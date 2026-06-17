@@ -255,6 +255,7 @@ async def run_autoprove_pipeline(
                     description="Structural invariant CVL",
                     source=source_input,
                     spec_dir=SPECS_DIR,
+                    spec_stem=InvariantSpec().stem,
                 ),
             )
             if isinstance(inv_cvl_result, GaveUp):
