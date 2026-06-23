@@ -7,13 +7,13 @@ against real source code.
 
 import json
 import logging
-import os
+import re
 import sys
 import tempfile
+from collections.abc import Callable
 from pydantic import BaseModel, Field
 from pathlib import Path
-from contextvars import ContextVar
-from typing import Any, TypedDict, Literal, Annotated, Protocol
+from typing import TypedDict, Literal, Annotated
 from pydantic import Discriminator
 import asyncio
 from composer.prover.core import ProverOptions
@@ -50,31 +50,35 @@ type AutoSetupEvents = Annotated[
     AutoSetupComplete | AutoSetupStart | AutoSetupStdout, Discriminator("type")
 ]
 
-class SetupLifecycleCallbacks(Protocol):
-    def log_start(self) -> None:
-        ...
 
-    def log_stdout(self, line: str) -> None:
-        ...
-
-    def log_complete(self, returncode: int) -> None:
-        ...
+_LINE_SPLIT = re.compile(r"[\r\n]+")
 
 
-class SetupImpl(Protocol):
-    async def __call__(
-        self,
-        callbacks: SetupLifecycleCallbacks,
-        project_root: Path,
-        relative_path: str,
-        main_contract: str,
-        prover_opts: ProverOptions,
-        *extra_files
-    ) -> SetupResult:
-        ...
+async def _drain(
+    stream: asyncio.StreamReader,
+    sink: Callable[[str], object],
+    log_level: int,
+) -> None:
+    """Drain a subprocess stream line by line into ``sink``.
 
+    stdout and stderr are drained concurrently: if the child fills the OS pipe
+    buffer on one stream while we block reading the other, it stalls on its write
+    and we deadlock. Splitting on ``[\\r\\n]+`` also collapses the carriage-return
+    progress redraws AutoSetup emits into discrete lines.
+    """
+    buf = ""
+    while chunk := await stream.read(4096):
+        buf += chunk.decode(errors="replace")
+        parts = _LINE_SPLIT.split(buf)
+        buf = parts.pop()
+        for line in parts:
+            if line:
+                _logger.log(log_level, line)
+                sink(line)
+    if buf := buf.strip():
+        _logger.log(log_level, buf)
+        sink(buf)
 
-_setup_impl : ContextVar[SetupImpl | None] = ContextVar("_setup_impl", default=None)
 
 async def run_autosetup(
     project_root: Path,
@@ -90,7 +94,7 @@ async def run_autosetup(
         project_root: Path to the Foundry project root
         relative_path: Relative path to the main contract file
         main_contract: Contract name, e.g. "Token"
-        prover_opts: Prover options carrying cloud flag + extra_args forwarded to certoraRun
+        prover_opts: Prover options; the cloud flag selects local vs cloud AutoSetup runner
 
     Returns:
         SetupResult with compilation config and summaries path
@@ -119,17 +123,86 @@ async def run_autosetup(
                 "type": "auto_setup_complete"
             })
 
-    _impl = _setup_impl.get()
-    if _impl is None:
-        raise RuntimeError("No implementation of autosetup; failing")
+    cb = CB()
+    certora_dir = project_root / "certora"
+    with tempfile.NamedTemporaryFile("r") as f:
+        # AutoSetup writes its composer-facing result (config + summary paths) to
+        # this temp file via --composer-setup; we read it back once the process exits.
+        main_contract_path = f"{relative_path}:{main_contract}"
+        args = [
+            sys.executable, "-m", "certora_autosetup.autosetup",
+            "--composer-setup", f.name,
+            "--no-strip-contracts",
+            "--skip-harnessing",
+            "--run-source", "AUTO_PROVER",
+            "--main-contract",
+            main_contract_path,
+            main_contract_path,
+            *extra_files,
+        ]
 
-    return await _impl(
-        CB(),
-        project_root,
-        relative_path,
-        main_contract,
-        prover_opts,
-        *extra_files
+        if not prover_opts.cloud:
+            args.append("--use-local-runner")
+
+        _logger.debug("Starting AutoSetup process")
+        cb.log_start()
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=project_root,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+
+        stderr_lines: list[str] = []
+        try:
+            _logger.debug("Draining AutoSetup subprocess output")
+            await asyncio.gather(
+                _drain(proc.stdout, cb.log_stdout, logging.INFO),
+                _drain(proc.stderr, stderr_lines.append, logging.ERROR),
+            )
+        except Exception:
+            _logger.exception("Error while draining AutoSetup subprocess output")
+            # A sink raising (or cancellation) would leave the child running with
+            # its pipes half-drained; kill it so wait() can reap.
+            if proc.returncode is None:
+                proc.kill()
+            raise
+        finally:
+            _logger.debug("AutoSetup process complete, waiting for exit")
+            returncode = await proc.wait()
+        cb.log_complete(returncode)
+        if returncode != 0:
+            return SetupFailure(
+                error="AutoSetup failed",
+                stderr="\n".join(stderr_lines),
+            )
+
+        data = json.load(f)
+
+    # AutoSetup reports the generated summary spec relative to the project (under
+    # certora/); validate it lands inside certora/ before handing it back.
+    summary_path = Path(data["contract_to_summary"][main_contract])
+    resolved_summary_path: Path
+    if summary_path.is_absolute():
+        if not summary_path.is_relative_to(certora_dir):
+            return SetupFailure(error="Summary not in project relative path")
+        else:
+            resolved_summary_path = summary_path
+    else:
+        if summary_path.parts[0] != "certora":
+            return SetupFailure(error="Summary not in certora/ folder")
+        resolved_summary_path = project_root / summary_path
+        if not resolved_summary_path.exists() or not resolved_summary_path.is_relative_to(certora_dir):
+            return SetupFailure(error=f"Relative path {summary_path} doesn't exist in project certora/ folder")
+
+    udts = json.loads((project_root / ".certora_internal" / "all_user_defined_types.json").read_text())
+
+    return SetupSuccess(
+        prover_config=json.loads((project_root / data["contract_to_config"][main_contract]).read_text()),
+        summaries_path=str(resolved_summary_path.relative_to(certora_dir)),
+        user_types=udts,
     )
 
 

@@ -1,0 +1,1308 @@
+"""
+Compilation workarounds for handling common Solidity compilation issues.
+
+These workarounds can be applied:
+1. During initial compilation analysis (via SetupProver)
+2. When adding files during linking/dispatching (via ConfigManager)
+3. When generating mock/harness contracts (missing-library harness — see
+   ``_apply_missing_library_harness_to_config``)
+"""
+
+import json
+import re
+import shutil
+import subprocess
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
+from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION, SolcConvention
+from certora_autosetup.utils.enhanced_config_manager import ConfigManager
+from certora_autosetup.utils.library_harness import (
+    LibrarySpec,
+    build_consumer_harness_source,
+    pragma_for_solc,
+)
+from certora_autosetup.utils.logger import logger
+from certora_autosetup.utils.paths import user_harness_path, user_harnesses_dir
+from certora_autosetup.utils.solc_version_resolver import extract_pragma_spec, resolve_pragma_to_version
+from certora_autosetup.utils.types import ContractHandle
+
+
+def _path_from_compiling_line(line: str) -> Optional[str]:
+    """Return ``<path>`` from a ``Compiling <path>...`` prover progress line, or
+    None if ``line`` isn't one.
+
+    Several detectors recover the file the prover was working on by scanning for
+    these progress lines. This is the single home for that one stdout-format
+    dependency, so the prefix/suffix stripping isn't open-coded at each call site.
+    """
+    prefix, suffix = "Compiling ", "..."
+    if not (line.startswith(prefix) and line.endswith(suffix)):
+        return None
+    return line.removeprefix(prefix).removesuffix(suffix)
+
+
+def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
+    """Walk backward from ``lines[idx]`` to the nearest preceding plain
+    ``Compiling <path>...`` line and return its path, or None if there is none.
+
+    The relevant Compiling line is the one nearest *above* the error — multiple
+    files compile per run, so the globally last one would be wrong. Skips the
+    autofinder variant ``Compiling <path> to expose internal function
+    information...``: its "path" embeds the suffix and won't match the contracts
+    list, and the plain form for the same file appears one line earlier.
+
+    ``max_lookback`` bounds the number of preceding lines examined (None = all
+    the way back to the start).
+    """
+    stop = -1 if max_lookback is None else max(idx - max_lookback - 1, -1)
+    for j in range(idx - 1, stop, -1):
+        line = lines[j]
+        if "to expose internal function information" in line:
+            continue
+        path = _path_from_compiling_line(line)
+        if path is not None:
+            return path
+    return None
+
+
+@dataclass
+class CompilationWorkaround:
+    """Represents a compilation workaround that can be applied to fix errors."""
+
+    name: str
+    detect_fn: Callable[[str], Any]  # Takes compilation output, returns detection result or None
+    apply_fn: Callable[[Any, Dict, Dict, Path, List[ContractHandle]], Dict]
+    enabled: bool = True
+
+
+class CompilationWorkaroundManager:
+    """Manages compilation workarounds for config files."""
+
+    def __init__(
+        self,
+        project_root: Path,
+        solc_default_version: str = DEFAULT_SOLC_VERSION,
+        verbose: int = 0,
+        solc_convention: SolcConvention = SolcConvention.CERTORA,
+    ):
+        self.project_root = project_root
+        self.solc_convention = solc_convention
+        self.verbose = verbose
+        self._remappings_workaround_applied = False
+        # (consumer, lib) pairs already covered by a generated harness in this run.
+        # Used as a loop guard — if the prover still reports the same pair after we
+        # wrapped the consumer, the workaround stops firing to avoid spinning.
+        self._harnessed_libs: Set[Tuple[str, str]] = set()
+        # consumer -> [(lib_name, lib_path), ...] in insertion order. A second
+        # firing for the same consumer (different missing library) regenerates the
+        # consumer's harness covering every library it has needed so far.
+        self._harnesses_by_consumer: Dict[str, List[Tuple[str, str]]] = {}
+        # Convert default version to the detected convention
+        if solc_convention == SolcConvention.SOLC_SELECT and solc_default_version.startswith("solc") \
+                and not solc_default_version.startswith("solc-"):
+            # "solc8.34" -> "solc-0.8.34"
+            self.solc_default_version = f"solc-0.{solc_default_version[4:]}"
+        else:
+            self.solc_default_version = solc_default_version
+
+    def format_solc_version(self, version: str) -> str:
+        """Format a semantic version string for this manager's solc convention.
+
+        Thin wrapper around the static ``ConfigManager.format_solc_version`` so
+        the formatting logic lives in exactly one place.
+        """
+        return ConfigManager.format_solc_version(version, self.solc_convention)
+
+    # =========================================================================
+    # Per-flag map lifecycle: seed → (workarounds update) → normalize
+    # =========================================================================
+
+    # Conf keys that move together when promoting/collapsing a scalar <-> map.
+
+    def _seed_compile_maps(self, config: Dict, contracts: List[ContractHandle]) -> None:
+        """Promote scalar ``solc``/``solc_via_ir`` into fully-populated maps.
+        """
+        if "compiler_map" not in config:
+            default = config.pop("solc", None) or self.solc_default_version
+            config["compiler_map"] = {c.contract_name: default for c in contracts}
+        if "solc_via_ir_map" not in config:
+            via_ir = config.pop("solc_via_ir", False)
+            config["solc_via_ir_map"] = {c.contract_name: via_ir for c in contracts}
+
+    def _normalize_compile_maps(self, config: Dict) -> None:
+        """Collapse a uniform compiler_map / solc_via_ir_map back to its scalar if all values are same.
+        """
+        cmap = config.get("compiler_map")
+        if isinstance(cmap, dict) and cmap and len(set(cmap.values())) == 1:
+            config["solc"] = next(iter(cmap.values()))
+            del config["compiler_map"]
+
+        vmap = config.get("solc_via_ir_map")
+        if isinstance(vmap, dict) and vmap and len(set(vmap.values())) == 1:
+            value = next(iter(vmap.values()))
+            del config["solc_via_ir_map"]
+            if value:  # False is the prover default — no scalar needed.
+                config["solc_via_ir"] = value
+
+    def _mirror_compile_flags(self, src: Dict, dst: Dict) -> None:
+        """Copy the compile-flag keys from ``src`` onto ``dst`` (dropping any the
+        src no longer has), so the disk conf and the returned dict stay in sync
+        after seeding/normalizing."""
+        compile_flag_keys = ("solc", "compiler_map", "solc_via_ir", "solc_via_ir_map")
+        for key in compile_flag_keys:
+            dst.pop(key, None)
+            if key in src:
+                dst[key] = src[key]
+
+    def _finalize_compile_maps(self, compilation_config: Dict, updated_config_dict: Dict, config_file: Path) -> None:
+        """Collapse the seeded maps back to scalars if needed, sync the returned dict, and
+        persist."""
+        self._normalize_compile_maps(compilation_config)
+        self._mirror_compile_flags(compilation_config, updated_config_dict)
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+    def log(self, message: str, level: str = "INFO") -> None:
+        """Log a message."""
+        if level == "ERROR":
+            logger.error(message)
+        elif level == "WARNING":
+            logger.warning(message)
+        else:
+            logger.info(message)
+
+    # =========================================================================
+    # Main entry point for running compilation with workarounds
+    # =========================================================================
+
+    def run_compilation_with_workarounds(
+        self,
+        cmd: List[str],
+        config_file: Path,
+        compilation_config: Dict,
+        contracts: List[ContractHandle],
+        updated_config_dict: Dict,
+    ) -> Tuple[bool, str, Dict]:
+        """Run compilation with automatic workarounds for common errors.
+
+        Applies workarounds in priority order:
+        1. Solc not found fallback (versioned binary missing, fall back to plain solc)
+        2. Remappings conflict (package.json vs remappings.txt duplicate keys)
+        3. Source not found (add packages from `forge remappings`, foundry.toml, remappings.txt, package.json)
+        4. Compiler version mismatch (blocks all compilation)
+        5. Stack-too-deep errors (via-ir workaround)
+        6. Unsupported solc version for via-ir (disable via-ir for old compiler versions)
+        7. Cancun opcode errors (mcopy/tload/tstore — set EVM version to cancun)
+        8. Unnamed return variable warning (ignore_solidity_warnings)
+        9. YulException stack-too-deep with via-ir (try adding optimizer first)
+        10. YulException stack-too-deep persists (remove via-ir + optimizer, disable autofinders)
+        11. Missing dependency library (generate harness with dummy usage so solc emits the lib)
+        12. Catch-all: use_relpaths_for_solc_json (last resort before import-patch fallback)
+
+        Args:
+            cmd: Command to execute
+            config_file: Path to config file (to rewrite on updates)
+            compilation_config: Full compilation config (will be updated)
+            contracts: List of contracts for path mapping
+            updated_config_dict: Config dict to track updates
+
+        Returns:
+            Tuple of (success, output, updated_config_dict)
+        """
+        # Check if global solc_via_ir is already enabled
+        global_via_ir_enabled = updated_config_dict.get("solc_via_ir", False)
+        solc_already_set = "solc" in updated_config_dict
+
+        # Initialize workarounds list
+        workarounds = [
+            CompilationWorkaround(
+                name="cached_autofinder_failure",
+                detect_fn=lambda output: (
+                    "detected"
+                    if "Failed to create autofinders, failing" in output
+                    and (compilation_config.get("build_cache", False) or "--build_cache" in cmd)
+                    else None
+                ),
+                apply_fn=self._apply_disable_build_cache,
+                enabled=True,
+            ),
+            CompilationWorkaround(
+                name="solc_not_found_fallback",
+                detect_fn=lambda output: self._detect_solc_not_found(output),
+                apply_fn=self._apply_solc_fallback_workaround,
+                enabled=solc_already_set and updated_config_dict.get("solc") != "solc",
+            ),
+            CompilationWorkaround(
+                name="remappings_conflict",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._has_remappings_conflict(output) and not self._remappings_workaround_applied
+                    else None
+                ),
+                apply_fn=self._apply_remappings_conflict_workaround,
+                enabled=True,
+            ),
+            CompilationWorkaround(
+                name="source_not_found_packages",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._has_source_not_found(output)
+                    and not self._remappings_workaround_applied
+                    else None
+                ),
+                apply_fn=self._apply_source_not_found_packages_workaround,
+                enabled=True,
+            ),
+            CompilationWorkaround(
+                name="compiler_version_mismatch",
+                detect_fn=lambda output: self._detect_compiler_version_mismatch(output, contracts),
+                apply_fn=self._apply_compiler_version_workaround_to_config,
+                enabled=not solc_already_set,
+            ),
+            CompilationWorkaround(
+                name="stack_too_deep_via_ir",
+                detect_fn=lambda output: self._detect_stack_too_deep_errors(output, contracts),
+                apply_fn=self._apply_via_ir_workaround_to_config,
+                enabled=not global_via_ir_enabled,
+            ),
+            CompilationWorkaround(
+                name="unsupported_solc_via_ir",
+                detect_fn=lambda output: self._detect_unsupported_solc_via_ir(output, contracts),
+                apply_fn=self._apply_disable_via_ir_workaround_to_config,
+                enabled=global_via_ir_enabled,
+            ),
+            CompilationWorkaround(
+                name="cancun_opcode_evm_version",
+                detect_fn=lambda output: self._detect_cancun_opcode_errors(output, contracts),
+                apply_fn=self._apply_evm_version_cancun_workaround_to_config,
+                enabled=True,
+            ),
+            CompilationWorkaround(
+                name="unnamed_return_warning",
+                detect_fn=lambda output: "detected" if self._has_unnamed_return_warning(output) else None,
+                apply_fn=self._apply_ignore_solidity_warnings_workaround,
+                enabled="ignore_solidity_warnings" not in updated_config_dict,
+            ),
+            CompilationWorkaround(
+                name="yul_exception_add_optimizer",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._detect_yul_exception_stack_too_deep(output)
+                    and "solc_optimize" not in compilation_config
+                    else None
+                ),
+                apply_fn=self._apply_optimizer_for_via_ir,
+                enabled=True,
+            ),
+            CompilationWorkaround(
+                name="yul_exception_stack_too_deep",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._detect_yul_exception_stack_too_deep(output)
+                    and compilation_config.get("assert_autofinder_success", False)
+                    and "solc_optimize" in compilation_config
+                    else None
+                ),
+                apply_fn=self._apply_yul_exception_workaround,
+                enabled=True,
+            ),
+            CompilationWorkaround(
+                name="missing_library_harness",
+                detect_fn=lambda output: self._detect_missing_library(output, contracts),
+                apply_fn=self._apply_missing_library_harness_to_config,
+                enabled=True,
+            ),
+            # Catch-all — must stay LAST. Fires only when no more specific workaround
+            # matched the failure output, as a final attempt before setup_prover falls
+            # back to the import-patch pass.
+            CompilationWorkaround(
+                name="use_relpaths_for_solc_json",
+                detect_fn=lambda output: (
+                    "detected"
+                    if not compilation_config.get("use_relpaths_for_solc_json", False)
+                    else None
+                ),
+                apply_fn=self._apply_use_relpaths_workaround,
+                enabled=True,
+            ),
+        ]
+
+        # Calculate max retries based on enabled workarounds
+        enabled_workarounds = [w for w in workarounds if w.enabled]
+        max_retries = len(contracts) * len(enabled_workarounds)
+        retry_count = 0
+
+        # Seed compiler_map / solc_via_ir_map up front so the workarounds below
+        # can update per-contract entries unconditionally; _finalize_compile_maps
+        # collapses them back to scalars on every exit (see helpers above).
+        self._seed_compile_maps(compilation_config, contracts)
+        self._mirror_compile_flags(compilation_config, updated_config_dict)
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        while retry_count <= max_retries:
+            # Run compilation
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            output = result.stdout + result.stderr
+
+            if result.returncode == 0:
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                return True, output, updated_config_dict
+
+            # Log compilation output for debugging
+            if self.verbose >= 2:
+                self.log("Compilation output (stdout + stderr):")
+                self.log(output)
+
+            # Try to find an applicable workaround
+            workaround_applied = False
+            for workaround in workarounds:
+                if not workaround.enabled:
+                    continue
+
+                # Try to detect if this workaround applies
+                detect_result = workaround.detect_fn(output)
+                if detect_result is not None:
+                    # Apply the workaround
+                    self.log(f"Applying {workaround.name} workaround")
+                    updated_config_dict = workaround.apply_fn(
+                        detect_result,
+                        updated_config_dict,
+                        compilation_config,
+                        config_file,
+                        contracts,
+                    )
+                    # If we disabled build_cache in config, also remove from CLI command
+                    if workaround.name == "cached_autofinder_failure" and "--build_cache" in cmd:
+                        cmd.remove("--build_cache")
+                    workaround_applied = True
+                    retry_count += 1
+                    conf_contents = json.dumps(compilation_config, indent=2)
+                    self.log(
+                        f"Retrying compilation after {workaround.name} fix (attempt {retry_count}/{max_retries})\n"
+                        f"  Command: {' '.join(cmd)}\n"
+                        f"  Config ({config_file}):\n{conf_contents}"
+                    )
+                    break  # Only apply one workaround per iteration
+
+            # If no workaround applies, exit immediately (guardrail against infinite loop)
+            if not workaround_applied:
+                if retry_count == 0:
+                    # First attempt failed - log output for debugging
+                    self.log("Compilation failed. Output:", "WARNING")
+                    self.log(output, "WARNING")
+                else:
+                    self.log("Compilation failed with no applicable workaround", "ERROR")
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                return False, output, updated_config_dict
+
+        # Max retries exceeded
+        self.log(f"Max retries ({max_retries}) exceeded for workarounds", "ERROR")
+        self.log("Final compilation output:", "ERROR")
+        self.log(output, "ERROR")
+        self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+        return False, output, updated_config_dict
+
+    # =========================================================================
+    # Detection methods
+    # =========================================================================
+
+    def _detect_stack_too_deep_errors(
+        self, output: str, contracts: List[ContractHandle]
+    ) -> Optional[str]:
+        """Detect stack-too-deep error and return affected contract name."""
+        lines = output.split("\n")
+
+        for i in range(len(lines)):
+            line = lines[i]
+
+            # Pattern 1: Look for "Compiling <PATH> to expose internal function information"
+            if "Compiling" in line and "to expose internal function information" in line:
+                parts = line.split("Compiling", 1)
+                if len(parts) > 1:
+                    path_part = parts[1].split("to expose internal function information", 1)[0].strip()
+
+                    if i + 2 < len(lines):
+                        if "Encountered an exception generating autofinder" in lines[i + 1]:
+                            if lines[i + 2].startswith("CompilerError: Stack too deep"):
+                                contract_name = self._get_contract_name_from_path(path_part, contracts)
+                                if contract_name:
+                                    self.log(f"Detected stack-too-deep error for {contract_name} (path: {path_part})")
+                                    return contract_name
+                                else:
+                                    self.log(f"Warning: Could not map path '{path_part}' to contract name", "WARNING")
+
+            # Pattern 2: Look for "Compiling <PATH>..." (generic compilation)
+            else:
+                path_part = _path_from_compiling_line(line)
+                if path_part is None or i + 1 >= len(lines) or lines[i + 1].startswith("Compiling "):
+                    continue
+
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    if lines[j].startswith("Compiling "):
+                        break
+                    if "had an error:" in lines[j]:
+                        for k in range(j + 1, min(j + 3, len(lines))):
+                            if lines[k].startswith("CompilerError: Stack too deep"):
+                                contract_name = self._get_contract_name_from_path(path_part, contracts)
+                                if contract_name:
+                                    self.log(f"Detected stack-too-deep error for {contract_name} (path: {path_part})")
+                                    return contract_name
+                                else:
+                                    self.log(f"Warning: Could not map path '{path_part}' to contract name", "WARNING")
+                        break
+
+        return None
+
+    def _detect_cancun_opcode_errors(self, output: str, contracts: List[ContractHandle]) -> Optional[str]:
+        """Detect DeclarationError for Cancun opcodes (mcopy, tload, tstore) and return affected contract name."""
+        if (
+            'DeclarationError: Function "mcopy" not found' not in output
+            and 'DeclarationError: Function "tload" not found' not in output
+            and 'DeclarationError: Function "tstore" not found' not in output
+        ):
+            return None
+
+        cancun_errors = (
+            'DeclarationError: Function "mcopy" not found',
+            'DeclarationError: Function "tload" not found',
+            'DeclarationError: Function "tstore" not found',
+        )
+        lines = output.split("\n")
+        for i in range(len(lines)):
+            line = lines[i]
+            path_part = _path_from_compiling_line(line)
+            if path_part is None:
+                continue
+            for j in range(i + 1, min(i + 5, len(lines))):
+                if lines[j].startswith("Compiling "):
+                    break
+                if "had an error:" in lines[j]:
+                    for k in range(j + 1, min(j + 10, len(lines))):
+                        if any(err in lines[k] for err in cancun_errors):
+                            contract_name = self._get_contract_name_from_path(path_part, contracts)
+                            if contract_name:
+                                self.log(f"Detected Cancun opcode error for {contract_name} (path: {path_part})")
+                                return contract_name
+                    break
+        return None
+
+    def _detect_yul_exception_stack_too_deep(self, output: str) -> bool:
+        """Detect YulException with stack too deep error."""
+        pattern = r"YulException:.*Stack too deep"
+        return bool(re.search(pattern, output, re.IGNORECASE))
+
+    def _detect_compiler_version_mismatch(
+        self, output: str, contracts: List[ContractHandle]
+    ) -> Optional[Tuple[str, str]]:
+        """Detect compiler version mismatch error and extract contract name and required version."""
+        lines = output.split("\n")
+
+        for i in range(len(lines)):
+            line = lines[i]
+
+            if "ParserError: Source file requires different compiler version" in line:
+                # Try to find file_path from preceding "Compiling ..." line
+                file_path = _find_compiling_path_before(lines, i, max_lookback=15)
+
+                # Fallback: Extract file_path from arrow line if not found above
+                if not file_path:
+                    for j in range(i + 1, min(i + 10, len(lines))):
+                        if "-->" in lines[j]:
+                            path_parts = []
+                            arrow_line = lines[j].split("-->", 1)
+                            if len(arrow_line) > 1:
+                                path_parts.append(arrow_line[1].strip())
+
+                            for k in range(j + 1, min(j + 5, len(lines))):
+                                stripped = lines[k].strip()
+                                if not stripped or stripped == "|":
+                                    break
+                                path_parts.append(stripped)
+                                if re.search(r":\d+:\d+:\s*$", stripped):
+                                    break
+
+                            full_path = "".join(path_parts)
+                            path_match = re.search(r"^(.+?):\d+:\d+:\s*$", full_path)
+                            if path_match:
+                                file_path = path_match.group(1).strip()
+                                break
+
+                if not file_path:
+                    continue
+
+                # Extract pragma specification from subsequent lines
+                for k in range(i + 1, min(i + 10, len(lines))):
+                    pragma_spec = extract_pragma_spec(lines[k])
+                    if pragma_spec:
+                        version = resolve_pragma_to_version(pragma_spec)
+                        if not version:
+                            self.log(f"Could not resolve pragma '{pragma_spec}' to concrete version", "WARNING")
+                            return None
+
+                        contract_name = self._get_contract_name_from_path(file_path, contracts)
+                        if contract_name:
+                            self.log(f"Detected compiler version mismatch for {contract_name}: requires {version}")
+                            return (contract_name, version)
+                        else:
+                            self.log(f"Warning: Could not map path '{file_path}' to contract name", "WARNING")
+                            return None
+
+        return None
+
+    def _detect_solc_not_found(self, output: str) -> Optional[str]:
+        """Detect a missing solc binary and return its name.
+        """
+        match = re.search(
+            r"attribute/flag 'compiler_map': Solidity executable (solc\S+) not found in path",
+            output,
+        )
+        if match:
+            self.log(f"Detected missing solc binary: {match.group(1)}", "WARNING")
+            return match.group(1)
+        return None
+
+    def _detect_unsupported_solc_via_ir(self, output: str, contracts: List[ContractHandle]) -> Optional[str]:
+        """Detect 'Unsupported solc version ... for solc_via_ir' and return the affected contract name."""
+        lines = output.split("\n")
+        for i in range(len(lines)):
+            if "Unsupported solc version" in lines[i] and "solc_via_ir" in lines[i]:
+                file_path = _find_compiling_path_before(lines, i, max_lookback=15)
+                if file_path is not None:
+                    contract_name = self._get_contract_name_from_path(file_path, contracts)
+                    if contract_name:
+                        self.log(f"Detected unsupported solc version for via-ir: {contract_name}")
+                        return contract_name
+                return None
+        return None
+
+    def _has_remappings_conflict(self, output: str) -> bool:
+        return "package.json and remappings.txt include duplicated keys in" in output
+
+    def _has_source_not_found(self, output: str) -> bool:
+        return 'ParserError: Source "' in output and "File not found" in output
+
+    def _has_unnamed_return_warning(self, output: str) -> bool:
+        return "Unnamed return variable can remain unassigned" in output
+
+    # Two-line signature emitted by the Certora wrapper when a library used by a
+    # contract's constructor is not in the compile scope. Matching both lines makes
+    # the detector specific enough that no other prover error collides.
+
+    def _detect_missing_library(
+        self, output: str, contracts: List[ContractHandle]
+    ) -> Optional[Tuple[str, str, str]]:
+        """Detect "Failed to find a dependency library" + "Failed to find a contract named ..."
+        and return (consumer, lib_name, lib_path), or None. Covers case in which we need to
+        create a harness of `consumer` contract with dummy use of the library `lib_name`
+        to produce library bytecode.
+        Returns None if ``(consumer, lib_name)`` is already in ``self._harnessed_libs``.
+        """
+        _missing_lib_consumer_re = re.compile(
+            r"Failed to find a dependency library while building the constructor bytecode of (\w+)\."
+        )
+        consumer_match = _missing_lib_consumer_re.search(output)
+        _missing_lib_target_re = re.compile(
+            r"Failed to find a contract named (\w+) in file (\S+\.sol)\."
+        )
+        target_match = _missing_lib_target_re.search(output)
+        if not (consumer_match and target_match):
+            return None
+
+        # Walk backwards from the "Failed to find a dependency library" line to the
+        # nearest preceding "Compiling <path>..." line — that path is the file the
+        # prover was working on when linking failed.
+        lines = output.split("\n")
+        for idx, line in enumerate(lines):
+            if "Failed to find a dependency library while building" in line:
+                header_line_idx = idx
+                break
+        else:
+            # consumer_match matched the longer string that contains this exact
+            # substring, so it must appear in `lines`. Reaching here is impossible.
+            assert False, "dependency-library header matched but absent line-by-line"
+
+        compiling_path = _find_compiling_path_before(lines, header_line_idx)
+        # A missing-library error is always preceded by a plain
+        # ``Compiling <path>...`` line for the file under compilation.
+        assert compiling_path is not None, \
+            "missing-library error not preceded by a 'Compiling <path>...' line"
+
+        # Consumer is contract for which compilation faile, i.e. contract in path from
+        # ``Compiling <path>`` log message.
+        # Ancestor is contract containing actually the import of library.
+        # Consumer can be also the Ancestor or it inherits the ancestor.
+        ancestor = consumer_match.group(1)
+        mapped = self._get_contract_name_from_path(compiling_path, contracts)
+        if mapped:
+            consumer = mapped
+        else:
+            # Path present but not in the scene (a file we don't track) — fall
+            # back to the ancestor the error names.
+            consumer = ancestor
+            self.log(
+                f"Missing-library error: could not map '{compiling_path}' to a "
+                f"contract in the scene; falling back to ancestor '{ancestor}'",
+                "WARNING",
+            )
+
+        lib_name = target_match.group(1)
+        lib_path = target_match.group(2)
+        if (consumer, lib_name) in self._harnessed_libs:
+            self.log(
+                f"Missing-library error still references ({consumer}, {lib_name}) after "
+                f"harnessing — giving up to break retry loop",
+                "WARNING",
+            )
+            return None
+        return consumer, lib_name, lib_path
+
+    # =========================================================================
+    # Apply workaround methods (full versions that write to config file)
+    # =========================================================================
+
+    def _apply_compiler_version_workaround_to_config(
+        self,
+        detect_result: Tuple[str, str],
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Apply compiler version workaround to config files for a contract with version mismatch."""
+        contract_name, version_string = detect_result
+
+        self.log(f"Applying compiler version workaround for contract: {contract_name}")
+        self.apply_compiler_version_workaround(contract_name, version_string, updated_config_dict)
+        compilation_config.update(updated_config_dict)
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_via_ir_workaround_to_config(
+        self,
+        contract_name: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Apply via-ir workaround to config files for a contract with stack-too-deep error."""
+        self.log(f"Applying via-ir workaround for contract: {contract_name}")
+        self._apply_via_ir_workaround(contract_name, updated_config_dict)
+        compilation_config.update(updated_config_dict)
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_evm_version_cancun_workaround_to_config(
+        self,
+        contract_name: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        contracts: List[ContractHandle],
+    ) -> Dict:
+        """Apply EVM version cancun workaround to config for a contract with Cancun opcode errors."""
+        self.log(f"Applying EVM version cancun workaround for contract: {contract_name}")
+        if "solc_evm_version_map" not in updated_config_dict:
+            updated_config_dict["solc_evm_version_map"] = {}
+        updated_config_dict["solc_evm_version_map"][contract_name] = "cancun"
+        self.log(f"Adding EVM version cancun workaround for contract: {contract_name}")
+        compilation_config.update(updated_config_dict)
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_disable_via_ir_workaround_to_config(
+        self,
+        contract_name: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        contracts: List[ContractHandle],
+    ) -> Dict:
+        """Disable via-ir for a contract with an old Solidity version that doesn't support it."""
+        self.log(f"Disabling via-ir for contract: {contract_name} (unsupported solc version)")
+
+        updated_config_dict["solc_via_ir_map"][contract_name] = False
+
+        compilation_config.update(updated_config_dict)
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+        return updated_config_dict
+
+    def _apply_optimizer_for_via_ir(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Apply optimizer alongside via-ir to resolve YulException stack-too-deep."""
+        self.log("Detected YulException stack-too-deep with via-ir — adding solc_optimize 200", "WARNING")
+
+        compilation_config["solc_optimize"] = "200"
+        updated_config_dict["solc_optimize"] = "200"
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_yul_exception_workaround(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Last resort: remove via-ir and optimizer, disable autofinders, compile clean."""
+        self.log("YulException persists with via-ir + optimizer — reverting to clean compilation without autofinders", "WARNING")
+
+        # Remove via-ir
+        for key in ("solc_via_ir", "solc_via_ir_map"):
+            compilation_config.pop(key, None)
+            updated_config_dict.pop(key, None)
+
+        # Remove optimizer
+        compilation_config.pop("solc_optimize", None)
+        updated_config_dict.pop("solc_optimize", None)
+
+        # Disable autofinders
+        compilation_config["assert_autofinder_success"] = False
+        updated_config_dict["assert_autofinder_success"] = False
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_disable_build_cache(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Disable build_cache to get the real error instead of a cached autofinder failure."""
+        self.log("Autofinder failure from build cache — disabling build_cache to get the real error", "WARNING")
+
+        compilation_config["build_cache"] = False
+        updated_config_dict["build_cache"] = False
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_solc_fallback_workaround(
+        self,
+        failed_solc: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Fall back from a missing versioned solc binary.
+
+        Checks if plain 'solc' provides the version we need; if not, uses the
+        default versioned binary (convention-aware, e.g. solc8.34 or solc-0.8.34).
+        """
+        fallback = self._pick_solc_fallback()
+        self.log(f"Falling back from '{failed_solc}' to '{fallback}'", "WARNING")
+
+        # solc is seeded into compiler_map up front (see _seed_compile_maps), so
+        # rewrite the bad binary there — every entry pinned to it — rather than
+        # setting the scalar solc, which can't coexist with compiler_map. A
+        # uniform map collapses back to scalar solc in _normalize_compile_maps.
+        # compilation_config shares this map object with updated_config_dict,
+        # so the in-place rewrite is visible in the disk write below too — no mirroring needed.
+        cmap = updated_config_dict.get("compiler_map")
+        assert isinstance(cmap, dict), "compiler_map is seeded before any workaround runs"
+        for name, version in cmap.items():
+            if version == failed_solc:
+                cmap[name] = fallback
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _pick_solc_fallback(self) -> str:
+        """Choose the best solc fallback: plain 'solc' if it matches the desired version, else the default."""
+        desired = self._extract_version_from_solc_name(self.solc_default_version)
+        if not desired:
+            return "solc"
+
+        plain_version = self._get_plain_solc_version()
+        if plain_version and plain_version == desired:
+            return "solc"
+
+        if shutil.which(self.solc_default_version):
+            return self.solc_default_version
+
+        return "solc"
+
+    @staticmethod
+    def _extract_version_from_solc_name(solc_name: str) -> Optional[str]:
+        """Extract semantic version from a solc binary name.
+
+        'solc8.34' -> '0.8.34', 'solc-0.8.34' -> '0.8.34', 'solc' -> None
+        """
+        if solc_name.startswith("solc-"):
+            return solc_name[5:]  # "solc-0.8.34" -> "0.8.34"
+        if solc_name.startswith("solc") and len(solc_name) > 4 and solc_name[4].isdigit():
+            return f"0.{solc_name[4:]}"  # "solc8.34" -> "0.8.34"
+        return None
+
+    @staticmethod
+    def _get_plain_solc_version() -> Optional[str]:
+        """Run 'solc --version' and return the version string, e.g. '0.8.33'."""
+        try:
+            result = subprocess.run(["solc", "--version"], capture_output=True, text=True, check=False, timeout=5)
+            match = re.search(r"Version:\s*(\d+\.\d+\.\d+)", result.stdout)
+            if match:
+                return match.group(1)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return None
+
+    def _apply_remappings_conflict_workaround(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Apply remappings conflict workaround by constructing explicit packages list."""
+        self.log("Detected remappings conflict between package.json and remappings.txt", "WARNING")
+        self.log("Building explicit packages list to resolve conflict...")
+
+        packages = self._build_packages_from_remapping_sources()
+        updated_config_dict["packages"] = packages
+        compilation_config["packages"] = packages
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        self._remappings_workaround_applied = True
+        return updated_config_dict
+
+    def _apply_source_not_found_packages_workaround(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Apply source-not-found workaround by adding packages from project remapping sources."""
+        self.log(
+            "Source file not found — adding packages from `forge remappings`, "
+            "foundry.toml, remappings.txt, and package.json",
+            "WARNING",
+        )
+
+        packages = self._build_packages_from_remapping_sources()
+        updated_config_dict["packages"] = packages
+        compilation_config["packages"] = packages
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        self._remappings_workaround_applied = True
+        return updated_config_dict
+
+    def _apply_ignore_solidity_warnings_workaround(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Set ignore_solidity_warnings to suppress unnamed return variable warnings."""
+        self.log("Setting ignore_solidity_warnings to suppress unnamed return warnings", "WARNING")
+        updated_config_dict["ignore_solidity_warnings"] = True
+        compilation_config["ignore_solidity_warnings"] = True
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_missing_library_harness_to_config(
+        self,
+        detect_result: Tuple[str, str, str],
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        contracts: List[ContractHandle],
+    ) -> Dict:
+        """Wrap the *consumer* in a harness that uses the missing library *lib_name*.
+        The hanrness contains a dummy method calling a public
+        external/public library function to force compilation of the library's deployable
+        bytecode into the same compilation unit,
+        """
+        consumer, lib_name, lib_path = detect_result
+
+        # Accumulate libs per consumer so multi-library cases regenerate the
+        # harness with everything that's ever been missing.
+        bucket = self._harnesses_by_consumer.setdefault(consumer, [])
+        if (lib_name, lib_path) not in bucket:
+            bucket.append((lib_name, lib_path))
+
+        # Find the consumer in the ContractHandle list so we know its source file.
+        consumer_handle = next(
+            (h for h in contracts if h.contract_name == consumer), None
+        )
+        if consumer_handle is None:
+            self.log(
+                f"Consumer '{consumer}' not in contracts list — cannot generate "
+                f"wrapping harness for missing library '{lib_name}'",
+                "ERROR",
+            )
+            return updated_config_dict
+
+        consumer_path = consumer_handle.source_file
+
+        # Pin the harness to the consumer's compile mode so its bytecode matches
+        # what the linker expects.
+        compiler_map = compilation_config.get("compiler_map", {}) or {}
+        target_solc = compiler_map.get(consumer, self.solc_default_version)
+
+        harness_dir = user_harnesses_dir(self.project_root)
+        harness_dir.mkdir(parents=True, exist_ok=True)
+        harness_name = f"{consumer}Harness"
+        harness_file = user_harness_path(self.project_root, harness_name)
+
+        consumer_file_abs = self.project_root / consumer_path
+        library_specs = [
+            LibrarySpec(
+                name=lib,
+                source_text=(self.project_root / path).read_text(),
+                file_path=self.project_root / path,
+            )
+            for lib, path in bucket
+        ]
+        content = build_consumer_harness_source(
+            consumer_name=consumer,
+            consumer_source_text=consumer_file_abs.read_text(),
+            consumer_file_abs=consumer_file_abs,
+            libraries=library_specs,
+            harness_dir=harness_dir,
+            harness_name=harness_name,
+            pragma_line=pragma_for_solc(target_solc),
+        )
+        harness_file.write_text(content)
+        self.log(
+            f"Generated consumer harness {harness_name} wrapping {consumer} "
+            f"({len(bucket)} library/libraries): {harness_file}"
+        )
+
+        rel_harness = str(harness_file.relative_to(self.project_root))
+        harness_files_entry = f"{rel_harness}:{harness_name}"
+
+        # Replace consumer's entry in `files` with the harness. Match both the bare
+        # path and the explicit `path:Consumer` form to be defensive. If we've
+        # already replaced it on a prior firing for this consumer, the entry is
+        # already the harness form — leave it alone.
+        files = compilation_config.get("files", []) or []
+        new_files: List[str] = []
+        for entry in files:
+            if entry == consumer_path or entry == f"{consumer_path}:{consumer}":
+                new_files.append(harness_files_entry)
+            else:
+                new_files.append(entry)
+        if harness_files_entry not in new_files:
+            new_files.append(harness_files_entry)
+        compilation_config["files"] = new_files
+        updated_config_dict["files"] = new_files
+
+        for map_name in ("compiler_map", "solc_via_ir_map", "solc_optimize_map", "solc_evm_version_map"):
+            existing_map = compilation_config.get(map_name)
+            if not isinstance(existing_map, dict):
+                continue
+            if consumer in existing_map:
+                existing_map[harness_name] = existing_map.pop(consumer)
+            updated_config_dict[map_name] = existing_map
+
+        # Replace the consumer's ContractHandle with the harness's so downstream
+        # detectors see the new name. Edit in place to keep caller references valid.
+        for i, h in enumerate(contracts):
+            if h.contract_name == consumer:
+                contracts[i] = ContractHandle(
+                    contract_name=harness_name, source_file=rel_harness
+                )
+
+        self._harnessed_libs.add((consumer, lib_name))
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_use_relpaths_workaround(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Catch-all: enable use_relpaths_for_solc_json when a compile fails for a non-specific reason.
+
+        Last workaround tried before setup_prover falls back to the import-patch pass.
+        Works around solc autofinder / path-resolution edge cases that the pattern-specific
+        workarounds don't recognize.
+        """
+        self.log(
+            "Compile failed with no specific workaround match — enabling use_relpaths_for_solc_json",
+            "WARNING",
+        )
+        updated_config_dict["use_relpaths_for_solc_json"] = True
+        compilation_config["use_relpaths_for_solc_json"] = True
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    # =========================================================================
+    # Core workaround logic (in-memory only, no file writes)
+    # =========================================================================
+
+    def apply_compiler_version_workaround(
+        self,
+        contract_name: str,
+        version_string: str,
+        conf_object: Dict[str, Any],
+    ) -> bool:
+        """
+        Apply compiler version workaround for a contract that needs a specific compiler version.
+
+        Args:
+            contract_name: Contract name that needs specific compiler version
+            version_string: Required version (e.g., "0.8.23")
+            conf_object: Config dictionary to update (modified in place)
+
+        Returns:
+            True if compiler_map was modified
+        """
+        # compiler_map is seeded up front by _seed_compile_maps, so it always
+        # exists here — just set the affected contract's entry.
+        formatted_version = self.format_solc_version(version_string)
+
+        # Set the affected contract to required version
+        conf_object["compiler_map"][contract_name] = formatted_version
+        self.log(f"Adding compiler version workaround for {contract_name}: {formatted_version}")
+
+        return True
+
+    def _apply_via_ir_workaround(self, contract_needing_via_ir: str, config_dict: Dict) -> Dict:
+        """Add solc_via_ir_map entry for contract that needs via-ir compilation."""
+        # solc_via_ir_map is seeded up front by _seed_compile_maps; just set the
+        # contract that needs via-ir to True.
+        config_dict["solc_via_ir_map"][contract_needing_via_ir] = True
+        self.log(f"Adding via-ir workaround for contract: {contract_needing_via_ir}")
+
+        return config_dict
+
+    # =========================================================================
+    # Helper methods
+    # =========================================================================
+
+    def _get_contract_name_from_path(self, file_path: str, contracts: List[ContractHandle]) -> Optional[str]:
+        """Map a file path from error message to contract name.
+
+        TODO: This returns the first matching contract, but a .sol file can contain multiple
+        contracts. Consider returning all contract names or using file paths as keys instead.
+        """
+        # Try direct string match first (fastest)
+        for contract in contracts:
+            if contract.source_file == file_path:
+                return contract.contract_name
+
+        # Try normalized path comparison
+        try:
+            normalized_path = str(Path(file_path).resolve())
+            for contract in contracts:
+                contract_path = str(Path(contract.source_file).resolve())
+                if contract_path == normalized_path:
+                    return contract.contract_name
+        except Exception:
+            pass
+
+        return None
+
+    def _build_packages_from_remapping_sources(self) -> List[str]:
+        """Build a merged packages list from forge remappings, foundry.toml, remappings.txt, package.json.
+
+        Priority on key conflict (highest wins, with a warning on path mismatch):
+        1. `forge remappings` — recursively walks nested foundry.toml files (e.g. lib/*/foundry.toml)
+            and emits paths relative to CWD; strictly stronger than parsing the top-level
+            foundry.toml alone. Best-effort: skipped silently if forge is not installed or
+            the command fails.
+        2. foundry.toml — hand-curated source of truth for the build system
+        3. remappings.txt — often partially auto-generated; may drift
+        4. package.json — npm-style fallback
+        """
+        packages: List[str] = []
+        remapping_key_to_path: Dict[str, str] = {}
+        remapping_key_to_source: Dict[str, str] = {}
+
+        # Try `forge remappings` (highest priority — walks nested foundry.toml files)
+        try:
+            result = subprocess.run(
+                ["forge", "remappings"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            self.log(f"Could not run `forge remappings` ({e}); falling back to local files", "INFO")
+            result = None
+
+        if result is not None and result.returncode == 0:
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                self._merge_remapping_entry(
+                    entry=line,
+                    source_name="`forge remappings`",
+                    packages=packages,
+                    remapping_key_to_path=remapping_key_to_path,
+                    remapping_key_to_source=remapping_key_to_source,
+                    warn_on_mismatch=False,
+                )
+        elif result is not None:
+            self.log(
+                f"`forge remappings` exited with code {result.returncode}; falling back to local files",
+                "WARNING",
+            )
+
+        # Read foundry.toml (next priority — top-level remappings field)
+        foundry_toml_path = Path("foundry.toml")
+        if foundry_toml_path.exists():
+            try:
+                with foundry_toml_path.open("rb") as f:
+                    foundry_data = tomllib.load(f)
+            except tomllib.TOMLDecodeError as e:
+                self.log(f"Failed to parse foundry.toml: {e}", "WARNING")
+                foundry_data = {}
+
+            foundry_remappings: List[str] = []
+            # foundry.toml accepts both top-level `remappings = [...]` and
+            # `[profile.default] remappings = [...]`; merge with top-level winning per
+            # foundry's own semantics.
+            foundry_remappings.extend(
+                foundry_data.get("profile", {}).get("default", {}).get("remappings", []) or []
+            )
+            foundry_remappings.extend(foundry_data.get("remappings", []) or [])
+
+            for entry in foundry_remappings:
+                entry = entry.strip()
+                if not entry or "=" not in entry:
+                    continue
+                self._merge_remapping_entry(
+                    entry=entry,
+                    source_name="foundry.toml",
+                    packages=packages,
+                    remapping_key_to_path=remapping_key_to_path,
+                    remapping_key_to_source=remapping_key_to_source,
+                    warn_on_mismatch=False,
+                )
+
+        # Read remappings.txt
+        remappings_path = Path("remappings.txt")
+        if remappings_path.exists():
+            for line in remappings_path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                self._merge_remapping_entry(
+                    entry=line,
+                    source_name="remappings.txt",
+                    packages=packages,
+                    remapping_key_to_path=remapping_key_to_path,
+                    remapping_key_to_source=remapping_key_to_source,
+                    warn_on_mismatch=True,
+                )
+
+        # Read package.json and add entries not already in remappings
+        package_json_path = Path("package.json")
+        if package_json_path.exists():
+            package_data = json.loads(package_json_path.read_text())
+            for section in ("dependencies", "devDependencies", "resolutions"):
+                for key in package_data.get(section, {}):
+                    self._merge_remapping_entry(
+                        entry=f"{key}=node_modules/{key}",
+                        source_name="package.json",
+                        packages=packages,
+                        remapping_key_to_path=remapping_key_to_path,
+                        remapping_key_to_source=remapping_key_to_source,
+                        warn_on_mismatch=True,
+                    )
+
+        return packages
+
+    def _merge_remapping_entry(
+        self,
+        *,
+        entry: str,
+        source_name: str,
+        packages: List[str],
+        remapping_key_to_path: Dict[str, str],
+        remapping_key_to_source: Dict[str, str],
+        warn_on_mismatch: bool,
+    ) -> None:
+        """Merge a single `key=path` remapping entry into the running packages list.
+
+        Both sides of the entry get ``rstrip("/")``-normalized before storage, so the
+        merged list is internally consistent regardless of which source emitted the
+        entry. Solc/forge accept the normalized form (`key=path`) as long as key and
+        path agree on trailing slashes, which this guarantees.
+
+        On a key conflict (already populated by an earlier-priority source):
+        - if ``warn_on_mismatch`` and the stored path differs from the new one, log a
+          warning naming the actual earlier source from ``remapping_key_to_source``;
+        - otherwise silently skip.
+
+        Caller is responsible for stripping whitespace and confirming the entry contains
+        an ``=`` before calling.
+        """
+        raw_key, raw_path = entry.split("=", 1)
+        key = raw_key.rstrip("/")
+        path = raw_path.rstrip("/")
+
+        if key in remapping_key_to_path:
+            if warn_on_mismatch and remapping_key_to_path[key] != path:
+                earlier_source = remapping_key_to_source[key]
+                self.log(
+                    f"Package '{key}' has different paths in {earlier_source} "
+                    f"('{remapping_key_to_path[key]}') and {source_name} ('{path}') "
+                    f"— using {earlier_source}",
+                    "WARNING",
+                )
+            return
+
+        packages.append(f"{key}={path}")
+        remapping_key_to_path[key] = path
+        remapping_key_to_source[key] = source_name
