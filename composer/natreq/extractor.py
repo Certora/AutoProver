@@ -16,8 +16,8 @@ from langgraph.graph import MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
-from composer.audit.types import InputFileLike
-from composer.audit.db import ResumeArtifact
+from composer.audit.store import ResumeArtifact
+from composer.input.files import Document, TextDocument
 from composer.input.types import RAGDBOptions
 from composer.rag.db import ComposerRAGDB, rag_context
 from composer.rag.models import get_model
@@ -115,8 +115,8 @@ async def get_requirements(
     io: IOHandler,
     options: RAGDBOptions,
     llm: BaseChatModel,
-    sys_doc: InputFileLike,
-    spec_file: InputFileLike,
+    sys_doc: Document,
+    spec_file: TextDocument,
     mem_tool: BaseTool,
     resume_artifact: ResumeArtifact | None,
 ) -> ExtractionResult:
@@ -147,9 +147,10 @@ async def get_requirements(
 
         config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
+        sys_text = sys_doc.string_contents
         input_text : list[str | dict] = [
             "The system document is as follows:",
-            sys_doc.string_contents,
+            sys_text if sys_text is not None else sys_doc.to_dict(),
             "The spec file is as follows:",
             spec_file.string_contents
         ]
@@ -164,7 +165,7 @@ async def get_requirements(
     """)
             input_text.append("The OLD spec file is as follows:")
             input_text.append(
-                resume_artifact.spec_file
+                resume_artifact.spec.contents
             )
 
         graph_input = ExtractionInput(input=input_text, memory=None, did_read=False)
