@@ -146,11 +146,19 @@ non-deterministic** tool results, which make the agent's next call diverge from 
 recording. In order of impact:
 
 - **`memory` tool calls** — the agent uses `memory` (per-run namespace) to stash and
-  re-read "progress" notes; replay can't reproduce that store, so a recorded `memory`
-  read returns different content and the agent veers off-tape. In the JSON, drop the
+  re-read "progress" notes, and replay can't reproduce that store. The breakage isn't
+  about *content*: `HarnessFakeLLM` serves the next recorded response strictly in lane
+  order and never inspects the prompt, so what a `memory` read returns can't change which
+  response comes next. The breakage is an **added turn**. During recording, the `memory`
+  read succeeded; on replay the store is empty, so the real tool call now *errors*
+  (`File not found: /memories/progress.md`). LangGraph wraps that error in a
+  `ToolMessage` and loops back to the model for a recovery turn — an extra `ainvoke` the
+  recording never made — so the lane runs out of entries and replay fails with
+  `lane exhausted`. Fix it by removing the `memory` call from the recording: drop the
   `memory` entry from a message's `"tool_calls"` (and its matching `tool_use` block in
-  `"content"`), or delete the whole message if `memory` was its only tool call. The
-  pipeline tolerates the agent not using memory.
+  `"content"`), or delete the whole message if `memory` was its only tool call. With no
+  real `memory` op, nothing errors and no extra turn is injected; the pipeline tolerates
+  the agent not using memory at all.
 - **Flailing / redundant turns** — on trivial scenarios the agent loops (re-reads
   files, re-drafts). Delete those message objects, trimming each lane to its canonical
   path. For a CVL lane that is `put_cvl_raw → feedback_tool → verify_spec → result`,
