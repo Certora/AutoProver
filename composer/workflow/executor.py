@@ -1,4 +1,4 @@
-from typing import Optional, cast, Any
+from typing import Optional, cast, Any, Callable
 import logging
 import uuid
 from dataclasses import dataclass
@@ -10,32 +10,31 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from langgraph.store.base import BaseStore
-from langgraph.graph.state import CompiledStateGraph
-from langgraph._internal._typing import StateLike
 from langgraph.types import Checkpointer
 
 from graphcore.graph import Builder
 from graphcore.tools.memory import async_memory_tool
-from graphcore.tools.vfs import VFSState
+from graphcore.tools.vfs import VFSState, VFSAccessor
 
 from composer.input.types import WorkflowOptions, InputData, ResumeFSData, ResumeIdData, ResumeInput, NativeFS
 from composer.input.files import Document, InMemoryTextFile
 from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools
-from composer.workflow.factories import get_cryptostate_builder, get_vfs_tools, get_memory_ns
+from composer.workflow.factories import get_vfs_tools, get_memory_ns
 from composer.workflow.services import standard_connections, IndexedConnections
 from composer.workflow.types import PromptParams, WorkflowSuccess, WorkflowFailure, WorkflowCrash, WorkflowResult
 from composer.workflow.meta import create_resume_commentary
 from composer.core.context import AIComposerContext, ProverOptions
-from composer.prover.core import make_prover_options
-from composer.core.validation import ValidationType, prover, reqs as req_type
-from composer.rag.db import PostgreSQLRAGDatabase
+from composer.core.state import AIComposerState
+from composer.prover.core import make_prover_options, CexHandler
+from composer.core.validation import ProverValidation, ReqsValidation
+from composer.rag.db import rag_context, ComposerRAGDB
 from composer.rag.models import get_model as get_rag_model
 from composer.audit.db import AuditDB, AuditDBSink, ResumeArtifact, InputFileLike
 from composer.natreq.extractor import get_requirements
 from composer.natreq.judge import get_judge_tool
-from composer.spec.cvl_research import CVL_RESEARCH_BASE_DOC, _build_research_tool
+from composer.spec.cvl_research import CVL_RESEARCH_BASE_DOC, cvl_research_tool
 from composer.tools.relaxation import requirements_relaxation
-from composer.tools.search import cvl_manual_tools
+from composer.tools.search import cvl_manual_tools, cvl_manual_search
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import CodeGenIOHandler, WorkflowPurpose
 from composer.io.context import with_handler, run_graph
@@ -47,7 +46,13 @@ from composer.prover.report_store import ReportStore
 from composer.spec.proposal_store import ProposalStore
 from composer.spec.cex_remediation import cex_remediation_tool, summary_critic_tool
 from composer.spec.guidance import ERC20TokenGuidance
-from composer.tools.working_spec import ApplyRemediationProposal
+from composer.tools.working_spec import ApplyRemediationProposal, CommitWorkingSpec, ReadWorkingSpec, WriteWorkingSpec
+from composer.tools.prover import CertoraProverTool, ProverDeps
+from composer.tools.proposal import propose_spec_change
+from composer.tools.question import human_in_the_loop
+from composer.tools.result import code_result
+from composer.workflow.codegen_store import CodegenStore
+from composer.workflow.summarization import SummaryGeneration
 
 
 _KB_NS = ("cvl",)
@@ -81,8 +86,11 @@ def get_reference_input(input_data: InputData, debug_prompt: Optional[str]) -> s
         debug_prompt=debug_prompt)
 
 def _get_empty_extra() -> AIComposerExtra:
+    # Prover is the baseline completion gate on every path; the reqs gate is
+    # appended later iff requirements were extracted (see _run_codegen).
     return AIComposerExtra(
-        validation={}, skipped_reqs=set(), working_spec=None
+        validations={}, required_validations=[ProverValidation()],
+        skipped_reqs=set(), working_spec=None
     )
 
 
@@ -214,16 +222,22 @@ async def execute_ai_composer_workflow(
     delegates to ``_run_codegen``. The audit DB stays on psycopg for now;
     only the langgraph side moves async.
     """
-    async with standard_connections(embedder=DefaultEmbedder()) as conn:
+    # One embedding model, shared by the indexed-store embedder and the RAG
+    # connection — get_model() loads a fresh SentenceTransformer per call, so
+    # instantiating once avoids double-loading the same nomic-embed model.
+    model = get_rag_model()
+    async with (
+        standard_connections(embedder=DefaultEmbedder(model)) as conn,
+        rag_context(workflow_options.rag_db, model) as rag_db,
+    ):
         audit_conn = psycopg.connect(workflow_options.audit_db)
         try:
             return await _run_codegen(
-                handler, llm, input, workflow_options, conn, AuditDB(audit_conn),
+                handler, llm, input, workflow_options, conn, rag_db, AuditDB(audit_conn),
                 memory_namespace=memory_namespace, resume_work_key=resume_work_key,
             )
         finally:
             audit_conn.close()
-
 
 async def _run_codegen(
     handler: CodeGenIOHandler,
@@ -231,6 +245,7 @@ async def _run_codegen(
     input: InputData | ResumeFSData | ResumeIdData,
     workflow_options: WorkflowOptions,
     conn: IndexedConnections,
+    rag_db: ComposerRAGDB,
     audit_db: AuditDB,
     *,
     memory_namespace: str | None,
@@ -288,40 +303,25 @@ async def _run_codegen(
 
     store = conn.store
     report_store = ReportStore(store=store)
-    proposal_store = ProposalStore(store=store)
+    codegen_store = CodegenStore(store)
 
     req_mem_tool = async_memory_tool(conn.memory(get_memory_ns(mem_root, "natreq")))
 
-    extra_reqs = await store.aget((thread_id,), "requirements")
-    reqs_list : list[str] | None
-    if extra_reqs is None:
-        if workflow_options.skip_reqs:
-            reqs_list = None
-        elif workflow_options.set_reqs is not None:
-            if workflow_options.set_reqs.startswith("@"):
-                other_reqs = await store.aget((workflow_options.set_reqs[1:],), "requirements")
-                assert other_reqs is not None
-                reqs_list = other_reqs.value["reqs"]
-            else:
-                reqs_list = [ v for l in pathlib.Path(workflow_options.set_reqs).read_text().splitlines() if (v := l.strip()) ]
-        else:
-            print("Analyzing requirements...")
-            extraction = await get_requirements(
-                handler,
-                workflow_options,
-                llm,
-                system_doc,
-                spec_file,
-                req_mem_tool,
-                resume_art,
-                workflow_options.requirements_oracle
-            )
-            reqs_list = extraction.reqs
-            await handler.log_workflow_thread(WorkflowPurpose.NATREQ, extraction.thread_id)
-        await store.aput((thread_id,), "requirements", {"reqs": reqs_list})
-    else:
-        print("Read requirements from store")
-        reqs_list = extra_reqs.value["reqs"]
+    reqs_list = await codegen_store.requirements(thread_id)
+    if reqs_list is None and not workflow_options.skip_reqs:
+        print("Analyzing requirements...")
+        extraction = await get_requirements(
+            handler,
+            workflow_options,
+            llm,
+            system_doc,
+            spec_file,
+            req_mem_tool,
+            resume_art,
+        )
+        reqs_list = extraction.reqs
+        await handler.log_workflow_thread(WorkflowPurpose.NATREQ, extraction.thread_id)
+        await codegen_store.record_requirements(thread_id, reqs_list)
     extra_tools = []
 
     if reqs_list is not None:
@@ -336,92 +336,45 @@ async def _run_codegen(
         extra_tools.append(judge_tool)
         extra_tools.append(requirements_relaxation)
 
-    if "context-management-2025-06-27" in getattr(llm, "betas"):
-        memory = async_memory_tool(conn.memory(get_memory_ns(mem_root, "composer")))
-        extra_tools.append(memory)
+    memory = async_memory_tool(conn.memory(get_memory_ns(mem_root, "composer")))
+    extra_tools.append(memory)
 
-    # CVL research sub-agent — KB needs indexed store for semantic search
-    rag_db = PostgreSQLRAGDatabase(workflow_options.rag_db, get_rag_model())
-    indexed_store = conn.indexed_store
-    cvl_builder = Builder().with_llm(
-        llm
-    ).with_loader(
-        load_jinja_template
-    ).with_tools(
-        cvl_manual_tools(rag_db)
-    ).with_checkpointer(
-        checkpointer
-    ).with_tools(
-        make_kb_tools(indexed_store, _KB_NS, read_only=True)
-    )
-
-    research_doc = CVL_RESEARCH_BASE_DOC + " Do NOT use this for source code questions — use the VFS tools for that."
-    async def runner[S: StateLike, I: StateLike](
-        graph: CompiledStateGraph[S, Any, I, Any],
-        i: I,
-        tool_id: str | None,
-    ) -> S:
-        return await run_graph(
-            ctxt=None,
-            description="CVL Researcher",
-            graph=graph,
-            input=i,
-            run_conf={
-                "recursion_limit": workflow_options.recursion_limit,
-                "configurable": {
-                    "thread_id": "research-" + uuid.uuid4().hex[:16]
-                }
-            },
-            within_tool=tool_id
-        )
-    research_tool = _build_research_tool(cvl_builder, runner, research_doc)
+    research_tool, cvl_builder = _cvl_knowledge_setup(llm, rag_db, conn, workflow_options.recursion_limit)
     extra_tools.append(research_tool)
 
-    (workflow_builder, materializer) = get_cryptostate_builder(
-        llm=llm,
-        fs_layer=fs_layer,
-    )
-
-    # CEX remediation sub-agent + its summary critic. The remediator drafts
-    # spec-side CVL fixes when the codegen author decides a counterexample
-    # needs a spec change rather than a code change; the critic gates those
-    # drafts for soundness + faithfulness to the system document (passed as a
-    # Document). The author also gets apply_remediation_proposal to stage a
-    # proposal by key. recursion_limit is threaded into every sub-agent.
+    # VFS tooling: the mutable layer (its materializer is shared into the
+    # AIComposerContext) plus an immutable view for the read-only sub-agents.
+    vfs_tooling, materializer = get_vfs_tools(fs_layer=fs_layer, immutable=False)
     immut_vfs_tools, _ = get_vfs_tools(fs_layer=fs_layer, immutable=True)
-    summary_critic = summary_critic_tool(
-        cvl_builder.with_tools([*immut_vfs_tools, research_tool]),
-        system_doc_doc,
-        recursion_limit=workflow_options.recursion_limit,
-    )
-    cex_remediator = cex_remediation_tool(
-        cvl_builder.with_tools([
-            *immut_vfs_tools,
-            research_tool,
-            summary_critic,
-            ERC20TokenGuidance.as_tool("erc20_guidance"),
-        ]),
-        materializer,
-        system_doc_doc,
-        async_memory_tool(conn.memory(get_memory_ns(mem_root, "cex-remediation"))),
-        proposal_store,
-        report_store,
-        recursion_limit=workflow_options.recursion_limit,
-    )
-    extra_tools.append(cex_remediator)
-    extra_tools.append(
-        ApplyRemediationProposal.bind(proposal_store).as_tool("apply_remediation_proposal")
+
+    # Prover options, built here so the prover tool's ProverDeps can bind them.
+    resolved = make_prover_options(cloud=not workflow_options.local_prover)
+    prover_opts = ProverOptions(
+        capture_output=workflow_options.prover_capture_output,
+        keep_folder=workflow_options.prover_keep_folders,
+        extra_args=resolved.extra_args,
     )
 
-    # The agentic CEX handler injected into the prover tool via context. It
-    # needs CVL research / manual / KB tools to ask CVL-language questions
-    # during analysis; source-side reads are scoped per call to the prover
-    # report folder inside ``analyze``, not baked into the builder.
-    cex_handler = AgenticCexHandler(
-        builder=cvl_builder.with_tools([research_tool]),
-        report_store=report_store,
-        recursion_limit=workflow_options.recursion_limit,
+    cex_remediation_tools = _remediation_tools(
+        cvl_builder,
+        conn,
+        system_doc_doc,
+        report_store,
+        immut_vfs_tools,
+        materializer,
+        async_memory_tool(conn.memory(get_memory_ns(mem_root, "cex-remediation"))),
+        workflow_options.recursion_limit,
     )
+    extra_tools.extend(cex_remediation_tools)
+
+    cex_handler = AgenticCexHandler(
+        builder=cvl_builder,
+        report_store=report_store,
+        recursion_limit=workflow_options.recursion_limit
+    )
+
+    crypto_tools = _codegen_author_tools(cex_handler, prover_opts, rag_db, vfs_tooling)
+    workflow_builder = _codegen_builder(llm, crypto_tools)
 
     workflow_graph = workflow_builder.with_tools(extra_tools).with_sys_prompt_template(
         "system_prompt.j2"
@@ -440,15 +393,16 @@ async def _run_codegen(
 
     workflow_exec = workflow_graph.compile(checkpointer=checkpointer, store=store)
     if reqs_list is not None:
+        flow_input["required_validations"].append(ReqsValidation())
         flow_input["input"].append(f"""
     Additionally, the implementation MUST satisfy the following requirements:
     {"\n".join(f"{i}. {r}" for (i, r) in enumerate(reqs_list, start = 1))}
     """)
 
     if resume_work_key is not None:
-        snapshot = await store.aget(("crash_recovery",), resume_work_key)
+        snapshot = await codegen_store.recovery(resume_work_key)
         if snapshot is not None:
-            vfs_files = list(snapshot.value["vfs"].items())
+            vfs_files = list(snapshot.items())
             recovery_msg = load_jinja_template("crash_recovery_context.j2", vfs_files=vfs_files)
             flow_input["input"].insert(0, recovery_msg)
 
@@ -465,22 +419,7 @@ async def _run_codegen(
     if workflow_options.checkpoint_id is not None:
         config["configurable"]["checkpoint_id"] = workflow_options.checkpoint_id
 
-    resolved = make_prover_options(cloud=not workflow_options.local_prover)
-    prover_opts: ProverOptions = ProverOptions(
-        capture_output=workflow_options.prover_capture_output,
-        keep_folder=workflow_options.prover_keep_folders,
-        extra_args=resolved.extra_args,
-    )
-
-    required_validations : list[ValidationType] = [prover]
-    if reqs_list is not None:
-        required_validations.append(req_type)
-
-    work_context = AIComposerContext(
-        rag_db=rag_db, prover_opts=prover_opts,
-        vfs_materializer=materializer, required_validations=required_validations,
-        cex_handler=cex_handler,
-    )
+    work_context = AIComposerContext(vfs_materializer=materializer)
 
     audit_sink = AuditDBSink(audit_db, thread_id)
 
@@ -509,8 +448,122 @@ async def _run_codegen(
                 channel_values = cast(VFSState, ct.checkpoint["channel_values"])
                 vfs_snapshot = {path: content.decode("utf-8") for path, content in materializer.iterate(channel_values)}
                 resume_key = f"crash_{thread_id}_{uuid.uuid4().hex[:8]}"
-                await store.aput(("crash_recovery",), resume_key, {"vfs": vfs_snapshot})
+                await codegen_store.save_recovery(resume_key, vfs_snapshot)
                 logger.info(f"Saved crash recovery snapshot: {resume_key}")
         except Exception as snapshot_exc:
             logger.warning(f"Failed to capture crash snapshot: {snapshot_exc}")
         return WorkflowCrash(resume_work_key=resume_key, error=exc)
+
+
+def _cvl_knowledge_setup(
+    llm: BaseChatModel,
+    rag_db: ComposerRAGDB,
+    conn: IndexedConnections,
+    recursion_limit: int,
+) -> tuple[BaseTool, Builder]:
+    """CVL knowledge tooling built on the standard connections. Returns the
+    research sub-agent (which uses cvl_research's own default run_to_completion
+    runner) and the rag-equipped builder the CEX sub-agents extend — with the
+    research tool already bound, since every consumer wants it. ``base_rag_tools``
+    is the CVL manual + KB search over the standard indexed store."""
+    base_rag_tools = tuple(cvl_manual_tools(rag_db)) + tuple(
+        make_kb_tools(conn.indexed_store, _KB_NS, read_only=True)
+    )
+    builder = (
+        Builder()
+        .with_llm(llm)
+        .with_loader(load_jinja_template)
+        .with_checkpointer(conn.checkpointer)
+    )
+
+    @dataclass(frozen=True)
+    class _CVLResearchEnv:
+        builder: Builder[None, None, None]
+        base_rag_tools: tuple[BaseTool, ...]
+
+    research_doc = CVL_RESEARCH_BASE_DOC + " Do NOT use this for source code questions — use the VFS tools for that."
+    research_tool = cvl_research_tool(
+        _CVLResearchEnv(builder, base_rag_tools), research_doc, recursion_limit
+    )
+    return research_tool, builder.with_tools([*base_rag_tools, research_tool])
+
+
+def _remediation_tools(
+    cvl_builder: Builder[None, None, None],
+    conn: IndexedConnections,
+    system_doc: Document,
+    report_store: ReportStore,
+    immut_vfs_tools: list[BaseTool],
+    materializer: VFSAccessor[VFSState],
+    mem_tool: BaseTool,
+    recursion_limit: int,
+) -> list[BaseTool]:
+    """The CEX remediation sub-agent (+ its summary critic) and the agentic CEX
+    handler. ``cvl_builder`` already carries the CVL manual / KB / research
+    tools. Returns the author-facing tools (the remediator + apply-proposal) to
+    add to the codegen toolset, plus the handler to inject into the prover via
+    ProverDeps. ``recursion_limit`` is threaded into every sub-agent."""
+    remediation_builder = cvl_builder.with_tools(
+        immut_vfs_tools
+    )
+    proposal_store = ProposalStore(conn.store)
+
+    cex_remediator = cex_remediation_tool(
+        remediation_builder,
+        materializer,
+        system_doc,
+        mem_tool,
+        proposal_store,
+        report_store,
+        recursion_limit=recursion_limit,
+    )
+    author_tools: list[BaseTool] = [
+        cex_remediator,
+        ApplyRemediationProposal.bind(proposal_store).as_tool("apply_remediation_proposal"),
+    ]
+    return author_tools
+
+
+def _codegen_author_tools(
+    cex_handler: CexHandler,
+    prover_opts: ProverOptions,
+    rag_db: ComposerRAGDB,
+    vfs_tooling: list[BaseTool],
+) -> list[BaseTool]:
+    """The codegen author's tool set (formerly ``get_cryptostate_builder``'s
+    crypto_tools). The prover tool is bound with its per-run deps here;
+    cvl_manual_search takes the rag_db instance directly."""
+    return [
+        CertoraProverTool.bind(
+            ProverDeps(cex_handler=cex_handler, prover_opts=prover_opts)
+        ).as_tool("certora_prover"),
+        propose_spec_change,
+        human_in_the_loop,
+        code_result,
+        cvl_manual_search(rag_db),
+        *vfs_tooling,
+        ReadWorkingSpec.as_tool("read_working_spec"),
+        WriteWorkingSpec.as_tool("write_working_spec"),
+        CommitWorkingSpec.as_tool("commit_working_spec"),
+    ]
+
+
+def _codegen_builder(llm: BaseChatModel, crypto_tools: list[BaseTool]) -> Builder:
+    """The codegen workflow Builder with the author tool set bound."""
+    return Builder().with_context(
+        AIComposerContext
+    ).with_loader(
+        load_jinja_template
+    ).with_input(
+        AIComposerInput
+    ).with_tools(
+        crypto_tools
+    ).with_state(
+        AIComposerState
+    ).with_llm(
+        llm
+    ).with_output_key(
+        "generated_code"
+    ).with_summary_config(
+        SummaryGeneration()
+    )

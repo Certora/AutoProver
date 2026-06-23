@@ -25,7 +25,6 @@ from composer.workflow.services import checkpointer_context
 from composer.tools.search import cvl_manual_search
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.templates.loader import load_jinja_template
-from composer.natreq.automation import requirements_oracle
 from composer.human.types import HumanInteractionType
 from composer.io.protocol import IOHandler
 from composer.io.context import with_handler, run_graph
@@ -112,29 +111,6 @@ system_prompt = load_jinja_template("req_role_prompt.j2")
 initial_prompt = load_jinja_template("req_extraction_prompt.j2")
 
 
-class OracleHandler:
-    """Delegation-based wrapper around any IOHandler.
-
-    Forwards all methods except human_interaction, where extraction_question
-    interrupts are routed to the oracle (if available).
-    """
-
-    def __init__(self, inner: IOHandler, oracle: Callable[[tuple[str, str]], str] | None):
-        self._inner = inner
-        self._oracle = oracle
-
-    def __getattr__(self, name: str):
-        return getattr(self._inner, name)
-
-    async def human_interaction(self, ty: HumanInteractionType, debug_thunk: Callable[[], None]) -> str:
-        if ty["type"] == "extraction_question" and self._oracle is not None:
-            print(f"Calling oracle...\nQuestion: {ty['question']}\nContext: {ty['context']}")
-            resp = self._oracle((ty["context"], ty["question"]))
-            print(f"Oracle response: {resp}")
-            return resp
-        return await self._inner.human_interaction(ty, debug_thunk)
-
-
 async def get_requirements(
     io: IOHandler,
     options: RAGDBOptions,
@@ -143,7 +119,6 @@ async def get_requirements(
     spec_file: InputFileLike,
     mem_tool: BaseTool,
     resume_artifact: ResumeArtifact | None,
-    oracle: list[str]
 ) -> ExtractionResult:
     tools = [
         mem_tool,
@@ -192,17 +167,9 @@ async def get_requirements(
                 resume_artifact.spec_file
             )
 
-        req_oracle : Callable[[tuple[str, str]], str] | None = None
-        if oracle is not None and len(oracle):
-            req_oracle = requirements_oracle(
-                llm,
-                [ pathlib.Path(p) for p in oracle ]
-            )
-
         graph_input = ExtractionInput(input=input_text, memory=None, did_read=False)
 
-        handler = OracleHandler(io, req_oracle)
-        async with with_handler(handler, NullEventHandler()):  # type: ignore[arg-type]
+        async with with_handler(io, NullEventHandler()):  # type: ignore[arg-type]
             final_state = await run_graph(built, ExtractionContext(rag_db=db), graph_input, config, description="Requirements extraction")
         assert "reqs" in final_state
         return ExtractionResult(reqs=final_state["reqs"], thread_id=thread_id)

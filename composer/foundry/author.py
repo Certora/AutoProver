@@ -58,15 +58,15 @@ from composer.ui.tool_display import (
 
 from composer.foundry.runner import get_forge_test_tool
 from composer.foundry.state import (
-    FEEDBACK,
-    FORGE_TEST_VALIDATION_KEY,
     FOUNDRY_JUDGE_KEY,
     FoundryTestExtra,
     FoundryGenerationInput,
     FoundryGenerationState,
     PropertyTestMapping,
+    ForgeTestValidation,
+    FeedbackValidation,
     check_foundry_completion,
-    make_foundry_validation_stamper,
+    stamp,
     validate_property_tests,
 )
 
@@ -326,7 +326,6 @@ the parent tool widget."""
 @dataclass
 class FeedbackDependencies:
     thunk: _FeedbackImplThunk
-    stamper: Callable[[FoundryGenerationState], dict[str, str]]
 
 
 @tool_display("Getting feedback", "Feedback")
@@ -375,7 +374,7 @@ class FeedbackTool(
                 return tool_state_update(
                     content=result,
                     tool_call_id=self.tool_call_id,
-                    validations=deps.stamper(self.state),
+                    **stamp(FeedbackValidation(), self.state),
                 )
             return result
 
@@ -667,7 +666,6 @@ async def batch_foundry_test_generation(
     judge_ctx = ctx.child(FOUNDRY_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=_build_feedback_thunk(judge_ctx, env, props, component),
-        stamper=make_foundry_validation_stamper(FEEDBACK),
     )
 
     builder = (
@@ -699,7 +697,7 @@ async def batch_foundry_test_generation(
     init_state = FoundryGenerationInput(
         curr_test=None,
         input=[],
-        required_validations=[FORGE_TEST_VALIDATION_KEY, FEEDBACK],
+        required_validations=[ForgeTestValidation(), FeedbackValidation()],
         skipped=[],
         property_tests=[],
         validations={},
