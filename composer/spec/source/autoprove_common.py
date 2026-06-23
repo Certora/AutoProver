@@ -155,8 +155,6 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
             {"root_thread_id": thread_id},
             default_logging_ns(None),
             run_id=summary.run_id,
-            # Persist final token usage into RunMeta.tags at run close (totals
-            # known only once the pipeline is done). Mirrors token_usage.json.
         ) as data_logger
     ):
         # Source-code agent caches are always per-user — the conventional
@@ -228,6 +226,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         try:
             yield runner
         finally:
+            # Persist final token usage into RunMeta.tags at run close (totals
+            # known only once the pipeline is done). Mirrors token_usage.json.
             await data_logger(
                 "token_usage", summary.token_usage_summary()
             )
