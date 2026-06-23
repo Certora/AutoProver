@@ -1,7 +1,8 @@
 import argparse
 from typing import TypeVar, Protocol, cast, Annotated, get_type_hints, get_origin, Any, get_args, Union
 from composer.audit.db import DEFAULT_CONNECTION as AUDITDB_DEFAULT_CONNECTION
-from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions
+from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions, UploadPaths, InputData
+from composer.input.files import FileUploader
 
 ArgNS = TypeVar("ArgNS", covariant=True)
 
@@ -138,6 +139,23 @@ def fresh_workflow_argument_parser() -> TypedArgumentParser[CommandLineArgs]:
     _common_options(parser)
 
     return cast(TypedArgumentParser[CommandLineArgs], parser)
+
+
+async def upload_input(args: UploadPaths) -> InputData:
+    """Turn the CLI's spec / interface / system-doc paths into an ``InputData``.
+
+    Spec and interface are unconditionally uploaded to the Files API as text
+    (``upload_text_file_if_needed`` → ``UploadedTextFile``, a ``TextDocument``);
+    the system doc goes through ``get_document`` so a PDF is uploaded while a
+    text design doc stays inline.
+    """
+    uploader = await FileUploader.fresh()
+    spec = await uploader.upload_text_file_if_needed(args.spec_file)
+    intf = await uploader.upload_text_file_if_needed(args.interface_file)
+    system_doc = await uploader.get_document(args.system_doc)
+    if system_doc is None:
+        raise FileNotFoundError(f"System document not found or not a file: {args.system_doc}")
+    return InputData(spec=spec, system_doc=system_doc, intf=intf)
 
 
 def _common_resume_args(parser: argparse.ArgumentParser) -> None:

@@ -27,8 +27,9 @@ from composer.prover.ptypes import RuleResult
 from graphcore.graph import LLM
 
 from composer.prover.core import (
-    ProverOptions, ProverCallbacks, run_prover, SummarizedReport, DefaultCexHandler
+    ProverOptions, ProverCallbacks, run_prover, DefaultCexHandler
 )
+from composer.prover.runner import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
     ProverOutputEvent, CloudPollingEvent, RuleAnalysisResult,
@@ -88,7 +89,7 @@ type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | R
 class StateWithSkips(CVLGenerationState, ProverStateExtra):
     pass
 
-class _SpecCallbacks(ProverCallbacks):
+class _SpecCallbacks(ProverEventCallbacks):
     def __init__(
         self,
         writer: Callable[[ProverEvents], None],
@@ -96,19 +97,12 @@ class _SpecCallbacks(ProverCallbacks):
         summary: RunSummary,
         config: dict,
     ) -> None:
+        super().__init__(writer, tool_call_id)
         self._writer = writer
         self._tool_call_id = tool_call_id
         self._summary = summary
         self._config = config
         self._started_mono: float | None = None
-
-    @override
-    async def on_stdout_line(self, line: str) -> None:
-        self._writer({
-            "type": "prover_output",
-            "tool_call_id": self._tool_call_id,
-            "line": line,
-        })
 
     @override
     async def on_cloud_poll(self, status: str, message: str) -> None:
@@ -117,29 +111,9 @@ class _SpecCallbacks(ProverCallbacks):
             f"cloud poll tool_call={self._tool_call_id} status={status} "
             f"elapsed={elapsed:.1f}s msg={message}"
         )
-        self._writer({
-            "type": "cloud_polling",
-            "tool_call_id": self._tool_call_id,
-            "status": status,
-            "message": message,
-        })
-
-    @override
-    async def on_analysis_start(self, rule: RuleResult) -> None:
-        self._writer({
-            "type": "cex_analysis",
-            "rule_name": rule.path.pprint(),
-            "tool_call_id": self._tool_call_id
-        })
-
-    @override
-    async def on_analysis_complete(self, rule: RuleResult, analysis: str) -> None:
-        self._writer({
-            "type": "rule_analysis",
-            "analysis": analysis,
-            "tool_call_id": self._tool_call_id,
-            "rule": rule.path.pprint()
-        })
+        await super().on_cloud_poll(
+            status, message
+        )
 
     @override
     async def on_prover_run(self, args: list[str]) -> None:
@@ -171,12 +145,9 @@ class _SpecCallbacks(ProverCallbacks):
             f"elapsed={elapsed:.1f}s status={status_summary}"
         )
         self._summary.add_prover_call(elapsed)
-        result_evt: ProverResult = {
-            "type": "prover_result",
-            "tool_call_id": self._tool_call_id,
-            "status": { k: v.status for (k,v) in results.items() },
-        }
-        self._writer(result_evt)
+        await super().on_prover_result(
+            results
+        )
 
 
 class VerifySpecSchema(BaseModel):
@@ -278,10 +249,6 @@ def get_prover_tool(
 
             if isinstance(result, str):
                 return result
-            if isinstance(result, SummarizedReport):
-                return tool_state_update(
-                    tool_call_id=tool_call_id, content=result.todo_list, prover_link=result.link
-                )
             all_verified = True
             for (r, stat) in result.rule_status.items():
                 if r in state["rule_skips"]:
@@ -291,11 +258,11 @@ def get_prover_tool(
                     break
             if rules is None and all_verified:
                 return tool_state_update(
-                    tool_call_id=tool_call_id, content=result.report,
+                    tool_call_id=tool_call_id, content=result.result_str,
                     prover_link=result.link, validations=stamper(state),
                 )
             return tool_state_update(
-                tool_call_id=tool_call_id, content=result.report, prover_link=result.link
+                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
             )
 
     return verify_spec

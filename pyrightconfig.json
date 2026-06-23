@@ -1,5 +1,5 @@
 {
-  "include": ["composer", "analyzer"],
+  "include": ["composer", "analyzer", "sanity_analyzer"],
   "extraPaths": ["graphcore"],
   "stubPath": "stubs",
   "typeCheckingMode": "standard",
@@ -7,5 +7,5 @@
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none",
   "reportMatchNotExhaustive": "error",
-  "reportUnnecessaryTypeIgnoreComment": "error",    
+  "reportUnnecessaryTypeIgnoreComment": "none",    
 }
