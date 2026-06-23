@@ -29,13 +29,13 @@ from graphcore.graph import LLM
 from composer.prover.core import (
     ProverOptions, ProverCallbacks, run_prover, DefaultCexHandler
 )
-from composer.prover.runner import ProverEventCallbacks
+from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
     ProverOutputEvent, CloudPollingEvent, RuleAnalysisResult,
     CEXAnalysisStart, ProverRun, ProverLink, ProverResult
 )
-from composer.spec.cvl_generation import CVLGenerationState, make_validation_stamper
+from composer.spec.cvl_generation import CVLGenerationState, stamp, ProverValidation
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
@@ -63,8 +63,6 @@ def prover_config_overlay(base_config: dict, *, main_contract: str, verify_targe
 
 
 DELETE_SKIP = "__delete_skip"
-
-VALIDATION_KEY = "prover"
 
 def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
     to_ret = left.copy()
@@ -209,7 +207,6 @@ def get_prover_tool(
     prover_opts: ProverOptions,
 ) -> BaseTool:
     sem = _prover_sem(prover_opts.cloud)
-    stamper = make_validation_stamper(VALIDATION_KEY)
 
     @tool_display("Running prover", None)
     @tool(args_schema=VerifySpecSchema)
@@ -259,7 +256,7 @@ def get_prover_tool(
             if rules is None and all_verified:
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state),
+                    prover_link=result.link, **stamp(ProverValidation(), state),
                 )
             return tool_state_update(
                 tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link

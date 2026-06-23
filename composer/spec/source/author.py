@@ -12,14 +12,14 @@ from graphcore.graph import tool_state_update
 from graphcore.summary import SummaryConfig
 
 from composer.spec.cvl_generation import (
-    static_tools, CVLGenerationExtra, FeedbackToolContext, FEEDBACK_VALIDATION_KEY,
+    static_tools, CVLGenerationExtra, FeedbackToolContext, FeedbackValidation, ProverValidation,
     check_completion, validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
     GeneratedCVL, PropertyRuleMapping
 )
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.prop import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
-from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
+from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP
 from langgraph.graph import MessagesState
 from langgraph.runtime import get_runtime
 from pathlib import Path
@@ -402,7 +402,7 @@ async def batch_cvl_generation(
             curr_spec=None,
             config=init_config,
             input=[],
-            required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
+            required_validations=[FeedbackValidation(), ProverValidation()],
             rule_skips={},
             skipped=[],
             property_rules=[],

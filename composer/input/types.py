@@ -66,8 +66,6 @@ class WorkflowOptions(RAGDBOptions, LanggraphOptions, Protocol):
 
     audit_db: str
 
-    requirements_oracle: list[str]
-    set_reqs: Optional[str]
     skip_reqs: bool
 
 class ModelConfiguration(Protocol):

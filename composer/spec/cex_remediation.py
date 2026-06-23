@@ -39,6 +39,8 @@ from graphcore.graph import Builder, FlowInput
 from graphcore.tools.schemas import WithAsyncDependencies, WithInjectedState, WithAsyncImplementation, WithInjectedId
 from graphcore.tools.vfs import VFSState, VFSAccessor
 
+from composer.spec.guidance import ERC20TokenGuidance
+
 from composer.core.state import AIComposerState
 from composer.input.files import Document
 from composer.spec.graph_builder import bind_standard, run_to_completion
@@ -471,6 +473,10 @@ def cex_remediation_tool(
     so the per-CEX context survives summarization. See the comment on
     ``_CEXRemediationDeps.builder``.
     """
+    critic = summary_critic_tool(
+        builder, system_doc, recursion_limit=recursion_limit
+    )
+
     @tool_display("Reading system document", None)
     class ReadSystemDocument(WithAsyncImplementation[list[str | dict]]):
         """Read the protocol's system document — the authoritative
@@ -491,7 +497,7 @@ def cex_remediation_tool(
     prebuilt = (
         bind_standard(builder, _RemediationState)
         .with_input(_RemediationInput)
-        .with_tools([mem_tool, read_system_document])
+        .with_tools([mem_tool, read_system_document, critic, ERC20TokenGuidance.as_tool("erc20_guidance")])
         .with_sys_prompt_template("cex_remediation_system.j2")
     )
 
