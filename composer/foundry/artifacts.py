@@ -23,6 +23,7 @@ from composer.spec.gen_types import (
     FOUNDRY_DELIVERABLE_DIR, FOUNDRY_INTERNAL_DIR, under_project,
 )
 from composer.spec.prop import PropertyFormulation
+from composer.spec.source.report.schema import AutoProverReport
 from composer.spec.util import ensure_dir
 
 
@@ -68,22 +69,6 @@ class ComponentTestStatus(BaseModel):
     generated tests, plus any properties the author declared unformalizable."""
     tests: list[TestStatus]
     skipped: list[SkippedProperty]
-
-
-class FoundryComponentEntry(BaseModel):
-    """One generated component in the run report; ``stem`` keys its per-component
-    files under ``certora/foundry/properties/``."""
-    component: str
-    stem: str
-
-
-class FoundryRunReport(BaseModel):
-    """``certora/foundry/report.json`` — the run-level rollup. Per-component detail
-    lives in the ``properties/`` files keyed by each entry's ``stem``."""
-    n_components: int
-    n_properties: int
-    components: list[FoundryComponentEntry]
-    failures: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +135,10 @@ class FoundryArtifactStore(ArtifactStore):
 
     # -- run-level ----------------------------------------------------------
 
-    def write_report(self, report: FoundryRunReport) -> None:
-        """The run-level rollup to ``certora/foundry/report.json``. Per-component
-        detail lives in the ``properties/`` files written above."""
+    def write_report(self, report: AutoProverReport) -> None:
+        """The property-keyed run report to ``certora/foundry/report.json`` (render to HTML on
+        demand with ``autoprove-report-render``). Per-component detail lives in the ``properties/``
+        files written above."""
         out = ensure_dir(self._deliverable_dir()) / "report.json"
         out.write_text(report.model_dump_json(indent=2) + "\n")
 
