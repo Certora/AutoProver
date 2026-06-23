@@ -1,6 +1,6 @@
 import argparse
 from typing import TypeVar, Protocol, cast, Annotated, get_type_hints, get_origin, Any, get_args, Union
-from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions, UploadPaths, InputData
+from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions, UploadPaths, InputData, SpecInput
 from composer.input.files import FileUploader
 
 ArgNS = TypeVar("ArgNS", covariant=True)
@@ -149,7 +149,13 @@ async def upload_input(args: UploadPaths) -> InputData:
     system_doc = await uploader.get_document(args.system_doc)
     if system_doc is None:
         raise FileNotFoundError(f"System document not found or not a file: {args.system_doc}")
-    return InputData(spec=spec, system_doc=system_doc, intf=intf)
+    # The legacy CLI triad is single-spec; map it to a one-element specs list at
+    # the conventional codegen path. The pipeline is plumbed for N specs.
+    return InputData(
+        specs=[SpecInput(file=spec, vfs_path="rules.spec")],
+        system_doc=system_doc,
+        intf=intf,
+    )
 
 
 def _common_resume_args(parser: argparse.ArgumentParser) -> None:

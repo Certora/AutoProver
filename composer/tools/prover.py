@@ -21,6 +21,11 @@ from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 
 
+# Scratch VFS path the working-spec draft is materialized to for verification
+# (the draft has no committed path of its own until commit_working_spec).
+_WORKING_SPEC_SCRATCH = "_composer_working.spec"
+
+
 @dataclass
 class ProverDeps:
     """Per-run dependencies injected into the prover tool — the CEX-analysis
@@ -98,7 +103,19 @@ class CertoraProverTool(WithAsyncDependencies[Command, ProverDeps], WithInjected
               "up to date version of the code. However, when iteratively developing code, it may be useful to focus on a"
               "single, 'problematic' rule.")
     
-    use_working_spec : bool = Field(description="Use the working copy of the spec instead of the master copy.")
+    target_spec: Optional[str] = Field(default=None, description=(
+        "The VFS path of the committed spec file to verify against. Required "
+        "when use_working_spec is false; the prover reads this spec from the VFS "
+        "and records a per-spec completion stamp on success. Ignored when "
+        "use_working_spec is true (the transient working draft has no VFS path "
+        "until committed, and runs against it never stamp)."
+    ))
+
+    use_working_spec : bool = Field(description=(
+        "If true, verify against the current working-spec draft instead of a "
+        "committed spec file; target_spec is ignored and no completion stamp is "
+        "recorded (the draft has no VFS path until committed)."
+    ))
 
     state: Annotated[AIComposerState, InjectedState]
 
@@ -112,7 +129,12 @@ class CertoraProverTool(WithAsyncDependencies[Command, ProverDeps], WithInjected
                 # The handler already rendered the full report into result_str
                 # (including any volume summarization it chose to do); there's no
                 # separate truncated/summarized shape to branch on anymore.
-                if result.all_verified and not self.use_working_spec and not self.rule:
+                if (
+                    result.all_verified
+                    and not self.use_working_spec
+                    and not self.rule
+                    and self.target_spec is not None
+                ):
                     return Command(
                         update={
                             "messages": [
@@ -121,7 +143,7 @@ class CertoraProverTool(WithAsyncDependencies[Command, ProverDeps], WithInjected
                                     content=result.result_str
                                 )
                             ],
-                            **stamp(ProverValidation(), self.state),
+                            **stamp(ProverValidation(self.target_spec), self.state),
                         }
                     )
                 return tool_return(tool_call_id=self.tool_call_id, content=result.result_str)
@@ -136,8 +158,19 @@ async def _run_certora_prover(
     fixed codegen ``certoraRun`` args from the tool's fields, and run. Reads
     everything off ``tool`` (its args map ~1:1 onto a prover run); the only
     runtime-context read is ``vfs_materializer``."""
-    if tool.use_working_spec and not tool.state["working_spec"]:
-        return "No working spec written."
+    if tool.use_working_spec:
+        if not tool.state["working_spec"]:
+            return "No working spec written."
+        # The working draft has no VFS path; verify it from a scratch file
+        # written into the materialized tree. target_spec is ignored here.
+        effective_spec = _WORKING_SPEC_SCRATCH
+    else:
+        if tool.target_spec is None:
+            return (
+                "target_spec is required when use_working_spec is false. "
+                "Pass the VFS path of one of the registered spec files."
+            )
+        effective_spec = tool.target_spec
     ctxt = get_runtime(AIComposerContext).context
     writer = get_stream_writer()
 
@@ -145,12 +178,12 @@ async def _run_certora_prover(
         if tool.use_working_spec:
             ws = tool.state["working_spec"]
             assert ws is not None
-            (Path(temp_dir) / "rules.spec").write_text(ws)
+            (Path(temp_dir) / _WORKING_SPEC_SCRATCH).write_text(ws)
         try:
             args = tool.source_files.copy()
             args.extend([
                 "--verify",
-                f"{tool.target_contract}:./rules.spec",
+                f"{tool.target_contract}:./{effective_spec}",
                 "--optimistic_loop",
                 "--optimistic_hashing",
                 "--loop_iter",

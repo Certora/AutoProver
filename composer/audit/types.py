@@ -17,7 +17,7 @@ class RunInput(TypedDict):
     # Audit-restored file fields are ``Uploadable`` — not renderable content
     # blocks themselves; the executor rehydrates them through its
     # ``FileUploader`` into ``Document`` / ``TextDocument`` instances.
-    spec: SpecRunEntry
+    specs: list[SpecRunEntry]
     interface: TextUploadable
     system: Uploadable
     reqs: list[str] | None

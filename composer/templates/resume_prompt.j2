@@ -1,8 +1,4 @@
-The workflow you are resuming was started using the following spec file:
-
-```
-{{ orig_spec }}
-```
+The workflow you are resuming was started with the specification(s) described below.
 
 When the initial workflow was completed, you summarized your progress as follows:
 
@@ -10,18 +6,22 @@ When the initial workflow was completed, you summarized your progress as follows
 {{ commentary }}
 ```
 
-However, the specification file has since been updated to the following:
+{% for d in spec_deltas %}
+The spec at `{{ d.vfs_path }}` was originally:
 
 ```
-{{ new_spec }}
+{{ d.orig }}
 ```
 
-This NEW version of the specification has already been changed in the VFS at the path `rules.spec`.
+It has since been updated to the following (already applied to the VFS at `{{ d.vfs_path }}`):
 
-You must carefully analyze the differences between the specifications. Identify what
-has been added, removed or changed, and consider what, if anything, in the current version
-of the implementation has been changed.
+```
+{{ d.new }}
+```
 
+Carefully analyze the differences between these specifications. Identify what has been added,
+removed, or changed, and consider what, if anything, in the current implementation must change.
+{% endfor %}
 {% for change in other_changes %}
 In addition, the {{ change.single_form }} used in the original workflow was the following:
 
@@ -43,7 +43,6 @@ In addition to the above changes, you must also carefully analyze the difference
 Identify what has been added, removed or changed, and consider what, if anything, in the current version
 of the implementation has been changed.
 {% endfor %}
-
 {% if spec_change_commentary %}
 The following is provided as commentary on the input changes, which can include the reasons for the
 changes or a summary thereof:

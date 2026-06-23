@@ -11,14 +11,16 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ProverValidation:
-    """Completion gate: the Certora Prover verified the generated code against
-    the spec."""
+    """Completion gate: the Certora Prover verified a committed spec against the
+    generated code. One gate per registered spec, keyed by its VFS path."""
+
+    spec: str
 
     def to_key(self) -> str:
-        return "prover"
+        return f"prover:{self.spec}"
 
     def description(self) -> str:
-        return "prover verification"
+        return f"prover verification of {self.spec}"
 
 
 @dataclass(frozen=True)
