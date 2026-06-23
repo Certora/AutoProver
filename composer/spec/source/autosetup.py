@@ -8,7 +8,6 @@ against real source code.
 import json
 import logging
 import re
-import shlex
 import sys
 import tempfile
 from collections.abc import Callable
@@ -95,7 +94,7 @@ async def run_autosetup(
         project_root: Path to the Foundry project root
         relative_path: Relative path to the main contract file
         main_contract: Contract name, e.g. "Token"
-        prover_opts: Prover options carrying cloud flag + extra_args forwarded to certoraRun
+        prover_opts: Prover options; the cloud flag selects local vs cloud AutoSetup runner
 
     Returns:
         SetupResult with compilation config and summaries path
@@ -134,6 +133,8 @@ async def run_autosetup(
             sys.executable, "-m", "certora_autosetup.autosetup",
             "--composer-setup", f.name,
             "--no-strip-contracts",
+            "--skip-harnessing",
+            "--run-source", "AUTO_PROVER",
             "--main-contract",
             main_contract_path,
             main_contract_path,
@@ -142,9 +143,6 @@ async def run_autosetup(
 
         if not prover_opts.cloud:
             args.append("--use-local-runner")
-
-        if prover_opts.extra_args:
-            args.extend(["--extra-args", shlex.join(prover_opts.extra_args)])
 
         cb.log_start()
         proc = await asyncio.create_subprocess_exec(
