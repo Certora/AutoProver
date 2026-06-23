@@ -58,14 +58,20 @@ class SpecChangeProposalArgs(WithToolCallId):
     explanation: str = \
         Field(description="An explanation to the human reviewer as to why you think"
               "this change is necessary and why it is safe or sound to apply it.")
-    
+
+    target_path: str = Field(description=(
+        "The VFS path of the spec file this proposal edits. Must be one of the "
+        "registered spec files for this task (use list_files to see which spec "
+        "paths exist). The proposed contents replace this file on acceptance."
+    ))
+
     state: Annotated[AIComposerState, InjectedState]
 
 
 @tool_display(
     lambda p: (
-        f"Proposing spec change: {p['explanation']}"
-        if p.get("explanation") else "Proposing spec change"
+        f"Proposing spec change to {p.get('target_path', '?')}: {p['explanation']}"
+        if p.get("explanation") else f"Proposing spec change to {p.get('target_path', '?')}"
     ),
     None,
 )
@@ -73,13 +79,18 @@ class SpecChangeProposalArgs(WithToolCallId):
 def propose_spec_change(
     proposed_spec: str,
     explanation: str,
+    target_path: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
     state: Annotated[AIComposerState, InjectedState]
-) -> Command:
+) -> Command | str:
     ctxt = get_runtime(AIComposerContext)
-    vfs_access = ctxt.context.vfs_materializer 
-    curr_spec = vfs_access.get(state, "rules.spec")
-    assert curr_spec is not None
+    vfs_access = ctxt.context.vfs_materializer
+    curr_spec = vfs_access.get(state, target_path)
+    if curr_spec is None:
+        return (
+            f"Target path {target_path!r} is not a registered spec file in the VFS. "
+            f"Use list_files to see available spec paths."
+        )
     human_response = interrupt(ProposalType(
         type="proposal",
         proposed_spec=proposed_spec,
@@ -97,7 +108,7 @@ def propose_spec_change(
                     )
                 ],
                 "vfs": {
-                    "rules.spec": proposed_spec
+                    target_path: proposed_spec
                 }
             }
         )
