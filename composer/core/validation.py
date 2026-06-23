@@ -9,7 +9,6 @@ the others.
 
 from dataclasses import dataclass
 
-
 @dataclass(frozen=True)
 class ProverValidation:
     """Completion gate: the Certora Prover verified the generated code against
