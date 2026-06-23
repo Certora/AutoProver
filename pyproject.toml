@@ -32,10 +32,25 @@ dependencies = [
     "langgraph-prebuilt==1.0.8",
     "langchain_core<1.3.3",
     "certora-prover-cli",
+    # certora_autosetup runtime deps (merged in from the AutoSetup repo).
+    # einops is provided by the [ml] extra; certora-prover-cli (above) ships the
+    # prover_output_utility module AutoSetup imports.
+    "tqdm>=4.65.0",
+    "anthropic>=0.18.0",
+    "openai>=1.50.0",
+    "wcmatch>=8.5.0",
+    "python-dotenv>=1.0.0",
+    "json5>=0.9.0",
+    "claude-agent-sdk>=0.1.0",
+    "sqlalchemy>=2.0.0",
+    "isodate>=0.6.0",
+    "fsspec>=2023.1.0",
 ]
 
 [project.optional-dependencies]
 ml = ["sentence-transformers>=5.1", "einops"] # save CI
+# Optional S3-backed cache for certora_autosetup (SaaS mode).
+s3 = ["s3fs>=2023.1.0"]
 
 # Certora CLI package. certora-cli, certora-cli-beta, and
 # certora-cli-beta-mirror are the same tool published under different package
@@ -84,12 +99,32 @@ tui-foundry = "composer.cli.tui_foundry:main"
 autoprove-report-render = "composer.spec.source.report.render:main"
 tui-natspec = "composer.cli.tui_pipeline:main"
 cache-natspec = "composer.cli.cache_natspec:main"
+# certora_autosetup entry points (merged in from the AutoSetup repo).
+certora-autosetup = "certora_autosetup.autosetup.cli:main"
+certora-parallel-autosetup = "certora_autosetup.parallel_autosetup:main"
+certora-setup-summaries = "certora_autosetup.setup.setup_summaries:main"
+certora-setup-erc7201 = "certora_autosetup.setup.setup_erc7201:main"
+certora-run-auto-solc = "certora_autosetup.certoraRunAutoSolc:main"
+certora-fixconf = "certora_autosetup.fixconf:main"
+autosetup = "certora_autosetup.autosetup.cli:main"
+fixconf = "certora_autosetup.fixconf:main"
 
 [tool.setuptools.packages.find]
-include = ["composer*", "sanity_analyzer*", "analyzer*"]
+include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
 
 [tool.setuptools.package-dir]
 "" = "."
 
 [tool.setuptools.package-data]
 composer = ["templates/*.j2", "scripts/init-db.sql"]
+# Bundled CVL summaries, spec templates, mocks and conf templates the prover
+# reads directly off disk; ship them with the wheel.
+certora_autosetup = [
+    "certora/**",
+    "**/*.spec",
+    "**/*.conf",
+    "**/*.sol",
+    "**/*.template.sol",
+    "**/*.j2",
+    "**/*.json",
+]

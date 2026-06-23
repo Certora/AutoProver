@@ -1,0 +1,145 @@
+{
+  "oz_Math_mulDiv": {
+    "names": ["mulDiv", "sqrt"],
+    "library_names": ["Math"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_Math.template.spec",
+    "description": "OpenZeppelin Math.mulDiv / sqrt"
+  },
+  "oz_MathUpgradeable_mulDiv": {
+    "names": ["mulDiv"],
+    "library_names": ["MathUpgradeable"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_MathUpgradeable.spec",
+    "description": "OpenZeppelin MathUpgradeable.mulDiv"
+  },
+  "Uniswap_FullMath_mulDiv": {
+    "names": ["mulDiv"],
+    "library_names": ["FullMath"],
+    "summary_file": "specs/summaries/Uniswap/Uniswap_FullMath.spec",
+    "description": "Uniswap FullMath.mulDiv"
+  },
+  "toString": {
+    "names": ["toString"],
+    "library_names": ["ShortStrings"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_ShortStrings.spec",
+    "description": "OpenZeppelin ShortStrings.toString"
+  },
+  "toStringUpgradeable": {
+    "names": ["toString"],
+    "library_names": ["ShortStringsUpgradeable"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_ShortStringsUpgradeable.spec",
+    "description": "OpenZeppelin ShortStringsUpgradeable.toString"
+  },
+  "strings_toString": {
+    "names": ["toString"],
+    "library_names": ["Strings"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_Strings.spec",
+    "description": "OpenZeppelin Strings.toString"
+  },
+  "strings_toStringUpgradeable": {
+    "names": ["toString"],
+    "library_names": ["StringsUpgradeable"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_StringsUpgradeable.spec",
+    "description": "OpenZeppelin StringsUpgradeable.toString"
+  },
+  "prb_mulDiv": {
+    "names": ["mulDiv"],
+    "library_names": ["PRBMath"],
+    "summary_file": "specs/summaries/PRB/PRB_Math.template.spec",
+    "description": "PRB Math mulDiv"
+  },
+  "fixed_point_math": {
+    "names": ["mulWadDown", "mulWadUp", "divWadDown", "divWadUp", "mulDivDown", "mulDivUp", "mulWad", "divWad", "mulDiv", "fullMulDiv", "fullMulDivUp", "rpow", "sqrt"],
+    "library_names": ["FixedPointMathLib"],
+    "summary_file": "specs/summaries/FixedPointMathLib.spec",
+    "description": "FixedPointMathLib (Solmate / Solady)"
+  },
+  "consensys_bytes": {
+    "names": ["concat", "concatStorage", "slice", "toAddress", "toUint8", "toUint16", "toUint32", "toUint64", "toUint96", "toUint128", "toUint256", "toBytes32", "equal", "equal_nonAligned", "equalStorage"],
+    "library_names": ["BytesLib"],
+    "summary_file": "specs/summaries/ConsenSys/Consensys_BytesLib.spec",
+    "description": "ConsenSys BytesLib"
+  },
+  "prb_mulDiv18": {
+    "names": ["mulDiv18"],
+    "library_names": ["PRBMath"],
+    "summary_file": "specs/summaries/PRB/PRB_Math.template.spec",
+    "description": "PRB Math mulDiv18"
+  },
+  "upgradeToAndCall": {
+    "names": ["upgradeToAndCall"],
+    "library_names": ["ERC1967Utils", "UUPSUpgradeable"],
+    "summary_file": "specs/summaries/UUPSUpgradeable.spec",
+    "description": "ERC1967/UUPS upgradeToAndCall (OpenZeppelin or Solady proxy upgrade)"
+  },
+  "sd59x18_ops": {
+    "signatures": [
+      "mul(SD59x18,SD59x18)",
+      "div(SD59x18,SD59x18)",
+      "add(SD59x18,SD59x18)",
+      "sub(SD59x18,SD59x18)",
+      "pow(SD59x18,SD59x18)",
+      "sqrt(SD59x18)",
+      "exp(SD59x18)",
+      "ln(SD59x18)",
+      "mul(UD60x18,UD60x18)",
+      "div(UD60x18,UD60x18)",
+      "add(UD60x18,UD60x18)",
+      "sub(UD60x18,UD60x18)",
+      "pow(UD60x18,UD60x18)",
+      "sqrt(UD60x18)",
+      "exp(UD60x18)",
+      "ln(UD60x18)"
+    ],
+    "library_names": ["PRBMath"],
+    "summary_file": "specs/summaries/PRB/PRB_Math.template.spec",
+    "description": "PRB Math SD59x18/UD60x18 operations"
+  },
+  "prb_conversions": {
+    "names": ["intoSD59x18", "intoUD60x18", "fromSD59x18", "fromUD60x18", "toInt", "toUint", "sd", "convert", "unwrap", "abs"],
+    "library_names": ["PRBMath"],
+    "summary_file": "specs/summaries/PRB/PRB_Math.template.spec",
+    "description": "PRB Math type conversions"
+  },
+  "bitmaps": {
+    "names": ["get", "set", "unset", "setTo"],
+    "library_names": ["BitMaps"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_BitMaps.spec",
+    "description": "OpenZeppelin BitMaps operations",
+    "additional_contracts": ["specs/summaries/OpenZeppelin/harnesses/OZ_BitMaps.sol"]
+  },
+  "extload": {
+    "names": ["extsload", "exttload"],
+    "summary_file": "specs/summaries/extload.template.spec",
+    "description": "External storage load functions (extsload/exttload)"
+  },
+  "safeTransfer": {
+    "names": ["safeTransfer"],
+    "library_names": ["SafeERC20"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec",
+    "description": "OpenZeppelin SafeERC20.safeTransfer"
+  },
+  "safeTransferFrom": {
+    "names": ["safeTransferFrom"],
+    "library_names": ["SafeERC20"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec",
+    "description": "OpenZeppelin SafeERC20.safeTransferFrom"
+  },
+  "safeApprove": {
+    "names": ["safeApprove"],
+    "library_names": ["SafeERC20"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec",
+    "description": "OpenZeppelin SafeERC20.safeApprove"
+  },
+  "safeIncreaseAllowance": {
+    "names": ["safeIncreaseAllowance"],
+    "library_names": ["SafeERC20"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec",
+    "description": "OpenZeppelin SafeERC20.safeIncreaseAllowance"
+  },
+  "safeDecreaseAllowance": {
+    "names": ["safeDecreaseAllowance"],
+    "library_names": ["SafeERC20"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec",
+    "description": "OpenZeppelin SafeERC20.safeDecreaseAllowance"
+  }
+}
