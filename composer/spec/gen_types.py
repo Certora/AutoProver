@@ -109,7 +109,7 @@ class TypedTemplate[T: Mapping[str, Any]]:
         return TemplateInstantiation.create(self, params)
 
 class TemplateRenderer[T](Protocol):
-    def __call__(self, template: str, **kwargs) -> T:
+    def __call__(self, template: str, /, **kwargs) -> T:
         ...
 
 @dataclass
