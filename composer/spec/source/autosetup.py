@@ -7,9 +7,11 @@ against real source code.
 
 import json
 import logging
+import re
 import shlex
 import sys
 import tempfile
+from collections.abc import Callable
 from pydantic import BaseModel, Field
 from pathlib import Path
 from typing import TypedDict, Literal, Annotated
@@ -48,6 +50,35 @@ class AutoSetupStdout(TypedDict):
 type AutoSetupEvents = Annotated[
     AutoSetupComplete | AutoSetupStart | AutoSetupStdout, Discriminator("type")
 ]
+
+
+_LINE_SPLIT = re.compile(r"[\r\n]+")
+
+
+async def _drain(
+    stream: asyncio.StreamReader,
+    sink: Callable[[str], object],
+    log_level: int,
+) -> None:
+    """Drain a subprocess stream line by line into ``sink``.
+
+    stdout and stderr are drained concurrently: if the child fills the OS pipe
+    buffer on one stream while we block reading the other, it stalls on its write
+    and we deadlock. Splitting on ``[\\r\\n]+`` also collapses the carriage-return
+    progress redraws AutoSetup emits into discrete lines.
+    """
+    buf = ""
+    while chunk := await stream.read(4096):
+        buf += chunk.decode(errors="replace")
+        parts = _LINE_SPLIT.split(buf)
+        buf = parts.pop()
+        for line in parts:
+            if line:
+                _logger.log(log_level, line)
+                sink(line)
+    if buf := buf.strip():
+        _logger.log(log_level, buf)
+        sink(buf)
 
 
 async def run_autosetup(
@@ -121,23 +152,29 @@ async def run_autosetup(
             cwd=project_root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
-        assert proc.stdout is not None
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
-                break
-            line = raw.decode().rstrip()
-            if not line:
-                continue
-            cb.log_stdout(line=line)
-        returncode = await proc.wait()
+        assert proc.stdout is not None and proc.stderr is not None
+
+        stderr_lines: list[str] = []
+        try:
+            await asyncio.gather(
+                _drain(proc.stdout, cb.log_stdout, logging.INFO),
+                _drain(proc.stderr, stderr_lines.append, logging.ERROR),
+            )
+        except Exception:
+            # A sink raising (or cancellation) would leave the child running with
+            # its pipes half-drained; kill it so wait() can reap.
+            if proc.returncode is None:
+                proc.kill()
+            raise
+        finally:
+            returncode = await proc.wait()
         cb.log_complete(returncode)
         if returncode != 0:
-            assert proc.stderr is not None
             return SetupFailure(
                 error="AutoSetup failed",
-                stderr=(await proc.stderr.read()).decode(),
+                stderr="\n".join(stderr_lines),
             )
 
         data = json.load(f)
