@@ -144,6 +144,7 @@ async def run_autosetup(
         if not prover_opts.cloud:
             args.append("--use-local-runner")
 
+        _logger.debug("Starting AutoSetup process")
         cb.log_start()
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -156,6 +157,7 @@ async def run_autosetup(
 
         stderr_lines: list[str] = []
         try:
+            _logger.debug("Draining AutoSetup subprocess output")
             await asyncio.gather(
                 _drain(proc.stdout, cb.log_stdout, logging.INFO),
                 _drain(proc.stderr, stderr_lines.append, logging.ERROR),
@@ -168,6 +170,7 @@ async def run_autosetup(
                 proc.kill()
             raise
         finally:
+            _logger.debug("AutoSetup process complete, waiting for exit")
             returncode = await proc.wait()
         cb.log_complete(returncode)
         if returncode != 0:
