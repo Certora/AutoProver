@@ -26,6 +26,10 @@ class InMemoryFile:
         self.bytes_contents = contents if isinstance(contents, bytes) else contents.encode("utf-8")
 
 class NativeFS:
+    """Filesystem-path-backed ``Uploadable``. Lazily reads bytes/text off disk;
+    ``string_contents`` is ``None`` for non-UTF-8 (binary) files so a PDF system
+    doc round-trips on resume instead of blowing up on ``read_text``."""
+
     def __init__(self, p: pathlib.Path):
         self.where = p
 
@@ -36,6 +40,18 @@ class NativeFS:
     @property
     def basename(self) -> str:
         return self.where.name
+
+    @property
+    def string_contents(self) -> str | None:
+        try:
+            return self.where.read_text()
+        except UnicodeDecodeError:
+            return None
+
+
+class TextNativeFS(NativeFS):
+    """A ``NativeFS`` known to be text (spec / interface): ``string_contents``
+    is guaranteed non-None, so it satisfies ``TextUploadable``."""
 
     @property
     def string_contents(self) -> str:
@@ -63,8 +79,6 @@ class WorkflowOptions(RAGDBOptions, LanggraphOptions, Protocol):
     local_prover: bool
 
     debug_prompt_override: Optional[str]
-
-    audit_db: str
 
     skip_reqs: bool
 
@@ -184,7 +198,7 @@ class ResumeInput(Protocol):
 @dataclass
 class ResumeIdData:
     thread_id: str
-    new_spec: NativeFS
+    new_spec: TextNativeFS
     comments: Optional[str]
     new_system: Optional[NativeFS]
 
