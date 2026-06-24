@@ -48,10 +48,14 @@ services:
           memory: 512M
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      # Probe over TCP (-h 127.0.0.1), not the unix socket: during the
+      # first-boot init-db.sql phase postgres listens on the socket only, so a
+      # socket probe reports "healthy" before TCP is actually accepting — which
+      # would let dependents start and hit "connection refused".
+      test: ["CMD-SHELL", "pg_isready -U postgres -h 127.0.0.1 -p 5432"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
 
   autoprove:
     profiles: ["autoprove"]
