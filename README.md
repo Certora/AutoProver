@@ -4,7 +4,7 @@ Auto-prove is a multi-agent pipeline that automatically generates and verifies C
 
 ## Quickstart (Docker)
 
-The fastest way from a clean clone to a working run. Everything — Python deps, the JRE, all `solcX.Y` compilers, the RAG knowledge base, and Postgres — is provisioned inside containers; the only host requirements are Docker (with Compose + BuildKit) and an SSH key with access to the (build-time) Certora Documentation clone.
+The fastest way from a clean clone to a working run. Everything — Python deps, the JRE, all `solcX.Y` compilers, the RAG knowledge base, and Postgres — is provisioned inside containers; the only host requirement is Docker (with Compose + BuildKit).
 
 ```bash
 git clone --recurse-submodules git@github.com:Certora/AutoProver.git
@@ -14,9 +14,13 @@ cd AutoProver
 export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...
 export CERTORA_USER=... CERTORA_TOKEN=... CERTORA_REFRESH_TOKEN=... AISS_ENV=prod
 
+# A ready-to-run example project (public).
+git clone https://github.com/Certora/AutoProverExamples.git
+
 # Builds the image (first time), starts Postgres, runs one-time DB/RAG setup,
-# then runs the pipeline. <project_root> is mounted into the container.
-scripts/autoprove ~/projects/my-defi-protocol src/Vault.sol:Vault docs/vault-design.pdf --cloud
+# then runs the pipeline. The project root is mounted into the container; the
+# contract and design-doc paths are relative to it.
+scripts/autoprove AutoProverExamples/SmokeTest src/Answer.sol:Answer design.md --cloud
 ```
 
 Add `--tui` for the interactive UI, `--rebuild` to force an image rebuild. Under the hood this is just `scripts/docker-compose.yml` (a profile-gated `autoprove` service next to `postgres`); see the header of that file to drive it with raw `docker compose` commands instead.
@@ -34,10 +38,6 @@ You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.
 - PostgreSQL databases running (see below)
 - RAG database populated
 - Solidity compiler(s) on `$PATH` (naming convention `solcX.Y`, e.g. `solc8.29`)
-
-### AutoSetup
-
-AutoSetup (compilation analysis + harness generation) is bundled with this repo — the `certora_autosetup` package is installed alongside `composer`, and the pipeline invokes it directly. No separate clone or `AUTOSETUP_PATH` is needed.
 
 ### Certora Prover
 
@@ -109,7 +109,7 @@ uv tool install '.[ml,certora-cli]'
 
 The `certora-cli` package is selected via one of three mutually-exclusive extras (pick exactly one): `certora-cli` (stable/main release), `certora-cli-beta`, or `certora-cli-beta-mirror`. The `prover` extra is an alias for `certora-cli` (the main release), so `'.[ml,prover]'` is equivalent to the command above. These extras include all of the dependencies for running the prover scripts (in local mode) and the certoraRun scripts themselves (cloud mode).
 
-The `ml` group includes `sentence-transformers` and `einops`, required for the embedding model (`nomic-embed-text-v1.5`) used by RAG and the indexed store. AutoSetup's prover-output dependency (`certora-prover-cli`, which provides POU) is a base dependency and is always installed.
+The `ml` group includes `sentence-transformers` and `einops`, required for the embedding model (`nomic-embed-text-v1.5`) used by RAG and the indexed store.
 
 ## Usage
 
@@ -158,12 +158,12 @@ You will likely want to install the tool using the `--editable` flag. You'll als
 
 ```bash
 tui-autoprove \
-    ~/projects/my-defi-protocol \
-    src/Vault.sol:Vault \
-    docs/vault-design.pdf \
+    AutoProverExamples/SmokeTest \
+    src/Answer.sol:Answer \
+    design.md \
     --cloud \
     --max-concurrent 2 \
-    --cache-ns my-vault-run
+    --cache-ns my-answer-run
 ```
 
 ## Pipeline Phases

@@ -7,11 +7,10 @@
 # AutoProver bundles both the `composer` pipeline and `certora_autosetup` in a
 # single `ai-composer` distribution, so this image installs them directly — no
 # external shim. All Python deps resolve from PyPI plus the vendored `graphcore`
-# git submodule, so the dependency install needs NO SSH/private auth. SSH is
-# used only by the docs-builder stage to clone the (otherwise public) Certora
-# Documentation repo for the RAG knowledge base.
+# git submodule, and the docs-builder clones the public Certora Documentation
+# repo over HTTPS — so the build needs NO SSH/private auth at all.
 #
-# Build (BuildKit required — docs-builder uses --mount=type=ssh):
+# Build (BuildKit required):
 #   docker compose -f scripts/docker-compose.yml --profile autoprove build
 #
 # Cloud Certora Prover only — the image does not bundle a local prover build.
@@ -22,14 +21,12 @@ FROM --platform=linux/amd64 python:3.12-slim AS docs-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
- && rm -rf /var/lib/apt/lists/* \
- && mkdir -p -m 0700 /root/.ssh \
- && ssh-keyscan github.com >> /root/.ssh/known_hosts
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-RUN --mount=type=ssh \
-    git clone --depth 1 git@github.com:Certora/Documentation.git docs
+# Certora/Documentation is a public repo, so clone over HTTPS — no SSH/auth needed.
+RUN git clone --depth 1 https://github.com/Certora/Documentation.git docs
 
 RUN python -m venv /venv \
  && /venv/bin/pip install --no-cache-dir -r /build/docs/requirements.txt

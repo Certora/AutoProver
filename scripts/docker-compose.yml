@@ -68,9 +68,6 @@ services:
         # certora-cli | certora-cli-beta | certora-cli-beta-mirror. Build-time
         # only; defaults to stable certora-cli.
         CERTORA_CLI_PACKAGE: ${CERTORA_CLI_PACKAGE:-certora-cli}
-      ssh:
-        # Used only by the docs-builder stage to clone Certora/Documentation.
-        - default
     depends_on:
       postgres:
         condition: service_healthy
