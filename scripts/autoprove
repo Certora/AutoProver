@@ -5,22 +5,25 @@
 # afterwards it just runs the pipeline. <project_root> is bind-mounted to /work
 # inside the container; the contract and design-doc paths may be absolute or
 # relative to <project_root> and are rewritten to their /work locations.
-#
-# Usage:
-#   scripts/autoprove [--tui] [--rebuild] \
-#       <project_root> <src/Contract.sol:Name> <design_doc> [autoprove options...]
-#
-#   --tui       use tui-autoprove instead of console-autoprove
-#   --rebuild   force an image rebuild
-#   everything after the three positionals is passed through (e.g. --cloud,
-#   --cache-ns my-run, --max-concurrent 2)
-#
-# Required env: ANTHROPIC_API_KEY, CERTORAKEY, CERTORA_USER, CERTORA_TOKEN,
-#               CERTORA_REFRESH_TOKEN, AISS_ENV.
 
 set -euo pipefail
 
-usage() { sed -n '2,20p' "$0" >&2; exit 2; }
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  scripts/autoprove [--tui] [--rebuild] \
+      <project_root> <src/Contract.sol:Name> <design_doc> [autoprove options...]
+
+  --tui       use tui-autoprove instead of console-autoprove
+  --rebuild   force an image rebuild
+  everything after the three positionals is passed through (e.g. --cloud,
+  --cache-ns my-run, --max-concurrent 2)
+
+Required env: ANTHROPIC_API_KEY, CERTORAKEY, CERTORA_USER, CERTORA_TOKEN,
+              CERTORA_REFRESH_TOKEN, AISS_ENV.
+EOF
+  exit 2
+}
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
