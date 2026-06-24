@@ -28,8 +28,6 @@ Arguments:
 
 Options:
   --tui            Run tui-autoprove instead of console-autoprove.
-  --no-cloud       Run the prover locally instead of in the Certora cloud
-                   (default is --cloud; note this image bundles no local prover).
   --cache-ns NAME  Override the auto-derived cache namespace.
   --rebuild        Force a local image rebuild.
   -h, --help       Show this help.
@@ -55,6 +53,9 @@ EXTRA=()
 while (( $# > 0 )); do
   case "$1" in
     --tui)          ENTRY=tui-autoprove; shift ;;
+    # Wired but intentionally undocumented: local-prover mode isn't supported
+    # yet (this image bundles no prover build), so --no-cloud is left out of the
+    # usage text until a local-prover overlay exists.
     --no-cloud)     CLOUD=0; shift ;;
     --cache-ns)     CACHE_NS="${2:?--cache-ns requires a value}"; shift 2 ;;
     --cache-ns=*)   CACHE_NS="${1#*=}"; shift ;;

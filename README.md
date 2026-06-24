@@ -23,7 +23,7 @@ git clone https://github.com/Certora/AutoProverExamples.git
 scripts/autoprove AutoProverExamples/SmokeTest src/Answer.sol:Answer design.md
 ```
 
-The prover runs in the Certora cloud by default; add `--no-cloud` to run it locally. Add `--tui` for the interactive UI, `--rebuild` to force an image rebuild. Pass extra autoprove options after `--` (e.g. `-- --max-concurrent 2`). Under the hood this is just `scripts/docker-compose.yml` (a profile-gated `autoprove` service next to `postgres`); see the header of that file to drive it with raw `docker compose` commands instead.
+The prover runs in the Certora cloud. Add `--tui` for the interactive UI, `--rebuild` to force an image rebuild. Pass extra autoprove options after `--` (e.g. `-- --max-concurrent 2`). Under the hood this is just `scripts/docker-compose.yml` (a profile-gated `autoprove` service next to `postgres`); see the header of that file to drive it with raw `docker compose` commands instead.
 
 > **Apple Silicon:** the image is `linux/amd64` (the Solidity compiler binaries are only published for amd64). Enable **Docker Desktop → Settings → General → "Use Rosetta for x86/amd64 emulation"** — it runs the amd64 image ~near-native; without it, qemu makes the build and the one-time RAG embedding *dramatically* slower.
 
