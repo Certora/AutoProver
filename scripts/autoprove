@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Minimal launcher for the containerized auto-prove pipeline.
+#
+# On first use it builds the image and runs the one-time DB + RAG/KB setup;
+# afterwards it just runs the pipeline. <project_root> is bind-mounted to /work
+# inside the container; the contract and design-doc paths may be absolute or
+# relative to <project_root> and are rewritten to their /work locations.
+#
+# Usage:
+#   scripts/autoprove [--tui] [--rebuild] \
+#       <project_root> <src/Contract.sol:Name> <design_doc> [autoprove options...]
+#
+#   --tui       use tui-autoprove instead of console-autoprove
+#   --rebuild   force an image rebuild
+#   everything after the three positionals is passed through (e.g. --cloud,
+#   --cache-ns my-run, --max-concurrent 2)
+#
+# Required env: ANTHROPIC_API_KEY, CERTORAKEY, CERTORA_USER, CERTORA_TOKEN,
+#               CERTORA_REFRESH_TOKEN, AISS_ENV.
+
+set -euo pipefail
+
+usage() { sed -n '2,20p' "$0" >&2; exit 2; }
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+compose=(docker compose -f "$script_dir/docker-compose.yml")
+
+cmd=console-autoprove
+rebuild=0
+# Leading wrapper-only flags.
+while [[ "${1:-}" == --tui || "${1:-}" == --rebuild ]]; do
+  case "$1" in
+    --tui) cmd=tui-autoprove ;;
+    --rebuild) rebuild=1 ;;
+  esac
+  shift
+done
+
+[[ $# -ge 3 ]] || usage
+project_root="$1"; contract_spec="$2"; design_doc="$3"; shift 3
+[[ -d "$project_root" ]] || { echo "project_root is not a directory: $project_root" >&2; exit 1; }
+[[ "$contract_spec" == *:* ]] || { echo "contract must be path:Name (e.g. src/Vault.sol:Vault)" >&2; exit 1; }
+
+# Rewrite a host path to its location under /work (relative to project_root).
+relto() { python3 -c "import os,sys; print(os.path.relpath(os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])))" "$1" "$2"; }
+contract_path="${contract_spec%:*}"
+contract_name="${contract_spec##*:}"
+c_rel="$(relto "$contract_path" "$project_root")"
+d_rel="$(relto "$design_doc" "$project_root")"
+
+export HOST_UID="$(id -u)" HOST_GID="$(id -g)"
+export HOST_WORK_DIR="$project_root"
+
+# The image build COPYs the graphcore submodule; make sure it's checked out.
+if [[ -z "$(ls -A "$repo_root/graphcore" 2>/dev/null)" ]]; then
+  echo "[autoprove] initializing graphcore submodule ..."
+  git -C "$repo_root" submodule update --init graphcore
+fi
+
+if (( rebuild )) || ! docker image inspect autoprover-local:latest >/dev/null 2>&1; then
+  echo "[autoprove] building image (first build can take a while) ..."
+  DOCKER_BUILDKIT=1 "${compose[@]}" --profile autoprove build
+fi
+
+"${compose[@]}" up -d postgres
+
+# One-time DB schema + RAG/KB population, tracked by a sentinel so later runs are fast.
+sentinel="${XDG_CACHE_HOME:-$HOME/.cache}/autoprove/setup-db.done"
+if [[ ! -f "$sentinel" ]]; then
+  echo "[autoprove] running one-time setup-db ..."
+  "${compose[@]}" --profile autoprove run --rm autoprove setup-db
+  mkdir -p "$(dirname "$sentinel")" && touch "$sentinel"
+fi
+
+echo "[autoprove] running ${cmd} ..."
+exec "${compose[@]}" --profile autoprove run --rm autoprove \
+  "$cmd" "/work/${c_rel}:${contract_name}" "/work/${d_rel}" "$@"

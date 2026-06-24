@@ -2,6 +2,27 @@
 
 Auto-prove is a multi-agent pipeline that automatically generates and verifies CVL specifications for Solidity smart contracts. Given a project root, a main contract, and a design document, it analyzes the system's components, formulates properties, and generates CVL specs — running the Certora Prover in a loop to verify them.
 
+## Quickstart (Docker)
+
+The fastest way from a clean clone to a working run. Everything — Python deps, the JRE, all `solcX.Y` compilers, the RAG knowledge base, and Postgres — is provisioned inside containers; the only host requirements are Docker (with Compose + BuildKit) and an SSH key with access to the (build-time) Certora Documentation clone.
+
+```bash
+git clone --recurse-submodules git@github.com:Certora/AutoProver.git
+cd AutoProver
+
+# Cloud Certora Prover credentials + Claude key (see the table below).
+export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...
+export CERTORA_USER=... CERTORA_TOKEN=... CERTORA_REFRESH_TOKEN=... AISS_ENV=prod
+
+# Builds the image (first time), starts Postgres, runs one-time DB/RAG setup,
+# then runs the pipeline. <project_root> is mounted into the container.
+scripts/autoprove ~/projects/my-defi-protocol src/Vault.sol:Vault docs/vault-design.pdf --cloud
+```
+
+Add `--tui` for the interactive UI, `--rebuild` to force an image rebuild. Under the hood this is just `scripts/docker-compose.yml` (a profile-gated `autoprove` service next to `postgres`); see the header of that file to drive it with raw `docker compose` commands instead.
+
+The rest of this document covers the **host `uv` flow** for development.
+
 ## Prerequisites
 
 You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.md):
@@ -14,13 +35,7 @@ You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.
 
 ### AutoSetup
 
-Auto-prove depends on AutoSetup for compilation analysis and harness generation. AutoSetup is a separate internal repository. Clone it and set the `AUTOSETUP_PATH` environment variable to its root directory:
-
-```bash
-export AUTOSETUP_PATH=/path/to/autosetup
-```
-
-The pipeline will fail at import time if this is not set.
+AutoSetup (compilation analysis + harness generation) is bundled with this repo — the `certora_autosetup` package is installed alongside `composer`, and the pipeline invokes it directly. No separate clone or `AUTOSETUP_PATH` is needed.
 
 ### Certora Prover
 
@@ -87,12 +102,12 @@ This inserts ~30 curated articles (summary misapplication, vacuity traps, ghost 
 To install the scripts for execution simply run:
 
 ```bash
-uv tool install '.[ml,certora-cli,pou]'
+uv tool install '.[ml,certora-cli]'
 ```
 
-The `certora-cli` package is selected via one of three mutually-exclusive extras (pick exactly one): `certora-cli` (stable/main release), `certora-cli-beta`, or `certora-cli-beta-mirror`. The `prover` extra is an alias for `certora-cli` (the main release), so `'.[ml,prover,pou]'` is equivalent to the command above. These extras include all of the dependencies for running the prover scripts (in local mode) and the certoraRun scripts themselves (cloud mode).
+The `certora-cli` package is selected via one of three mutually-exclusive extras (pick exactly one): `certora-cli` (stable/main release), `certora-cli-beta`, or `certora-cli-beta-mirror`. The `prover` extra is an alias for `certora-cli` (the main release), so `'.[ml,prover]'` is equivalent to the command above. These extras include all of the dependencies for running the prover scripts (in local mode) and the certoraRun scripts themselves (cloud mode).
 
-The `ml` group includes `sentence-transformers` and `einops`, required for the embedding model (`nomic-embed-text-v1.5`) used by RAG and the indexed store. `pou` is required by the auto setup component.
+The `ml` group includes `sentence-transformers` and `einops`, required for the embedding model (`nomic-embed-text-v1.5`) used by RAG and the indexed store. AutoSetup's prover-output dependency (`certora-prover-cli`, which provides POU) is a base dependency and is always installed.
 
 ## Usage
 
@@ -140,7 +155,7 @@ You will likely want to install the tool using the `--editable` flag. You'll als
 ### Example
 
 ```bash
-python tui_autoprove.py \
+tui-autoprove \
     ~/projects/my-defi-protocol \
     src/Vault.sol:Vault \
     docs/vault-design.pdf \
