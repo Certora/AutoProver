@@ -114,13 +114,13 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
       *) echo "Unknown CERTORA_CLI_PACKAGE: '$CERTORA_CLI_PACKAGE' (expected certora-cli|certora-cli-beta|certora-cli-beta-mirror)" >&2; exit 1 ;; \
     esac; \
     uv sync --frozen --no-install-project --no-editable \
-      --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
+      --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
 # Project layer: copy the rest of the source and install the project itself.
 COPY . ./
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-editable \
-      --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
+      --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
 # Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
 COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
