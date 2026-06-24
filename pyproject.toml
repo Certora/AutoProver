@@ -108,6 +108,9 @@ certora-run-auto-solc = "certora_autosetup.certoraRunAutoSolc:main"
 certora-fixconf = "certora_autosetup.fixconf:main"
 autosetup = "certora_autosetup.autosetup.cli:main"
 fixconf = "certora_autosetup.fixconf:main"
+console-autoprove = "composer.cli.console_autoprove:main"
+tui-autoprove = "composer.cli.tui_autoprove:main"
+
 
 [tool.setuptools.packages.find]
 include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
