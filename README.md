@@ -21,6 +21,8 @@ scripts/autoprove ~/projects/my-defi-protocol src/Vault.sol:Vault docs/vault-des
 
 Add `--tui` for the interactive UI, `--rebuild` to force an image rebuild. Under the hood this is just `scripts/docker-compose.yml` (a profile-gated `autoprove` service next to `postgres`); see the header of that file to drive it with raw `docker compose` commands instead.
 
+> **Apple Silicon:** the image is `linux/amd64` (the Solidity compiler binaries are only published for amd64). Enable **Docker Desktop → Settings → General → "Use Rosetta for x86/amd64 emulation"** — it runs the amd64 image ~near-native; without it, qemu makes the build and the one-time RAG embedding *dramatically* slower.
+
 The rest of this document covers the **host `uv` flow** for development.
 
 ## Prerequisites
