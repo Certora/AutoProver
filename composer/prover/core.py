@@ -43,7 +43,7 @@ from prover_output_utility import cloud_server_for_env
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import cloud_results
 from composer.prover.ptypes import RuleResult
-from composer.prover.results import read_and_format_run_result
+from composer.prover.results import read_and_format_run_result, read_prover_runtime_ms
 from composer.templates.loader import load_jinja_template
 from composer.prover.prover_protocol import ProverResult
 
@@ -194,6 +194,10 @@ class ProverCallbacks:
     """Fires once per run as soon as the prover emits its result link. For
     cloud runs ``link`` is the prover UI URL; for local runs it is a
     filesystem path to the results directory."""
+    async def on_prover_runtime(self, ms: int) -> None: pass
+    """Fires once per run with the prover's self-reported runtime in milliseconds
+    (statsdata.json ``run_id.start_to_end_time``). Only fires when statsdata is
+    present and parseable — absent for an errored run that produced no results."""
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None: pass
     async def on_analysis_start(self, rule: RuleResult) -> None: pass
     async def on_analysis_complete(self, rule: RuleResult, explanation: str) -> None: pass
@@ -442,20 +446,23 @@ async def run_prover(
             return f"Prover did not produce local results.\nstdout:\n{stdout}"
         results_cm = _local_results(Path(run_result["link"]))
 
-    # 8. Parse results + run analysis. Both happen inside ``results_cm`` so
-    # the report directory (which contains ``inputs/.certora_sources`` —
-    # the source files actually compiled into this verification problem)
-    # stays alive for the analyzer to read. Cloud runs unzip into a tmpdir
-    # whose lifetime is bound to ``cloud_results``; local runs hand back
-    # a stable path. Either way the analyzer must complete before the
+    # 8. Parse results, read the prover's self-reported runtime, and run analysis.
+    # All happen inside ``results_cm`` so the report directory (which contains
+    # ``inputs/.certora_sources`` — the source files actually compiled into this
+    # verification problem) stays alive for the analyzer to read. Cloud runs unzip
+    # into a tmpdir whose lifetime is bound to ``cloud_results``; local runs hand
+    # back a stable path. Either way the analyzer must complete before the
     # context manager exits.
     async with results_cm as emv_path:
         parsed = read_and_format_run_result(emv_path)
+        runtime_ms = read_prover_runtime_ms(emv_path)
 
         if isinstance(parsed, str):
             return f"Failed to parse prover results: {parsed}"
 
-        # 9. Notify prover_result callback
+        # 9. Notify runtime + prover_result callbacks
+        if runtime_ms is not None:
+            await callbacks.on_prover_runtime(runtime_ms)
         await callbacks.on_prover_result(parsed)
 
         all_results = list(parsed.values())

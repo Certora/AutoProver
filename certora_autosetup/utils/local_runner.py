@@ -189,6 +189,9 @@ class LocalProverRunner(ProverRunner):
                 job_handle.job_id = emv_folder_path
                 # Extract unresolved calls using ProverOutputUtility for consistency with cloud runner
                 output_data["unresolved_calls"] = self.extract_unresolved_calls(emv_folder_path)
+                # Fresh run (cache hits short-circuit before this method) — record its
+                # prover-reported runtime from the emv-* folder's statsdata.
+                self._record_fresh_prover_runtime(emv_folder_path)
 
             report_path = output_data.get("report_path")
 

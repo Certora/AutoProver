@@ -827,6 +827,11 @@ class CloudProverRunner(ProverRunner):
 
             duration = time.time() - start_time
 
+            # Fresh run (cache hits short-circuit before this method) — record its
+            # prover-reported runtime. Skips the exception path below, which has no
+            # statsdata to read anyway.
+            self._record_fresh_prover_runtime(job_url)
+
             if success:
                 # Job completed successfully, parse results
                 job_handle.status = JobStatus.COMPLETED
