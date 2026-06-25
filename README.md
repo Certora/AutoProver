@@ -2,6 +2,33 @@
 
 Auto-prove is a multi-agent pipeline that automatically generates and verifies CVL specifications for Solidity smart contracts. Given a project root, a main contract, and a design document, it analyzes the system's components, formulates properties, and generates CVL specs — running the Certora Prover in a loop to verify them.
 
+## Quickstart (Docker)
+
+The fastest way from a clean clone to a working run. Everything — Python deps, the JRE, all `solcX.Y` compilers, the RAG knowledge base, and Postgres — is provisioned inside containers; the only host requirement is Docker (with Compose + BuildKit).
+
+```bash
+git clone --recurse-submodules git@github.com:Certora/AutoProver.git
+cd AutoProver
+
+# Cloud Certora Prover credentials + Claude key (see the table below).
+export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...
+export CERTORA_USER=... CERTORA_TOKEN=... CERTORA_REFRESH_TOKEN=... AISS_ENV=prod
+
+# A ready-to-run example project (public).
+git clone https://github.com/Certora/AutoProverExamples.git
+
+# Builds the image (first time), starts Postgres, runs one-time DB/RAG setup,
+# then runs the pipeline. The project root is mounted into the container; the
+# contract and design-doc paths are relative to it.
+scripts/autoprove AutoProverExamples/SmokeTest src/Answer.sol:Answer design.md
+```
+
+The prover runs in the Certora cloud. Add `--tui` for the interactive UI, `--rebuild` to force an image rebuild. Pass extra autoprove options after `--` (e.g. `-- --max-concurrent 2`). Under the hood this is just `scripts/docker-compose.yml` (a profile-gated `autoprove` service next to `postgres`); see the header of that file to drive it with raw `docker compose` commands instead.
+
+> **Apple Silicon:** the image is `linux/amd64` (the Solidity compiler binaries are only published for amd64). Enable **Docker Desktop → Settings → General → "Use Rosetta for x86/amd64 emulation"** — it runs the amd64 image ~near-native; without it, qemu makes the build and the one-time RAG embedding *dramatically* slower.
+
+The rest of this document covers the **host `uv` flow** for development.
+
 ## Prerequisites
 
 You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.md):
@@ -11,16 +38,6 @@ You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.
 - PostgreSQL databases running (see below)
 - RAG database populated
 - Solidity compiler(s) on `$PATH` (naming convention `solcX.Y`, e.g. `solc8.29`)
-
-### AutoSetup
-
-Auto-prove depends on AutoSetup for compilation analysis and harness generation. AutoSetup is a separate internal repository. Clone it and set the `AUTOSETUP_PATH` environment variable to its root directory:
-
-```bash
-export AUTOSETUP_PATH=/path/to/autosetup
-```
-
-The pipeline will fail at import time if this is not set.
 
 ### Certora Prover
 
@@ -87,12 +104,12 @@ This inserts ~30 curated articles (summary misapplication, vacuity traps, ghost 
 To install the scripts for execution simply run:
 
 ```bash
-uv tool install '.[ml,certora-cli,pou]'
+uv tool install '.[ml,certora-cli]'
 ```
 
-The `certora-cli` package is selected via one of three mutually-exclusive extras (pick exactly one): `certora-cli` (stable/main release), `certora-cli-beta`, or `certora-cli-beta-mirror`. The `prover` extra is an alias for `certora-cli` (the main release), so `'.[ml,prover,pou]'` is equivalent to the command above. These extras include all of the dependencies for running the prover scripts (in local mode) and the certoraRun scripts themselves (cloud mode).
+The `certora-cli` package is selected via one of three mutually-exclusive extras (pick exactly one): `certora-cli` (stable/main release), `certora-cli-beta`, or `certora-cli-beta-mirror`. The `prover` extra is an alias for `certora-cli` (the main release), so `'.[ml,prover]'` is equivalent to the command above. These extras include all of the dependencies for running the prover scripts (in local mode) and the certoraRun scripts themselves (cloud mode).
 
-The `ml` group includes `sentence-transformers` and `einops`, required for the embedding model (`nomic-embed-text-v1.5`) used by RAG and the indexed store. `pou` is required by the auto setup component.
+The `ml` group includes `sentence-transformers` and `einops`, required for the embedding model (`nomic-embed-text-v1.5`) used by RAG and the indexed store.
 
 ## Usage
 
@@ -140,13 +157,13 @@ You will likely want to install the tool using the `--editable` flag. You'll als
 ### Example
 
 ```bash
-python tui_autoprove.py \
-    ~/projects/my-defi-protocol \
-    src/Vault.sol:Vault \
-    docs/vault-design.pdf \
+tui-autoprove \
+    AutoProverExamples/SmokeTest \
+    src/Answer.sol:Answer \
+    design.md \
     --cloud \
     --max-concurrent 2 \
-    --cache-ns my-vault-run
+    --cache-ns my-answer-run
 ```
 
 ## Pipeline Phases

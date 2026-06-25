@@ -1,4 +1,17 @@
-# docker-compose.yml - Lightweight PostgreSQL + pgvector setup
+# docker-compose.yml — PostgreSQL + pgvector, plus the (profile-gated) autoprove app.
+#
+# The `postgres` service is the always-on DB backing composer (used by both the
+# host `uv` dev flow and the container). The `autoprove` service is the
+# containerized pipeline; it only starts under `--profile autoprove`, so plain
+# `docker compose up -d` still brings up just postgres.
+#
+# Quickstart (see also scripts/autoprove and the README):
+#   docker compose -f scripts/docker-compose.yml up -d postgres
+#   docker compose -f scripts/docker-compose.yml --profile autoprove build
+#   docker compose -f scripts/docker-compose.yml --profile autoprove run --rm autoprove setup-db
+#   export HOST_UID=$(id -u) HOST_GID=$(id -g) HOST_WORK_DIR=/path/to/projects
+#   docker compose -f scripts/docker-compose.yml --profile autoprove run --rm autoprove \
+#       console-autoprove --cloud /work/<proj> /work/<proj>/src/X.sol:X /work/<proj>/docs/x.md
 name: composer_db
 
 services:
@@ -35,10 +48,48 @@ services:
           memory: 512M
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      # Probe over TCP (-h 127.0.0.1), not the unix socket: during the
+      # first-boot init-db.sql phase postgres listens on the socket only, so a
+      # socket probe reports "healthy" before TCP is actually accepting — which
+      # would let dependents start and hit "connection refused".
+      test: ["CMD-SHELL", "pg_isready -U postgres -h 127.0.0.1 -p 5432"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
+
+  autoprove:
+    profiles: ["autoprove"]
+    image: autoprover-local:latest
+    build:
+      context: ..
+      dockerfile: scripts/Dockerfile
+      args:
+        # Certora CLI channel baked into the image (the extra name itself):
+        # certora-cli | certora-cli-beta | certora-cli-beta-mirror. Build-time
+        # only; defaults to stable certora-cli.
+        CERTORA_CLI_PACKAGE: ${CERTORA_CLI_PACKAGE:-certora-cli}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Run as the host user so /work outputs aren't owned by root. Override with:
+    #   export HOST_UID=$(id -u) HOST_GID=$(id -g)
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set in your shell}
+      # Cloud Certora Prover credentials.
+      CERTORAKEY: ${CERTORAKEY:-}
+      CERTORA_USER: ${CERTORA_USER:?CERTORA_USER must be set in your shell}
+      CERTORA_TOKEN: ${CERTORA_TOKEN:?CERTORA_TOKEN must be set in your shell}
+      CERTORA_REFRESH_TOKEN: ${CERTORA_REFRESH_TOKEN:?CERTORA_REFRESH_TOKEN must be set in your shell}
+      CERTORA_LOGIN_NO_BROWSER: "true"
+      AISS_ENV: ${AISS_ENV:?AISS_ENV must be set to one of dev, stg, prod}
+      CERTORA_AI_COMPOSER_PGHOST: postgres
+      CERTORA_AI_COMPOSER_PGPORT: "5432"
+    volumes:
+      # Host directory holding your Solidity project(s) + design docs -> /work.
+      # Defaults to $PWD when compose was invoked.
+      - ${HOST_WORK_DIR:-${PWD}}:/work
+    working_dir: /work
 
 volumes:
   postgres_data:
