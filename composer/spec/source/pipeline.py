@@ -58,7 +58,7 @@ from composer.prover.core import ProverOptions
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun, Delivered, GaveUp,
-    CorePhases, SystemAnalysisSpec, CorePipelineResult,
+    CorePhases, SystemAnalysisSpec, ComponentOutcome, CorePipelineResult,
     run_pipeline, main_instance,
 )
 
@@ -104,6 +104,7 @@ class ProverRunner(Formalizer[GeneratedCVL]):
     """Immutable formalizer: per-batch CVL generation against a fixed prover
     config + resource set (already including ``invariants.spec`` when there are
     structural invariants), plus the in-memory invariant result for the report."""
+    _store: ProverArtifactStore
     _prover_tool: BaseTool
     _prover_config: dict
     _resources: list[CVLResource]
@@ -147,6 +148,20 @@ class ProverRunner(Formalizer[GeneratedCVL]):
         self, inp: ReportComponentInput[GeneratedCVL],
     ) -> dict[RuleName, Verdict]:
         return await self._fetch(inp)
+
+    @override
+    async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL]], run: PipelineRun) -> None:
+        # components_to_prover_runs.json: {run_key (slug): prover /output/ link}.
+        runs: dict[str, str] = {
+            ComponentSpec(o.feat.slugified_name).run_key: o.result.run_link
+            for o in outcomes
+            if isinstance(o.result, Delivered) and o.result.run_link
+        }
+        if self._invariant is not None:
+            inv = self._invariant[1]
+            if inv.run_link:
+                runs[InvariantSpec().run_key] = inv.run_link
+        self._store.write_component_runs(runs)
 
 
 @dataclass
@@ -217,7 +232,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
 
         return ProverRunner(
             GeneratedCVL, "prover",
-            self._prover_tool, setup_config.prover_config, resources, invariant,
+            self._store, self._prover_tool, setup_config.prover_config, resources, invariant,
             make_prover_fetcher(),
         )
 

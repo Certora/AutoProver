@@ -153,6 +153,11 @@ class Formalizer[FormT: BackendResult](ABC):
         off-thread. Foundry: read straight off inp.formalized.result."""
         ...
 
+    async def finalize(self, outcomes: list[ComponentOutcome[FormT]], run: PipelineRun) -> None:
+        """Emit any backend-specific run-level artifacts from the full outcome set (prover:
+        components_to_prover_runs.json). Default: none."""
+        return None
+
 @dataclass
 class PreparedSystem[FormT: BackendResult](ABC):
     main: ContractInstance
@@ -296,6 +301,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     outcomes = [o if isinstance(o, ComponentOutcome)
                 else ComponentOutcome(b.feat, b.props, o)
                 for b, o in zip(batches, settled)]
+
+    await formalizer.finalize(outcomes, run)
 
     # 5. Report (shared, backend-agnostic). The driver assembles the per-component inputs; backends
     # contribute only synthetic extras (prover: structural invariants). Best-effort: a failure here
