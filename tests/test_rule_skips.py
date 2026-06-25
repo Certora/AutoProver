@@ -11,7 +11,7 @@ from composer.spec.source.prover import (
     StateWithSkips, VALIDATION_KEY,
 )
 from composer.spec.cvl_generation import check_completion
-from composer.prover.core import RawReport, SummarizedReport
+from composer.prover.core import ProverReport
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
 from graphcore.tools.results import result_tool_generator
@@ -61,13 +61,13 @@ def _result(commentary: str) -> ToolCallDict:
 # ---------------------------------------------------------------------------
 
 
-def _raw_report(**rule_status: bool) -> RawReport:
-    return RawReport(rule_status=rule_status, report="Prover report output", link="local://test-run")
+def _raw_report(**rule_status: bool) -> ProverReport:
+    return ProverReport(rule_status=rule_status, result_str="Prover report output", link="local://test-run")
 
 
-def _summarized_report(todo: str, **rule_status: bool) -> SummarizedReport:
-    return SummarizedReport(
-        rule_status=rule_status, report="(truncated)", todo_list=todo, link="local://test-run",
+def _summarized_report(todo: str, **rule_status: bool) -> ProverReport:
+    return ProverReport(
+        rule_status=rule_status, result_str=todo, link="local://test-run",
     )
 
 
@@ -130,7 +130,7 @@ def _is_result_rejection(st: StateWithSkips) -> bool:
 
 
 # =========================================================================
-# Prover report handling
+# Prover report handlingq
 # =========================================================================
 
 

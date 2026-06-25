@@ -1,0 +1,73 @@
+name: Integration Tests
+
+# on:
+#   schedule:
+#     # Weekly, Sunday ~03:07 UTC. Off the top of the hour for reliability.
+#     # (cron is ALWAYS UTC — no timezone option. Adjust the hour for your locale.)
+#     - cron: '7 3 * * *'
+#   workflow_dispatch: {}   # adds a "Run workflow" button in the Actions tab
+
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+# If a manual run and a scheduled run overlap, cancel the older one
+# so you don't pay for the expensive job twice.
+concurrency:
+  group: scheduled-tests
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # >>> CHANGE: your real setup. Example for Python; swap for your stack.
+      - name: Set up environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          cache-suffix: integration
+
+      - name: sync-deps
+        run: |
+          uv sync --group test --extra prover
+
+      - name: sync solc
+        run: |
+          uv pip install solc-select
+          uv run solc-select install 0.8.19
+          uv run solc-select use 0.8.19
+
+      - name: run prover integration tests
+        run: |
+          uv run pytest -m 'expensive' tests
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      # Fires ONLY if a step above failed. The whole point of the file.
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sf -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \":red_circle: *Composer integration tests failed* in \`${{ github.repository }}\`\n<${RUN_URL}|View the failed run>\"
+            }" \
+            "$SLACK_WEBHOOK_URL"

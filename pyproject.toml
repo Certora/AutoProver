@@ -75,6 +75,14 @@ conflicts = [
 [tool.uv.sources]
 graphcore = { path = "./graphcore", editable = true }
 
+[tool.pytest.ini_options]
+markers = [
+    "expensive: hits the real prover / network — deselect with -m 'not expensive'",
+]
+# optional but recommended once you're registering marks:
+addopts = "--strict-markers"   # a typo'd mark becomes an error, not a silent no-match
+
+
 [project.scripts]
 cex-analyzer = "analyzer.analysis:main"
 ap-trail = "composer.cli.ap_trail:main"

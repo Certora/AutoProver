@@ -26,7 +26,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable, Protocol, cast, override
+from typing import AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
 import json
 import logging
@@ -219,16 +219,15 @@ class CexHandler(ABC):
 
         ``all_results`` is every rule outcome (verified and failing).
         ``run_prover`` only calls this when at least one rule is
-        VIOLATED; handlers that want failures clustered by rule name
-        call ``group_failing(all_results)`` themselves.
+        VIOLATED.
 
         ``report_dir`` is the prover's report directory (containing
         ``inputs/.certora_sources``). Implementations that read source
         for grounding can scope their reads inside that path; the
         directory is guaranteed live for the duration of this call.
 
-        ``callbacks`` is the ``CexProgressCallbacks`` slice — fire
-        ``on_analysis_start`` / ``on_analysis_complete`` for every
+        ``callbacks`` is the ``CexProgressCallbacks`` slice of `ProverCallbacks`
+        — fire ``on_analysis_start`` / ``on_analysis_complete`` for every
         failing rule the user should see in the UI. The wider
         ``ProverCallbacks`` surface (stdout streaming, cloud polling,
         etc.) is intentionally not exposed here.
@@ -344,6 +343,46 @@ PROVER REPORT:
     res = await llm.ainvoke(fresh_messages)
     return res.text
 
+async def run_prover_inner(
+    folder: Path,
+    args: list[str],
+    on_err: Callable[[int | None, str, str], None],
+    on_stdout: Callable[[str], Awaitable[None]]
+) -> tuple[ProverResult | str, str]:
+    # 3-5. Spawn async subprocess, stream stdout, collect stderr
+    wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
+
+    with tempfile.NamedTemporaryFile("rb", suffix=".json") as output_file:
+        proc = await asyncio.subprocess.create_subprocess_exec(
+            sys.executable,
+            str(wrapper_script), str(output_file.name), *args,
+            cwd=str(folder),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout_lines: list[str] = []
+        assert proc.stdout is not None
+        while True:
+            raw = await proc.stdout.readline()
+            if not raw:
+                break
+            line = raw.decode()
+            stdout_lines.append(line)
+            await on_stdout(line.rstrip("\n"))
+
+        stderr_raw = await proc.stderr.read() if proc.stderr else b""
+        await proc.wait()
+
+        stdout = "".join(stdout_lines)
+        stderr = stderr_raw.decode()
+        if proc.returncode != 0:
+            on_err(proc.returncode, stdout, stderr)
+            return f"Verification failed:\nstdout:\n{stdout}\nstderr:\n{stderr}", stdout
+
+        run_result = cast(ProverResult, json.load(output_file))
+        return run_result, stdout
+
 
 async def run_prover(
     folder: Path,
@@ -365,39 +404,14 @@ async def run_prover(
 
     # 2. Notify callback
     await callbacks.on_prover_run(effective_args)
-
-    # 3-5. Spawn async subprocess, stream stdout, collect stderr
-    wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
-
-    with tempfile.NamedTemporaryFile("rb", suffix=".json") as output_file:
-        proc = await asyncio.subprocess.create_subprocess_exec(
-            sys.executable,
-            str(wrapper_script), str(output_file.name), *effective_args,
-            cwd=str(folder),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        stdout_lines: list[str] = []
-        assert proc.stdout is not None
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
-                break
-            line = raw.decode()
-            stdout_lines.append(line)
-            await callbacks.on_stdout_line(line.rstrip("\n"))
-
-        stderr_raw = await proc.stderr.read() if proc.stderr else b""
-        await proc.wait()
-
-        stdout = "".join(stdout_lines)
-        stderr = stderr_raw.decode()
-        if proc.returncode != 0:
-            _logger.error("Process failed %d\nstdout:%s\nstderr:%s", proc.returncode, stdout, stderr)
-            return f"Verification failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
-
-        run_result = cast(ProverResult, json.load(output_file))
+    run_result, stdout = await run_prover_inner(
+        folder,
+        effective_args,
+        lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
+        callbacks.on_stdout_line
+    )
+    if isinstance(run_result, str):
+        return run_result
 
     if run_result is None or (run_result["sort"] == "success" and run_result["link"] is None):
         _logger.warning("Prover failed: %s", run_result)

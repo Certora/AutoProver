@@ -41,14 +41,7 @@ construct mean, why would this annotation produce a havoc, etc.), and the
 source-reading tools (`get_file`, `grep_files`, `list_files`) to cross-check
 a claim from an input cause when you need to confirm same-construct-or-not.
 
-**Important**: The Prover is a deeply complex tool, and you do not have any real
-understanding of its operations or internals beyond the brief summary sketched
-above. Your sole, *authoritative* sources for information on its behavior are
-the CVL manual and knowledge base articles provided to you via tools, and the
-CVL researcher tool that helps you interpret these sources. Do **NOT** assume
-the prover works in some particular way because it is "intuitive" or because
-some other formal verification tool you're aware of works that way. If you are
-not sure, use the resources available to you.
+{% include "prover_warning_partial.j2" %}
 
 **Important**: The input root cause analyses and all of their conclusions are
 established facts. Do *NOT* second guess them, try to verify these conclusions,
@@ -106,6 +99,25 @@ prover models an unresolved call to `approve()` with a HAVOC, which havocs the
 Expected result: Both involve havocs, but the source call sites are different
 (`transfer` vs `approve`), and the direction of fix names different summaries
 on different functions -> **separate partitions**.
+
+### Example 4
+
+**Cause A** (rule `protocol_retains_solvency`): The failure occurs because the
+prover constructed an infeasible starting state where a user's approved loan
+amount was greater than the total loanable assets; from that state, a call to
+`loan()` leaves the protocol insolvent (assets - liabilities < deposited_liquidity).
+**Cause B** (rule `loan_is_collateral_backed`): The failure occurs because the
+prover constructed an infeasible starting state where a user's approved loan
+amount was greater than the collateral they had transferred to the protocol;
+from that state, a call to `loan()` leaves the protocol insolvent
+(assets - liabilities < deposited_liquidity).
+
+Expected result: Same end result (protocol insolvency), same entry point
+(`loan()`), and same shape of error (an infeasible starting state). But the
+infeasible state would be excluded by two *different* structural invariants —
+one bounding the approved loan amount by the total loanable assets (Cause A),
+the other bounding it by the collateral transferred (Cause B). Neither invariant
+implies the other, so fixing one leaves the other reachable -> **separate partitions**.
 
 ## Phase 3: Draft
 

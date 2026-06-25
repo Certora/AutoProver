@@ -43,12 +43,7 @@ of which control how the Prover reasons about the smart contract's execution, an
 the counter example it produces. You should use the `cvl_researcher` subagent to help
 understand the input CVL.
 
-**Important**: The Prover is a deeply complex tool, and you do not have any real understanding
-of the its operations or internals beyond the brief summary sketched above. Your sole, *authoritative*
-sources for information on its behavior are the CVL manual and knowledge base articles provided to you via tools,
-and the CVL researcher tool that helps you interpret these sources. Do **NOT** assume the prover works
-in some particular way because it is "intuitive" or because some other formal verification tool
-you're aware of works that way. If you are not sure, use the resources available to you.
+{% include "prover_warning_partial.j2" %}
 
 Importantly, you are NOT responsible for proposing how to FIX this issue. Your role is simply
 to explain the counterexample and identify the root cause.
