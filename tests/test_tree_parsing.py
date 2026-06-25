@@ -15,7 +15,7 @@ async def _run_test_prover_job(
     assert test_dir.exists() and test_dir.is_dir()
 
     async def swallow(s: str):
-        pass
+        print(s)
     prover_res, _ = await run_prover_inner(
         folder=test_dir,
         args=[
