@@ -129,6 +129,11 @@ class GeneratedCVL(BaseModel):
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
 
+    def property_units(self) -> list[tuple[str, list[str]]]:
+        """Property title -> the CVL rule names that formalize it (the report's `ReportableResult`
+        adapter; pairs with the structurally-shared ``skipped`` field)."""
+        return [(m.property_title, m.rules) for m in self.property_rules]
+
 
 # ---------------------------------------------------------------------------
 # Completion validation

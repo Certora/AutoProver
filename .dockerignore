@@ -1,0 +1,30 @@
+# Build context is the repo root (compose sets context: ..). Keep it lean and
+# avoid copying host-only state over the image's own.
+#
+# .git is safe to drop: both ai-composer and the graphcore submodule use a
+# static setuptools version (no VCS versioning).
+.git
+**/.git
+.gitmodules
+
+# Host virtualenvs / caches — the image builds its own venv.
+.venv
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+.pytest_cache
+**/.pytest_cache
+.mypy_cache
+.ruff_cache
+**/.DS_Store
+
+# Built locally by scripts/gen_docs.sh; the image's docs-builder regenerates it.
+scripts/prover-docs/
+
+# Run artifacts / editors.
+**/.certora_internal
+build/
+dist/
+.idea/
+.vscode/

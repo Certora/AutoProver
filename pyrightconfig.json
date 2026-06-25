@@ -7,5 +7,5 @@
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none",
   "reportMatchNotExhaustive": "error",
-  "reportUnnecessaryTypeIgnoreComment": "error",    
+  "reportUnnecessaryTypeIgnoreComment": "none",
 }

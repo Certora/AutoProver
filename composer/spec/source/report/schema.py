@@ -3,8 +3,9 @@
 `AutoProverReport` is the top-level document written to ``certora/ap_report/report.json``.
 The report is **property-keyed**: a high-level `PropertyGroup` (a "P-NN" heading) groups the
 inferred `FormalizedProperty`s it covers, and a `RuleVerdict` may surface under several groups
-(rules repeat; properties partition). Rule verdicts reuse ProverOutputUtility's `NodeStatus` so the
-report speaks the same vocabulary as the analysis phase.
+(rules repeat; properties partition). Rule verdicts speak a backend-agnostic `Outcome` vocabulary
+(GOOD/BAD/…); each backend's analysis status maps into it, and the human-facing label for an
+outcome ("Verified" vs "Successful test") is a render-time concern, not stored here.
 
 The report is a **per-run snapshot** — no guarantee that property/group slugs stay stable across
 runs. Bump `schema_version` on a breaking change.
@@ -13,7 +14,6 @@ from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field
-from prover_output_utility.models import NodeStatus
 
 from composer.spec.prop import PropertyFormulation
 
@@ -36,31 +36,51 @@ type PropertyKey = tuple[ComponentName, PropertyTitle]
 """A property's identity: ``(component, title)`` — the cross-reference key groups use for members."""
 
 
+class Outcome(str, Enum):
+    """Backend-agnostic per-unit (rule / test) result. Each backend's native analysis status maps
+    into this small vocabulary; the human-facing label ("Verified" for a prover rule, "Successful
+    test" for a forge run) is supplied at render time, so the data model stays backend-neutral.
+
+      - GOOD    — the property holds (prover: VERIFIED; foundry: a passing test)
+      - BAD     — the property is violated (prover: VIOLATED; foundry: an expected-failure test)
+      - ERROR   — the run errored out without a verdict
+      - TIMEOUT — the run timed out without a verdict
+      - UNKNOWN — no conclusive result
+
+    A finalized report never carries RUNNING/PENDING — those fold into UNKNOWN at collection.
+    """
+    GOOD = "GOOD"
+    BAD = "BAD"
+    ERROR = "ERROR"
+    TIMEOUT = "TIMEOUT"
+    UNKNOWN = "UNKNOWN"
+
+
 class GroupStatus(str, Enum):
-    """Aggregated verdict for a `PropertyGroup`, rolled up from the `NodeStatus` of the rules its
+    """Aggregated outcome for a `PropertyGroup`, rolled up from the `Outcome` of the rules its
     member properties are formalized by (see :func:`grouping.aggregate_status`):
 
-      - VERIFIED   — every contributing rule VERIFIED
-      - VIOLATED   — any contributing rule VIOLATED
-      - PARTIAL    — some VERIFIED, some not-yet-VERIFIED (but none VIOLATED)
-      - NO_RESULTS — none VERIFIED, none VIOLATED (all TIMEOUT/ERROR/…)
+      - GOOD    — every contributing rule is GOOD
+      - BAD     — any contributing rule is BAD
+      - PARTIAL — some GOOD, some not-yet-GOOD (but none BAD)
+      - UNKNOWN — none GOOD, none BAD (all ERROR/TIMEOUT/UNKNOWN)
     """
-    VERIFIED = "VERIFIED"
-    VIOLATED = "VIOLATED"
+    GOOD = "GOOD"
+    BAD = "BAD"
     PARTIAL = "PARTIAL"
-    NO_RESULTS = "NO_RESULTS"
+    UNKNOWN = "UNKNOWN"
 
 
 class RuleVerdict(BaseModel):
-    """One CVL rule/invariant and its prover outcome — the verdict table the report references by
-    `RuleRef`. Stored once even when properties across several groups are formalized by it, so a
-    shared rule carries a single consistent verdict/link. ``status``/``line``/``duration_seconds``
-    come from ProverOutputUtility's per-rule ``CheckResult``."""
+    """One CVL rule/invariant (or foundry test) and its outcome — the verdict table the report
+    references by `RuleRef`. Stored once even when properties across several groups are formalized
+    by it, so a shared rule carries a single consistent outcome/link. ``outcome``/``line``/
+    ``duration_seconds`` come from the backend's per-unit result."""
     name: RuleName
     spec_file: str = Field(
         description="Basename of the spec defining this rule; with `name` it is the rule's identity.",
     )
-    status: NodeStatus = NodeStatus.UNKNOWN
+    outcome: Outcome = Outcome.UNKNOWN
     line: int | None = None
     duration_seconds: float | None = None
     prover_link: str | None = None
@@ -131,9 +151,16 @@ class CoverageReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+type ReportBackend = Literal["prover", "foundry"]
+"""Which pipeline produced this report. Provenance only — every backend fills the same fields;
+this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test")
+for a report.json it reads cold."""
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["2.0"] = "2.0"
+    schema_version: Literal["3.0"] = "3.0"
+    backend: ReportBackend = "prover"
     contract_name: str
     run_timestamp_utc: str | None = None
     #: component name (or "Structural Invariants") -> prover run link/path
