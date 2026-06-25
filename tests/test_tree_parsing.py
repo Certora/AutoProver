@@ -53,7 +53,7 @@ async def test_rule_parsing():
     expected: list[tuple[RulePath, str]] = [
         (RulePath(rule='envfreeFuncsStaticCheck'), 'VERIFIED'),
         (RulePath(rule='mintRaisesSupply'), 'VERIFIED'),
-        (RulePath(rule='sharesSumIsConsistent', contract='Bank', method='Bank.withdraw(uint256)'), 'LMAO I BROKE IT'),
+        (RulePath(rule='sharesSumIsConsistent', contract='Bank', method='Bank.withdraw(uint256)'), 'VIOLATED'),
         (RulePath(rule='sharesSumIsConsistent', contract='Bank', method='Bank.transferShares(address,uint256)'), 'VERIFIED'),
         (RulePath(rule='sharesSumIsConsistent', contract='Bank', method='Bank.deposit(uint256)'), 'VIOLATED'),
         (RulePath(rule='sharesSumIsConsistent', contract='Bank', method='Bank.setOwner(address)'), 'VERIFIED'),

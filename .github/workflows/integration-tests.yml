@@ -1,18 +1,9 @@
 name: Integration Tests
 
-# on:
-#   schedule:
-#     # Weekly, Sunday ~03:07 UTC. Off the top of the hour for reliability.
-#     # (cron is ALWAYS UTC — no timezone option. Adjust the hour for your locale.)
-#     - cron: '7 3 * * *'
-#   workflow_dispatch: {}   # adds a "Run workflow" button in the Actions tab
-
-
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+  schedule:
+    - cron: '7 3 * * *'
+  workflow_dispatch: {}   # adds a "Run workflow" button in the Actions tab
 
 # If a manual run and a scheduled run overlap, cancel the older one
 # so you don't pay for the expensive job twice.
