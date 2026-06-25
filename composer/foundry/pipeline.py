@@ -31,7 +31,7 @@ from composer.foundry.author import (
 from composer.foundry.artifacts import FoundryArtifactStore
 from composer.foundry.report import _foundry_verdicts
 from composer.pipeline.core import (
-    ComponentOutcome, Formalizer, PreparedSystem, PipelineRun,
+    Formalizer, PreparedSystem, PipelineRun,
     GaveUp, SystemAnalysisSpec,
     CorePhases, main_instance, Delivered,
     run_pipeline
@@ -114,13 +114,12 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
     @override
     async def formalize(
         self,
+        label: str,
         feat: ContractComponentInstance,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[GeneratedFoundryTest],
         run: PipelineRun
     ) -> GeneratedFoundryTest | GaveUp:
-        label = f"{feat.component.name} ({len(props)} properties)"
-
         return await batch_foundry_test_generation(
             ctx=ctx.abstract(FoundryGeneration),
             project_root=run.source.project_root,
@@ -134,28 +133,6 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
             props=props
         )
     
-    @override
-    def report_inputs(
-        self,
-        outcomes: list[ComponentOutcome[GeneratedFoundryTest]]
-    ) -> list[ReportComponentInput[GeneratedFoundryTest]]:
-        report_components : list[ReportComponentInput[GeneratedFoundryTest]] = []
-        for artifact in outcomes:
-            result = artifact.result
-            if isinstance(result, Delivered):
-                report_components.append(ReportComponentInput(
-                    formalized=result.to_formalized(),
-                    name=artifact.feat.component.name,
-                    props=artifact.props
-                ))
-            else:
-                report_components.append(ReportComponentInput(
-                    formalized=None,
-                    name=artifact.feat.component.name,
-                    props=artifact.props
-                ))
-        return report_components
-
     @override
     async def fetch_verdicts(self, inp: ReportComponentInput[GeneratedFoundryTest]) -> dict[str, Verdict]:
         return await _foundry_verdicts(inp)

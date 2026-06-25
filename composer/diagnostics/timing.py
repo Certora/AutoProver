@@ -163,12 +163,6 @@ class RunSummary:
             return
         self._latest_link_by_task[task_id] = link
 
-    def get_latest_link(self, task_id: str | None = None) -> str | None:
-        """Return the most recent prover link; defaults to the active task. None if none."""
-        if (task_id := task_id or get_current_task_id()) is None:
-            return None
-        return self._latest_link_by_task.get(task_id)
-
     def total_wall_s(self) -> float:
         return time.perf_counter() - self.started_at_mono
 

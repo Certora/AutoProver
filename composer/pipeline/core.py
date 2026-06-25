@@ -30,7 +30,7 @@ from composer.spec.context import (
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
-    SourceApplication, ContractInstance, ContractComponentInstance
+    SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication
 )
 from composer.spec.types import PropertyFormulation, FormalResult, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
@@ -38,7 +38,7 @@ from composer.spec.prop_inference import run_property_inference
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportableResult, ReportComponentInput, Verdict, Formalized
+from composer.spec.source.report.collect import ReportableResult, ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
 
 _log = logging.getLogger(__name__)
@@ -102,12 +102,16 @@ class Delivered[FormT: BackendResult]:
     result: FormT
     deliverable: Path
 
-    def to_formalized(self, with_link: str | None = None):
-        return Formalized(
-            result=self.result,
-            unit_file=str(self.deliverable),
-            run_link=with_link
-        )
+    @property
+    def unit_file(self) -> str:
+        # The verdict-disambiguation key (file, unit_name), never displayed; must match what the
+        # verdict fetchers emit — the prover's is `Path(loc.file).name` (basename) — so basename,
+        # not the full project-relative path.
+        return self.deliverable.name
+
+    @property
+    def run_link(self) -> str | None:
+        return self.result.output_link
 
 @dataclass
 class ComponentOutcome[FormT: BackendResult](BackendJob):
@@ -138,13 +142,11 @@ class Formalizer[FormT: BackendResult](ABC):
         run: PipelineRun
     ) -> FormT | GaveUp: ...
 
-    @abstractmethod
-    def report_inputs(self, outcomes: list[ComponentOutcome[FormT]]) -> list[ReportComponentInput[FormT]]:
-        """Map outcomes → report inputs: derive unit_file + run_link per component and fold in any
-        synthetic components (prover: 'Structural Invariants'; foundry: none). Gave-up / crashed
-        outcomes map to formalized=None."""
-        ...
-    
+    def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
+        """Synthetic report inputs beyond the per-component outcomes — the prover folds in its
+        'Structural Invariants' here. Default: none."""
+        return []
+
     @abstractmethod
     async def fetch_verdicts(self, inp: ReportComponentInput[FormT]) -> dict[RuleName, Verdict]:
         """Per-unit outcomes. Prover: query ProverOutputUtility via inp.formalized.run_link
@@ -184,7 +186,7 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
 PROPERTIES_KEY = CacheKey[None, Properties]("properties")
 
 
-def main_instance(app: SourceApplication, source: SourceCode) -> ContractInstance:
+def main_instance(app: AnyApplication, source: SourceCode) -> ContractInstance:
     """Locate the application's main contract — the one whose solidity identifier matches
     ``source.contract_name`` — and return a ``ContractInstance`` pointing at it. Backends call this
     from ``prepare_system`` to seed the per-component loop; component analysis should already have
@@ -282,8 +284,17 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
                 else ComponentOutcome(b.feat, b.props, o)
                 for b, o in zip(batches, settled)]
 
-    # 5. Report (shared, backend-agnostic). Best-effort: a failure here never fails the run.
-    inputs = formalizer.report_inputs(outcomes)
+    # 5. Report (shared, backend-agnostic). The driver assembles the per-component inputs; backends
+    # contribute only synthetic extras (prover: structural invariants). Best-effort: a failure here
+    # never fails the run.
+    inputs = [
+        ReportComponentInput(
+            name=o.feat.component.name,
+            props=o.props,
+            formalized=o.result if isinstance(o.result, Delivered) else None,
+        )
+        for o in outcomes
+    ] + formalizer.extra_report_inputs()
     try:
         report = await build_report(
             contract_name=source.contract_name, backend=formalizer.backend_tag,

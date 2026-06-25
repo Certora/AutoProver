@@ -97,6 +97,10 @@ class GeneratedFoundryTest(BaseModel):
     def artifact_text(self) -> str:
         return self.test_source
 
+    @property
+    def output_link(self) -> str | None:
+        return None  # foundry has no external run service
+
 
 type BatchFoundryResult = GeneratedFoundryTest | GaveUp
 

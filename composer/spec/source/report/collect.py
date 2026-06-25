@@ -32,17 +32,24 @@ class ReportableResult(Protocol):
 
     def property_units(self) -> list[tuple[PropertyTitle, list[RuleName]]]: ...
 
+    @property
+    def output_link(self) -> str | None:
+        """The verification-run link for this result (prover job URL / local dir), or ``None`` for
+        backends with no run service (foundry). Drives the report's ``run_link``."""
+        ...
 
-@dataclass(frozen=True)
-class Formalized[R: ReportableResult]:
-    """A component's generation result together with the things that exist only because it was
-    formalized. ``unit_file`` is the basename of the file its units live in (``autospec_<slug>.spec``
-    / ``invariants.spec`` / a ``.t.sol``) — the unit-identity fallback when a verdict carries no
-    source location. ``run_link`` is the verification-run link (prover URL / local dir); ``None``
-    even on success for backends with no run service (foundry)."""
-    result: R
-    unit_file: str
-    run_link: str | None
+
+class Formalized[R: ReportableResult](Protocol):
+    """The report's view of a successful generation: the result, the basename of the file its units
+    live in (``autospec_<slug>.spec`` / ``invariants.spec`` / a ``.t.sol``) — the unit-identity
+    fallback when a verdict carries no source location — and the verification-run link (``None`` for
+    backends with no run service)."""
+    @property
+    def result(self) -> R: ...
+    @property
+    def unit_file(self) -> str: ...
+    @property
+    def run_link(self) -> str | None: ...
 
 
 @dataclass(frozen=True)
@@ -86,13 +93,12 @@ _OUTCOME_PRIORITY: dict[Outcome, int] = {
     Outcome.BAD: 5, Outcome.ERROR: 4, Outcome.TIMEOUT: 3, Outcome.UNKNOWN: 2, Outcome.GOOD: 1,
 }
 
-
-type VerdictFetcher[R: ReportableResult] = Callable[
-    [ReportComponentInput[R]], Awaitable[dict[RuleName, Verdict]]
-]
-"""Backend hook: given one collected input, return its units' verdicts keyed by unit name. The
-prover impl calls ProverOutputUtility off-thread; the foundry impl reads the result's ran/expected
-tests. A component with no result (gave up) yields ``{}``."""
+class VerdictFetcher[R: ReportableResult](Protocol):
+    """Backend hook: given one collected input, return its units' verdicts keyed by unit name. The
+    prover impl calls ProverOutputUtility off-thread; the foundry impl reads the result's ran/expected
+    tests. A component with no result (gave up) yields ``{}``."""
+    async def __call__(self, input: ReportComponentInput[R], /) -> dict[RuleName, Verdict]:
+        ...
 
 
 async def collect[R: ReportableResult](
