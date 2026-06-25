@@ -12,37 +12,36 @@ from typing import Iterable
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from prover_output_utility.models import NodeStatus
 from pydantic import BaseModel, Field
 
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    FormalizedProperty, GroupStatus, PropertyGroup, PropertyKey, RuleRef,
+    FormalizedProperty, GroupStatus, Outcome, PropertyGroup, PropertyKey, RuleRef,
 )
 
 FALLBACK_SLUG = "general"
 FALLBACK_TITLE = "General"
 
 
-def aggregate_status(statuses: Iterable[NodeStatus]) -> GroupStatus:
-    """Roll member-rule `NodeStatus`es up into a `GroupStatus`:
-      - any VIOLATED                            -> VIOLATED
-      - all VERIFIED                            -> VERIFIED
-      - some VERIFIED but not all (no VIOLATED) -> PARTIAL
-      - none VERIFIED, none VIOLATED            -> NO_RESULTS
+def aggregate_status(outcomes: Iterable[Outcome]) -> GroupStatus:
+    """Roll member-rule `Outcome`s up into a `GroupStatus`:
+      - any BAD                            -> BAD
+      - all GOOD                           -> GOOD
+      - some GOOD but not all (no BAD)     -> PARTIAL
+      - none GOOD, none BAD                -> UNKNOWN
     """
-    all_verified = True
-    any_verified = False
-    for s in statuses:
-        if s == NodeStatus.VIOLATED:
-            return GroupStatus.VIOLATED
-        if s == NodeStatus.VERIFIED:
-            any_verified = True
+    all_good = True
+    any_good = False
+    for o in outcomes:
+        if o == Outcome.BAD:
+            return GroupStatus.BAD
+        if o == Outcome.GOOD:
+            any_good = True
         else:
-            all_verified = False
-    if any_verified:
-        return GroupStatus.VERIFIED if all_verified else GroupStatus.PARTIAL
-    return GroupStatus.NO_RESULTS
+            all_good = False
+    if any_good:
+        return GroupStatus.GOOD if all_good else GroupStatus.PARTIAL
+    return GroupStatus.UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -97,10 +96,10 @@ async def call_grouping_llm(
 def build_groups(
     drafts: list[PropertyGroupDraft],
     props_by_key: dict[PropertyKey, FormalizedProperty],
-    rule_status: dict[RuleRef, NodeStatus],
+    rule_outcomes: dict[RuleRef, Outcome],
 ) -> list[PropertyGroup]:
     """Turn the LLM's drafts into final `PropertyGroup`s, rolling each group's status up from the
-    verdicts of the rules its member properties are formalized by."""
+    outcomes of the rules its member properties are formalized by."""
     out: list[PropertyGroup] = []
     for d in drafts:
         out.append(PropertyGroup(
@@ -108,7 +107,7 @@ def build_groups(
             title=d.title,
             description=d.description,
             status=aggregate_status(
-                rule_status.get(ref, NodeStatus.UNKNOWN)
+                rule_outcomes.get(ref, Outcome.UNKNOWN)
                 for k in d.members
                 if (p := props_by_key.get(k)) is not None
                 for ref in p.rule_refs

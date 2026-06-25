@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>FV report — {{ report.contract_name }}</title>
+<title>{{ terms.title }} — {{ report.contract_name }}</title>
 <style>
 :root {
     --bg: #ffffff;
@@ -208,15 +208,16 @@ footer.report-foot {
 <div class="container">
 
 <header class="report-head">
-  <h1>Formal verification report — {{ report.contract_name }}</h1>
+  <h1>{{ terms.title }} — {{ report.contract_name }}</h1>
   <div class="subtitle">
     {{ coverage.total_properties }} properties &middot;
-    {{ coverage.total_rules }} CVL rules &middot;
+    {{ coverage.total_rules }} {{ terms.unit_plural }} &middot;
     {{ coverage.total_groups }} high-level properties
   </div>
   <dl class="meta-grid">
     <dt>Contract</dt><dd>{{ report.contract_name }}</dd>
     <dt>Run timestamp</dt><dd>{{ report.run_timestamp_utc or "—" }}</dd>
+    {%- if has_links %}
     <dt>Prover runs</dt>
     <dd>
       {%- if prover_runs %}
@@ -226,15 +227,16 @@ footer.report-foot {
         {%- endfor %}
       {%- else %}—{% endif %}
     </dd>
+    {%- endif %}
   </dl>
-  <div class="counts-label">Rule outcomes:</div>
+  <div class="counts-label">{{ terms.outcomes_label }}:</div>
   <div class="counts">
-    {%- for c in rule_counts %}<span class="count-chip"><span class="badge badge-{{ c.kind }}">{{ c.status }}</span><strong>{{ c.n }}</strong></span>{% endfor %}
+    {%- for c in rule_counts %}<span class="count-chip"><span class="badge badge-{{ c.kind }}">{{ c.label }}</span><strong>{{ c.n }}</strong></span>{% endfor %}
     {%- if not rule_counts %}<span class="muted">—</span>{% endif %}
   </div>
   <div class="counts-label">High-level property outcomes:</div>
   <div class="counts">
-    {%- for c in group_counts %}<span class="count-chip"><span class="badge badge-{{ c.kind }}">{{ c.status }}</span><strong>{{ c.n }}</strong></span>{% endfor %}
+    {%- for c in group_counts %}<span class="count-chip"><span class="badge badge-{{ c.kind }}">{{ c.label }}</span><strong>{{ c.n }}</strong></span>{% endfor %}
     {%- if not group_counts %}<span class="muted">—</span>{% endif %}
   </div>
 </header>
@@ -247,25 +249,27 @@ footer.report-foot {
 
 {%- for g in groups %}
 <section class="prop" id="{{ g.slug }}">
-  <h2><span class="id">{{ g.slug }}</span> {{ g.title }} <span class="badge badge-{{ g.kind }}">{{ g.status }}</span></h2>
+  <h2><span class="id">{{ g.slug }}</span> {{ g.title }} <span class="badge badge-{{ g.kind }}">{{ g.label }}</span></h2>
   <p class="desc">{{ g.description }}</p>
   <table class="rules">
-    <thead><tr><th>Rule</th><th>Status</th><th>Description</th><th></th></tr></thead>
+    <thead><tr><th>{{ terms.unit_cap }}</th><th>Status</th><th>Description</th>{% if has_links %}<th></th>{% endif %}</tr></thead>
     <tbody>
       {%- for row in g.rows %}
       <tr>
         <td class="col-name">{{ row.name }}{% if row.line is not none %}<span class="muted">:{{ row.line }}</span>{% endif %}</td>
-        <td class="col-status"><span class="badge badge-{{ row.kind }}">{{ row.status }}</span></td>
+        <td class="col-status"><span class="badge badge-{{ row.kind }}">{{ row.label }}</span></td>
         <td>
           {%- if row.descriptions | length > 1 %}
           <ul class="claims">{% for d in row.descriptions %}<li>{{ d }}</li>{% endfor %}</ul>
           {%- elif row.descriptions %}{{ row.descriptions[0] }}
           {%- else %}<span class="muted">(no inferred description)</span>{%- endif %}
         </td>
+        {%- if has_links %}
         <td class="col-link">
           {%- if row.link.href %}<a href="{{ row.link.href }}" target="_blank" rel="noopener">{{ row.link.label }}</a>
           {%- else %}<span class="muted">{{ row.link.label }}</span>{% endif %}
         </td>
+        {%- endif %}
       </tr>
       {%- endfor %}
     </tbody>
@@ -304,14 +308,14 @@ footer.report-foot {
 {%- endif %}
 
 <footer class="report-foot">
-  Coverage: {{ coverage.total_rules }} rules across {{ coverage.total_groups }} high-level properties
+  Coverage: {{ coverage.total_rules }} {{ terms.unit_plural }} across {{ coverage.total_groups }} high-level properties
   ({{ coverage.properties_per_group_min }}–{{ coverage.properties_per_group_max }} properties each).
   Coverage complete: <strong>{{ "Yes" if coverage.property_coverage_complete else "No" }}</strong>.
   {%- if coverage.dropped_orphan_rules %}
-  {{ coverage.dropped_orphan_rules }} prover rule(s) not attributed to any property were dropped.
+  {{ coverage.dropped_orphan_rules }} {{ terms.unit_singular }}(s) not attributed to any property were dropped.
   {%- endif %}
   {%- if coverage.rules_spanning_multiple_groups %}
-  {{ coverage.rules_spanning_multiple_groups | length }} rule(s) underwrite multiple high-level properties.
+  {{ coverage.rules_spanning_multiple_groups | length }} {{ terms.unit_singular }}(s) underwrite multiple high-level properties.
   {%- endif %}
 </footer>
 

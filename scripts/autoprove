@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# scripts/autoprove — friendly host wrapper for the AutoProver docker pipeline.
+#
+# Hides docker-compose flags, HOST_UID/GID/WORK_DIR, container path translation,
+# and --cache-ns from the user. Idempotently builds the image, starts postgres,
+# and runs setup-db on first invocation per host.
+
+set -euo pipefail
+
+# Locate the compose file relative to this script so the wrapper works from
+# any cwd.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+IMAGE=autoprover-local:latest
+SETUP_SENTINEL="${XDG_CACHE_HOME:-$HOME/.cache}/autoprove/setup-db.done"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/autoprove <project_root> <path:Contract> <design_doc> [options]
+
+Arguments:
+  <project_root>   Path to your Foundry project (relative or absolute). Mounted
+                   into the container as /work.
+  <path:Contract>  Contract under verification, e.g. src/Vault.sol:Vault.
+                   The path is resolved relative to <project_root>.
+  <design_doc>     Path to the design document. Resolved against <project_root>
+                   if not absolute. Must live under <project_root>.
+
+Options:
+  --tui            Run tui-autoprove instead of console-autoprove.
+  --cache-ns NAME  Override the auto-derived cache namespace.
+  --rebuild        Force a local image rebuild.
+  -h, --help       Show this help.
+  --               Forward all subsequent args untouched to the entry point.
+
+Required environment:
+  ANTHROPIC_API_KEY   Anthropic API key (drives the LLM pipeline).
+  CERTORAKEY          Certora cloud prover key.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+ENTRY=console-autoprove
+CLOUD=1
+CACHE_NS=""
+REBUILD=0
+POSITIONAL=()
+EXTRA=()
+
+while (( $# > 0 )); do
+  case "$1" in
+    --tui)          ENTRY=tui-autoprove; shift ;;
+    # Wired but intentionally undocumented: local-prover mode isn't supported
+    # yet (this image bundles no prover build), so --no-cloud is left out of the
+    # usage text until a local-prover overlay exists.
+    --no-cloud)     CLOUD=0; shift ;;
+    --cache-ns)     CACHE_NS="${2:?--cache-ns requires a value}"; shift 2 ;;
+    --cache-ns=*)   CACHE_NS="${1#*=}"; shift ;;
+    --rebuild)      REBUILD=1; shift ;;
+    -h|--help)      usage; exit 0 ;;
+    --)             shift; EXTRA+=("$@"); break ;;
+    -*)             EXTRA+=("$1"); shift ;;
+    *)              POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+if (( ${#POSITIONAL[@]} != 3 )); then
+  usage
+  echo "[autoprove] error: expected 3 positional arguments, got ${#POSITIONAL[@]}" >&2
+  exit 1
+fi
+
+PROJECT_RAW="${POSITIONAL[0]}"
+CONTRACT_ARG="${POSITIONAL[1]}"
+DOC_RAW="${POSITIONAL[2]}"
+
+# ---------------------------------------------------------------------------
+# Credential check (fail fast before touching docker)
+# ---------------------------------------------------------------------------
+
+[[ -n "${ANTHROPIC_API_KEY:-}" ]] || { echo "[autoprove] error: ANTHROPIC_API_KEY is not set in your shell. Export it and rerun." >&2; exit 1; }
+[[ -n "${CERTORAKEY:-}" ]]       || { echo "[autoprove] error: CERTORAKEY is not set in your shell. Export it and rerun (cloud prover is required)." >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Resolve host-side paths; mount <project_root> itself as /work, so the
+# contract and design doc must live under it.
+# ---------------------------------------------------------------------------
+
+PROJECT_HOST="$(cd -- "$PROJECT_RAW" 2>/dev/null && pwd)" \
+  || { echo "[autoprove] error: project root not found: $PROJECT_RAW" >&2; exit 1; }
+
+case "$CONTRACT_ARG" in
+  *:*) ;;
+  *)   echo "[autoprove] error: contract argument must be path:ContractName (got '$CONTRACT_ARG')" >&2; exit 1 ;;
+esac
+CONTRACT_PATH="${CONTRACT_ARG%:*}"
+CONTRACT_NAME="${CONTRACT_ARG##*:}"
+[[ -f "$PROJECT_HOST/$CONTRACT_PATH" ]] \
+  || { echo "[autoprove] error: contract file not found: $PROJECT_HOST/$CONTRACT_PATH" >&2; exit 1; }
+
+if [[ "$DOC_RAW" = /* ]]; then
+  DOC_HOST="$DOC_RAW"
+else
+  DOC_HOST="$PROJECT_HOST/$DOC_RAW"
+fi
+[[ -f "$DOC_HOST" ]] || { echo "[autoprove] error: design doc not found: $DOC_HOST" >&2; exit 1; }
+DOC_HOST="$(cd -- "$(dirname -- "$DOC_HOST")" && pwd)/$(basename -- "$DOC_HOST")"
+[[ "$DOC_HOST" == "$PROJECT_HOST/"* ]] \
+  || { echo "[autoprove] error: design doc must live under the project root ($PROJECT_HOST); got $DOC_HOST" >&2; exit 1; }
+
+# <project_root> -> /work; the contract and doc are addressed relative to it.
+HOST_WORK_DIR="$PROJECT_HOST"
+CTR_PROJECT=/work
+CTR_CONTRACT="/work/${CONTRACT_PATH}:${CONTRACT_NAME}"
+CTR_DOC="/work/${DOC_HOST#"$PROJECT_HOST"/}"
+
+# ---------------------------------------------------------------------------
+# Derive the default cache namespace if the user didn't pass one. Caching is
+# always on — there's no real cost, and it saves your bacon if you need to
+# restart partway through.
+# ---------------------------------------------------------------------------
+
+if [[ -z "$CACHE_NS" ]]; then
+  raw="$(basename -- "$PROJECT_HOST")-$CONTRACT_NAME"
+  CACHE_NS="$(printf '%s' "$raw" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//')"
+  [[ -n "$CACHE_NS" ]] || { echo "[autoprove] error: could not derive a cache namespace from '$raw'" >&2; exit 1; }
+fi
+
+# ---------------------------------------------------------------------------
+# Export the variables docker-compose.yml expects.
+# ---------------------------------------------------------------------------
+
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+export HOST_UID HOST_GID HOST_WORK_DIR
+
+compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
+
+# ---------------------------------------------------------------------------
+# Idempotent setup: image, postgres, setup-db.
+# ---------------------------------------------------------------------------
+
+if (( REBUILD )) || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "[autoprove] building image (first build can take a while) ..." >&2
+  compose --profile autoprove build autoprove
+fi
+
+# `compose up -d --wait` is a no-op if postgres is already up and healthy;
+# otherwise it starts it and blocks until the healthcheck passes.
+echo "[autoprove] ensuring postgres is up ..." >&2
+compose up -d --wait postgres
+
+if [[ ! -f "$SETUP_SENTINEL" ]]; then
+  echo "[autoprove] running one-time setup-db ..." >&2
+  mkdir -p -- "$(dirname -- "$SETUP_SENTINEL")"
+  compose --profile autoprove run --rm autoprove setup-db
+  touch -- "$SETUP_SENTINEL"
+fi
+
+# ---------------------------------------------------------------------------
+# Go.
+# ---------------------------------------------------------------------------
+
+CLOUD_FLAG=()
+(( CLOUD )) && CLOUD_FLAG=(--cloud)
+
+echo "[autoprove] starting $ENTRY (cache-ns: $CACHE_NS, cloud: $CLOUD) ..." >&2
+exec compose --profile autoprove run --rm autoprove \
+    "$ENTRY" ${CLOUD_FLAG[@]+"${CLOUD_FLAG[@]}"} \
+    "$CTR_PROJECT" "$CTR_CONTRACT" "$CTR_DOC" \
+    --cache-ns "$CACHE_NS" \
+    ${EXTRA[@]+"${EXTRA[@]}"}
