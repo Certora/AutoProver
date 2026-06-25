@@ -32,6 +32,7 @@ RUN python -m venv /venv \
  && /venv/bin/pip install --no-cache-dir -r /build/docs/requirements.txt
 
 # Only the CVL manual is needed for the base rag_db (see scripts/populate_rag.sh).
+# TODO: Include extended_rag for sanity analyzer
 RUN set -eux; \
     mkdir -p /out; \
     target=/build/docs/docs/cvl; \

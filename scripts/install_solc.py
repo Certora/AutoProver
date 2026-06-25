@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install every released solc linux-amd64 binary under the pipeline's naming.
 
-Fetched from the official Solidity binary index rather than a Certora mirror.
+Fetched from the official Solidity binary index.
 The index (`list.json`) maps each release version to a filename of the form
 `solc-linux-amd64-v0.8.29+commit.ab55807c`; the autoprove pipeline (and the
 LLM prompts) instead expect `solcX.Y`, where X.Y are the minor/patch numbers

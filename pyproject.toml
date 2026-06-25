@@ -68,7 +68,7 @@ prover = ["ai-composer[certora-cli]"]
 # the matching PyTorch index via [tool.uv.sources] below. The container image
 # and any GPU-less host should use `cpu` (avoids pulling the multi-GB CUDA
 # runtime into a cloud-prover image); pick `cuda` on a GPU box. With neither
-# extra, torch resolves from PyPI (CUDA) as before.
+# extra, torch resolves from PyPI (CUDA).
 cpu = ["torch"]
 cuda = ["torch"]
 
