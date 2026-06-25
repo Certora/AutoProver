@@ -119,6 +119,7 @@ def _comment_out_nondet_entries(content: str) -> str:
             found_semicolon = False
             j = i
 
+            current_stripped = ""
             while j < len(lines):
                 current_stripped = lines[j].strip()
                 if j > i:

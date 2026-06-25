@@ -344,6 +344,7 @@ class CompilationWorkaroundManager:
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
 
+        output = ""
         while retry_count <= max_retries:
             # Run compilation
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
