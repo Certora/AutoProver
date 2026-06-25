@@ -1,0 +1,14 @@
+{
+  "include": ["certora_autosetup"],
+  "extraPaths": ["graphcore"],
+  "stubPath": "stubs",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportMissingTypeStubs": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownParameterType": "none",
+  "reportPrivateUsage": "none"
+}
