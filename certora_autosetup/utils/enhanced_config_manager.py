@@ -305,6 +305,19 @@ class ConfigManager:
             logger.warning(f"Failed to extract contract and spec from {config_file}: {e}")
             return None
 
+    @staticmethod
+    def extract_main_contract_from_config(config: Dict[str, Any]) -> Optional[str]:
+        """Return the main (verify-target) contract name from a config dict's ``verify``
+        field (format ``"ContractName:spec/path"``), or None if absent/malformed.
+
+        Dict-based counterpart to ``extract_contract_and_spec_from_config`` (which reads a
+        .conf file from disk); use this when the config is already in memory.
+        """
+        verify = config.get("verify", "")
+        if isinstance(verify, str) and ":" in verify:
+            return verify.split(":", 1)[0]
+        return None
+
     def update_config_spec(self, config_path: Path, new_spec: Path) -> None:
         """Update the spec file path in a config's verify field.
 
