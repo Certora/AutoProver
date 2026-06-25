@@ -22,6 +22,7 @@ import asyncio
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import partial
 from typing import Protocol
 
 from textual.app import App, ComposeResult
@@ -101,6 +102,21 @@ class LiveRunSource:
             anchor_checkpoint_id=meta["end_checkpoint_id"],
             stop_at_checkpoint_id=meta["start_checkpoint_id"],
         )
+
+    async def load_state(
+        self, thread_id: str, checkpoint_id: str
+    ) -> dict[str, object] | None:
+        """Fetch a single checkpoint's channel values on demand.
+
+        One ``aget_tuple`` per call, so the UI reads state only for turns the
+        user actually expands. Returns ``None`` if the checkpoint is gone.
+        """
+        ct = await self._checkpointer.aget_tuple(
+            {"configurable": {"thread_id": thread_id, "checkpoint_id": checkpoint_id}}
+        )
+        if ct is None:
+            return None
+        return dict(ct.checkpoint["channel_values"])
 
 
 @dataclass
@@ -233,7 +249,7 @@ class RunExplorerApp(App):
         if data is None:
             return
         await self._ensure_expanded(event.node, data)
-        await self._show_in_right_pane(data.thread_run_id)
+        await self._show_in_right_pane(data)
 
     async def _get_thread_cache(self, thread_run_id: str) -> _ThreadCache:
         """Load + scan a thread once, then memoize for the lifetime of the app."""
@@ -270,14 +286,22 @@ class RunExplorerApp(App):
                 self._tree_nodes[child_tid] = child_node
         node.expand()
 
-    async def _show_in_right_pane(self, thread_run_id: str) -> None:
+    async def _show_in_right_pane(self, data: _TreeNodeData) -> None:
+        thread_run_id = data.thread_run_id
         switcher = self.query_one("#switcher", ContentSwitcher)
         if thread_run_id not in self._mounted_renderers:
             cache = await self._get_thread_cache(thread_run_id)
+            # State-channel inspection reads checkpoints directly, so it is
+            # only available against a live DB — replay/export sources can't
+            # serve arbitrary checkpoint lookups.
+            on_view_state = None
+            if isinstance(self._source, LiveRunSource):
+                on_view_state = partial(self._source.load_state, data.meta["thread_id"])
             renderer = ThreadRenderer(
                 cache.timeline,
                 descendable_tool_call_ids=cache.descendable_tool_call_ids,
                 on_tool_descend=self._descend_to_child,
+                on_view_state=on_view_state,
                 id=f"r_{thread_run_id}",
             )
             await switcher.mount(renderer)

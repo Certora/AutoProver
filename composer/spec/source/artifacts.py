@@ -70,7 +70,13 @@ class ProverArtifactStore(ArtifactStore):
     ``.certora_internal/autoProve/`` diagnostics)."""
 
     def __init__(self, project_root: str, main_contract: str):
-        super().__init__(project_root)
+        super().__init__(
+            project_root,
+            "property_rules",
+            deliverable_dir=CERTORA_DIR,
+            internal_dir=AUTOPROVE_INTERNAL_DIR,
+            report_dir=AP_REPORT_DIR
+        )
         self._main_contract = main_contract
 
     def _deliverable_dir(self) -> Path:
@@ -129,20 +135,3 @@ class ProverArtifactStore(ArtifactStore):
         ``.certora_internal/autoProve/components_to_prover_runs.json``."""
         out_dir = ensure_dir(self._internal_dir())
         (out_dir / "components_to_prover_runs.json").write_text(json.dumps(runs, indent=2))
-
-    def write_report(self, report: AutoProverReport) -> None:
-        """The autoprove final report to ``certora/ap_report/report.json``."""
-        report_dir = ensure_dir(under_project(self._project_root, AP_REPORT_DIR))
-        out = report_dir / "report.json"
-        out.write_text(report.model_dump_json(indent=2) + "\n")
-        _log.info("autoprove report: wrote %s", out)
-
-
-class ProverSourceCode(SourceCode):
-    """``SourceCode`` that exposes the prover artifact store. Construct this in the
-    autoprove entry point; analysis / property-inference passes keep taking plain
-    ``SourceCode`` since the store is irrelevant to them."""
-
-    @property
-    def artifact_store(self) -> ProverArtifactStore:
-        return ProverArtifactStore(self.project_root, self.contract_name)

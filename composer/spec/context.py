@@ -80,7 +80,7 @@ type CacheTypes = None | BaseModel | Marker
 MNEMONIC_KEYS = ("thread_mnemonics",)
 
 
-class CacheKey[Parent: CacheTypes, Curr: CacheTypes]:
+class CacheKey[Parent, Curr]:
     def __init__(self, key: str):
         self.key = key
 
@@ -104,17 +104,23 @@ class ComponentGroup:
 class CVLJudge:
     """CVL property feedback judge step."""
 
+class FoundryJudge:
+    """Foundry test feedback judge step."""
+
 class CVLGeneration:
     """Abstraction for the CVL generation pipeline."""
+
+class FoundryGeneration:
+    """Abstraction for the foundry test-generation pipeline."""
 
 class Contract:
     """An individual contract"""
 
-type Abstraction = CVLGeneration
+type Abstraction = CVLGeneration | FoundryGeneration
 
 type Marker = (
     InvJudge | InvFormal | Properties | ComponentGroup
-    | CVLJudge | Abstraction | Contract
+    | CVLJudge | FoundryJudge | Abstraction | Contract
 )
 
 # ---------------------------------------------------------------------------
@@ -122,7 +128,7 @@ type Marker = (
 # ---------------------------------------------------------------------------
 
 @dataclass
-class WorkflowContext[K: CacheTypes]:
+class WorkflowContext[K]:
     """
     Manages thread IDs, memory namespaces, and caching for workflows.
 
@@ -170,14 +176,14 @@ class WorkflowContext[K: CacheTypes]:
         )
     
     @overload
-    def child[NXT: CacheTypes](self, name_key: CacheKey[K, NXT]) -> "WorkflowContext[NXT]":
+    def child[NXT](self, name_key: CacheKey[K, NXT]) -> "WorkflowContext[NXT]":
         ...
 
     @overload
-    def child[NXT: CacheTypes](self, name_key: CacheKey[K, NXT], tag: dict) -> Awaitable["WorkflowContext[NXT]"]:
+    def child[NXT](self, name_key: CacheKey[K, NXT], tag: dict) -> Awaitable["WorkflowContext[NXT]"]:
         ...
 
-    def _child_pure[NXT: CacheTypes](
+    def _child_pure[NXT](
         self, name_key: CacheKey[K, NXT],
     ) -> tuple["WorkflowContext[NXT]", tuple[str, ...] | None]:
         name = name_key.key
@@ -191,7 +197,7 @@ class WorkflowContext[K: CacheTypes]:
             recursion_limit=self.recursion_limit,
         ), child_cache_ns)
 
-    async def _child_async[NXT: CacheTypes](
+    async def _child_async[NXT](
         self, name_key: CacheKey[K, NXT], tag: dict
     ) -> "WorkflowContext[NXT]":
         (nxt, cache_key) = self._child_pure(name_key)
@@ -199,12 +205,12 @@ class WorkflowContext[K: CacheTypes]:
             await self._store.aput(cache_key, "_desc", tag)
         return nxt
         
-    def _child_sync[NXT: CacheTypes](
+    def _child_sync[NXT](
         self, name_key: CacheKey[K, NXT]
     ) -> "WorkflowContext[NXT]":
         return self._child_pure(name_key)[0]
 
-    def child[NXT: CacheTypes](self, name_key: CacheKey[K, NXT], tag: dict | None = None) -> "WorkflowContext[NXT] | Awaitable[WorkflowContext[NXT]]":
+    def child[NXT](self, name_key: CacheKey[K, NXT], tag: dict | None = None) -> "WorkflowContext[NXT] | Awaitable[WorkflowContext[NXT]]":
         """Create a child context with derived namespaces."""
         if tag is None:
             return self._child_sync(name_key)

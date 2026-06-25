@@ -16,24 +16,30 @@ Phases:
 
 import asyncio
 
+from typing import override
+
 from composer.io.multi_job import (
     TaskInfo, HandlerFactory, run_task,
 )
 from composer.spec.source.autosetup import SetupSuccess
 from composer.ui.autoprove_app import AutoProvePhase
 
+from langchain_core.tools import BaseTool
+
+from dataclasses import dataclass
+
 from composer.input.files import Document
 from composer.spec.context import (
-    WorkflowContext, CacheKey, Properties, CVLGeneration,
+    WorkflowContext, CacheKey, Properties, CVLGeneration, SourceCode
 )
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
 from composer.spec.source.harness import run_harness_creation, run_autosetup_phase, ContractSetup
 from composer.spec.source.system_analysis import run_component_analysis
 from composer.spec.service_host import ServiceHost
 from composer.spec.source.summarizer import setup_summaries
 from composer.spec.system_model import (
-    HarnessedApplication, SourceExplicitContract,
+    ContractComponentInstance, HarnessedApplication, SourceExplicitContract,
     HarnessedExplicitContract, SourceExternalActor, HarnessDefinition, SolidityIdentifier
 )
 from composer.spec.cvl_generation import GeneratedCVL
@@ -41,11 +47,15 @@ from composer.spec.source.prover import get_prover_tool
 from composer.prover.core import ProverOptions
 from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.author import batch_cvl_generation, GaveUp
-from composer.spec.source.artifacts import InvariantSpec, ProverSourceCode
+from composer.spec.source.artifacts import InvariantSpec
 from composer.spec.source.common_pipeline import extract_all_components, generate_all_component_cvl, AutoProveResult
 from composer.spec.source.task_ids import (
     SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, AUTOSETUP_TASK_ID,
     SUMMARIES_TASK_ID, INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
+)
+
+from composer.pipeline.core import (
+    Formalizer, GaveUp, PreparedSystem, Formalized, PipelineRun
 )
 
 
@@ -66,8 +76,37 @@ INV_CVL_KEY = CacheKey[None, GeneratedCVL]("invariant-cvl")
 # Pipeline
 # ---------------------------------------------------------------------------
 
+@dataclass
+class ProverRunner(
+    Formalizer[GeneratedCVL]
+):
+    _prover_tool: BaseTool
+    _prover_config: dict
+    _resources: list[CVLResource]
+
+    @override
+    async def formalize(
+        self,
+        label: str,
+        feat: ContractComponentInstance,
+        props: list[PropertyFormulation],
+        ctx: WorkflowContext[GeneratedCVL],
+        run: PipelineRun
+    ) -> GeneratedCVL | GaveUp:
+        return await batch_cvl_generation(
+            ctx.abstract(CVLGeneration),
+            self._prover_config,
+            props,
+            feat,
+            self._resources,
+            self._prover_tool,
+            run.env,
+            label,
+            run.source, SPECS_DIR
+        )
+
 async def run_autoprove_pipeline(
-    source_input: ProverSourceCode,
+    source_input: SourceCode,
     ctx: WorkflowContext[None],
     handler_factory: HandlerFactory[AutoProvePhase, None],
     env: ServiceHost,
@@ -228,7 +267,6 @@ async def run_autoprove_pipeline(
         inv_props = [
             PropertyFormulation(
                 title=inv.name,
-                methods="invariant",
                 description=inv.description,
                 sort="invariant",
             )

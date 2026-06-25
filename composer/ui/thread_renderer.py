@@ -10,6 +10,7 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Static, Collapsible
 
+from rich.console import Group
 from rich.text import Text
 from rich.syntax import Syntax
 
@@ -49,6 +50,52 @@ def _compact_args(args: dict, max_len: int = 80) -> str:
     return result
 
 
+class LazyStateView(Collapsible):
+    """Per-turn view of a checkpoint's non-message state channels.
+
+    The channel values are fetched only on the first expansion (one
+    ``aget_tuple`` for the single checkpoint), so building a thread's
+    timeline never reads state for turns the user doesn't open. Wired up
+    only in live-run mode; replay/export sources pass no loader and no
+    state view is rendered.
+    """
+
+    def __init__(
+        self,
+        *,
+        checkpoint_id: str,
+        loader: Callable[[str], Awaitable[dict[str, object] | None]],
+        **kwargs,
+    ):
+        self._body = Static("(expand to load state)", markup=False)
+        super().__init__(self._body, title="  ⚙ state channels", collapsed=True, **kwargs)
+        self._checkpoint_id = checkpoint_id
+        self._loader = loader
+        self._loaded = False
+
+    async def on_collapsible_expanded(self, event: Collapsible.Expanded) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        self._body.update("loading…")
+        channel_values = await self._loader(self._checkpoint_id)
+        if channel_values is None:
+            self._body.update("(state unavailable)")
+            return
+        channels = {k: v for k, v in channel_values.items() if k != "messages"}
+        if not channels:
+            self.title = "  ⚙ state channels (none)"
+            self._body.update("(no non-message channels)")
+            return
+        self.title = f"  ⚙ state channels ({len(channels)})"
+        renderables: list = []
+        for key in sorted(channels):
+            renderables.append(Text(key, style="bold cyan"))
+            dumped = json.dumps(channels[key], indent=2, default=str)
+            renderables.append(Syntax(dumped, "json", theme="monokai", word_wrap=True))
+        self._body.update(Group(*renderables))
+
+
 class DescendableToolCall(Collapsible):
     """Tool-call collapsible whose id is known to spawn a sub-thread.
     A click outside the toggle area fires ``on_descend(tool_call_id)``."""
@@ -76,6 +123,10 @@ class ThreadRenderer(VerticalScroll):
     call's collapsible is rendered with a "↘" affordance and clicking the
     affordance fires ``on_tool_descend(tool_call_id)``. Snapshot-viewer passes
     an empty set + None callback for no drill-down.
+
+    When ``on_view_state`` is supplied, each turn gets a collapsible that
+    lazily loads the checkpoint's non-message state channels on first expand
+    (live-run mode only). Replay/export and snapshot-viewer pass None.
     """
 
     DEFAULT_CSS = """
@@ -83,6 +134,7 @@ class ThreadRenderer(VerticalScroll):
     ThreadRenderer > * { margin-bottom: 1; }
     ThreadRenderer .turn-header { margin-top: 1; }
     ThreadRenderer .turn-header:hover { background: $accent 30%; }
+    ThreadRenderer .turn-state { margin-left: 2; color: $text-muted; }
     ThreadRenderer .tool-call { margin-left: 2; }
     ThreadRenderer .tool-result { margin-left: 2; }
     ThreadRenderer .ai-text { margin-left: 2; color: #6699cc; }
@@ -124,12 +176,14 @@ class ThreadRenderer(VerticalScroll):
         *,
         descendable_tool_call_ids: set[str] | None = None,
         on_tool_descend: Callable[[str], Awaitable[None]] | None = None,
+        on_view_state: Callable[[str], Awaitable[dict[str, object] | None]] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._timeline = timeline
         self._descendable = descendable_tool_call_ids or set()
         self._on_tool_descend = on_tool_descend
+        self._on_view_state = on_view_state
 
     def on_mount(self) -> None:
         self.mount_all(self._render_all())
@@ -151,7 +205,7 @@ class ThreadRenderer(VerticalScroll):
                 tool_results[item.tool_call_id] = item
 
         turn = 0
-        for idx, (item, _ckpt_id) in enumerate(self._timeline):
+        for idx, (item, ckpt_id) in enumerate(self._timeline):
             match item:
                 case SummarizationMarker():
                     widgets.append(self._render_summarization(item, idx))
@@ -161,7 +215,7 @@ class ThreadRenderer(VerticalScroll):
                     widgets.append(self._render_human(item, idx))
                 case AIMessage():
                     turn += 1
-                    widgets.extend(self._render_turn(item, idx, turn, tool_results))
+                    widgets.extend(self._render_turn(item, idx, turn, ckpt_id, tool_results))
                 case ToolMessage():
                     pass  # rendered inline with its AI message
                 case _:
@@ -204,6 +258,7 @@ class ThreadRenderer(VerticalScroll):
         msg: AIMessage,
         idx: int,
         turn: int,
+        ckpt_id: str | None,
         tool_results: dict[str, ToolMessage],
     ) -> list:
         widgets: list = []
@@ -230,6 +285,13 @@ class ThreadRenderer(VerticalScroll):
             header.append(f"  {n_tool_calls} tool call(s)", style="dim")
         header.append(usage_str, style="dim")
         widgets.append(Static(header, classes="turn-header"))
+
+        if self._on_view_state is not None and ckpt_id is not None:
+            widgets.append(LazyStateView(
+                checkpoint_id=ckpt_id,
+                loader=self._on_view_state,
+                classes="turn-state",
+            ))
 
         for block in blocks:
             match block["type"]:

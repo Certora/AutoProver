@@ -12,11 +12,11 @@ from composer.ui.autoprove_app import AutoProvePhase
 
 from composer.input.files import Document
 from composer.spec.context import (
-    WorkflowContext, CacheKey, Properties, ComponentGroup, CVLGeneration,
+    WorkflowContext, CacheKey, Properties, ComponentGroup, CVLGeneration, SourceCode
 )
 from composer.spec.util import string_hash
 from composer.spec.prop_inference import run_property_inference
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.gen_types import CVLResource, SPECS_DIR
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
@@ -24,12 +24,12 @@ from composer.spec.system_model import (
 )
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.source.author import batch_cvl_generation, GaveUp, BatchGeneratedCVLResult
-from composer.spec.source.artifacts import ComponentSpec, InvariantSpec, ProverSourceCode
+from composer.spec.source.artifacts import ComponentSpec, InvariantSpec
 from composer.spec.source.task_ids import (
     bug_analysis_task_id, cvl_gen_task_id, REPORT_TASK_ID,
 )
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportComponentInput
+from composer.spec.source.report.collect import Formalized, ReportComponentInput
 from composer.spec.source.report_prover import make_prover_fetcher
 
 _log = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ class _ComponentBatch:
 
 async def extract_all_components(
     *,
-    source_input: ProverSourceCode,
+    source_input: SourceCode,
     prop_context: WorkflowContext[Properties],
     handler_factory: HandlerFactory[AutoProvePhase, None],
     env: ServiceHost,
@@ -137,7 +137,7 @@ async def extract_all_components(
 
 async def generate_all_component_cvl(
     *,
-    source_input: ProverSourceCode,
+    source_input: SourceCode,
     component_batches: list[_ComponentBatch],
     handler_factory: HandlerFactory[AutoProvePhase, None],
     env: ServiceHost,
@@ -229,20 +229,24 @@ async def generate_all_component_cvl(
             spec = ComponentSpec(batch.feat.slugified_name)
             report_components.append(ReportComponentInput(
                 name=batch.feat.component.name,
-                unit_file=spec.spec_filename,
                 props=batch.props,
-                result=result if isinstance(result, GeneratedCVL) else None,
-                run_link=component_runs.get(spec.run_key),
+                formalized=Formalized(
+                    result=result,
+                    unit_file=spec.spec_filename,
+                    run_link=component_runs.get(spec.run_key),
+                ) if isinstance(result, GeneratedCVL) else None,
             ))
         if invariant_result is not None:
             inv_props, inv_cvl = invariant_result
             inv_spec = InvariantSpec()
             report_components.append(ReportComponentInput(
                 name="Structural Invariants",
-                unit_file=inv_spec.spec_filename,
                 props=inv_props,
-                result=inv_cvl if isinstance(inv_cvl, GeneratedCVL) else None,
-                run_link=component_runs.get(inv_spec.run_key),
+                formalized=Formalized(
+                    result=inv_cvl,
+                    unit_file=inv_spec.spec_filename,
+                    run_link=component_runs.get(inv_spec.run_key),
+                ) if isinstance(inv_cvl, GeneratedCVL) else None,
             ))
         report = await run_task(
             handler_factory,
@@ -273,50 +277,4 @@ async def generate_all_component_cvl(
         n_components=len(component_batches),
         n_properties=n_properties,
         failures=failures,
-    )
-
-
-async def run_generation_pipeline(
-    source_input: ProverSourceCode,
-    prop_context: WorkflowContext[Properties],
-    handler_factory: HandlerFactory[AutoProvePhase, None],
-    env: ServiceHost,
-    summary: HarnessedApplication,
-    semaphore: asyncio.Semaphore,
-    resources: list[CVLResource],
-    prover_tool: BaseTool,
-    prover_config: dict,
-    interactive: bool,
-    threat_model: Document | None,
-    max_bug_rounds: int = 3,
-) -> AutoProveResult:
-    """Property extraction followed by CVL generation for every component.
-
-    Thin wrapper over ``extract_all_components`` + ``generate_all_component_cvl``
-    for callers that run the two phases back-to-back (e.g. ``direct_pipeline``).
-    The staged pipeline calls the two halves directly so it can interleave other
-    phases (autosetup, invariant CVL) between them.
-    """
-    component_batches = await extract_all_components(
-        source_input=source_input,
-        prop_context=prop_context,
-        handler_factory=handler_factory,
-        env=env,
-        summary=summary,
-        semaphore=semaphore,
-        interactive=interactive,
-        threat_model=threat_model,
-        max_bug_rounds=max_bug_rounds,
-    )
-    if not component_batches:
-        raise ValueError("No properties extracted from any component.")
-    return await generate_all_component_cvl(
-        source_input=source_input,
-        component_batches=component_batches,
-        handler_factory=handler_factory,
-        env=env,
-        prover_tool=prover_tool,
-        prover_config=prover_config,
-        resources=resources,
-        semaphore=semaphore,
     )

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 
 from composer.spec.cvl_generation import SkippedProperty
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.source.report.schema import (
     ComponentName, FormalizedProperty, GaveUpComponent, Outcome, PropertyTitle, RuleName, RuleRef,
     RuleVerdict, SkippedClaim,
@@ -34,17 +34,25 @@ class ReportableResult(Protocol):
 
 
 @dataclass(frozen=True)
-class ReportComponentInput[R: ReportableResult]:
-    """One unit to collect: a component or the structural invariants. ``unit_file`` is the basename
-    of the file the units live in (``autospec_<slug>.spec`` / ``invariants.spec`` / a ``.t.sol``) —
-    the unit-identity fallback when a verdict carries no source location. ``result`` is the in-memory
-    generation outcome, or ``None`` when the component gave up / crashed (no units formalized).
-    ``run_link`` is this component's verification-run link, if any (prover URL / local dir)."""
-    name: ComponentName
+class Formalized[R: ReportableResult]:
+    """A component's generation result together with the things that exist only because it was
+    formalized. ``unit_file`` is the basename of the file its units live in (``autospec_<slug>.spec``
+    / ``invariants.spec`` / a ``.t.sol``) — the unit-identity fallback when a verdict carries no
+    source location. ``run_link`` is the verification-run link (prover URL / local dir); ``None``
+    even on success for backends with no run service (foundry)."""
+    result: R
     unit_file: str
-    props: list[PropertyFormulation]
-    result: R | None
     run_link: str | None
+
+
+@dataclass(frozen=True)
+class ReportComponentInput[R: ReportableResult]:
+    """One unit to collect: a component or the structural invariants. ``formalized`` carries the
+    generation result and its unit file / run link, or is ``None`` when the component gave up or
+    crashed — in which case no units were formalized, no file was written, and there is no run."""
+    name: ComponentName
+    props: list[PropertyFormulation]
+    formalized: Formalized[R] | None
 
 
 @dataclass(frozen=True)
@@ -109,17 +117,19 @@ async def collect[R: ReportableResult](
     referenced: set[RuleRef] = set()
 
     for inp, verdicts in zip(inputs, verdict_maps):
-        if inp.result is None:
+        if inp.formalized is None:
             # Gave up or crashed: the whole component is a formalization gap.
             gave_up.append(GaveUpComponent(component=inp.name, properties=inp.props))
             continue
-        res = inp.result
+        res = inp.formalized.result
+        unit_file = inp.formalized.unit_file
+        run_link = inp.formalized.run_link
         skip_reasons = {s.property_title: s.reason for s in res.skipped}
         mapping = dict(res.property_units())
 
         def _ref(unit_name: str) -> RuleRef:
             v = verdicts.get(unit_name)
-            return ((v.unit_file if v and v.unit_file else inp.unit_file), unit_name)
+            return ((v.unit_file if v and v.unit_file else unit_file), unit_name)
 
         for prop in inp.props:
             if prop.title in skip_reasons:
@@ -142,11 +152,11 @@ async def collect[R: ReportableResult](
 
         # Register every unit the backend reported (first run naming a (unit_file, name) wins).
         for unit_name, v in verdicts.items():
-            key = (v.unit_file or inp.unit_file, unit_name)
+            key = (v.unit_file or unit_file, unit_name)
             if key not in rules_by_key:
                 rules_by_key[key] = RuleVerdict(
                     name=unit_name, spec_file=key[0], outcome=v.outcome, line=v.line,
-                    duration_seconds=v.duration_seconds, prover_link=inp.run_link,
+                    duration_seconds=v.duration_seconds, prover_link=run_link,
                 )
 
     # A referenced unit with no verdict still needs an (UNKNOWN) entry to render.

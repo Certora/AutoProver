@@ -55,8 +55,8 @@ def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[Ge
     api = api or ProverOutputAPI()
 
     async def fetch(inp: ReportComponentInput[GeneratedCVL]) -> dict[RuleName, Verdict]:
-        if inp.result is None or inp.run_link is None:
+        if inp.formalized is None or inp.formalized.run_link is None:
             return {}
-        return await asyncio.to_thread(_fetch, api, inp.run_link)
+        return await asyncio.to_thread(_fetch, api, inp.formalized.run_link)
 
     return fetch

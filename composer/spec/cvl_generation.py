@@ -133,6 +133,10 @@ class GeneratedCVL(BaseModel):
         """Property title -> the CVL rule names that formalize it (the report's `ReportableResult`
         adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.rules) for m in self.property_rules]
+    
+    @property
+    def artifact_text(self) -> str:
+        return self.cvl
 
 
 # ---------------------------------------------------------------------------

@@ -23,10 +23,9 @@ from composer.workflow.services import llm_factory, standard_connections
 from composer.spec.service_host import ModelProvider
 from composer.spec.system_model import SolidityIdentifier
 from composer.spec.context import (
-    WorkflowContext,
+    WorkflowContext, SourceCode
 )
 from composer.spec.source.pipeline import run_autoprove_pipeline, AutoProveResult
-from composer.spec.source.artifacts import ProverSourceCode
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
 from composer.spec.agent_index import agent_index_config_from_env
@@ -166,7 +165,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         if content is None:
             parser.error(f"cannot read {sys_path}")
 
-        system_doc = ProverSourceCode(
+        system_doc = SourceCode(
             content=content,
             project_root=str(project_root),
             contract_name=SolidityIdentifier(contract_name),

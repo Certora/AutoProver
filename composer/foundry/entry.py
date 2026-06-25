@@ -28,7 +28,7 @@ from composer.core.user import user_data_ns
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.input.parsing import Arg, add_protocol_args
-from composer.input.types import DEFAULT_RECURSION_LIMIT, TieredModelOptions, RAGDBOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, TieredModelOptions, RAGDBOptions, ExtendedModelOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import DEFAULT_META_NS, thread_logger, default_logging_ns
 from composer.kb.knowledge_base import DefaultEmbedder
@@ -116,7 +116,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
         description="Foundry-test author for a property-extraction pipeline",
     )
     add_protocol_args(parser, FoundryRAGDBOptions)
-    add_protocol_args(parser, TieredModelOptions)
+    add_protocol_args(parser, ExtendedModelOptions)
     parser.add_argument(
         "--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT,
         help=f"Max graph iterations (default: {DEFAULT_RECURSION_LIMIT})",
