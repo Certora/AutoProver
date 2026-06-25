@@ -1,38 +1,44 @@
-"""Build the autoprove report in memory: collect -> group -> validate.
+"""Build the property-keyed report in memory: collect -> group -> validate.
 
-`run_autoprove_report` is the entry point the pipeline's final phase calls. It builds and
-*returns* the `AutoProverReport`; persisting it is the caller's job (via the pipeline's
-`ArtifactStore`). It is structured so that any single failure (LLM, validation, an empty
-grouping) degrades to a single ``general`` bucket rather than producing no high-level
-section; the caller additionally treats the whole phase as best-effort.
+`build_report` is the entry point a pipeline's final phase calls. It builds and *returns* the
+`AutoProverReport`; persisting it is the caller's job (via the pipeline's `ArtifactStore`). It is
+backend-agnostic: the caller supplies a `VerdictFetcher` (how to get per-unit `Outcome`s for this
+backend) and a `backend` tag (used only to pick render labels). It is structured so that any single
+failure (LLM, validation, an empty grouping) degrades to a single ``general`` bucket rather than
+producing no high-level section; the caller additionally treats the whole phase as best-effort.
 """
 import logging
 from datetime import datetime, timezone
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from prover_output_utility import ProverOutputAPI
-from prover_output_utility.models import NodeStatus
 
-from composer.spec.source.report.collect import ReportComponentInput, collect
+from composer.spec.source.report.collect import (
+    ReportableResult, ReportComponentInput, VerdictFetcher, collect,
+)
 from composer.spec.source.report.coverage import ValidationError, validate
 from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm,
 )
-from composer.spec.source.report.schema import AutoProverReport, PropertyKey, RuleRef
+from composer.spec.source.report.schema import (
+    AutoProverReport, Outcome, PropertyKey, ReportBackend, RuleRef,
+)
 
 _log = logging.getLogger(__name__)
 
 
-async def run_autoprove_report(
+async def build_report[R: ReportableResult](
     *,
     contract_name: str,
-    components: list[ReportComponentInput],
+    backend: ReportBackend,
+    components: list[ReportComponentInput[R]],
     llm: BaseChatModel,
-    api: ProverOutputAPI | None = None,
+    fetch_verdicts: VerdictFetcher[R],
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job."""
-    properties, rules, skipped, gave_up, dropped = await collect(components, api=api)
-    rule_status: dict[RuleRef, NodeStatus] = {r.ref: r.status for r in rules}
+    properties, rules, skipped, gave_up, dropped = await collect(
+        components, fetch_verdicts=fetch_verdicts
+    )
+    rule_outcomes: dict[RuleRef, Outcome] = {r.ref: r.outcome for r in rules}
     props_by_key = {p.key: p for p in properties}
 
     # The grouping may fail three ways; each degrades to the single 'general' bucket so the report
@@ -44,7 +50,7 @@ async def run_autoprove_report(
         grouping = await call_grouping_llm(
             llm=llm, contract_name=contract_name, properties=properties,
         )
-        groups = build_groups(grouping.groups, props_by_key, rule_status)
+        groups = build_groups(grouping.groups, props_by_key, rule_outcomes)
         coverage = validate(
             properties=properties, rules=rules, groups=groups,
             skipped=skipped, gave_up=gave_up, dropped_orphan_rules=dropped,
@@ -57,9 +63,9 @@ async def run_autoprove_report(
             f"validation rejected the grouping: {e}" if isinstance(e, ValidationError)
             else f"grouping failed: {e}"
         )
-        _log.warning("autoprove report: %s; applying fallback grouping", fallback_reason)
+        _log.warning("report: %s; applying fallback grouping", fallback_reason)
         groups = build_groups(
-            build_fallback_grouping(properties).groups, props_by_key, rule_status
+            build_fallback_grouping(properties).groups, props_by_key, rule_outcomes
         )
         coverage = validate(
             properties=properties, rules=rules, groups=groups,
@@ -68,9 +74,10 @@ async def run_autoprove_report(
         coverage.warnings = ["FALLBACK GROUPING APPLIED"] + coverage.warnings
 
     report = AutoProverReport(
+        backend=backend,
         contract_name=contract_name,
         run_timestamp_utc=datetime.now(timezone.utc).isoformat(),
-        prover_links={c.name: c.prover_link for c in components if c.prover_link},
+        prover_links={c.name: c.run_link for c in components if c.run_link},
         properties=properties,
         rules=rules,
         groups=groups,

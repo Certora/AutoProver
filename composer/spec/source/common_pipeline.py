@@ -28,8 +28,9 @@ from composer.spec.source.artifacts import ComponentSpec, InvariantSpec, ProverS
 from composer.spec.source.task_ids import (
     bug_analysis_task_id, cvl_gen_task_id, REPORT_TASK_ID,
 )
-from composer.spec.source.report.build import run_autoprove_report
+from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportComponentInput
+from composer.spec.source.report_prover import make_prover_fetcher
 
 _log = logging.getLogger(__name__)
 
@@ -223,33 +224,35 @@ async def generate_all_component_cvl(
     # Final, best-effort phase: turn the in-memory component results + per-component prover verdicts
     # into certora/ap_report/report.json. A failure here must never fail the run, so it is guarded.
     try:
-        report_components: list[ReportComponentInput] = []
+        report_components: list[ReportComponentInput[GeneratedCVL]] = []
         for batch, result in zip(component_batches, generation_results):
             spec = ComponentSpec(batch.feat.slugified_name)
             report_components.append(ReportComponentInput(
                 name=batch.feat.component.name,
-                spec_file=spec.spec_filename,
+                unit_file=spec.spec_filename,
                 props=batch.props,
-                result=result,
-                prover_link=component_runs.get(spec.run_key),
+                result=result if isinstance(result, GeneratedCVL) else None,
+                run_link=component_runs.get(spec.run_key),
             ))
         if invariant_result is not None:
             inv_props, inv_cvl = invariant_result
             inv_spec = InvariantSpec()
             report_components.append(ReportComponentInput(
                 name="Structural Invariants",
-                spec_file=inv_spec.spec_filename,
+                unit_file=inv_spec.spec_filename,
                 props=inv_props,
-                result=inv_cvl,
-                prover_link=component_runs.get(inv_spec.run_key),
+                result=inv_cvl if isinstance(inv_cvl, GeneratedCVL) else None,
+                run_link=component_runs.get(inv_spec.run_key),
             ))
         report = await run_task(
             handler_factory,
             TaskInfo(REPORT_TASK_ID, "Report", AutoProvePhase.REPORT),
-            lambda: run_autoprove_report(
+            lambda: build_report(
                 contract_name=source_input.contract_name,
+                backend="prover",
                 components=report_components,
                 llm=env.llm_lite(),
+                fetch_verdicts=make_prover_fetcher(),
             ),
         )
         if report is not None:
