@@ -208,6 +208,19 @@ def _component_cache_key(c: ContractComponentInstance) -> CacheKey[Properties, C
 def _batch_cache_key[FormT: BaseModel](props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, FormT]:
     return CacheKey(string_hash("|".join(p.model_dump_json() for p in props)))
 
+
+# Per-task ids: key the harness tapes and address the TUI's per-task lanes. Helpers so the format
+# has one home and tapes can reconstruct them.
+SYSTEM_ANALYSIS_TASK_ID = "system-analysis"
+
+
+def extract_task_id(idx: int) -> str:
+    return f"extract-{idx}"
+
+
+def formalize_task_id(idx: int) -> str:
+    return f"formalize-{idx}"
+
 # ---- the driver --------------------------------------------------------------
 async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](
     backend: PipelineBackend[P, FormT, H, A],
@@ -222,7 +235,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     # 1. System analysis (shared primitive, backend-parameterized; always yields SourceApplication).
     analyzed = await run.runner(
-        TaskInfo("system-analysis", "System Analysis", phases["analysis"]),
+        TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
         lambda: run_component_analysis(
             ty=SourceApplication, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
             input=source, env=run.env, extra_input=[
@@ -262,7 +275,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
             label = f"{batch.feat.component.name} ({len(batch.props)} properties)"
             result : FormT | GaveUp = await run.runner(
                 TaskInfo(
-                    f"formalize-{batch.feat.ind}",
+                    formalize_task_id(batch.feat.ind),
                     f"{batch.feat.component.name} ({len(batch.props)} properties)",
                     phases["formalization"]
                 ),
@@ -317,7 +330,7 @@ async def _extract_all[P: enum.Enum, H](
         feat_ctx = await prop_ctx.child(_component_cache_key(feat),
                                         {"component": feat.component.model_dump()})
         props = await run.runner(
-            TaskInfo(f"extract-{idx}", feat.component.name, phase),
+            TaskInfo(extract_task_id(idx), feat.component.name, phase),
             lambda conv: run_property_inference(
                 feat_ctx, run.env, feat, refinement=conv if interactive else None,
                 threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance),
