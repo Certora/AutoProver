@@ -20,6 +20,7 @@ give-ups are reported as failures in the result.
 
 import asyncio
 import enum
+import logging
 import pathlib
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
@@ -27,9 +28,9 @@ from typing import Awaitable, Callable
 from composer.foundry.author import (
     BatchFoundryResult, GaveUp, GeneratedFoundryTest, batch_foundry_test_generation,
 )
-from composer.foundry.artifacts import (
-    FoundryComponentEntry, FoundryRunReport, FoundrySourceCode, FoundryTestArtifact,
-)
+from composer.foundry.artifacts import FoundrySourceCode, FoundryTestArtifact
+from composer.foundry.report import run_foundry_report
+from composer.spec.source.report.collect import ReportComponentInput
 from composer.spec.context import (
     CVLGeneration, CacheKey, ComponentGroup, Properties, WorkflowContext,
 )
@@ -78,6 +79,8 @@ from composer.spec.system_model import (
 from composer.spec.util import slugify_filename, string_hash
 
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -245,12 +248,15 @@ async def run_foundry_pipeline(
         f"{s}_{b.feat.ind}" if slug_counts[s] > 1 else s
         for s, b in zip(raw_slugs, batches)
     ]
+    # Per-component test artifact (owns its own stem / .t.sol filename) — built once and reused for
+    # every write and for the report's unit identity, rather than reconstructed from `base` ad hoc.
+    artifacts = [FoundryTestArtifact(b) for b in bases]
 
     store = source_input.artifact_store
     # Dump the analysis-phase properties for every extracted component (parallels
     # the prover pipeline; recorded even if that component's tests later give up).
-    for base, batch in zip(bases, batches):
-        store.write_analysis_properties(FoundryTestArtifact(base), batch.props)
+    for artifact, batch in zip(artifacts, batches):
+        store.write_analysis_properties(artifact, batch.props)
 
     # ------------------------------------------------------------------
     # Phase 3: Per-component foundry test generation.
@@ -295,7 +301,7 @@ async def run_foundry_pipeline(
         res = await _generate(i, batch)
         if isinstance(res, GaveUp):
             return res, None
-        out_path = store.write_generated_test(FoundryTestArtifact(bases[i]), res)
+        out_path = store.write_generated_test(artifacts[i], res)
         return res, out_path
 
     results = await asyncio.gather(
@@ -305,24 +311,29 @@ async def run_foundry_pipeline(
 
     written: list[pathlib.Path] = []
     failures: list[str] = []
-    components: list[FoundryComponentEntry] = []
+    report_components: list[ReportComponentInput[GeneratedFoundryTest]] = []
     n_properties = 0
-    for base, batch, result in zip(bases, batches, results):
+    for artifact, batch, result in zip(artifacts, batches, results):
         n_properties += len(batch.props)
+        test_result: GeneratedFoundryTest | None = None
         if isinstance(result, BaseException):
             failures.append(f"{batch.feat.component.name}: {result}")
-            continue
-        res, path = result
-        if isinstance(res, GaveUp):
-            failures.append(
-                f"{batch.feat.component.name}: GAVE_UP: {res.reason}"
-            )
-        elif path is not None:
-            written.append(path)
-            components.append(FoundryComponentEntry(
-                component=batch.feat.component.name,
-                stem=FoundryTestArtifact(base).stem,
-            ))
+        else:
+            res, path = result
+            if isinstance(res, GaveUp):
+                failures.append(f"{batch.feat.component.name}: GAVE_UP: {res.reason}")
+            else:
+                test_result = res
+                if path is not None:
+                    written.append(path)
+        # Crashed / gave-up components carry a None result -> a formalization gap in the report.
+        report_components.append(ReportComponentInput(
+            name=batch.feat.component.name,
+            unit_file=artifact.test_filename,
+            props=batch.props,
+            result=test_result,
+            run_link=None,
+        ))
 
     pipeline_result = FoundryPipelineResult(
         n_components=len(batches),
@@ -330,13 +341,18 @@ async def run_foundry_pipeline(
         written=written,
         failures=failures,
     )
-    # Run-level rollup; per-component detail lives in certora/foundry/properties/.
-    store.write_report(FoundryRunReport(
-        n_components=pipeline_result.n_components,
-        n_properties=pipeline_result.n_properties,
-        components=components,
-        failures=failures,
-    ))
+
+    # Final, best-effort phase: the property-keyed report. A failure here must never fail the run.
+    try:
+        report = await run_foundry_report(
+            contract_name=source_input.contract_name,
+            components=report_components,
+            llm=env.llm_lite(),
+        )
+        store.write_report(report)
+    except Exception:
+        _log.warning("foundry report phase failed (continuing)", exc_info=True)
+
     return pipeline_result
 
 

@@ -88,6 +88,11 @@ class GeneratedFoundryTest(BaseModel):
     expected_failures: dict[str, str] = Field(default_factory=dict)
     ran_tests: list[str] = Field(default_factory=list)
 
+    def property_units(self) -> list[tuple[str, list[str]]]:
+        """Property title -> the foundry test names that demonstrate it (the report's
+        `ReportableResult` adapter; pairs with the structurally-shared ``skipped`` field)."""
+        return [(m.property_title, m.tests) for m in self.property_tests]
+
 
 class GaveUp(BaseModel):
     reason: str

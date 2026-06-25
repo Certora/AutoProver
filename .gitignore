@@ -13,5 +13,6 @@ build/
 emv-*
 .certora-*
 composer/testing/**/certora/
+test_scenarios/**/certora/
 local/
 test_scenarios/**/certora/
