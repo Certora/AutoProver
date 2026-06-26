@@ -237,7 +237,6 @@ def read_autosetup_usage(project_root: Path) -> list[TokenUsageDict]:
     """
     # Local import: importing certora_autosetup.utils at module load would instantiate its logger
     # singleton (a RotatingFileHandler) as a side effect. This runs only at runtime, so import here.
-    # (Not a cycle — certora_autosetup never imports composer.)
     from certora_autosetup.utils.paths import resolve_autosetup_llm_usage_file
 
     usage_file = resolve_autosetup_llm_usage_file(project_root)
