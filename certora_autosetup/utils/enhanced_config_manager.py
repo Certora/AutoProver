@@ -345,6 +345,7 @@ class ConfigManager:
         files_added = []
 
         # Add new contract files
+        contracts_added: List[ContractHandle] = []
         if new_contract_files:
             orig_files = conf_object.get("files", [])
 
@@ -361,7 +362,6 @@ class ConfigManager:
                 else:
                     normalized_orig.add(str(existing_path))
 
-            contracts_added: List[ContractHandle] = []
             for contract_file in new_contract_files:
                 # ContractHandle already has the right format (includes :ContractName if needed)
                 file_str = contract_file.to_config_str()

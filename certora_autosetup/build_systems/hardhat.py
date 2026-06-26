@@ -103,11 +103,10 @@ class HardhatManager(BuildSystemManager):
         Returns:
             HardhatConfig with parsed settings
         """
+        # Determine config type (before the try so it's available in the except handler)
+        config_type = "typescript" if config_file.name.endswith(".ts") else "javascript"
         try:
             self.log(f"Parsing Hardhat config from {config_file}")
-
-            # Determine config type
-            config_type = "typescript" if config_file.name.endswith(".ts") else "javascript"
 
             # Try to extract config using a Node.js script
             config_data = self._extract_config_via_node(config_file)

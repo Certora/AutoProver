@@ -176,7 +176,7 @@ class ProverRunner(ABC):
     @abstractmethod
     async def submit_jobs(
         self, job_specs: List[ProverJobSpec], pre_execute_callback=None
-    ) -> List[SubmissionResult | BaseException]:
+    ) -> List[SubmissionResult]:
         """
         Submit multiple jobs and return submission results.
         Fast operation - does not wait for completion.
