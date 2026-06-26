@@ -1,5 +1,5 @@
 {
-  "include": ["composer", "analyzer", "certora_autosetup"],
+  "include": ["composer", "analyzer", "certora_autosetup", "sanity_analyzer"],
   "extraPaths": ["graphcore"],
   "stubPath": "stubs",
   "typeCheckingMode": "standard",
