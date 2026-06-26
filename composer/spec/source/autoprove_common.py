@@ -111,14 +111,24 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
 
     args = cast(AutoProveArgs, parser.parse_args())
+    async with autoprove_executor(args, summary) as runner:
+        yield runner
 
+
+@asynccontextmanager
+async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncIterator[Executor]:
+    """Set up services from already-parsed args and yield the pipeline runner.
+
+    ``_entry_point`` parses argv into ``AutoProveArgs`` then delegates here; tests
+    construct ``AutoProveArgs`` directly.
+    """
     # Parse main_contract (path:ContractName)
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
-        parser.error(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
+        raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
 
     relative_path = str(full_contract_path.relative_to(project_root))
 
@@ -164,7 +174,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         # Read input documents now that the uploader is available.
         content = await conns.uploader.get_document(sys_path)
         if content is None:
-            parser.error(f"cannot read {sys_path}")
+            raise ValueError(f"cannot read {sys_path}")
 
         system_doc = ProverSourceCode(
             content=content,

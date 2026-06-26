@@ -28,6 +28,13 @@ jobs:
           cache-dependency-glob: "uv.lock"
           cache-suffix: integration
 
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'certora'
+
       - name: sync-deps
         run: |
           uv sync --group test --extra prover
@@ -53,6 +60,6 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           curl -sf -X POST -H 'Content-type: application/json' \
             --data "{
-              \"text\": \":red_circle: *Composer integration tests failed* in \`${{ github.repository }}\`\n<${RUN_URL}|View the failed run>\"
+              \"text\": \":red_circle: *AutoProver integration tests failed* in \`${{ github.repository }}\`\n<${RUN_URL}|View the failed run>\"
             }" \
             "$SLACK_WEBHOOK_URL"
