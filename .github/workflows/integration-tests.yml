@@ -49,9 +49,13 @@ jobs:
           uv run solc-select install 0.8.29
           uv run solc-select use 0.8.29
 
-      - name: run prover integration tests
+      - name: async runners
+        name: |
+          uv pip install pytest-xdist
+
+      - name: run autoprover integration tests
         run: |
-          uv run pytest -m 'expensive' tests -k test_autoprove_integration
+          uv run pytest -n 3 -m 'expensive' tests
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
 
