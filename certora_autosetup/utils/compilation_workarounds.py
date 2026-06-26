@@ -380,6 +380,20 @@ class CompilationWorkaroundManager:
                 self.log("Compilation output (stdout + stderr):")
                 self.log(output)
 
+            # Terminal, non-recoverable case: the main (verify-target) contract has no
+            # bytecode (abstract / no constructor). No workaround can make an abstract
+            # contract concrete, so detect it as soon as compilation fails rather than
+            # after exhausting every workaround (the catch-all relpaths workaround would
+            # otherwise fire first and delay this).
+            abstract_main_contract = self._detect_abstract_main_contract(output, compilation_config)
+            if abstract_main_contract is not None:
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                raise AbstractMainContractError(
+                    f"Main contract '{abstract_main_contract}' compiled to no bytecode: it is abstract "
+                    f"(or is missing a constructor), so it is not deployable and cannot be "
+                    f"verified. Re-run with a concrete implementation as the main contract."
+                )
+
             # Try to find an applicable workaround
             workaround_applied = False
             for workaround in workarounds:
@@ -413,16 +427,6 @@ class CompilationWorkaroundManager:
 
             # If no workaround applies, exit immediately (guardrail against infinite loop)
             if not workaround_applied:
-                # Terminal, non-recoverable case: the main (verify-target) contract has
-                # no bytecode (abstract / no constructor).
-                abstract_main_contract = self._detect_abstract_main_contract(output, compilation_config)
-                if abstract_main_contract is not None:
-                    self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
-                    raise AbstractMainContractError(
-                        f"Main contract '{abstract_main_contract}' compiled to no bytecode: it is abstract "
-                        f"(or is missing a constructor), so it is not deployable and cannot be "
-                        f"verified. Re-run with a concrete implementation as the main contract."
-                    )
                 if retry_count == 0:
                     # First attempt failed - log output for debugging
                     self.log("Compilation failed. Output:", "WARNING")
