@@ -5,6 +5,13 @@ on:
     - cron: '7 3 * * *'
   workflow_dispatch: {}   # adds a "Run workflow" button in the Actions tab
 
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+
 # If a manual run and a scheduled run overlap, cancel the older one
 # so you don't pay for the expensive job twice.
 concurrency:
