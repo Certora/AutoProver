@@ -38,7 +38,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: 'certora'
+          cache: 'maven'
 
       - name: sync-deps
         run: |
