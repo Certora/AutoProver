@@ -7,9 +7,8 @@ from pydantic import BaseModel, Field
 
 from graphcore.graph import FlowInput, build_async_workflow
 from graphcore.tools.results import result_tool_generator
-from graphcore.tools.memory import memory_tool, MemoryBackend
 
-from langchain_core.tools import tool
+from langchain_core.tools import tool, BaseTool
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -142,12 +141,12 @@ async def get_requirements(
     llm: BaseChatModel,
     sys_doc: InputFileLike,
     spec_file: InputFileLike,
-    mem_backend: MemoryBackend,
+    mem_tool: BaseTool,
     resume_artifact: ResumeArtifact | None,
     oracle: list[str]
 ) -> ExtractionResult:
     tools = [
-        memory_tool(mem_backend),
+        mem_tool,
         results_tool,
         human_in_the_loop,
         cvl_manual_search(ExtractionContext),

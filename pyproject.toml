@@ -114,6 +114,14 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
+[tool.pytest.ini_options]
+markers = [
+    "expensive: hits the real prover / network — deselect with -m 'not expensive'",
+]
+# optional but recommended once you're registering marks:
+addopts = "--strict-markers"   # a typo'd mark becomes an error, not a silent no-match
+
+
 [project.scripts]
 cex-analyzer = "analyzer.analysis:main"
 ap-trail = "composer.cli.ap_trail:main"
@@ -124,7 +132,9 @@ tui-foundry = "composer.cli.tui_foundry:main"
 autoprove-report-render = "composer.spec.source.report.render:main"
 tui-natspec = "composer.cli.tui_pipeline:main"
 cache-natspec = "composer.cli.cache_natspec:main"
-# certora_autosetup entry points (merged in from the AutoSetup repo).
+console-codegen = "composer.cli.console_codegen:main"
+tui-codegen = "composer.cli.tui_codegen:main"
+# certora_autosetup entry points
 certora-autosetup = "certora_autosetup.autosetup.cli:main"
 certora-parallel-autosetup = "certora_autosetup.parallel_autosetup:main"
 certora-setup-summaries = "certora_autosetup.setup.setup_summaries:main"

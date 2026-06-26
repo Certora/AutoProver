@@ -1,13 +1,12 @@
 from dataclasses import dataclass, field
 import hashlib
 
-from graphcore.graph import BoundLLM
 from graphcore.tools.vfs import VFSAccessor
 
 from composer.core.state import AIComposerState
 from composer.rag.db import ComposerRAGDB
 from composer.core.validation import ValidationType, prover
-from composer.prover.core import DEFAULT_GLOBAL_TIMEOUT
+from composer.prover.core import DEFAULT_GLOBAL_TIMEOUT, CexHandler
 
 @dataclass
 class ProverOptions:
@@ -28,10 +27,14 @@ class ProverOptions:
 
 @dataclass
 class AIComposerContext:
-    llm: BoundLLM
     rag_db: ComposerRAGDB
     prover_opts: ProverOptions
     vfs_materializer: VFSAccessor[AIComposerState]
+    # CEX-analysis strategy injected into the prover tool — the agentic handler
+    # for codegen. Read back out of the context by the prover runner. The
+    # report/proposal stores the handler and cex_remediation use are passed
+    # straight to those constructors at wiring time, not carried here.
+    cex_handler: CexHandler
     required_validations: list[ValidationType] = field(default_factory=lambda: [prover])
 
 def compute_state_digest(c: AIComposerContext, state: AIComposerState) -> str:
