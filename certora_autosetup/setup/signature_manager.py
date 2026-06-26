@@ -282,9 +282,10 @@ class SignatureManager:
             Path to the created dump file
         """
         use_cache_fs = output_file is None
+        cache_file = cache_path(DIR_CERTORA_INTERNAL, DIR_SIGNATURE_STATE, "signature_database.json")
+        fs = None
         if use_cache_fs:
             fs = get_fs()
-            cache_file = cache_path(DIR_CERTORA_INTERNAL, DIR_SIGNATURE_STATE, "signature_database.json")
             fs.mkdirs(cache_path(DIR_CERTORA_INTERNAL, DIR_SIGNATURE_STATE), exist_ok=True)
 
         # Collect all data
@@ -418,6 +419,7 @@ class SignatureManager:
 
         # Write to file
         if use_cache_fs:
+            assert fs is not None  # set above whenever use_cache_fs is True
             with fs.open(cache_file, "w") as f:
                 json.dump(dump_data, f, indent=2)
             logger.info(f"Signature database dumped to: {cache_file}")

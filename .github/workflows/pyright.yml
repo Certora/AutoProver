@@ -28,4 +28,4 @@ jobs:
 
       - name: Run pyright
         run: |
-          uv run pyright composer/ analyzer sanity_analyzer
+          uv run pyright composer/ analyzer sanity_analyzer certora_autosetup

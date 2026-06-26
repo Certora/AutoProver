@@ -833,6 +833,8 @@ class SetupProver:
                                 type_name = None
                                 qualified_name = None
                                 base_type = None
+                                enum_members = []
+                                struct_members = []
 
                                 # Handle UserDefinedValueType
                                 if type_info.get("type") == "UserDefinedValueType":

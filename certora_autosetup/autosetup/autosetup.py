@@ -1157,6 +1157,7 @@ class Autosetup:
         """
         from typechecker_loop import TypecheckerLoop  # type: ignore[import-not-found]
 
+        desc_text = f" for {description}" if description else ""
         try:
             # Build command for typechecker
             cmd = [self.config.certora_run_command, str(config_file)] + self.config.extra_args
@@ -1169,7 +1170,6 @@ class Autosetup:
             )
 
             # Run the typechecker loop to fix any typechecker errors
-            desc_text = f" for {description}" if description else ""
             self.log(f"🔧 Running typechecker fixes{desc_text}: {config_file.name}")
             success, final_cmd = typechecker.run_typechecker_loop(cmd, max_rounds=10)
 

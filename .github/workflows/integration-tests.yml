@@ -1,0 +1,68 @@
+name: Integration Tests
+
+on:
+  schedule:
+    - cron: '7 5 * * *'
+  workflow_dispatch: {}   # adds a "Run workflow" button in the Actions tab
+
+# If a manual run and a scheduled run overlap, cancel the older one
+# so you don't pay for the expensive job twice.
+concurrency:
+  group: scheduled-tests
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          cache-suffix: integration
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: sync-deps
+        run: |
+          uv sync --group test --extra prover
+
+      - name: sync solc
+        run: |
+          uv pip install solc-select
+          uv run solc-select install 0.8.29
+          uv run solc-select use 0.8.29
+
+      - name: async runners
+        run: |
+          uv pip install pytest-xdist
+
+      - name: run autoprover integration tests
+        run: |
+          uv run pytest -n 3 -m 'expensive' tests
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      # Fires ONLY if a step above failed. The whole point of the file.
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sf -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \":red_circle: *AutoProver integration tests failed* in \`${{ github.repository }}\`\n<${RUN_URL}|View the failed run>\"
+            }" \
+            "$SLACK_WEBHOOK_URL"

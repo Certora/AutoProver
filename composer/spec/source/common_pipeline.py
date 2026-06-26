@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from composer.spec.context import CacheKey, Properties, ComponentGroup
 from composer.spec.cvl_generation import GeneratedCVL
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance
 from composer.spec.util import string_hash
 

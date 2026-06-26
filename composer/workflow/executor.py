@@ -15,13 +15,14 @@ from langgraph._internal._typing import StateLike
 from langgraph.types import Checkpointer
 
 from graphcore.graph import Builder
-from graphcore.tools.memory import memory_tool
+from graphcore.tools.memory import async_memory_tool
 from graphcore.tools.vfs import VFSState
 
 from composer.input.types import WorkflowOptions, InputData, ResumeFSData, ResumeIdData, ResumeInput, NativeFS
+from composer.input.files import Document, InMemoryTextFile
 from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools
 from composer.workflow.factories import get_cryptostate_builder, get_vfs_tools, get_memory_ns
-from composer.workflow.services import get_checkpointer, get_store, get_memory, get_indexed_store
+from composer.workflow.services import standard_connections, IndexedConnections
 from composer.workflow.types import PromptParams, WorkflowSuccess, WorkflowFailure, WorkflowCrash, WorkflowResult
 from composer.workflow.meta import create_resume_commentary
 from composer.core.context import AIComposerContext, ProverOptions
@@ -41,7 +42,12 @@ from composer.io.context import with_handler, run_graph
 from composer.ui.codegen_events import CodeGenEventHandler
 from composer.core.state import AIComposerInput, AIComposerExtra
 from composer.ui.tool_display import tool_context
-from composer.workflow.services import checkpointer_context, memory_backend_context, store_context, indexed_store_context
+from composer.prover.agentic_analyzer import AgenticCexHandler
+from composer.prover.report_store import ReportStore
+from composer.spec.proposal_store import ProposalStore
+from composer.spec.cex_remediation import cex_remediation_tool, summary_critic_tool
+from composer.spec.guidance import ERC20TokenGuidance
+from composer.tools.working_spec import ApplyRemediationProposal
 
 
 _KB_NS = ("cvl",)
@@ -184,6 +190,15 @@ def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflo
     return (AIComposerInput(input=input_messages, vfs={}, **_get_empty_extra()), NativeFS(intf_p), NativeFS(spec_p))
 
 
+def _system_doc_as_document(fl: InputFileLike) -> Document:
+    """Bridge a resume-path system-doc handle to a ``Document`` for the CEX
+    agents. Audit/resume handles carry text (``InputFileLike.string_contents``
+    is typed ``str``), so an inline text document is the faithful
+    representation; binary system docs on resume await the input-layer rework.
+    """
+    return InMemoryTextFile(basename=fl.basename, string_contents=fl.string_contents)
+
+
 async def execute_ai_composer_workflow(
     handler: CodeGenIOHandler,
     llm: BaseChatModel,
@@ -192,13 +207,38 @@ async def execute_ai_composer_workflow(
     memory_namespace: str | None = None,
     resume_work_key: str | None = None,
 ) -> WorkflowResult:
-    """Execute the AI Composer workflow with interrupt handling."""
+    """Execute the AI Composer workflow with interrupt handling.
+
+    Opens the async langgraph connection bundle (store / checkpointer /
+    indexed store / memory / uploader) and the (still-sync) audit DB, then
+    delegates to ``_run_codegen``. The audit DB stays on psycopg for now;
+    only the langgraph side moves async.
+    """
+    async with standard_connections(embedder=DefaultEmbedder()) as conn:
+        audit_conn = psycopg.connect(workflow_options.audit_db)
+        try:
+            return await _run_codegen(
+                handler, llm, input, workflow_options, conn, AuditDB(audit_conn),
+                memory_namespace=memory_namespace, resume_work_key=resume_work_key,
+            )
+        finally:
+            audit_conn.close()
+
+
+async def _run_codegen(
+    handler: CodeGenIOHandler,
+    llm: BaseChatModel,
+    input: InputData | ResumeFSData | ResumeIdData,
+    workflow_options: WorkflowOptions,
+    conn: IndexedConnections,
+    audit_db: AuditDB,
+    *,
+    memory_namespace: str | None,
+    resume_work_key: str | None,
+) -> WorkflowResult:
     logger = logging.getLogger(__name__)
 
-    checkpointer = get_checkpointer()
-
-    audit_conn = psycopg.connect(workflow_options.audit_db)
-    audit_db = AuditDB(audit_conn)
+    checkpointer = conn.checkpointer
 
     thread_id = workflow_options.thread_id
 
@@ -214,6 +254,7 @@ async def execute_ai_composer_workflow(
     flow_input: AIComposerInput
 
     system_doc: InputFileLike
+    system_doc_doc: Document
     interface_file: InputFileLike
     spec_file: InputFileLike
     resume_art : None | ResumeArtifact = None
@@ -223,6 +264,7 @@ async def execute_ai_composer_workflow(
             prompt_params = PromptParams(is_resume=False)
             flow_input = get_fresh_input(input, workflow_options)
             system_doc = input.system_doc.to_file_like()
+            system_doc_doc = input.system_doc
             interface_file = input.intf
             spec_file = input.spec
 
@@ -234,6 +276,7 @@ async def execute_ai_composer_workflow(
                 system_doc = resume_art.system_vfs_handle
             else:
                 system_doc = input.new_system
+            system_doc_doc = _system_doc_as_document(system_doc)
             match input:
                 case ResumeFSData():
                     (flow_input, interface_file, spec_file) = get_resume_fs_input(input, resume_art, workflow_options)
@@ -243,28 +286,20 @@ async def execute_ai_composer_workflow(
                     flow_input = get_resume_id_input(input, resume_art, workflow_options)
                     spec_file = input.new_spec
 
-    store = get_store()
+    store = conn.store
+    report_store = ReportStore(store=store)
+    proposal_store = ProposalStore(store=store)
 
-    from_previous_ns : str | None = None
-    match input:
-        case ResumeFSData(thread_id=src_id) | ResumeIdData(thread_id=src_id):
-            from_previous_ns = get_memory_ns(memory_namespace or src_id, "natreq")
-        case InputData():
-            pass
+    req_mem_tool = async_memory_tool(conn.memory(get_memory_ns(mem_root, "natreq")))
 
-    req_memories = get_memory(
-        get_memory_ns(mem_root, "natreq"),
-        from_previous_ns
-    )
-
-    extra_reqs = store.get((thread_id,), "requirements")
+    extra_reqs = await store.aget((thread_id,), "requirements")
     reqs_list : list[str] | None
     if extra_reqs is None:
         if workflow_options.skip_reqs:
             reqs_list = None
         elif workflow_options.set_reqs is not None:
             if workflow_options.set_reqs.startswith("@"):
-                other_reqs = store.get((workflow_options.set_reqs[1:],), "requirements")
+                other_reqs = await store.aget((workflow_options.set_reqs[1:],), "requirements")
                 assert other_reqs is not None
                 reqs_list = other_reqs.value["reqs"]
             else:
@@ -277,13 +312,13 @@ async def execute_ai_composer_workflow(
                 llm,
                 system_doc,
                 spec_file,
-                req_memories,
+                req_mem_tool,
                 resume_art,
                 workflow_options.requirements_oracle
             )
             reqs_list = extraction.reqs
             await handler.log_workflow_thread(WorkflowPurpose.NATREQ, extraction.thread_id)
-        store.put((thread_id,), "requirements", {"reqs": reqs_list})
+        await store.aput((thread_id,), "requirements", {"reqs": reqs_list})
     else:
         print("Read requirements from store")
         reqs_list = extra_reqs.value["reqs"]
@@ -292,7 +327,7 @@ async def execute_ai_composer_workflow(
     if reqs_list is not None:
         judge_tool = get_judge_tool(
             reqs=reqs_list,
-            mem=req_memories,
+            mem_tool=req_mem_tool,
             unbound=llm,
             vfs_tools=get_vfs_tools(
                 fs_layer=fs_layer, immutable=True
@@ -302,12 +337,12 @@ async def execute_ai_composer_workflow(
         extra_tools.append(requirements_relaxation)
 
     if "context-management-2025-06-27" in getattr(llm, "betas"):
-        memory = memory_tool(get_memory(get_memory_ns(mem_root, "composer"), "composer"))
+        memory = async_memory_tool(conn.memory(get_memory_ns(mem_root, "composer")))
         extra_tools.append(memory)
 
     # CVL research sub-agent — KB needs indexed store for semantic search
     rag_db = PostgreSQLRAGDatabase(workflow_options.rag_db, get_rag_model())
-    indexed_store = get_indexed_store(DefaultEmbedder())
+    indexed_store = conn.indexed_store
     cvl_builder = Builder().with_llm(
         llm
     ).with_loader(
@@ -339,11 +374,53 @@ async def execute_ai_composer_workflow(
             },
             within_tool=tool_id
         )
-    extra_tools.append(_build_research_tool(cvl_builder, runner, research_doc))
+    research_tool = _build_research_tool(cvl_builder, runner, research_doc)
+    extra_tools.append(research_tool)
 
     (workflow_builder, materializer) = get_cryptostate_builder(
         llm=llm,
         fs_layer=fs_layer,
+    )
+
+    # CEX remediation sub-agent + its summary critic. The remediator drafts
+    # spec-side CVL fixes when the codegen author decides a counterexample
+    # needs a spec change rather than a code change; the critic gates those
+    # drafts for soundness + faithfulness to the system document (passed as a
+    # Document). The author also gets apply_remediation_proposal to stage a
+    # proposal by key. recursion_limit is threaded into every sub-agent.
+    immut_vfs_tools, _ = get_vfs_tools(fs_layer=fs_layer, immutable=True)
+    summary_critic = summary_critic_tool(
+        cvl_builder.with_tools([*immut_vfs_tools, research_tool]),
+        system_doc_doc,
+        recursion_limit=workflow_options.recursion_limit,
+    )
+    cex_remediator = cex_remediation_tool(
+        cvl_builder.with_tools([
+            *immut_vfs_tools,
+            research_tool,
+            summary_critic,
+            ERC20TokenGuidance.as_tool("erc20_guidance"),
+        ]),
+        materializer,
+        system_doc_doc,
+        async_memory_tool(conn.memory(get_memory_ns(mem_root, "cex-remediation"))),
+        proposal_store,
+        report_store,
+        recursion_limit=workflow_options.recursion_limit,
+    )
+    extra_tools.append(cex_remediator)
+    extra_tools.append(
+        ApplyRemediationProposal.bind(proposal_store).as_tool("apply_remediation_proposal")
+    )
+
+    # The agentic CEX handler injected into the prover tool via context. It
+    # needs CVL research / manual / KB tools to ask CVL-language questions
+    # during analysis; source-side reads are scoped per call to the prover
+    # report folder inside ``analyze``, not baked into the builder.
+    cex_handler = AgenticCexHandler(
+        builder=cvl_builder.with_tools([research_tool]),
+        report_store=report_store,
+        recursion_limit=workflow_options.recursion_limit,
     )
 
     workflow_graph = workflow_builder.with_tools(extra_tools).with_sys_prompt_template(
@@ -369,7 +446,7 @@ async def execute_ai_composer_workflow(
     """)
 
     if resume_work_key is not None:
-        snapshot = store.get(("crash_recovery",), resume_work_key)
+        snapshot = await store.aget(("crash_recovery",), resume_work_key)
         if snapshot is not None:
             vfs_files = list(snapshot.value["vfs"].items())
             recovery_msg = load_jinja_template("crash_recovery_context.j2", vfs_files=vfs_files)
@@ -399,7 +476,11 @@ async def execute_ai_composer_workflow(
     if reqs_list is not None:
         required_validations.append(req_type)
 
-    work_context = AIComposerContext(llm=llm, rag_db=rag_db, prover_opts=prover_opts, vfs_materializer=materializer, required_validations=required_validations)
+    work_context = AIComposerContext(
+        rag_db=rag_db, prover_opts=prover_opts,
+        vfs_materializer=materializer, required_validations=required_validations,
+        cex_handler=cex_handler,
+    )
 
     audit_sink = AuditDBSink(audit_db, thread_id)
 
@@ -423,12 +504,12 @@ async def execute_ai_composer_workflow(
         # Attempt to capture VFS from last checkpoint
         resume_key: str | None = None
         try:
-            ct = checkpointer.get_tuple({"configurable": {"thread_id": thread_id}})
+            ct = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
             if ct is not None:
                 channel_values = cast(VFSState, ct.checkpoint["channel_values"])
                 vfs_snapshot = {path: content.decode("utf-8") for path, content in materializer.iterate(channel_values)}
                 resume_key = f"crash_{thread_id}_{uuid.uuid4().hex[:8]}"
-                store.put(("crash_recovery",), resume_key, {"vfs": vfs_snapshot})
+                await store.aput(("crash_recovery",), resume_key, {"vfs": vfs_snapshot})
                 logger.info(f"Saved crash recovery snapshot: {resume_key}")
         except Exception as snapshot_exc:
             logger.warning(f"Failed to capture crash snapshot: {snapshot_exc}")

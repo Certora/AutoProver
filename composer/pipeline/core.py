@@ -40,6 +40,7 @@ from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportableResult, ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
+from composer.spec.source.report import build as report_build
 
 _log = logging.getLogger(__name__)
 
@@ -322,6 +323,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         )
         backend.artifact_store.write_report(report)
     except Exception:
+        if report_build.RERAISE_REPORT_FAILURES:
+            raise
         _log.warning("report phase failed (continuing)", exc_info=True)
 
     return _tally(outcomes)
