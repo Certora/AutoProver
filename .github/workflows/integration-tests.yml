@@ -2,7 +2,7 @@ name: Integration Tests
 
 on:
   schedule:
-    - cron: '7 3 * * *'
+    - cron: '7 5 * * *'
   workflow_dispatch: {}   # adds a "Run workflow" button in the Actions tab
 
 # If a manual run and a scheduled run overlap, cancel the older one
