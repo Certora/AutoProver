@@ -130,7 +130,7 @@ def _is_result_rejection(st: StateWithSkips) -> bool:
 
 
 # =========================================================================
-# Prover report handlingq
+# Prover report handling
 # =========================================================================
 
 
