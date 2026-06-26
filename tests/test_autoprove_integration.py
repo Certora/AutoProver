@@ -61,8 +61,11 @@ _SUMMARIES_REL = "specs/summaries/Counter_base_summaries.spec"
 
 
 async def _fake_autosetup_phase(*_args, **_kwargs) -> SetupSuccess:
-    """Stand in for the AutoSetup subprocess, which makes its own un-tapeable LLM
-    calls. Writes out the (trivial, no-op) summaries spec the generated CVL imports
+    """Stand in for the AutoSetup subprocess, which makes its LLM
+    calls that we, in autoprover land, aren't going to start taping.
+    It is also not an intersting unit of test for this workflow, so just use the
+    trivial, precomputed setups.
+    Writes out the (trivial, no-op) summaries spec the generated CVL imports
     against, then returns the config AutoSetup would have produced for Counter."""
     summaries = _SCENARIO / "certora" / _SUMMARIES_REL
     summaries.parent.mkdir(parents=True, exist_ok=True)
