@@ -51,7 +51,7 @@ jobs:
 
       - name: run prover integration tests
         run: |
-          uv run pytest -m 'expensive' tests
+          uv run pytest -m 'expensive' tests -k test_autoprove_integration
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
 

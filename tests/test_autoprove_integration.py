@@ -52,7 +52,7 @@ _COUNTER_PROVER_CONFIG = {
     "parametric_contracts": "Counter",
     "prover_args": ["-quiet"],
     "run_source": "AUTO_PROVER",
-    "solc": "solc8.29",
+    "solc": "solc",
     "verify": "Counter:certora/specs/sanity-Counter.spec",
     "wait_for_results": "none",
 }
