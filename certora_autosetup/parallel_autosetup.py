@@ -26,6 +26,7 @@ from certora_autosetup.utils.constants import (
     CERTORA_REPORTS_DIR,
     DIR_CERTORA_INTERNAL,
     DIR_WORKTREE_LOGS,
+    FILE_LLM_USAGE,
 )
 from certora_autosetup.utils.llm_util import LlmUsageReport, UsageRow
 from certora_autosetup.utils.logger import logger
@@ -471,7 +472,7 @@ def aggregate_llm_usage(results: list[ContractRunResult], dest: Path) -> None:
         if not result.success:
             logger.warning(f"Skipping llm_usage for failed contract {result.contract_name}", COMPONENT)
             continue
-        usage_path = dest / result.contract_name / "llm_usage.json"
+        usage_path = dest / result.contract_name / FILE_LLM_USAGE
         if not usage_path.exists():
             logger.warning(f"No llm_usage.json for {result.contract_name} at {usage_path}", COMPONENT)
             continue
