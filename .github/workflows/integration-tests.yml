@@ -50,7 +50,7 @@ jobs:
           uv run solc-select use 0.8.29
 
       - name: async runners
-        name: |
+        run: |
           uv pip install pytest-xdist
 
       - name: run autoprover integration tests
