@@ -30,7 +30,7 @@ from certora_autosetup.utils.constants import (
 from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 from certora_autosetup.utils.llm_util import LlmUsageReport, ledger_reset
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.scope import Scope
 
 

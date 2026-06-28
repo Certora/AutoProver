@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from certora_autosetup.utils import logger as _logger
+from certora_autosetup.utils.logger import logger as _logger
 from certora_autosetup.utils.types import ContractHandle
 
 DEPENDENCIES = [

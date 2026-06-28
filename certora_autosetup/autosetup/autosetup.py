@@ -35,7 +35,7 @@ from certora_autosetup.setup.solidity_utils import (
     find_libraries_used_by,
 )
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.constants import (
     CERTORA_REPORTS_DIR,
     DIR_CERTORA_INTERNAL,
