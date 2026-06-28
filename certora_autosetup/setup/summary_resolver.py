@@ -38,8 +38,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from certora_cli.Shared.certoraUtils import find_jar
-
 from certora_autosetup.parsers.method_parser import MethodParser
 
 # A logger callable matching SummarySetup.log(message, level).
@@ -144,6 +142,10 @@ def _ast_extraction(blanked_source: str) -> Optional[dict]:
     Non-fatal diagnostics (e.g. "no reason provided for assumption") still yield an AST
     and are ignored here.
     """
+    # find_jar is the only certora_cli dependency in this module; import it lazily so
+    # summary_resolver stays importable (e.g. for unit tests) without the prover CLI.
+    from certora_cli.Shared.certoraUtils import find_jar
+
     # find_jar only computes a path; it does not verify the jar is present. Fail loud
     # here rather than letting `java -jar <missing>` die with an opaque JSONDecodeError.
     jar = find_jar(_AST_EXTRACTION_JAR)
