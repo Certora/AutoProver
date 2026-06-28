@@ -233,22 +233,32 @@ class FileUploader:
     filename) so callers pass a single handle through the upload
     pipeline instead of threading ``(client, uploaded_files)`` pairs.
 
-    Construct via :meth:`fresh`; it creates an async client and seeds
-    the cache from the live Files API listing so duplicate uploads are
-    skipped on subsequent calls."""
+    Construct via :meth:`fresh`; the dedup cache is seeded lazily from the
+    live Files API listing on the first upload (see :meth:`_ensure_seeded`),
+    so a run that only inlines text documents never lists files."""
 
     client: anthropic.AsyncAnthropic
-    uploaded: dict[str, str] = field(default_factory=dict)
+    #: ``None`` until the first upload seeds it from the Files-API listing.
+    uploaded: dict[str, str] | None = None
+    #: Guards the one-time seed against concurrent first uploads.
+    _seed_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @staticmethod
     async def fresh() -> "FileUploader":
-        """Build a fresh ``FileUploader`` with the cache seeded from the
-        account's existing Files-API uploads."""
-        client = anthropic.AsyncAnthropic()
-        uploaded: dict[str, str] = {}
-        async for f in await client.beta.files.list():
-            uploaded[f.filename] = f.id
-        return FileUploader(client=client, uploaded=uploaded)
+        """Build a fresh ``FileUploader``. Constructs the async client but makes
+        no network call — the existing-uploads cache is seeded on first upload."""
+        return FileUploader(client=anthropic.AsyncAnthropic())
+
+    async def _ensure_seeded(self) -> dict[str, str]:
+        """Seed the dedup cache from the account's existing Files-API uploads on
+        first use, then return it. Guarded so concurrent first uploads list once."""
+        async with self._seed_lock:
+            if self.uploaded is None:
+                seeded: dict[str, str] = {}
+                async for f in await self.client.beta.files.list():
+                    seeded[f.filename] = f.id
+                self.uploaded = seeded
+            return self.uploaded
 
     async def _upload_raw(
         self, file_path: str | pathlib.Path
@@ -268,14 +278,15 @@ class FileUploader:
         raw, crc_hex = await asyncio.to_thread(_read_and_crc)
         digest = _bytes_digest(raw)
         crc_basename = f"{crc_hex}_{basename}"
-        if crc_basename not in self.uploaded:
+        uploaded = await self._ensure_seeded()
+        if crc_basename not in uploaded:
             mime = await _upload_mime(file_path)
             uploaded_file = await self.client.beta.files.upload(
                 file=(crc_basename, open(file_path, "rb"), mime)
             )
-            self.uploaded[crc_basename] = uploaded_file.id
+            uploaded[crc_basename] = uploaded_file.id
             return uploaded_file.id, basename, raw, digest
-        return self.uploaded[crc_basename], basename, raw, digest
+        return uploaded[crc_basename], basename, raw, digest
 
     async def upload_file_if_needed(
         self, file_path: str | pathlib.Path

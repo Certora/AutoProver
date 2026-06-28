@@ -25,6 +25,15 @@ from composer.spec.source.report.schema import (
 
 _log = logging.getLogger(__name__)
 
+#: Test escape hatch. When True, a report-phase failure re-raises instead of being
+#: absorbed (the grouping fallback here, and the best-effort guard around the whole
+#: phase in common_pipeline). Production/manual-harness runs leave this False so a
+#: degraded grouping never fails the run; a harness test flips it on so a broken
+#: tape (missing/mis-keyed ``report`` lane) fails loudly instead of silently
+#: exercising the fallback path. Read as a live module attribute — set it via the
+#: module, not a by-value import.
+RERAISE_REPORT_FAILURES = False
+
 
 async def build_report[R: ReportableResult](
     *,
@@ -59,6 +68,8 @@ async def build_report[R: ReportableResult](
         if properties and not grouped:
             raise ValidationError("grouping produced no high-level properties")
     except Exception as e:  # noqa: BLE001 — any LLM/transport/validation error degrades
+        if RERAISE_REPORT_FAILURES:
+            raise
         fallback_reason = (
             f"validation rejected the grouping: {e}" if isinstance(e, ValidationError)
             else f"grouping failed: {e}"

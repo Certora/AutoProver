@@ -67,6 +67,8 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
     # task_id -> next index. Mutated in place; each instance owns its own dict.
     lane_cursors: dict[str, int] = Field(default_factory=dict, exclude=True)
 
+    with_human_delay: bool = Field(default=True)
+
     @override
     def bind_tools(
         self,
@@ -87,7 +89,8 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
         **kwargs: Any
     ) -> AIMessage:
         # Simulate LLM latency to keep the TUI from filling all at once to give some ability to judge the "feel" of the UI.
-        await asyncio.sleep(random.random() * 1.5 + 1.0)
+        if self.with_human_delay:
+            await asyncio.sleep(random.random() * 1.5 + 1.0)
 
         task_id = get_current_task_id()
         if task_id is None:

@@ -401,6 +401,11 @@ async def run_prover(
 
     # 1. Build effective args. extra_args is already fully resolved by make_prover_options.
     effective_args = args + prover_opts.extra_args
+    # On the cloud path we poll for results ourselves (step 7), so certoraRun must submit and return
+    # the link rather than block on the verdict. certoraRun force-enables wait_for_results when it
+    # detects GITHUB_ACTION in the environment, which would deadlock against that polling — pin it off.
+    if prover_opts.cloud and "--wait_for_results" not in effective_args:
+        effective_args = effective_args + ["--wait_for_results", "none"]
 
     # 2. Notify callback
     await callbacks.on_prover_run(effective_args)
