@@ -169,7 +169,7 @@ async def cloud_results(
                             f.write(chunk)
 
             with tarfile.open(tmp_path, "r:gz") as tar:
-                tar.extractall(path=dest)
+                tar.extractall(path=dest, filter=lambda x, _: x)
         finally:
             tmp_path.unlink(missing_ok=True)
 

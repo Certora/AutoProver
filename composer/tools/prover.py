@@ -5,7 +5,7 @@ from pydantic import Field
 from graphcore.graph import tool_return
 from graphcore.tools.schemas import WithInjectedId, WithAsyncImplementation
 
-from langchain_core.messages import ToolMessage, HumanMessage
+from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 from langgraph.runtime import get_runtime
@@ -13,7 +13,8 @@ from langgraph.runtime import get_runtime
 from composer.core.state import AIComposerState
 from composer.core.context import AIComposerContext, compute_state_digest
 from composer.core.validation import prover as prover_key
-from composer.prover.runner import certora_prover as prover_impl, RawReport, SummarizedReport
+from composer.prover.runner import certora_prover as prover_impl
+from composer.prover.core import ProverReport
 from composer.ui.tool_display import tool_display
 
 
@@ -103,7 +104,10 @@ class CertoraProverTool(WithInjectedId, WithAsyncImplementation[Command]):
         match result:
             case str():
                 return tool_return(tool_call_id=self.tool_call_id, content=result)
-            case RawReport():
+            case ProverReport():
+                # The handler already rendered the full report into result_str
+                # (including any volume summarization it chose to do); there's no
+                # separate truncated/summarized shape to branch on anymore.
                 if result.all_verified and not self.use_working_spec and not self.rule:
                     ctxt = get_runtime(AIComposerContext).context
                     state_digest = compute_state_digest(c=ctxt, state=self.state)
@@ -112,7 +116,7 @@ class CertoraProverTool(WithInjectedId, WithAsyncImplementation[Command]):
                             "messages": [
                                 ToolMessage(
                                     tool_call_id=self.tool_call_id,
-                                    content=result.report
+                                    content=result.result_str
                                 )
                             ],
                             "validation": {
@@ -120,25 +124,7 @@ class CertoraProverTool(WithInjectedId, WithAsyncImplementation[Command]):
                             }
                         }
                     )
-                return tool_return(tool_call_id=self.tool_call_id, content=result.report)
-            case SummarizedReport():
-                return Command(
-                    update={
-                        "messages": [
-                            ToolMessage(
-                                tool_call_id=self.tool_call_id,
-                                content="... Output truncated ..."
-                            ),
-                            HumanMessage(
-                                content=[
-                                    "The prover output was too large for the context window. A TODO list extracted from its output is as follows",
-                                    result.todo_list
-                                ],
-                                display_tag="prover_summary"
-                            )
-                        ]
-                    }
-                )
+                return tool_return(tool_call_id=self.tool_call_id, content=result.result_str)
 
 
 certora_prover = CertoraProverTool.as_tool("certora_prover")
