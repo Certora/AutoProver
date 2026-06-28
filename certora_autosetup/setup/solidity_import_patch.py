@@ -5,7 +5,7 @@ from pathlib import Path
 from shutil import copyfile
 from certora_autosetup.utils.progress_display import make_tqdm
 from certora_autosetup.setup.solidity_utils import DEPENDENCIES, find_all_solidity_files
-from certora_autosetup.utils import logger as _logger
+from certora_autosetup.utils.logger import logger as _logger
 
 PATCH_FILE = ".certora_internal/import_patch.json"
 KNOWN_IMPORT_ROOTS = ["contracts", "src"] + DEPENDENCIES

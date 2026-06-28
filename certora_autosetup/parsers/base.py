@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from certora_autosetup.setup.solidity_utils import find_all_solidity_files
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import ContractHandle
 
 

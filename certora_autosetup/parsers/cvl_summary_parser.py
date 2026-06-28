@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List
 
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 
 
 IV_PREFIX = "iv_"

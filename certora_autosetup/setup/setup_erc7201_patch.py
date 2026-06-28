@@ -18,7 +18,7 @@ from typing import Callable, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.llm_util import call_llm_structured, ledger_component
 
 

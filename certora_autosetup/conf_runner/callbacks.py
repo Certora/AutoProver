@@ -18,7 +18,7 @@ from certora_autosetup.setup.setup_completeness_checker import SetupCompleteness
 from certora_autosetup.utils.enhanced_config_manager import FileContent, ProverJobSpec
 from certora_autosetup.utils.paths import internal_difficult_retry_dir, internal_multi_assert_dir
 from certora_autosetup.utils.runner_types import ProverResult
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 
 
 COMPONENT = "ConfRunner"

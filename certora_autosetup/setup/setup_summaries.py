@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, ValidationError, Discriminator
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.contract_utils import split_contract_spec
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
 from certora_autosetup.utils.constants import (
