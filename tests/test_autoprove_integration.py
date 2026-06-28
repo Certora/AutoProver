@@ -14,7 +14,7 @@ and skipped without testcontainers. Run with ``-m expensive``.
 """
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast, TYPE_CHECKING
+from typing import Any, cast, TYPE_CHECKING
 
 import psycopg
 import pytest
@@ -106,12 +106,18 @@ def _db_url(pg: "PostgresContainer", database: str) -> str:
     )
 
 
-def _make_args(rag_conn: str) -> AutoProveArgs:
-    """Hand-built ``AutoProveArgs`` (the CLI path builds this via argparse)."""
+_DOC_UNSET = object()
+
+
+def _make_args(rag_conn: str, system_doc: Any = _DOC_UNSET) -> AutoProveArgs:
+    """Hand-built ``AutoProveArgs`` (the CLI path builds this via argparse).
+
+    ``system_doc`` defaults to the scenario's ``system.md``; pass ``None`` to exercise
+    the auto-discovery path."""
     return cast(AutoProveArgs, SimpleNamespace(
         project_root=str(_SCENARIO),
         main_contract=f"{_SCENARIO / "src/Counter.sol"}:Counter",
-        system_doc=str(_SCENARIO / "system.md"),
+        system_doc=(str(_SCENARIO / "system.md") if system_doc is _DOC_UNSET else system_doc),
         max_concurrent=4,
         cache_ns=None,
         memory_ns=None,
@@ -132,20 +138,31 @@ def _make_args(rag_conn: str) -> AutoProveArgs:
         interleaved_thinking=False,
     ))
 
-async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContainer", monkeypatch):
-    assert _SCENARIO.is_dir(), _SCENARIO
-
+def _provision(pg_container: "PostgresContainer", monkeypatch) -> str:
+    """Stand up the DBs/roles/schema and install the LLM/AutoSetup mocks; return the
+    RAG DB url. Idempotent (existence-checked creates) so it is safe to call once per
+    test against the session-scoped container. The monkeypatches are function-scoped
+    and so re-applied per test."""
     # 1. Give the container the roles + databases the pipeline expects, matching
     #    the hardcoded creds in services._DATABASE_CONFIGS (a login role owning its
     #    own DB) — so the real connection-string path works unpatched.
     admin_url = pg_container.get_connection_url(driver=None)
     with psycopg.connect(admin_url, autocommit=True) as admin:
+        def _role_missing(name: str) -> bool:
+            return admin.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (name,)).fetchone() is None
+
+        def _db_missing(name: str) -> bool:
+            return admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone() is None
+
         for cfg in services._DATABASE_CONFIGS.values():
-            admin.execute(SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
-                Identifier(cfg["user"]), Literal(cfg["password"])))
-            admin.execute(SQL("CREATE DATABASE {} OWNER {}").format(
-                Identifier(cfg["database"]), Identifier(cfg["user"])))
-        admin.execute(SQL("CREATE DATABASE {}").format(Identifier(_RAG_DB)))
+            if _role_missing(cfg["user"]):
+                admin.execute(SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                    Identifier(cfg["user"]), Literal(cfg["password"])))
+            if _db_missing(cfg["database"]):
+                admin.execute(SQL("CREATE DATABASE {} OWNER {}").format(
+                    Identifier(cfg["database"]), Identifier(cfg["user"])))
+        if _db_missing(_RAG_DB):
+            admin.execute(SQL("CREATE DATABASE {}").format(Identifier(_RAG_DB)))
     # pgvector must be installed by a superuser, so do it on the admin connection.
     for db in _VECTOR_DBS:
         with psycopg.connect(_db_url(pg_container, db), autocommit=True) as conn:
@@ -188,8 +205,24 @@ async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContaine
     monkeypatch.setattr(
         "composer.spec.source.report.build.RERAISE_REPORT_FAILURES", True
     )
+    return _db_url(pg_container, _RAG_DB)
 
-    # 4. Run the whole pipeline. Pass == it completes without raising.
+
+async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContainer", monkeypatch):
+    assert _SCENARIO.is_dir(), _SCENARIO
+    rag_conn = _provision(pg_container, monkeypatch)
+    # Run the whole pipeline. Pass == it completes without raising.
     summary = RunSummary()
-    async with autoprove_executor(_make_args(_db_url(pg_container, _RAG_DB)), summary) as run:
+    async with autoprove_executor(_make_args(rag_conn), summary) as run:
+        await run(AutoProveConsoleHandler().make_handler)
+
+
+async def test_autoprove_counter_no_doc_runs_end_to_end(pg_container: "PostgresContainer", monkeypatch):
+    """Same pipeline, design doc OMITTED: the Design Doc Discovery phase runs the
+    finder (its tape lane selects ``system.md``) and the run completes via the
+    discovered doc."""
+    assert _SCENARIO.is_dir(), _SCENARIO
+    rag_conn = _provision(pg_container, monkeypatch)
+    summary = RunSummary()
+    async with autoprove_executor(_make_args(rag_conn, system_doc=None), summary) as run:
         await run(AutoProveConsoleHandler().make_handler)

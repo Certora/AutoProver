@@ -22,6 +22,7 @@ from typing import override, cast
 
 from composer.spec.source.prover import ProverEvents
 from composer.spec.source.autosetup import AutoSetupEvents
+from composer.spec.source.doc_finder import DesignDocChosenEvent
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.ui.multi_console_handler import MultiJobConsoleHandler
 
@@ -58,8 +59,9 @@ class AutoProveConsoleHandler(MultiJobConsoleHandler[AutoProvePhase]):
         # AutoSetup is an external subprocess, not a LangGraph agent, so it
         # never trips the graph-level ``[<phase>] start`` log the other phases
         # get. Surface its lifecycle here for parity. Per-line subprocess stdout
-        # is suppressed, mirroring how ``prover_output`` is dropped above.
-        evt = cast(AutoSetupEvents, payload)
+        # is suppressed, mirroring how ``prover_output`` is dropped above. The
+        # design-doc finder reports its choice as the discovery phase completes.
+        evt = cast(AutoSetupEvents | DesignDocChosenEvent, payload)
         match evt["type"]:
             case "auto_setup_start":
                 self._output("[AutoSetup] start")
@@ -67,3 +69,8 @@ class AutoProveConsoleHandler(MultiJobConsoleHandler[AutoProvePhase]):
                 pass
             case "auto_setup_complete":
                 self._output(f"[AutoSetup] complete (return code {evt['return_code']})")
+            case "design_doc_chosen":
+                self._output(
+                    f"[Design Doc Discovery] {evt['source']} design doc: "
+                    f"{evt['path']}  ({evt['reason']})"
+                )

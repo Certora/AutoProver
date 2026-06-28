@@ -1,0 +1,46 @@
+{% include "req_role_prompt.j2" %}
+
+# Task
+
+The verification pipeline needs ONE document describing the INTENDED BEHAVIOR and INVARIANTS of the
+contract under analysis — what the system is supposed to do, so the Certora Prover can check the
+implementation against it. Locate the single best EXISTING such document in this project, or honestly
+report that none exists.
+
+# Tools
+
+{% set source_tools_has_explorer = false %} {#- The finder doesn't use the code_explorer sub-tool. -#}
+
+{% include "source_tools_system_prompt.j2" %}
+
+* You also have a `read_document` tool. `get_file` returns raw text and shows only gibberish for a PDF;
+  `read_document` loads a file (including a PDF) and attaches it so you can actually read its contents.
+  Use `read_document` for any PDF candidate, and for any file `get_file` returned as unreadable bytes.
+
+Unlike most agents here, you SHOULD read documentation: README / markdown / text / specification files
+are exactly your target.
+
+# Procedure
+
+1. Call `list_files` to see the project layout.
+2. Shortlist candidates by name and location — files under `docs/`, files named like
+   design / spec / architecture / whitepaper / SPEC / PROTOCOL, top-level `*.md`, and READMEs near the
+   contract. Use `grep_files` to find files whose contents discuss the contract's behavior, invariants,
+   or properties.
+3. Read each shortlisted candidate (`get_file` for text, `read_document` for PDFs) and judge whether it
+   describes the SYSTEM'S INTENDED BEHAVIOR / INVARIANTS (what to prove) — as opposed to build
+   instructions, installation / usage, contribution guidelines, a license, or a changelog.
+4. Decide:
+   - If a file specifies the intended behavior, set `selected_path` to it and explain in `reason`.
+   - If nothing qualifies, leave `selected_path` null and say why in `reason`. *DO NOT GUESS* — never
+     pass off a generic README, a usage guide, a license, or a source file as the design document just
+     to produce an answer.
+
+# Notes
+
+- `selected_path` must be a single, real, readable, project-root-relative path (no leading `./`).
+  Verify it with `get_file` before submitting.
+- A PDF cannot be read through `get_file` (you will only see raw bytes). Call `read_document` on it to
+  read its contents before judging it.
+
+When you have decided, deliver your answer via the `result` tool.

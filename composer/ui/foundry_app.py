@@ -33,12 +33,14 @@ from composer.foundry.runner import ForgeTestRunEvent
 # ---------------------------------------------------------------------------
 
 FOUNDRY_PHASE_LABELS: dict[FoundryPhase, str] = {
+    FoundryPhase.DISCOVER_DESIGN_DOC: "Design Doc Discovery",
     FoundryPhase.SYSTEM_ANALYSIS: "System Analysis",
     FoundryPhase.PROPERTY_EXTRACTION: "Property Extraction",
     FoundryPhase.TEST_GENERATION: "Test Generation",
 }
 
 FOUNDRY_SECTION_ORDER: list[str] = [
+    "Design Doc Discovery",
     "System Analysis",
     "Property Extraction",
     "Test Generation",

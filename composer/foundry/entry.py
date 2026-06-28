@@ -7,11 +7,12 @@ but plugs in foundry-specific pieces: the foundry RAG database connection
 (distinct from the CVL manual RAG), the foundry env builder, and the
 foundry pipeline.
 
-Deliberately self-contained — does NOT import or modify anything under
-``composer/spec/source/``. Reuses the cross-workflow infrastructure
-(``standard_connections``, ``thread_logger``, ``WorkflowContext``,
-``run_component_analysis`` / ``run_property_inference`` from the
-non-source spec modules).
+Deliberately self-contained — does NOT import the source *pipeline* under
+``composer/spec/source/`` (the shared design-doc finder utility,
+``doc_finder.resolve_design_doc``, is the one exception). Reuses the
+cross-workflow infrastructure (``standard_connections``, ``thread_logger``,
+``WorkflowContext``, ``run_component_analysis`` / ``run_property_inference``
+from the non-source spec modules).
 """
 
 import argparse
@@ -30,7 +31,7 @@ from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.input.parsing import Arg, add_protocol_args
 from composer.input.types import DEFAULT_RECURSION_LIMIT, TieredModelOptions, RAGDBOptions
 from composer.io.multi_job import HandlerFactory
-from composer.io.thread_logging import DEFAULT_META_NS, thread_logger, default_logging_ns
+from composer.io.thread_logging import thread_logger, default_logging_ns
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
 from composer.rag.models import get_model
@@ -46,6 +47,7 @@ from composer.foundry.env import build_foundry_env
 from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, run_foundry_pipeline,
 )
+from composer.spec.source.doc_finder import resolve_design_doc, discovery_cache_key
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ class FoundryRAGDBOptions(RAGDBOptions, Protocol):
 class FoundryArgs(TieredModelOptions, FoundryRAGDBOptions, Protocol):
     project_root: str
     main_contract: str
-    system_doc: str
+    system_doc: str | None
     max_concurrent: int
     cache_ns: str | None
     memory_ns: str | None
@@ -123,7 +125,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
     )
     parser.add_argument("project_root", help="Foundry project root (contains foundry.toml).")
     parser.add_argument("main_contract", help="Main contract as path:ContractName")
-    parser.add_argument("system_doc", help="Path to the design document (text or PDF)")
+    parser.add_argument("system_doc", nargs="?", default=None, help="Path to the design document (text or PDF). Optional — auto-discovered from the project when omitted.")
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
     parser.add_argument("--max-forge-runners", default=1, type=int, help="Max concurrent forge runners (default: 1)")
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
@@ -145,13 +147,15 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
         parser.error(f"Invalid path: {full_path} doesn't appear in project root {project_root}")
     relative_path = str(full_path.relative_to(project_root))
 
-    sys_path = pathlib.Path(args.system_doc)
-
     model = get_model()
 
-    root_key = _root_cache_key(str(project_root), sys_path, relative_path, contract_name)
-    cache_root: tuple[str, ...] | None = (
-        _user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
+    # Discovery cache namespace is DOC-INDEPENDENT (the doc is discovery's output, not
+    # an input); the per-doc root cache key is derived after the doc is resolved, inside
+    # ``runner``.
+    disc_cache_ns: tuple[str, ...] | None = (
+        _user_ns(args.cache_ns, "discovery",
+                 discovery_cache_key(str(project_root), relative_path, contract_name))
+        if args.cache_ns is not None else None
     )
 
     thread_id = f"foundry_{uuid.uuid4().hex[:12]}"
@@ -174,24 +178,15 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                 # effective memory namespace, so run-trail tooling can find
                 # this run's cache/memory entries without reverse-engineering
                 # namespaces from thread ids.
-                "cache_root": list(cache_root) if cache_root is not None else None,
+                # Discovery cache root (doc-independent); the per-doc root cache is
+                # derived after the doc is resolved, inside ``runner``.
+                "cache_root": list(disc_cache_ns) if disc_cache_ns is not None else None,
                 "memory_ns": args.memory_ns if args.memory_ns is not None else thread_id,
             },
             default_logging_ns(uid=None),
             run_id=summary.run_id,
         ),
     ):
-        content = await conns.uploader.get_document(sys_path)
-        if content is None:
-            parser.error(f"cannot read {sys_path}")
-        source_input = FoundrySourceCode(
-            content=content,
-            project_root=str(project_root),
-            contract_name=contract_name,
-            relative_path=relative_path,
-            forbidden_read=FS_FORBIDDEN_READ,
-        )
-
         model_provider = ModelProvider(
             checkpointer=conns.checkpointer,
             factory=model_fact,
@@ -199,33 +194,69 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
             lite_model=args.lite_model
         )
 
-        # Per-user cache namespace for the indexed code_explorer's question
-        # cache (mirrors what autoprove_common does for the source_question_ns).
-        source_question_ns = _user_ns("source_agent", "cache", root_key)
-
-        env = build_foundry_env(
-            model_provider=model_provider,
-            project_root=str(project_root),
-            forbidden_read=FS_FORBIDDEN_READ,
-            rag_db=foundry_rag_db,
-            store=conns.indexed_store,
-            source_question_ns=source_question_ns,
-            recursion_limit=args.recursion_limit,
-        )
-
         memory_ns = args.memory_ns
-        ctx = WorkflowContext.create(
+
+        disc_ctx = WorkflowContext.create(
             services=lambda ns: async_memory_tool(conns.memory(ns)),
             thread_id=thread_id,
             store=conns.store,
             recursion_limit=args.recursion_limit,
-            cache_namespace=cache_root,
+            cache_namespace=disc_cache_ns,
             memory_namespace=memory_ns,
         )
 
         async def runner(
             handler: HandlerFactory[FoundryPhase, None],
         ) -> FoundryPipelineResult:
+            # Resolve the design doc first (supplied path, or auto-discovery under the
+            # ``DISCOVER_DESIGN_DOC`` phase). The per-doc cache key, env, ctx, and source
+            # artifact are all keyed off the resolved doc and built here.
+            doc_path, content = await resolve_design_doc(
+                system_doc_arg=args.system_doc,
+                project_root=str(project_root),
+                contract_name=contract_name,
+                relative_path=relative_path,
+                forbidden_read=FS_FORBIDDEN_READ,
+                uploader=conns.uploader,
+                models=model_provider,
+                handler=handler,
+                discover_phase=FoundryPhase.DISCOVER_DESIGN_DOC,
+                disc_ctx=disc_ctx,
+            )
+
+            root_key = _root_cache_key(str(project_root), doc_path, relative_path, contract_name)
+            cache_root = _user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
+            # Per-user cache namespace for the indexed code_explorer's question
+            # cache (mirrors what autoprove_common does for the source_question_ns).
+            source_question_ns = _user_ns("source_agent", "cache", root_key)
+
+            env = build_foundry_env(
+                model_provider=model_provider,
+                project_root=str(project_root),
+                forbidden_read=FS_FORBIDDEN_READ,
+                rag_db=foundry_rag_db,
+                store=conns.indexed_store,
+                source_question_ns=source_question_ns,
+                recursion_limit=args.recursion_limit,
+            )
+
+            ctx = WorkflowContext.create(
+                services=lambda ns: async_memory_tool(conns.memory(ns)),
+                thread_id=thread_id,
+                store=conns.store,
+                recursion_limit=args.recursion_limit,
+                cache_namespace=cache_root,
+                memory_namespace=memory_ns,
+            )
+
+            source_input = FoundrySourceCode(
+                content=content,
+                project_root=str(project_root),
+                contract_name=contract_name,
+                relative_path=relative_path,
+                forbidden_read=FS_FORBIDDEN_READ,
+            )
+
             return await run_foundry_pipeline(
                 source_input=source_input,
                 ctx=ctx,

@@ -91,6 +91,7 @@ _log = logging.getLogger(__name__)
 class FoundryPhase(enum.Enum):
     """Task-grouping phases of the foundry pipeline (the ``P`` of its
     ``HandlerFactory``)."""
+    DISCOVER_DESIGN_DOC = "discover_design_doc"
     SYSTEM_ANALYSIS = "system_analysis"
     PROPERTY_EXTRACTION = "property_extraction"
     TEST_GENERATION = "test_generation"
