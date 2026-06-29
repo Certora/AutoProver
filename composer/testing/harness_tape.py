@@ -115,3 +115,42 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
             )
         self.lane_cursors[task_id] = i + 1
         return cast(AIMessage, lane[i])
+
+
+def install_fake_llm(fake: Any) -> None:
+    """Route every LLM-construction path in the pipeline to ``fake``.
+
+    Pipeline models are minted via
+    ``composer.llm.registry.get_provider_for(...).builder_for(...)`` — the tiering
+    layer uses the ``tiered=`` overload, the CLIs use ``options=`` — and the
+    codegen ``create_llm`` / ``create_llm_base`` seam is the secondary direct path.
+    Patching the registry chokepoint plus the services seam covers every path,
+    and short-circuits ``get_provider_for`` before it tries to ``_lookup`` a fake
+    model name.
+
+    Patches the ``registry`` / ``services`` source bindings, so it must run BEFORE
+    the entry path imports ``get_provider_for`` by name (``composer/bind.py`` is
+    that hook). Eager-import callers (the integration test) additionally rebind
+    their own ``get_provider_for`` reference to the patched one.
+    """
+    import composer.llm.registry as registry
+    import composer.workflow.services as services
+
+    class _FakeProvider:
+        provider = "anthropic"
+
+        def builder_for(self, *, cache_level: Any = None, disable_thinking: bool = False) -> Any:
+            return fake
+
+    fp = _FakeProvider()
+
+    def _fake_get_provider_for(
+        *, model_name: Any = None, options: Any = None, tiered: Any = None
+    ) -> Any:
+        if tiered is not None:
+            return registry.TieredProviders(lite=fp, heavy=fp, provider_kind="anthropic")
+        return fp
+
+    registry.get_provider_for = _fake_get_provider_for
+    services.create_llm = lambda args: fake
+    services.create_llm_base = lambda args: fake

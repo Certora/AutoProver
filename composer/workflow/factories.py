@@ -8,6 +8,7 @@ from graphcore.graph import build_workflow, BoundLLM, Builder
 from graphcore.tools.vfs import vfs_tools, VFSAccessor, VFSToolConfig, VFSState
 
 from composer.workflow.types import PromptParams
+from composer.workflow.provider import ProviderKind
 from composer.core.context import AIComposerContext
 from composer.core.state import AIComposerState, AIComposerInput
 

@@ -121,9 +121,9 @@ def _make_args(rag_conn: str) -> AutoProveArgs:
         recursion_limit=100,
         max_bug_rounds=1,
         rag_db=rag_conn,
-        # Model-config fields: only read through ``llm_factory(args)``, which the
-        # tape patches to ignore args, so the values are inert — present to satisfy
-        # the AutoProveArgs surface.
+        # Model-config fields: only read through ``get_provider_for(tiered=args)``,
+        # which the tape patches to ignore them, so the values are inert — present
+        # to satisfy the AutoProveArgs surface.
         heavy_model="fake-heavy",
         lite_model="fake-lite",
         tokens=128_000,
@@ -167,9 +167,12 @@ async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContaine
 
     # 3. Mock only the LLM (Counter tape) + disable the agent-index cache.
     install_harness_tape(with_delay=False)
-    # autoprove_common imported `llm_factory` by name, so install_harness_tape's
-    # patch of services.llm_factory doesn't reach that binding — rebind it here.
-    monkeypatch.setattr("composer.spec.source.autoprove_common.llm_factory", services.llm_factory)
+    # autoprove_common imported `get_provider_for` by name, so install_harness_tape's
+    # patch of registry.get_provider_for doesn't reach that binding — rebind it here.
+    import composer.llm.registry as registry
+    monkeypatch.setattr(
+        "composer.spec.source.autoprove_common.get_provider_for", registry.get_provider_for
+    )
     # Swap the real sentence-transformer for the deterministic mock: no model
     # download, and nothing in this run depends on real embeddings (index cache
     # disabled by the tape, RAG DB empty).
