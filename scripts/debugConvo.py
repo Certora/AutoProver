@@ -34,7 +34,7 @@ class ModelOpts:
     memory_tool: bool
 
 opts = ModelOpts(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     thinking_tokens=2048,
     tokens=4096,
     memory_tool=False

@@ -47,7 +47,7 @@ load_dotenv()
 # instead of referencing this constant directly — that helper consults the
 # PREAUDIT_ANTHROPIC_MODEL env var first, so operators can override per-run without
 # editing code. This value is the fallback when the env var is unset.
-_DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
+_DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
 
 def default_anthropic_model() -> str:
