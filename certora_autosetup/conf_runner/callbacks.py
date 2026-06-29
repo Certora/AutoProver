@@ -18,7 +18,7 @@ from certora_autosetup.setup.setup_completeness_checker import SetupCompleteness
 from certora_autosetup.utils.enhanced_config_manager import FileContent, ProverJobSpec
 from certora_autosetup.utils.paths import internal_difficult_retry_dir, internal_multi_assert_dir
 from certora_autosetup.utils.runner_types import ProverResult
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 
 
 COMPONENT = "ConfRunner"
@@ -276,6 +276,8 @@ class JobCallbacks:
             with open(config_path) as f:
                 config_data = json5.load(f)
 
+            # Loop-invariant: all retry jobs are for the same contract.
+            contract_name = result.job_spec.contract_name
             for rule_name, methods in rule_to_inconclusive_methods.items():
                 new_config = config_data.copy()
                 new_config["rule"] = [rule_name]
@@ -286,7 +288,6 @@ class JobCallbacks:
                 with open(new_config_path, "w") as f:
                     json.dump(new_config, f, indent=4)
 
-                contract_name = result.job_spec.contract_name
                 new_job_spec = ProverJobSpec(
                     config_file=FileContent.from_file(new_config_path),
                     contract_name=contract_name,

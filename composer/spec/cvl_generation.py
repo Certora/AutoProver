@@ -129,6 +129,11 @@ class GeneratedCVL(BaseModel):
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
 
+    def property_units(self) -> list[tuple[str, list[str]]]:
+        """Property title -> the CVL rule names that formalize it (the report's `ReportableResult`
+        adapter; pairs with the structurally-shared ``skipped`` field)."""
+        return [(m.property_title, m.rules) for m in self.property_rules]
+
 
 # ---------------------------------------------------------------------------
 # Completion validation
@@ -396,10 +401,11 @@ async def run_cvl_generator[S: CVLGenerationState, C: FeedbackToolContext, I: CV
 ) -> S:
     input_copy = in_state["input"].copy()
     last_attempt = await ctx.child(LAST_ATTEMPT_KEY).cache_get(_LastAttemptCache)
-    if last_attempt is not None:
-        input_copy.append("Your last working draft was (you will need to re-put this onto the VFS):")
-        input_copy.append(last_attempt.cvl)
     in_state_copy = in_state.copy()
+    if last_attempt is not None:
+        input_copy.append("Your last working draft on this task is below; it has been automatically placed into your working CVL buffer.")
+        input_copy.append(last_attempt.cvl)
+        in_state_copy["curr_spec"] = last_attempt.cvl
     in_state_copy["input"] = input_copy
     tid : str
     desc : str

@@ -34,7 +34,7 @@ from composer.core.user import get_uid, user_data_ns
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.ui.tool_display import async_tool_context
-from composer.io.thread_logging import thread_logger, DEFAULT_META_NS
+from composer.io.thread_logging import thread_logger, default_logging_ns
 
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.io.multi_job import HandlerFactory
@@ -111,14 +111,24 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
 
     args = cast(AutoProveArgs, parser.parse_args())
+    async with autoprove_executor(args, summary) as runner:
+        yield runner
 
+
+@asynccontextmanager
+async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncIterator[Executor]:
+    """Set up services from already-parsed args and yield the pipeline runner.
+
+    ``_entry_point`` parses argv into ``AutoProveArgs`` then delegates here; tests
+    construct ``AutoProveArgs`` directly.
+    """
     # Parse main_contract (path:ContractName)
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
-        parser.error(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
+        raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
 
     relative_path = str(full_contract_path.relative_to(project_root))
 
@@ -153,12 +163,9 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         thread_logger(
             conns.store,
             {"root_thread_id": thread_id},
-            user_ns(DEFAULT_META_NS),
+            default_logging_ns(None),
             run_id=summary.run_id,
-            # Persist final token usage into RunMeta.tags at run close (totals
-            # known only once the pipeline is done). Mirrors token_usage.json.
-            finalize_tags=lambda: {"token_usage": summary.token_usage_summary()},
-        )
+        ) as data_logger
     ):
         # Source-code agent caches are always per-user — the conventional
         # ``user_data_ns(uid)`` prefix lives directly in the ns we pass
@@ -167,7 +174,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         # Read input documents now that the uploader is available.
         content = await conns.uploader.get_document(sys_path)
         if content is None:
-            parser.error(f"cannot read {sys_path}")
+            raise ValueError(f"cannot read {sys_path}")
 
         system_doc = ProverSourceCode(
             content=content,
@@ -229,6 +236,11 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         try:
             yield runner
         finally:
+            # Persist final token usage into RunMeta.tags at run close (totals
+            # known only once the pipeline is done). Mirrors token_usage.json.
+            await data_logger(
+                "token_usage", summary.token_usage_summary()
+            )
             # Dump final LLM token usage for the run (success or failure). Single
             # choke point both console and TUI entry points pass through, with
             # system_doc in scope and the summary fully populated. Guarded so a

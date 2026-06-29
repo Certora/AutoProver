@@ -238,8 +238,7 @@ class ForgeTestTool(
         )
 
         clean = (
-            returncode == 0
-            and not unexpected_failures
+            not unexpected_failures
             and not unexpected_passes
         )
 

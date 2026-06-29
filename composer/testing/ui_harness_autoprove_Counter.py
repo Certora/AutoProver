@@ -55,6 +55,9 @@ so their responses live in the parent's lane.
     cvl-0-Increment  : batch_cvl_generation, component=<one>
                         (+ feedback ×1, CEX ×1 — surfaces the real
                         ``incrementOther`` implementation bug)
+    ── final, best-effort report phase ──
+    report           : build_report → call_grouping_llm (one structured-output
+                        call partitioning the formalized properties into groups)
 
     Per-component lanes are ``{bug,cvl}-{component index}-{slugified_name}``;
     here the Counter's sole component is "Increment".
@@ -66,7 +69,7 @@ import uuid
 from composer.testing.harness_tape import HarnessFakeLLM
 from composer.spec.source.task_ids import (
     SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, INVARIANTS_TASK_ID,
-    INVARIANT_CVL_TASK_ID, bug_analysis_task_id, cvl_gen_task_id,
+    INVARIANT_CVL_TASK_ID, REPORT_TASK_ID, bug_analysis_task_id, cvl_gen_task_id,
 )
 
 from langchain_core.messages import AIMessage, BaseMessage
@@ -236,6 +239,7 @@ _APP_RESULT = {
                 "The only contract in the system; owns the count and per-"
                 "caller tally state and the two increment entry points."
             ),
+            "solidity_identifier": "Counter",
             "components": [
                 {
                     "name": "Increment",
@@ -290,6 +294,7 @@ _CLASSIFIER_RESULT = {
             "name": "Counter",
             "link_fields": [],
             "num_instances": None,
+            "solidity_identifier": "Counter"
         }
     ],
     "erc20_contracts": [],
@@ -1153,78 +1158,6 @@ _BUG_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # ───────────────────────────────────────────────────────────────────
-    # P5b. Interactive refinement conversation (only when --interactive)
-    # ───────────────────────────────────────────────────────────────────
-    # ``run_bug_analysis`` enters ``refinement_loop`` once
-    # ``interactive=True``. The conversation graph has its own thread,
-    # its own tools (``env.source_tools`` + ``finalize_properties`` +
-    # ``update_requirements``), and is driven by stdin via
-    # ``RichConsoleConversationClient`` (see
-    # ``composer/ui/conversation_client.py``).
-    #
-    # The flow is interrupt-driven:
-    #   chat_node → interrupt(HumanPrompt)  →  outer loop reads stdin
-    #     →  resume with HumanMessage  →  llm_echo (TAPE ENTRY)
-    #     →  (optional) tools  →  llm_echo (TAPE ENTRY)
-    #     →  ... back to chat_node, repeat
-    #   until the LLM calls ``finalize_properties`` (Exit) which raises
-    #   ``interrupt(EndConversation())`` from inside the tools node.
-    #
-    # Every AI message below tags the expected human reply with
-    # ``[TAPE EXPECTATION: respond '...']``. The harness operator types
-    # that reply into the prompt-toolkit prompt to advance the tape. The
-    # tape entries below are popped one per ``llm_echo`` invocation.
-
-    # P5b.1 — first AI turn after the user's opening prompt. The expected
-    # opening from the user is a question about the property list. The AI
-    # answers conversationally with NO tool call, so control returns to
-    # ``chat_node`` for the next human turn.
-    _ai(
-        "Sure — property 1 and property 2 cover the obvious behavior of "
-        "``increment()``: it adds 1 to ``count`` and 1 to "
-        "``increments[msg.sender]``. Property 3 is about "
-        "``incrementOther(other)``: the function name suggests it credits "
-        "a different address, so the matching post-condition is "
-        "``increments[other]`` goes up by 1. I haven't tried to prove "
-        "any of these yet — they're just what the surface contract "
-        "promises."
-    ),
-
-    # P5b.2 — second AI turn: the user has asked for a rewording of
-    # property 3. The AI calls ``update_requirements`` with the full
-    # refined list. SetRequirements injects the new list into
-    # ``state["extra_data"]`` via a Command and the state-diff renderer
-    # fires.
-    _ai(
-        "Got it — I'll tighten property 3 to call out both the move and "
-        "the non-move, conditioned on ``other != msg.sender``. Updating "
-        "now.",
-        _tc(
-            "update_requirements",
-            new_requirements=_REFINED_BUG_ANALYSIS_PROPS,
-        ),
-    ),
-
-    # P5b.3 — after ``update_requirements`` returns, llm_echo fires again.
-    # The AI yields control back to the user (no tool calls) so they can
-    # approve.
-    _ai(
-        "Updated. Property 3 now reads: \"After calling "
-        "incrementOther(other) with other != msg.sender, "
-        "increments[other] must increase by exactly 1 and "
-        "increments[msg.sender] must be unchanged.\" The first two are "
-        "untouched."
-    ),
-
-    # P5b.4 — user has signaled finalization. The AI calls
-    # ``finalize_properties`` (Exit) which raises
-    # ``interrupt(EndConversation())`` from inside the tools node; the
-    # outer loop catches it and exits the refinement context.
-    _ai(
-        "Finalizing the refined property list.",
-        _tc("finalize_properties"),
-    ),
 
     # ───────────────────────────────────────────────────────────────────
     # P6. Component CVL generation (batch_cvl_generation, component=<one>)
@@ -1394,6 +1327,61 @@ _CVL_TAPE: list[BaseMessage] = [
 ]
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# P7. Report grouping (build_report → call_grouping_llm)
+# ───────────────────────────────────────────────────────────────────────────
+# The final, best-effort phase. ``call_grouping_llm`` makes ONE structured-output
+# call (``llm.with_structured_output(GroupingResult)``), so this lane has exactly
+# one entry: an AIMessage whose ``GroupingResult`` tool call (the tool name is the
+# pydantic model's class name) partitions every formalized property into groups.
+#
+# The five formalized properties this run produces (component, title):
+#   ("Increment", count_increments_by_one / sender_increments_by_one /
+#    other_increments_by_one)  +  ("Structural Invariants",
+#    increments_sum_is_count / zero_address_is_zero).
+# ``coverage.validate`` requires each appear in exactly one group, so the two
+# groups below must cover all five with no overlap or omission. Without this lane
+# the call raised ``no tape lane``, which ``build_report`` swallows into its
+# fallback single-bucket grouping — so the report path ran but the grouping step
+# was never actually exercised.
+
+_REPORT_TAPE: list[BaseMessage] = [
+    _ai(
+        "Partitioning the formalized properties into high-level claims.",
+        _tc(
+            "GroupingResult",
+            groups=[
+                {
+                    "slug": "increment-accounting",
+                    "title": "Increment entry points update counters by exactly one",
+                    "description": (
+                        "Each increment operation advances the global counter and the "
+                        "relevant per-address tally by exactly one."
+                    ),
+                    "members": [
+                        ["Increment", "count_increments_by_one"],
+                        ["Increment", "sender_increments_by_one"],
+                        ["Increment", "other_increments_by_one"],
+                    ],
+                },
+                {
+                    "slug": "counter-structural-invariants",
+                    "title": "Counter state respects its structural invariants",
+                    "description": (
+                        "The global counter stays consistent with the sum of the per-address "
+                        "tallies and the zero address is never credited."
+                    ),
+                    "members": [
+                        ["Structural Invariants", "increments_sum_is_count"],
+                        ["Structural Invariants", "zero_address_is_zero"],
+                    ],
+                },
+            ],
+        ),
+    ),
+]
+
+
 # The tape, as a per-phase lane map keyed by run_task task_id. HarnessFakeLLM
 # serves each LLM call from its lane's cursor, so the scripted responses stay
 # correct even though the pipeline runs phases concurrently. The Counter
@@ -1405,6 +1393,7 @@ _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
     INVARIANT_CVL_TASK_ID: _INVARIANT_CVL_TAPE,
     bug_analysis_task_id(0, "Increment"): _BUG_TAPE,
     cvl_gen_task_id(0, "Increment"): _CVL_TAPE,
+    REPORT_TASK_ID: _REPORT_TAPE,
 }
 
 
@@ -1418,16 +1407,16 @@ _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
 # ``run_task`` task_id, and within a lane responses are consumed in order.
 
 
-def get_autoprove_Counter_llm() -> HarnessFakeLLM:
+def get_autoprove_Counter_llm(with_delay: bool = True) -> HarnessFakeLLM:
     """Return a fresh fake LLM loaded with the autoprove counter tape.
 
     Each call returns an independent instance with its own per-lane cursors, so
     tests can run multiple scenarios without cross-contamination.
     """
-    return HarnessFakeLLM(lanes=_AUTOPROVE_TAPE)
+    return HarnessFakeLLM(lanes=_AUTOPROVE_TAPE, with_human_delay=with_delay)
 
 
-def install_harness_tape() -> HarnessFakeLLM:
+def install_harness_tape(with_delay: bool = True) -> HarnessFakeLLM:
     """Monkey-patch ``composer.workflow.services.create_llm`` and
     ``create_llm_base`` so the real autoprove pipeline receives the fake.
 
@@ -1441,7 +1430,7 @@ def install_harness_tape() -> HarnessFakeLLM:
     Returns the fake instance so the caller can inspect ``.i`` /
     ``.responses`` for debugging.
     """
-    fake = get_autoprove_Counter_llm()
+    fake = get_autoprove_Counter_llm(with_delay)
     import composer.spec.agent_index as a_ind
     a_ind._UNSAFE_DISABLE_CACHE = True
 

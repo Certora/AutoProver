@@ -55,6 +55,7 @@ def extract_job_id_from_url(url: str) -> str:
     """
     parsed = urlparse(url)
     path_parts = parsed.path.split("/")
+    output_idx = -1  # sentinel; reads of output_idx below are reached only when index() succeeded
     try:
         output_idx = path_parts.index("output")
         first = path_parts[output_idx + 1]
