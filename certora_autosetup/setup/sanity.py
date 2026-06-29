@@ -48,7 +48,7 @@ class _SanityArgs:
     thinking_tokens: int = 2048
     tokens: int = 4096
     rag_db: str = field(default_factory=lambda: SANITY_DEFAULT_CONNECTION)
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str = "claude-sonnet-4-6"
     memory_tool: bool = True
     interleaved_thinking: bool = True
     prover_capture_output: bool = False
@@ -190,6 +190,10 @@ class SanityResult(Enum):
     UNKNOWN_FAIL = "unknown_fail"
 
 
+# Per-job prover timeout (seconds) applied to the exploratory sanity runs.
+SANITY_GLOBAL_TIMEOUT = 1200
+
+
 @dataclass
 class BoundConfiguration:
     """Configuration for a specific bound combination."""
@@ -208,6 +212,8 @@ class BoundConfiguration:
             # Bound detection only reads the `sanity` rule's results (vacuity / rule_not_vacuous is
             # excluded from the analysis), so the rule_sanity sub-checks are pure wasted runtime here.
             "rule_sanity": "none",
+            # Cap the exploratory sanity runs; only applied to these transient conf copies.
+            "global_timeout": str(SANITY_GLOBAL_TIMEOUT),
         }
         if self.hashing_bound is not None:
             properties["hashing_length_bound"] = self.hashing_bound
@@ -569,7 +575,7 @@ class SanityPhase:
             skipped = failing_methods[MAX_RERUNS:]
             self.log("warning", f"Too many methods failed sanity ({len(failing_methods)}), running reruns only for the first {MAX_RERUNS}. Skipped: {skipped}")
             failing_methods = failing_methods[:MAX_RERUNS]
-        
+
         self.log(
             "info",
             f"Running sanity coverage reruns for {len(failing_methods)} failing method(s): {failing_methods}",
@@ -578,7 +584,12 @@ class SanityPhase:
         for i, method in enumerate(failing_methods):
             coverage_config = self.config_manager.create_copy_with_config_properties(
                 self.config_file,
-                {"coverage_info": "advanced", "method": [method], "rule_sanity": "none"},
+                {
+                    "coverage_info": "advanced",
+                    "method": [method],
+                    "rule_sanity": "none",
+                    "global_timeout": str(SANITY_GLOBAL_TIMEOUT),
+                },
                 f"_coverage_rerun_{i}",
                 target_dir=self._internal_confs_dir,
             )
@@ -704,6 +715,11 @@ class SanityPhase:
                 detection_args,
                 "_bound_detection",
                 target_dir=self._internal_confs_dir,
+            )
+
+            # Cap the detection run; global_timeout is a top-level property, not a prover arg.
+            self.config_manager.update_config_with_properties(
+                bound_detection_config.path, {"global_timeout": str(SANITY_GLOBAL_TIMEOUT)}
             )
 
             # Submit bound detection job

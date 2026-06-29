@@ -3,7 +3,7 @@ import re
 from collections import deque
 from pathlib import Path
 
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 
 
 def parse_imports_from_spec(spec_path: Path, recursive: bool = True) -> list[Path]:

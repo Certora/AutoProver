@@ -127,7 +127,6 @@ class ConfigManager:
         self,
         project_root: Path,
         convert_solc_to_certora_format: bool = True,
-        global_timeout: int = 1200,
     ):
         """
         Initialize configuration manager.
@@ -135,11 +134,9 @@ class ConfigManager:
         Args:
             project_root: Root directory of the project
             convert_solc_to_certora_format: Whether to convert solc version from foundry format to Certora format
-            global_timeout: Global timeout in seconds for prover execution
         """
         self.project_root = project_root
         self.convert_solc_to_certora_format = convert_solc_to_certora_format
-        self.global_timeout = global_timeout
         self.component = "ConfigManager"
         self.reference_compiler_maps: Dict[str, Any] = {}
 
@@ -229,7 +226,6 @@ class ConfigManager:
         """
         # Create config from template
         conf_template = copy.deepcopy(self.DEFAULT_CONF_TEMPLATE)
-        conf_template["global_timeout"] = str(self.global_timeout)
 
         # Add contract files (use normalized paths) TODO: what about the additional files? we expect them to come already normalized now
         normalized = self.normalize_paths(contract_handles)

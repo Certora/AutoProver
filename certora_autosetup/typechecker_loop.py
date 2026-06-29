@@ -18,7 +18,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from certora_autosetup.parsers.prover_config_parser import get_spec_from_verify_field
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 from certora_autosetup.utils.paths import internal_round_summaries_dir, internal_typechecker_round_dir
 

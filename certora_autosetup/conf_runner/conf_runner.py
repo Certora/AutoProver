@@ -17,7 +17,7 @@ from certora_autosetup.conf_runner.types import ConfRunnerConfig
 from certora_autosetup.reporting.reporter import Reporter
 from certora_autosetup.reporting.json_reporter import JsonReporter
 from certora_autosetup.setup.setup_completeness_checker import SetupCompletenessChecker, SetupCompletenessReport
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager, FileContent, ProverJobSpec
 from certora_autosetup.utils.prover_runner import ProverRunner
 from certora_autosetup.utils.runner_types import ProverResult

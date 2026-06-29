@@ -12,7 +12,10 @@ cd AutoProver
 
 # Cloud Certora Prover credentials + Claude key (see the table below).
 export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...
-export CERTORA_USER=... CERTORA_TOKEN=... CERTORA_REFRESH_TOKEN=... AISS_ENV=prod
+
+# One-time Certora cloud login
+uv tool install certora-cloud
+certora-cloud login
 
 # A ready-to-run example project (public).
 git clone https://github.com/Certora/AutoProverExamples.git
@@ -41,9 +44,9 @@ You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.
 
 ### Certora Prover
 
-**Cloud mode (`--cloud`):** You simply need a CERTORAKEY set in your environment.
+**Cloud mode (the default):** Two credentials are needed. `CERTORAKEY` (set in your environment) authenticates `certoraRun` when it submits prover jobs. The job *results* are fetched with the Certora cloud credentials produced by `certora-cloud login` — install the public CLI (`uv tool install certora-cloud`) and run it once (`certora-cloud login`); it writes `~/.certora/credentials.json`, which is read automatically. Exporting `CERTORA_USER`/`CERTORA_TOKEN`/`CERTORA_REFRESH_TOKEN` instead is an optional override.
 
-**Local mode (default):** You need a full local prover build. From the prover repo root, run `./gradlew copy-assets` and set `CERTORA` to point to `CertoraProver/target`.
+**Local mode:** You need a full local Prover build from https://github.com/Certora/CertoraProver. From the Prover repo root, run `./gradlew copy-assets` and set `CERTORA` to point to `CertoraProver/target`. (N.B. Local mode is not yet wired through the `scripts/autoprove` Docker wrapper.)
 
 ## (One Time) Database Setup
 

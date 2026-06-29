@@ -20,6 +20,8 @@ from composer.prover.core import ProverOptions
 
 from graphcore.utils import TokenUsageDict
 from composer.io.context import emit_custom_event
+# Locator for autosetup's on-disk llm_usage.json (certora_autosetup owns that layout).
+from certora_autosetup.utils.paths import resolve_autosetup_llm_usage_file
 
 _logger = logging.getLogger(__name__)
 
@@ -209,49 +211,8 @@ async def run_autosetup(
 # --- AutoSetup LLM token-usage ingestion -----------------------------------
 # AutoSetup runs as a separate process, so its LLM calls never pass through
 # composer's model factory and are invisible to the UsageCallback. Its only
-# trace is the llm_usage.json it writes to disk. These names are AutoSetup's
-# on-disk contract (certora_autosetup constants + the autosetup_result.json it
-# drops in .certora_internal); we hard-code them rather than import
-# certora_autosetup, which composer must not depend on at import time.
-# TODO: improve this once the repos are merged.
-_CERTORA_INTERNAL = ".certora_internal"
-_AUTOSETUP_RESULT_FILE = "autosetup_result.json"
-_REPORTS_DIR = ".CertoraProverLiteReports"
-_LLM_USAGE_FILE = "llm_usage.json"
-
-
-def _resolve_autosetup_usage_file(project_root: Path) -> Path | None:
-    """Locate the ``llm_usage.json`` AutoSetup wrote for the most recent run.
-
-    Primary: read ``orchestration_timestamp`` from ``autosetup_result.json`` and
-    build ``.CertoraProverLiteReports/<ts>/llm_usage.json`` — the deterministic
-    inverse of how AutoSetup names that dir. Fallback (older AutoSetup, or a
-    ``--reports-dir`` override that kept the convention): the newest timestamped
-    subdir holding an ``llm_usage.json``. Timestamps are ``%Y%m%d_%H%M%S``, so a
-    plain lexicographic max picks the most recent. Returns ``None`` if nothing
-    is found.
-    """
-    reports_root = project_root / _REPORTS_DIR
-
-    result_path = project_root / _CERTORA_INTERNAL / _AUTOSETUP_RESULT_FILE
-    try:
-        timestamp = json.loads(result_path.read_text()).get("orchestration_timestamp")
-    except (OSError, ValueError):
-        timestamp = None
-    if timestamp:
-        candidate = reports_root / timestamp / _LLM_USAGE_FILE
-        if candidate.exists():
-            return candidate
-
-    try:
-        subdirs = sorted((d for d in reports_root.iterdir() if d.is_dir()), key=lambda d: d.name)
-    except OSError:
-        return None
-    for d in reversed(subdirs):
-        candidate = d / _LLM_USAGE_FILE
-        if candidate.exists():
-            return candidate
-    return None
+# trace is the llm_usage.json it writes to disk. certora_autosetup owns that
+# on-disk layout and exposes resolve_autosetup_llm_usage_file() to locate it.
 
 
 def _to_token_usage(model: str, bucket: dict) -> TokenUsageDict:
@@ -276,7 +237,7 @@ def read_autosetup_usage(project_root: Path) -> list[TokenUsageDict]:
     crash, replayed snapshot, or an AutoSetup too old to emit it — or malformed
     JSON): missing external usage must never break the phase.
     """
-    usage_file = _resolve_autosetup_usage_file(project_root)
+    usage_file = resolve_autosetup_llm_usage_file(project_root)
     if usage_file is None:
         return []
     try:
