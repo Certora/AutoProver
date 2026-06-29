@@ -4,7 +4,7 @@ The base summary aggregator at ``certora/specs/summaries/{main}_base_summaries.s
 written once by ``SummarySetup.generate_base_aggregator`` with curated bundled
 imports + per-contract LLM imports for the initial scene (main + additional
 contracts). After that, only ``BaseSummariesAggregator.register`` may mutate it,
-appending an ``import "./{C}_summaries.spec";`` line per newly summarized contract
+appending an ``import "{C}_summaries.spec";`` line per newly summarized contract
 brought into scene by call resolution. All mutations are idempotent so the same
 contract can be registered repeatedly across iterations.
 """
@@ -26,7 +26,7 @@ class BaseSummariesAggregator:
         self.aggregator_path = summaries_dir / f"{main_contract}_base_summaries.spec"
 
     def register(self, contract_names: Iterable[str]) -> List[str]:
-        """Append one ``import "./{C}_summaries.spec";`` line per contract whose
+        """Append one ``import "{C}_summaries.spec";`` line per contract whose
         per-contract spec exists on disk and isn't already imported.
 
         Returns:
@@ -45,7 +45,9 @@ class BaseSummariesAggregator:
             spec_path = self.summaries_dir / f"{name}_summaries.spec"
             if not spec_path.exists():
                 continue
-            import_line = f'import "./{name}_summaries.spec";'
+            # No "./" prefix: must match the form written at initial generation
+            # (setup_summaries.generate_base_aggregator) and by register_curated, or dedup misses it.
+            import_line = f'import "{name}_summaries.spec";'
             if import_line in existing or import_line in new_lines:
                 continue
             new_lines.append(import_line)
@@ -57,6 +59,40 @@ class BaseSummariesAggregator:
         with self.aggregator_path.open("a") as f:
             # Ensure the appended block starts on a new line even if the file
             # didn't end with one.
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            for line in new_lines:
+                f.write(f"{line}\n")
+        return added
+
+    def register_curated(self, import_paths: Iterable[str]) -> List[str]:
+        """Append one ``import "<path>";`` line per curated summary spec not already imported.
+
+        ``import_paths`` are aggregator-relative paths (e.g. ``"CTHelpers.spec"`` or
+        ``"OpenZeppelin/OZ_Math.spec"``), matching the format written at initial generation.
+
+        Returns:
+            The import paths that had a line added (for logging). Empty if all were already
+            imported or the aggregator file doesn't exist yet.
+        """
+        if not self.aggregator_path.exists():
+            return []
+
+        existing = self.aggregator_path.read_text()
+        new_lines: List[str] = []
+        added: List[str] = []
+
+        for path in import_paths:
+            import_line = f'import "{path}";'
+            if import_line in existing or import_line in new_lines:
+                continue
+            new_lines.append(import_line)
+            added.append(path)
+
+        if not new_lines:
+            return []
+
+        with self.aggregator_path.open("a") as f:
             if existing and not existing.endswith("\n"):
                 f.write("\n")
             for line in new_lines:

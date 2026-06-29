@@ -61,6 +61,27 @@ from certora_autosetup.setup.summary_resolver import resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
 
 
+# CVL grammar keyword terminals (EVMVerifier CVL lexer, com.certora.certoraprover.cvl). A Solidity
+# parameter whose name equals one of these is lexed as that keyword inside a methods{} entry, which is
+# a syntax error; such names are suffixed with "_" before emission (see _cvl_safe_param_name).
+CVL_RESERVED_WORDS = frozenset({
+    "ALL", "ALWAYS", "ASSERT_FALSE", "AUTO", "CONSTANT", "Create", "DELETE", "DISPATCH", "DISPATCHER",
+    "HAVOC_ALL", "HAVOC_ECF", "NONDET", "PER_CALLEE_CONSTANT", "STORAGE", "Sload", "Sstore", "Tload",
+    "Tstore", "UNRESOLVED", "as", "assert", "assuming", "at", "axiom", "builtin", "default",
+    "definition", "description", "else", "event", "exists", "expect", "fallback", "false", "filtered",
+    "forall", "function", "ghost", "good_description", "havoc", "hook", "if", "import", "in", "indexed",
+    "invariant", "lastReverted", "lastStorage", "links", "mapping", "methods", "new", "norevert", "old",
+    "onTransactionBoundary", "override", "persistent", "preserved", "require", "requireInvariant",
+    "reset_storage", "return", "returns", "revert", "rule", "satisfy", "sig", "sort", "strong", "sum",
+    "true", "unresolved", "use", "using", "usum", "void", "weak", "with", "withrevert", "xor",
+})
+
+
+def _cvl_safe_param_name(name: str) -> str:
+    """The parameter name with a trailing "_" if it equals a CVL reserved word, otherwise unchanged."""
+    return f"{name}_" if name in CVL_RESERVED_WORDS else name
+
+
 try:
     from dotenv import load_dotenv
 
@@ -195,8 +216,8 @@ class DecimalSummary(BaseModel):
 
     @property
     def summary_line(self) -> str:
-        params = ", ".join([ f"{_pprint_type(p.ty)} {p.name}" for p in self.param_list ])
-        return f"function _.{self.method_name}({params}) internal => {self.cvl_function_name}({self.amount_parameter}) expect {self.return_type.ty_name};"
+        params = ", ".join([ f"{_pprint_type(p.ty)} {_cvl_safe_param_name(p.name)}" for p in self.param_list ])
+        return f"function _.{self.method_name}({params}) internal => {self.cvl_function_name}({_cvl_safe_param_name(self.amount_parameter)}) expect {self.return_type.ty_name};"
 
     @property
     def cvl_function(self) -> str:
@@ -238,7 +259,7 @@ class NondetSummary(BaseModel):
 
     @property
     def summary_line(self) -> str:
-        params = ", ".join([f"{_pprint_type(p.ty)} {p.name}" for p in self.param_list])
+        params = ", ".join([f"{_pprint_type(p.ty)} {_cvl_safe_param_name(p.name)}" for p in self.param_list])
         if self.return_type is not None:
             return_types = ", ".join([
                 _pprint_type(ty) for ty in self.return_type
@@ -351,6 +372,16 @@ class SummarySetup:
 
         # Initialize TypeAnalyzer for resolving user-defined types in function declarations
         self.type_analyzer: TypeAnalyzer = self._init_type_analyzer()
+
+    @functools.cached_property
+    def methods_parser(self) -> MethodParser:
+        """Parsed ``all_methods.json``, loaded once and reused.
+
+        ``all_methods.json`` is written once by the build (``generate_all_methods_json``) and is
+        immutable afterward, so the parse is cached rather than repeated per match/recipe call.
+        Access only after confirming the file exists.
+        """
+        return MethodParser(str(PATH_ALL_METHODS_JSON))
 
     def _init_type_analyzer(self) -> TypeAnalyzer:
         """Initialize TypeAnalyzer. Fatal error if initialization fails."""
@@ -857,6 +888,16 @@ class SummarySetup:
 
         return str(SUMMARIES_SUBDIR / versioned_rel_under)
 
+    def curated_summary_import_path(self, func_name: str, main_contract: str) -> str:
+        """Aggregator-relative import path for a matched curated-summary key.
+
+        A ``.template.spec`` entry is materialized into its ``{base}-{main_contract}.spec`` form first.
+        """
+        import_path: str = self.function_summaries[func_name]["summary_file"]
+        if import_path.endswith(".template.spec"):
+            import_path = self._materialize_template(import_path, main_contract)
+        return os.path.relpath(self.certora_dir / import_path, self.user_summaries_dir)
+
     def generate_base_aggregator(
         self,
         main_contract: str,
@@ -899,14 +940,7 @@ class SummarySetup:
         # the versioned ``{base}-{main}.spec`` directly into the user's dir) and import
         # that versioned name.
         for func_name in verified_functions:
-            func_info = self.function_summaries[func_name]
-            import_path: str = func_info["summary_file"]
-
-            if import_path.endswith(".template.spec"):
-                import_path = self._materialize_template(import_path, main_contract)
-
-            rel_to_aggregator = os.path.relpath(self.certora_dir / import_path, self.user_summaries_dir)
-            unique_imports.add(rel_to_aggregator)
+            unique_imports.add(self.curated_summary_import_path(func_name, main_contract))
 
         # Per-contract LLM specs for the initial scope.
         for c_name in in_scene_contracts:
@@ -931,6 +965,42 @@ class SummarySetup:
             "SUCCESS" if unique_imports else "INFO",
         )
         return aggregator_path
+
+    def prune_emitted_specs(self, main_contract: str) -> None:
+        """Comment out methods{} entries that don't resolve in the compiled scene, across ALL emitted
+        summary specs. Curated/dedicated library specs (in function_summaries.json key order) take
+        precedence over LLM-generated ones for duplicate (receiver, name, param_types) ownership.
+
+        Global by design — it needs every spec at once for that precedence — so it runs after summary
+        emission and before a prover submission, not inline per contract. Union templates and curated
+        specs added lazily during call resolution otherwise leave entries that fail CVL typechecking.
+
+        Each spec path is passed to the resolver at most once: several function_summaries keys can
+        share one summary_file (e.g. the SafeERC20 keys), and resolving the same file twice makes the
+        second pass treat the file's own kept entries as duplicates owned by the first and drop them.
+        """
+        if not PATH_ALL_METHODS_JSON.exists():
+            return
+        ordered_specs: List[Path] = []
+        seen: Set[Path] = set()
+
+        def _add(p: Path) -> None:
+            if p not in seen:
+                seen.add(p)
+                ordered_specs.append(p)
+
+        for key in self.function_summaries:  # function_summaries.json key order = curated precedence
+            if key not in self.matched_functions:
+                continue
+            rel_under = Path(self.function_summaries[key]["summary_file"]).relative_to(SUMMARIES_SUBDIR)
+            if str(rel_under).endswith(".template.spec"):
+                base_stem = rel_under.stem[: -len(".template")]
+                rel_under = rel_under.parent / f"{base_stem}-{main_contract}.spec"
+            _add(self.user_summaries_dir / rel_under)
+        # Then any other emitted spec (LLM per-contract, call resolution) — lower dedup precedence.
+        for spec in walk_files_by_suffix(self.user_summaries_dir, ".spec"):
+            _add(spec)
+        resolve_summary_specs(ordered_specs, PATH_ALL_METHODS_JSON, log=self.log)
 
     def should_process_file(self, file_path: str) -> bool:
         """Check if a file should be processed (not a dependency or internal file).
@@ -1197,6 +1267,7 @@ If the function cannot be summarized (e.g., struct parameters), return an Invali
         params = []
         for i, param_type in enumerate(param_types):
             param_name = param_names[i] if i < len(param_names) and param_names[i] else f""
+            param_name = _cvl_safe_param_name(param_name)
             location = locations[i] if i < len(locations) else ""
 
             cvl_type, classification = classify_solidity_type(param_type)
@@ -1633,7 +1704,7 @@ Method signature: {method_signature}
             )
             return []
 
-        mp = MethodParser(str(methods_file))
+        mp = self.methods_parser
 
         # Filter methods by properties and originatingContract
         all_methods = mp.get_all_methods()
@@ -2022,6 +2093,12 @@ Method signature: {method_signature}
             header.extend(['import "./_helpers.spec";', ""])
         return "\n".join(header + body)
 
+    def _returns_reference_type(self, method: Dict[str, Any]) -> bool:
+        """Whether any of the method's returns is a reference type (string/bytes/array/struct/mapping),
+        determined from the per-return data location recorded in the build JSON.
+        """
+        return any(loc in ("memory", "calldata", "storage") for loc in method.get("returnLocations", []))
+
     def _append_method_summary(
         self,
         content: List[str],
@@ -2059,7 +2136,12 @@ Method signature: {method_signature}
         content.append("     */")
 
         if summary_type.upper() == "NONDET":
-            if method["stateMutability"] in ["view", "pure"]:
+            if self._returns_reference_type(method):
+                sig = self._get_function_signature(method, is_wildcard=False)
+                content.append(
+                    f"    // AUTO-DISABLED (NONDET unsound for reference types): {sig}"
+                )
+            elif method["stateMutability"] in ["view", "pure"]:
                 if has_ellipsis and (nondet_summary := self._generate_nondet_summary(
                     method, udt_context
                 )) is not None:
@@ -2273,7 +2355,7 @@ Method signature: {method_signature}
             self.log("all_methods.json not found", "ERROR")
             return set(), set()
 
-        mp = MethodParser(str(methods_file))
+        mp = self.methods_parser
 
         self.log(f"Matching summaries for {main_contract}...")
         # Filter to only methods that originate from this contract (compilation unit)
@@ -2437,30 +2519,10 @@ Method signature: {method_signature}
         in_scene = [main_contract] + additional_names
         self.generate_base_aggregator(main_contract, in_scene, matched_functions)
 
-        # Step 5b: Prune summary methods{} entries that don't resolve in the compiled
-        # scene. Union templates (e.g. FixedPointMathLib.spec carries both solmate and
-        # solady naming) otherwise leave entries whose method doesn't exist at the
-        # declared receiver, which fail CVL typechecking before any checker runs.
-        # Curated/dedicated library specs take precedence over LLM-generated ones for
-        # duplicate (receiver, name, param_types) ownership, so resolve them first.
-        if PATH_ALL_METHODS_JSON.exists():
-            ordered_specs: List[Path] = []
-            for key in self.function_summaries:  # function_summaries.json key order
-                if key not in matched_functions:
-                    continue
-                rel_under = Path(self.function_summaries[key]["summary_file"]).relative_to(SUMMARIES_SUBDIR)
-                if str(rel_under).endswith(".template.spec"):
-                    base_stem = rel_under.stem[: -len(".template")]
-                    rel_under = rel_under.parent / f"{base_stem}-{main_contract}.spec"
-                ordered_specs.append(self.user_summaries_dir / rel_under)
-            curated = set(ordered_specs)
-            # Then any other emitted summary spec (LLM per-contract, aggregator, call
-            # resolution) — lower precedence for dedup, but still pruned for nonexistent
-            # entries.
-            for spec in walk_files_by_suffix(self.user_summaries_dir, ".spec"):
-                if spec not in curated:
-                    ordered_specs.append(spec)
-            resolve_summary_specs(ordered_specs, PATH_ALL_METHODS_JSON, log=self.log)
+        # Step 5b: Prune summary methods{} entries that don't resolve in the compiled scene
+        # (e.g. union-template specs naming functions the library doesn't have). Same pass is
+        # re-run before each call-resolution submission as lazily-added specs arrive.
+        self.prune_emitted_specs(main_contract)
 
         if not matched_functions and not any(
             (self.user_summaries_dir / f"{c}_summaries.spec").exists()

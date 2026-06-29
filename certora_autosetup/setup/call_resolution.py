@@ -263,11 +263,6 @@ class CallResolutionPhase:
         # 2. LLM analysis per new contract. Sequential so ``SummarySetup``'s shared
         # accumulators (``_emitted_methods``, ``_methods_per_contract``,
         # ``_cvl_functions``) aren't touched concurrently.
-        # TODO: only LLM analysis runs for contracts pulled in during call resolution — the curated
-        # library-summary matcher (SummarySetup.match_summaries_from_all_methods against
-        # function_summaries.json) is applied only to the main contract and the initial
-        # additional_contracts, not here. Run curated matching on ``names`` here too to
-        # close that gap.
         contract_files = self.summary_setup.solidity_files_no_dependencies
         for name in names:
             try:
@@ -277,6 +272,29 @@ class CallResolutionPhase:
                     f"LLM analysis failed for {name}; continuing without summaries: {e}"
                 )
 
+        # 2b. Curated library summaries for the new contracts, scene-timed rather than matched once
+        # against the main contract. A curated summary is emitted only after its contract/library is in
+        # the conf — step 1 added the libraries these contracts use — so its receiver resolves instead
+        # of failing "contract not found" and being commented out by the typechecker loop.
+        try:
+            curated_keys: Set[str] = set()
+            for name in names:
+                matched, _ = self.summary_setup.match_summaries_from_all_methods(name)
+                curated_keys |= matched
+            if curated_keys:
+                # Publish so prune_emitted_specs (run before the next submission) ranks these as
+                # curated for dedup precedence over LLM specs.
+                self.summary_setup.matched_functions |= curated_keys
+                self.summary_setup.copy_summaries_folder(curated_keys)
+                registered = self.aggregator.register_curated(
+                    self.summary_setup.curated_summary_import_path(key, self.contract_name)
+                    for key in curated_keys
+                )
+                if registered:
+                    logger.info(f"Summary aggregator: registered curated specs {registered}")
+        except Exception as e:
+            logger.warning(f"Curated summary matching failed for {names}: {e}")
+
         # 3. Append imports for any specs that landed on disk.
         try:
             added = self.aggregator.register(names)
@@ -284,6 +302,21 @@ class CallResolutionPhase:
                 logger.info(f"Summary aggregator: registered LLM specs for {added}")
         except Exception as e:
             logger.warning(f"Summary aggregator register failed for {names}: {e}")
+
+        # 4. Prune entries that don't resolve in the scene across all emitted specs (curated + LLM,
+        # this and prior iterations) — the same global pass the initial setup runs, re-run here because
+        # this is the contract-add event. Cleans lazily-added union-template/curated specs before the
+        # next submission instead of letting them hard-fail it.
+        # TODO(perf): this re-checks every emitted spec on each contract-add. all_methods.json is built
+        # once and never regenerated, so an entry that resolved before stays resolvable — only the
+        # newly-added specs need the existence check. The exception is cross-spec dedup precedence (a
+        # newly-added curated spec can supersede a (receiver,name,params) an existing LLM spec kept),
+        # which needs the global view. Consider pruning only new specs for existence + handling dedup
+        # incrementally.
+        try:
+            self.summary_setup.prune_emitted_specs(self.contract_name)
+        except Exception as e:
+            logger.warning(f"Summary spec prune failed after adding {names}: {e}")
 
     async def execute(
         self,
