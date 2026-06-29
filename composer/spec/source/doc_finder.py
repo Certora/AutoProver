@@ -24,7 +24,7 @@ from typing import Any, Literal, NotRequired, Sequence, TypedDict, override
 
 from pydantic import BaseModel, Field
 
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
@@ -179,10 +179,9 @@ def read_document_tool(uploader: FileUploader, project_root: str) -> BaseTool:
     including PDFs, which ``get_file`` can only return as raw bytes.
 
     It loads the file through the same ``uploader.get_document`` the pipeline uses
-    (text inline, binary via the Files API) and returns a ``Command`` that attaches
-    the document as a **user-message content block** — the API-correct placement for
-    documents (a ``tool_result`` cannot carry a document block). The model then reads
-    the attachment on its next turn."""
+    (text inline, binary via the Files API) and embeds the document block **inside the
+    tool result** — Anthropic accepts ``document`` blocks in ``tool_result.content``,
+    and ``langchain_anthropic`` forwards the ToolMessage content there verbatim."""
     root = pathlib.Path(project_root)
 
     class ReadDocument(WithAsyncImplementation[Command], WithInjectedId):
@@ -212,14 +211,17 @@ def read_document_tool(uploader: FileUploader, project_root: str) -> BaseTool:
                 return tool_return(
                     self.tool_call_id, f"cannot read {self.path!r}: not a regular file."
                 )
-            # Tool-result ack + a user message carrying the document block (documents
-            # belong in user content, not in a tool_result).
+            # Document goes INSIDE the tool_result content. A single ToolMessage keeps
+            # this parallel-safe: each tool call in the turn contributes exactly one
+            # tool_result, with nothing inserted between them.
             return Command(update={"messages": [
                 ToolMessage(
                     tool_call_id=self.tool_call_id,
-                    content=f"Loaded {self.path!r}; its contents are attached below.",
+                    content=[
+                        {"type": "text", "text": f"Contents of {self.path!r}:"},
+                        doc.to_dict(),
+                    ],
                 ),
-                HumanMessage(content=[doc.to_dict()]),
             ]})
 
     return ReadDocument.as_tool("read_document")
