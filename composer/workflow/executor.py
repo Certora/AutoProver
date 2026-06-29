@@ -453,7 +453,7 @@ async def _run_codegen(
             flow_input["input"].insert(0, recovery_msg)
 
     try:
-        import grandalf
+        import grandalf #type: ignore
         layout = workflow_exec.get_graph().draw_ascii()
         logger.debug(f"\n{layout}")
     except ModuleNotFoundError:

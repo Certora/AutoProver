@@ -41,6 +41,7 @@ from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportableResult, ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
+from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 
 _log = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class CorePhases[P: enum.Enum](TypedDict):
     analysis: P
     extraction: P
     formalization: P
+    report: P
 
 
 @dataclass(frozen=True)
@@ -215,11 +217,6 @@ def _batch_cache_key[FormT: BaseModel](props: list[PropertyFormulation]) -> Cach
     return CacheKey(string_hash("|".join(p.model_dump_json() for p in props)))
 
 
-# Per-task ids: key the harness tapes and address the TUI's per-task lanes. Helpers so the format
-# has one home and tapes can reconstruct them.
-SYSTEM_ANALYSIS_TASK_ID = "system-analysis"
-
-
 def extract_task_id(idx: int) -> str:
     return f"extract-{idx}"
 
@@ -317,9 +314,12 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         for o in outcomes
     ] + formalizer.extra_report_inputs()
     try:
-        report = await build_report(
-            contract_name=source.contract_name, backend=formalizer.backend_tag,
-            components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
+        report = await run.runner(
+            job=lambda: build_report(
+                contract_name=source.contract_name, backend=formalizer.backend_tag,
+                components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
+            ),
+            task_info=TaskInfo(REPORT_TASK_ID, label="Report Extraction", phase=backend.core_phases["report"])
         )
         backend.artifact_store.write_report(report)
     except Exception:

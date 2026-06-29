@@ -278,6 +278,7 @@ class ProverBackend:
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
         "extraction": AutoProvePhase.BUG_ANALYSIS,
         "formalization": AutoProvePhase.CVL_GEN,
+        "report": AutoProvePhase.REPORT
     })
     analysis_spec = SystemAnalysisSpec("source-analysis")
 

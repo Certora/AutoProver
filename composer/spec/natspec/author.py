@@ -20,7 +20,7 @@ from composer.spec.cvl_generation import (
 from composer.spec.context import (
     WorkflowContext, CVLGeneration, SystemDoc
 )
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.feedback import property_feedback_judge, Properties, FeedbackTemplate
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.system_model import ContractComponentInstance, ContractName

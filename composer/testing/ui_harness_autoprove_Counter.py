@@ -1391,8 +1391,8 @@ _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
     HARNESS_TASK_ID: _HARNESS_TAPE,
     INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
     INVARIANT_CVL_TASK_ID: _INVARIANT_CVL_TAPE,
-    bug_analysis_task_id(0, "Increment"): _BUG_TAPE,
-    cvl_gen_task_id(0, "Increment"): _CVL_TAPE,
+    "extract-0": _BUG_TAPE,
+    "formalize-0": _CVL_TAPE,
     REPORT_TASK_ID: _REPORT_TAPE,
 }
 

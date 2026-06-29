@@ -105,6 +105,7 @@ class FoundryPhase(enum.Enum):
     SYSTEM_ANALYSIS = "system_analysis"
     PROPERTY_EXTRACTION = "property_extraction"
     TEST_GENERATION = "test_generation"
+    REPORT = "report"
 
 class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
     def __init__(self, conf: _ForgeRunConfig):
@@ -152,7 +153,8 @@ class FoundryBackend:
     core_phases = CorePhases({
         "analysis": FoundryPhase.SYSTEM_ANALYSIS,
         "extraction": FoundryPhase.PROPERTY_EXTRACTION,
-        "formalization": FoundryPhase.TEST_GENERATION
+        "formalization": FoundryPhase.TEST_GENERATION,
+        "report": FoundryPhase.REPORT
     })
 
     analysis_spec = SystemAnalysisSpec("foundry-application")

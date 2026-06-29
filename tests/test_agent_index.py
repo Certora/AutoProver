@@ -196,6 +196,7 @@ class TestReadOrder:
     async def test_overlay_shadows_base(self, store):
         trusted_idx = AgentIndex(store, trusted_config())
         gkey = await trusted_idx.aput(question="Q1", answer="A_base")
+        assert gkey is not None
 
         alice_idx = AgentIndex(store, tiered_config(ALICE))
         akey = await alice_idx.aput(question="Q1", answer="A_overlay")
@@ -215,6 +216,7 @@ class TestReadOrder:
         # Seed base only.
         trusted_idx = AgentIndex(store, trusted_config())
         gkey = await trusted_idx.aput(question="Q1", answer="A_base")
+        assert gkey is not None
 
         # Alice's overlay is empty for Q1; aget falls through.
         alice_idx = AgentIndex(store, tiered_config(ALICE))

@@ -19,7 +19,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
-from composer.spec.prop import PropertyFormulation, PropertyType
+from composer.spec.types import PropertyFormulation, PropertyType
 from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping, SkippedProperty
 
 from composer.spec.source.artifacts import ProverArtifactStore

@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 
 type RuleName = str
 """A CVL rule/invariant identifier as it appears in the prover report and in a component's
