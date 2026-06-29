@@ -6,6 +6,7 @@ from pydantic import Field
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
+from composer.llm.provider import ProviderKind
 from langchain_core.prompt_values import PromptValue
 from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, AIMessage
@@ -137,7 +138,7 @@ def install_fake_llm(fake: Any) -> None:
     import composer.workflow.services as services
 
     class _FakeProvider:
-        provider = "anthropic"
+        provider : ProviderKind = "anthropic"
 
         def builder_for(self, *, cache_level: Any = None, disable_thinking: bool = False) -> Any:
             return fake
