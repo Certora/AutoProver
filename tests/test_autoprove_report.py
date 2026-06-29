@@ -88,7 +88,7 @@ def _gen(mapping: dict[str, list[str]] | None = None,
     )
 
 
-def _input(name, unit_file, props, result: GeneratedCVL | None, link="L1") -> ReportComponentInput[GeneratedCVL]:
+def _input(name, unit_file, props, result: GeneratedCVL | None, link : str | None="L1") -> ReportComponentInput[GeneratedCVL]:
     """``link`` is the result's prover run link (``GeneratedCVL.final_link``); the prover fetcher
     keys its verdicts off it. ``None`` (or a ``None`` result) means no run link, so no verdicts."""
     return ReportComponentInput(
