@@ -13,7 +13,7 @@ from graphcore.graph import tool_state_update
 from graphcore.tools.schemas import WithImplementation, WithInjectedId, WithInjectedState, WithAsyncDependencies
 from composer.spec.cvl_generation import (
     static_tools, run_cvl_generator, CVLGenerationInput, CVLGenerationState,
-    FeedbackToolContext, check_completion, CVLGenerationExtra, FeedbackValidation
+    FeedbackToolContext, check_completion, CVLGenerationExtra
 )
 
 
@@ -258,7 +258,7 @@ async def generate_cvl_batch(
                 f"The current stub implementation of the {contract_name} contract is",
                 stub_reader()
             ],
-            required_validations=[FeedbackValidation()],
+            required_validations=["feedback"],
             skipped=[],
             validations={},
             failed=None,

@@ -21,8 +21,7 @@ Mirrors ``composer/spec/cvl_generation.py`` for the foundry workflow:
 """
 
 import hashlib
-from dataclasses import dataclass
-from typing import Annotated, NotRequired
+from typing import Annotated, Callable, NotRequired
 from typing_extensions import TypedDict
 
 from langgraph.graph import MessagesState
@@ -30,34 +29,14 @@ from pydantic import BaseModel, Field
 
 from graphcore.graph import FlowInput
 
-from composer.chassis.validation import ValidationState, completion_validations
+from composer.core.state import merge_validation
 from composer.spec.context import CacheKey, CVLGeneration, CVLJudge
 from composer.spec.cvl_generation import SkippedProperty, _merge_skips
 
 
-@dataclass(frozen=True)
-class ForgeTestValidation:
-    """Completion gate: the forge test suite ran all-green (publish gate)."""
+FORGE_TEST_VALIDATION_KEY = "forge_test"
 
-    def to_key(self) -> str:
-        return "forge_test"
-
-    def description(self) -> str:
-        return "forge test suite passing"
-
-
-@dataclass(frozen=True)
-class FeedbackValidation:
-    """Completion gate: the judge approved the tests' property coverage."""
-
-    def to_key(self) -> str:
-        return "feedback"
-
-    def description(self) -> str:
-        return "judge feedback approval"
-
-
-type FoundryValidation = ForgeTestValidation | FeedbackValidation
+FEEDBACK = "feedback"
 
 # WorkflowContext child key for the feedback judge (derives its memory
 # namespace and thread ids). The phantom markers are the CVL-named ones
@@ -96,9 +75,11 @@ def _merge_expected_failures(left: dict[str, str], right: dict[str, str]) -> dic
     return to_ret
 
 
-class FoundryGenerationExtra(FoundryTestExtra, ValidationState[FoundryValidation]):
+class FoundryGenerationExtra(FoundryTestExtra):
     skipped: Annotated[list[SkippedProperty], _merge_skips]
     property_tests: list[PropertyTestMapping]
+    validations: Annotated[dict[str, str], merge_validation]
+    required_validations: list[str]
     expected_failures: Annotated[dict[str, str], _merge_expected_failures]
     last_test_names: list[str] | None
     failed: bool | None
@@ -123,15 +104,33 @@ def _foundry_digest(curr_test: str, skipped: list[SkippedProperty]) -> str:
     return h.hexdigest()
 
 
-def _foundry_digester(state: FoundryGenerationState) -> str:
-    return _foundry_digest(state["curr_test"] or "", state["skipped"])
+def make_foundry_validation_stamper(
+    key: str,
+) -> Callable[[FoundryGenerationExtra], dict[str, str]]:
+    def stamp(state: FoundryGenerationExtra) -> dict[str, str]:
+        return {
+            key: _foundry_digest(state["curr_test"] or "", state["skipped"])
+        }
+    return stamp
 
 
-# Foundry's completion-validation trio. ``stamp`` marks a gate satisfied (forge
-# all-green / judge approval); ``check_foundry_completion`` gates publish.
-stamp, check_foundry_completion, _ = completion_validations(
-    FoundryGenerationState, _foundry_digester, lambda x: x
-)
+def check_foundry_completion(state: FoundryGenerationExtra) -> str | None:
+    """Return None if the publish gate is satisfied, otherwise the reason.
+
+    Required validations must have stamps whose digest matches the current
+    ``curr_test + skipped`` digest. A stamp that doesn't match is treated as
+    stale (the agent edited the test after the stamp was issued)."""
+    test = state["curr_test"]
+    if test is None:
+        return "Completion REJECTED: no test written yet."
+    digest = _foundry_digest(test, state["skipped"])
+    validations = state["validations"]
+    for key in state["required_validations"]:
+        if validations.get(key) != digest:
+            return (
+                f"Completion REJECTED: {key} validation not satisfied or stale."
+            )
+    return None
 
 
 def validate_property_tests(

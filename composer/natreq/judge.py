@@ -21,8 +21,8 @@ from langgraph.runtime import get_runtime
 from composer.templates.loader import load_jinja_template
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.core.state import AIComposerState
-from composer.core.validation import ReqsValidation
-from composer.core.context import stamp
+from composer.core.validation import reqs as req_key
+from composer.core.context import AIComposerContext, compute_state_digest
 from composer.io.context import run_graph
 from composer.ui.tool_display import tool_display
 
@@ -171,10 +171,16 @@ def get_judge_tool(
         formatted_res = _format_result(judge_state["result"], skipped)
         if not all_satisfied:
             return formatted_res
+        digest = compute_state_digest(
+            c=get_runtime(AIComposerContext).context,
+            state=state
+        )
         return Command(update={
             "messages": [
                 ToolMessage(content=formatted_res, tool_call_id=tool_call_id)
             ],
-            **stamp(ReqsValidation(), state),
+            "validation": {
+                req_key: digest
+            }
         })
     return requirements_evaluation

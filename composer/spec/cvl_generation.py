@@ -27,7 +27,7 @@ from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
 )
 from composer.spec.guidance import ERC20TokenGuidance, UnresolvedCallGuidance
-from composer.chassis.validation import ValidationState, completion_validations
+from composer.core.state import merge_validation
 from composer.spec.graph_builder import run_to_completion
 from composer.cvl.tools import put_cvl_raw, put_cvl, get_cvl, edit_cvl
 from composer.ui.tool_display import tool_display, suppress_ack
@@ -139,35 +139,12 @@ class GeneratedCVL(BaseModel):
 # Completion validation
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class ProverValidation:
-    """Completion gate: the spec verified against the source via the prover."""
-
-    def to_key(self) -> str:
-        return "prover"
-
-    def description(self) -> str:
-        return "prover verification"
-
-
-@dataclass(frozen=True)
-class FeedbackValidation:
-    """Completion gate: the judge approved the spec's property coverage."""
-
-    def to_key(self) -> str:
-        return "feedback"
-
-    def description(self) -> str:
-        return "judge feedback approval"
-
-
-type CVLValidation = ProverValidation | FeedbackValidation
-
-
-class CVLGenerationExtra(ValidationState[CVLValidation]):
+class CVLGenerationExtra(TypedDict):
     curr_spec: str | None
     skipped: Annotated[list[SkippedProperty], _merge_skips]
     property_rules: list[PropertyRuleMapping]
+    validations: Annotated[dict[str, str], merge_validation]
+    required_validations: list[str]
 
 
 def _compute_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
@@ -176,6 +153,22 @@ def _compute_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
     for s in skipped:
         digester.update(f"{s.property_title}:{s.reason}".encode())
     return digester.hexdigest()
+
+
+def check_completion(
+    state: CVLGenerationExtra,
+) -> str | None:
+    """Returns None if valid, error string if not."""
+    spec = state["curr_spec"]
+    if spec is None:
+        return "Completion REJECTED: no spec written yet."
+    digest = _compute_digest(spec, state["skipped"])
+    validations = state["validations"]
+    required = state["required_validations"]
+    for key in required:
+        if key not in validations or validations[key] != digest:
+            return f"Completion REJECTED: {key} validation not satisfied or stale."
+    return None
 
 
 def validate_property_rules(
@@ -222,24 +215,26 @@ def validate_property_rules(
     return None
 
 
+def make_validation_stamper(key: str) -> Callable[[CVLGenerationExtra], dict[str, str]]:
+    """Create a stamper for future prover tool integration.
+
+    The stamper reads curr_spec/skipped from state and returns
+    a dict suitable for merging into the validations state key.
+    """
+    def stamp(state: CVLGenerationExtra) -> dict[str, str]:
+        return {key: _compute_digest(
+            state["curr_spec"] or "",
+            state["skipped"],
+        )}
+    return stamp
+
+
 class CVLGenerationInput(FlowInput, CVLGenerationExtra):
     pass
 
 
 class CVLGenerationState(MessagesState, CVLGenerationExtra):
     result: NotRequired[str]
-
-
-def _cvl_digester(state: CVLGenerationExtra) -> str:
-    return _compute_digest(state["curr_spec"] or "", state["skipped"])
-
-
-# CVL spec-generation's completion-validation trio (shared by the source and
-# natspec authors). ``stamp`` marks a gate satisfied (prover run / judge
-# approval); ``check_completion`` gates the result tool. ``refl`` is identity.
-stamp, check_completion, _ = completion_validations(
-    CVLGenerationExtra, _cvl_digester, lambda x: x
-)
 
 
 class _LastAttemptCache(BaseModel):
@@ -265,6 +260,8 @@ class FeedbackToolContext:
     # the titles named by record_skip / unskip_property / the result mapping refer to real
     # properties, and to check every non-skipped property is mapped.
     titles: list[str]
+
+FEEDBACK_VALIDATION_KEY = "feedback"
 
 @tool_display("Getting feedback", "Feedback")
 class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, WithAsyncImplementation[Command]):
@@ -301,9 +298,10 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
         t = await feedback(spec, skipped, self.rebuttals, self.tool_call_id)
         msg = f"Good? {t.good}\nFeedback {t.feedback}"
         if t.good:
+            digest = _compute_digest(spec, skipped)
             return tool_state_update(
                 self.tool_call_id, msg,
-                **stamp(FeedbackValidation(), st),
+                validations={FEEDBACK_VALIDATION_KEY: digest},
             )
         return tool_state_update(self.tool_call_id, msg)
 

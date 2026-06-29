@@ -26,7 +26,7 @@ from composer.workflow.meta import create_resume_commentary
 from composer.core.context import AIComposerContext, ProverOptions
 from composer.core.state import AIComposerState
 from composer.prover.core import make_prover_options, CexHandler
-from composer.core.validation import ProverValidation, ReqsValidation
+from composer.core.validation import ValidationType, prover, reqs as req_type
 from composer.rag.db import rag_context, ComposerRAGDB
 from composer.rag.models import get_model as get_rag_model
 from composer.audit.db import AuditDB, AuditDBSink, ResumeArtifact, InputFileLike
@@ -86,11 +86,8 @@ def get_reference_input(input_data: InputData, debug_prompt: Optional[str]) -> s
         debug_prompt=debug_prompt)
 
 def _get_empty_extra() -> AIComposerExtra:
-    # Prover is the baseline completion gate on every path; the reqs gate is
-    # appended later iff requirements were extracted (see _run_codegen).
     return AIComposerExtra(
-        validations={}, required_validations=[ProverValidation()],
-        skipped_reqs=set(), working_spec=None
+        validation={}, skipped_reqs=set(), working_spec=None
     )
 
 
@@ -393,7 +390,6 @@ async def _run_codegen(
 
     workflow_exec = workflow_graph.compile(checkpointer=checkpointer, store=store)
     if reqs_list is not None:
-        flow_input["required_validations"].append(ReqsValidation())
         flow_input["input"].append(f"""
     Additionally, the implementation MUST satisfy the following requirements:
     {"\n".join(f"{i}. {r}" for (i, r) in enumerate(reqs_list, start = 1))}
@@ -419,7 +415,13 @@ async def _run_codegen(
     if workflow_options.checkpoint_id is not None:
         config["configurable"]["checkpoint_id"] = workflow_options.checkpoint_id
 
-    work_context = AIComposerContext(vfs_materializer=materializer)
+    required_validations: list[ValidationType] = [prover]
+    if reqs_list is not None:
+        required_validations.append(req_type)
+
+    work_context = AIComposerContext(
+        vfs_materializer=materializer, required_validations=required_validations
+    )
 
     audit_sink = AuditDBSink(audit_db, thread_id)
 

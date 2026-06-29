@@ -14,8 +14,8 @@ from langgraph.runtime import get_runtime
 from langgraph.types import Command
 
 from composer.core.state import AIComposerState
-from composer.core.context import AIComposerContext, ProverOptions, stamp
-from composer.core.validation import ProverValidation
+from composer.core.context import AIComposerContext, ProverOptions, compute_state_digest
+from composer.core.validation import prover as prover_key
 from composer.prover.core import ProverReport, CexHandler, ProverOptions as CoreProverOptions, run_prover
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
@@ -113,6 +113,8 @@ class CertoraProverTool(WithAsyncDependencies[Command, ProverDeps], WithInjected
                 # (including any volume summarization it chose to do); there's no
                 # separate truncated/summarized shape to branch on anymore.
                 if result.all_verified and not self.use_working_spec and not self.rule:
+                    ctxt = get_runtime(AIComposerContext).context
+                    state_digest = compute_state_digest(c=ctxt, state=self.state)
                     return Command(
                         update={
                             "messages": [
@@ -121,7 +123,9 @@ class CertoraProverTool(WithAsyncDependencies[Command, ProverDeps], WithInjected
                                     content=result.result_str
                                 )
                             ],
-                            **stamp(ProverValidation(), self.state),
+                            "validation": {
+                                prover_key: state_digest
+                            }
                         }
                     )
                 return tool_return(tool_call_id=self.tool_call_id, content=result.result_str)

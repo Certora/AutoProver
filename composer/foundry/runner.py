@@ -12,7 +12,7 @@ that:
 * Runs ``forge test --json --match-path test/<staged>`` so only the
   draft's tests run and the result comes back as structured JSON.
 * On a fully green run (excluding tests marked via
-  ``expect_test_failure``), stamps the ``ForgeTestValidation`` gate
+  ``expect_test_failure``), stamps ``validations[FORGE_TEST_VALIDATION_KEY]``
   ONLY when the run was unseeded. Seeded runs are a debugging aid for
   iterating on specific fuzz/invariant counterexamples; a clean unseeded
   run is what certifies the property for publish.
@@ -49,9 +49,9 @@ from graphcore.tools.schemas import (
 from composer.ui.tool_display import tool_display
 
 from composer.foundry.state import (
+    FORGE_TEST_VALIDATION_KEY,
     FoundryGenerationState,
-    ForgeTestValidation,
-    stamp,
+    make_foundry_validation_stamper,
 )
 
 
@@ -249,13 +249,14 @@ class ForgeTestTool(
         test_names = [r.name for r in results]
 
         if clean and not seeded:
+            stamper = make_foundry_validation_stamper(FORGE_TEST_VALIDATION_KEY)
             return tool_state_update(
                 tool_call_id=self.tool_call_id,
                 content=(
                     f"All tests passed (publish gate stamped).\n\n{summary}"
                 ),
+                validations=stamper(self.state),
                 last_test_names=test_names,
-                **stamp(ForgeTestValidation(), self.state),
             )
 
         if clean and seeded:
