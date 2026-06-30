@@ -23,6 +23,7 @@ CEX analysis flow:
 import asyncio
 import sys
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,7 +44,7 @@ from prover_output_utility import cloud_server_for_env
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import cloud_results
 from composer.prover.ptypes import RuleResult
-from composer.prover.results import read_and_format_run_result, read_prover_runtime_ms
+from composer.prover.results import read_and_format_run_result
 from composer.templates.loader import load_jinja_template
 from composer.prover.prover_protocol import ProverResult
 
@@ -196,8 +197,8 @@ class ProverCallbacks:
     filesystem path to the results directory."""
     async def on_prover_runtime(self, ms: int) -> None: pass
     """Fires once per run with the prover's queue-free run time in milliseconds — the
-    cloud job's ``startTime``->``finishTime`` execution window, or (local) the engine's
-    statsdata ``start_to_end_time``. Only fires when that value is available."""
+    cloud job's ``startTime``->``finishTime`` execution window, or (local) the prover
+    subprocess wall-clock. Only fires when that value is available."""
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None: pass
     async def on_analysis_start(self, rule: RuleResult) -> None: pass
     async def on_analysis_complete(self, rule: RuleResult, explanation: str) -> None: pass
@@ -316,12 +317,14 @@ DefaultCexHandler = TrivialFanoutCexHandler
 
 
 @asynccontextmanager
-async def _local_results(path: Path) -> AsyncIterator[tuple[Path, int | None]]:
-    """Trivial context manager yielding ``(local results path, None)``.
+async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[tuple[Path, int | None]]:
+    """Trivial context manager yielding ``(local results path, runtime_ms)``.
 
-    The ``None`` is the cloud-runtime slot (matching ``cloud_results``); local runs have no
-    cloud job, so their runtime is read from statsdata via ``read_prover_runtime_ms``."""
-    yield (path, None)
+    Mirrors ``cloud_results``' interface so ``run_prover`` consumes both uniformly. Where
+    ``cloud_results`` computes the runtime from the polled job, the local run already
+    happened in ``run_prover_inner``, so its wall-clock (queue-free — local isn't queued)
+    is measured there and handed in here."""
+    yield (path, runtime_ms)
 
 
 async def _report_to_todo_list(
@@ -416,12 +419,18 @@ async def run_prover(
 
     # 2. Notify callback
     await callbacks.on_prover_run(effective_args)
+    # Wall-clock of the prover subprocess. For LOCAL this IS the run time (certoraRun runs
+    # the prover and blocks until done; local runs aren't queued). For cloud the subprocess
+    # only submits and returns, so this isn't used — cloud runtime comes from the job's
+    # execution window (see cloud_results / _job_runtime_ms).
+    _t0 = time.perf_counter()
     run_result, stdout = await run_prover_inner(
         folder,
         effective_args,
         lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
         callbacks.on_stdout_line
     )
+    local_runtime_ms = int((time.perf_counter() - _t0) * 1000)
     if isinstance(run_result, str):
         return run_result
 
@@ -447,21 +456,17 @@ async def run_prover(
     else:
         if not run_result["is_local_link"]:
             return f"Prover did not produce local results.\nstdout:\n{stdout}"
-        results_cm = _local_results(Path(run_result["link"]))
+        results_cm = _local_results(Path(run_result["link"]), local_runtime_ms)
 
-    # 8. Parse results, determine the prover's queue-free runtime, and run analysis.
-    # All happen inside ``results_cm`` so the report directory (which contains
-    # ``inputs/.certora_sources`` — the source files actually compiled into this
-    # verification problem) stays alive for the analyzer to read. Cloud runs unzip
-    # into a tmpdir whose lifetime is bound to ``cloud_results``; local runs hand
-    # back a stable path. Either way the analyzer must complete before the
-    # context manager exits.
-    async with results_cm as (emv_path, cloud_runtime_ms):
+    # 8. Parse results and run analysis, both inside ``results_cm`` so the report
+    # directory (which contains ``inputs/.certora_sources`` — the source files actually
+    # compiled into this verification problem) stays alive for the analyzer to read.
+    # Cloud runs unzip into a tmpdir whose lifetime is bound to ``cloud_results``; local
+    # runs hand back a stable path. Either way the analyzer must complete before the
+    # context manager exits. ``runtime_ms`` is the prover's queue-free run time, sourced
+    # by each context manager (cloud job window / local subprocess wall-clock).
+    async with results_cm as (emv_path, runtime_ms):
         parsed = read_and_format_run_result(emv_path)
-        # Queue-free run time: cloud uses the job's startTime->finishTime (execution
-        # window, excludes queue); local has no cloud job and isn't queued, so it reads
-        # the engine's own start_to_end from statsdata.
-        runtime_ms = cloud_runtime_ms if prover_opts.cloud else read_prover_runtime_ms(emv_path)
 
         if isinstance(parsed, str):
             return f"Failed to parse prover results: {parsed}"

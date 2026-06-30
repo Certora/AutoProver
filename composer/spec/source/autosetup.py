@@ -254,7 +254,7 @@ def read_autosetup_usage(project_root: Path) -> list[TokenUsageDict]:
 
 
 def read_autosetup_prover_usage(project_root: Path) -> int | None:
-    """Prover-REPORTED runtime (milliseconds) AutoSetup's subprocess prover runs
+    """Prover-reported runtime (milliseconds) AutoSetup's subprocess prover runs
     consumed on this run — ready to fold into the run's prover usage via
     ``RunSummary.record_prover_runtime``.
 

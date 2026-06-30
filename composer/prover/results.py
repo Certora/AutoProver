@@ -3,13 +3,10 @@ from typing_extensions import Iterable
 from pathlib import Path
 import re
 import json
-import logging
 
 from pydantic import Field, BaseModel, ValidationError
 
 from composer.prover.ptypes import RuleResult, StatusCodes, RulePath
-
-_logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -211,28 +208,6 @@ def read_and_format_run_result(s: Path) -> dict[str, RuleResult] | str:
     for r in _flat_yield(loaded_data.rules, lambda r: flatten_tree_view_root(tree_view_dir, r)):
         to_ret[r.name] = r
     return to_ret
-
-
-def read_prover_runtime_ms(results_root: Path) -> int | None:
-    """The prover engine's self-reported run time for this job, in milliseconds.
-
-    Read from ``<results_root>/Reports/statsdata.json`` (``run_id.start_to_end_time``) —
-    the engine's own start-to-end wall time, which is post-dequeue (queue-free). Used for
-    LOCAL runs; cloud runs instead derive runtime from the job's startTime->finishTime in
-    ``cloud_results`` (queue-free too, and no need to read the extracted archive). NOT
-    composer's client-side ``elapsed`` (which also covers cloud queue / polling / download).
-    The value is stored as a single-element list. Returns ``None`` on any failure (file
-    absent, malformed JSON, or the key missing) — usage capture must never break a run.
-    """
-    stats_path = results_root / "Reports" / "statsdata.json"
-    try:
-        # statsdata records every metric as a list of samples; start_to_end_time
-        # always carries exactly one — the run's total (IndexError below if empty).
-        runtime = json.loads(stats_path.read_text())["run_id"]["start_to_end_time"][0]
-        return int(runtime)
-    except (OSError, ValueError, KeyError, IndexError, TypeError) as e:
-        _logger.debug("Could not read prover runtime from %s: %s", stats_path, e)
-        return None
 
 def calltrace_to_xml(node: CallTraceModel) -> str:
     """

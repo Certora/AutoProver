@@ -173,11 +173,10 @@ class RunSummary:
         }
 
     def prover_usage_summary(self) -> dict[str, object]:
-        """Serializable run-total / per-phase prover-REPORTED runtime — the body of
+        """Serializable run-total / per-phase prover-reported runtime — the body of
         ``prover_usage.json`` and of the ``prover_usage`` run tag. Runtime is the
         prover's own start-to-end time (statsdata ``run_id.start_to_end_time``),
-        summed across every prover run (cloud and local alike), in milliseconds.
-        Minutes are trivially ``ms / 60_000`` and not stored."""
+        summed across every prover run (cloud and local alike), in milliseconds."""
         return {
             "total_ms": self.prover_reported_ms_total,
             "by_phase": [
