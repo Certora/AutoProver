@@ -125,14 +125,18 @@ def _ast_extraction(blanked_source: str) -> Optional[dict]:
         capture_output=True,
         text=True,
     )
-    # The jar prints the JSON payload to stdout even for syntax errors (ast=null). Empty
-    # stdout means it crashed before producing anything — surface that, with its stderr,
-    # rather than an opaque JSONDecodeError.
-    if not result.stdout.strip():
+    # The jar prints the JSON payload to stdout even for syntax errors (ast=null), but may
+    # prepend ``Warning: ...`` diagnostic lines (e.g. one per ``using`` alias declaration when a
+    # spec is parsed without a scene). The JSON object begins on its own line; parse from there.
+    # No ``{`` line at all means the jar crashed before emitting a payload — surface its stderr.
+    lines = result.stdout.splitlines(keepends=True)
+    json_start = next((i for i, line in enumerate(lines) if line.lstrip().startswith("{")), None)
+    if json_start is None:
         raise RuntimeError(
-            f"{_AST_EXTRACTION_JAR} produced no output (exit {result.returncode}): {result.stderr.strip()}"
+            f"{_AST_EXTRACTION_JAR} produced no JSON (exit {result.returncode}): "
+            f"{result.stderr.strip() or result.stdout.strip()}"
         )
-    payload = json.loads(result.stdout)
+    payload = json.loads("".join(lines[json_start:]))
     return payload if payload.get("ast") else None
 
 
