@@ -273,5 +273,5 @@ def read_autosetup_prover_usage(project_root: Path) -> int | None:
     try:
         return int(json.loads(usage_file.read_text())["ms"])
     except (OSError, ValueError, KeyError, TypeError) as e:
-        _logger.debug(f"Could not read AutoSetup prover usage from {usage_file}: {e}")
+        _logger.warning(f"Could not read AutoSetup prover usage from {usage_file}: {e}")
         return None

@@ -83,20 +83,12 @@ class RunSummary:
     prover_total_s: float = 0.0
     prover_total_calls: int = 0
     _active_prover_by_task: dict[str, tuple[float, int]] = field(default_factory=dict, repr=False)
-    prover_reported_ms_total: int = 0
-    """Run-wide prover-REPORTED runtime (statsdata run_id.start_to_end_time, in ms), summed
-    over every prover run. Distinct from prover_total_s, which is composer's client-side
-    wall-clock (and so includes cloud queue / polling / result download)."""
-    _active_prover_reported_by_task: dict[str, int] = field(default_factory=dict, repr=False)
-    """Maps task_id -> prover-reported ms accumulated while the task is in flight."""
-    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    """Maps task_id -> (prover_s_accum, prover_calls) recorded while task is in flight."""
-    _latest_link_by_task: dict[str, str] = field(default_factory=dict, repr=False)
-    """Maps task_id -> link for the most recent prover run."""
-    token_usage_by_model: dict[str, TokenTotals] = field(default_factory=dict)
-    """Maps model_name -> accumulated raw token counts across the whole run."""
-    _active_tokens_by_task: dict[str, dict[str, TokenTotals]] = field(default_factory=dict, repr=False)
-    """Maps task_id -> {model_name -> token counts} accumulated while the task is in flight."""
+    prover_reported_ms_total: int = 0  # Run-wide prover-REPORTED runtime, summed over every prover run. Distinct from prover_total_s, which is composer's client-side wall-clock (and so includes cloud queue / polling / result download).
+    _active_prover_reported_by_task: dict[str, int] = field(default_factory=dict, repr=False)  # Maps task_id -> prover-reported ms accumulated while the task is in flight.
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)  # Maps task_id -> (prover_s_accum, prover_calls) recorded while task is in flight.
+    _latest_link_by_task: dict[str, str] = field(default_factory=dict, repr=False)  # Maps task_id -> link for the most recent prover run.
+    token_usage_by_model: dict[str, TokenTotals] = field(default_factory=dict)  # Maps model_name -> accumulated raw token counts across the whole run.
+    _active_tokens_by_task: dict[str, dict[str, TokenTotals]] = field(default_factory=dict, repr=False)  # Maps task_id -> {model_name -> token counts} accumulated while the task is in flight.
 
     def record_phase(
         self,
