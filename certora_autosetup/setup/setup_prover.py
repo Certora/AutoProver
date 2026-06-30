@@ -9,6 +9,7 @@ This module contains all the setup phase functionality including:
 - Summary compilation testing
 """
 
+import asyncio
 import json
 import shutil
 import subprocess
@@ -1467,7 +1468,7 @@ class SetupProver:
             setup = SummarySetup(verbose=max(1, self.verbose), inheritance_graph=inheritance_graph)
 
             with ledger_component("summaries"):
-                success = setup.run(
+                configured = setup.configure(
                     main_contract=main_contract,
                     contract_files=contract_files,
                     additional_contracts=self.additional_contracts,
@@ -1476,8 +1477,16 @@ class SetupProver:
                     enable_llm=not self.skip_llm,
                     custom_recipe=None,
                 )
+                if configured:
+                    # Summarize the initial scene (main + additional contracts); call resolution
+                    # later drives the same on_contracts_entered_scene for each contract it adds.
+                    asyncio.run(
+                        setup.on_contracts_entered_scene(
+                            [main_contract] + setup.additional_names, main_contract
+                        )
+                    )
 
-            if success:
+            if configured:
                 self.log("✓ Setup summaries completed successfully")
                 self.summary_setup = setup
                 return True
