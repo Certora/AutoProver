@@ -296,27 +296,17 @@ class ProverRunner(ABC):
         """Get cache key for job specification."""
         return job_spec.get_cache_key(self.config_manager)
 
-    def _record_fresh_prover_runtime(self, job_identifier: Optional[str]) -> None:
-        """Fold a freshly-executed prover run's prover-REPORTED runtime (statsdata
-        ``run_id.start_to_end_time``, in ms) into the process prover-usage ledger.
+    def _record_prover_runtime_seconds(self, seconds: Optional[float]) -> None:
+        """Fold a freshly-executed prover run's runtime (in seconds) into the process
+        prover-usage ledger. ``None`` or non-positive is a no-op.
 
-        ``job_identifier`` is whatever ``ProverOutputAPI`` resolves to statsdata for
-        this runner — the emv-* folder path (local) or the cloud job URL (cloud).
-        Called from each runner's leaf executor, on the fresh-run path only: cache
-        hits short-circuit before the executor runs, so cached jobs are excluded —
-        they consumed no prover compute this run. Best-effort: any failure to locate /
-        read statsdata is a silent no-op (a run that crashed before producing statsdata
-        simply isn't counted)."""
-        if not job_identifier:
-            return
-        try:
-            stats = self.prover_api.get_statsdata(job_identifier)
-            # statsdata records every metric as a list of samples; start_to_end_time
-            # always carries exactly one — the run's total.
-            runtime = stats["run_id"]["start_to_end_time"][0]
-            record_prover_runtime_ms(int(runtime))
-        except Exception as e:
-            self.log(f"Could not record prover runtime for usage ledger: {e}", "DEBUG")
+        Cloud passes the server-reported runtime (job start→finish); local passes its
+        wall-clock duration — local runs are serialized (one prover at a time, no
+        queueing), so wall-time is the run time. Callers are on the fresh-run path
+        only: cache hits short-circuit before the executor runs, so cached jobs are
+        excluded — they consumed no prover compute this run."""
+        if seconds and seconds > 0:
+            record_prover_runtime_ms(int(seconds * 1000))
 
     async def _check_cache(self, cache_key: str, job_spec: ProverJobSpec) -> Optional[ProverResult]:
         """Check if we have a cached result for this cache key."""

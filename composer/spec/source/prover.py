@@ -138,8 +138,8 @@ class _SpecCallbacks(ProverEventCallbacks):
 
     @override
     async def on_prover_runtime(self, ms: int) -> None:
-        # Prover-reported runtime (statsdata run_id.start_to_end_time). Attributed to
-        # the active task; folded into the phase / run "prover_usage" totals.
+        # Queue-free prover run time (cloud job startTime->finishTime, or local statsdata).
+        # Attributed to the active task; folded into the phase / run "prover_usage" totals.
         self._summary.record_prover_runtime(ms)
 
     @override

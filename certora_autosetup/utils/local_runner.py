@@ -104,6 +104,11 @@ class LocalProverRunner(ProverRunner):
             )
             result = await self._execute_local_prover(job_spec, cache_key)
 
+            # Fresh run (cache hits returned above) — record its wall-clock runtime.
+            # Local runs are serialized (one prover at a time, no queueing), so
+            # wall-time is the run time.
+            self._record_prover_runtime_seconds(result.duration)
+
             # Step 3: Cache successful results (unless disabled)
             if result.success and not self.disable_cache:
                 await self._cache_result(cache_key, result)
@@ -189,9 +194,6 @@ class LocalProverRunner(ProverRunner):
                 job_handle.job_id = emv_folder_path
                 # Extract unresolved calls using ProverOutputUtility for consistency with cloud runner
                 output_data["unresolved_calls"] = self.extract_unresolved_calls(emv_folder_path)
-                # Fresh run (cache hits short-circuit before this method) — record its
-                # prover-reported runtime from the emv-* folder's statsdata.
-                self._record_fresh_prover_runtime(emv_folder_path)
 
             report_path = output_data.get("report_path")
 

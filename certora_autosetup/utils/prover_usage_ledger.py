@@ -7,10 +7,11 @@ compute this run) never lands here. Mirrors the LLM usage ledger in ``llm_util``
 module-global accumulator reset at process start (``cli.main``) and harvested at the end
 into ``prover_usage.json``, which composer ingests.
 
-"Runtime" is the prover engine's own start-to-end wall time (``statsdata.json``
-``run_id.start_to_end_time``, in milliseconds) — matching what composer records for its
-own native prover runs, and NOT client-side wall-clock (which also covers cloud queue,
-polling, and result download).
+"Runtime" (milliseconds) is per-run how long the prover actually ran: for cloud jobs the
+server-reported job duration (start→finish from ``JobInfo``), for local jobs the wall-clock
+duration (local runs are serialized — one prover at a time, no queueing — so wall-time is
+the run time). It deliberately excludes the cloud queue / polling / download overhead that
+a client-side cloud wall-clock would include.
 """
 
 import threading

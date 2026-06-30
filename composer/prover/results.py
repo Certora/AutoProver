@@ -214,14 +214,15 @@ def read_and_format_run_result(s: Path) -> dict[str, RuleResult] | str:
 
 
 def read_prover_runtime_ms(results_root: Path) -> int | None:
-    """The prover's self-reported run time for this job, in milliseconds.
+    """The prover engine's self-reported run time for this job, in milliseconds.
 
-    Read from ``<results_root>/Reports/statsdata.json`` (``run_id.start_to_end_time``)
-    — the prover engine's own start-to-end wall time, present and identical for cloud
-    (the extracted results archive) and local runs. This is NOT composer's client-side
-    ``elapsed`` (which also covers cloud queue / polling / result download). The value is
-    stored as a single-element list. Returns ``None`` on any failure (file absent,
-    malformed JSON, or the key missing) — usage capture must never break a prover run.
+    Read from ``<results_root>/Reports/statsdata.json`` (``run_id.start_to_end_time``) —
+    the engine's own start-to-end wall time, which is post-dequeue (queue-free). Used for
+    LOCAL runs; cloud runs instead derive runtime from the job's startTime->finishTime in
+    ``cloud_results`` (queue-free too, and no need to read the extracted archive). NOT
+    composer's client-side ``elapsed`` (which also covers cloud queue / polling / download).
+    The value is stored as a single-element list. Returns ``None`` on any failure (file
+    absent, malformed JSON, or the key missing) — usage capture must never break a run.
     """
     stats_path = results_root / "Reports" / "statsdata.json"
     try:
