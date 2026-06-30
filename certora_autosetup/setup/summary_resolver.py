@@ -118,7 +118,7 @@ def _parse_ast_payload(stdout: str, returncode: int, stderr: str) -> Optional[di
     """
     lines = stdout.splitlines()
     # Only LEADING diagnostic lines precede the JSON; never strip inside the payload.
-    while lines and (lines[0].startswith("Warning: ") or lines[0].startswith("Error: ")):
+    while lines and lines[0].startswith(("Warning: ", "Error: ")):
         lines.pop(0)
     body = "\n".join(lines).strip()
     # Empty stdout (or stdout that was nothing but diagnostics) means the jar gave us
