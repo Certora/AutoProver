@@ -130,7 +130,7 @@ def _parse_ast_payload(stdout: str, returncode: int, stderr: str) -> Optional[di
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             f"{_AST_EXTRACTION_JAR} output was not JSON after stripping diagnostics "
-            f"(exit {returncode}): {exc}; stdout_head={stdout[:300]!r} stderr={stderr.strip()[:500]!r}"
+            f"(exit {returncode}): {exc}; stdout_head={stdout!r} stderr={stderr.strip()!r}"
         )
     return payload if payload.get("ast") else None
 
