@@ -18,7 +18,7 @@ from composer.workflow.provider import provider_for
 
 from composer.tools.thinking import get_rough_draft_tools, RoughDraftState
 
-from graphcore.tools.memory import memory_tool, openai_memory_tool
+from graphcore.tools.memory import anthropic_memory_tool, openai_memory_tool
 from graphcore.tools.vfs import fs_tools
 from graphcore.graph import build_workflow, FlowInput, build_async_workflow
 from graphcore.tools.results import result_tool_generator
@@ -255,7 +255,7 @@ async def async_analyze(args: SanityAnalysisArgs) -> SanityAnalysisResult | None
     if args.memory_tool:
         match provider:
             case "anthropic":
-                mem_factory = memory_tool
+                mem_factory = anthropic_memory_tool
             case "openai":
                 mem_factory = openai_memory_tool
             case _:

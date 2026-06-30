@@ -15,12 +15,11 @@ from langgraph._internal._typing import StateLike
 from langgraph.types import Checkpointer
 
 from graphcore.graph import Builder
-from graphcore.tools.memory import async_memory_tool
 from graphcore.tools.vfs import VFSState
 
 from composer.input.types import WorkflowOptions, InputData, ResumeFSData, ResumeIdData, ResumeInput, NativeFS
 from composer.input.files import Document, InMemoryTextFile
-from graphcore.tools.memory import memory_tool, openai_memory_tool
+from graphcore.tools.memory import openai_memory_tool
 from composer.workflow.provider import provider_for, ProviderKind
 from graphcore.tools.vfs import VFSState
 
@@ -64,37 +63,6 @@ class _ExecutorOptions(WorkflowOptions, ModelOptionsBase, Protocol):
     """Combined runtime options consumed by the executor: workflow
     config + model identification. Callers already pass dataclasses
     that satisfy both protocols."""
-
-
-def _sync_memory_tool_for(provider: ProviderKind, backend) -> BaseTool:
-    """Construct a sync memory ``BaseTool`` with the right schema for ``provider``."""
-    match provider:
-        case "anthropic":
-            return memory_tool(backend)
-        case "openai":
-            return openai_memory_tool(backend)
-        case _:
-            assert_never(provider)
-
-
-@dataclass
-class _CodegenResearchContext:
-    """Satisfies ResearchContext protocol for the CVL research sub-agent."""
-    _store: BaseStore
-    _kb_ns: tuple[str, ...]
-    _checkpointer: Checkpointer
-    _thread_prefix: str
-
-    def kb_tools(self, read_only: bool) -> list[BaseTool]:
-        return make_kb_tools(self._store, self._kb_ns, read_only)
-
-    @property
-    def checkpointer(self) -> Checkpointer:
-        return self._checkpointer
-
-    def uniq_thread_id(self) -> str:
-        return f"{self._thread_prefix}-{uuid.uuid4().hex[:16]}"
-
 
 def get_reference_input(input_data: InputData, debug_prompt: Optional[str]) -> str:
     return load_jinja_template(

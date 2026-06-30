@@ -15,8 +15,6 @@ import uuid
 from typing import cast, Protocol
 
 
-from graphcore.tools.memory import async_memory_tool
-
 from composer.core.user import user_data_ns
 from composer.input.types import ModelOptions, RAGDBOptions, DEFAULT_RECURSION_LIMIT
 from composer.input.parsing import add_protocol_args

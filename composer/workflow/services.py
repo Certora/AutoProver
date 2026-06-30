@@ -471,11 +471,11 @@ def _memory_tool_factory(
     Closes over the provider so the rest of the codebase only sees
     ``Callable[[ns], BaseTool]`` — the memory tool's shape is the
     factory's secret."""
-    from graphcore.tools.memory import async_memory_tool, openai_async_memory_tool
+    from graphcore.tools.memory import anthropic_async_memory_tool, openai_async_memory_tool
 
     match provider:
         case "anthropic":
-            return lambda ns: async_memory_tool(backend_factory(ns))
+            return lambda ns: anthropic_async_memory_tool(backend_factory(ns))
         case "openai":
             return lambda ns: openai_async_memory_tool(backend_factory(ns))
         case _:
