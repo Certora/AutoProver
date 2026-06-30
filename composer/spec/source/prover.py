@@ -12,23 +12,25 @@ import asyncio
 import json
 import logging
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Annotated, Callable, Iterator, override, AsyncContextManager
+from typing import Annotated, Callable, Iterator, override, AsyncContextManager, Sequence, Literal
 from typing_extensions import TypedDict, NotRequired
 
 from langchain_core.tools import InjectedToolCallId, tool, BaseTool
+from langchain_core.messages import AIMessage
 from langgraph.prebuilt import InjectedState
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, Discriminator
 
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
-from composer.prover.ptypes import RuleResult
+from composer.prover.ptypes import RuleResult, RulePath
 from graphcore.graph import LLM
 
 from composer.prover.core import (
-    ProverOptions, ProverCallbacks, run_prover, DefaultCexHandler
+    ProverOptions, run_prover, DefaultCexHandler
 )
+from composer.prover.ptypes import StatusCodes
 from composer.prover.runner import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
@@ -40,6 +42,7 @@ from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
 from composer.spec.gen_types import SPECS_DIR
+from composer.spec.util import string_hash
 
 
 _logger = logging.getLogger("composer.prover")
@@ -76,6 +79,23 @@ def _merge_rule_skips(left: dict[str, str], right: dict[str, str]) -> dict[str, 
         to_ret[k] = v
     return to_ret
 
+class ProverRunLog(TypedDict):
+    tool_call_id: str
+    prover_results: list[tuple[RulePath, StatusCodes]]
+    spec_digest: str
+    rules: list[str] | None
+    sort: Literal["run"]
+
+class NagMarker(TypedDict):
+    nagged_rules: list[RulePath]
+    sort: Literal["nag"]
+
+type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort")]
+
+def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:
+    to_ret = left.copy()
+    to_ret.extend(right)
+    return to_ret
 
 class ProverStateExtra(TypedDict):
     rule_skips: Annotated[dict[str, str], _merge_rule_skips]
@@ -83,6 +103,7 @@ class ProverStateExtra(TypedDict):
     # Link of the last prover run this generation performed (URL or local results dir).
     # Last-write-wins; absent until the first prover run. Read at completion onto GeneratedCVL.
     prover_link: NotRequired[str | None]
+    prover_history: Annotated[list[ProverHistoryItem], _merge_prover_history]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
@@ -192,15 +213,8 @@ def tmp_spec(
 def _prover_sem(cloud: bool) -> AsyncContextManager[None]:
     if not cloud:
         return asyncio.Semaphore(1)
-
-    class ToRet():
-        async def __aenter__(self):
-            return
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return
-
-    return ToRet()
+    else:
+        return nullcontext()
 
 def get_prover_tool(
     llm: LLM,
@@ -218,8 +232,25 @@ def get_prover_tool(
         state: Annotated[StateWithSkips, InjectedState],
         rules: list[str] | None = None
     ) -> str | Command:
+        last_msg = state["messages"][-1]
+        if isinstance(last_msg, AIMessage) and any(
+            i["id"] != tool_call_id for i in last_msg.tool_calls
+        ):
+            return "Cannot call the verify_spec tool in parallel with other tool calls. verify_spec must be the only tool you call in a turn"
+        
         if state["curr_spec"] is None:
             return "Specification not yet put on VFS"
+        
+        spec_hash = string_hash(
+            state["curr_spec"]
+        )
+
+        if len(state['prover_history']) > 0:
+            last_item = state["prover_history"][-1]
+            if last_item["sort"] == "run" and any(i == "TIMEOUT" for (_,i) in last_item) and last_item["spec_digest"] == spec_hash:
+                return "Refusing to re-run prover on identical spec with a known TIMEOUT result; timeouts are not transient " \
+                "errors and will not go away by re-running the tool."
+
         conf = state["config"]
         with tmp_spec(root=project_root, content=state["curr_spec"]) as generated:
             config = prover_config_overlay(
@@ -256,13 +287,90 @@ def get_prover_tool(
                 if not stat:
                     all_verified = False
                     break
+            spec_hash = string_hash(
+                state["curr_spec"]
+            )
+
+            stuck_rules = {
+                k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED")
+            }
+
+            stuck_count = {
+                k: 1 for k in stuck_rules.keys()
+            }
+
+            to_warn : set[RulePath] = set()
+
+            known_tc_ids = {
+                l["id"]
+                for msg in state["messages"] if isinstance(msg, AIMessage)
+                for l in msg.tool_calls if l["name"] == "verify_spec"
+            }
+
+            seen_post_compaction_history = False
+
+            history_ind = len(state["prover_history"]) - 1
+            while history_ind >= 0 and len(stuck_count) > 0:
+                it = state["prover_history"][history_ind]
+                if it["sort"] == "nag":
+                    for r in it["nagged_rules"]:
+                        del stuck_count[r]
+                    history_ind -= 1
+                    continue
+                assert it["sort"] == "run"
+                if it["tool_call_id"] not in known_tc_ids:
+                    seen_post_compaction_history = True
+                target_rules = set(it["rules"]) if it["rules"] else None
+                for k in stuck_count.keys():
+                    if target_rules is not None and k.rule not in target_rules:
+                        continue
+                    if not any(
+                        rp == k and stuck_rules[k] == stat for (rp, stat) in it["prover_results"]
+                    ):
+                        del stuck_count[k]
+                    else:
+                        stuck_count[k] += 1
+                        if stuck_count[k] == 2:
+                            to_warn.add(k)
+                            del stuck_count[k]
+            
+            prover_update : list[ProverHistoryItem] = [
+                ProverRunLog(
+                    tool_call_id=tool_call_id,
+                    prover_results=[(k, v) for (k,v) in result.raw_rule_status.items()],
+                    rules=rules,
+                    spec_digest=spec_hash,
+                    sort="run"
+                )
+            ]
+            nag_channel = {
+                
+            }
+            if len(to_warn) > 0:
+                prover_update.append(NagMarker(
+                    sort="nag",
+                    nagged_rules=list(to_warn)
+                ))
+                nag_channel["reminders_channel"] = [
+                    "The following rule(s) have had identical failures on the last 3 runs of the prover:",
+                    *(f"- {it.pprint()}" for it in to_warn),
+                    "You may need to significantly change your approach, or skip the property if this is a persistent issue (you may need to use rebuttals to communicate"
+                    " these failures to the feedback judge)."
+                ]
+                if seen_post_compaction_history:
+                    nag_channel["reminders_channel"].append(
+                        "(NB: Some of these prover calls happened before your most recent task history summarization)"
+                    )
+                
             if rules is None and all_verified:
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str,
                     prover_link=result.link, validations=stamper(state),
+                    prover_history=prover_update
                 )
             return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
+                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
+                prover_history=prover_update
             )
 
     return verify_spec

@@ -30,6 +30,7 @@ from composer.workflow.services import CacheLevel
 from langgraph.types import Command
 from composer.spec.feedback import property_feedback_judge, FeedbackTemplate
 from composer.ui.tool_display import tool_display
+from .monitor import monitor
 
 from graphcore.graph import FlowInput
 
@@ -37,6 +38,7 @@ class SourceAuthorExtra(TypedDict):
     failed: bool | None
 
 class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra):
+    reminders_channel: list[str]
     pass
 
 class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):
@@ -374,6 +376,8 @@ async def batch_cvl_generation(
         [prover_tool, ExpectRulePassage.as_tool("expect_rule_passage"), ExpectRuleFailure.as_tool("expect_rule_failure"), GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"), ctx.get_memory_tool()]
     ).with_state(
         SourceCVLGenerationState
+    ).with_monitor(
+        monitor
     ).with_output_key(
         "result"
     ).with_input(
@@ -408,6 +412,8 @@ async def batch_cvl_generation(
             property_rules=[],
             validations={},
             failed=None,
+            prover_history=[],
+            reminders_channel=[]
         )
     )
 
