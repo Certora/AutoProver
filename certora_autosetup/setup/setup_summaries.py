@@ -61,9 +61,9 @@ from certora_autosetup.setup.summary_resolver import resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
 
 
-# CVL grammar keyword terminals (EVMVerifier CVL lexer, com.certora.certoraprover.cvl). A Solidity
-# parameter whose name equals one of these is lexed as that keyword inside a methods{} entry, which is
-# a syntax error; such names are suffixed with "_" before emission (see _cvl_safe_param_name).
+# CVL grammar keyword terminals. A Solidity parameter whose name equals one of these is lexed as that
+# keyword inside a methods{} entry, which is a syntax error; such names are suffixed with "_" before
+# emission (see _cvl_safe_param_name).
 CVL_RESERVED_WORDS = frozenset({
     "ALL", "ALWAYS", "ASSERT_FALSE", "AUTO", "CONSTANT", "Create", "DELETE", "DISPATCH", "DISPATCHER",
     "HAVOC_ALL", "HAVOC_ECF", "NONDET", "PER_CALLEE_CONSTANT", "STORAGE", "Sload", "Sstore", "Tload",
@@ -866,6 +866,15 @@ class SummarySetup:
             f"Processed template {template_file.name} with contract name: {contract_name}"
         )
 
+    @staticmethod
+    def _versioned_template_relpath(rel_under_summaries: Path, main_contract: str) -> Path:
+        """Summaries-dir-relative path of a curated summary, mapping a ``.template.spec`` to its
+        ``{base}-{main_contract}.spec`` name and returning any other path unchanged."""
+        stem = rel_under_summaries.stem
+        if not stem.endswith(".template"):
+            return rel_under_summaries
+        return rel_under_summaries.parent / f"{stem[: -len('.template')]}-{main_contract}.spec"
+
     def _materialize_template(self, template_path: str, main_contract: str) -> str:
         """Substitute ``$CONTRACT_NAME$`` in a bundled template and write the versioned
         spec into the user's ``certora/specs/summaries/`` tree.
@@ -889,11 +898,7 @@ class SummarySetup:
         rel_under_summaries = Path(template_path).relative_to(SUMMARIES_SUBDIR)
         src = self.summaries_dir / rel_under_summaries
 
-        base_stem = rel_under_summaries.stem  # e.g. "OZ_Math.template"
-        if base_stem.endswith(".template"):
-            base_stem = base_stem[: -len(".template")]
-        versioned_filename = f"{base_stem}-{main_contract}.spec"
-        versioned_rel_under = rel_under_summaries.parent / versioned_filename
+        versioned_rel_under = self._versioned_template_relpath(rel_under_summaries, main_contract)
 
         dst = self.user_summaries_dir / versioned_rel_under
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -981,9 +986,7 @@ class SummarySetup:
             if key not in self.matched_functions:
                 continue
             rel_under = Path(self.function_summaries[key]["summary_file"]).relative_to(SUMMARIES_SUBDIR)
-            if str(rel_under).endswith(".template.spec"):
-                base_stem = rel_under.stem[: -len(".template")]
-                rel_under = rel_under.parent / f"{base_stem}-{main_contract}.spec"
+            rel_under = self._versioned_template_relpath(rel_under, main_contract)
             _add(self.user_summaries_dir / rel_under)
         # Then any other emitted spec (LLM per-contract, call resolution) — lower dedup precedence.
         for spec in walk_files_by_suffix(self.user_summaries_dir, ".spec"):
