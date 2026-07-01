@@ -150,7 +150,7 @@ class VersionedAgentIndex(AgentIndexBase):
             if migration is not None and i == len(versions) - 1:
                 return self._caveat(migration)
             elif migration["status"] == "stale":
-                canon_start = None # reclassify from scratch
+                # reclassify from initial answer state scratch
                 break
             else:
                 assert migration["status"] == "ok"
