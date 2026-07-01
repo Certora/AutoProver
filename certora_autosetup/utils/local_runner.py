@@ -104,6 +104,11 @@ class LocalProverRunner(ProverRunner):
             )
             result = await self._execute_local_prover(job_spec, cache_key)
 
+            # Fresh run (cache hits returned above) — record its wall-clock runtime.
+            # Local runs are serialized (one prover at a time, no queueing), so
+            # wall-time is the run time.
+            self._record_prover_runtime_seconds(result.duration)
+
             # Step 3: Cache successful results (unless disabled)
             if result.success and not self.disable_cache:
                 await self._cache_result(cache_key, result)
