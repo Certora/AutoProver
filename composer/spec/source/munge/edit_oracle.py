@@ -53,9 +53,10 @@ def _file_diff(path: str, old: str | None, new: str) -> str:
 
 
 def _compute_diff(old: Callable[[str], str | None], new: dict[str, str]) -> str:
-    """Diff the ``old`` view against the complete ``new`` VFS. There is no
-    delete-file tool, so every path of interest is a key of ``new`` and iterating
-    it is sufficient — a file missing from ``old`` is an addition, never a deletion."""
+    """Diff the ``old`` view against ``new``, the end-version overlay. Overlays
+    only accumulate (there is no delete-file tool), so any path whose view changed
+    between the two versions is a key of ``new`` and iterating it is sufficient — a
+    file missing from ``old`` is an addition, never a deletion."""
     chunks = (_file_diff(path, old(path), content) for path, content in new.items())
     return "".join(c for c in chunks if c)
 
@@ -68,10 +69,11 @@ def mk_oracle(
     """Build a :class:`MigrationOracle` that decides, in one LLM call, whether a
     recorded finding survives the edits between two source versions.
 
-    The ``new`` side of the diff is always the complete VFS snapshot at
-    ``end_version``. The ``old`` side is resolved lazily per path: from the
-    ``start_version`` snapshot, or — for V0 (``start_version is None``) — from the
-    base ``fs_layer`` on disk under ``sc.project_root``."""
+    The VFS is a union overlay over the base ``fs_layer``: a version snapshot holds
+    only the files edited as of that version, and every other path reads through to
+    ``sc.project_root`` on disk. So the ``new`` side is the ``end_version`` overlay,
+    and ``old`` resolves each path as overlay-then-base — or, for V0
+    (``start_version is None``), the base fs_layer alone."""
 
     async def oracle(
         *,
@@ -83,19 +85,18 @@ def mk_oracle(
         new = await edit_store.read(end_version)
         assert new is not None, f"end version {end_version!r} absent from edit store"
 
-        if start_version is None:
-            root = pathlib.Path(sc.project_root)
+        root = pathlib.Path(sc.project_root)
+        overlay = None if start_version is None else await edit_store.read(start_version)
 
-            def old(path: str) -> str | None:
-                try:
-                    return (root / path).read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    return None
-        else:
-            start = await edit_store.read(start_version)
-
-            def old(path: str) -> str | None:
-                return start.get(path) if start is not None else None
+        def old(path: str) -> str | None:
+            # Union FS: an edited path uses the overlay's content, everything else
+            # reads through to the base fs_layer under project_root.
+            if overlay is not None and path in overlay:
+                return overlay[path]
+            try:
+                return (root / path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return None
 
         diff = _compute_diff(old, new)
         if not diff:
