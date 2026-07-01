@@ -141,7 +141,7 @@ def _adapt_async(obj: T, pairs: list[tuple[str, str]]) -> T:
 # Bound each connect attempt; give getconn a long window to keep retrying so a
 # slow first connection doesn't fail the run.
 _DB_CONNECT_TIMEOUT_SECONDS = 10
-_DB_POOL_ACQUIRE_TIMEOUT_SECONDS = 120.0
+_DB_POOL_ACQUIRE_TIMEOUT_SECONDS = 180.0
 
 
 def _get_composer_connection_string(
