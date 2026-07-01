@@ -2,9 +2,10 @@
 Fake-LLM end-to-end UI harness for ``tui_pipeline.py`` (NatSpec multi-agent
 pipeline).
 
-Substitutes the real ``ChatAnthropic`` built by
-``composer.workflow.services.create_llm`` with a ``FakeMessagesListChatModel``
-preloaded with a hand-authored tape of responses. The rest of the pipeline
+Substitutes the real ``ChatAnthropic`` built via
+``composer.llm.registry.get_provider_for(...).builder_for(...)`` with a
+``FakeMessagesListChatModel`` preloaded with a hand-authored tape of
+responses. The rest of the pipeline
 runs normally — TUI (``PipelineApp``), real tool execution (solc,
 certoraTypeCheck.py, Typechecker.jar for ``put_cvl_raw``), workflow graphs,
 checkpointing, store/memory/IDE bridges — so UI rendering and tool-dispatch
@@ -728,31 +729,16 @@ def get_counter_llm() -> _NatspecFakeLLM:
 
 
 def install_harness_tape() -> _NatspecFakeLLM:
-    """Monkey-patch ``composer.workflow.services.create_llm`` so the real
-    natspec pipeline receives the fake.
+    """Route the natspec pipeline's models to the fake LLM.
 
-    Call this BEFORE importing ``tui_pipeline`` — ``tui_pipeline`` does
-    ``from composer.workflow.services import create_llm`` at module load
-    time, so the local binding is captured the first time the module is
-    imported. Calling ``install_counter_tape()`` after that import would be
-    a no-op for the call site in ``tui_pipeline.main``.
-
-    Returns the fake instance so the caller can inspect ``.i`` / ``.responses``
-    for debugging.
+    Call this BEFORE importing ``tui_pipeline`` — ``get_provider_for`` is imported
+    by name at module load, so the patch (``install_fake_llm``) must land first.
+    One fake backs every tier (and natspec collapses heavy==lite anyway), so the
+    per-lane tape stays deterministic. Returns the fake for debugging.
     """
+    from composer.testing.harness_tape import install_fake_llm
     fake = get_counter_llm()
-    import composer.workflow.services as services
-
-    services.create_llm = lambda args: fake
-    services.create_llm_base = lambda args: fake
-    # Natspec now mints models via ``llm_factory(args)`` (ServiceHost path), not
-    # ``create_llm``. Patch that seam too. The returned factory closes over the
-    # single ``fake`` so all tiers share one instance / one set of lane cursors,
-    # keeping the per-lane tape deterministic. (Natspec collapses heavy==lite,
-    # so this is doubly moot, but the seam must still be the fake.)
-    services.llm_factory = lambda args: (
-        lambda model_name, *, cache_level=None, disable_thinking=False: fake
-    )
+    install_fake_llm(fake)
     return fake
 
 

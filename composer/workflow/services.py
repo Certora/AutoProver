@@ -1,7 +1,6 @@
 import psycopg
-from typing import Any, Callable, TypedDict, Literal, overload, AsyncContextManager, TYPE_CHECKING, Protocol
+from typing import Any, Callable, TypedDict, Literal, overload, AsyncContextManager, TYPE_CHECKING, assert_never
 from typing_extensions import TypeVar
-import enum
 import inspect
 import os
 from dataclasses import dataclass
@@ -20,8 +19,10 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 # import inside the function body.
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.tools import BaseTool
 else:
     BaseChatModel = "BaseChatModel"
+    BaseTool = "BaseTool"
 
 from psycopg.rows import AsyncRowFactory
 from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
@@ -37,9 +38,10 @@ else:
     PostgresMemoryBackend = "PostgresMemoryBackend"
     AsyncPostgresBackend = "AsyncPostgresBackend"
 
-from composer.input.types import ModelOptions, ModelOptionsBase, ModelConfiguration
+from composer.input.types import ModelOptions, ModelOptionsBase
 from composer.input.files import FileUploader
-from .llm import model_parser
+from composer.llm.provider import ProviderKind, CacheLevel
+from composer.llm.registry import get_provider_for, uploader_for, llm_factory, LLMFactory
 
 
 T = TypeVar("T")
@@ -441,123 +443,12 @@ async def memory_backend_context() -> AsyncIterator[MemoryBackendGenerator]:
     async with _async_memory_pool() as p:
         yield (lambda ns: AsyncPostgresBackend(ns, p))
 
-_ADAPTIVE_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6", "claude-opus-4-7"}
-
-def _create_llm_base(
-    model_name: str,
-    args: ModelConfiguration,
-    cache_control: Literal["5m", "1h"] | None,
-    disable_thinking_override: Literal[True] | None = None
-) -> "BaseChatModel":
-    model_cap = model_parser(model_name)
-    thinking : dict[str, Any] | None
-    if args.thinking_tokens is None or disable_thinking_override is True:
-        thinking = None
-    elif model_cap.adaptive_thinking:
-        thinking = {"type": "adaptive"}
-    else:
-        thinking = {"type": "enabled", "budget_tokens": args.thinking_tokens}
-    
-    beta_headers = ["files-api-2025-04-14"]
-    if model_cap.interleaved_thinking and args.interleaved_thinking:
-        beta_headers.append("interleaved-thinking-2025-05-14")
-    if args.memory_tool:
-        beta_headers.append("context-management-2025-06-27")
-    
-    from langchain_anthropic import ChatAnthropic
-    from composer.diagnostics.usage_callback import UsageCallback
-
-    if cache_control:
-        model_kwargs = {
-            "cache_control": {
-                "type": "ephemeral",
-                "ttl": cache_control
-            }
-        }
-    else:
-        model_kwargs = {}
-
-    return ChatAnthropic(
-        model_name=model_name,
-        max_tokens_to_sample=args.tokens,
-        temperature=1,
-        timeout=None,
-        max_retries=8,
-        stop=None,
-        betas=beta_headers,
-        thinking=thinking,
-        model_kwargs=model_kwargs,
-        callbacks=[UsageCallback()],
-    )
-
-class CacheLevel(enum.StrEnum):
-    NONE = "none"
-    SHORT = "short"
-    LONG = "long"
-
-class LLMFactory(Protocol):
-    def __call__(
-        self,
-        model_name: str,
-        *,
-        cache_level: CacheLevel | None = None,
-        disable_thinking: bool = False
-    ) -> "BaseChatModel":
-        ...
-
-def llm_factory(args: ModelConfiguration) -> LLMFactory:
-    def to_ret(
-        model_name: str,
-        *,
-        cache_level: CacheLevel | None = None,
-        disable_thinking: bool = False
-    ) -> "BaseChatModel":
-        match cache_level:
-            case CacheLevel.SHORT:
-                ttl = "5m"
-            case CacheLevel.LONG:
-                ttl = "1h"
-            case None | CacheLevel.NONE:
-                ttl = None
-        return _create_llm_base(
-            args=args,
-            model_name=model_name,
-            cache_control=ttl,
-            disable_thinking_override=True if disable_thinking else None
-        )
-    return to_ret
-
 def create_llm_base(args: ModelOptionsBase) -> "BaseChatModel":
-    """Create LLM; thinking disabled when args.thinking_tokens is None."""
-    from langchain_anthropic import ChatAnthropic
-    from composer.diagnostics.usage_callback import UsageCallback
-
-    thinking: dict[str, Any] | None
-    effective_interleaved = args.interleaved_thinking
-    if args.thinking_tokens is None:
-        thinking = None
-    elif args.model in _ADAPTIVE_MODELS:
-        thinking = {"type": "adaptive"}
-        effective_interleaved = False
-    else:
-        thinking = {"type": "enabled", "budget_tokens": args.thinking_tokens}
-
-    return ChatAnthropic(
-        model_name=args.model,
-        max_tokens_to_sample=args.tokens,
-        temperature=1,
-        timeout=None,
-        max_retries=8,
-        stop=None,
-        betas=(
-            ["files-api-2025-04-14"]
-            + (["context-management-2025-06-27"] if args.memory_tool else [])
-            + (["interleaved-thinking-2025-05-14"] if effective_interleaved else [])
-        ),
-        thinking=thinking,
-        model_kwargs={"cache_control": {"type": "ephemeral"}},
-        callbacks=[UsageCallback()],
-    )
+    """Create an LLM for ``args.model``; thinking is enabled when
+    ``args.thinking_tokens`` is set. The provider-specific construction lives in
+    ``composer.llm``; this stays here as the seam the fake-LLM test harnesses
+    monkeypatch (``create_llm`` delegates to it)."""
+    return get_provider_for(options=args).builder_for()
 
 
 def create_llm(args: ModelOptions) -> "BaseChatModel":
@@ -567,48 +458,82 @@ def create_llm(args: ModelOptions) -> "BaseChatModel":
 
 @dataclass
 class StandardConnections:
+    """Bundle of every per-workflow service plus the provider kind it
+    speaks to and a Files-API uploader for that provider.
+
+    ``standard_connections`` takes the provider directly, so consumers
+    read it (and the uploader) off the bundle rather than re-deriving."""
     checkpointer: AsyncPostgresSaver
     store: AsyncPostgresStore
-    memory: "Callable[[str], AsyncPostgresBackend]"
+    memory: "Callable[[str], BaseTool]"
     uploader: FileUploader
+    provider: ProviderKind
 
 @dataclass
 class IndexedConnections(StandardConnections):
     indexed_store: AsyncPostgresStore
 
 
+def _memory_tool_factory(
+    provider: ProviderKind,
+    backend_factory: Callable[[str], AsyncPostgresBackend],
+) -> Callable[[str], BaseTool]:
+    """Wrap a backend factory into a provider-aware tool factory.
+
+    Closes over the provider so the rest of the codebase only sees
+    ``Callable[[ns], BaseTool]`` — the memory tool's shape is the
+    factory's secret."""
+    from graphcore.tools.memory import anthropic_async_memory_tool, openai_async_memory_tool
+
+    match provider:
+        case "anthropic":
+            return lambda ns: anthropic_async_memory_tool(backend_factory(ns))
+        case "openai":
+            return lambda ns: openai_async_memory_tool(backend_factory(ns))
+        case _:
+            assert_never(provider)
+
+
 @overload
-def standard_connections() -> AsyncContextManager[StandardConnections]:
+def standard_connections(
+    *, provider: ProviderKind,
+) -> AsyncContextManager[StandardConnections]:
     ...
 
 @overload
-def standard_connections(*, embedder : Embeddings) -> AsyncContextManager[IndexedConnections]:
+def standard_connections(
+    *, provider: ProviderKind, embedder: Embeddings
+) -> AsyncContextManager[IndexedConnections]:
     ...
 
 @asynccontextmanager
 async def standard_connections(
     *,
-    embedder: Embeddings | None = None
+    provider: ProviderKind,
+    embedder: Embeddings | None = None,
 ) -> AsyncIterator[StandardConnections | IndexedConnections]:
-    uploader = await FileUploader.fresh()
+    uploader = uploader_for(provider)
     async with (
         checkpointer_context() as check,
         memory_backend_context() as mem,
         store_context() as store
     ):
+        memory: Callable[[str], BaseTool] = _memory_tool_factory(provider, mem)
         if embedder is not None:
             async with indexed_store_context(embedder) as ind:
                 yield IndexedConnections(
                     checkpointer=check,
                     indexed_store=ind,
                     store=store,
-                    memory=mem,
+                    memory=memory,
                     uploader=uploader,
+                    provider=provider,
                 )
                 return
         yield StandardConnections(
             checkpointer=check,
             store=store,
-            memory=mem,
+            memory=memory,
             uploader=uploader,
+            provider=provider,
         )

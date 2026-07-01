@@ -1,4 +1,4 @@
-from typing import Optional, cast, Any
+from typing import Optional, Protocol, cast, Any, assert_never
 import logging
 import uuid
 from dataclasses import dataclass
@@ -15,11 +15,17 @@ from langgraph._internal._typing import StateLike
 from langgraph.types import Checkpointer
 
 from graphcore.graph import Builder
-from graphcore.tools.memory import async_memory_tool
 from graphcore.tools.vfs import VFSState
 
 from composer.input.types import WorkflowOptions, InputData, ResumeFSData, ResumeIdData, ResumeInput, NativeFS
 from composer.input.files import Document, InMemoryTextFile
+from graphcore.tools.memory import openai_memory_tool
+from composer.workflow.provider import provider_for, ProviderKind
+from graphcore.tools.vfs import VFSState
+
+from composer.llm.provider import ModelProvider
+
+from composer.input.types import WorkflowOptions, ModelOptionsBase, InputData, ResumeFSData, ResumeIdData, ResumeInput, NativeFS
 from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools
 from composer.workflow.factories import get_cryptostate_builder, get_vfs_tools, get_memory_ns
 from composer.workflow.services import standard_connections, IndexedConnections
@@ -53,24 +59,10 @@ from composer.tools.working_spec import ApplyRemediationProposal
 _KB_NS = ("cvl",)
 
 
-@dataclass
-class _CodegenResearchContext:
-    """Satisfies ResearchContext protocol for the CVL research sub-agent."""
-    _store: BaseStore
-    _kb_ns: tuple[str, ...]
-    _checkpointer: Checkpointer
-    _thread_prefix: str
-
-    def kb_tools(self, read_only: bool) -> list[BaseTool]:
-        return make_kb_tools(self._store, self._kb_ns, read_only)
-
-    @property
-    def checkpointer(self) -> Checkpointer:
-        return self._checkpointer
-
-    def uniq_thread_id(self) -> str:
-        return f"{self._thread_prefix}-{uuid.uuid4().hex[:16]}"
-
+class _ExecutorOptions(WorkflowOptions, ModelOptionsBase, Protocol):
+    """Combined runtime options consumed by the executor: workflow
+    config + model identification. Callers already pass dataclasses
+    that satisfy both protocols."""
 
 def get_reference_input(input_data: InputData, debug_prompt: Optional[str]) -> str:
     return load_jinja_template(
@@ -190,20 +182,20 @@ def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflo
     return (AIComposerInput(input=input_messages, vfs={}, **_get_empty_extra()), NativeFS(intf_p), NativeFS(spec_p))
 
 
-def _system_doc_as_document(fl: InputFileLike) -> Document:
+def _system_doc_as_document(fl: InputFileLike, provider: ProviderKind) -> Document:
     """Bridge a resume-path system-doc handle to a ``Document`` for the CEX
     agents. Audit/resume handles carry text (``InputFileLike.string_contents``
     is typed ``str``), so an inline text document is the faithful
     representation; binary system docs on resume await the input-layer rework.
     """
-    return InMemoryTextFile(basename=fl.basename, string_contents=fl.string_contents)
+    return InMemoryTextFile(basename=fl.basename, string_contents=fl.string_contents, provider=provider)
 
 
 async def execute_ai_composer_workflow(
     handler: CodeGenIOHandler,
-    llm: BaseChatModel,
+    llm: ModelProvider,
     input: InputData | ResumeFSData | ResumeIdData,
-    workflow_options: WorkflowOptions,
+    workflow_options: _ExecutorOptions,
     memory_namespace: str | None = None,
     resume_work_key: str | None = None,
 ) -> WorkflowResult:
@@ -214,7 +206,7 @@ async def execute_ai_composer_workflow(
     delegates to ``_run_codegen``. The audit DB stays on psycopg for now;
     only the langgraph side moves async.
     """
-    async with standard_connections(embedder=DefaultEmbedder()) as conn:
+    async with standard_connections(provider=llm.provider, embedder=DefaultEmbedder()) as conn:
         audit_conn = psycopg.connect(workflow_options.audit_db)
         try:
             return await _run_codegen(
@@ -227,7 +219,7 @@ async def execute_ai_composer_workflow(
 
 async def _run_codegen(
     handler: CodeGenIOHandler,
-    llm: BaseChatModel,
+    llm: ModelProvider,
     input: InputData | ResumeFSData | ResumeIdData,
     workflow_options: WorkflowOptions,
     conn: IndexedConnections,
@@ -276,7 +268,7 @@ async def _run_codegen(
                 system_doc = resume_art.system_vfs_handle
             else:
                 system_doc = input.new_system
-            system_doc_doc = _system_doc_as_document(system_doc)
+            system_doc_doc = _system_doc_as_document(system_doc, llm.provider)
             match input:
                 case ResumeFSData():
                     (flow_input, interface_file, spec_file) = get_resume_fs_input(input, resume_art, workflow_options)
@@ -290,7 +282,7 @@ async def _run_codegen(
     report_store = ReportStore(store=store)
     proposal_store = ProposalStore(store=store)
 
-    req_mem_tool = async_memory_tool(conn.memory(get_memory_ns(mem_root, "natreq")))
+    req_mem_tool = conn.memory(get_memory_ns(mem_root, "natreq"))
 
     extra_reqs = await store.aget((thread_id,), "requirements")
     reqs_list : list[str] | None
@@ -309,7 +301,7 @@ async def _run_codegen(
             extraction = await get_requirements(
                 handler,
                 workflow_options,
-                llm,
+                llm.builder_for(),
                 system_doc,
                 spec_file,
                 req_mem_tool,
@@ -328,7 +320,7 @@ async def _run_codegen(
         judge_tool = get_judge_tool(
             reqs=reqs_list,
             mem_tool=req_mem_tool,
-            unbound=llm,
+            unbound=llm.builder_for(),
             vfs_tools=get_vfs_tools(
                 fs_layer=fs_layer, immutable=True
             )[0]
@@ -337,14 +329,14 @@ async def _run_codegen(
         extra_tools.append(requirements_relaxation)
 
     if "context-management-2025-06-27" in getattr(llm, "betas"):
-        memory = async_memory_tool(conn.memory(get_memory_ns(mem_root, "composer")))
+        memory = conn.memory(get_memory_ns(mem_root, "composer"))
         extra_tools.append(memory)
 
     # CVL research sub-agent — KB needs indexed store for semantic search
     rag_db = PostgreSQLRAGDatabase(workflow_options.rag_db, get_rag_model())
     indexed_store = conn.indexed_store
     cvl_builder = Builder().with_llm(
-        llm
+        llm.builder_for()
     ).with_loader(
         load_jinja_template
     ).with_tools(
@@ -378,7 +370,7 @@ async def _run_codegen(
     extra_tools.append(research_tool)
 
     (workflow_builder, materializer) = get_cryptostate_builder(
-        llm=llm,
+        llm=llm.builder_for(),
         fs_layer=fs_layer,
     )
 
@@ -403,7 +395,7 @@ async def _run_codegen(
         ]),
         materializer,
         system_doc_doc,
-        async_memory_tool(conn.memory(get_memory_ns(mem_root, "cex-remediation"))),
+        conn.memory(get_memory_ns(mem_root, "cex-remediation")),
         proposal_store,
         report_store,
         recursion_limit=workflow_options.recursion_limit,
@@ -492,7 +484,7 @@ async def _run_codegen(
         if result is None:
             return WorkflowFailure()
 
-        res_commentary = await create_resume_commentary(final_state, llm=llm)
+        res_commentary = await create_resume_commentary(final_state, llm=llm.builder_for())
         audit_db.register_complete(
             thread_id, materializer.iterate(final_state), res_commentary.interface_path, res_commentary.commentary
         )

@@ -22,8 +22,6 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, AsyncIterator, Awaitable, Callable, Protocol, cast
 
-from graphcore.tools.memory import async_memory_tool
-
 from composer.core.user import user_data_ns
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.diagnostics.timing import RunSummary, install_run_summary
@@ -40,6 +38,7 @@ from composer.spec.service_host import ModelProvider
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import standard_connections, llm_factory
+from composer.llm.registry import get_provider_for
 
 from composer.foundry.artifacts import FoundrySourceCode
 from composer.foundry.env import build_foundry_env
@@ -148,6 +147,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
     sys_path = pathlib.Path(args.system_doc)
 
     model = get_model()
+    tiered = get_provider_for(tiered=args)
 
     root_key = _root_cache_key(str(project_root), sys_path, relative_path, contract_name)
     cache_root: tuple[str, ...] | None = (
@@ -162,7 +162,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
     model_fact = llm_factory(args)
 
     async with (
-        standard_connections(embedder=DefaultEmbedder(model)) as conns,
+        standard_connections(provider=tiered.provider_kind, embedder=DefaultEmbedder(model)) as conns,
         PostgreSQLRAGDatabase.rag_context(model, args.rag_db) as foundry_rag_db,
         async_tool_context(),
         thread_logger(
@@ -194,9 +194,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
 
         model_provider = ModelProvider(
             checkpointer=conns.checkpointer,
-            factory=model_fact,
-            heavy_model=args.heavy_model,
-            lite_model=args.lite_model
+            heavy_model=tiered.heavy,
+            lite_model=tiered.lite
         )
 
         # Per-user cache namespace for the indexed code_explorer's question
@@ -215,7 +214,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
 
         memory_ns = args.memory_ns
         ctx = WorkflowContext.create(
-            services=lambda ns: async_memory_tool(conns.memory(ns)),
+            services=lambda ns: conns.memory(ns),
             thread_id=thread_id,
             store=conns.store,
             recursion_limit=args.recursion_limit,
