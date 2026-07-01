@@ -14,7 +14,7 @@ and skipped without testcontainers. Run with ``-m expensive``.
 """
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast, TYPE_CHECKING
+from typing import cast, TYPE_CHECKING
 
 import psycopg
 import pytest
@@ -106,10 +106,7 @@ def _db_url(pg: "PostgresContainer", database: str) -> str:
     )
 
 
-_DOC_UNSET = object()
-
-
-def _make_args(rag_conn: str, system_doc: Any = _DOC_UNSET) -> AutoProveArgs:
+def _make_args(rag_conn: str, system_doc: str | None = str(_SCENARIO / "system.md")) -> AutoProveArgs:
     """Hand-built ``AutoProveArgs`` (the CLI path builds this via argparse).
 
     ``system_doc`` defaults to the scenario's ``system.md``; pass ``None`` to exercise
@@ -117,7 +114,7 @@ def _make_args(rag_conn: str, system_doc: Any = _DOC_UNSET) -> AutoProveArgs:
     return cast(AutoProveArgs, SimpleNamespace(
         project_root=str(_SCENARIO),
         main_contract=f"{_SCENARIO / "src/Counter.sol"}:Counter",
-        system_doc=(str(_SCENARIO / "system.md") if system_doc is _DOC_UNSET else system_doc),
+        system_doc=system_doc,
         max_concurrent=4,
         cache_ns=None,
         memory_ns=None,
@@ -138,38 +135,41 @@ def _make_args(rag_conn: str, system_doc: Any = _DOC_UNSET) -> AutoProveArgs:
         interleaved_thinking=False,
     ))
 
-def _provision(pg_container: "PostgresContainer", monkeypatch) -> str:
-    """Stand up the DBs/roles/schema and install the LLM/AutoSetup mocks; return the
-    RAG DB url. Idempotent (existence-checked creates) so it is safe to call once per
-    test against the session-scoped container. The monkeypatches are function-scoped
-    and so re-applied per test."""
-    # 1. Give the container the roles + databases the pipeline expects, matching
-    #    the hardcoded creds in services._DATABASE_CONFIGS (a login role owning its
-    #    own DB) — so the real connection-string path works unpatched.
+@pytest.fixture(scope="session")
+def provisioned_rag_url(pg_container: "PostgresContainer | None") -> str:
+    """Stand up the fixed-name roles / databases / extensions / schema the autoprove
+    pipeline connects to, once per session; return the RAG DB url.
+
+    These database names *and* login roles are hardcoded in
+    ``services._DATABASE_CONFIGS`` — only host/port are overridable (redirected
+    per-test in ``_install_mocks``). The pipeline therefore always talks to these same
+    databases: there is nothing per-test to make unique, so they are created once,
+    unconditionally. No other fixture creates these fixed names, so there is nothing to
+    collide with (unlike ``get_test_database``'s per-invocation ``test_store_<uuid>``).
+
+    Per-test isolation comes from namespacing, not fresh databases: each run uses a
+    unique ``thread_id`` (checkpoint/store) and ``memory_ns``, with caching off, so the
+    two integration tests don't step on each other despite sharing these DBs."""
+    if pg_container is None:
+        pytest.skip("No pgcontainers")
+    # Roles + databases matching services._DATABASE_CONFIGS (a login role owning its
+    # own DB), so the real connection-string path works unpatched.
     admin_url = pg_container.get_connection_url(driver=None)
     with psycopg.connect(admin_url, autocommit=True) as admin:
-        def _role_missing(name: str) -> bool:
-            return admin.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (name,)).fetchone() is None
-
-        def _db_missing(name: str) -> bool:
-            return admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone() is None
-
         for cfg in services._DATABASE_CONFIGS.values():
-            if _role_missing(cfg["user"]):
-                admin.execute(SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
-                    Identifier(cfg["user"]), Literal(cfg["password"])))
-            if _db_missing(cfg["database"]):
-                admin.execute(SQL("CREATE DATABASE {} OWNER {}").format(
-                    Identifier(cfg["database"]), Identifier(cfg["user"])))
-        if _db_missing(_RAG_DB):
-            admin.execute(SQL("CREATE DATABASE {}").format(Identifier(_RAG_DB)))
+            admin.execute(SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                Identifier(cfg["user"]), Literal(cfg["password"])))
+            admin.execute(SQL("CREATE DATABASE {} OWNER {}").format(
+                Identifier(cfg["database"]), Identifier(cfg["user"])))
+        admin.execute(SQL("CREATE DATABASE {}").format(Identifier(_RAG_DB)))
     # pgvector must be installed by a superuser, so do it on the admin connection.
     for db in _VECTOR_DBS:
         with psycopg.connect(_db_url(pg_container, db), autocommit=True) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     # The memory backend doesn't self-create its schema (the checkpointer/store do,
-    # via .setup()), so create memories_fs as the memory role (its DB owner).
+    # via .setup()), so create memories_fs as the memory role (its DB owner), not the
+    # superuser — the backend connects as that role and must own the table.
     mem = services._DATABASE_CONFIGS["memory"]
     mem_url = (
         f"postgresql://{mem['user']}:{mem['password']}"
@@ -177,12 +177,18 @@ def _provision(pg_container: "PostgresContainer", monkeypatch) -> str:
     )
     with psycopg.connect(mem_url, autocommit=True) as conn:
         conn.execute(_MEMORIES_DDL)
+    return _db_url(pg_container, _RAG_DB)
 
-    # 2. Only host/port need redirecting — the role creds already match the configs.
+
+def _install_mocks(pg_container: "PostgresContainer", monkeypatch) -> None:
+    """Function-scoped connection redirection + LLM/AutoSetup mocks (undone per test by
+    ``monkeypatch``). The databases themselves are stood up once by the
+    ``provisioned_rag_url`` session fixture."""
+    # Only host/port need redirecting — the role creds already match the configs.
     monkeypatch.setenv("CERTORA_AI_COMPOSER_PGHOST", pg_container.get_container_host_ip())
     monkeypatch.setenv("CERTORA_AI_COMPOSER_PGPORT", str(pg_container.get_exposed_port(5432)))
 
-    # 3. Mock only the LLM (Counter tape) + disable the agent-index cache.
+    # Mock only the LLM (Counter tape) + disable the agent-index cache.
     install_harness_tape(with_delay=False)
     # autoprove_common imported `llm_factory` by name, so install_harness_tape's
     # patch of services.llm_factory doesn't reach that binding — rebind it here.
@@ -205,24 +211,27 @@ def _provision(pg_container: "PostgresContainer", monkeypatch) -> str:
     monkeypatch.setattr(
         "composer.spec.source.report.build.RERAISE_REPORT_FAILURES", True
     )
-    return _db_url(pg_container, _RAG_DB)
 
 
-async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContainer", monkeypatch):
+async def test_autoprove_counter_runs_end_to_end(
+    pg_container: "PostgresContainer", provisioned_rag_url: str, monkeypatch
+):
     assert _SCENARIO.is_dir(), _SCENARIO
-    rag_conn = _provision(pg_container, monkeypatch)
+    _install_mocks(pg_container, monkeypatch)
     # Run the whole pipeline. Pass == it completes without raising.
     summary = RunSummary()
-    async with autoprove_executor(_make_args(rag_conn), summary) as run:
+    async with autoprove_executor(_make_args(provisioned_rag_url), summary) as run:
         await run(AutoProveConsoleHandler().make_handler)
 
 
-async def test_autoprove_counter_no_doc_runs_end_to_end(pg_container: "PostgresContainer", monkeypatch):
+async def test_autoprove_counter_no_doc_runs_end_to_end(
+    pg_container: "PostgresContainer", provisioned_rag_url: str, monkeypatch
+):
     """Same pipeline, design doc OMITTED: the Design Doc Discovery phase runs the
     finder (its tape lane selects ``system.md``) and the run completes via the
     discovered doc."""
     assert _SCENARIO.is_dir(), _SCENARIO
-    rag_conn = _provision(pg_container, monkeypatch)
+    _install_mocks(pg_container, monkeypatch)
     summary = RunSummary()
-    async with autoprove_executor(_make_args(rag_conn, system_doc=None), summary) as run:
+    async with autoprove_executor(_make_args(provisioned_rag_url, system_doc=None), summary) as run:
         await run(AutoProveConsoleHandler().make_handler)

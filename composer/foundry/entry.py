@@ -9,7 +9,7 @@ foundry pipeline.
 
 Deliberately self-contained — does NOT import the source *pipeline* under
 ``composer/spec/source/`` (the shared design-doc finder utility,
-``doc_finder.resolve_design_doc``, is the one exception). Reuses the
+``design_doc_finder.resolve_design_doc``, is the one exception). Reuses the
 cross-workflow infrastructure (``standard_connections``, ``thread_logger``,
 ``WorkflowContext``, ``run_component_analysis`` / ``run_property_inference``
 from the non-source spec modules).
@@ -47,7 +47,7 @@ from composer.foundry.env import build_foundry_env
 from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, run_foundry_pipeline,
 )
-from composer.spec.source.doc_finder import resolve_design_doc, discovery_cache_key
+from composer.spec.source.design_doc_finder import resolve_design_doc, discovery_cache_key
 
 
 # ---------------------------------------------------------------------------

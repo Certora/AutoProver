@@ -24,14 +24,11 @@ from typing import Any, Literal, NotRequired, Sequence, TypedDict, override
 
 from pydantic import BaseModel, Field
 
-from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command
 
-from graphcore.graph import Builder, FlowInput, MessagesState, tool_return
-from graphcore.tools.schemas import WithAsyncImplementation, WithInjectedId
+from graphcore.graph import Builder, FlowInput, MessagesState
+from graphcore.tools.schemas import WithAsyncImplementation
 
 from composer.input.files import Document, FileUploader
 from composer.io.context import emit_custom_event
@@ -53,12 +50,12 @@ class DesignDocChosenEvent(TypedDict):
     ``handle_progress_event``; other handlers ignore unknown types (``NullEventHandler``).
     ``source`` is the display verb ("discovered" / "reusing cached")."""
     type: Literal["design_doc_chosen"]
-    source: str
+    source: Literal["discovered", "reusing cached"]
     path: str
     reason: str
 
 
-def _emit_choice(source: str, choice: "DesignDocChoice") -> None:
+def _emit_choice(source: Literal["discovered", "reusing cached"], choice: "DesignDocChoice") -> None:
     """Surface the chosen design doc to the user as the discovery phase completes.
 
     Emits a progress event the console + TUI handlers render (the autoprove logger is
@@ -146,7 +143,7 @@ def build_finder_graph(
         lambda g: bound.render_to(g.with_initial_prompt_template),
     ).with_sys_prompt_template(
         "design_doc_finder_system_prompt.j2",
-    ).compile_async(checkpointer=InMemorySaver())
+    ).compile_async()
 
 
 async def find_design_doc(
@@ -167,7 +164,7 @@ async def find_design_doc(
         context=None,
         input=FlowInput(input=[]),
         recursion_limit=recursion_limit,
-        thread_id=uniq_thread_id("doc_finder"),
+        thread_id=uniq_thread_id("design_doc_finder"),
         description="Design Doc Discovery",
     )
     assert "result" in st, "finder graph completed without a result"
@@ -184,7 +181,7 @@ def read_document_tool(uploader: FileUploader, project_root: str) -> BaseTool:
     and ``langchain_anthropic`` forwards the ToolMessage content there verbatim."""
     root = pathlib.Path(project_root)
 
-    class ReadDocument(WithAsyncImplementation[Command], WithInjectedId):
+    class ReadDocument(WithAsyncImplementation[str | list[str | dict]]):
         """Read a document — including a PDF — so you can judge its actual contents.
 
         Unlike `get_file` (which returns raw text and shows only gibberish for a PDF),
@@ -199,30 +196,16 @@ def read_document_tool(uploader: FileUploader, project_root: str) -> BaseTool:
         )
 
         @override
-        async def run(self) -> Command:
+        async def run(self) -> str | list[str | dict]:
+            # Returning the content blocks IS the tool result — same shape as
+            # cex_remediation's read_system_document. A plain string on failure.
             target = (root / self.path).resolve()
             if not target.is_relative_to(root.resolve()):
-                return tool_return(
-                    self.tool_call_id,
-                    f"{self.path!r} is outside the project root; refusing to read it.",
-                )
+                return f"{self.path!r} is outside the project root; refusing to read it."
             doc = await uploader.get_document(target)
             if doc is None:
-                return tool_return(
-                    self.tool_call_id, f"cannot read {self.path!r}: not a regular file."
-                )
-            # Document goes INSIDE the tool_result content. A single ToolMessage keeps
-            # this parallel-safe: each tool call in the turn contributes exactly one
-            # tool_result, with nothing inserted between them.
-            return Command(update={"messages": [
-                ToolMessage(
-                    tool_call_id=self.tool_call_id,
-                    content=[
-                        {"type": "text", "text": f"Contents of {self.path!r}:"},
-                        doc.to_dict(),
-                    ],
-                ),
-            ]})
+                return f"cannot read {self.path!r}: not a regular file."
+            return [f"Contents of {self.path!r}:", doc.to_dict()]
 
     return ReadDocument.as_tool("read_document")
 

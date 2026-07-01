@@ -22,7 +22,7 @@ from composer.ui.multi_job_app import (
 )
 from composer.spec.source.prover import ProverOutputEvent, CloudPollingEvent
 from composer.spec.source.autosetup import AutoSetupEvents
-from composer.spec.source.doc_finder import DesignDocChosenEvent
+from composer.spec.source.design_doc_finder import DesignDocChosenEvent
 
 
 # ---------------------------------------------------------------------------

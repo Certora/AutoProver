@@ -27,7 +27,7 @@ from composer.spec.context import (
 )
 from composer.spec.source.pipeline import run_autoprove_pipeline, AutoProveResult
 from composer.spec.source.artifacts import ProverSourceCode, ProverArtifactStore
-from composer.spec.source.doc_finder import resolve_design_doc, discovery_cache_key
+from composer.spec.source.design_doc_finder import resolve_design_doc, discovery_cache_key
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
 from composer.spec.agent_index import agent_index_config_from_env

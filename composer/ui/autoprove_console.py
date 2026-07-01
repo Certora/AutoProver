@@ -22,7 +22,7 @@ from typing import override, cast
 
 from composer.spec.source.prover import ProverEvents
 from composer.spec.source.autosetup import AutoSetupEvents
-from composer.spec.source.doc_finder import DesignDocChosenEvent
+from composer.spec.source.design_doc_finder import DesignDocChosenEvent
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.ui.multi_console_handler import MultiJobConsoleHandler
 

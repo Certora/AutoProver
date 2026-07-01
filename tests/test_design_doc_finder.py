@@ -1,4 +1,4 @@
-"""Unit tests for the design-document finder (composer/spec/source/doc_finder.py).
+"""Unit tests for the design-document finder (composer/spec/source/design_doc_finder.py).
 
 These run WITHOUT postgres or a live LLM:
 
@@ -38,7 +38,7 @@ from composer.templates.loader import load_jinja_template
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.ui.autoprove_console import AutoProveConsoleHandler
 from composer.spec.source.source_env import build_basic_source_tools
-from composer.spec.source.doc_finder import (
+from composer.spec.source.design_doc_finder import (
     DESIGN_DOC_DISCOVERY_KEY,
     DesignDocChoice,
     _discover,
@@ -172,7 +172,7 @@ async def test_resolve_discovered_doc(tmp_path, monkeypatch):
     async def fake_discover(**_kwargs) -> DesignDocChoice:
         return DesignDocChoice(selected_path="docs/design.md", reason="found it")
 
-    monkeypatch.setattr("composer.spec.source.doc_finder._discover", fake_discover)
+    monkeypatch.setattr("composer.spec.source.design_doc_finder._discover", fake_discover)
 
     path, content = await resolve_design_doc(
         system_doc_arg=None,
@@ -194,7 +194,7 @@ async def test_resolve_no_doc_fails_fast_with_reason(tmp_path, monkeypatch):
     async def fake_discover(**_kwargs) -> DesignDocChoice:
         return DesignDocChoice(selected_path=None, reason="only a build README here")
 
-    monkeypatch.setattr("composer.spec.source.doc_finder._discover", fake_discover)
+    monkeypatch.setattr("composer.spec.source.design_doc_finder._discover", fake_discover)
 
     with pytest.raises(ValueError, match="only a build README here"):
         await resolve_design_doc(
