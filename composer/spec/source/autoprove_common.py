@@ -19,16 +19,17 @@ from composer.kb.knowledge_base import DefaultEmbedder, DEFAULT_KB_NS
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.rag.models import get_model
 from composer.workflow.services import llm_factory, standard_connections
+from composer.pipeline.core import CorePipelineResult
 
 from composer.spec.service_host import ModelProvider
 from composer.spec.system_model import SolidityIdentifier
 from composer.spec.context import (
-    WorkflowContext,
+    WorkflowContext, SourceCode
 )
-from composer.spec.source.pipeline import run_autoprove_pipeline, AutoProveResult
-from composer.spec.source.artifacts import ProverSourceCode
+from composer.spec.source.pipeline import run_autoprove_pipeline, GeneratedCVL
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
+from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.agent_index import agent_index_config_from_env
 from composer.core.user import get_uid, user_data_ns
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
@@ -89,7 +90,7 @@ def _root_cache_key(
 # Main
 # ---------------------------------------------------------------------------
 
-type Executor = Callable[[HandlerFactory[AutoProvePhase, None]], Awaitable[AutoProveResult]]
+type Executor = Callable[[HandlerFactory[AutoProvePhase, None]], Awaitable[CorePipelineResult[GeneratedCVL]]]
 
 @asynccontextmanager
 async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
@@ -176,7 +177,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
         if content is None:
             raise ValueError(f"cannot read {sys_path}")
 
-        system_doc = ProverSourceCode(
+        system_doc = SourceCode(
             content=content,
             project_root=str(project_root),
             contract_name=SolidityIdentifier(contract_name),
@@ -220,7 +221,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
 
         prover_opts = make_prover_options(cloud=args.cloud)
 
-        async def runner(handler: HandlerFactory[AutoProvePhase, None]) -> AutoProveResult:
+        async def runner(handler: HandlerFactory[AutoProvePhase, None]) -> CorePipelineResult[GeneratedCVL]:
             return await run_autoprove_pipeline(
                     ctx=ctx,
                     source_input=system_doc,
@@ -246,6 +247,6 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             # system_doc in scope and the summary fully populated. Guarded so a
             # diagnostics-dump failure can never mask the pipeline's own outcome.
             try:
-                system_doc.artifact_store.write_token_usage(summary)
+                ProverArtifactStore(main_contract=system_doc.contract_name, project_root=system_doc.project_root).write_token_usage(summary)
             except Exception:
                 _logger.exception("failed to dump token usage")

@@ -23,21 +23,27 @@ import enum
 import logging
 import pathlib
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, override
 
 from composer.foundry.author import (
-    BatchFoundryResult, GaveUp, GeneratedFoundryTest, batch_foundry_test_generation,
+    GeneratedFoundryTest, batch_foundry_test_generation,
 )
-from composer.foundry.artifacts import FoundrySourceCode, FoundryTestArtifact
-from composer.foundry.report import run_foundry_report
-from composer.spec.source.report.collect import ReportComponentInput
+from composer.foundry.artifacts import FoundryArtifactStore
+from composer.foundry.report import _foundry_verdicts
+from composer.pipeline.core import (
+    Formalizer, PreparedSystem, PipelineRun,
+    GaveUp, SystemAnalysisSpec,
+    CorePhases, main_instance, Delivered,
+    run_pipeline
+)
+from composer.foundry.artifacts import FoundryTestArtifact
+from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.context import (
-    CVLGeneration, CacheKey, ComponentGroup, Properties, WorkflowContext,
+    CacheKey, Properties, WorkflowContext, SourceCode, FoundryGeneration
 )
 from composer.spec.service_host import ServiceHost
-from composer.spec.prop import PropertyFormulation
-from composer.spec.prop_inference import run_property_inference
-from composer.spec.system_analysis import run_component_analysis
+from composer.spec.types import PropertyFormulation
+from composer.spec.artifacts import ArtifactStore
 
 
 # Backend-guidance string fed into the property-analysis prompt — describes
@@ -74,14 +80,19 @@ assert no overflow are uninteresting. Properties implied by the type
 system (a uint256 being non-negative, etc.) are also uninteresting.
 """
 from composer.spec.system_model import (
-    ContractComponentInstance, ContractInstance, SourceApplication,
+    ContractComponentInstance, SourceApplication,
 )
-from composer.spec.util import slugify_filename, string_hash
 
-from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
+from composer.io.multi_job import HandlerFactory
 
 _log = logging.getLogger(__name__)
 
+
+@dataclass
+class _ForgeRunConfig:
+    forge_binary: str
+    forge_timeout_s: int
+    forge_sem: asyncio.Semaphore
 
 # ---------------------------------------------------------------------------
 # Phases
@@ -94,7 +105,78 @@ class FoundryPhase(enum.Enum):
     SYSTEM_ANALYSIS = "system_analysis"
     PROPERTY_EXTRACTION = "property_extraction"
     TEST_GENERATION = "test_generation"
+    REPORT = "report"
 
+class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
+    def __init__(self, conf: _ForgeRunConfig):
+        super().__init__(GeneratedFoundryTest, "foundry")
+        self.conf = conf
+
+    @override
+    async def formalize(
+        self,
+        label: str,
+        feat: ContractComponentInstance,
+        props: list[PropertyFormulation],
+        ctx: WorkflowContext[GeneratedFoundryTest],
+        run: PipelineRun
+    ) -> GeneratedFoundryTest | GaveUp:
+        return await batch_foundry_test_generation(
+            ctx=ctx.abstract(FoundryGeneration),
+            project_root=run.source.project_root,
+            contract_name=run.source.contract_name,
+            component=feat,
+            description=label,
+            env=run.env,
+            forge_binary=self.conf.forge_binary,
+            forge_sem=self.conf.forge_sem,
+            forge_timeout_s=self.conf.forge_timeout_s,
+            props=props
+        )
+    
+    @override
+    async def fetch_verdicts(self, inp: ReportComponentInput[GeneratedFoundryTest]) -> dict[str, Verdict]:
+        return await _foundry_verdicts(inp)
+
+@dataclass
+class FoundrySystem(PreparedSystem[GeneratedFoundryTest]):
+    form: FoundryFormalizer
+
+    @override
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedFoundryTest]:
+        return self.form
+
+@dataclass
+class FoundryBackend:
+    backend_guidance = FOUNDRY_BACKEND_GUIDANCE
+
+    core_phases = CorePhases({
+        "analysis": FoundryPhase.SYSTEM_ANALYSIS,
+        "extraction": FoundryPhase.PROPERTY_EXTRACTION,
+        "formalization": FoundryPhase.TEST_GENERATION,
+        "report": FoundryPhase.REPORT
+    })
+
+    analysis_spec = SystemAnalysisSpec("foundry-application")
+
+    artifact_store: ArtifactStore[FoundryTestArtifact, GeneratedFoundryTest]
+
+    foundry_conf: _ForgeRunConfig
+
+    async def prepare_system(
+        self,
+        analyzed: SourceApplication,
+        run: PipelineRun[FoundryPhase, None]
+    ) -> PreparedSystem[GeneratedFoundryTest]:
+        return FoundrySystem(
+            main_instance(
+                analyzed, run.source
+            ),
+            FoundryFormalizer(self.foundry_conf)
+        )
+
+    def to_artifact_id(self, c: ContractComponentInstance) -> FoundryTestArtifact:
+        return FoundryTestArtifact(c.slugified_name)
 
 # ---------------------------------------------------------------------------
 # Cache keys (parallel to common_pipeline's)
@@ -102,22 +184,6 @@ class FoundryPhase(enum.Enum):
 
 SOURCE_ANALYSIS_KEY = CacheKey[None, SourceApplication]("foundry-source-analysis")
 PROPERTIES_KEY = CacheKey[None, Properties]("foundry-properties")
-
-
-def _component_cache_key(
-    component: ContractComponentInstance,
-) -> CacheKey[Properties, ComponentGroup]:
-    combined = "|".join([
-        component.app.model_dump_json(),
-        str(component.ind),
-        str(component._contract.ind),
-    ])
-    return CacheKey(string_hash(combined))
-
-
-def _batch_cache_key(props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, GeneratedFoundryTest]:
-    combined = "|".join(p.model_dump_json() for p in props)
-    return CacheKey(string_hash(combined))
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +203,8 @@ class FoundryPipelineResult:
 # Pipeline
 # ---------------------------------------------------------------------------
 
-
 async def run_foundry_pipeline(
-    source_input: FoundrySourceCode,
+    source_input: SourceCode,
     ctx: WorkflowContext[None],
     handler_factory: HandlerFactory[FoundryPhase, None],
     env: ServiceHost,
@@ -159,202 +224,31 @@ async def run_foundry_pipeline(
     writes generated ``.t.sol`` files under ``<project>/test/``.
     """
     semaphore = asyncio.Semaphore(max_concurrent)
-
-    # ------------------------------------------------------------------
-    # Phase 1: Component analysis. SourceApplication so the model carries
-    # paths back from the design doc + source-tree exploration.
-    # ------------------------------------------------------------------
-    summary = await run_task(
-        handler_factory,
-        TaskInfo("system-analysis", "System Analysis", FoundryPhase.SYSTEM_ANALYSIS),
-        lambda: run_component_analysis(
-            ty=SourceApplication,
-            child_ctxt=ctx.child(SOURCE_ANALYSIS_KEY),
-            input=source_input,
-            env=env,
-            extra_input=[
-                f"The main entry point of this application has been "
-                f"explicitly identified as {source_input.contract_name} at "
-                f"relative path {source_input.relative_path}",
-            ],
-        ),
+    artifacts = FoundryArtifactStore(
+        source_input.project_root
     )
-    if summary is None:
-        raise ValueError("Component analysis produced no result.")
+    foundry_sem = asyncio.Semaphore(forge_concurrency)
 
-    # Locate the main contract in the analyzed application.
-    main_ind = -1
-    for i, c in enumerate(summary.contract_components):
-        if c.name == source_input.contract_name:
-            main_ind = i
-            break
-    if main_ind == -1:
-        raise ValueError(
-            f"Contract {source_input.contract_name!r} not found in the "
-            "analyzed application."
-        )
-    contract_instance = ContractInstance(ind=main_ind, app=summary)
-
-    prop_context = ctx.child(PROPERTIES_KEY)
-
-    # ------------------------------------------------------------------
-    # Phase 2: Per-component property extraction.
-    # ------------------------------------------------------------------
-    @dataclass
-    class _ComponentBatch:
-        feat: ContractComponentInstance
-        props: list[PropertyFormulation]
-        feat_ctx: WorkflowContext[ComponentGroup]
-
-    async def _extract(idx: int) -> _ComponentBatch | None:
-        feat = ContractComponentInstance(_contract=contract_instance, ind=idx)
-        feat_ctx = await prop_context.child(
-            _component_cache_key(feat),
-            {"component": feat.component.model_dump()},
-        )
-        props = await run_task(
-            handler_factory,
-            TaskInfo(
-                f"bug-{idx}", feat.component.name, FoundryPhase.PROPERTY_EXTRACTION,
-            ),
-            lambda conv: run_property_inference(
-                feat_ctx,
-                env,
-                feat,
-                refinement=conv if interactive else None,
-                max_rounds=max_bug_rounds,
-                backend_guidance=FOUNDRY_BACKEND_GUIDANCE,
-            ),
-            semaphore,
-        )
-        if not props:
-            return None
-        return _ComponentBatch(feat=feat, props=props, feat_ctx=feat_ctx)
-
-    extraction = await asyncio.gather(*[
-        _extract(i)
-        for i in range(len(contract_instance.contract.components))
-    ])
-    batches = [b for b in extraction if b is not None]
-    if not batches:
-        raise ValueError("No properties extracted from any component.")
-
-    # Filename slugs — disambiguate collisions with the index.
-    raw_slugs = [slugify_filename(b.feat.component.name) for b in batches]
-    slug_counts: dict[str, int] = {}
-    for s in raw_slugs:
-        slug_counts[s] = slug_counts.get(s, 0) + 1
-    bases = [
-        f"{s}_{b.feat.ind}" if slug_counts[s] > 1 else s
-        for s, b in zip(raw_slugs, batches)
-    ]
-    # Per-component test artifact (owns its own stem / .t.sol filename) — built once and reused for
-    # every write and for the report's unit identity, rather than reconstructed from `base` ad hoc.
-    artifacts = [FoundryTestArtifact(b) for b in bases]
-
-    store = source_input.artifact_store
-    # Dump the analysis-phase properties for every extracted component (parallels
-    # the prover pipeline; recorded even if that component's tests later give up).
-    for artifact, batch in zip(artifacts, batches):
-        store.write_analysis_properties(artifact, batch.props)
-
-    # ------------------------------------------------------------------
-    # Phase 3: Per-component foundry test generation.
-    # ------------------------------------------------------------------
-    forge_runner_sem = asyncio.Semaphore(forge_concurrency)
-
-    async def _generate(i: int, batch: _ComponentBatch) -> BatchFoundryResult:
-        batch_child = await batch.feat_ctx.child(
-            _batch_cache_key(batch.props),
-            {"properties": [p.model_dump() for p in batch.props]},
-        )
-        if (cached := await batch_child.cache_get(GeneratedFoundryTest)) is not None:
-            return cached
-        batch_ctx = batch_child.abstract(CVLGeneration)
-
-        label = f"{batch.feat.component.name} ({len(batch.props)} properties)"
-
-        res = await run_task(
-            handler_factory,
-            TaskInfo(f"foundry-{i}", label, FoundryPhase.TEST_GENERATION),
-            lambda: batch_foundry_test_generation(
-                ctx=batch_ctx,
-                project_root=source_input.project_root,
-                contract_name=source_input.contract_name,
-                props=batch.props,
-                component=batch.feat,
-                env=env,
-                description=label,
-                forge_binary=forge_binary,
-                forge_timeout_s=forge_timeout_s,
-                forge_sem = forge_runner_sem
-            ),
-            semaphore,
-        )
-        if isinstance(res, GeneratedFoundryTest):
-            await batch_child.cache_put(res)
-        return res
-
-    async def _generate_and_write(
-        i: int, batch: _ComponentBatch,
-    ) -> tuple[BatchFoundryResult, pathlib.Path | None]:
-        res = await _generate(i, batch)
-        if isinstance(res, GaveUp):
-            return res, None
-        out_path = store.write_generated_test(artifacts[i], res)
-        return res, out_path
-
-    results = await asyncio.gather(
-        *[_generate_and_write(i, b) for i, b in enumerate(batches)],
-        return_exceptions=True,
+    forge_conf =_ForgeRunConfig(
+        forge_binary=forge_binary,
+        forge_timeout_s=forge_timeout_s,
+        forge_sem=foundry_sem
     )
 
-    written: list[pathlib.Path] = []
-    failures: list[str] = []
-    report_components: list[ReportComponentInput[GeneratedFoundryTest]] = []
-    n_properties = 0
-    for artifact, batch, result in zip(artifacts, batches, results):
-        n_properties += len(batch.props)
-        test_result: GeneratedFoundryTest | None = None
-        if isinstance(result, BaseException):
-            failures.append(f"{batch.feat.component.name}: {result}")
-        else:
-            res, path = result
-            if isinstance(res, GaveUp):
-                failures.append(f"{batch.feat.component.name}: GAVE_UP: {res.reason}")
-            else:
-                test_result = res
-                if path is not None:
-                    written.append(path)
-        # Crashed / gave-up components carry a None result -> a formalization gap in the report.
-        report_components.append(ReportComponentInput(
-            name=batch.feat.component.name,
-            unit_file=artifact.test_filename,
-            props=batch.props,
-            result=test_result,
-            run_link=None,
-        ))
-
-    pipeline_result = FoundryPipelineResult(
-        n_components=len(batches),
-        n_properties=n_properties,
-        written=written,
-        failures=failures,
+    backend = FoundryBackend(artifacts, forge_conf)
+    run_conf = PipelineRun(
+        ctx, env, source_input, handler_factory, semaphore
     )
 
-    # Final, best-effort phase: the property-keyed report. A failure here must never fail the run.
-    try:
-        report = await run_foundry_report(
-            contract_name=source_input.contract_name,
-            components=report_components,
-            llm=env.llm_lite(),
-        )
-        store.write_report(report)
-    except Exception:
-        _log.warning("foundry report phase failed (continuing)", exc_info=True)
+    to_ret = await run_pipeline(
+        backend, run_conf, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+    )
 
-    return pipeline_result
-
+    return FoundryPipelineResult(
+        to_ret.n_components, to_ret.n_properties, written=[
+            i.result.deliverable for i in to_ret.outcomes if isinstance(i.result, Delivered)
+        ], failures=to_ret.failures
+    )
 
 type FoundryPipelineExecutor = Callable[
     [HandlerFactory[FoundryPhase, None]], Awaitable[FoundryPipelineResult],

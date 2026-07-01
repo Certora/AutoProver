@@ -303,7 +303,7 @@ class FoundryFragment(BaseModel):
     profile: dict[str, ProfileConf]
 
 def infer_test_dir(
-    project_root: str
+    project_root: str | Path
 ) -> str:
     foundry_conf = Path(project_root) / "foundry.toml"
     if not foundry_conf.exists():

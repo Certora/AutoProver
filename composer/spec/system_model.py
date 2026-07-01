@@ -1,31 +1,12 @@
 from dataclasses import dataclass
-from typing import Literal, TYPE_CHECKING
+from typing import Literal
 from pydantic import BaseModel, Field
 from functools import cached_property
 from composer.spec.util import slugify_filename
+from .types import ComponentName, SolidityIdentifier, ContractName
 
 type ContractSort = Literal["dynamic", "singleton", "multiple"]
 
-# Nominal ``str`` subtypes for the two distinct contract-identity fields.
-# Both phantom-typed (TYPE_CHECKING-only subclass; ``str`` at runtime) so they
-# remain distinct at static-check time but pydantic ``Field`` validates them
-# as plain strings.
-#
-# ``SolidityIdentifier``: a Solidity contract identifier (regex-validated where
-# stored on a pydantic field).
-# ``ContractName``: the conceptual / design-doc-readable name of a contract.
-# May be a Solidity identifier when the design doc names contracts that way,
-# but allowed to be anything human-readable.
-#
-# The two are **siblings under str**, not in a subtype relation with each
-# other — passing a ``SolidityIdentifier`` where ``ContractName`` is expected
-# (or vice-versa) is a type error, even though both are ``str`` at runtime.
-if TYPE_CHECKING:
-    class SolidityIdentifier(str): ...
-    class ContractName(str): ...
-else:
-    SolidityIdentifier = str
-    ContractName = str
 
 class ExternalDependency(BaseModel):
     external_actor: str = Field(description="The name of the external actor interacted with")
@@ -33,7 +14,7 @@ class ExternalDependency(BaseModel):
 
 class ComponentInteraction(BaseModel):
     contract_name: ContractName = Field(description="The conceptual name of the contract interacted with (matching the `name` field of an ExplicitContract in the application)")
-    component : str | None = Field(description="The specific component within that contract interacted with")
+    component : ComponentName | None = Field(description="The specific component within that contract interacted with")
     description : str = Field(description="A description of the interaction with the contract component.")
 
 type Interaction = ComponentInteraction | ExternalDependency
@@ -42,7 +23,7 @@ class ContractComponent(BaseModel):
     """
     A single major "component" within a contract.
     """
-    name: str = Field(description="A short, concise name of the component")
+    name: ComponentName = Field(description="A short, concise name of the component")
     description: str = Field(description="A longer description describing *what* this component does, not *how* it does it.")
     external_entry_points : list[str] = Field(description="The signatures/names of any external entry points explicitly part of this component")
     state_variables : list[str] = Field(description="The name & types of any storage/state variables explicitly linked to this entry point")
@@ -247,16 +228,11 @@ class ContractComponentInstance:
 
     @property
     def slugified_name(self) -> str:
-        """Filesystem-safe, collision-free slug for this component, used as an
-        output filename base. Component names are unique within a contract, but
-        slugifying can map distinct names onto the same slug, so the component
-        index disambiguates when (and only when) the slug collides with a
-        sibling's."""
-        slug = slugify_filename(self.component.name)
-        sibling_slugs = [slugify_filename(c.name) for c in self.contract.components]
-        if sibling_slugs.count(slug) > 1:
-            return f"{slug}_{self.ind}"
-        return slug
+        """Filesystem-safe slug for this component, used as an output filename base.
+        Slug uniqueness within a contract is guaranteed upstream: component analysis
+        rejects any application whose sibling components slugify to the same id (see
+        ``_validate_connectivity``), so no disambiguation is needed here."""
+        return slugify_filename(self.component.name)
 
     @staticmethod
     def from_app(

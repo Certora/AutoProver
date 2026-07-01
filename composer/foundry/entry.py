@@ -28,20 +28,19 @@ from composer.core.user import user_data_ns
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.input.parsing import Arg, add_protocol_args
-from composer.input.types import DEFAULT_RECURSION_LIMIT, TieredModelOptions, RAGDBOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, TieredModelOptions, RAGDBOptions, ExtendedModelOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import DEFAULT_META_NS, thread_logger, default_logging_ns
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
 from composer.rag.models import get_model
-from composer.spec.context import WorkflowContext
+from composer.spec.context import WorkflowContext, SourceCode
 from composer.spec.system_model import SolidityIdentifier
 from composer.spec.service_host import ModelProvider
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import standard_connections, llm_factory
 
-from composer.foundry.artifacts import FoundrySourceCode
 from composer.foundry.env import build_foundry_env
 from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, run_foundry_pipeline,
@@ -116,7 +115,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
         description="Foundry-test author for a property-extraction pipeline",
     )
     add_protocol_args(parser, FoundryRAGDBOptions)
-    add_protocol_args(parser, TieredModelOptions)
+    add_protocol_args(parser, ExtendedModelOptions)
     parser.add_argument(
         "--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT,
         help=f"Max graph iterations (default: {DEFAULT_RECURSION_LIMIT})",
@@ -184,7 +183,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
         content = await conns.uploader.get_document(sys_path)
         if content is None:
             parser.error(f"cannot read {sys_path}")
-        source_input = FoundrySourceCode(
+        source_input = SourceCode(
             content=content,
             project_root=str(project_root),
             contract_name=contract_name,
