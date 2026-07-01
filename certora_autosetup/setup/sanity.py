@@ -48,7 +48,7 @@ class _SanityArgs:
     thinking_tokens: int = 2048
     tokens: int = 4096
     rag_db: str = field(default_factory=lambda: SANITY_DEFAULT_CONNECTION)
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str = "claude-sonnet-4-6"
     memory_tool: bool = True
     interleaved_thinking: bool = True
     prover_capture_output: bool = False
@@ -575,7 +575,7 @@ class SanityPhase:
             skipped = failing_methods[MAX_RERUNS:]
             self.log("warning", f"Too many methods failed sanity ({len(failing_methods)}), running reruns only for the first {MAX_RERUNS}. Skipped: {skipped}")
             failing_methods = failing_methods[:MAX_RERUNS]
-        
+
         self.log(
             "info",
             f"Running sanity coverage reruns for {len(failing_methods)} failing method(s): {failing_methods}",

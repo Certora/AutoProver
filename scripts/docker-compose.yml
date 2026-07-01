@@ -76,19 +76,26 @@ services:
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set in your shell}
-      # Cloud Certora Prover credentials.
+      # Cloud Certora Prover credentials. CERTORAKEY drives certoraRun job
+      # submission; the CERTORA_* OAuth tokens are used to fetch job results.
+      # When the OAuth tokens are unset, they're left empty so certora_login
+      # falls back to the credentials file written by `certora-cloud login`
+      # (mounted from the host ~/.certora below).
       CERTORAKEY: ${CERTORAKEY:-}
-      CERTORA_USER: ${CERTORA_USER:?CERTORA_USER must be set in your shell}
-      CERTORA_TOKEN: ${CERTORA_TOKEN:?CERTORA_TOKEN must be set in your shell}
-      CERTORA_REFRESH_TOKEN: ${CERTORA_REFRESH_TOKEN:?CERTORA_REFRESH_TOKEN must be set in your shell}
+      CERTORA_USER: ${CERTORA_USER:-}
+      CERTORA_TOKEN: ${CERTORA_TOKEN:-}
+      CERTORA_REFRESH_TOKEN: ${CERTORA_REFRESH_TOKEN:-}
       CERTORA_LOGIN_NO_BROWSER: "true"
-      AISS_ENV: ${AISS_ENV:?AISS_ENV must be set to one of dev, stg, prod}
       CERTORA_AI_COMPOSER_PGHOST: postgres
       CERTORA_AI_COMPOSER_PGPORT: "5432"
     volumes:
       # Host directory holding your Solidity project(s) + design docs -> /work.
       # Defaults to $PWD when compose was invoked.
       - ${HOST_WORK_DIR:-${PWD}}:/work
+      # Certora cloud credentials from `certora-cloud login`. Mounted rw so the
+      # token-refresh path can rewrite credentials.json. $HOME inside the
+      # container is /opt/autoprove/home (see scripts/Dockerfile).
+      - ${HOME}/.certora:/opt/autoprove/home/.certora
     working_dir: /work
 
 volumes:
