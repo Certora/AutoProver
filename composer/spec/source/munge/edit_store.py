@@ -15,7 +15,7 @@ class EditStore:
         return cast(dict[str, str], res.value)
 
     @classmethod
-    def deterministic_hash(cls, vfs: dict[str, str]) -> str:
+    def _deterministic_hash(cls, vfs: dict[str, str]) -> str:
         sorted_keys = sorted(vfs.keys())
         hasher = hashlib.sha256()
         for nm in sorted_keys:
@@ -24,6 +24,6 @@ class EditStore:
         return hasher.hexdigest()
 
     async def commit(self, vfs: dict[str, str]) -> str:
-        id = self.deterministic_hash(vfs)
+        id = self._deterministic_hash(vfs)
         await self._store.aput(self._target_ns, id, {**vfs})
         return id

@@ -1,6 +1,4 @@
-import difflib
 import pathlib
-from typing import Callable
 
 from pydantic import BaseModel, Field
 
@@ -8,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .edit_store import EditStore
+from .vfs_diff import compute_diff
 from composer.spec.source.versioned_index import (
     MigrationOracle,
     AnswerPortability,
@@ -37,28 +36,6 @@ class _PortabilityVerdict(BaseModel):
         description="When still_holds is False, one sentence naming the change that invalidates "
         "the answer. Left empty when it still holds.",
     )
-
-
-def _file_diff(path: str, old: str | None, new: str) -> str:
-    """Unified diff for a single file. A path absent from the old view (``old`` is
-    ``None``) reads as an addition; identical content produces the empty string."""
-    if old == new:
-        return ""
-    old_lines = (old or "").splitlines(keepends=True)
-    new_lines = new.splitlines(keepends=True)
-    from_label = f"a/{path}" if old is not None else "/dev/null"
-    return "".join(
-        difflib.unified_diff(old_lines, new_lines, fromfile=from_label, tofile=f"b/{path}")
-    )
-
-
-def _compute_diff(old: Callable[[str], str | None], new: dict[str, str]) -> str:
-    """Diff the ``old`` view against ``new``, the end-version overlay. Overlays
-    only accumulate (there is no delete-file tool), so any path whose view changed
-    between the two versions is a key of ``new`` and iterating it is sufficient — a
-    file missing from ``old`` is an addition, never a deletion."""
-    chunks = (_file_diff(path, old(path), content) for path, content in new.items())
-    return "".join(c for c in chunks if c)
 
 
 def mk_oracle(
@@ -98,7 +75,7 @@ def mk_oracle(
             except (OSError, UnicodeDecodeError):
                 return None
 
-        diff = _compute_diff(old, new)
+        diff = compute_diff(old, new)
         if not diff:
             # Nothing observable changed between the two views, so no edit we can
             # see could have invalidated the finding.
