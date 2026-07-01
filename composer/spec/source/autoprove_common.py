@@ -224,6 +224,16 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             # AgentIndex runs single-pool (no overlay).
             source_data_ns = user_ns("source_agent", "cache", root_key)
 
+            # Record the namespaces this run used under its metadata so the cache
+            # explorer can be pointed at the run by id alone: the doc — hence root_key,
+            # hence cache_root — is only known here (after discovery), so it can't go in
+            # the up-front run tags.
+            await data_logger("cache_root", {
+                "cache_root": list(cache_root) if cache_root is not None else None,
+                "contract_name": str(contract_name),
+                "memory_ns": memory_ns,
+            })
+
             source_env = build_source_env(
                 models=models,
                 db=rag_db,

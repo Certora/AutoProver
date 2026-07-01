@@ -174,18 +174,17 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
             {
                 "root_thread_id": thread_id,
                 "workflow": "foundry",
-                # Resolved cache root (null when caching is disabled) and
-                # effective memory namespace, so run-trail tooling can find
-                # this run's cache/memory entries without reverse-engineering
-                # namespaces from thread ids.
-                # Discovery cache root (doc-independent); the per-doc root cache is
-                # derived after the doc is resolved, inside ``runner``.
-                "cache_root": list(disc_cache_ns) if disc_cache_ns is not None else None,
+                # Effective memory namespace + the doc-INDEPENDENT discovery cache root,
+                # so run-trail tooling can find this run's entries without reverse-
+                # engineering namespaces from thread ids. The per-doc *root* cache is
+                # only known after discovery, so it is recorded from inside ``runner``
+                # via the run-data logger under "cache_root".
+                "discovery_cache_root": list(disc_cache_ns) if disc_cache_ns is not None else None,
                 "memory_ns": args.memory_ns if args.memory_ns is not None else thread_id,
             },
             default_logging_ns(uid=None),
             run_id=summary.run_id,
-        ),
+        ) as data_logger,
     ):
         model_provider = ModelProvider(
             checkpointer=conns.checkpointer,
@@ -226,6 +225,15 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
 
             root_key = _root_cache_key(str(project_root), doc_path, relative_path, contract_name)
             cache_root = _user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
+            # Record the namespaces this run used under its metadata so the cache
+            # explorer can be pointed at the run by id alone: the doc — hence root_key,
+            # hence cache_root — is only known here (after discovery), so it can't go in
+            # the up-front run tags.
+            await data_logger("cache_root", {
+                "cache_root": list(cache_root) if cache_root is not None else None,
+                "contract_name": str(contract_name),
+                "memory_ns": memory_ns,
+            })
             # Per-user cache namespace for the indexed code_explorer's question
             # cache (mirrors what autoprove_common does for the source_question_ns).
             source_question_ns = _user_ns("source_agent", "cache", root_key)
