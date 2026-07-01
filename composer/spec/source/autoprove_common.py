@@ -26,7 +26,8 @@ from composer.spec.context import (
     WorkflowContext,
 )
 from composer.spec.source.pipeline import run_autoprove_pipeline, AutoProveResult
-from composer.spec.source.artifacts import ProverSourceCode
+from composer.spec.source.artifacts import ProverSourceCode, ProverArtifactStore
+from composer.spec.source.design_doc_finder import resolve_design_doc, discovery_cache_key
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
 from composer.spec.agent_index import agent_index_config_from_env
@@ -59,7 +60,7 @@ def user_ns(
 class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     project_root: str
     main_contract: str
-    system_doc: str
+    system_doc: str | None
     max_concurrent: int
     cache_ns: str | None
     memory_ns: str | None
@@ -101,7 +102,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT, help=f"The number of iterations of the graph to allow (default: {DEFAULT_RECURSION_LIMIT})")
     parser.add_argument("project_root", help="Root directory of the Solidity project")
     parser.add_argument("main_contract", help="Main contract as path:ContractName")
-    parser.add_argument("system_doc", help="Path to the design document (text or PDF)")
+    parser.add_argument("system_doc", nargs="?", default=None, help="Path to the design document (text or PDF). Optional — auto-discovered from the project when omitted.")
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
@@ -132,21 +133,9 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
 
     relative_path = str(full_contract_path.relative_to(project_root))
 
-    sys_path = pathlib.Path(args.system_doc)
-
     # Set up services
     model_factory = llm_factory(args)
     model = get_model()
-
-
-    cache_root: tuple[str, ...] | None = None
-
-    root_key = _root_cache_key(
-            str(project_root), sys_path, relative_path, contract_name,
-        )
-
-    if args.cache_ns is not None:
-        cache_root = user_ns(args.cache_ns, root_key)
 
     thread_id = f"autoprove_{uuid.uuid4().hex[:12]}"
 
@@ -167,60 +156,113 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             run_id=summary.run_id,
         ) as data_logger
     ):
-        # Source-code agent caches are always per-user — the conventional
-        # ``user_data_ns(uid)`` prefix lives directly in the ns we pass
-        # so the AgentIndex runs single-pool (no overlay).
-        source_data_ns = user_ns("source_agent", "cache", root_key)
-        # Read input documents now that the uploader is available.
-        content = await conns.uploader.get_document(sys_path)
-        if content is None:
-            raise ValueError(f"cannot read {sys_path}")
-
-        system_doc = ProverSourceCode(
-            content=content,
-            project_root=str(project_root),
-            contract_name=SolidityIdentifier(contract_name),
-            relative_path=relative_path,
-            forbidden_read=FS_FORBIDDEN_READ,
-        )
-
-        threat_model = (
-            await conns.uploader.get_document(pathlib.Path(threat_path))
-            if (threat_path := args.threat_model) is not None else None
-        )
+        # ``models``, the discovery context, the threat model and prover options are
+        # all doc-independent and built up front. The design doc — supplied or
+        # auto-discovered — and everything keyed off its bytes (root cache key,
+        # source-agent index ns, source env, workflow context, the ProverSourceCode
+        # artifact) are built inside ``runner``: discovery needs an active handler
+        # scope, which only ``run_task`` (reachable once ``runner`` has the handler
+        # factory) installs.
         models = ModelProvider(
             factory=model_factory,
             heavy_model=args.heavy_model,
             lite_model=args.lite_model,
             checkpointer=conns.checkpointer,
         )
-        source_env = build_source_env(
-            models=models,
-            db=rag_db,
-            forbidden_read=FS_FORBIDDEN_READ,
-            kb_ns=DEFAULT_KB_NS,
-            root=args.project_root,
-            store=conns.indexed_store,
-            source_question_ns=source_data_ns,
-            recursion_limit=args.recursion_limit,
-            cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
-        )
 
         memory_ns = args.memory_ns
         if memory_ns:
             memory_ns = get_uid() + "/" + memory_ns
-        ctx = WorkflowContext.create(
+
+        # The discovery cache lives under a DOC-INDEPENDENT namespace (the doc is the
+        # output of discovery, not an input), so a repeat run on the same project
+        # reuses the chosen path without re-running the finder agent.
+        disc_cache_ns = (
+            user_ns(args.cache_ns, "discovery",
+                    discovery_cache_key(str(project_root), relative_path, contract_name))
+            if args.cache_ns is not None else None
+        )
+        disc_ctx = WorkflowContext.create(
             services=lambda namespace: async_memory_tool(conns.memory(namespace)),
             thread_id=thread_id,
             store=conns.store,
             recursion_limit=args.recursion_limit,
-            cache_namespace=cache_root,
+            cache_namespace=disc_cache_ns,
             memory_namespace=memory_ns,
+        )
+
+        threat_model = (
+            await conns.uploader.get_document(pathlib.Path(threat_path))
+            if (threat_path := args.threat_model) is not None else None
         )
 
         prover_opts = make_prover_options(cloud=args.cloud)
 
         async def runner(handler: HandlerFactory[AutoProvePhase, None]) -> AutoProveResult:
+            # Resolve the design doc first: the supplied path, or auto-discovery under
+            # a visible ``DISCOVER_DESIGN_DOC`` phase. Everything below is keyed off the
+            # resolved doc's bytes, so it cannot be built until the doc is known.
+            doc_path, content = await resolve_design_doc(
+                system_doc_arg=args.system_doc,
+                project_root=str(project_root),
+                contract_name=contract_name,
+                relative_path=relative_path,
+                forbidden_read=FS_FORBIDDEN_READ,
+                uploader=conns.uploader,
+                models=models,
+                handler=handler,
+                discover_phase=AutoProvePhase.DISCOVER_DESIGN_DOC,
+                disc_ctx=disc_ctx,
+            )
+
+            root_key = _root_cache_key(
+                str(project_root), doc_path, relative_path, contract_name,
+            )
+            cache_root = user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
+            # Source-code agent caches are always per-user — the conventional
+            # ``user_data_ns(uid)`` prefix lives directly in the ns we pass so the
+            # AgentIndex runs single-pool (no overlay).
+            source_data_ns = user_ns("source_agent", "cache", root_key)
+
+            # Record the namespaces this run used under its metadata so the cache
+            # explorer can be pointed at the run by id alone: the doc — hence root_key,
+            # hence cache_root — is only known here (after discovery), so it can't go in
+            # the up-front run tags.
+            await data_logger("cache_root", {
+                "cache_root": list(cache_root) if cache_root is not None else None,
+                "contract_name": str(contract_name),
+                "memory_ns": memory_ns,
+            })
+
+            source_env = build_source_env(
+                models=models,
+                db=rag_db,
+                forbidden_read=FS_FORBIDDEN_READ,
+                kb_ns=DEFAULT_KB_NS,
+                root=args.project_root,
+                store=conns.indexed_store,
+                source_question_ns=source_data_ns,
+                recursion_limit=args.recursion_limit,
+                cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
+            )
+
+            ctx = WorkflowContext.create(
+                services=lambda namespace: async_memory_tool(conns.memory(namespace)),
+                thread_id=thread_id,
+                store=conns.store,
+                recursion_limit=args.recursion_limit,
+                cache_namespace=cache_root,
+                memory_namespace=memory_ns,
+            )
+
+            system_doc = ProverSourceCode(
+                content=content,
+                project_root=str(project_root),
+                contract_name=SolidityIdentifier(contract_name),
+                relative_path=relative_path,
+                forbidden_read=FS_FORBIDDEN_READ,
+            )
+
             return await run_autoprove_pipeline(
                     ctx=ctx,
                     source_input=system_doc,
@@ -246,12 +288,14 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             await data_logger(
                 "prover_usage", summary.prover_usage_summary()
             )
-            # Dump final usage diagnostics for the run (success or failure). Single
-            # choke point both console and TUI entry points pass through, with
-            # system_doc in scope and the summary fully populated. Guarded so a
+            # Dump final usage diagnostics for the run (success or failure). Built from
+            # project_root/contract_name directly rather than the ProverSourceCode (which
+            # is constructed inside ``runner`` and may not exist if discovery failed), so
+            # usage is still dumped even on a discovery-time failure. Guarded so a
             # diagnostics-dump failure can never mask the pipeline's own outcome.
             try:
-                system_doc.artifact_store.write_token_usage(summary)
-                system_doc.artifact_store.write_prover_usage(summary)
+                store = ProverArtifactStore(str(project_root), contract_name)
+                store.write_token_usage(summary)
+                store.write_prover_usage(summary)
             except Exception:
                 _logger.exception("failed to dump usage diagnostics")
