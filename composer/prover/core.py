@@ -479,7 +479,7 @@ async def run_prover(
                     diagnoses=[],
                 )
     except CloudJobError as exc:
-        return f"Prover cloud job did not produce results (status {exc.status.value}). Prover link: {exc.link}"
+        return f"Prover cloud job did not produce results (status {exc.status.value})."
 
     prover_report: dict[str, bool] = {}
     for i in parsed.values():
