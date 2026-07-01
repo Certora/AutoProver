@@ -158,6 +158,7 @@ async def generate_all_component_cvl(
     async def _generate_batch(
         task_id: str,
         batch: _ComponentBatch,
+        spec_stem: str,
     ) -> BatchGeneratedCVLResult:
         batch_child = await batch.feat_ctx.child(
             _batch_cache_key(batch.props),
@@ -182,6 +183,7 @@ async def generate_all_component_cvl(
                 description=label,
                 source=source_input,
                 spec_dir=SPECS_DIR,
+                spec_stem=spec_stem,
             ),
             semaphore,
         )
@@ -193,7 +195,10 @@ async def generate_all_component_cvl(
         batch: _ComponentBatch
     ) -> BatchGeneratedCVLResult:
         task_id = cvl_gen_task_id(batch.feat.ind, batch.feat.slugified_name)
-        res = await _generate_batch(task_id=task_id, batch=batch)
+        res = await _generate_batch(
+            task_id=task_id, batch=batch,
+            spec_stem=ComponentSpec(batch.feat.slugified_name).stem,
+        )
         if isinstance(res, GaveUp):
             return res
         # Writes specs/{stem}.spec + the commentary/property_rules/conf bundle.
