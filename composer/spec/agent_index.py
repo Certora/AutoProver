@@ -3,10 +3,10 @@ import hashlib
 import os
 import unicodedata
 from dataclasses import dataclass
-from typing import TypedDict, Unpack, cast, overload, override
+from typing import TypedDict, Unpack, cast, overload, override, Awaitable, AsyncIterable
 from abc import abstractmethod, ABC
 
-from langgraph.store.base import BaseStore
+from langgraph.store.base import BaseStore, SearchItem
 from graphcore.tools.schemas import WithAsyncDependencies
 from pydantic import Field
 
@@ -79,8 +79,52 @@ def agent_index_config_from_env(data_ns: tuple[str, ...]) -> AgentIndexConfig:
         "Expected one of: tiered, trusted, readonly."
     )
 
+class AgentIndexBase:
+    @dataclass
+    class _ListIter[T]:
+        wrapped: list[T]
+        ptr: int = 0
 
-class AgentIndex:
+        def peek(self) -> T | None:
+            if self.ptr >= len(self.wrapped):
+                return None
+            return self.wrapped[self.ptr]
+        
+        def pop(self) -> T:
+            to_ret = self.wrapped[self.ptr]
+            self.ptr += 1
+            return to_ret
+
+    @classmethod
+    def _normalize(cls, text: str) -> str:
+        nfkc = unicodedata.normalize("NFKC", text).casefold()
+        stripped = "".join(c for c in nfkc if not unicodedata.category(c).startswith("P"))
+        return " ".join(stripped.split())
+
+    @classmethod
+    def _question_key(
+        cls, question: str
+    ) -> str:
+        return hashlib.sha256(cls._normalize(question).encode()).hexdigest()[18:]
+    
+    @classmethod
+    async def parallel_search(
+        cls, *args: Awaitable[list[SearchItem]]
+    ) -> AsyncIterable[SearchItem]:
+        query_results = await asyncio.gather(*args)
+        result_pointers = [
+            cls._ListIter(l) for l in query_results
+        ]
+        while True:
+            query = ((i, peeked) for (i, it) in enumerate(result_pointers) if (peeked := it.peek()) is not None)
+            m = max(query, key=lambda r: cast(float, r[1].score), default=None)
+            if m is None:
+                return
+            popped = result_pointers[m[0]].pop()
+            yield popped
+
+
+class AgentIndex(AgentIndexBase):
     """Two-layer semantic cache.
 
     ``base_layer`` is always consulted on reads and is the default
@@ -142,16 +186,6 @@ class AgentIndex:
             return [self.base_layer]
         return [self.write_layer, self.base_layer]
 
-    def _normalize(self, text: str) -> str:
-        nfkc = unicodedata.normalize("NFKC", text).casefold()
-        stripped = "".join(c for c in nfkc if not unicodedata.category(c).startswith("P"))
-        return " ".join(stripped.split())
-
-    def _question_key(
-        self, question: str
-    ) -> str:
-        return hashlib.sha256(self._normalize(question).encode()).hexdigest()[18:]
-
     async def aput(
         self,
         **doc: Unpack[AgentResult]
@@ -183,20 +217,13 @@ class AgentIndex:
                 return cast(AgentResult, r.value)
         return None
     
-    @dataclass
-    class _ListIter[T]:
-        wrapped: list[T]
-        ptr: int = 0
-
-        def peek(self) -> T | None:
-            if self.ptr >= len(self.wrapped):
-                return None
-            return self.wrapped[self.ptr]
-        
-        def pop(self) -> T:
-            to_ret = self.wrapped[self.ptr]
-            self.ptr += 1
-            return to_ret
+    def _raw_search(
+        self, question: str
+    ) -> list[Awaitable[list[SearchItem]]]:
+        return [
+            self.store.asearch(ns, query=question, limit=5)
+            for ns in self._read_pools
+        ]
 
     async def asearch(
         self, question: str
@@ -209,21 +236,12 @@ class AgentIndex:
         # the same metric (cosine similarity), so merging by score is
         # meaningful. Dedup defends against the same key existing in both
         # pools (which a manual / offline promotion may produce).
-        pool_results = await asyncio.gather(*[
-            self.store.asearch(ns, query=question, limit=5)
-            for ns in self._read_pools
-        ])
-        result_pointers = [
-            AgentIndex._ListIter(l) for l in pool_results
-        ]
         context : list[IndexedAgentResult] = []
         seen = set()
-        while True:
-            query = ((i, peeked) for (i, it) in enumerate(result_pointers) if (peeked := it.peek()) is not None)
-            m = max(query, key=lambda r: cast(float, r[1].score), default=None)
-            if m is None:
-                return context
-            popped = result_pointers[m[0]].pop()
+        async for popped in self.parallel_search(*(
+            self.store.asearch(ns, query=question, limit=5)
+            for ns in self._read_pools
+        )):
             if popped.key in seen:
                 continue
             seen.add(popped.key)
@@ -234,6 +252,7 @@ class AgentIndex:
             })
             if len(context) == 5:
                 return context
+        return context
     
     @overload
     @staticmethod
@@ -330,10 +349,10 @@ Document-Ref: {prior_match['ref_string']}
                 # Document-Ref can be surfaced.
                 return answer
             return f"{answer}\n\nDocument-Ref: {ref_key}"
-        
+
 class RetrieveDocumentTool(WithAsyncDependencies[str, AgentIndex]):
     """
-    Retrieve the document associated with the provided document ref
+    Retrieve the document associated with the provided document ref.
     """
     ref: str = Field(description="The document reference id")
 
