@@ -64,7 +64,6 @@ class Autosetup:
     """
 
     TEST_RUN_PROVER_ARGS = {
-        "verifyCache": "",
         "verifyTACDumps": "",
         "testMode": "",
         "checkRuleDigest": "",
