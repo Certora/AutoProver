@@ -124,7 +124,7 @@ def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_ty
                 cex_dump=None,
                 status=stat
             )]
-    
+
     if stat == "TIMEOUT":
         if len(r.children) == 0:
             return [RuleResult(path=effective_path, cex_dump=None,status=stat)]
