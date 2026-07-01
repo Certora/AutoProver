@@ -278,17 +278,24 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
         try:
             yield runner
         finally:
-            # Persist final token usage into RunMeta.tags at run close (totals
-            # known only once the pipeline is done). Mirrors token_usage.json.
+            # Persist final token + prover usage into the run's data_ns at run close
+            # (totals known only once the pipeline is done). Mirror the *_usage.json
+            # artifacts. prover_usage is the prover's self-reported runtime
+            # (statsdata run_id.start_to_end_time) summed over every prover run.
             await data_logger(
                 "token_usage", summary.token_usage_summary()
             )
-            # Dump final LLM token usage for the run (success or failure). Built from
-            # project_root/contract_name directly rather than the ProverSourceCode
-            # (which is constructed inside ``runner`` and may not exist if discovery
-            # failed) so usage is still dumped on a discovery-time failure. Guarded so a
+            await data_logger(
+                "prover_usage", summary.prover_usage_summary()
+            )
+            # Dump final usage diagnostics for the run (success or failure). Built from
+            # project_root/contract_name directly rather than the ProverSourceCode (which
+            # is constructed inside ``runner`` and may not exist if discovery failed), so
+            # usage is still dumped even on a discovery-time failure. Guarded so a
             # diagnostics-dump failure can never mask the pipeline's own outcome.
             try:
-                ProverArtifactStore(str(project_root), contract_name).write_token_usage(summary)
+                store = ProverArtifactStore(str(project_root), contract_name)
+                store.write_token_usage(summary)
+                store.write_prover_usage(summary)
             except Exception:
-                _logger.exception("failed to dump token usage")
+                _logger.exception("failed to dump usage diagnostics")

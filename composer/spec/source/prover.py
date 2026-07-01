@@ -137,6 +137,12 @@ class _SpecCallbacks(ProverEventCallbacks):
         })
 
     @override
+    async def on_prover_runtime(self, ms: int) -> None:
+        # Queue-free prover run time (cloud job startTime->finishTime, or local subprocess wall-clock).
+        # Attributed to the active task; folded into the phase / run "prover_usage" totals.
+        self._summary.record_prover_runtime(ms)
+
+    @override
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
         elapsed = (time.perf_counter() - self._started_mono) if self._started_mono else 0.0
         status_summary = { k: v.status for (k,v) in results.items() }

@@ -78,3 +78,15 @@ class ArtifactStore(ABC):
         (ensure_dir(self._internal_dir()) / "token_usage.json").write_text(
             json.dumps(payload, indent=2)
         )
+
+    def write_prover_usage(self, summary: RunSummary) -> None:
+        """The run's accumulated prover-reported runtime → ``{internal}/prover_usage.json``.
+
+        Prover-reported run time (statsdata.json ``run_id.start_to_end_time`` — the engine's
+        own start-to-end wall time, not composer's client-side ``elapsed``), in milliseconds
+        with a derived ``minutes`` ``total`` and a ``by_phase`` breakdown. Summed across every
+        prover run in the pipeline (cloud and local alike)."""
+        payload = {"run_id": summary.run_id, **summary.prover_usage_summary()}
+        (ensure_dir(self._internal_dir()) / "prover_usage.json").write_text(
+            json.dumps(payload, indent=2)
+        )

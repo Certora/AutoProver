@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 from urllib.parse import urlparse, parse_qs
@@ -106,6 +107,23 @@ async def poll_job(
     """
     return await asyncio.wait_for(_poll_job_inner(job, interval=interval, on_status=on_status), timeout=timeout)
 
+def _job_runtime_ms(job_data: dict) -> int | None:
+    """Prover execution time (ms) from the cloud job's ``startTime``→``finishTime`` —
+    the post-dequeue run window.
+
+    EXCLUDES queue wait: the job is created at ``postTime``, sits in the queue, then
+    ``startTime`` marks when the prover actually began executing. Returns ``None``
+    if either timestamp is absent or unparseable, so usage capture never breaks a run.
+    """
+    start, finish = job_data.get("startTime"), job_data.get("finishTime")
+    if not start or not finish:
+        return None
+    try:
+        return int((datetime.fromisoformat(finish) - datetime.fromisoformat(start)).total_seconds() * 1000)
+    except (ValueError, TypeError):
+        return None
+
+
 def find_results_root(dest: Path) -> Path:
     """Navigate past the extra TarName/ top-level directory in the extracted archive."""
     children = [p for p in dest.iterdir() if p.is_dir()]
@@ -127,12 +145,14 @@ async def cloud_results(
     *,
     poll_timeout: float,
     poll_callback: Callable[[str, str], Awaitable[None]] | None = None,
-) -> AsyncIterator[Path]:
-    """Async context manager: poll cloud job, download results, yield path, clean up.
+) -> AsyncIterator[tuple[Path, int | None]]:
+    """Async context manager: poll cloud job, download results, yield (path, runtime_ms),
+    clean up.
 
-    Parses the cloud link, polls until completion, downloads and extracts the
-    results archive, then yields the path to the results root. The temporary
-    directory is cleaned up on exit.
+    Parses the cloud link, polls until completion, downloads and extracts the results
+    archive, then yields ``(results_root, runtime_ms)`` where ``runtime_ms`` is the prover's
+    queue-free execution time from the job's ``startTime``→``finishTime`` (``None`` if
+    unavailable). The temporary directory is cleaned up on exit.
     """
     cloud_job = parse_cloud_link(run_result_link)
 
@@ -148,6 +168,8 @@ async def cloud_results(
     status = job_data.get("jobStatus", "UNKNOWN")
     if status != "SUCCEEDED":
         raise RuntimeError(f"Cloud job finished with status {status} (expected DONE)")
+
+    runtime_ms = _job_runtime_ms(job_data)
 
     zip_url = job_data.get("zipOutputUrl")
     if not zip_url:
@@ -173,4 +195,4 @@ async def cloud_results(
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        yield find_results_root(dest)
+        yield (find_results_root(dest), runtime_ms)

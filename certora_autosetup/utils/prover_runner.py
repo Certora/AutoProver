@@ -33,6 +33,7 @@ from .enhanced_config_manager import ConfigManager, FileContent, ProverJobSpec
 from .file_utils import atomic_write_json_fsspec
 from .job_problem_fixes import MAX_JOB_PROBLEM_FIXES, on_job_problem
 from .logger import logger
+from .prover_usage_ledger import record_prover_runtime_ms
 from .runner_types import (
     JobHandle,
     NotificationType,
@@ -294,6 +295,18 @@ class ProverRunner(ABC):
     def _get_cache_key(self, job_spec: ProverJobSpec) -> str:
         """Get cache key for job specification."""
         return job_spec.get_cache_key(self.config_manager)
+
+    def _record_prover_runtime_seconds(self, seconds: Optional[float]) -> None:
+        """Fold a freshly-executed prover run's runtime (in seconds) into the process
+        prover-usage ledger. ``None`` or non-positive is a no-op.
+
+        Cloud passes the server-reported runtime (job start→finish); local passes its
+        wall-clock duration — local runs are serialized (one prover at a time, no
+        queueing), so wall-time is the run time. Callers are on the fresh-run path
+        only: cache hits short-circuit before the executor runs, so cached jobs are
+        excluded — they consumed no prover compute this run."""
+        if seconds and seconds > 0:
+            record_prover_runtime_ms(int(seconds * 1000))
 
     async def _check_cache(self, cache_key: str, job_spec: ProverJobSpec) -> Optional[ProverResult]:
         """Check if we have a cached result for this cache key."""
