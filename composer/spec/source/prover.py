@@ -29,7 +29,7 @@ from graphcore.graph import LLM
 from composer.prover.core import (
     ProverOptions, ProverCallbacks, run_prover, DefaultCexHandler
 )
-from composer.prover.runner import ProverEventCallbacks
+from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
     ProverOutputEvent, CloudPollingEvent, RuleAnalysisResult,

@@ -1,22 +1,23 @@
-from typing import Optional, List, Callable, override
-from pathlib import Path
+"""Stream-event prover callbacks shared by the codegen prover tool and the
+source-pipeline ``verify_spec`` tool.
 
-from langgraph.config import get_stream_writer
-from langgraph.runtime import get_runtime
+``ProverEventCallbacks`` translates the ``ProverCallbacks`` lifecycle into the
+custom stream events the UI renders, keyed by tool_call_id. Both prover entry
+points subclass it (the source tool adds its own timing / prover-link handling).
+"""
+
+from typing import Callable, override
 
 from composer.diagnostics.stream import (
     ProverRun, ProverResult, RuleAnalysisResult, CEXAnalysisStart,
     ProverOutputEvent, CloudPollingEvent,
 )
 from composer.prover.ptypes import RuleResult
-from composer.prover.core import (
-    ProverReport, ProverOptions as CoreProverOptions,
-    ProverCallbacks, run_prover,
-)
-from composer.core.state import AIComposerState
-from composer.core.context import AIComposerContext
+from composer.prover.core import ProverCallbacks
+
 
 type ProverEvents = ProverOutputEvent | CloudPollingEvent | ProverRun | ProverResult | RuleAnalysisResult | CEXAnalysisStart
+
 
 class ProverEventCallbacks(ProverCallbacks):
     def __init__(self, writer: Callable[[ProverEvents], None], tool_call_id: str) -> None:
@@ -78,56 +79,3 @@ class ProverEventCallbacks(ProverCallbacks):
             "rule_name": rule.name,
         }
         self._writer(evt)
-
-async def certora_prover(
-    source_files: List[str],
-    target_contract: str,
-    compiler_version: str,
-    loop_iter: int,
-    rule: Optional[str],
-    state: AIComposerState,
-    tool_call_id: str,
-    use_working_spec: bool
-) -> ProverReport | str:
-    if use_working_spec and not state["working_spec"]:
-        return "No working spec written."
-    runtime = get_runtime(AIComposerContext)
-    ctxt = runtime.context
-    writer = get_stream_writer()
-
-    with ctxt.vfs_materializer.materialize(state, debug=ctxt.prover_opts.keep_folder) as temp_dir:
-        if use_working_spec:
-            ws = state["working_spec"]
-            assert ws is not None
-            (Path(temp_dir) / "rules.spec").write_text(ws)
-        try:
-            args = source_files.copy()
-            args.extend([
-                "--verify",
-                f"{target_contract}:./rules.spec",
-                "--optimistic_loop",
-                "--optimistic_hashing",
-                "--loop_iter",
-                str(loop_iter),
-                "--solc", compiler_version,
-                "--solc_via_ir",
-                "--strict_solc_optimizer",
-                "--prover_args",
-                "-timeoutCracker true",
-            ])
-            if rule is not None:
-                args.extend(["--rule", rule])
-
-            return await run_prover(
-                Path(temp_dir),
-                args,
-                tool_call_id,
-                CoreProverOptions(extra_args=ctxt.prover_opts.extra_args),
-                ProverEventCallbacks(writer, tool_call_id),
-                ctxt.cex_handler,
-            )
-        except Exception as e:
-            print(e)
-            import traceback
-            traceback.print_exc()
-            raise e
