@@ -95,8 +95,6 @@ def get_provider_for(
         lite_model = _lookup(tiered.lite_model).build(tiered.lite_model, tiered)
         heavy_model = _lookup(tiered.heavy_model).build(tiered.heavy_model, tiered)
         if lite_model.provider != heavy_model.provider:
-            raise ValueError
-        if lite_model.provider != heavy_model.provider:
             raise ValueError(f"Cannot use different model providers for heavy and lite models: {tiered.lite_model} vs {tiered.heavy_model}")
         return TieredProviders(lite=lite_model, heavy=heavy_model, provider_kind=lite_model.provider)
 
