@@ -111,29 +111,13 @@ async def run_graph[H, S: StateLike, I: StateLike, C: StateLike | None](
                             graph_input = Command(resume=human_response)
                             interrupted = True
                             break
-                        elif ty == "custom":
-                            event_sink(
-                                CustomUpdate(payload, thread_id=tid, checkpoint_id=curr_checkpoint) # pyright: ignore[reportPossiblyUnboundVariable]
+                        event_sink(
+                            StateUpdate(
+                                payload, thread_id=tid
                             )
-                        else:
-                            assert ty == "updates"
-                            if "__interrupt__" in payload:
-                                assert human_handler is not None
-                                if "configurable" in curr_config and "checkpoint_id" in curr_config["configurable"]:
-                                    del curr_config["configurable"]["checkpoint_id"]
-                                interrupt_data = cast(H, payload["__interrupt__"][0].value)
-                                curr_state = cast(S, (await graph.aget_state({"configurable": {"thread_id": tid}})).values)
-                                human_response = await human_handler(interrupt_data, curr_state)
-                                graph_input = Command(resume=human_response)
-                                interrupted = True
-                                break
-                            event_sink(
-                                StateUpdate(
-                                    payload, thread_id=tid
-                                )
-                            )
-                    if interrupted:
-                        continue
+                        )
+                if interrupted:
+                    continue
 
                 result_state = (await graph.aget_state({"configurable": {"thread_id": tid}})).values
                 return cast(S, result_state)

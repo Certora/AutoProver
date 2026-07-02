@@ -118,6 +118,36 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
         return cast(AIMessage, lane[i])
 
 
+class _DummyUploader:
+    """A ``FileUploader`` stand-in that never touches a Files API: every input is
+    read from disk and returned as an in-memory text document. Installed under the
+    harness so a taped run does no real uploads — the codegen path uploads the spec
+    + interface via ``upload_text_file_if_needed``, which would otherwise hit the
+    live Files API."""
+
+    async def upload_text_file_if_needed(self, file_path: Any) -> Any:
+        return self._inline(file_path)
+
+    async def upload_file_if_needed(self, file_path: Any) -> Any:
+        return self._inline(file_path)
+
+    async def get_document(self, path: Any) -> Any:
+        import os
+        return self._inline(path) if os.path.isfile(str(path)) else None
+
+    @staticmethod
+    def _inline(path: Any) -> Any:
+        import os
+        from pathlib import Path
+        from composer.input.files import InMemoryTextFile
+        p = str(path)
+        return InMemoryTextFile(
+            basename=os.path.basename(p),
+            string_contents=Path(p).read_text(encoding="utf-8"),
+            provider="anthropic"
+        )
+
+
 def install_fake_llm(fake: Any) -> None:
     """Route every LLM-construction path in the pipeline to ``fake``.
 
@@ -153,5 +183,45 @@ def install_fake_llm(fake: Any) -> None:
         return fp
 
     registry.get_provider_for = _fake_get_provider_for
+    registry.uploader_for = lambda _provider: _DummyUploader()
     services.create_llm = lambda args: fake
     services.create_llm_base = lambda args: fake
+
+
+def install_fake_responses(responses: list[str]) -> None:
+    """Replay scripted human replies for console HITL interrupts.
+
+    Patches ``composer.ui.prompt.prompt_input`` (and the binding
+    ``composer.ui.console`` imported it under) to return each ``responses`` entry
+    in call order, applying the call's own ``filter`` as a sanity check. Raises if
+    the tape is exhausted or a scripted reply fails the prompt's filter. Install
+    before the entry path imports ``prompt_input`` by name (``composer/bind.py`` is
+    that hook). Replayed alongside ``install_fake_llm``.
+
+    Covers only the console HITL path; the autoprove interactive-refinement
+    conversation uses a different input path and is not handled here.
+    """
+    import composer.ui.prompt as prompt_mod
+
+    served = iter(responses)
+
+    def _fake_prompt_input(
+        prompt_str: str,
+        debug_thunk: Callable[[], None],
+        filter: Callable[[str], str | None] | None = None,
+    ) -> str:
+        try:
+            resp = next(served)
+        except StopIteration:
+            raise RuntimeError(
+                f"response tape exhausted — no scripted reply for HITL prompt: {prompt_str!r}"
+            )
+        if filter is not None and (rejection := filter(resp)) is not None:
+            raise RuntimeError(
+                f"scripted response {resp!r} rejected for prompt {prompt_str!r}: {rejection}"
+            )
+        return resp
+
+    prompt_mod.prompt_input = _fake_prompt_input
+    import composer.ui.console as console_mod
+    console_mod.prompt_input = _fake_prompt_input

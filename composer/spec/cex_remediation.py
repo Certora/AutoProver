@@ -28,7 +28,6 @@ from typing import NotRequired, override
 from typing_extensions import TypedDict
 from dataclasses import dataclass
 import difflib
-import uuid
 
 from pydantic import BaseModel, Field
 
@@ -44,7 +43,7 @@ from composer.spec.guidance import ERC20TokenGuidance
 from composer.core.state import AIComposerState
 from composer.input.files import Document
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.util import uniq_thread_id
+from composer.spec.util import uniq_thread_id, string_hash
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.ui.tool_display import tool_display
 from composer.prover.report_store import ReportStore
@@ -430,7 +429,9 @@ class CEXRemediator(
             # apply_remediation_proposal can fetch it without the
             # codegen author having to re-emit (or paraphrase) the spec
             # text. The codegen author only ever sees the diff + the key.
-            proposal_key = uuid.uuid4().hex
+            # Content-addressed (not a uuid): deterministic across identical
+            # re-runs and reconstructible by the harness tape, still opaque.
+            proposal_key = string_hash(result.proposed_cvl)
             await deps.proposals.record(proposal_key, result.proposed_cvl)
             return _render_remediation(
                 result,
