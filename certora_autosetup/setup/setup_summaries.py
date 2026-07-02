@@ -61,19 +61,23 @@ from certora_autosetup.setup.summary_resolver import resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
 
 
-# CVL grammar keyword terminals. A Solidity parameter whose name equals one of these is lexed as that
-# keyword inside a methods{} entry, which is a syntax error; such names are suffixed with "_" before
-# emission (see _cvl_safe_param_name).
+# CVL grammar keyword terminals that cannot double as an identifier. A Solidity parameter whose name
+# equals one of these is lexed as that keyword inside a methods{} entry, which is a syntax error; such
+# names are suffixed with "_" before emission (see _cvl_safe_param_name).
+#
+# This deliberately EXCLUDES the terminals listed under the `usable_keywords` production in cvl.cup
+# (exists, forall, sum, usum, using, as, import, use, builtin, override, sig, description, invariant,
+# preserved, weak, strong, onTransactionBoundary, old, hook, unresolved). The grammar accepts those
+# wherever an identifier is expected, so a parameter named after one parses fine and must NOT be
+# mangled. Note: uppercase "UNRESOLVED" is a distinct summary keyword and remains reserved.
 CVL_RESERVED_WORDS = frozenset({
     "ALL", "ALWAYS", "ASSERT_FALSE", "AUTO", "CONSTANT", "Create", "DELETE", "DISPATCH", "DISPATCHER",
     "HAVOC_ALL", "HAVOC_ECF", "NONDET", "PER_CALLEE_CONSTANT", "STORAGE", "Sload", "Sstore", "Tload",
-    "Tstore", "UNRESOLVED", "as", "assert", "assuming", "at", "axiom", "builtin", "default",
-    "definition", "description", "else", "event", "exists", "expect", "fallback", "false", "filtered",
-    "forall", "function", "ghost", "good_description", "havoc", "hook", "if", "import", "in", "indexed",
-    "invariant", "lastReverted", "lastStorage", "links", "mapping", "methods", "new", "norevert", "old",
-    "onTransactionBoundary", "override", "persistent", "preserved", "require", "requireInvariant",
-    "reset_storage", "return", "returns", "revert", "rule", "satisfy", "sig", "sort", "strong", "sum",
-    "true", "unresolved", "use", "using", "usum", "void", "weak", "with", "withrevert", "xor",
+    "Tstore", "UNRESOLVED", "assert", "assuming", "at", "axiom", "default", "definition", "else",
+    "event", "expect", "fallback", "false", "filtered", "function", "ghost", "good_description",
+    "havoc", "if", "in", "indexed", "lastReverted", "lastStorage", "links", "mapping", "methods",
+    "new", "norevert", "persistent", "require", "requireInvariant", "reset_storage", "return",
+    "returns", "revert", "rule", "satisfy", "sort", "true", "void", "with", "withrevert", "xor",
 })
 
 
