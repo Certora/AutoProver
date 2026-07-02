@@ -71,6 +71,7 @@ class PhaseRecord:
     error: str | None = None
     prover_s: float = 0.0
     prover_calls: int = 0
+    prover_reported_ms: int = 0  # prover-REPORTED runtime (statsdata run_id.start_to_end_time, ms) summed over this phase's runs
     final_link: str | None = None # URL (cloud) or local results directory (local) of the last prover run.
     token_usage_by_model: dict[str, TokenTotals] = field(default_factory=dict)
 
@@ -82,14 +83,12 @@ class RunSummary:
     prover_total_s: float = 0.0
     prover_total_calls: int = 0
     _active_prover_by_task: dict[str, tuple[float, int]] = field(default_factory=dict, repr=False)
-    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    """Maps task_id -> (prover_s_accum, prover_calls) recorded while task is in flight."""
-    _latest_link_by_task: dict[str, str] = field(default_factory=dict, repr=False)
-    """Maps task_id -> link for the most recent prover run."""
-    token_usage_by_model: dict[str, TokenTotals] = field(default_factory=dict)
-    """Maps model_name -> accumulated raw token counts across the whole run."""
-    _active_tokens_by_task: dict[str, dict[str, TokenTotals]] = field(default_factory=dict, repr=False)
-    """Maps task_id -> {model_name -> token counts} accumulated while the task is in flight."""
+    prover_reported_ms_total: int = 0  # Run-wide prover-REPORTED runtime, summed over every prover run. Distinct from prover_total_s, which is composer's client-side wall-clock (and so includes cloud queue / polling / result download).
+    _active_prover_reported_by_task: dict[str, int] = field(default_factory=dict, repr=False)  # Maps task_id -> prover-reported ms accumulated while the task is in flight.
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)  # Maps task_id -> (prover_s_accum, prover_calls) recorded while task is in flight.
+    _latest_link_by_task: dict[str, str] = field(default_factory=dict, repr=False)  # Maps task_id -> link for the most recent prover run.
+    token_usage_by_model: dict[str, TokenTotals] = field(default_factory=dict)  # Maps model_name -> accumulated raw token counts across the whole run.
+    _active_tokens_by_task: dict[str, dict[str, TokenTotals]] = field(default_factory=dict, repr=False)  # Maps task_id -> {model_name -> token counts} accumulated while the task is in flight.
 
     def record_phase(
         self,
@@ -102,6 +101,7 @@ class RunSummary:
         error: str | None = None,
     ) -> None:
         prover_s, prover_calls = self._active_prover_by_task.pop(task_id, (0.0, 0))
+        prover_reported_ms = self._active_prover_reported_by_task.pop(task_id, 0)
         link = self._latest_link_by_task.pop(task_id, None)
         tokens = self._active_tokens_by_task.pop(task_id, {})
         self.phases.append(PhaseRecord(
@@ -113,6 +113,7 @@ class RunSummary:
             error=error,
             prover_s=prover_s,
             prover_calls=prover_calls,
+            prover_reported_ms=prover_reported_ms,
             final_link=link,
             token_usage_by_model=tokens,
         ))
@@ -124,6 +125,20 @@ class RunSummary:
         if task_id is not None:
             prev_s, prev_n = self._active_prover_by_task.get(task_id, (0.0, 0))
             self._active_prover_by_task[task_id] = (prev_s + duration_s, prev_n + 1)
+
+    def record_prover_runtime(self, ms: int, *, task_id: str | None = None) -> None:
+        """Accumulate one prover run's prover-REPORTED runtime (statsdata.json
+        ``run_id.start_to_end_time``, in milliseconds — the prover engine's own
+        start-to-end wall time) into the run-wide total and, if a task is active,
+        into that task's in-flight bucket, later folded into its ``PhaseRecord`` by
+        ``record_phase``. Defaults attribution to the active task. Distinct from
+        ``add_prover_call``/``prover_total_s``, which records composer's client-side
+        wall-clock (and so also covers cloud queue, polling, and result download)."""
+        self.prover_reported_ms_total += ms
+        if (task_id := task_id or get_current_task_id()) is not None:
+            self._active_prover_reported_by_task[task_id] = (
+                self._active_prover_reported_by_task.get(task_id, 0) + ms
+            )
 
     def record_token_usage(self, usage: TokenUsageDict, *, task_id: str | None = None) -> None:
         """Accumulate one LLM call's token counts into the run-wide per-model totals
@@ -154,6 +169,20 @@ class RunSummary:
                 }
                 for p in self.phases
                 if p.token_usage_by_model
+            ],
+        }
+
+    def prover_usage_summary(self) -> dict[str, object]:
+        """Serializable run-total / per-phase prover-reported runtime — the body of
+        ``prover_usage.json`` and of the ``prover_usage`` run tag. Runtime is the
+        prover's own start-to-end time (statsdata ``run_id.start_to_end_time``),
+        summed across every prover run (cloud and local alike), in milliseconds."""
+        return {
+            "total_ms": self.prover_reported_ms_total,
+            "by_phase": [
+                {"task_id": p.task_id, "phase": p.phase, "ms": p.prover_reported_ms}
+                for p in self.phases
+                if p.prover_reported_ms
             ],
         }
 
@@ -262,6 +291,12 @@ def _format_summary(summary: RunSummary) -> str:
         f"Prover total: {_fmt_secs(summary.prover_total_s)} across "
         f"{summary.prover_total_calls} call(s)"
     )
+    if summary.prover_reported_ms_total:
+        out.append(
+            f"Prover runtime (reported): "
+            f"{summary.prover_reported_ms_total / 60_000:.1f} min "
+            f"({_fmt_secs(summary.prover_reported_ms_total / 1000)})"
+        )
     tot = summary.total_tokens()
     if tot:
         out.append(
