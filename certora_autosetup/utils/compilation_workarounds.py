@@ -493,9 +493,16 @@ class CompilationWorkaroundManager:
         return None
 
     def _detect_yul_exception_stack_too_deep(self, output: str) -> bool:
-        """Detect YulException with stack too deep error."""
-        pattern = r"YulException:.*Stack too deep"
-        return bool(re.search(pattern, output, re.IGNORECASE))
+        """Detect YulException with stack too deep error.
+
+        solc hard-wraps its diagnostic text at a fixed width, so the phrase
+        "Stack too deep" is frequently split across a newline (e.g. the real
+        error reads "...Stack too\ndeep."). Match across arbitrary whitespace
+        (DOTALL + ``\\s+`` between words) so the wrap does not hide the error;
+        otherwise the via-ir / optimizer workarounds never trigger.
+        """
+        pattern = r"YulException:.*?Stack\s+too\s+deep"
+        return bool(re.search(pattern, output, re.IGNORECASE | re.DOTALL))
 
     def _detect_compiler_version_mismatch(
         self, output: str, contracts: List[ContractHandle]
