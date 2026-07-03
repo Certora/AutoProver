@@ -473,6 +473,9 @@ class CallResolutionPhase:
             phase="call_resolution",
             config_file=config_content,
             extra_args=self.extra_args,
+            msg=ProverJobSpec.build_job_msg(
+                self.contract_name, self.config_file, suffix=f"(iteration {self.current_iteration})"
+            ),
         )
 
         prover_result = await self.prover_runner.check_with_prover(job_spec)
