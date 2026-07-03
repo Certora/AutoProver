@@ -1260,7 +1260,7 @@ class SetupProver:
                                 method.get("fullArgs", []), method.get("paramNames", [])
                             ):
                                 type_desc = arg.get("typeDesc", {})
-                                sol_type = parse_type_descriptor(type_desc, TypeParseMode.QUALIFIED)
+                                sol_type = parse_type_descriptor(type_desc, TypeParseMode.SOLIDITY)
                                 location = arg.get("location", "")
                                 if location in ("memory", "calldata", "storage"):
                                     sol_type = f"{sol_type} {location}"
