@@ -12,12 +12,12 @@ import json
 import re
 import shutil
 import subprocess
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
+import tomllib
+
 from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION, SolcConvention
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 from certora_autosetup.utils.library_harness import (
@@ -27,8 +27,16 @@ from certora_autosetup.utils.library_harness import (
 )
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.paths import user_harness_path, user_harnesses_dir
-from certora_autosetup.utils.solc_version_resolver import extract_pragma_spec, resolve_pragma_to_version
+from certora_autosetup.utils.solc_version_resolver import (
+    extract_pragma_spec,
+    resolve_pragma_to_version,
+)
 from certora_autosetup.utils.types import ContractHandle
+
+
+class AbstractMainContractError(Exception):
+    """Raised when the main (verify-target) contract compiled to no bytecode — it is
+    abstract (or lacks a constructor) and therefore cannot be verified."""
 
 
 def _path_from_compiling_line(line: str) -> Optional[str]:
@@ -174,6 +182,20 @@ class CompilationWorkaroundManager:
             logger.warning(message)
         else:
             logger.info(message)
+
+    def _detect_abstract_main_contract(self, output: str, compilation_config: Dict) -> Optional[str]:
+        """Return the main (verify-target) contract name if the compiler reported it has
+        no bytecode — i.e. it is abstract (or lacks a constructor) and cannot be verified.
+
+        The prover prints ``Contract <name> has no bytecode`` for any contract in the
+        input files (harnesses/siblings included), so match the reported names against
+        the verify target specifically rather than assuming the first one is the main.
+        """
+        main_contract = ConfigManager.extract_main_contract_from_config(compilation_config)
+        if main_contract is None:
+            return None
+        no_bytecode = {m.group(1) for m in re.finditer(r"Contract (\S+) has no bytecode", output)}
+        return main_contract if main_contract in no_bytecode else None
 
     # =========================================================================
     # Main entry point for running compilation with workarounds
@@ -358,6 +380,20 @@ class CompilationWorkaroundManager:
             if self.verbose >= 2:
                 self.log("Compilation output (stdout + stderr):")
                 self.log(output)
+
+            # Terminal, non-recoverable case: the main (verify-target) contract has no
+            # bytecode (abstract / no constructor). No workaround can make an abstract
+            # contract concrete, so detect it as soon as compilation fails rather than
+            # after exhausting every workaround (the catch-all relpaths workaround would
+            # otherwise fire first and delay this).
+            abstract_main_contract = self._detect_abstract_main_contract(output, compilation_config)
+            if abstract_main_contract is not None:
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                raise AbstractMainContractError(
+                    f"Main contract '{abstract_main_contract}' compiled to no bytecode: it is abstract "
+                    f"(or is missing a constructor), so it is not deployable and cannot be "
+                    f"verified. Re-run with a concrete implementation as the main contract."
+                )
 
             # Try to find an applicable workaround
             workaround_applied = False

@@ -322,10 +322,13 @@ class SetupProver:
             # fail gracefully here rather than failing later via certoraRun.
             if main_contract not in surviving_names:
                 raise CompilationAnalysisError(
-                    f"Main contract '{main_contract}' is not among the files in the prover scene: "
-                    f"{sorted(surviving_names) or '(none)'}. "
-                    f"The active build system did not compile it — check the build config "
-                    f"or override with --build-system"
+                    f"Main contract '{main_contract}' is not among the compiled contracts in the "
+                    f"prover scene: {sorted(surviving_names) or '(none)'}. "
+                    f"Most often this means '{main_contract}' is abstract or an interface "
+                    f"(it compiles to no bytecode), so it is not deployable and cannot be verified "
+                    f"— re-run with a concrete implementation as the main contract. Otherwise the "
+                    f"active build system did not compile it — check the build config or override "
+                    f"with --build-system."
                 )
 
             # Precompute compiler_map and solc_via_ir_map from build artifacts (survivors only)
