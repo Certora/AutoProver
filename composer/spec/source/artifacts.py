@@ -69,9 +69,13 @@ class ProverArtifactStore(ArtifactStore):
     """Persists the autoprove pipeline's outputs under ``certora/`` (plus
     ``.certora_internal/autoProve/`` diagnostics)."""
 
-    def __init__(self, project_root: str, main_contract: str):
+    def __init__(self, project_root: str, main_contract: str, verify_contract: str | None = None):
         super().__init__(project_root)
         self._main_contract = main_contract
+        # The contract identifier the prover verifies: the main-harness identifier
+        # when the run verifies through an augmentation harness, otherwise the main
+        # contract itself.
+        self._verify_contract = verify_contract or main_contract
 
     def _deliverable_dir(self) -> Path:
         return under_project(self._project_root, CERTORA_DIR)
@@ -116,8 +120,8 @@ class ProverArtifactStore(ArtifactStore):
             return
         conf = prover_config_overlay(
             base_config,
-            main_contract=self._main_contract,
-            verify_target=f"{self._main_contract}:{spec_path}",
+            main_contract=self._verify_contract,
+            verify_target=f"{self._verify_contract}:{spec_path}",
         )
         confs_dir = ensure_dir(self._deliverable_dir() / "confs")
         (confs_dir / f"{spec.stem}.conf").write_text(json.dumps(conf, indent=2))
@@ -138,11 +142,19 @@ class ProverArtifactStore(ArtifactStore):
         _log.info("autoprove report: wrote %s", out)
 
 
+@dataclass
 class ProverSourceCode(SourceCode):
     """``SourceCode`` that exposes the prover artifact store. Construct this in the
     autoprove entry point; analysis / property-inference passes keep taking plain
     ``SourceCode`` since the store is irrelevant to them."""
 
+    # The contract identifier the prover verifies. Defaults to ``contract_name``;
+    # the staged pipeline overrides it (via ``dataclasses.replace``) when a
+    # main-contract augmentation harness is the verify target.
+    verify_contract: str | None = None
+
     @property
     def artifact_store(self) -> ProverArtifactStore:
-        return ProverArtifactStore(self.project_root, self.contract_name)
+        return ProverArtifactStore(
+            self.project_root, self.contract_name, verify_contract=self.verify_contract,
+        )

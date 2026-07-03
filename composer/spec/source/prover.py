@@ -50,6 +50,8 @@ def prover_config_overlay(base_config: dict, *, main_contract: str, verify_targe
 
     Shared by the live ``verify_spec`` run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
+    ``main_contract`` is the verified contract identifier — the augmentation-harness
+    identifier when the pipeline verifies through a main-contract harness.
     """
     return {
         **base_config,

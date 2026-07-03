@@ -39,12 +39,15 @@ class ReportComponentInput[R: ReportableResult]:
     of the file the units live in (``autospec_<slug>.spec`` / ``invariants.spec`` / a ``.t.sol``) —
     the unit-identity fallback when a verdict carries no source location. ``result`` is the in-memory
     generation outcome, or ``None`` when the component gave up / crashed (no units formalized).
-    ``run_link`` is this component's verification-run link, if any (prover URL / local dir)."""
+    ``run_link`` is this component's verification-run link, if any (prover URL / local dir).
+    ``gave_up_sort`` is the author's give-up classification when ``result`` is ``None`` because
+    the component gave up (``None`` for crashes / backends that don't classify give-ups)."""
     name: ComponentName
     unit_file: str
     props: list[PropertyFormulation]
     result: R | None
     run_link: str | None
+    gave_up_sort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -111,7 +114,9 @@ async def collect[R: ReportableResult](
     for inp, verdicts in zip(inputs, verdict_maps):
         if inp.result is None:
             # Gave up or crashed: the whole component is a formalization gap.
-            gave_up.append(GaveUpComponent(component=inp.name, properties=inp.props))
+            gave_up.append(GaveUpComponent(
+                component=inp.name, properties=inp.props, give_up_sort=inp.gave_up_sort,
+            ))
             continue
         res = inp.result
         skip_reasons = {s.property_title: s.reason for s in res.skipped}

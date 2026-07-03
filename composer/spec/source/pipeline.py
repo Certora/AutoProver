@@ -15,6 +15,7 @@ Phases:
 """
 
 import asyncio
+from dataclasses import replace
 
 from composer.io.multi_job import (
     TaskInfo, HandlerFactory, run_task,
@@ -139,10 +140,20 @@ async def run_autoprove_pipeline(
         components=comp
     )
 
+    # The verified contract, computed ONCE here: the main-harness identifier when
+    # harness creation produced a main-contract augmentation harness, the main
+    # contract itself otherwise. Everything downstream that names a verify target
+    # (prover tool, artifact-store conf dumps) derives from this.
+    verify_contract = sys_desc.verify_contract_name(source_input.contract_name)
+    source_input = replace(source_input, verify_contract=verify_contract)
+    # The harness API one-liners (None when no main harness), surfaced to the
+    # property authors and the feedback judge.
+    harness_api = sys_desc.main_harness_api()
+
     # Prover tool is stateless with respect to setup, so build it now; it is
     # shared by every CVL-generation call below.
     prover_tool = get_prover_tool(
-        env.llm_heavy(), source_input.contract_name,
+        env.llm_heavy(), verify_contract,
         source_input.project_root, prover_opts=prover_opts,
     )
 
@@ -186,7 +197,10 @@ async def run_autoprove_pipeline(
         return await run_task(
             handler_factory,
             TaskInfo(INVARIANTS_TASK_ID, "Structural Invariants", AutoProvePhase.INVARIANTS),
-            lambda: get_invariant_formulation(ctx, source_input, env, harnessed_app),
+            lambda: get_invariant_formulation(
+                ctx, source_input, env, harnessed_app,
+                main_harness=sys_desc.main_harness_view(),
+            ),
         )
 
     async def stream_bugs():
@@ -255,6 +269,7 @@ async def run_autoprove_pipeline(
                     description="Structural invariant CVL",
                     source=source_input,
                     spec_dir=SPECS_DIR,
+                    harness_api=harness_api,
                 ),
             )
             if isinstance(inv_cvl_result, GaveUp):
@@ -293,4 +308,5 @@ async def run_autoprove_pipeline(
         resources=resources,
         semaphore=semaphore,
         invariant_result=invariant_result,
+        harness_api=harness_api,
     )

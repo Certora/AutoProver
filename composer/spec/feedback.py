@@ -41,11 +41,17 @@ class FeedbackInherentParams(TypedDict):
     #   ``existing``   — pre-existing codebase being verified as-is; target
     #                    has real immutable source.
     sort: Sort
+    # One-liners describing the main-contract augmentation harness API. Only the
+    # source-mode (autoprove) flow supplies this; the other flows have no harness.
+    harness_api: NotRequired[list[str] | None]
 
 FeedbackTemplate = TypedTemplate[FeedbackInherentParams]("property_judge_prompt.j2")
 
 class JudgeSystemParams(TypedDict):
     sort: Sort
+    # True when the run verifies through a main-contract augmentation harness;
+    # gates the harness-aware wording (the template defaults it to false).
+    harness_augmentation: NotRequired[bool]
 
 # Judge system prompt, shared between the natspec and source-mode flows. The fs
 # primitives are always documented; ``sort`` drives the rest (the template
@@ -61,10 +67,14 @@ def property_feedback_judge(
     *,
     extra_inputs: list[str | dict] | Callable[[], list[str | dict]] | None = None,
     system_prompt: TemplateInstantiation | None = None,
+    harness_augmentation: bool = False,
 ) -> FeedbackToolContext:
 
     if system_prompt is None:
-        system_prompt = FeedbackSystemTemplate.bind({"sort": env.sort})
+        system_prompt = FeedbackSystemTemplate.bind({
+            "sort": env.sort,
+            "harness_augmentation": harness_augmentation,
+        })
 
     builder = env.builder_heavy().with_tools(
         env.all_tools
