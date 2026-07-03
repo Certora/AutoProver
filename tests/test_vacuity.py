@@ -2,8 +2,8 @@
 Unit tests for composer/prover/vacuity.py: vacuous-method detection over
 synthetic RuleResult sets, alert rendering, the filtered-block /
 documented-repair spec-text checks, and the verify_spec hard guard that
-withholds the PROVER validation stamp for undocumented filters of
-detected-vacuous methods.
+withholds the PROVER validation stamp for undocumented filters — or
+undocumented expect_rule_failure skips — of detected-vacuous methods.
 """
 
 import pytest
@@ -16,6 +16,7 @@ from composer.prover.vacuity import (
     format_vacuity_alert,
     instantiated_methods,
     undocumented_filtered_vacuous,
+    undocumented_skipped_vacuous,
 )
 from composer.spec.cvl_generation import check_completion
 from composer.spec.source.author import ExpectRuleFailure
@@ -182,6 +183,55 @@ rule a(method f) filtered { f -> f.selector != sig:deposit(uint256).selector
 """
         assert undocumented_filtered_vacuous(spec, [WITHDRAW, DEPOSIT]) == [DEPOSIT, WITHDRAW]
 
+    def test_prefix_collision_not_matched(self):
+        """Token-boundary matching: vacuous `deposit` must NOT count as contained
+        in a filter that only excludes `depositAll` (raw-substring prefix hit)."""
+        spec = """\
+rule a(method f) filtered { f -> f.selector != sig:depositAll().selector } {
+    assert true;
+}
+"""
+        assert undocumented_filtered_vacuous(spec, [DEPOSIT]) == []
+
+
+# =========================================================================
+# undocumented_skipped_vacuous
+# =========================================================================
+
+
+_DOCUMENTED_SKIP_REASON = (
+    "solvency sanity-fails because deposit is vacuous; attempted to fix the NONDET "
+    "summary on the payable receiver, then a mock under certora/mocks, then "
+    "optimistic_fallback — the revert persisted in all three."
+)
+
+
+class TestUndocumentedSkippedVacuous:
+    def test_undocumented_skip_blocked(self):
+        evidence = detect_vacuous_methods(
+            [_res("ruleA", DEPOSIT, "SANITY_FAILED"), _res("ruleB", DEPOSIT, "SANITY_FAILED")]
+        )
+        skips = {"ruleA": "flaky rule", "ruleB": "known to fail"}
+        assert undocumented_skipped_vacuous(evidence, skips) == [DEPOSIT]
+
+    def test_documented_skip_passes(self):
+        evidence = detect_vacuous_methods(
+            [_res("ruleA", DEPOSIT, "SANITY_FAILED"), _res("ruleB", DEPOSIT, "SANITY_FAILED")]
+        )
+        skips = {"ruleA": _DOCUMENTED_SKIP_REASON, "ruleB": "known to fail"}
+        assert undocumented_skipped_vacuous(evidence, skips) == []
+
+    def test_unskipped_rules_pass(self):
+        """A vacuous verdict with no affected rule in rule_skips never blocks here
+        (the still-failing rules block all_verified instead)."""
+        evidence = detect_vacuous_methods(
+            [_res("ruleA", DEPOSIT, "SANITY_FAILED"), _res("ruleB", DEPOSIT, "SANITY_FAILED")]
+        )
+        assert undocumented_skipped_vacuous(evidence, {"unrelated": "expected CEX"}) == []
+
+    def test_empty_evidence_passes(self):
+        assert undocumented_skipped_vacuous({}, {"ruleA": "flaky"}) == []
+
 
 # =========================================================================
 # verify_spec filtered-vacuous hard guard (mocked prover)
@@ -305,6 +355,69 @@ class TestVerifySpecVacuityGuard:
         )
         accepted = await scenario.turns(
             _verify(),
+            _verify(),
+            _result("done"),
+        ).map_run(_result_accepted)
+        assert accepted
+
+    @pytest.mark.asyncio
+    async def test_undocumented_rule_skip_withholds_stamp(self, certora_prover: ProverMock):
+        """The expect_rule_failure bypass: instead of filtering the vacuous method,
+        the agent marks its sanity-failing rule "expected to fail". The rule drops
+        out of the all-verified check, but the stamp must still be withheld."""
+        scenario = _guard_scenario(
+            certora_prover,
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            curr_spec=_NO_FILTER_SPEC,
+        )
+        accepted = await scenario.turns(
+            _verify(),
+            tool_call_raw("expect_rule_failure", rule_name="solvency", reason="flaky rule"),
+            _verify(),
+            _result("done"),
+        ).map_run(_result_accepted)
+        assert not accepted
+
+    @pytest.mark.asyncio
+    async def test_skip_guard_message_names_method_and_tools(self, certora_prover: ProverMock):
+        scenario = _guard_scenario(
+            certora_prover,
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            curr_spec=_NO_FILTER_SPEC,
+        )
+        msg = await (
+            scenario.turn(_verify())
+            .turn(tool_call_raw("expect_rule_failure", rule_name="solvency", reason="flaky rule"))
+            .turn(_verify())
+            .run_last_single_tool(_PROVER)
+        )
+        assert "vacuity_skip_guard" in msg
+        assert "WITHHELD" in msg
+        assert DEPOSIT in msg
+        assert "expect_rule_passage" in msg
+
+    @pytest.mark.asyncio
+    async def test_documented_rule_skip_grants_stamp(self, certora_prover: ProverMock):
+        """Escape hatch: the skip reason documents the attempted repair-ladder steps."""
+        scenario = _guard_scenario(
+            certora_prover,
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            curr_spec=_NO_FILTER_SPEC,
+        )
+        accepted = await scenario.turns(
+            _verify(),
+            tool_call_raw(
+                "expect_rule_failure", rule_name="solvency", reason=_DOCUMENTED_SKIP_REASON
+            ),
             _verify(),
             _result("done"),
         ).map_run(_result_accepted)

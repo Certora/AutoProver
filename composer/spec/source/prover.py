@@ -29,7 +29,10 @@ from graphcore.graph import LLM
 from composer.prover.core import (
     ProverOptions, ProverCallbacks, ProverReport, run_prover, DefaultCexHandler
 )
-from composer.prover.vacuity import format_filter_guard, undocumented_filtered_vacuous
+from composer.prover.vacuity import (
+    format_filter_guard, format_skip_guard,
+    undocumented_filtered_vacuous, undocumented_skipped_vacuous,
+)
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
@@ -301,14 +304,24 @@ def get_prover_tool(
                     break
             if rules is None and all_verified:
                 # HARD GUARD: a detected-vacuous method sitting inside a `filtered` block
-                # makes the run pass trivially. Withhold the PROVER validation stamp
-                # unless a repair-ladder attempt is documented near the filter (the
-                # escape hatch — checked leniently; the judge assesses its quality).
-                blocked = undocumented_filtered_vacuous(state["curr_spec"], known_vacuous)
-                if blocked:
+                # makes the run pass trivially — and so does marking its sanity-failing
+                # rules "expected to fail", which drops them from the all_verified check
+                # above. Withhold the PROVER validation stamp in both cases unless a
+                # repair-ladder attempt is documented (near the filter / in the skip
+                # reason — the escape hatch, checked leniently; the judge assesses
+                # its quality).
+                filter_blocked = undocumented_filtered_vacuous(
+                    state["curr_spec"], known_vacuous
+                )
+                skip_blocked = undocumented_skipped_vacuous(
+                    result.vacuous_methods, state["rule_skips"]
+                )
+                if filter_blocked or skip_blocked:
+                    guards = ([format_filter_guard(filter_blocked)] if filter_blocked else []) \
+                        + ([format_skip_guard(skip_blocked)] if skip_blocked else [])
                     return tool_state_update(
                         tool_call_id=tool_call_id,
-                        content=f"{result.result_str}\n\n{format_filter_guard(blocked)}",
+                        content="\n\n".join([result.result_str, *guards]),
                         prover_link=result.link, vacuous_methods=vacuity_update,
                     )
                 return tool_state_update(

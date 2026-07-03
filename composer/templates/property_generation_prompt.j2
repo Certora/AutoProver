@@ -112,6 +112,9 @@ feedback as soon as possible.
     defect instead of fixing it, and the prover validation stamp will be withheld. If steps 1-3 of the repair ladder
     genuinely failed, you may filter the method, but the justification comment next to the filter MUST name which of
     summary-fix / mock / `optimistic_fallback` you attempted and why each failed.
+  + The same applies to `expect_rule_failure`: marking a vacuous method's sanity-failing rules as "expected to fail"
+    hides the identical setup defect and likewise withholds the prover validation stamp, unless the reason you record
+    names which of summary-fix / mock / `optimistic_fallback` you attempted and why each failed.
 * For any other logical errors/issues not described here, address the changes in a methodical way. Use your
   adaptive thinking and the cvl researcher to come to *principled* solutions. Do *NOT* try to brute force
   the solution by trying random changes.

@@ -6,8 +6,9 @@ the current verification model, so any rule instantiated with it passes
 trivially. Per-rule ``SANITY_FAILED`` results already reach the verify loop
 (``composer/prover/results.py`` attaches the ``METHOD_INSTANTIATION`` name to
 ``RulePath.method``); this module aggregates them into a per-method verdict,
-renders the ``<vacuity_alert>`` the agent sees, and provides the spec-text
-checks backing the ``verify_spec`` filtered-vacuous guard.
+renders the ``<vacuity_alert>`` the agent sees, and provides the checks backing
+the ``verify_spec`` vacuity guards (undocumented ``filtered`` exclusions and
+undocumented ``expect_rule_failure`` skips of the affected rules).
 
 The near-universal root cause is a setup defect — canonically a NONDET summary
 on a payable or side-effecting callee — so the alert prescribes a *repair
@@ -136,6 +137,29 @@ Filtering a vacuous method hides a setup defect instead of fixing it. Either:
 </vacuity_filter_guard>"""
 
 
+def format_skip_guard(blocked: list[str]) -> str:
+    """Render the message returned by ``verify_spec`` when it withholds the
+    PROVER validation stamp because the sanity-failing rules of vacuous methods
+    were marked "expected to fail" without a documented repair attempt."""
+    method_list = "\n".join(f"  - {m}" for m in sorted(blocked))
+    return f"""\
+<vacuity_skip_guard>
+The PROVER validation stamp was WITHHELD. The following method(s) are VACUOUS (they revert on
+every path under the current verification model) and their sanity-failing rules were marked
+"expected to fail" via `expect_rule_failure` with no documented repair attempt:
+{method_list}
+
+Marking those rules as expected failures hides a setup defect just like filtering the method would.
+Either:
+  * repair the root cause (repair ladder: 1. fix/replace the offending summary preserving payable
+    semantics, 2. `write_mock` + `edit_config` AddFile/AddLink, 3. `optimistic_fallback` via
+    `edit_config` set_flag), un-mark the rules with `expect_rule_passage`, and rerun `verify_spec`; or
+  * if steps 1-3 genuinely failed, re-call `expect_rule_failure` with a reason documenting which of
+    summary-fix / mock / optimistic_fallback you attempted and why each failed, then rerun
+    `verify_spec`. The feedback judge will assess the quality of that justification.
+</vacuity_skip_guard>"""
+
+
 def _bare_method_name(method: str) -> str:
     """``Bank.withdraw(uint256)`` -> ``withdraw``. Prover method-instantiation
     names are contract-qualified with a parameter list; filter expressions
@@ -198,8 +222,34 @@ def undocumented_filtered_vacuous(spec: str, methods: Iterable[str]) -> list[str
     blocks = _filtered_blocks_with_context(spec)
     blocked: list[str] = []
     for method in methods:
-        bare = _bare_method_name(method)
-        containing = [ctx for (ctx, body) in blocks if bare in body]
+        # Token-boundary match, not raw substring: a filter excluding only
+        # `depositAll` must not count as containing the vacuous `deposit`.
+        name_re = re.compile(rf"\b{re.escape(_bare_method_name(method))}\b")
+        containing = [ctx for (ctx, body) in blocks if name_re.search(body)]
         if containing and not any(_documents_repair_attempt(ctx) for ctx in containing):
+            blocked.append(method)
+    return sorted(blocked)
+
+
+def undocumented_skipped_vacuous(
+    evidence: dict[str, VacuityEvidence], rule_skips: dict[str, str]
+) -> list[str]:
+    """The subset of this run's vacuous methods with a sanity-failing rule
+    excluded from the pass/fail verdict via a rule skip (``expect_rule_failure``)
+    whose reason does not document a repair-ladder attempt.
+
+    Closes the other mechanical bypass of the filtered-vacuous guard: instead of
+    filtering the method, the agent can mark each of its sanity-failing rules
+    "expected to fail" — those rules then drop out of ``verify_spec``'s
+    all-verified check while the method never enters a filter body. Works off
+    the current run's evidence (not the persisted verdicts) because only it
+    names the affected rules; in the skip scenario the method stays
+    instantiated, so detection re-fires on every run. Mirrors the filter
+    check's leniency: one documented skip reason covering the method clears it.
+    """
+    blocked: list[str] = []
+    for method, ev in evidence.items():
+        reasons = [rule_skips[r] for r in ev.affected_rules if r in rule_skips]
+        if reasons and not any(_documents_repair_attempt(reason) for reason in reasons):
             blocked.append(method)
     return sorted(blocked)
