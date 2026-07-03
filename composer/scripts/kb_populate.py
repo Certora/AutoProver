@@ -498,6 +498,244 @@ CVL_HELP_MESSAGES : list[KBMessage] = [
             "to the property being checked."
         ),
     },
+    {
+        "title": "Keccak-derived / unstructured storage slots are verifiable — don't skip",
+        "symptom": "You are about to skip a property because the contract keeps state in keccak-derived storage slots (ERC-7201 namespaced storage, EIP-1967 proxy slots, assembly/`StorageSlot` access) and \"CVL cannot reason about hash functions\".",
+        "body": (
+            "**Misconception:** The \"no reasoning about hashes\" limitation is about *collisions and "
+            "inversion* of hashes of unknown data. A keccak-derived storage *slot* is the hash of a "
+            "fixed string literal — a compile-time constant — and `keccak256` is a built-in CVL "
+            "function. Such state is fully in reach.\n\n"
+            "**Slot formulas:**\n"
+            "- EIP-1967: `bytes32(uint256(keccak256(\"eip1967.proxy.implementation\")) - 1)`\n"
+            "- ERC-7201: `keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))`\n\n"
+            "Compute the constant once (from the contract source, or with `cast keccak`/`chisel`) and "
+            "embed it as a `definition`:\n"
+            "```cvl\n"
+            "// bytes32(uint256(keccak256(\"eip1967.proxy.implementation\")) - 1)\n"
+            "definition IMPL_SLOT() returns uint256 =\n"
+            "    0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;\n"
+            "\n"
+            "ghost address implMirror;\n"
+            "\n"
+            "// the (slot ...) hook pattern takes a numeric literal; keep the derivation as a comment\n"
+            "hook Sstore (slot 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc)\n"
+            "    address newImpl {\n"
+            "    implMirror = newImpl;\n"
+            "}\n"
+            "```\n\n"
+            "**Alternative — harness getter:** add `contract XHarness is X` with an `external view` "
+            "getter that `sload`s the slot constant (see the harness article). Prefer hooks for "
+            "tracking *writes*, getters for reading current values inside assertions."
+        ),
+    },
+    {
+        "title": "Sload/Sstore hook grammar — paths, KEY/INDEX, ghost mirroring",
+        "symptom": "You need to observe storage reads/writes (a mapping entry, array element, struct field, or raw slot) to state a property, but are unsure of the hook pattern syntax or why your hook never fires.",
+        "body": (
+            "**Pattern grammar by example:**\n"
+            "```cvl\n"
+            "hook Sload address o owner { ... }                          // read of a named variable\n"
+            "hook Sstore totalSupply uint256 ts (uint256 old_ts) { ... } // old value in parens\n"
+            "hook Sstore balances[KEY address user] uint256 v { ... }    // mapping entry\n"
+            "hook Sstore entries[INDEX uint256 i] uint256 e { ... }      // array element\n"
+            "hook Sstore owner.balance uint256 b { ... }                 // struct field\n"
+            "hook Sstore (slot 1).(offset 2) uint16 b { ... }            // raw slot + offset\n"
+            "```\n"
+            "`KEY` binds the mapping key, `INDEX` the array index; paths compose "
+            "(`m[KEY address a].field[INDEX uint256 i]`).\n\n"
+            "**Ghost mirroring** — the standard way to make hooked state visible to rules and "
+            "invariants:\n"
+            "```cvl\n"
+            "ghost mapping(address => uint256) balanceMirror {\n"
+            "    init_state axiom forall address a. balanceMirror[a] == 0;\n"
+            "}\n"
+            "hook Sstore balances[KEY address user] uint256 v {\n"
+            "    balanceMirror[user] = v;\n"
+            "}\n"
+            "```\n\n"
+            "**Why a hook may never fire:**\n"
+            "- Hooks are only triggered by *contract* code. Direct storage access from CVL does not "
+            "fire them (calling a Solidity function from CVL does — the store happens in contract "
+            "code).\n"
+            "- Hooks are not applied recursively: stores performed inside a hook body do not trigger "
+            "further hooks.\n"
+            "- Non-persistent ghosts are havoced together with storage on unresolved calls — mirror "
+            "values can be wiped even though the hook fired."
+        ),
+    },
+    {
+        "title": "No public getter for the state you need — write a harness",
+        "symptom": "The property needs a private/internal variable, an unstructured storage slot, or an intermediate step of a monolithic function, and the contract exposes no getter for it.",
+        "body": (
+            "Missing getters are a *harness* problem, not a CVL-expressibility problem. Three "
+            "patterns, all in a `contract XHarness is X` under `certora/harnesses/` (verify the "
+            "harness instead of the base contract — inherited behavior is unchanged):\n\n"
+            "**1. Getter harness** for private/internal state:\n"
+            "```solidity\n"
+            "contract VaultHarness is Vault {\n"
+            "    function getPendingFees() external view returns (uint256) {\n"
+            "        return _pendingFees; // internal state, no public getter upstream\n"
+            "    }\n"
+            "}\n"
+            "```\n\n"
+            "**2. Raw-slot getter** for unstructured/keccak-derived storage:\n"
+            "```solidity\n"
+            "function slotValue(bytes32 slot) external view returns (uint256 v) {\n"
+            "    assembly { v := sload(slot) }\n"
+            "}\n"
+            "```\n\n"
+            "**3. Helper decomposition** of a monolithic external function: expose each internal step "
+            "as a thin wrapper (`helper1()`, `helper2()`, ...) so steps can be verified separately. "
+            "Wrappers must contain *no logic of their own* — each one only calls an existing internal "
+            "function; otherwise you verify the harness, not the protocol.\n\n"
+            "A harness is verification infrastructure, not a protocol change — needing one is not a "
+            "reason to skip a property."
+        ),
+    },
+    {
+        "title": "Rule passes vacuously — a method always reverts under the model",
+        "symptom": "rule_sanity reports a rule vacuous (or `assert false` passes), or a parametric rule's instantiation for one method always reverts even though the method works on-chain.",
+        "body": (
+            "**Root-cause checklist, in order of likelihood:**\n"
+            "1. **`NONDET` summary on a payable or side-effecting callee.** Canonical case: the "
+            "contract forwards ETH to a summarized `deposit()` (e.g. the beacon-chain deposit "
+            "contract). The `NONDET` summary erases the callee's state effects, so checks downstream "
+            "of the call fail on every path and the caller always reverts in the model — every rule "
+            "touching that path becomes vacuous. Inspect the auto-generated summaries first.\n"
+            "2. **Conflicting `require`s** (including silent `require_*` casts) in the rule or a "
+            "preserved block.\n"
+            "3. **`loop_iter` too small:** with default (pessimistic) loop handling, executions "
+            "needing more iterations than `loop_iter` are cut off — possibly all of them.\n"
+            "4. **`lastReverted` overwritten** by a later call (see the dedicated article).\n\n"
+            "**Repair order — fix the root cause before filtering:**\n"
+            "1. Replace the bad summary with a sound one (expression summary / ghost model of the "
+            "callee).\n"
+            "2. Write a small mock contract and link it into the scene.\n"
+            "3. `\"optimistic_fallback\": true` if the offender is an unresolved raw ETH transfer "
+            "(see the optimistic_fallback article).\n"
+            "4. Only if 1–3 are impossible: a `filtered` block, with a comment documenting which "
+            "repairs were attempted and why they failed.\n\n"
+            "Filtering first hides the setup bug and silently unverifies *every* property on that "
+            "method."
+        ),
+    },
+    {
+        "title": "Unresolved low-level call{value} havocs storage — optimistic_fallback vs DISPATCHER vs mock",
+        "symptom": "Call resolution shows an unresolved low-level `.call{value: ...}(\"\")` (or `send`/`transfer`) resolved as HAVOC; rules fail with arbitrary storage changes or become vacuous.",
+        "body": (
+            "**Default behavior:** an unresolved external call with an empty input buffer havocs "
+            "storage — the Prover assumes the unknown receiver may call back and change anything.\n\n"
+            "**Options, weakest-assumption first:**\n"
+            "- **`\"optimistic_fallback\": true`** (conf flag): unresolved empty-calldata calls no "
+            "longer havoc the caller's storage. The right fix when the call is a *pure ETH transfer* "
+            "to an arbitrary address. Unsound exactly when the receiver could reenter the protocol — "
+            "reentrancy is what the flag assumes away, so don't use it for reentrancy properties.\n"
+            "- **`DISPATCHER(true)`**: when the call goes through a known interface and an "
+            "implementation exists in the scene; the Prover case-splits over scene implementations. "
+            "Sound relative to the scene, but fails at type-checking (CLI ≥7.7.0) if no "
+            "implementation is present, and doesn't apply to raw empty-calldata transfers.\n"
+            "- **Mock contract** linked into the scene: full control over counterparty behavior; "
+            "costs authoring effort and risks over-constraining (a too-friendly mock hides bugs).\n\n"
+            "Pick the weakest assumption that unblocks the rule and record the soundness trade-off in "
+            "a comment next to the flag or summary."
+        ),
+    },
+    {
+        "title": "Verifying properties across a sequence of calls — `lastStorage` and `at`",
+        "symptom": "The property compares outcomes of different call sequences from the same starting state (additivity, round-trip/inverse, split-vs-whole operations), and single-call rules can't express it.",
+        "body": (
+            "**Idiom:** snapshot the state with `storage s = lastStorage;` and replay an alternative "
+            "sequence from the snapshot with `f(e, args) at s;`.\n\n"
+            "**Additivity template** (split vs. whole):\n"
+            "```cvl\n"
+            "rule depositAdditive(env e, uint256 x, uint256 y) {\n"
+            "    storage init = lastStorage;\n"
+            "    deposit(e, x);\n"
+            "    deposit(e, y);\n"
+            "    uint256 split = balanceOf(e.msg.sender);\n"
+            "\n"
+            "    deposit(e, require_uint256(x + y)) at init; // replay from the snapshot\n"
+            "    uint256 whole = balanceOf(e.msg.sender);\n"
+            "\n"
+            "    assert split == whole; // rounding may require: split <= whole (or a ±1 bound)\n"
+            "}\n"
+            "```\n\n"
+            "**Round-trip template** (inverse operations restore state):\n"
+            "```cvl\n"
+            "rule depositWithdrawRoundTrip(env e, uint256 amount) {\n"
+            "    storage init = lastStorage;\n"
+            "    uint256 shares = deposit(e, amount);\n"
+            "    withdraw(e, shares);\n"
+            "    assert lastStorage[currentContract] == init[currentContract];\n"
+            "}\n"
+            "```\n"
+            "Whole-storage comparison (`==` on `storage` variables, optionally restricted per contract "
+            "with `s[c]`) is supported.\n\n"
+            "**Caveat:** rounding usually breaks exact equalities — prefer inequalities in the "
+            "direction that protects the protocol (\"the user never gains from split/round-trip\")."
+        ),
+    },
+    {
+        "title": "Implication rules can pass vacuously — add `satisfy` witness rules",
+        "symptom": "A rule whose assertion is an implication (`antecedent => consequent`) passes, and you suspect it only passes because the antecedent is never true on any reachable path.",
+        "body": (
+            "**Semantics:** `assert p;` must hold on *all* reachable paths; `satisfy p;` checks that "
+            "*there exists* a reachable path where `p` holds, and fails if none does. A rule body "
+            "ends with either `assert` or `satisfy`.\n\n"
+            "`rule_sanity: basic` catches a fully unreachable assert, but NOT an implication whose "
+            "antecedent is never true — the assert is still reached and trivially passes. The fix is "
+            "a witness companion rule:\n"
+            "```cvl\n"
+            "rule pausedBlocksWithdraw(env e) {\n"
+            "    bool paused = paused();\n"
+            "    withdraw@withrevert(e);\n"
+            "    assert paused => lastReverted;\n"
+            "}\n"
+            "\n"
+            "// companion witness: the interesting antecedent is actually reachable\n"
+            "rule pausedBlocksWithdraw_witness(env e) {\n"
+            "    bool paused = paused();\n"
+            "    withdraw@withrevert(e);\n"
+            "    satisfy paused;\n"
+            "}\n"
+            "```\n\n"
+            "**Difference from `assert`:** a passing `satisfy` produces a concrete witness execution "
+            "in the report — it is a coverage/sanity check that the rule exercises the case you care "
+            "about, not a safety proof. Add witnesses for every implication-shaped or "
+            "heavily-`require`d rule."
+        ),
+    },
+    {
+        "title": "Nonlinear arithmetic (mulDiv) times out — verify relational properties, summarize with abstractions",
+        "symptom": "Rules over share/asset conversions or ratio math (`x * y / z`, mulDiv, WAD/RAY operations) time out or exhaust the SMT solver.",
+        "body": (
+            "**Principle — relational over exact:** do not restate the exact nonlinear formula in the "
+            "spec (that doubles the nonlinear reasoning burden). State the properties that actually "
+            "matter and are solver-friendly:\n"
+            "- monotonicity in each argument,\n"
+            "- bounds and rounding direction (`down <= up <= down + 1`),\n"
+            "- round-trip inequalities (converting and back never favors the user),\n"
+            "- zero/identity cases.\n\n"
+            "**Summarize the hotspot:** replace the exact `mulDiv` implementation with a relational "
+            "abstraction that keeps only such axioms. The `CVLMath.spec` summaries resource (under "
+            "`certora/specs/summaries/`, when present in the project) provides `mulDivDownAbstract`, "
+            "`mulDivUpAbstract`, and friends with monotonicity/zero/exactness axioms — import it and "
+            "route the implementation through it:\n"
+            "```cvl\n"
+            "import \"summaries/CVLMath.spec\";\n"
+            "\n"
+            "methods {\n"
+            "    function MathLib.mulDiv(uint256 x, uint256 y, uint256 d) internal returns (uint256)\n"
+            "        => mulDivDownAbstract(x, y, d);\n"
+            "}\n"
+            "```\n\n"
+            "**Trade-off:** the abstraction over-approximates the real function, so properties that "
+            "depend on exact values may get spurious counterexamples — keep exact summaries for "
+            "those rules only. Abstractions with axioms can also introduce vacuity if the axioms "
+            "conflict; keep `rule_sanity: basic` on to catch it."
+        ),
+    },
 ]
 
 to_store : list[KnowledgeBaseArticle] = [
