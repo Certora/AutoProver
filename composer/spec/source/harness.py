@@ -208,6 +208,11 @@ class SystemDescriptionHarnessed(SystemDescriptionBase[HarnessedContract]):
     # kept so downstream prompts can describe the harness API.
     main_harness: HarnessedContract | None = None
     main_harness_plan: MainHarnessPlan | None = None
+    # Human-readable reason when the generated harness failed AutoSetup and the run
+    # fell back to verifying the raw main contract (see ``run_autosetup_phase``).
+    # Set in-run only, never cached: the description is cached before AutoSetup runs,
+    # so a rerun retries the harness before falling back again.
+    main_harness_fallback: str | None = None
 
     def verify_contract_name(self, default_name: str) -> str:
         """The contract identifier the prover verifies: the main-harness identifier
@@ -846,53 +851,90 @@ async def run_autosetup_phase(
     return the compilation config + summaries. Depends on harness creation
     having run first: it reads the transitive-closure file paths from disk.
 
+    When a main-contract augmentation harness exists, the harness *is* the
+    verified contract: it becomes AutoSetup's target (the original main
+    contract enters the scene through inheritance, not as its own instance).
+    If AutoSetup fails on the harness, the phase falls back to the raw main
+    contract instead of hard-failing the run: it clears ``main_harness`` /
+    ``main_harness_plan`` on ``sys_desc`` (so every verify-target and prompt
+    accessor reverts automatically — the pipeline computes the verify target
+    after this phase) and records the downgrade in ``main_harness_fallback``
+    for the report. Failures are never cached, so a rerun retries the harness
+    before falling back again.
+
     Cache hits are guarded by the on-disk existence of ``summaries_path``."""
-    # When a main-contract augmentation harness exists, the harness *is* the
-    # verified contract: it becomes AutoSetup's target (the original main
-    # contract enters the scene through inheritance, not as its own instance).
-    verify_harness = (
-        sys_desc.main_harness.solidity_identifier if sys_desc.main_harness is not None else None
-    )
     config_ctxt = context.child(config_key)
-    cache = await config_ctxt.child(
-        autosetup_key(application_desc, prover_opts, verify_harness),
-        application_desc.model_dump(),
-    )
-    if (cached := await cache.cache_get(SetupSuccess)) is not None:
-        if under_project(source.project_root, certora_relative_to_project(cached.summaries_path)).exists():
-            return cached
 
     extra_files = [
         c.path for c in sys_desc.transitive_closure if c.solidity_identifier != source.contract_name
     ]
 
-    setup_result = await run_autosetup(
-        Path(source.project_root),
-        sys_desc.verify_contract_path(source.relative_path),
-        sys_desc.verify_contract_name(source.contract_name),
-        prover_opts,
-        *extra_files,
-    )
+    async def attempt(verify: HarnessedContract | None) -> SetupSuccess | SetupFailure:
+        """One AutoSetup attempt: against the augmentation harness when ``verify``
+        is given, the raw main contract otherwise. Each target caches under its
+        own key (``autosetup_key``'s verify component), so a fallback result can
+        never be replayed as a harness result or vice versa."""
+        cache = await config_ctxt.child(
+            autosetup_key(
+                application_desc, prover_opts,
+                verify.solidity_identifier if verify is not None else None,
+            ),
+            application_desc.model_dump(),
+        )
+        if (cached := await cache.cache_get(SetupSuccess)) is not None:
+            if under_project(source.project_root, certora_relative_to_project(cached.summaries_path)).exists():
+                return cached
+
+        setup_result = await run_autosetup(
+            Path(source.project_root),
+            verify.path if verify is not None else source.relative_path,
+            verify.solidity_identifier if verify is not None else source.contract_name,
+            prover_opts,
+            *extra_files,
+        )
+
+        if isinstance(setup_result, SetupFailure):
+            return setup_result
+
+        # AutoSetup runs as a subprocess; its LLM token usage never reaches composer's
+        # UsageCallback. Fold the counts it wrote to disk into the run summary so they
+        # land in token_usage.json, the run tag, and the end-of-run table. No task_id:
+        # the active task is already AUTOSETUP_TASK_ID, so this attributes to the
+        # autosetup phase. Guarded — read_autosetup_usage returns [] if absent. This is
+        # only reached on a cache miss (cache hits return above), so usage spent in this
+        # process's autosetup run is counted exactly once.
+        summary = get_run_summary()
+        for usage in read_autosetup_usage(Path(source.project_root)):
+            summary.record_token_usage(usage)
+        # Likewise fold AutoSetup's subprocess prover runtime (prover-reported, cache hits
+        # excluded) into the run's prover_usage under the active AUTOSETUP_TASK_ID. None if
+        # absent — guarded so missing external usage can't break the phase.
+        if (autosetup_prover_ms := read_autosetup_prover_usage(Path(source.project_root))) is not None:
+            summary.record_prover_runtime(autosetup_prover_ms)
+
+        await cache.cache_put(setup_result)
+        return setup_result
+
+    main_harness = sys_desc.main_harness
+    setup_result = await attempt(main_harness)
+
+    if isinstance(setup_result, SetupFailure) and main_harness is not None:
+        # Raw-contract fallback: a broken generated harness (classifier false
+        # positive, bad import/constructor/solc detail) must not kill a run that
+        # succeeds on the raw contract.
+        reason = (
+            f"AutoSetup failed for the augmentation harness {main_harness.solidity_identifier}; "
+            f"verification fell back to the raw contract {source.contract_name}. "
+            f"Error: {setup_result.error}"
+        )
+        _logger.warning("%s\nProc stderr:\n%s", reason, setup_result.stderr)
+        sys_desc.main_harness = None
+        sys_desc.main_harness_plan = None
+        sys_desc.main_harness_fallback = reason
+        setup_result = await attempt(None)
 
     if isinstance(setup_result, SetupFailure):
         raise RuntimeError(f"Auto setup failed: {setup_result.error}\nProc stderr:\n{setup_result.stderr}")
 
-    # AutoSetup runs as a subprocess; its LLM token usage never reaches composer's
-    # UsageCallback. Fold the counts it wrote to disk into the run summary so they
-    # land in token_usage.json, the run tag, and the end-of-run table. No task_id:
-    # the active task is already AUTOSETUP_TASK_ID, so this attributes to the
-    # autosetup phase. Guarded — read_autosetup_usage returns [] if absent. This is
-    # only reached on a cache miss (cache hits return above), so usage spent in this
-    # process's autosetup run is counted exactly once.
-    summary = get_run_summary()
-    for usage in read_autosetup_usage(Path(source.project_root)):
-        summary.record_token_usage(usage)
-    # Likewise fold AutoSetup's subprocess prover runtime (prover-reported, cache hits
-    # excluded) into the run's prover_usage under the active AUTOSETUP_TASK_ID. None if
-    # absent — guarded so missing external usage can't break the phase.
-    if (autosetup_prover_ms := read_autosetup_prover_usage(Path(source.project_root))) is not None:
-        summary.record_prover_runtime(autosetup_prover_ms)
-
-    await cache.cache_put(setup_result)
     return setup_result
 

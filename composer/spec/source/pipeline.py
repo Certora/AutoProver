@@ -140,22 +140,13 @@ async def run_autoprove_pipeline(
         components=comp
     )
 
-    # The verified contract, computed ONCE here: the main-harness identifier when
-    # harness creation produced a main-contract augmentation harness, the main
-    # contract itself otherwise. Everything downstream that names a verify target
-    # (prover tool, artifact-store conf dumps) derives from this.
-    verify_contract = sys_desc.verify_contract_name(source_input.contract_name)
-    source_input = replace(source_input, verify_contract=verify_contract)
-    # The harness API one-liners (None when no main harness), surfaced to the
-    # property authors and the feedback judge.
-    harness_api = sys_desc.main_harness_api()
-
-    # Prover tool is stateless with respect to setup, so build it now; it is
-    # shared by every CVL-generation call below.
-    prover_tool = get_prover_tool(
-        env.llm_heavy(), verify_contract,
-        source_input.project_root, prover_opts=prover_opts,
-    )
+    # Captured before the parallel phase below: the invariant formulator runs
+    # concurrently with AutoSetup, so it intentionally sees the pre-fallback
+    # harness view. If AutoSetup falls back to the raw contract mid-flight,
+    # invariants formulated over harness getters simply fail formalization
+    # downstream, where the post-fallback state (computed after the join)
+    # governs the verify target and prompts.
+    pre_fallback_harness_view = sys_desc.main_harness_view()
 
     # ------------------------------------------------------------------
     # Phase 3 (parallel branches, joined below):
@@ -199,7 +190,7 @@ async def run_autoprove_pipeline(
             TaskInfo(INVARIANTS_TASK_ID, "Structural Invariants", AutoProvePhase.INVARIANTS),
             lambda: get_invariant_formulation(
                 ctx, source_input, env, harnessed_app,
-                main_harness=sys_desc.main_harness_view(),
+                main_harness=pre_fallback_harness_view,
             ),
         )
 
@@ -224,6 +215,23 @@ async def run_autoprove_pipeline(
 
     if not component_batches:
         raise ValueError("No properties extracted from any component.")
+
+    # The verified contract, computed ONCE here — after AutoSetup, so a raw-contract
+    # fallback (which clears sys_desc.main_harness) is already reflected: the
+    # main-harness identifier when the augmentation harness survived AutoSetup, the
+    # main contract itself otherwise. Everything downstream that names a verify
+    # target (prover tool, artifact-store conf dumps) derives from this.
+    verify_contract = sys_desc.verify_contract_name(source_input.contract_name)
+    source_input = replace(source_input, verify_contract=verify_contract)
+    # The harness API one-liners (None when no main harness), surfaced to the
+    # property authors and the feedback judge.
+    harness_api = sys_desc.main_harness_api()
+
+    # The prover tool is shared by every CVL-generation call below.
+    prover_tool = get_prover_tool(
+        env.llm_heavy(), verify_contract,
+        source_input.project_root, prover_opts=prover_opts,
+    )
 
     store = source_input.artifact_store
 

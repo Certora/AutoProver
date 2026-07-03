@@ -288,6 +288,149 @@ def test_harness_augmentation_reaches_both_judge_binds(flag: bool):
     assert task_bind.render_to(load_jinja_template)
 
 
+# ---------------------------------------------------------------------------
+# Raw-contract fallback when the harness fails AutoSetup
+# ---------------------------------------------------------------------------
+
+def _fallback_fixture(tmp_path):
+    """A WorkflowContext (in-memory store), a SourceCode rooted at tmp_path, and a
+    harnessed system description, for driving run_autosetup_phase directly."""
+    from typing import Any, cast
+    from langgraph.store.memory import InMemoryStore
+    from composer.spec.context import SourceCode, WorkflowContext
+
+    ctx = WorkflowContext.create(
+        services=cast(Any, None),
+        thread_id="fallback-test",
+        store=InMemoryStore(),
+        recursion_limit=25,
+        cache_namespace=("fallback-test",),
+    )
+    source = SourceCode(
+        content=cast(Any, None),
+        project_root=str(tmp_path),
+        contract_name="River",
+        relative_path="src/River.sol",
+        forbidden_read="^$",
+    )
+    desc = SystemDescriptionHarnessed.model_validate(_base_description_fields())
+    desc.main_harness = _main_harness_contract()
+    desc.main_harness_plan = _plan()
+    return ctx, source, desc
+
+
+def _fake_autosetup(fail_for: set[str], calls: list[tuple[str, str]]):
+    from composer.spec.source.autosetup import SetupFailure, SetupSuccess
+
+    async def fake(project_root, relative_path, main_contract, prover_opts, *extra_files):
+        calls.append((relative_path, main_contract))
+        if main_contract in fail_for:
+            return SetupFailure(error=f"solc boom for {main_contract}", stderr="stderr text")
+        return SetupSuccess(
+            prover_config={"files": []},
+            summaries_path=f"certora/summaries/summaries-{main_contract}.spec",
+            user_types=[],
+        )
+
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_autosetup_falls_back_to_raw_contract(tmp_path, monkeypatch):
+    import composer.spec.source.harness as harness_mod
+    from composer.prover.core import ProverOptions
+    from composer.spec.system_model import SourceApplication as App
+
+    ctx, source, desc = _fallback_fixture(tmp_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(harness_mod, "run_autosetup", _fake_autosetup({"RiverHarness"}, calls))
+
+    app = App(application_type="Staking", description="desc", components=[])
+    result = await harness_mod.run_autosetup_phase(ctx, source, desc, app, ProverOptions())
+
+    # Harness attempt first, then the raw contract.
+    assert calls == [
+        ("certora/harnesses/RiverHarness.sol", "RiverHarness"),
+        ("src/River.sol", "River"),
+    ]
+    assert result.summaries_path.endswith("summaries-River.spec")
+    # The fallback clears the harness so every verify-target/prompt accessor reverts,
+    # and records the downgrade for the report.
+    assert desc.main_harness is None
+    assert desc.main_harness_plan is None
+    assert desc.verify_contract_name("River") == "River"
+    assert desc.main_harness_api() is None
+    assert desc.main_harness_fallback is not None
+    assert "RiverHarness" in desc.main_harness_fallback
+    assert "solc boom for RiverHarness" in desc.main_harness_fallback
+
+
+@pytest.mark.asyncio
+async def test_autosetup_harness_success_keeps_harness(tmp_path, monkeypatch):
+    import composer.spec.source.harness as harness_mod
+    from composer.prover.core import ProverOptions
+    from composer.spec.system_model import SourceApplication as App
+
+    ctx, source, desc = _fallback_fixture(tmp_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(harness_mod, "run_autosetup", _fake_autosetup(set(), calls))
+
+    app = App(application_type="Staking", description="desc", components=[])
+    result = await harness_mod.run_autosetup_phase(ctx, source, desc, app, ProverOptions())
+
+    assert calls == [("certora/harnesses/RiverHarness.sol", "RiverHarness")]
+    assert result.summaries_path.endswith("summaries-RiverHarness.spec")
+    assert desc.main_harness is not None
+    assert desc.main_harness_fallback is None
+
+
+@pytest.mark.asyncio
+async def test_autosetup_raw_failure_still_raises(tmp_path, monkeypatch):
+    import composer.spec.source.harness as harness_mod
+    from composer.prover.core import ProverOptions
+    from composer.spec.system_model import SourceApplication as App
+
+    ctx, source, desc = _fallback_fixture(tmp_path)
+    # No harness: a raw-contract failure has nothing to fall back to.
+    desc.main_harness = None
+    desc.main_harness_plan = None
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(harness_mod, "run_autosetup", _fake_autosetup({"River"}, calls))
+
+    app = App(application_type="Staking", description="desc", components=[])
+    with pytest.raises(RuntimeError, match="Auto setup failed"):
+        await harness_mod.run_autosetup_phase(ctx, source, desc, app, ProverOptions())
+    assert calls == [("src/River.sol", "River")]
+
+
+@pytest.mark.asyncio
+async def test_autosetup_fallback_failure_raises_too(tmp_path, monkeypatch):
+    import composer.spec.source.harness as harness_mod
+    from composer.prover.core import ProverOptions
+    from composer.spec.system_model import SourceApplication as App
+
+    ctx, source, desc = _fallback_fixture(tmp_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        harness_mod, "run_autosetup", _fake_autosetup({"River", "RiverHarness"}, calls),
+    )
+
+    app = App(application_type="Staking", description="desc", components=[])
+    with pytest.raises(RuntimeError, match="Auto setup failed"):
+        await harness_mod.run_autosetup_phase(ctx, source, desc, app, ProverOptions())
+    # Both attempts ran; the downgrade was still recorded before the final failure.
+    assert calls == [
+        ("certora/harnesses/RiverHarness.sol", "RiverHarness"),
+        ("src/River.sol", "River"),
+    ]
+    assert desc.main_harness_fallback is not None
+
+
+def test_system_description_fallback_field_backcompat():
+    desc = SystemDescriptionHarnessed.model_validate(_base_description_fields())
+    assert desc.main_harness_fallback is None
+
+
 @pytest.mark.parametrize("with_harness", [True, False])
 def test_structural_invariant_prompt_main_harness(with_harness: bool):
     view = MainHarnessView(
