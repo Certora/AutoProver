@@ -123,6 +123,12 @@ class ConfigManager:
 
     DEFAULT_CONF_TEMPLATE = {"assert_autofinder_success": True, "files": []}
 
+    # Top-level conf flags an autosetup phase may *recommend* (e.g. call resolution
+    # recommending optimistic_fallback for unresolved low-level value transfers).
+    # Deliberately narrow: recommendations flow from automated analyses, so anything
+    # outside this whitelist is a bug in the recommending phase, not user input.
+    EXTRA_FLAGS_WHITELIST = frozenset({"optimistic_fallback", "contract_recursion_limit"})
+
     def __init__(
         self,
         project_root: Path,
@@ -199,6 +205,38 @@ class ConfigManager:
                 normalized_handles.append(handle)
         return normalized_handles
 
+    def _validated_extra_flags(self, extra_flags: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate a recommended-flags dict against EXTRA_FLAGS_WHITELIST.
+
+        Raises ValueError on a non-whitelisted flag or an ill-typed value — the caller
+        is an automated phase, so a violation is a programming error, not bad user input.
+        NB: bool is a subclass of int, so the bool check precedes the int check.
+        """
+        for flag, value in extra_flags.items():
+            if flag not in self.EXTRA_FLAGS_WHITELIST:
+                raise ValueError(
+                    f"Flag {flag!r} is not in the extra-flags whitelist "
+                    f"({sorted(self.EXTRA_FLAGS_WHITELIST)})"
+                )
+            if flag == "optimistic_fallback" and not isinstance(value, bool):
+                raise ValueError(f"optimistic_fallback expects a bool, got {value!r}")
+            if flag == "contract_recursion_limit" and (
+                isinstance(value, bool) or not isinstance(value, int) or not (0 <= value <= 10)
+            ):
+                raise ValueError(f"contract_recursion_limit expects an int in 0..10, got {value!r}")
+        return dict(extra_flags)
+
+    def apply_extra_flags(self, config_file: Path, extra_flags: Dict[str, Any]) -> FileContent:
+        """Merge whitelisted recommended flags into an *existing* conf.
+
+        Companion to create_config's ``extra_flags`` parameter for recommendations that
+        arrive after the conf was created (call resolution runs against the already-created
+        base conf and mutates it in place, like its linker entries do).
+        """
+        return self.update_config_with_properties(
+            config_file, self._validated_extra_flags(extra_flags)
+        )
+
     def create_config(
         self,
         contract_name: str,
@@ -208,6 +246,7 @@ class ConfigManager:
         conf_path: Optional[Path] = None,
         additional_args: Optional[Dict[str, str]] = None,
         properties: Optional[Dict[str, Any]] = None,
+        extra_flags: Optional[Dict[str, Any]] = None,
     ) -> FileContent:
         """
         Create initial configuration file from template.
@@ -220,6 +259,8 @@ class ConfigManager:
             conf_path: Path to the to-be-created .conf file
             additional_args: Optional dict of additional prover arguments
             properties: Optional dict of additional config properties (including build system settings)
+            extra_flags: Optional recommended top-level flags from automated phases;
+                validated against EXTRA_FLAGS_WHITELIST (ValueError on violation)
 
         Returns:
             FileContent representing the created configuration
@@ -240,6 +281,11 @@ class ConfigManager:
         # Apply additional properties if provided
         if properties:
             conf_template.update(properties)
+
+        # Apply whitelisted recommended flags (after properties: a validated
+        # recommendation wins over a same-named entry smuggled in via properties)
+        if extra_flags:
+            conf_template.update(self._validated_extra_flags(extra_flags))
 
         # Apply additional prover args if provided
         if additional_args:

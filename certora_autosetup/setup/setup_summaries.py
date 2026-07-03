@@ -1668,6 +1668,33 @@ Method signature: {method_signature}
             await processed.put(None)
             return l
 
+    @staticmethod
+    def _nondet_ineligible(
+        recipe: Recipe,
+        method: Dict[str, Any],
+        payable_keys: Set[Tuple[str, str]],
+    ) -> bool:
+        """True when ``method`` must not be matched by a NONDET-producing recipe.
+
+        A NONDET summary erases the callee's effects; on a payable method that
+        includes its ability to accept ``msg.value``, and on any state-mutating
+        method it drops the state update — either way callers typically revert
+        on every path, so rules instantiated with them pass vacuously. This is
+        the match-time arm of the guard (defense in depth over the emit-time
+        view/pure check in ``_emit_per_contract_summaries``); it also covers
+        custom recipes, whose ``properties`` may not constrain mutability.
+
+        ``payable_keys`` is the ``(contractName, name)`` set from
+        ``MethodParser.get_payable_methods()`` — payability is the canonical
+        culprit, so it is checked explicitly rather than only via the
+        mutability fallback.
+        """
+        if recipe.summary_type.upper() != "NONDET":
+            return False
+        if (method["contractName"], method["name"]) in payable_keys:
+            return True
+        return method.get("stateMutability") not in ("view", "pure")
+
     async def analyze_with_llm(
         self,
         recipe: Recipe,
@@ -1701,6 +1728,12 @@ Method signature: {method_signature}
 
         mp = self.methods_parser
 
+        # Payable methods must never receive a NONDET summary (see _nondet_ineligible);
+        # keyed like methods_to_skip for the match-time exclusion below.
+        payable_keys: Set[Tuple[str, str]] = {
+            (m["contractName"], m["name"]) for m in mp.get_payable_methods()
+        }
+
         # Filter methods by properties and originatingContract
         all_methods = mp.get_all_methods()
         filtered_methods = []
@@ -1728,6 +1761,15 @@ Method signature: {method_signature}
             if matches:
                 # Skip methods with storage location parameters (internal-only, can't generate valid summaries)
                 if any(loc == "storage" for loc in method.get("location", [])):
+                    continue
+
+                # Defense in depth over the emit-time view/pure check: never even propose a
+                # payable or state-mutating method for a NONDET recipe (custom recipes included).
+                if self._nondet_ineligible(recipe, method, payable_keys):
+                    self.log(
+                        f"Skipping payable/state-mutating method for NONDET recipe: "
+                        f"{method_key[0]}.{method_key[1]}"
+                    )
                     continue
 
                 # Skip known ERC4626 exchange-rate methods for the decimal-conversion recipe:
@@ -2257,7 +2299,15 @@ Method signature: {method_signature}
                 Recipe(
                     recipe_type=RecipeType.INLINE_ASSEMBLY,
                     characteristic="contains inline assembly blocks with `mload` or `mstore` instructions",
-                    properties={"visibility": "internal"},
+                    # Restricted to view/pure: a NONDET summary on a state-mutating (and
+                    # especially payable) method erases its effects, which typically makes
+                    # every caller revert on all paths — rules over those callers then pass
+                    # vacuously. `_nondet_ineligible` enforces the same bound at match time
+                    # as defense in depth (covering custom recipes too).
+                    properties={
+                        "visibility": "internal",
+                        "stateMutability": ["view", "pure"],
+                    },
                     summary_type="NONDET",
                 ),
             ]

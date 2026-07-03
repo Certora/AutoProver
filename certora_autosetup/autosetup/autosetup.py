@@ -903,6 +903,20 @@ class Autosetup:
 
             self.log(f"🔗 Running call resolution for {contract_handle.contract_name}")
             await call_resolution_phase.execute(max_iterations=10)
+
+            # Call resolution may recommend conf flags (e.g. optimistic_fallback when an
+            # unresolved low-level value transfer remains — no link/dispatcher can resolve
+            # those, and without the flag every caller can vacuously revert). The base conf
+            # was created before this phase ran, so merge into the existing conf here rather
+            # than at create_config time.
+            if call_resolution_phase.recommended_extra_flags:
+                self.log(
+                    f"Applying conf flags recommended by call resolution: "
+                    f"{call_resolution_phase.recommended_extra_flags}"
+                )
+                self.config_manager.apply_extra_flags(
+                    enhanced_config.path, call_resolution_phase.recommended_extra_flags
+                )
             return True
 
         except Exception as e:

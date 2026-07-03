@@ -125,6 +125,25 @@ class IterationResult:
         return 0
 
 
+def is_unresolved_value_transfer(call: CallResolutionInfo) -> bool:
+    """Whether ``call`` is a low-level value transfer (``.call{value: ...}``, ``send``,
+    ``transfer``) with no resolvable target.
+
+    Such a call HAVOCs and — crucially — can always be *assumed to fail*, which makes every
+    caller able to revert on all paths (the vacuous-rule failure mode). ``optimistic_fallback``
+    assumes these calls succeed instead, hence the recommendation built from this predicate.
+
+    The selector check keeps high-level calls that merely look alike out: an unresolved
+    ERC20-style ``token.transfer(...)`` carries a resolvable selector, while native value
+    transfers have none (``[?].[?]`` in the report legend).
+    """
+    snippet = (call.call_site_snippet or "").replace(" ", "")
+    if not any(marker in snippet for marker in (".call{value", ".send(", ".transfer(")):
+        return False
+    # Cheap field check first: extract_sighash_from_callee may shell out to `cast sig`.
+    return call.selector is None and extract_sighash_from_callee(call.callee_name) is None
+
+
 class CallResolutionPhase:
     """
     Iterative call resolution:
@@ -168,6 +187,12 @@ class CallResolutionPhase:
         self.contract_dispatcher = ContractDispatcher(self.scope, config_manager=config_manager)
         self.current_iteration = 0
         self._last_unresolved_calls: List[CallResolutionInfo] = []
+
+        # Structured conf-flag recommendation derived from the calls left unresolved when
+        # the loop finishes (currently only {"optimistic_fallback": True}, emitted when an
+        # unresolved low-level value transfer remains). The autosetup call site merges these
+        # into the emitted conf via the ConfigManager extra-flags whitelist.
+        self.recommended_extra_flags: Dict[str, Any] = {}
 
         # Report state: tracks every contract added to the scene with its provenance,
         # every proxy-detection scan result (hits and misses), and the prover job URL
@@ -336,6 +361,17 @@ class CallResolutionPhase:
                         logger.info(f"  {call.caller_name} -> {sighash} (not in signature database)")
                 else:
                     logger.info(f"  {call.caller_name} -> {call.callee_name}")
+
+        # Recommend optimistic_fallback when unresolved low-level value transfers remain:
+        # no link/dispatcher can ever resolve a native `.call{value: ...}`/`send`/`transfer`
+        # target, so without the flag every caller can vacuously revert.
+        value_transfers = [c for c in remaining if is_unresolved_value_transfer(c)]
+        if value_transfers:
+            self.recommended_extra_flags["optimistic_fallback"] = True
+            logger.info(
+                f"Recommending optimistic_fallback for {self.contract_name}: "
+                f"{len(value_transfers)} unresolved low-level value transfer(s) remain"
+            )
 
         # An empty `remaining` only means "all resolved" when the loop finished cleanly.
         # If a prover run failed, the loop broke before refreshing `remaining`, so the
@@ -553,6 +589,12 @@ class CallResolutionPhase:
                 prior_parts = [f"[{n}]({u})" if u else f"{n}" for n, u in prior]
                 headline += f"  (earlier iterations {', '.join(prior_parts)})"
             lines.append(headline)
+        if self.recommended_extra_flags:
+            lines.append(
+                f"- **Recommended conf flags:** {self.recommended_extra_flags} "
+                "(unresolved low-level value transfer(s) remain; without `optimistic_fallback` "
+                "every caller of such a call can vacuously revert)"
+            )
         lines.append("")
 
         # Section B: Proxy Detection
