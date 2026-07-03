@@ -82,6 +82,45 @@ class TestJudgePrompt:
         # The old blanket doctrine ("the Solidity code is IMMUTABLE", unqualified) is gone.
         assert "The Solidity code is *IMMUTABLE*" not in out
 
+    def test_criteria7_fallback_labels_harness_skips(self):
+        # harness_augmentation omitted (default false): Criteria 7 must align with the
+        # system prompt's fallback — harness-shaped skips get the "missing harness
+        # support" label rather than a rejection the author has no tool to satisfy.
+        out = load_jinja_template(
+            "property_judge_prompt.j2", properties=_props(), sort="existing", context=None
+        )
+        assert "missing harness support, not CVL inexpressibility" in out
+        assert "If any of these mechanisms applies, reject the skip" not in out
+        assert "does NOT make a skip valid under this rule" not in out
+
+    def test_criteria7_augmentation_rejects_harness_skips(self):
+        # With harness_augmentation the judge may demand harness getters/wrappers:
+        # all three mechanisms trigger rejection and harness need does not validate
+        # a skip under the protocol-immutability carve-out.
+        out = load_jinja_template(
+            "property_judge_prompt.j2",
+            properties=_props(),
+            sort="existing",
+            context=None,
+            harness_augmentation=True,
+        )
+        assert "If any of these mechanisms applies, reject the skip" in out
+        assert "does NOT make a skip valid under this rule" in out
+        assert "missing harness support, not CVL inexpressibility" not in out
+
+    def test_criteria7_explicit_false_matches_omitted(self):
+        omitted = load_jinja_template(
+            "property_judge_prompt.j2", properties=_props(), sort="existing", context=None
+        )
+        explicit = load_jinja_template(
+            "property_judge_prompt.j2",
+            properties=_props(),
+            sort="existing",
+            context=None,
+            harness_augmentation=False,
+        )
+        assert omitted == explicit
+
 
 class TestGenerationPrompt:
     def test_storage_access_block_renders(self):

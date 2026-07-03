@@ -41,6 +41,12 @@ class FeedbackInherentParams(TypedDict):
     #   ``existing``   — pre-existing codebase being verified as-is; target
     #                    has real immutable source.
     sort: Sort
+    # Mirrors JudgeSystemParams.harness_augmentation and must be bound consistently
+    # with it: it gates Criteria 7's "reject harness-shaped skips" directive so the
+    # judge only demands harness getters/wrappers in pipelines that can generate
+    # them. The template defaults it to false, so pipelines without harness
+    # augmentation may simply omit it.
+    harness_augmentation: NotRequired[bool]
 
 FeedbackTemplate = TypedTemplate[FeedbackInherentParams]("property_judge_prompt.j2")
 

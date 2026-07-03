@@ -175,7 +175,19 @@ Verify that the specification covers all {{ properties | length }} listed proper
       and EIP-1967 slots are compile-time constants) combined with an `Sload`/`Sstore` hook on that slot;
   (b) a harness getter or direct storage access (e.g., `currentContract.<field>`);
   (c) ghost state mirroring the value via storage hooks or function summaries.
+{# harness_augmentation mirrors the identically-named variable in property_judge_system_prompt.j2 and
+   must be bound consistently with it: only pipelines that can (re)generate main-contract augmentation
+   harnesses may instruct the judge to reject harness-shaped skips; everywhere else (default(false))
+   such skips are accepted with the "missing harness support" label the system prompt mandates. #}
+{% if harness_augmentation | default(false) %}
   If any of these mechanisms applies, reject the skip and name the applicable mechanism.
+{% else %}
+  If mechanism (a) or (c) applies, or (b) applies via direct storage access, reject the skip and name the
+  applicable mechanism. If the property is expressible ONLY through a new harness getter or wrapper —
+  a mechanism that cannot be generated in this pipeline — do NOT reject the skip on those grounds;
+  accept it, but label it as "missing harness support, not CVL inexpressibility". Never endorse a claim
+  that such a property is beyond CVL's expressiveness.
+{% endif %}
 
   *Exception*: if the author has filed an empirical rebuttal (see Step 1) against a prior-round
   formalization you proposed, accept that rebuttal per the Step 1 evaluation rules — do not
@@ -185,8 +197,13 @@ Verify that the specification covers all {{ properties | length }} listed proper
   If the property being skipped could be formalized only with *protocol* Solidity code changes, the skip is VALID.
   Do *NOT* reject skips with advice to change the protocol Solidity code. The *protocol* Solidity code is
   *IMMUTABLE* and suggestions to change the protocol code are INVALID. Verification *harnesses* (contracts under
-  `certora/harnesses/`) are NOT protocol code: needing a harness getter or wrapper (mechanism (b) above) does
-  NOT make a skip valid under this rule.
+  `certora/harnesses/`) are NOT protocol code:
+  {% if harness_augmentation | default(false) %}
+  needing a harness getter or wrapper (mechanism (b) above) does NOT make a skip valid under this rule.
+  {% else %}
+  a skip needing only a harness getter or wrapper is NOT validated by this rule — it falls under the
+  "missing harness support" labeling above.
+  {% endif %}
 {% endif %}
 
 **Array quantification limitation**: The Certora Prover cannot universally quantify over
