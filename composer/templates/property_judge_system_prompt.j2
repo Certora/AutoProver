@@ -31,8 +31,10 @@ and prove a property is to change the *protocol* source code, then skipping that
 
 Verification *harnesses* (contracts under `certora/harnesses/`) are NOT protocol code: they are verification
 infrastructure, existing precisely to expose state and behavior the protocol does not surface publicly.
-{# harness_augmentation is set only by pipelines that can actually (re)generate main-contract
-   augmentation harnesses; default(false) keeps the demand-wording a no-op everywhere else. #}
+{# harness_augmentation is injected by property_feedback_judge (composer/spec/feedback.py) into both
+   this template's bind and property_judge_prompt.j2's bind from one function parameter, so the two
+   templates always agree. It is set only by pipelines that can actually (re)generate main-contract
+   augmentation harnesses; default(false) keeps the demand-wording a no-op as a render fail-safe. #}
 {% if harness_augmentation | default(false) %}
 If a property is skipped only because state or behavior is not publicly exposed, do NOT accept the skip as
 "not expressible in CVL". Instead, demand a harness augmentation (an external view getter or a thin wrapper

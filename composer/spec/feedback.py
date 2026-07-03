@@ -41,22 +41,11 @@ class FeedbackInherentParams(TypedDict):
     #   ``existing``   — pre-existing codebase being verified as-is; target
     #                    has real immutable source.
     sort: Sort
-    # Mirrors JudgeSystemParams.harness_augmentation and must be bound consistently
-    # with it: it gates Criteria 7's "reject harness-shaped skips" directive so the
-    # judge only demands harness getters/wrappers in pipelines that can generate
-    # them. The template defaults it to false, so pipelines without harness
-    # augmentation may simply omit it.
-    harness_augmentation: NotRequired[bool]
 
 FeedbackTemplate = TypedTemplate[FeedbackInherentParams]("property_judge_prompt.j2")
 
 class JudgeSystemParams(TypedDict):
     sort: Sort
-    # Whether the pipeline can (re)generate main-contract augmentation harnesses. When true,
-    # the judge template's "demand a harness getter/wrapper instead of accepting the skip"
-    # wording is rendered; the template defaults it to false, so pipelines without harness
-    # augmentation may simply omit it.
-    harness_augmentation: NotRequired[bool]
 
 # Judge system prompt, shared between the natspec and source-mode flows. The fs
 # primitives are always documented; ``sort`` drives the rest (the template
@@ -64,18 +53,37 @@ class JudgeSystemParams(TypedDict):
 # ``sort == "existing"``, the only mode that wires those tools).
 FeedbackSystemTemplate = TypedTemplate[JudgeSystemParams]("property_judge_system_prompt.j2")
 
+
+def _bind_harness_augmentation(
+    prompt: TemplateInstantiation, harness_augmentation: bool
+) -> TemplateInstantiation:
+    """Inject the ``harness_augmentation`` flag into an already-instantiated template bind.
+
+    Both judge templates gate their harness-skip policy on this variable; injecting it
+    from the single ``property_feedback_judge`` parameter into BOTH binds is what keeps
+    the system prompt and Criteria 7 in agreement. The templates' ``default(false)`` is
+    a render fail-safe only, never the mechanism that decides the value.
+    """
+    return TemplateInstantiation(
+        prompt.template,
+        {**prompt.args, "harness_augmentation": harness_augmentation},
+    )
+
+
 def property_feedback_judge(
     ctx: WorkflowContext[CVLJudge],
     env: ServiceHost,
     prompt: InjectedTemplate[Properties] | TemplateInstantiation,
     props: list[PropertyFormulation],
     *,
+    harness_augmentation: bool = False,
     extra_inputs: list[str | dict] | Callable[[], list[str | dict]] | None = None,
     system_prompt: TemplateInstantiation | None = None,
 ) -> FeedbackToolContext:
 
     if system_prompt is None:
         system_prompt = FeedbackSystemTemplate.bind({"sort": env.sort})
+    system_prompt = _bind_harness_augmentation(system_prompt, harness_augmentation)
 
     builder = env.builder_heavy().with_tools(
         env.all_tools
@@ -99,7 +107,10 @@ def property_feedback_judge(
 
     mem = ctx.get_memory_tool()
 
-    final_prompt = prompt if isinstance(prompt, TemplateInstantiation) else prompt.inject({"properties": props})
+    final_prompt = _bind_harness_augmentation(
+        prompt if isinstance(prompt, TemplateInstantiation) else prompt.inject({"properties": props}),
+        harness_augmentation,
+    )
 
     workflow = bind_standard(
         builder, ST, validator=did_rough_draft_read

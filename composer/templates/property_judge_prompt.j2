@@ -180,9 +180,11 @@ Verify that the specification covers all {{ properties | length }} listed proper
   reason is access-shaped — state described as private, unstructured, keccak-addressed, or lacking
   a getter — but categorized as anything other than `storage_access`, audit it as `storage_access`
   anyway, running the full mechanism checklist above; the category is the author's claim, not a fact.
-{# harness_augmentation mirrors the identically-named variable in property_judge_system_prompt.j2 and
-   must be bound consistently with it: only pipelines that can (re)generate main-contract augmentation
-   harnesses may instruct the judge to reject harness-shaped skips; everywhere else (default(false))
+{# harness_augmentation is injected by property_feedback_judge (composer/spec/feedback.py) into both
+   this template's bind and property_judge_system_prompt.j2's bind from one function parameter, so
+   the two templates always agree; default(false) is a render fail-safe only. Only pipelines that
+   can (re)generate main-contract augmentation harnesses may instruct the judge to reject
+   harness-shaped skips; everywhere else (the false default)
    such skips are accepted with the "missing harness support" label the system prompt mandates.
    Greenfield is checked first because harness pipelines (and the immutability rule the fallback
    compensates for) only exist for pre-existing source: the greenfield author shapes the stub's API

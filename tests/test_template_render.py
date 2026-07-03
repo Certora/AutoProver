@@ -8,6 +8,12 @@ pipelines without harness augmentation can omit it entirely.
 import pytest
 
 from composer.templates.loader import load_jinja_template
+from composer.spec.feedback import (
+    FeedbackSystemTemplate,
+    FeedbackTemplate,
+    Properties,
+    _bind_harness_augmentation,
+)
 from composer.spec.prop import PropertyFormulation
 
 
@@ -118,6 +124,47 @@ class TestJudgePrompt:
         assert "If any of these mechanisms applies, reject the skip" in out
         assert "does NOT make a skip valid under this rule" in out
         assert "missing harness support, not CVL inexpressibility" not in out
+
+    @pytest.mark.parametrize("flag", [True, False])
+    def test_judge_templates_agree_on_harness_wording(self, flag: bool):
+        # The system prompt and Criteria 7 encode the same harness-skip policy; for a
+        # given flag value the harness wording must be present/absent in BOTH templates
+        # together, or the judge receives self-contradictory instructions.
+        sys_out = load_jinja_template(
+            "property_judge_system_prompt.j2", sort="existing", harness_augmentation=flag
+        )
+        task_out = load_jinja_template(
+            "property_judge_prompt.j2",
+            properties=_props(),
+            sort="existing",
+            context=None,
+            harness_augmentation=flag,
+        )
+        assert ("demand a harness augmentation" in sys_out) == flag
+        assert ("If any of these mechanisms applies, reject the skip" in task_out) == flag
+        assert ("missing harness support, not CVL inexpressibility" in sys_out) == (not flag)
+        assert ("missing harness support, not CVL inexpressibility" in task_out) == (not flag)
+
+    @pytest.mark.parametrize("flag", [True, False])
+    def test_property_feedback_judge_injection_binds_both_templates(self, flag: bool):
+        # property_feedback_judge threads its harness_augmentation parameter into both
+        # binds via _bind_harness_augmentation; render both through the same helper and
+        # assert the resulting prompts agree for both flag values.
+        task = _bind_harness_augmentation(
+            FeedbackTemplate.bind({"context": None, "sort": "existing"})
+            .depends(Properties)
+            .inject({"properties": _props()}),
+            flag,
+        )
+        sys_p = _bind_harness_augmentation(
+            FeedbackSystemTemplate.bind({"sort": "existing"}), flag
+        )
+        task_out = task.render_to(load_jinja_template)
+        sys_out = sys_p.render_to(load_jinja_template)
+        assert ("demand a harness augmentation" in sys_out) == flag
+        assert ("If any of these mechanisms applies, reject the skip" in task_out) == flag
+        assert ("missing harness support, not CVL inexpressibility" in sys_out) == (not flag)
+        assert ("missing harness support, not CVL inexpressibility" in task_out) == (not flag)
 
     def test_criteria7_explicit_false_matches_omitted(self):
         omitted = load_jinja_template(
