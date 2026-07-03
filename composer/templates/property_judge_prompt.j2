@@ -178,8 +178,16 @@ Verify that the specification covers all {{ properties | length }} listed proper
 {# harness_augmentation mirrors the identically-named variable in property_judge_system_prompt.j2 and
    must be bound consistently with it: only pipelines that can (re)generate main-contract augmentation
    harnesses may instruct the judge to reject harness-shaped skips; everywhere else (default(false))
-   such skips are accepted with the "missing harness support" label the system prompt mandates. #}
-{% if harness_augmentation | default(false) %}
+   such skips are accepted with the "missing harness support" label the system prompt mandates.
+   Greenfield is checked first because harness pipelines (and the immutability rule the fallback
+   compensates for) only exist for pre-existing source: the greenfield author shapes the stub's API
+   themselves, so a missing getter is never a capability gap there. #}
+{% if sort == "greenfield" %}
+  If any of these mechanisms applies, reject the skip and name the applicable mechanism. There is no
+  pre-existing implementation here: the author defines the contract API through the stub, so a skip
+  claiming state lacks a getter is invalid — reject it and advise exposing the state through a getter
+  in the stub.
+{% elif harness_augmentation | default(false) %}
   If any of these mechanisms applies, reject the skip and name the applicable mechanism.
 {% else %}
   If mechanism (a) or (c) applies, or (b) applies via direct storage access, reject the skip and name the

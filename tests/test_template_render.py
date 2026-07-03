@@ -82,6 +82,17 @@ class TestJudgePrompt:
         # The old blanket doctrine ("the Solidity code is IMMUTABLE", unqualified) is gone.
         assert "The Solidity code is *IMMUTABLE*" not in out
 
+    def test_criteria7_greenfield_rejects_getter_skips(self):
+        # In greenfield the author defines the contract API through the stub, so
+        # getter-shaped skips stay rejectable and the "missing harness support"
+        # fallback labeling must not render.
+        out = load_jinja_template(
+            "property_judge_prompt.j2", properties=_props(), sort="greenfield", context=None
+        )
+        assert "If any of these mechanisms applies, reject the skip" in out
+        assert "exposing the state through a getter" in out
+        assert "missing harness support, not CVL inexpressibility" not in out
+
     def test_criteria7_fallback_labels_harness_skips(self):
         # harness_augmentation omitted (default false): Criteria 7 must align with the
         # system prompt's fallback — harness-shaped skips get the "missing harness
