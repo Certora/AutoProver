@@ -1,10 +1,12 @@
 """
-Unit tests for composer/prover/vacuity.py: vacuous-method detection over
-synthetic RuleResult sets, alert rendering, the filtered-block /
-documented-repair spec-text checks, and the verify_spec hard guard that
-withholds the PROVER validation stamp for undocumented filters — or
-undocumented expect_rule_failure skips — of detected-vacuous methods.
+Unit tests for composer/prover/vacuity.py and the verify_spec vacuity gate:
+vacuous-method detection over synthetic RuleResult sets, alert rendering, the
+acknowledge_vacuous_method ledger tool, and the purely structural hard guard
+that withholds the PROVER validation stamp while any known-vacuous method is
+neither shown healthy by a later run nor acknowledged in the ledger.
 """
+
+import json
 
 import pytest
 
@@ -15,11 +17,9 @@ from composer.prover.vacuity import (
     detect_vacuous_methods,
     format_vacuity_alert,
     instantiated_methods,
-    undocumented_filtered_vacuous,
-    undocumented_skipped_vacuous,
 )
 from composer.spec.cvl_generation import check_completion
-from composer.spec.source.author import ExpectRuleFailure
+from composer.spec.source.author import AcknowledgeVacuousMethod, ExpectRuleFailure
 from composer.spec.source.prover import StateWithSkips, VALIDATION_KEY
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
@@ -153,112 +153,17 @@ class TestFormatVacuityAlert:
 
 
 # =========================================================================
-# undocumented_filtered_vacuous
+# verify_spec vacuity hard guard (mocked prover)
 # =========================================================================
 
-
-_UNDOCUMENTED_SPEC = """\
+# The gate is purely structural (persisted verdicts minus the acknowledgment
+# ledger) — the spec text is irrelevant to it, so one spec serves every case:
+# it "hides" the vacuous method simply by not exercising it in run 2.
+_SPEC = """\
 rule solvency(method f) filtered { f -> f.selector != sig:deposit(uint256).selector } {
     assert true;
 }
 """
-
-_DOCUMENTED_SPEC = """\
-// deposit is excluded: attempted to fix the NONDET summary on the payable receiver (typecheck
-// rejected the replacement), then a mock under certora/mocks (compilation failed on the
-// constructor), then optimistic_fallback (the revert persisted). Filtering as a last resort.
-rule solvency(method f) filtered { f -> f.selector != sig:deposit(uint256).selector } {
-    assert true;
-}
-"""
-
-_NO_FILTER_SPEC = """\
-rule solvency(method f) {
-    assert true;
-}
-"""
-
-
-class TestUndocumentedFilteredVacuous:
-    def test_undocumented_filter_blocked(self):
-        assert undocumented_filtered_vacuous(_UNDOCUMENTED_SPEC, [DEPOSIT]) == [DEPOSIT]
-
-    def test_documented_filter_passes(self):
-        assert undocumented_filtered_vacuous(_DOCUMENTED_SPEC, [DEPOSIT]) == []
-
-    def test_method_not_filtered_passes(self):
-        assert undocumented_filtered_vacuous(_NO_FILTER_SPEC, [DEPOSIT]) == []
-
-    def test_other_method_in_filter_passes(self):
-        assert undocumented_filtered_vacuous(_UNDOCUMENTED_SPEC, [WITHDRAW]) == []
-
-    def test_one_documented_occurrence_suffices(self):
-        """A method filtered in two rules passes if either filter is documented."""
-        spec = _UNDOCUMENTED_SPEC + "\n" + _DOCUMENTED_SPEC.replace("solvency", "shares")
-        assert undocumented_filtered_vacuous(spec, [DEPOSIT]) == []
-
-    def test_multiple_methods_sorted(self):
-        spec = """\
-rule a(method f) filtered { f -> f.selector != sig:deposit(uint256).selector
-                              && f.selector != sig:withdraw(uint256).selector } {
-    assert true;
-}
-"""
-        assert undocumented_filtered_vacuous(spec, [WITHDRAW, DEPOSIT]) == [DEPOSIT, WITHDRAW]
-
-    def test_prefix_collision_not_matched(self):
-        """Token-boundary matching: vacuous `deposit` must NOT count as contained
-        in a filter that only excludes `depositAll` (raw-substring prefix hit)."""
-        spec = """\
-rule a(method f) filtered { f -> f.selector != sig:depositAll().selector } {
-    assert true;
-}
-"""
-        assert undocumented_filtered_vacuous(spec, [DEPOSIT]) == []
-
-
-# =========================================================================
-# undocumented_skipped_vacuous
-# =========================================================================
-
-
-_DOCUMENTED_SKIP_REASON = (
-    "solvency sanity-fails because deposit is vacuous; attempted to fix the NONDET "
-    "summary on the payable receiver, then a mock under certora/mocks, then "
-    "optimistic_fallback — the revert persisted in all three."
-)
-
-
-class TestUndocumentedSkippedVacuous:
-    def test_undocumented_skip_blocked(self):
-        evidence = detect_vacuous_methods(
-            [_res("ruleA", DEPOSIT, "SANITY_FAILED"), _res("ruleB", DEPOSIT, "SANITY_FAILED")]
-        )
-        skips = {"ruleA": "flaky rule", "ruleB": "known to fail"}
-        assert undocumented_skipped_vacuous(evidence, skips) == [DEPOSIT]
-
-    def test_documented_skip_passes(self):
-        evidence = detect_vacuous_methods(
-            [_res("ruleA", DEPOSIT, "SANITY_FAILED"), _res("ruleB", DEPOSIT, "SANITY_FAILED")]
-        )
-        skips = {"ruleA": _DOCUMENTED_SKIP_REASON, "ruleB": "known to fail"}
-        assert undocumented_skipped_vacuous(evidence, skips) == []
-
-    def test_unskipped_rules_pass(self):
-        """A vacuous verdict with no affected rule in rule_skips never blocks here
-        (the still-failing rules block all_verified instead)."""
-        evidence = detect_vacuous_methods(
-            [_res("ruleA", DEPOSIT, "SANITY_FAILED"), _res("ruleB", DEPOSIT, "SANITY_FAILED")]
-        )
-        assert undocumented_skipped_vacuous(evidence, {"unrelated": "expected CEX"}) == []
-
-    def test_empty_evidence_passes(self):
-        assert undocumented_skipped_vacuous({}, {"ruleA": "flaky"}) == []
-
-
-# =========================================================================
-# verify_spec filtered-vacuous hard guard (mocked prover)
-# =========================================================================
 
 _PROVER = "verify_spec"
 _RESULT = "result"
@@ -297,16 +202,39 @@ _DEPOSIT_EVIDENCE = {
 }
 
 
-def _guard_scenario(certora_prover: ProverMock, *responses: ProverToolResponse, curr_spec: str):
+_ACK = "acknowledge_vacuous_method"
+
+
+def _acknowledge(
+    method: str = DEPOSIT,
+    steps: list[str] | None = None,
+    justification: str = "summary fix rejected by typechecker; mock failed to compile",
+) -> ToolCallDict:
+    return tool_call_raw(
+        _ACK,
+        method=method,
+        steps_attempted=steps if steps is not None else ["summary_fix", "mock"],
+        justification=justification,
+    )
+
+
+def _guard_scenario(certora_prover: ProverMock, *responses: ProverToolResponse):
     prover_tool = certora_prover(responses)
-    return Scenario(StateWithSkips, prover_tool, ExpectRuleFailure.as_tool("expect_rule_failure"), _result_tool).init(
-        curr_spec=curr_spec,
+    return Scenario(
+        StateWithSkips,
+        prover_tool,
+        ExpectRuleFailure.as_tool("expect_rule_failure"),
+        AcknowledgeVacuousMethod.as_tool(_ACK),
+        _result_tool,
+    ).init(
+        curr_spec=_SPEC,
         skipped=[],
         property_rules=[],
         validations={},
         required_validations=[VALIDATION_KEY],
         rule_skips={},
         vacuous_methods={},
+        acknowledged_vacuous={},
         config={"files": ["src/Foo.sol"]},
     )
 
@@ -315,18 +243,65 @@ def _result_accepted(st: StateWithSkips) -> bool:
     return "result" in st
 
 
-class TestVerifySpecVacuityGuard:
-    """Run 1 detects the vacuous method; run 2 passes because the spec filters it.
-    The stamp must be withheld unless the filter documents a repair attempt."""
+class TestAcknowledgeVacuousMethod:
+    """The ledger tool's own validation, exercised against pre-seeded state."""
+
+    def _scenario(self, vacuous: dict[str, str] | None = None):
+        return Scenario(StateWithSkips, AcknowledgeVacuousMethod.as_tool(_ACK)).init(
+            curr_spec=_SPEC,
+            skipped=[],
+            property_rules=[],
+            validations={},
+            required_validations=[VALIDATION_KEY],
+            rule_skips={},
+            vacuous_methods=vacuous if vacuous is not None else {DEPOSIT: "diagnosis"},
+            acknowledged_vacuous={},
+            config={},
+        )
 
     @pytest.mark.asyncio
-    async def test_undocumented_filter_withholds_stamp(self, certora_prover: ProverMock):
+    async def test_acknowledgment_recorded_as_structured_ledger_entry(self):
+        acks = await self._scenario().turn(_acknowledge()).map_run(
+            lambda st: st["acknowledged_vacuous"]
+        )
+        record = json.loads(acks[DEPOSIT])
+        assert record["steps_attempted"] == ["mock", "summary_fix"]
+        assert "typechecker" in record["justification"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_method_rejected(self):
+        scenario = self._scenario().turn(_acknowledge(method=WITHDRAW))
+        msg = await scenario.run_last_single_tool(_ACK)
+        assert "not currently flagged" in msg
+        assert DEPOSIT in msg  # the response lists what IS flagged
+
+    @pytest.mark.asyncio
+    async def test_empty_steps_rejected(self):
+        acks = await self._scenario().turn(_acknowledge(steps=[])).map_run(
+            lambda st: st["acknowledged_vacuous"]
+        )
+        assert acks == {}
+
+    @pytest.mark.asyncio
+    async def test_blank_justification_rejected(self):
+        acks = await self._scenario().turn(_acknowledge(justification="  ")).map_run(
+            lambda st: st["acknowledged_vacuous"]
+        )
+        assert acks == {}
+
+
+class TestVerifySpecVacuityGuard:
+    """Run 1 detects the vacuous method; run 2 passes because the spec hides it
+    (filter / skip / rule removal — the gate cannot tell and must not care).
+    The stamp must be withheld until the method is acknowledged or shown healthy."""
+
+    @pytest.mark.asyncio
+    async def test_unacknowledged_hidden_method_withholds_stamp(self, certora_prover: ProverMock):
         scenario = _guard_scenario(
             certora_prover,
             _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
                             instantiated={DEPOSIT}),
             _vacuous_report(rule_status={"solvency": True}),
-            curr_spec=_UNDOCUMENTED_SPEC,
         )
         accepted = await scenario.turns(
             _verify(),
@@ -336,111 +311,76 @@ class TestVerifySpecVacuityGuard:
         assert not accepted
 
     @pytest.mark.asyncio
-    async def test_guard_message_names_method_and_ladder(self, certora_prover: ProverMock):
+    async def test_guard_message_names_method_ladder_and_tool(self, certora_prover: ProverMock):
         scenario = _guard_scenario(
             certora_prover,
             _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
                             instantiated={DEPOSIT}),
             _vacuous_report(rule_status={"solvency": True}),
-            curr_spec=_UNDOCUMENTED_SPEC,
         )
         msg = await scenario.turn(_verify()).turn(_verify()).run_last_single_tool(_PROVER)
-        assert "vacuity_filter_guard" in msg
+        assert "vacuity_guard" in msg
         assert "WITHHELD" in msg
         assert DEPOSIT in msg
+        assert "acknowledge_vacuous_method" in msg
+        assert "write_mock" in msg  # the repair ladder is restated
 
     @pytest.mark.asyncio
-    async def test_documented_filter_grants_stamp(self, certora_prover: ProverMock):
-        """Escape hatch: a repair-ladder attempt documented near the filter."""
+    async def test_acknowledged_method_grants_stamp(self, certora_prover: ProverMock):
+        """The structured escape hatch: a ledger entry written by the tool."""
         scenario = _guard_scenario(
             certora_prover,
             _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
                             instantiated={DEPOSIT}),
             _vacuous_report(rule_status={"solvency": True}),
-            curr_spec=_DOCUMENTED_SPEC,
         )
         accepted = await scenario.turns(
             _verify(),
+            _acknowledge(),
             _verify(),
             _result("done"),
         ).map_run(_result_accepted)
         assert accepted
 
     @pytest.mark.asyncio
-    async def test_no_filter_no_guard(self, certora_prover: ProverMock):
-        """A vacuous verdict alone never blocks — only filtering it does."""
-        scenario = _guard_scenario(
-            certora_prover,
-            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
-                            instantiated={DEPOSIT}),
-            _vacuous_report(rule_status={"solvency": True}),
-            curr_spec=_NO_FILTER_SPEC,
-        )
-        accepted = await scenario.turns(
-            _verify(),
-            _verify(),
-            _result("done"),
-        ).map_run(_result_accepted)
-        assert accepted
-
-    @pytest.mark.asyncio
-    async def test_undocumented_rule_skip_withholds_stamp(self, certora_prover: ProverMock):
-        """The expect_rule_failure bypass: instead of filtering the vacuous method,
-        the agent marks its sanity-failing rule "expected to fail". The rule drops
-        out of the all-verified check, but the stamp must still be withheld."""
+    async def test_rule_skip_bypass_still_blocked(self, certora_prover: ProverMock):
+        """The expect_rule_failure bypass: the sanity-failing rule drops out of
+        the all-verified check, but the persisted verdict still withholds the
+        stamp — no matter how persuasive the free-text skip reason sounds
+        (the old lexical hatch is gone; only the ledger clears the gate)."""
         scenario = _guard_scenario(
             certora_prover,
             _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
                             instantiated={DEPOSIT}),
             _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
                             instantiated={DEPOSIT}),
-            curr_spec=_NO_FILTER_SPEC,
-        )
-        accepted = await scenario.turns(
-            _verify(),
-            tool_call_raw("expect_rule_failure", rule_name="solvency", reason="flaky rule"),
-            _verify(),
-            _result("done"),
-        ).map_run(_result_accepted)
-        assert not accepted
-
-    @pytest.mark.asyncio
-    async def test_skip_guard_message_names_method_and_tools(self, certora_prover: ProverMock):
-        scenario = _guard_scenario(
-            certora_prover,
-            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
-                            instantiated={DEPOSIT}),
-            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
-                            instantiated={DEPOSIT}),
-            curr_spec=_NO_FILTER_SPEC,
-        )
-        msg = await (
-            scenario.turn(_verify())
-            .turn(tool_call_raw("expect_rule_failure", rule_name="solvency", reason="flaky rule"))
-            .turn(_verify())
-            .run_last_single_tool(_PROVER)
-        )
-        assert "vacuity_skip_guard" in msg
-        assert "WITHHELD" in msg
-        assert DEPOSIT in msg
-        assert "expect_rule_passage" in msg
-
-    @pytest.mark.asyncio
-    async def test_documented_rule_skip_grants_stamp(self, certora_prover: ProverMock):
-        """Escape hatch: the skip reason documents the attempted repair-ladder steps."""
-        scenario = _guard_scenario(
-            certora_prover,
-            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
-                            instantiated={DEPOSIT}),
-            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
-                            instantiated={DEPOSIT}),
-            curr_spec=_NO_FILTER_SPEC,
         )
         accepted = await scenario.turns(
             _verify(),
             tool_call_raw(
-                "expect_rule_failure", rule_name="solvency", reason=_DOCUMENTED_SKIP_REASON
+                "expect_rule_failure", rule_name="solvency",
+                reason="attempted summary fix, mock, and optimistic_fallback; all failed",
             ),
+            _verify(),
+            _result("done"),
+        ).map_run(_result_accepted)
+        assert not accepted
+
+    @pytest.mark.asyncio
+    async def test_acknowledged_rule_skip_grants_stamp(self, certora_prover: ProverMock):
+        """Skipping the sanity-failing rules is fine once the method itself is
+        acknowledged in the ledger."""
+        scenario = _guard_scenario(
+            certora_prover,
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+        )
+        accepted = await scenario.turns(
+            _verify(),
+            tool_call_raw("expect_rule_failure", rule_name="solvency", reason="vacuous, acknowledged"),
+            _acknowledge(),
             _verify(),
             _result("done"),
         ).map_run(_result_accepted)
@@ -449,14 +389,13 @@ class TestVerifySpecVacuityGuard:
     @pytest.mark.asyncio
     async def test_healthy_reinstantiation_clears_verdict(self, certora_prover: ProverMock):
         """Run 2 instantiates the method without a sanity failure (the setup was
-        repaired) — the vacuity verdict clears and the filter no longer blocks."""
+        repaired) — the vacuity verdict clears and nothing blocks the stamp."""
         scenario = _guard_scenario(
             certora_prover,
             _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
                             instantiated={DEPOSIT}),
             _vacuous_report(rule_status={"solvency": True}, instantiated={DEPOSIT}),
             _vacuous_report(rule_status={"solvency": True}),
-            curr_spec=_UNDOCUMENTED_SPEC,
         )
         accepted = await scenario.turns(
             _verify(),
@@ -465,3 +404,31 @@ class TestVerifySpecVacuityGuard:
             _result("done"),
         ).map_run(_result_accepted)
         assert accepted
+
+    @pytest.mark.asyncio
+    async def test_healthy_reinstantiation_clears_acknowledgment(self, certora_prover: ProverMock):
+        """When the verdict clears, its ledger entry clears with it: a method
+        that turns vacuous AGAIN later needs a fresh acknowledgment, so a stale
+        acknowledgment can never pre-clear a future verdict."""
+        scenario = _guard_scenario(
+            certora_prover,
+            # Run 1: vacuous. Acknowledged. Run 2: healthy (verdict + ack clear).
+            # Run 3: vacuous again. Run 4: hidden again -> guard must re-fire.
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            _vacuous_report(rule_status={"solvency": True}, instantiated={DEPOSIT}),
+            _vacuous_report(rule_status={"solvency": False}, vacuous=_DEPOSIT_EVIDENCE,
+                            instantiated={DEPOSIT}),
+            _vacuous_report(rule_status={"solvency": True}),
+        )
+        final = await scenario.turns(
+            _verify(),
+            _acknowledge(),
+            _verify(),
+            _verify(),
+            _verify(),
+        ).map_run(lambda st: (st["acknowledged_vacuous"], Scenario.last_single_tool(_PROVER, st)))
+        acks, last_prover_msg = final
+        assert acks == {}  # cleared by the healthy run, not re-established
+        assert "vacuity_guard" in last_prover_msg
+        assert "WITHHELD" in last_prover_msg

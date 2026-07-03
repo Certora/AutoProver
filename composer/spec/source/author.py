@@ -68,6 +68,72 @@ class ExpectRuleFailure(WithAsyncImplementation[Command], WithInjectedId):
                 self.rule_name: self.reason
             }
         )
+type RepairStep = Literal["summary_fix", "mock", "optimistic_fallback"]
+
+
+@tool_display(lambda p: f"Acknowledging vacuous method `{p['method']}`", None)
+class AcknowledgeVacuousMethod(
+    WithImplementation[Command], WithInjectedState[ProverStateExtra], WithInjectedId,
+):
+    """
+    Formally acknowledge a method that `verify_spec` flagged as VACUOUS (in a `<vacuity_alert>` /
+    `<vacuity_guard>` block), after the repair ladder failed to fix it. This is the ONLY way to
+    obtain the prover validation stamp while a known-vacuous method is excluded (via `filtered`,
+    `expect_rule_failure`, or rule removal): an unacknowledged vacuous method always withholds
+    the stamp. The feedback judge audits the quality of your acknowledgment, so record honestly
+    which repair-ladder steps you attempted and why each failed. The acknowledgment is cleared
+    automatically if a later run shows the method healthy.
+    """
+    method: str = Field(
+        description="The method's instantiation name exactly as flagged by the prover "
+        "(e.g. `Bank.deposit(uint256)`)"
+    )
+    steps_attempted: list[RepairStep] = Field(
+        description="The repair-ladder steps you actually attempted before acknowledging: "
+        "`summary_fix` (fixing/replacing the offending summary), `mock` (a mock contract via "
+        "`write_mock` + `edit_config`), `optimistic_fallback` (via `edit_config` set_flag). "
+        "Must be non-empty."
+    )
+    justification: str = Field(
+        description="Why each attempted step failed to repair the vacuity, concretely "
+        "(compiler/prover output, persisting sanity failure, etc.). The feedback judge "
+        "reads this verbatim."
+    )
+
+    @override
+    def run(self) -> Command:
+        known = self.state.get("vacuous_methods", {})
+        if self.method not in known:
+            return tool_state_update(
+                self.tool_call_id,
+                f"Method {self.method!r} is not currently flagged as vacuous. "
+                + (f"Currently flagged: {', '.join(sorted(known))}." if known
+                   else "No methods are currently flagged."),
+            )
+        if not self.steps_attempted:
+            return tool_state_update(
+                self.tool_call_id,
+                "At least one attempted repair-ladder step is required: acknowledge a vacuous "
+                "method only after genuinely attempting to repair the setup.",
+            )
+        if not self.justification.strip():
+            return tool_state_update(
+                self.tool_call_id,
+                "A non-empty justification is required: describe why each attempted "
+                "repair-ladder step failed.",
+            )
+        record = json.dumps({
+            "steps_attempted": sorted(set(self.steps_attempted)),
+            "justification": self.justification,
+        })
+        return tool_state_update(
+            self.tool_call_id,
+            f"Acknowledged {self.method} as vacuous. The feedback judge will audit this "
+            "justification; rerun `verify_spec` to obtain the validation stamp.",
+            acknowledged_vacuous={self.method: record},
+        )
+
+
 @tool_display(
     lambda p: f"Expecting rule `{p["rule_name"]}` to pass", None
 )
@@ -469,9 +535,12 @@ async def batch_cvl_generation(
             GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"),
             # Setup-repair tools for the vacuity repair ladder: edit_config covers ladder
             # steps 2 (register a mock via add_file/add_link) and 3 (optimistic_fallback via
-            # set_flag); write_mock produces the step-2 mock itself.
+            # set_flag); write_mock produces the step-2 mock itself;
+            # acknowledge_vacuous_method is the structured last-resort ledger entry the
+            # verify_spec stamp gate and the feedback judge consult.
             ConfigEditTool.as_tool("edit_config"),
             WriteMockTool.bind(source.project_root).as_tool("write_mock"),
+            AcknowledgeVacuousMethod.as_tool("acknowledge_vacuous_method"),
             ctx.get_memory_tool(),
         ]
     ).with_state(
@@ -507,6 +576,7 @@ async def batch_cvl_generation(
             required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
             rule_skips={},
             vacuous_methods={},
+            acknowledged_vacuous={},
             skipped=[],
             property_rules=[],
             validations={},

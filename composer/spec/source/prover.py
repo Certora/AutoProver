@@ -29,10 +29,7 @@ from graphcore.graph import LLM
 from composer.prover.core import (
     ProverOptions, ProverCallbacks, ProverReport, run_prover, DefaultCexHandler
 )
-from composer.prover.vacuity import (
-    format_filter_guard, format_skip_guard,
-    undocumented_filtered_vacuous, undocumented_skipped_vacuous,
-)
+from composer.prover.vacuity import format_vacuity_guard
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
@@ -98,6 +95,14 @@ class ProverStateExtra(TypedDict):
     # forget it. Shares the DELETE_SKIP-sentinel reducer with rule_skips — an entry is cleared
     # when a later run instantiates the method without a sanity failure.
     vacuous_methods: Annotated[dict[str, str], _merge_rule_skips]
+    # The acknowledged-vacuous ledger (instantiation name -> JSON record with
+    # `steps_attempted` and `justification`), written by the acknowledge_vacuous_method
+    # tool. The verify_spec stamp gate is `known_vacuous - acknowledged`: an acknowledged
+    # method no longer withholds the stamp, and the feedback judge audits the record's
+    # quality. An entry is cleared alongside its vacuity verdict when a run shows the
+    # method healthy, so a method that later turns vacuous *again* needs a fresh
+    # acknowledgment.
+    acknowledged_vacuous: Annotated[dict[str, str], _merge_rule_skips]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
@@ -173,26 +178,32 @@ class _SpecCallbacks(ProverEventCallbacks):
 
 def _vacuity_state_update(
     state: ProverStateExtra, result: ProverReport
-) -> tuple[dict[str, str], set[str]]:
+) -> tuple[dict[str, str], dict[str, str], set[str]]:
     """Fold this run's vacuity view into the persisted ``vacuous_methods`` state.
 
-    Returns ``(update, known_vacuous)``: the reducer delta to merge into state
-    (newly detected methods added, previously-recorded methods that this run
-    instantiated *without* a sanity failure cleared via DELETE_SKIP), and the
-    resulting set of methods still considered vacuous — the set the filtered-
-    vacuous guard checks against. ``state.get`` tolerates checkpoints predating
-    this field.
+    Returns ``(update, ack_update, known_vacuous)``: the reducer delta to merge
+    into ``vacuous_methods`` (newly detected methods added, previously-recorded
+    methods that this run instantiated *without* a sanity failure cleared via
+    DELETE_SKIP), the companion delta clearing ``acknowledged_vacuous`` entries
+    whose verdict just cleared (so a method that turns vacuous again later needs
+    a fresh acknowledgment), and the resulting set of methods still considered
+    vacuous — the set the stamp gate checks against. ``state.get`` tolerates
+    checkpoints predating these fields.
     """
     prior = state.get("vacuous_methods", {})
+    acks = state.get("acknowledged_vacuous", {})
     update: dict[str, str] = {m: ev.diagnosis for m, ev in result.vacuous_methods.items()}
     for m in prior:
         if m in result.instantiated_methods and m not in result.vacuous_methods:
             update[m] = DELETE_SKIP
+    ack_update = {
+        m: DELETE_SKIP for m, v in update.items() if v == DELETE_SKIP and m in acks
+    }
     known_vacuous = {
         m for m in (set(prior) | set(result.vacuous_methods))
         if update.get(m) != DELETE_SKIP
     }
-    return update, known_vacuous
+    return update, ack_update, known_vacuous
 
 
 class VerifySpecSchema(BaseModel):
@@ -294,7 +305,7 @@ def get_prover_tool(
 
             if isinstance(result, str):
                 return result
-            vacuity_update, known_vacuous = _vacuity_state_update(state, result)
+            vacuity_update, ack_update, known_vacuous = _vacuity_state_update(state, result)
             all_verified = True
             for (r, stat) in result.rule_status.items():
                 if r in state["rule_skips"]:
@@ -303,35 +314,37 @@ def get_prover_tool(
                     all_verified = False
                     break
             if rules is None and all_verified:
-                # HARD GUARD: a detected-vacuous method sitting inside a `filtered` block
-                # makes the run pass trivially — and so does marking its sanity-failing
-                # rules "expected to fail", which drops them from the all_verified check
-                # above. Withhold the PROVER validation stamp in both cases unless a
-                # repair-ladder attempt is documented (near the filter / in the skip
-                # reason — the escape hatch, checked leniently; the judge assesses
-                # its quality).
-                filter_blocked = undocumented_filtered_vacuous(
-                    state["curr_spec"], known_vacuous
-                )
-                skip_blocked = undocumented_skipped_vacuous(
-                    result.vacuous_methods, state["rule_skips"]
-                )
-                if filter_blocked or skip_blocked:
-                    guards = ([format_filter_guard(filter_blocked)] if filter_blocked else []) \
-                        + ([format_skip_guard(skip_blocked)] if skip_blocked else [])
+                # HARD GUARD, purely structural: a persisted vacuity verdict only clears
+                # when a run instantiates the method without a sanity failure, so ANY
+                # route that hides the method while it is still broken — a `filtered`
+                # block, `expect_rule_failure` on its sanity-failing rules (dropping
+                # them from the all_verified check above), even deleting the rule —
+                # leaves the verdict outstanding. Withhold the PROVER validation stamp
+                # while any known-vacuous method lacks an acknowledged_vacuous ledger
+                # entry (written by the acknowledge_vacuous_method tool; the feedback
+                # judge audits the entry's quality).
+                unacknowledged = known_vacuous - set(state.get("acknowledged_vacuous", {}))
+                if unacknowledged:
+                    prior_verdicts = state.get("vacuous_methods", {})
+                    blocked = {
+                        m: (result.vacuous_methods[m].diagnosis
+                            if m in result.vacuous_methods else prior_verdicts[m])
+                        for m in unacknowledged
+                    }
                     return tool_state_update(
                         tool_call_id=tool_call_id,
-                        content="\n\n".join([result.result_str, *guards]),
+                        content="\n\n".join([result.result_str, format_vacuity_guard(blocked)]),
                         prover_link=result.link, vacuous_methods=vacuity_update,
+                        acknowledged_vacuous=ack_update,
                     )
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str,
                     prover_link=result.link, validations=stamper(state),
-                    vacuous_methods=vacuity_update,
+                    vacuous_methods=vacuity_update, acknowledged_vacuous=ack_update,
                 )
             return tool_state_update(
                 tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
-                vacuous_methods=vacuity_update,
+                vacuous_methods=vacuity_update, acknowledged_vacuous=ack_update,
             )
 
     return verify_spec

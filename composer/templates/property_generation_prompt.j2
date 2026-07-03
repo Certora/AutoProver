@@ -103,18 +103,19 @@ feedback as soon as possible.
        is reached through a storage field).
     3. Set `optimistic_fallback` to true via `edit_config` (`set_flag`) so unresolved calls are assumed to succeed
        instead of always being able to revert.
-    4. ONLY as a last resort, exclude the method with a `filtered` block — see below.
+    4. ONLY as a last resort, acknowledge the method with the `acknowledge_vacuous_method` tool and then
+       exclude it with a `filtered` block — see below.
 * If you have a parametric rule or invariant that is persistently failing on a method, and that method should
   genuinely be excluded from the property/invariant being proven, use a `filtered` block to exclude it.
   + You should not use this strategy lightly; only do so when you are 95% certain that the method in question
     should be excluded from the property.
-  + NEVER use a `filtered` block to hide a *vacuous* method (one flagged in a `<vacuity_alert>`): that hides a setup
-    defect instead of fixing it, and the prover validation stamp will be withheld. If steps 1-3 of the repair ladder
-    genuinely failed, you may filter the method, but the justification comment next to the filter MUST name which of
-    summary-fix / mock / `optimistic_fallback` you attempted and why each failed.
-  + The same applies to `expect_rule_failure`: marking a vacuous method's sanity-failing rules as "expected to fail"
-    hides the identical setup defect and likewise withholds the prover validation stamp, unless the reason you record
-    names which of summary-fix / mock / `optimistic_fallback` you attempted and why each failed.
+  + NEVER hide a *vacuous* method (one flagged in a `<vacuity_alert>`) — whether via a `filtered` block, via
+    `expect_rule_failure` on its sanity-failing rules, or by deleting the rule: that hides a setup defect instead
+    of fixing it, and the prover validation stamp will be withheld while the vacuity verdict is outstanding. The
+    verdict clears only when a prover run shows the method instantiated without a sanity failure. If steps 1-3 of
+    the repair ladder genuinely failed, formally acknowledge the method with the `acknowledge_vacuous_method`
+    tool, recording which steps (`summary_fix` / `mock` / `optimistic_fallback`) you attempted and why each
+    failed; the feedback judge audits the quality of that acknowledgment.
 * For any other logical errors/issues not described here, address the changes in a methodical way. Use your
   adaptive thinking and the cvl researcher to come to *principled* solutions. Do *NOT* try to brute force
   the solution by trying random changes.
