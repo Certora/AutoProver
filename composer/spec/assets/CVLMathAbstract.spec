@@ -10,10 +10,11 @@
  * relational facts — do NOT weaken the property instead.
  *
  * This file is deliberately standalone (it defines no `*Summary` names), so
- * it can be imported alongside the AutoSetup-bundled Math.spec exact
- * summaries without any double-definition clash. Projects whose AutoSetup
- * summaries did NOT pull in Math.spec get the exact tier too, via the
- * sibling CVLMath.spec which imports this file.
+ * it can be imported alongside the exact Math.spec summaries without any
+ * double-definition clash. The exact tier always lives at
+ * certora/specs/summaries/Math.spec — placed there by AutoSetup's summary
+ * closure or, failing that, copied from the same canonical bundled file by
+ * the pipeline.
  */
 
 definition WAD() returns uint256 = 10^18;

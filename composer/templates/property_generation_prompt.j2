@@ -125,9 +125,18 @@ and are far easier on the solver.
 
 If the prover *times out* on a property because of exact nonlinear formulas, do NOT weaken or skip the
 property. Instead, summarize the underlying math function (e.g., `mulDiv`) with the relational
-abstractions from the CVLMath resource (see the resources list, when available): the `...Abstract`
-variants replace the nonlinear formula with solver-friendly axioms (zero-preservation, exactness at the
-denominator, monotonicity, down/up rounding within 1) that suffice to prove relational properties.
+abstractions from the CVLMathAbstract.spec resource (see the resources list, when available): the
+`...Abstract` variants replace the nonlinear formula with solver-friendly axioms (zero-preservation,
+exactness at the denominator, monotonicity, down/up rounding within 1) that suffice to prove relational
+properties. The exact `...Summary` models (faithful rounding and revert behavior) live in the Math.spec
+summaries resource; use those by default and switch to the `...Abstract` variants only on timeout.
+
+Be aware that the `...Abstract` constraints are imposed with `require`-based axioms and do not model the
+overflow revert: a rule whose other assumptions contradict the axioms is silently pruned rather than
+reported (potential vacuity). Prefer them for relational properties, avoid relying on them under
+`satisfy` (a witness drawn from an over-constrained model proves nothing), and treat a SANITY_FAILURE
+that first appears after adopting them as a sign the axioms conflict with your rule's assumptions rather
+than a code bug.
 </math_properties>
 
 ## Step 4

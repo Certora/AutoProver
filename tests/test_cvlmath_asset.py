@@ -1,27 +1,28 @@
-"""Tests for the packaged CVLMath assets and their pipeline resource wiring.
+"""Tests for the packaged CVL math assets and their pipeline resource wiring.
 
-The assets must be resolvable through ``importlib.resources`` (so they survive
-being installed as a wheel, not just run from a source checkout), the install
-helper must write the project copies exactly where the pipeline advertises
-them — dropping the exact tier when AutoSetup already copied Math.spec — and
-the shipped CVL must parse with the same syntax checker the authoring tools
-use.
+The abstract-tier asset must be resolvable through ``importlib.resources`` (so
+it survives being installed as a wheel, not just run from a source checkout),
+the exact tier must come from the ONE canonical certora_autosetup-bundled
+Math.spec (composer ships no copy), the install helper must write the project
+files exactly where the pipeline advertises them — adding Math.spec only when
+AutoSetup did not already ship it — and the shipped CVL must parse with the
+same syntax checker the authoring tools use.
 """
 
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from composer.spec.assets import (
-    AUTOSETUP_MATH_SPEC_PATH,
     CVLMATH_ABSTRACT_PROJECT_PATH,
     CVLMATH_ABSTRACT_SPEC_NAME,
-    CVLMATH_PROJECT_PATH,
-    CVLMATH_SPEC_NAME,
+    MATH_SPEC_NAME,
+    MATH_SPEC_PROJECT_PATH,
+    bundled_math_spec_text,
     cvlmath_abstract_spec_text,
-    cvlmath_spec_text,
-    install_cvlmath_resource,
+    install_cvlmath_resources,
 )
 
 
@@ -36,76 +37,83 @@ def test_abstract_asset_is_standalone_relational_tier():
     assert "Summary(" not in text
 
 
-def test_cvlmath_asset_is_exact_tier_importing_abstract():
-    text = cvlmath_spec_text()
-    # Exact tier defined here (byte-identical to the AutoSetup Math.spec)...
-    assert "mulDivDownSummary" in text
-    assert "mulDivUpSummary" in text
-    # ...with the relational tier pulled in by import, not redefined.
-    assert f'import "{CVLMATH_ABSTRACT_SPEC_NAME}";' in text
-    assert "function mulDivDownAbstract" not in text
-    assert "definition WAD()" not in text
-
-
-def test_cvlmath_exact_tier_matches_bundled_math_spec():
-    """Guards the double-definition rationale: the install helper skips
-    CVLMath.spec exactly because its exact tier duplicates the AutoSetup
-    Math.spec definitions."""
-    from pathlib import Path
-
+def test_bundled_math_spec_is_resolvable_and_is_the_exact_tier():
+    """Drift guard for the single-source scheme: the canonical exact tier is
+    certora_autosetup's bundled Math.spec, read through importlib.resources.
+    If that file is ever moved or renamed this test must FAIL (not skip) —
+    that is precisely the event that would break the install helper and any
+    generated spec importing summaries/Math.spec."""
     import certora_autosetup
     from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 
-    bundled = (
-        Path(certora_autosetup.__file__).parent / "certora" / SUMMARIES_SUBDIR / "Math.spec"
+    fs_path = (
+        Path(certora_autosetup.__file__).parent
+        / "certora"
+        / SUMMARIES_SUBDIR
+        / MATH_SPEC_NAME
     )
-    if not bundled.exists():
-        pytest.skip(f"bundled Math.spec not found at {bundled}")
-    assert bundled.read_text().strip() in cvlmath_spec_text()
+    assert fs_path.exists(), (
+        f"canonical bundled Math.spec missing at {fs_path}; the composer "
+        "install helper and generated-spec imports depend on this exact path"
+    )
+    # bundled_math_spec_text() must resolve to that same file (raises rather
+    # than skipping if the packaged layout diverges).
+    text = bundled_math_spec_text()
+    assert text == fs_path.read_text()
+    # And it is the exact `*Summary` tier the resource description promises.
+    assert "mulDivDownSummary" in text
+    assert "mulDivUpSummary" in text
+    assert "sqrtSummaryPrecise" in text
 
 
 def test_install_without_math_spec_ships_both_tiers(tmp_path):
-    res = install_cvlmath_resource(tmp_path)
-    # The resource path is canonical (project-root-relative) and optional —
-    # this is the CVLResource the pipeline appends in stream_autosetup().
-    assert res.path == CVLMATH_PROJECT_PATH
-    assert res.sort == "import"
-    assert not res.required
-    assert (tmp_path / CVLMATH_PROJECT_PATH).read_text() == cvlmath_spec_text()
-    # The abstract tier lands next to it so the relative import resolves.
+    resources = install_cvlmath_resources(tmp_path)
+    # Resource paths are canonical (project-root-relative) and optional —
+    # these are the CVLResources the pipeline appends in stream_autosetup().
+    by_path = {res.path: res for res in resources}
+    assert set(by_path) == {CVLMATH_ABSTRACT_PROJECT_PATH, MATH_SPEC_PROJECT_PATH}
+    for res in resources:
+        assert res.sort == "import"
+        assert not res.required
+    assert "require" in by_path[CVLMATH_ABSTRACT_PROJECT_PATH].description
+    # Both tiers land in the summaries dir, byte-identical to their sources.
     assert (
         tmp_path / CVLMATH_ABSTRACT_PROJECT_PATH
     ).read_text() == cvlmath_abstract_spec_text()
+    assert (tmp_path / MATH_SPEC_PROJECT_PATH).read_text() == bundled_math_spec_text()
 
 
-def test_install_with_math_spec_ships_abstract_tier_only(tmp_path):
-    math_spec = tmp_path / AUTOSETUP_MATH_SPEC_PATH
+def test_install_with_math_spec_present_ships_abstract_resource_only(tmp_path):
+    math_spec = tmp_path / MATH_SPEC_PROJECT_PATH
     math_spec.parent.mkdir(parents=True)
-    math_spec.write_text("// AutoSetup-copied exact summaries\n")
-    res = install_cvlmath_resource(tmp_path)
-    assert res.path == CVLMATH_ABSTRACT_PROJECT_PATH
-    assert res.sort == "import"
-    assert not res.required
+    sentinel = "// AutoSetup-copied exact summaries\n"
+    math_spec.write_text(sentinel)
+    resources = install_cvlmath_resources(tmp_path)
+    # Only the abstract tier is advertised: the exact tier is already
+    # reachable through the required AutoSetup summaries import.
+    assert [res.path for res in resources] == [CVLMATH_ABSTRACT_PROJECT_PATH]
     assert (
         tmp_path / CVLMATH_ABSTRACT_PROJECT_PATH
     ).read_text() == cvlmath_abstract_spec_text()
-    # CVLMath.spec would double-define the *Summary functions — must not exist.
-    assert not (tmp_path / CVLMATH_PROJECT_PATH).exists()
+    # The existing Math.spec is AutoSetup's to manage — never overwritten.
+    assert math_spec.read_text() == sentinel
 
 
-def test_install_with_math_spec_removes_stale_cvlmath(tmp_path):
-    """Multi-run edge: run 1 installs the full library (no Math.spec yet),
-    then a later run's AutoSetup closure pulls Math.spec in — the leftover
-    CVLMath.spec must be removed or a cached generated spec importing it
-    would double-define the *Summary functions."""
-    first = install_cvlmath_resource(tmp_path)
-    assert first.path == CVLMATH_PROJECT_PATH
-    math_spec = tmp_path / AUTOSETUP_MATH_SPEC_PATH
-    math_spec.write_text("// AutoSetup-copied exact summaries\n")
-    res = install_cvlmath_resource(tmp_path)
-    assert res.path == CVLMATH_ABSTRACT_PROJECT_PATH
-    assert not (tmp_path / CVLMATH_PROJECT_PATH).exists()
-    # The abstract tier is still (re)installed for the aggregator import.
+def test_install_is_idempotent_across_runs(tmp_path):
+    """Multi-run edge: run 1 installs Math.spec (no AutoSetup copy yet); a
+    later run must leave the on-disk exact tier intact at the same single
+    path, so a cached generated spec importing summaries/Math.spec still
+    typechecks."""
+    first = install_cvlmath_resources(tmp_path)
+    assert {res.path for res in first} == {
+        CVLMATH_ABSTRACT_PROJECT_PATH,
+        MATH_SPEC_PROJECT_PATH,
+    }
+    second = install_cvlmath_resources(tmp_path)
+    # Math.spec already exists (identical canonical bytes), so it is not
+    # re-advertised; the file itself must survive with the same content.
+    assert [res.path for res in second] == [CVLMATH_ABSTRACT_PROJECT_PATH]
+    assert (tmp_path / MATH_SPEC_PROJECT_PATH).read_text() == bundled_math_spec_text()
     assert (
         tmp_path / CVLMATH_ABSTRACT_PROJECT_PATH
     ).read_text() == cvlmath_abstract_spec_text()
@@ -113,7 +121,7 @@ def test_install_with_math_spec_removes_stale_cvlmath(tmp_path):
 
 @pytest.mark.parametrize(
     "spec_name",
-    [CVLMATH_ABSTRACT_SPEC_NAME, CVLMATH_SPEC_NAME],
+    [CVLMATH_ABSTRACT_SPEC_NAME, MATH_SPEC_NAME],
 )
 def test_cvlmath_specs_pass_syntax_check(tmp_path, spec_name):
     """Parse the shipped specs with the same emv.jar checker ``put_cvl_raw`` uses."""
@@ -125,10 +133,10 @@ def test_cvlmath_specs_pass_syntax_check(tmp_path, spec_name):
         jar = typechecker_jar()
     except CertoraEnvironmentError as exc:
         pytest.skip(f"Typechecker.jar unavailable: {exc}")
-    # Write both files so CVLMath.spec's relative import of the abstract tier
-    # resolves, then check the requested entry point.
-    (tmp_path / CVLMATH_SPEC_NAME).write_text(cvlmath_spec_text())
+        return  # unreachable (skip raises); keeps `jar` provably bound below
+    # Both files are standalone (no imports), so each is checked on its own.
     (tmp_path / CVLMATH_ABSTRACT_SPEC_NAME).write_text(cvlmath_abstract_spec_text())
+    (tmp_path / MATH_SPEC_NAME).write_text(bundled_math_spec_text())
     res = subprocess.run(
         ["java", "-classpath", str(jar), "EntryPointKt", str(tmp_path / spec_name)],
         capture_output=True,
