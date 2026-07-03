@@ -827,6 +827,16 @@ class CloudProverRunner(ProverRunner):
 
             duration = time.time() - start_time
 
+            # Fresh run (cache hits short-circuit before this method) — record the
+            # prover's server-reported runtime, computed from the job's start/finish
+            # timestamps (JobInfo.runtime). For a completed job this read is cheap
+            # (cache-served from polling). Best-effort; the exception path below has
+            # nothing to record anyway.
+            try:
+                self._record_prover_runtime_seconds(prover_api.get_job_info(job_url).runtime)
+            except Exception as e:
+                self.log(f"Could not record prover runtime for usage ledger: {e}", "DEBUG")
+
             if success:
                 # Job completed successfully, parse results
                 job_handle.status = JobStatus.COMPLETED

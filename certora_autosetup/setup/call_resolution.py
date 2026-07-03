@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.paths import user_call_resolution_spec_path
 
@@ -37,7 +36,6 @@ from certora_autosetup.setup.proxy_detection import (
 from certora_autosetup.setup.setup_summaries import SummarySetup
 from certora_autosetup.setup.signature_types import extract_sighash_from_callee
 from certora_autosetup.utils.llm_util import ledger_component
-from certora_autosetup.setup.summary_aggregator import BaseSummariesAggregator
 from certora_autosetup.utils.contract_dispatcher import (
     ContractDispatcher,
     DispatchingResult,
@@ -192,10 +190,6 @@ class CallResolutionPhase:
         self.summary_setup = summary_setup
         self.library_resolver = library_resolver
         self.is_library = is_library
-        self.aggregator = BaseSummariesAggregator(
-            summaries_dir=scope.project_root / "certora" / SUMMARIES_SUBDIR,
-            main_contract=self.contract_name,
-        )
 
     def _record_contract(
         self,
@@ -215,10 +209,10 @@ class CallResolutionPhase:
     ) -> None:
         """Hook called after contracts join the scene during call resolution.
 
-        Three side effects, each best-effort (a failure in one doesn't block the others):
-        1. Add library files used by the new contracts' compilation units to the config.
-        2. Run LLM analysis on each new contract (writes ``{C}_summaries.spec``).
-        3. Append ``import "./{C}_summaries.spec";`` to the base summary aggregator.
+        Records provenance, adds the library files the new contracts use to the config, then
+        summarizes the batch via ``summary_setup.on_contracts_entered_scene`` (curated matching,
+        LLM analysis, aggregator update, prune). Each step is best-effort: a failure is logged
+        and doesn't block the others.
 
         ``source`` labels the provenance of the primary handles for the report
         (LINK, DISPATCH, PROXY_IMPL); harness wrappers are detected by
@@ -260,30 +254,19 @@ class CallResolutionPhase:
             except Exception as e:
                 logger.warning(f"Failed to add library files for {names}: {e}")
 
-        # 2. LLM analysis per new contract. Sequential so ``SummarySetup``'s shared
-        # accumulators (``_emitted_methods``, ``_methods_per_contract``,
-        # ``_cvl_functions``) aren't touched concurrently.
-        # TODO: only LLM analysis runs for contracts pulled in during call resolution — the curated
-        # library-summary matcher (SummarySetup.match_summaries_from_all_methods against
-        # function_summaries.json) is applied only to the main contract and the initial
-        # additional_contracts, not here. Run curated matching on ``names`` here too to
-        # close that gap.
-        contract_files = self.summary_setup.solidity_files_no_dependencies
-        for name in names:
-            try:
-                await self.summary_setup.analyze_contract(name, contract_files)
-            except Exception as e:
-                logger.warning(
-                    f"LLM analysis failed for {name}; continuing without summaries: {e}"
-                )
-
-        # 3. Append imports for any specs that landed on disk.
+        # 2. Summarize the new contracts: curated matching, LLM analysis, aggregator update, and
+        # the scene-wide prune pass. Curated summaries resolve here because step 1 has already added
+        # the libraries these contracts use to the conf.
+        # TODO(perf): on_contracts_entered_scene's prune re-checks every emitted spec on each
+        # contract-add. all_methods.json is built once and never regenerated, so an entry that
+        # resolved before stays resolvable — only the newly-added specs need the existence check.
+        # The exception is cross-spec dedup precedence (a newly-added curated spec can supersede a
+        # (receiver,name,params) an existing LLM spec kept), which needs the global view. Consider
+        # pruning only new specs for existence + handling dedup incrementally.
         try:
-            added = self.aggregator.register(names)
-            if added:
-                logger.info(f"Summary aggregator: registered LLM specs for {added}")
+            await self.summary_setup.on_contracts_entered_scene(names, self.contract_name)
         except Exception as e:
-            logger.warning(f"Summary aggregator register failed for {names}: {e}")
+            logger.warning(f"Summarizing {names} failed; continuing without their summaries: {e}")
 
     async def execute(
         self,
