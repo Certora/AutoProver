@@ -170,7 +170,10 @@ async def run_autoprove_pipeline(
         ]
         # Ship the packaged CVLMath library into the project (mirroring how
         # custom_summaries.spec is written by the summaries phase) and offer it
-        # as an optional import for taming nonlinear arithmetic.
+        # as an optional import for taming nonlinear arithmetic. Must stay
+        # after the AutoSetup await above: the helper checks whether AutoSetup
+        # copied Math.spec into the project and, if so, installs only the
+        # abstract tier to avoid double-defining the exact *Summary functions.
         resources.append(install_cvlmath_resource(source_input.project_root))
         if sys_desc.erc20_contracts or sys_desc.external_interfaces:
             summary_resource = await run_task(
