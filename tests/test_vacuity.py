@@ -70,12 +70,35 @@ class TestDetectVacuousMethods:
         ]
         assert detect_vacuous_methods(results) == {}
 
-    def test_two_rules_flagged_even_when_others_pass(self):
-        """>=2 sanity-failed rules flag the method even below 100%."""
+    def test_two_rules_with_healthy_instantiation_not_flagged(self):
+        """>=2 sanity failures alongside a VERIFIED instantiation are a
+        rule-precondition problem, not method vacuity: a passing rule reached
+        the method's code, disproving all-paths reversion."""
         results = [
             _res("ruleA", DEPOSIT, "SANITY_FAILED"),
             _res("ruleB", DEPOSIT, "SANITY_FAILED"),
             _res("ruleC", DEPOSIT, "VERIFIED"),
+        ]
+        assert detect_vacuous_methods(results) == {}
+
+    def test_two_rules_with_violated_instantiation_not_flagged(self):
+        """VIOLATED also requires reaching the method's code, so it clears
+        the >=2 arm just like VERIFIED."""
+        results = [
+            _res("ruleA", DEPOSIT, "SANITY_FAILED"),
+            _res("ruleB", DEPOSIT, "SANITY_FAILED"),
+            _res("ruleC", DEPOSIT, "VIOLATED"),
+        ]
+        assert detect_vacuous_methods(results) == {}
+
+    def test_two_rules_flagged_when_others_timeout(self):
+        """TIMEOUT/ERROR can mask an all-paths-reverting method — the >=2 arm
+        still fires when no instantiation reached a healthy verdict."""
+        results = [
+            _res("ruleA", DEPOSIT, "SANITY_FAILED"),
+            _res("ruleB", DEPOSIT, "SANITY_FAILED"),
+            _res("ruleC", DEPOSIT, "TIMEOUT"),
+            _res("ruleD", DEPOSIT, "ERROR"),
         ]
         assert set(detect_vacuous_methods(results)) == {DEPOSIT}
 

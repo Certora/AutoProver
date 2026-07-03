@@ -1,7 +1,8 @@
 """Vacuous-method detection over per-rule prover results.
 
 A parametric method whose sanity check fails in every rule that instantiates it
-(or in several rules at once) is *vacuous*: every path through it reverts under
+(or in several rules while every other instantiation timed out or errored) is
+*vacuous*: every path through it reverts under
 the current verification model, so any rule instantiated with it passes
 trivially. Per-rule ``SANITY_FAILED`` results already reach the verify loop
 (``composer/prover/results.py`` attaches the ``METHOD_INSTANTIATION`` name to
@@ -34,16 +35,23 @@ class VacuityEvidence(BaseModel):
 
 def detect_vacuous_methods(results: Iterable[RuleResult]) -> dict[str, VacuityEvidence]:
     """Group ``SANITY_FAILED`` results by instantiated method and flag the
-    methods that are sanity-failed in >= 2 rules OR in 100% of the rules that
-    instantiate them.
+    methods that are sanity-failed in 100% of the rules that instantiate them,
+    OR in >= 2 rules while no instantiation reached a healthy verdict.
 
-    The 100% arm catches single-rule runs; the >= 2 arm catches a method that
-    is vacuous across the board even when some rule's own preconditions mask
-    it. A sanity failure on a non-parametric rule (``path.method is None``)
-    is a rule-authoring problem, not method vacuity, and is ignored here.
+    The 100% arm catches single-rule runs. The >= 2 arm catches a method that
+    is vacuous across the board when the remaining instantiations are
+    TIMEOUT/ERROR/SKIPPED — statuses that can *mask* an all-paths-reverting
+    method. A VERIFIED or VIOLATED instantiation, by contrast, requires
+    actually reaching the method's code, so it *disproves* all-paths
+    reversion: sanity failures alongside a healthy instantiation stem from
+    the failing rules' own preconditions (a rule-authoring problem), not
+    method vacuity, and must not be flagged here. A sanity failure on a
+    non-parametric rule (``path.method is None``) is likewise a
+    rule-authoring problem and is ignored.
     """
     instantiating: dict[str, set[str]] = {}
     sanity_failed: dict[str, set[str]] = {}
+    healthy: dict[str, set[str]] = {}
     for r in results:
         method = r.path.method
         if method is None:
@@ -51,11 +59,15 @@ def detect_vacuous_methods(results: Iterable[RuleResult]) -> dict[str, VacuityEv
         instantiating.setdefault(method, set()).add(r.path.rule)
         if r.status == "SANITY_FAILED":
             sanity_failed.setdefault(method, set()).add(r.path.rule)
+        elif r.status in ("VERIFIED", "VIOLATED"):
+            healthy.setdefault(method, set()).add(r.path.rule)
 
     flagged: dict[str, VacuityEvidence] = {}
     for method, failed_rules in sanity_failed.items():
         all_rules = instantiating[method]
-        if len(failed_rules) < 2 and failed_rules != all_rules:
+        everywhere = failed_rules == all_rules
+        masked_majority = len(failed_rules) >= 2 and not healthy.get(method)
+        if not (everywhere or masked_majority):
             continue
         flagged[method] = VacuityEvidence(
             method=method,
