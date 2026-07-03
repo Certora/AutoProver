@@ -26,6 +26,7 @@ from certora_autosetup.utils.constants import (
     FILE_COMPILATION_DUMMY_SPEC,
     FILE_ERC7201_SPEC,
     FILE_LLM_USAGE,
+    FILE_PROVER_USAGE,
     SUMMARIES_SUBDIR,
 )
 
@@ -97,17 +98,18 @@ def internal_difficult_retry_dir(project_root: Path) -> Path:
     return project_root / DIR_INTERNAL_DIFFICULT_RETRY
 
 
-def resolve_autosetup_llm_usage_file(project_root: Path) -> Path | None:
-    """Locate the ``llm_usage.json`` the most recent autosetup run wrote under ``project_root``.
+def _resolve_autosetup_reports_file(project_root: Path, filename: str) -> Path | None:
+    """Locate ``filename`` in the reports dir the most recent autosetup run wrote under
+    ``project_root``.
 
     Primary: read ``orchestration_timestamp`` from ``autosetup_result.json`` and build
-    ``<CERTORA_REPORTS_DIR>/<ts>/llm_usage.json`` — the deterministic inverse of how the CLI names
+    ``<CERTORA_REPORTS_DIR>/<ts>/<filename>`` — the deterministic inverse of how the CLI names
     that dir. Fallback (a ``--reports-dir`` override that kept the convention, or an older run): the
-    newest timestamped subdir holding a ``llm_usage.json``. Timestamps are ``%Y%m%d_%H%M%S``, so a
+    newest timestamped subdir holding ``<filename>``. Timestamps are ``%Y%m%d_%H%M%S``, so a
     plain lexicographic max picks the most recent. Returns ``None`` if nothing is found.
 
     This is the single source of truth for the on-disk usage-file layout; external consumers (e.g.
-    composer) should call it rather than re-deriving these paths.
+    composer) should call the typed wrappers below rather than re-deriving these paths.
     """
     reports_root = project_root / CERTORA_REPORTS_DIR
 
@@ -117,7 +119,7 @@ def resolve_autosetup_llm_usage_file(project_root: Path) -> Path | None:
     except (OSError, ValueError):
         timestamp = None
     if timestamp:
-        candidate = reports_root / timestamp / FILE_LLM_USAGE
+        candidate = reports_root / timestamp / filename
         if candidate.exists():
             return candidate
 
@@ -126,7 +128,19 @@ def resolve_autosetup_llm_usage_file(project_root: Path) -> Path | None:
     except OSError:
         return None
     for d in reversed(subdirs):
-        candidate = d / FILE_LLM_USAGE
+        candidate = d / filename
         if candidate.exists():
             return candidate
     return None
+
+
+def resolve_autosetup_llm_usage_file(project_root: Path) -> Path | None:
+    """Locate the ``llm_usage.json`` the most recent autosetup run wrote under ``project_root``
+    (``None`` if absent). See :func:`_resolve_autosetup_reports_file`."""
+    return _resolve_autosetup_reports_file(project_root, FILE_LLM_USAGE)
+
+
+def resolve_autosetup_prover_usage_file(project_root: Path) -> Path | None:
+    """Locate the ``prover_usage.json`` the most recent autosetup run wrote under ``project_root``
+    (``None`` if absent). See :func:`_resolve_autosetup_reports_file`."""
+    return _resolve_autosetup_reports_file(project_root, FILE_PROVER_USAGE)
