@@ -23,6 +23,7 @@ from composer.spec.source.autosetup import SetupSuccess
 from composer.ui.autoprove_app import AutoProvePhase
 
 from composer.input.files import Document
+from composer.spec.assets import install_cvlmath_resource
 from composer.spec.context import (
     WorkflowContext, CacheKey, Properties, CVLGeneration,
 )
@@ -167,6 +168,10 @@ async def run_autoprove_pipeline(
                 sort="import",
             ),
         ]
+        # Ship the packaged CVLMath library into the project (mirroring how
+        # custom_summaries.spec is written by the summaries phase) and offer it
+        # as an optional import for taming nonlinear arithmetic.
+        resources.append(install_cvlmath_resource(source_input.project_root))
         if sys_desc.erc20_contracts or sys_desc.external_interfaces:
             summary_resource = await run_task(
                 handler_factory,
