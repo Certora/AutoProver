@@ -217,6 +217,11 @@ def test_property_generation_prompt_harness_api(with_api: bool):
     )
     assert ("<verification_harness>" in out) == with_api
     assert ("getVersionSlot" in out) == with_api
+    # Soundness guardrails render exactly when the harness API does: parametric
+    # participation, the filtered-exclusion idiom, and the satisfy-witness ban.
+    assert ("NOT reachable in the production contract" in out) == with_api
+    assert ("filtered { f -> f.selector != sig:" in out) == with_api
+    assert ("never use a harness helper wrapper as the witness" in out) == with_api
 
 
 def test_property_judge_prompt_harness_api():
@@ -229,6 +234,12 @@ def test_property_judge_prompt_harness_api():
     )
     assert "<verification_harness>" in out
     assert "getVersionSlot" in out
+    # The judge mirrors the author guardrails: helper-witnessed satisfy claims,
+    # harness-artifact-driven weakenings, and the filter-legitimacy taxonomy
+    # (documented harness helper OR recorded vacuity acknowledgment).
+    assert "witness runs through a harness helper wrapper" in out
+    assert "reject the weakening" in out
+    assert "recorded vacuity acknowledgment" in out
     # Binding without harness_api at all (the NotRequired key) renders harness-free.
     out = load_jinja_template(
         "property_judge_prompt.j2",
@@ -266,3 +277,6 @@ def test_structural_invariant_prompt_main_harness(with_harness: bool):
     )
     assert ("RiverHarness" in out) == with_harness
     assert ("getVersionSlot" in out) == with_harness
+    # The shared harnessed context carries the parametric/witness caveat, so the
+    # invariant formulator sees the same soundness guardrails as the CVL author.
+    assert ("never use a helper as the witness" in out) == with_harness
