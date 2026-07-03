@@ -52,7 +52,9 @@ def test_property_analysis_prompt_render():
         "property_analysis_prompt.j2",
         context=_fake_component_context(),
         backend_guidance="BACKEND_GUIDANCE_SENTINEL",
-        sort="source",
+        # A valid Sort value (see composer/spec/service_host.py) exercising the
+        # non-greenfield template branch.
+        sort="existing",
         prior_properties=[],
     )
     # The context and backend guidance are threaded through.
@@ -77,7 +79,7 @@ def test_property_analysis_prompt_render_with_prior_rounds():
         "property_analysis_prompt.j2",
         context=_fake_component_context(),
         backend_guidance="",
-        sort="source",
+        sort="existing",
         prior_properties=prior,
     )
     assert "solvency" in out
