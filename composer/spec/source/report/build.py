@@ -20,7 +20,7 @@ from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm,
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, Outcome, PropertyKey, ReportBackend, RuleRef,
+    AutoProverReport, HarnessDisclosure, Outcome, PropertyKey, ReportBackend, RuleRef,
 )
 
 _log = logging.getLogger(__name__)
@@ -42,8 +42,15 @@ async def build_report[R: ReportableResult](
     components: list[ReportComponentInput[R]],
     llm: BaseChatModel,
     fetch_verdicts: VerdictFetcher[R],
+    main_harness: HarnessDisclosure | None = None,
+    main_harness_fallback: str | None = None,
 ) -> AutoProverReport:
-    """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job."""
+    """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
+
+    ``main_harness`` discloses that verification ran through an augmentation harness;
+    ``main_harness_fallback`` discloses that a generated harness failed AutoSetup and
+    the run reverted to the raw contract. Both default to None for backends without
+    harness support."""
     properties, rules, skipped, gave_up, dropped = await collect(
         components, fetch_verdicts=fetch_verdicts
     )
@@ -95,5 +102,7 @@ async def build_report[R: ReportableResult](
         skipped=skipped,
         gave_up_components=gave_up,
         coverage=coverage,
+        main_harness=main_harness,
+        main_harness_fallback=main_harness_fallback,
     )
     return report

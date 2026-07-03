@@ -44,6 +44,7 @@ from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.author import batch_cvl_generation, GaveUp
 from composer.spec.source.artifacts import InvariantSpec, ProverSourceCode
 from composer.spec.source.common_pipeline import extract_all_components, generate_all_component_cvl, AutoProveResult
+from composer.spec.source.report.schema import HarnessDisclosure
 from composer.spec.source.task_ids import (
     SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, AUTOSETUP_TASK_ID,
     SUMMARIES_TASK_ID, INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
@@ -227,6 +228,17 @@ async def run_autoprove_pipeline(
     # property authors and the feedback judge.
     harness_api = sys_desc.main_harness_api()
 
+    # Report disclosure: which augmentation harness verification ran against
+    # (post-fallback view), so the report never overstates what was directly
+    # verified.
+    harness_view = sys_desc.main_harness_view()
+    main_harness_disclosure = HarnessDisclosure(
+        name=harness_view.name,
+        path=harness_view.path,
+        harness_of=harness_view.harness_of,
+        api=harness_view.api,
+    ) if harness_view is not None else None
+
     # The prover tool is shared by every CVL-generation call below.
     prover_tool = get_prover_tool(
         env.llm_heavy(), verify_contract,
@@ -317,4 +329,6 @@ async def run_autoprove_pipeline(
         semaphore=semaphore,
         invariant_result=invariant_result,
         harness_api=harness_api,
+        main_harness=main_harness_disclosure,
+        main_harness_fallback=sys_desc.main_harness_fallback,
     )

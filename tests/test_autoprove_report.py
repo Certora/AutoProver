@@ -33,7 +33,7 @@ from composer.spec.source.report.grouping import (
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
     AutoProverReport, CoverageReport, FormalizedProperty, GaveUpComponent, GroupStatus,
-    Outcome, PropertyGroup, RuleVerdict, SkippedClaim,
+    HarnessDisclosure, Outcome, PropertyGroup, RuleVerdict, SkippedClaim,
 )
 from composer.spec.source.report_prover import make_prover_fetcher
 
@@ -423,6 +423,52 @@ def test_render_html_omits_link_column_without_links():
     assert "Prover runs" not in h
 
 
+def _harness_disclosure() -> HarnessDisclosure:
+    return HarnessDisclosure(
+        name="CounterHarness",
+        path="certora/harnesses/CounterHarness.sol",
+        harness_of="Counter",
+        api=["`getShadowSlot()` returns (`uint256`) — reads the shadow slot"],
+    )
+
+
+def test_render_html_discloses_main_harness():
+    report = _mini_report().model_copy(update={"main_harness": _harness_disclosure()})
+    h = render_html(report)
+    assert "Verification harness" in h
+    assert "CounterHarness" in h
+    assert "certora/harnesses/CounterHarness.sol" in h
+    assert "getShadowSlot" in h
+    # Header meta row reconciles the conf's verify target with the report's contract.
+    assert "Verified via" in h
+    assert "augmentation harness extending" in h
+
+
+def test_render_html_omits_harness_section_without_harness():
+    h = render_html(_mini_report())
+    assert "Verification harness" not in h
+    assert "Verified via" not in h
+    assert "Harness fallback" not in h
+
+
+def test_render_html_discloses_harness_fallback():
+    report = _mini_report().model_copy(update={
+        "main_harness_fallback": "AutoSetup failed for the augmentation harness CounterHarness",
+    })
+    h = render_html(report)
+    assert "Harness fallback:" in h
+    assert "AutoSetup failed for the augmentation harness CounterHarness" in h
+
+
+def test_report_schema_harness_fields_backcompat():
+    # A persisted pre-change report (no harness keys) still validates, with both
+    # disclosure fields defaulting to None.
+    dumped = _mini_report().model_dump(exclude={"main_harness", "main_harness_fallback"})
+    reloaded = AutoProverReport.model_validate(dumped)
+    assert reloaded.main_harness is None
+    assert reloaded.main_harness_fallback is None
+
+
 # ---------------------------------------------------------------------------
 # build orchestrator (async)
 # ---------------------------------------------------------------------------
@@ -454,6 +500,30 @@ async def test_build_groups_properties(tmp_path):
     assert [g.slug for g in report.groups] == ["g"]
     assert {p.title for p in report.properties} == {"p1", "p2"}
     assert report.coverage.property_coverage_complete is True
+    # Without a harness the disclosure fields stay None.
+    assert report.main_harness is None
+    assert report.main_harness_fallback is None
+
+
+@pytest.mark.asyncio
+async def test_build_threads_harness_disclosure(tmp_path):
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    llm = _GroupingStubModel(result=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])]))
+
+    report = await build.build_report(
+        contract_name="Counter",
+        backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        llm=llm, fetch_verdicts=fetch,
+        main_harness=_harness_disclosure(),
+        main_harness_fallback="fell back",
+    )
+
+    assert report.main_harness is not None
+    assert report.main_harness.name == "CounterHarness"
+    assert report.main_harness_fallback == "fell back"
 
 
 @pytest.mark.asyncio
