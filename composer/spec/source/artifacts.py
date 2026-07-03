@@ -16,7 +16,7 @@ from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceCode
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.gen_types import (
-    AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, SPECS_DIR, under_project,
+    AP_REPORT_DIR, AUTOPROVE_INTERNAL_DIR, CERTORA_DIR, MOCKS_DIR, SPECS_DIR, under_project,
 )
 from composer.spec.prop import PropertyFormulation
 from composer.spec.source.prover import prover_config_overlay
@@ -92,7 +92,8 @@ class ProverArtifactStore(ArtifactStore):
         project-root-relative path (e.g. ``certora/specs/invariants.spec``).
 
         Bundle: ``specs/{stem}.spec``, ``properties/{stem}.commentary.md``,
-        ``properties/{stem}.property_rules.json``, and ``confs/{stem}.conf``.
+        ``properties/{stem}.property_rules.json``, ``confs/{stem}.conf``, and the
+        generation's mock contracts (if any) at their state-held paths.
         """
         specs_dir = ensure_dir(self._deliverable_dir() / "specs")
         (specs_dir / spec.spec_filename).write_text(result.cvl)
@@ -101,9 +102,25 @@ class ProverArtifactStore(ArtifactStore):
             spec.stem, "property_rules",
             {m.property_title: m.rules for m in result.property_rules},
         )
+        self._write_mocks(result.mocks)
         spec_path = SPECS_DIR / spec.spec_filename  # project-root-relative
         self._write_conf(spec, result.config, spec_path)
         return spec_path
+
+    def _write_mocks(self, mocks: dict[str, str]) -> None:
+        """The generation's mock contracts, at their exact state-held
+        (project-root-relative, per-generation-namespaced) paths — the conf's
+        ``files`` entries reference them there, so a cache replay from a fresh
+        checkout can recompile without rerunning the generation."""
+        for rel, content in mocks.items():
+            rel_path = Path(rel)
+            # Belt over the write_mock tool's validation: never write outside
+            # the canonical mocks directory.
+            assert not rel_path.is_absolute() and ".." not in rel_path.parts, rel
+            assert rel_path.parts[:len(MOCKS_DIR.parts)] == MOCKS_DIR.parts, rel
+            target = under_project(self._project_root, rel_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
 
     def _write_conf(
         self, spec: SpecIdentity, base_config: dict | None, spec_path: Path,

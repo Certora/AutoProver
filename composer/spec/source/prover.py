@@ -95,6 +95,13 @@ class ProverStateExtra(TypedDict):
     # forget it. Shares the DELETE_SKIP-sentinel reducer with rule_skips — an entry is cleared
     # when a later run instantiates the method without a sanity failure.
     vacuous_methods: Annotated[dict[str, str], _merge_rule_skips]
+    # Agent-written mock contracts (project-root-relative path under the generation's
+    # certora/mocks/<stem>/ namespace -> Solidity source), written by the write_mock tool.
+    # State-held rather than written to disk so concurrent batch generations never mutate
+    # the shared project tree: verify_spec materializes them for the duration of a prover
+    # run, and the artifact store persists them (with the conf that references them) only
+    # for completed generations. Shares the DELETE_SKIP reducer idiom of rule_skips.
+    mocks: Annotated[dict[str, str], _merge_rule_skips]
     # The acknowledged-vacuous ledger (instantiation name -> JSON record with
     # `steps_attempted` and `justification`), written by the acknowledge_vacuous_method
     # tool. The verify_spec stamp gate is `known_vacuous - acknowledged`: an acknowledged
@@ -245,6 +252,31 @@ def tmp_spec(
     ) as tmp:
         yield tmp
 
+@contextmanager
+def materialized_mocks(root: str, mocks: dict[str, str]) -> Iterator[None]:
+    """Materialize the generation's state-held mock files onto the real project
+    tree for the duration of a prover run (the prover compiles from disk), then
+    remove them.
+
+    Mock paths are namespaced per generation (``certora/mocks/<spec stem>/``),
+    so concurrent batch generations write disjoint files and never observe each
+    other's mocks mid-compile. Removing them afterward keeps gave-up generations
+    from leaving stray sources behind; completed generations get their mocks
+    persisted by the artifact store alongside the conf that references them.
+    """
+    written: list[Path] = []
+    for rel, content in mocks.items():
+        target = Path(root) / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+        written.append(target)
+    try:
+        yield
+    finally:
+        for target in written:
+            target.unlink(missing_ok=True)
+
+
 def _prover_sem(cloud: bool) -> AsyncContextManager[None]:
     if not cloud:
         return asyncio.Semaphore(1)
@@ -292,7 +324,7 @@ def get_prover_tool(
                 content=json.dumps(config, indent=2),
                 ext="conf",
                 prefix="verify"
-            ) as config_path:
+            ) as config_path, materialized_mocks(project_root, state.get("mocks", {})):
                 async with sem:
                     result = await run_prover(
                         Path(project_root),

@@ -27,6 +27,12 @@ PROPERTIES_SUBDIR = "properties"
 PROPERTIES_DIR = CERTORA_DIR / PROPERTIES_SUBDIR
 #: AutoSetup / custom summaries live here.
 SUMMARIES_DIR = SPECS_DIR / "summaries"
+#: Agent-written mock contracts (the `write_mock` repair-ladder tool). Mocks are
+#: state-held during generation and only touch this directory when materialized
+#: for a prover run or persisted by the artifact store; each generation writes
+#: into its own subdirectory (``certora/mocks/<spec stem>/``) so concurrent
+#: batches never collide.
+MOCKS_DIR = CERTORA_DIR / "mocks"
 #: The autoprove run report (report.json, the optional rendered HTML, and the
 #: canonical slug<->id map) lives here -- a dedicated subdir so a consumer can
 #: include or exclude the human-facing report independently of the specs.

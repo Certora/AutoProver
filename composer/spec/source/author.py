@@ -24,7 +24,7 @@ from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATIO
 from langgraph.graph import MessagesState
 from langgraph.runtime import get_runtime
 from pathlib import Path, PurePosixPath
-from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
+from composer.spec.gen_types import CVLResource, MOCKS_DIR, TypedTemplate, import_statement_for
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import CacheLevel
 
@@ -447,45 +447,45 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
         )
 
 
-# The only directory write_mock may write into, mirroring the harness generator's VFS
-# confinement (`forbidden_write="^(?!certora/harnesses)"` in harness.py) — but enforced
-# directly here because the authoring agent's source tools are read-only over the real
-# project tree and the prover compiles from the real tree, so the mock must land on disk.
-MOCKS_DIR = PurePosixPath("certora/mocks")
-
-
-@tool_display(lambda p: f"Writing mock `{p['file_path']}`", None)
-class WriteMockTool(WithAsyncDependencies[str, str]):
+@tool_display(lambda p: f"Writing mock `{p['file_name']}`", None)
+class WriteMockTool(WithAsyncDependencies[Command | str, str], WithInjectedId):
     """
-    Write a minimal Solidity mock contract under `certora/mocks` implementing an interface, so
-    the prover can resolve calls to an otherwise-unresolved callee (step 2 of the vacuity repair
-    ladder). After writing the mock, register it in the prover configuration with `edit_config`
-    (an `add_file` edit, plus an `add_link` edit if the callee is reached through a storage field).
+    Write a minimal Solidity mock contract implementing an interface, so the prover can resolve
+    calls to an otherwise-unresolved callee (step 2 of the vacuity repair ladder). The mock is
+    recorded against this generation's own `certora/mocks/` subdirectory and materialized on
+    disk for every prover run; the tool response names the exact project-root-relative path.
+    After writing the mock, register that path in the prover configuration with `edit_config`
+    (an `add_file` edit, plus an `add_link` edit if the callee is reached through a storage
+    field).
 
     Keep the mock as small as possible: implement only the interface the caller needs, but
     preserve the semantics that matter to the calling contract — in particular a `payable`
-    callee must remain `payable`. Writing to an existing path overwrites it, so you can iterate
-    on a mock in place.
+    callee must remain `payable`. Writing an existing file name overwrites it, so you can
+    iterate on a mock in place.
     """
-    file_path: str = Field(description=f"Project-root-relative path for the mock, under `{MOCKS_DIR}` (e.g. `{MOCKS_DIR}/MockOracle.sol`)")
+    # The bound dependency is the generation's namespace (its spec stem): mocks are held in
+    # graph state and materialized under certora/mocks/<namespace>/ only around prover runs,
+    # so concurrent batch generations never mutate shared paths in the project tree (the
+    # same isolation the tmp_spec idiom gives curr_spec).
+    file_name: str = Field(description="Bare file name for the mock, e.g. `MockOracle.sol` (no directories — the tool chooses this generation's mocks directory)")
     content: str = Field(description="The full Solidity source of the mock contract")
 
     @override
-    async def run(self) -> str:
-        rel = PurePosixPath(self.file_path)
-        if rel.is_absolute() or ".." in rel.parts:
-            return f"Invalid path `{self.file_path}`: must be a project-root-relative path without `..`"
-        if rel.parts[:len(MOCKS_DIR.parts)] != MOCKS_DIR.parts or len(rel.parts) <= len(MOCKS_DIR.parts):
-            return f"You may only write into the `{MOCKS_DIR}` directory (got `{self.file_path}`)"
-        if rel.suffix != ".sol":
-            return f"Mock must be a Solidity source file (`.sol`), got `{self.file_path}`"
-        with self.tool_deps() as project_root:
-            target = Path(project_root) / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(self.content)
-        return (
-            f"Wrote mock to `{self.file_path}`. Remember to register it in the prover configuration "
-            "via `edit_config` (`add_file`, plus `add_link` if the callee is reached through a storage field)."
+    async def run(self) -> Command | str:
+        name = PurePosixPath(self.file_name)
+        if len(name.parts) != 1 or name.parts[0] in (".", ".."):
+            return f"Invalid file name `{self.file_name}`: provide a bare file name without directories"
+        if name.suffix != ".sol":
+            return f"Mock must be a Solidity source file (`.sol`), got `{self.file_name}`"
+        with self.tool_deps() as namespace:
+            rel = PurePosixPath(MOCKS_DIR.as_posix()) / namespace / name
+        return tool_state_update(
+            self.tool_call_id,
+            f"Recorded mock `{rel}`; it will be materialized there for every prover run. "
+            "Remember to register it in the prover configuration via `edit_config` "
+            f"(`add_file` with `{rel}`, plus `add_link` if the callee is reached through "
+            "a storage field).",
+            mocks={str(rel): self.content},
         )
 
 
@@ -502,10 +502,14 @@ async def batch_cvl_generation(
     description: str,
     source: SourceCode,
     spec_dir: Path,
+    mock_namespace: str,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
     # directory, so resource imports are expressed relative to *spec_dir*.
+    # *mock_namespace* (the spec's stem) names this generation's private
+    # certora/mocks/<namespace>/ subdirectory: write_mock records mocks against it, so
+    # concurrent batch generations can never clobber each other's mock files.
     resource_views: list[ResourceView] = [
         {
             "description": r.description,
@@ -539,7 +543,7 @@ async def batch_cvl_generation(
             # acknowledge_vacuous_method is the structured last-resort ledger entry the
             # verify_spec stamp gate and the feedback judge consult.
             ConfigEditTool.as_tool("edit_config"),
-            WriteMockTool.bind(source.project_root).as_tool("write_mock"),
+            WriteMockTool.bind(mock_namespace).as_tool("write_mock"),
             AcknowledgeVacuousMethod.as_tool("acknowledge_vacuous_method"),
             ctx.get_memory_tool(),
         ]
@@ -577,6 +581,7 @@ async def batch_cvl_generation(
             rule_skips={},
             vacuous_methods={},
             acknowledged_vacuous={},
+            mocks={},
             skipped=[],
             property_rules=[],
             validations={},
@@ -590,14 +595,16 @@ async def batch_cvl_generation(
         return GaveUp(reason=res_state["result"])
     d = res_state["curr_spec"]
     assert d is not None
-    # Persist the base prover config and last run link from the final state so a later cache
-    # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
+    # Persist the base prover config, mocks, and last run link from the final state so a
+    # later cache hit (which skips the prover) can still reconstruct certora/confs — and
+    # the mock files those confs reference — and retain the link.
     return GeneratedCVL(
         commentary=res_state["result"],
         cvl=d,
         skipped=res_state["skipped"],
         property_rules=res_state["property_rules"],
         config=res_state["config"],
+        mocks=res_state["mocks"],
         final_link=res_state.get("prover_link"),
     )
 

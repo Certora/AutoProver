@@ -182,6 +182,7 @@ async def generate_all_component_cvl(
                 description=label,
                 source=source_input,
                 spec_dir=SPECS_DIR,
+                mock_namespace=ComponentSpec(batch.feat.slugified_name).stem,
             ),
             semaphore,
         )

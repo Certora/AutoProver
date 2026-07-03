@@ -125,6 +125,10 @@ class GeneratedCVL(BaseModel):
     # (which skips the prover) can still reconstruct certora/confs. None for pre-existing
     # cache entries or runs where no config was established.
     config: dict | None = Field(default=None)
+    # The generation's mock contracts (state["mocks"]: project-root-relative path ->
+    # Solidity source), persisted so the conf's file references resolve on cache replay
+    # from a fresh checkout. Empty for pre-existing cache entries and mock-free runs.
+    mocks: dict[str, str] = Field(default_factory=dict)
     # The last prover-run link (URL or local results dir), persisted for the report and so a
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
