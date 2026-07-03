@@ -30,10 +30,10 @@ from composer.spec.util import ensure_dir
 CVLMATH_ABSTRACT_SPEC_NAME = "CVLMathAbstract.spec"
 MATH_SPEC_NAME = "Math.spec"
 #: Canonical (project-root-relative) install locations, next to the AutoSetup /
-#: custom summaries so imports look uniform to the spec author. MATH_SPEC_
-#: PROJECT_PATH is the SAME path AutoSetup's copy_summaries_folder uses (it
-#: preserves the bundled layout), which is what makes the single-name scheme
-#: work: its presence signals "the exact tier is already installed".
+#: custom summaries so imports look uniform to the spec author. The Math.spec
+#: path is the SAME one AutoSetup's copy_summaries_folder uses (it preserves
+#: the bundled layout), which is what makes the single-name scheme work: its
+#: presence signals "the exact tier is already installed".
 MATH_SPEC_PROJECT_PATH = SUMMARIES_DIR / MATH_SPEC_NAME
 CVLMATH_ABSTRACT_PROJECT_PATH = SUMMARIES_DIR / CVLMATH_ABSTRACT_SPEC_NAME
 
