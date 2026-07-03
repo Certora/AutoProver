@@ -1,0 +1,64 @@
+<background>
+You are assisting in the setup of a formal verification project using the Certora Prover.
+</background>
+
+<task>
+The contract {{ contract_name }} (located at `{{ relative_path }}`) is being verified. A prior analysis
+determined that some of its state and/or entry points cannot be observed through its external interface,
+which prevents verification properties from being written about them.
+
+You must write a single "augmentation harness": a contract declared as
+`contract {{ harness_name }} is {{ contract_name }}` which exposes the required verification API
+*without* changing or duplicating any behavior of {{ contract_name }}.
+
+The harness must contain exactly the following, and nothing else:
+{% if plan.unstructured_slots %}
+
+## Storage getters
+
+For each entry below, add an `external view` getter that reads the *exact* storage slot used by the contract:
+{% for s in plan.unstructured_slots %}
+* `{{ s.getter_name }}` returning `{{ s.value_type }}` — slot derivation: {{ s.slot_derivation }}. Rationale: {{ s.rationale }}
+{% endfor %}
+
+Implementation constraints for getters:
+* Read the slot with inline assembly (an `sload` of a precomputed `constant` slot value), or, when the
+  contract accesses the slot through an internal storage-library getter, call that internal getter instead.
+* Precompute the slot constant *exactly* as the contract derives it (e.g. `keccak256("...") - 1`, the
+  ERC-7201 formula, etc.); consult the contract source and do NOT re-derive it differently.
+{% endif %}
+{% if plan.decompositions %}
+
+## Helper wrappers
+{% for d in plan.decompositions %}
+
+The function `{{ d.target_function }}` should be decomposed ({{ d.rationale }}) via the following thin external wrappers:
+{% for (name, contract) in d.helpers.items() %}
+* `{{ name }}`: {{ contract }}
+{% endfor %}
+{% endfor %}
+
+Implementation constraints for wrappers:
+* Each wrapper must be a *thin* `external` function that simply calls the corresponding existing
+  `internal`/`private` function of {{ contract_name }} (forwarding arguments and returning its result).
+{% endif %}
+
+Hard rules:
+* Do NOT duplicate any logic from {{ contract_name }}: getters only read state, wrappers only delegate to
+  existing internal functions.
+* Do NOT change any behavior of {{ contract_name }}: do not override any of its existing external/public functions.
+* Do NOT declare any state variables in the harness (no shadowing, no new state).
+* The harness must compile. Import {{ contract_name }} using the relative path of the target file, i.e.
+  `import "{{ relative_path }}";` — do NOT try to use imports with `..`. Add only the code necessary to satisfy
+  the Solidity compiler/typechecker (e.g., code to invoke the parent contract's constructor).
+
+Place the generated file at `certora/harnesses/{{ harness_name }}.sol` on the VFS using the `put_file` tool.
+The contract identifier MUST be exactly `{{ harness_name }}`.
+
+**Important**: Prior executions of this workflow may mean the harness already exists on the VFS. So long as
+the file exists with an implementation that satisfies the above instructions, you *may* deliver it unchanged.
+
+Once the harness has been generated, call the `result` tool with the relative path to the generated file and
+the contract identifier `{{ harness_name }}`. Your result will be validated; repair any issues and re-invoke
+the result tool upon rejection.
+</task>

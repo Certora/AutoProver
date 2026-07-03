@@ -177,10 +177,36 @@ Use your memory tool to record the results of this analysis at `/memories/extern
 
 ## Step 6
 
+Analyze the implementation of {{ contract_name }} itself (the *main* contract being verified) to determine
+whether it needs an "augmentation harness". Verification properties can only observe the contract through its
+external interface, so flag the following:
+
+a. State that is accessed via inline assembly `sload`/`sstore`, the `StorageSlot` library, ERC-7201
+   namespaced storage, or constant keccak-derived slots, and which has *no* public getter.
+   NB: CVL *CAN* compute keccak-derived storage slots (they are compile-time constants and `keccak256` is
+   built into CVL) and hook them directly; a harness getter is still preferred because it makes the
+   resulting rules dramatically more readable.
+b. Monolithic external functions that are long sequences of internal-helper calls. Decomposing such a
+   function into thin external wrappers around its existing internal helpers lets properties target each
+   step in isolation.
+
+If either applies, propose a "main contract harness plan" (the `main_contract_harness` field of your result):
+* For each flagged storage location: the desired getter name, the slot derivation (the keccak preimage or
+  namespace string), the Solidity type of the value read from the slot, and a one-line rationale.
+* For each monolithic function: the thin helper wrappers to expose (name plus a one-line behavioral contract
+  for each) and a rationale.
+
+If neither applies, leave `main_contract_harness` null. Do NOT propose getters for state that already has a
+public getter, and do NOT propose helpers that would duplicate logic rather than wrap existing internal functions.
+
+Use your memory tool to record the results of this analysis at `/memories/main_harness.md`
+
+## Step 7
+
 Output the results of your findings using the provided `result` tool, reading in information from your memory
 if needed.
 
-Your results consists of four parts:
+Your results consists of five parts:
 1. A natural language description of the non-trivial state of the {{ contract_name }}
 2. A list of "interface interactions", consisting of:
    a. The name of the external actor
@@ -190,6 +216,7 @@ Your results consists of four parts:
    b. A list of "link fields" used to connect this contract with others in this interaction closure
    c. the number of instances needed to model a non-trivial state if the contract is `MULTIPLE` or `DYNAMIC` (null if inapplicable)
 4. A list of contracts classified at ERC20
+5. The main contract harness plan from step 6 (null if no augmentation is needed)
 
 <state>
   You will execute this task across multiple iterations with the provided tools; you should take your time and work methodically.
