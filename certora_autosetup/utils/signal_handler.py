@@ -11,7 +11,7 @@ import sys
 from typing import Callable
 
 from certora_autosetup.conf_runner import ConfRunner
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 
 
 COMPONENT = "SignalHandler"

@@ -19,6 +19,7 @@ that should still be uploaded can be loaded explicitly via
 
 import asyncio
 import hashlib
+import io
 import mimetypes
 import os
 import pathlib
@@ -28,28 +29,40 @@ from typing import Protocol, Any
 
 import anthropic
 
-from composer.audit.types import InputFileLike
-
 
 # ---------------------------------------------------------------------------
 # Protocols (the public surface)
 # ---------------------------------------------------------------------------
 
 
-class Document(Protocol):
-    """A piece of content destined for an LLM message."""
+class Uploadable(Protocol):
+    """Raw content destined for (re)upload: basename + bytes, with text
+    available iff the source is UTF-8 text. Distinct from ``Document`` — it
+    carries no ``to_dict``/``to_digest`` and is not directly renderable.
+    Audit-restored handles are ``Uploadable``; feed them through
+    :meth:`FileUploader.document_from` to get a renderable ``Document`` for
+    the active provider."""
 
     @property
     def basename(self) -> str: ...
     @property
-    def string_contents(self) -> str | None: ...
-    @property
     def bytes_contents(self) -> bytes: ...
+    @property
+    def string_contents(self) -> str | None: ...
+
+
+class TextUploadable(Uploadable, Protocol):
+    """Refinement of ``Uploadable`` whose body is guaranteed text."""
+
+    @property
+    def string_contents(self) -> str: ...
+
+
+class Document(Uploadable, Protocol):
+    """A piece of content destined for an LLM message."""
+
     def to_dict(self, with_cache: bool = False) -> dict: ...
     def to_digest(self) -> str: ...
-
-    def to_file_like(self) -> InputFileLike:
-        ...
 
 
 class TextDocument(Document, Protocol):
@@ -112,6 +125,16 @@ async def _is_binary_file(path: str) -> bool:
     return b"\x00" in chunk
 
 
+def _mime_for_bytes(basename: str) -> str:
+    """MIME type for an in-memory upload sourced from bytes (no path to
+    sniff). Guess from the suffix; anything text-ish or unknown is treated
+    as opaque binary (this path is only reached for already-binary inputs)."""
+    guessed, _ = mimetypes.guess_type(basename)
+    if guessed is not None and not guessed.startswith("text/"):
+        return guessed
+    return "application/octet-stream"
+
+
 # ---------------------------------------------------------------------------
 # Concrete shapes (implementation details — declare protocol types instead)
 # ---------------------------------------------------------------------------
@@ -141,27 +164,7 @@ class InMemoryTextFile:
 
     def to_digest(self) -> str:
         return _bytes_digest(self.bytes_contents)
-    
-    def to_file_like(self) -> InputFileLike:
-        return self
 
-@dataclass(frozen=True)
-class _IFWrapper:
-    _wrapped: "UploadedFile"
-
-    @property
-    def basename(self) -> str:
-        return self._wrapped.basename
-    
-    @property
-    def bytes_contents(self) -> bytes:
-        return self._wrapped.bytes_contents
-    
-    @property
-    def string_contents(self) -> str:
-        r = self._wrapped.string_contents
-        assert r is not None
-        return r
 
 @dataclass(frozen=True)
 class UploadedFile:
@@ -203,9 +206,6 @@ class UploadedFile:
     @property
     def bytes_contents(self) -> bytes:
         return self.contents
-    
-    def to_file_like(self) -> InputFileLike:
-        return _IFWrapper(self)
 
 
 @dataclass(frozen=True)
@@ -233,22 +233,32 @@ class FileUploader:
     filename) so callers pass a single handle through the upload
     pipeline instead of threading ``(client, uploaded_files)`` pairs.
 
-    Construct via :meth:`fresh`; it creates an async client and seeds
-    the cache from the live Files API listing so duplicate uploads are
-    skipped on subsequent calls."""
+    Construct via :meth:`fresh`; the dedup cache is seeded lazily from the
+    live Files API listing on the first upload (see :meth:`_ensure_seeded`),
+    so a run that only inlines text documents never lists files."""
 
     client: anthropic.AsyncAnthropic
-    uploaded: dict[str, str] = field(default_factory=dict)
+    #: ``None`` until the first upload seeds it from the Files-API listing.
+    uploaded: dict[str, str] | None = None
+    #: Guards the one-time seed against concurrent first uploads.
+    _seed_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @staticmethod
     async def fresh() -> "FileUploader":
-        """Build a fresh ``FileUploader`` with the cache seeded from the
-        account's existing Files-API uploads."""
-        client = anthropic.AsyncAnthropic()
-        uploaded: dict[str, str] = {}
-        async for f in await client.beta.files.list():
-            uploaded[f.filename] = f.id
-        return FileUploader(client=client, uploaded=uploaded)
+        """Build a fresh ``FileUploader``. Constructs the async client but makes
+        no network call — the existing-uploads cache is seeded on first upload."""
+        return FileUploader(client=anthropic.AsyncAnthropic())
+
+    async def _ensure_seeded(self) -> dict[str, str]:
+        """Seed the dedup cache from the account's existing Files-API uploads on
+        first use, then return it. Guarded so concurrent first uploads list once."""
+        async with self._seed_lock:
+            if self.uploaded is None:
+                seeded: dict[str, str] = {}
+                async for f in await self.client.beta.files.list():
+                    seeded[f.filename] = f.id
+                self.uploaded = seeded
+            return self.uploaded
 
     async def _upload_raw(
         self, file_path: str | pathlib.Path
@@ -268,14 +278,15 @@ class FileUploader:
         raw, crc_hex = await asyncio.to_thread(_read_and_crc)
         digest = _bytes_digest(raw)
         crc_basename = f"{crc_hex}_{basename}"
-        if crc_basename not in self.uploaded:
+        uploaded = await self._ensure_seeded()
+        if crc_basename not in uploaded:
             mime = await _upload_mime(file_path)
             uploaded_file = await self.client.beta.files.upload(
                 file=(crc_basename, open(file_path, "rb"), mime)
             )
-            self.uploaded[crc_basename] = uploaded_file.id
+            uploaded[crc_basename] = uploaded_file.id
             return uploaded_file.id, basename, raw, digest
-        return self.uploaded[crc_basename], basename, raw, digest
+        return uploaded[crc_basename], basename, raw, digest
 
     async def upload_file_if_needed(
         self, file_path: str | pathlib.Path
@@ -321,3 +332,37 @@ class FileUploader:
             return await self.upload_file_if_needed(p)
         text = await asyncio.to_thread(p.read_text)
         return InMemoryTextFile(basename=p.name, string_contents=text)
+
+    async def upload_bytes_if_needed(
+        self, basename: str, raw: bytes
+    ) -> UploadedFile:
+        """Upload in-memory ``raw`` bytes (e.g. an audit-restored binary
+        document) to the Files API, reusing a cached upload by CRC. The
+        bytes-sourced analogue of :meth:`upload_file_if_needed`."""
+        crc_basename = f"{hex(zlib.crc32(raw))}_{basename}"
+        uploaded = await self._ensure_seeded()
+        if crc_basename not in uploaded:
+            uploaded_file = await self.client.beta.files.upload(
+                file=(crc_basename, io.BytesIO(raw), _mime_for_bytes(basename))
+            )
+            uploaded[crc_basename] = uploaded_file.id
+        return UploadedFile(
+            file_id=uploaded[crc_basename],
+            basename=basename,
+            contents=raw,
+            digest=_bytes_digest(raw),
+        )
+
+    def text_document_from(self, src: TextUploadable) -> TextDocument:
+        """Rehydrate a text ``Uploadable`` into an inline ``TextDocument`` (no
+        upload — text stays in-prompt for transcript debuggability)."""
+        return InMemoryTextFile(basename=src.basename, string_contents=src.string_contents)
+
+    async def document_from(self, src: Uploadable) -> Document:
+        """Rehydrate an ``Uploadable`` (e.g. an audit-restored handle) into a
+        renderable ``Document``: text stays inline as ``InMemoryTextFile``;
+        binary goes through the Files API for the active provider."""
+        text = src.string_contents
+        if text is not None:
+            return InMemoryTextFile(basename=src.basename, string_contents=text)
+        return await self.upload_bytes_if_needed(src.basename, src.bytes_contents)

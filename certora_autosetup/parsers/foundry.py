@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 from certora_autosetup.build_systems.foundry import FoundryManager
 from certora_autosetup.parsers.base import ContractExtractor
 from certora_autosetup.setup.solidity_utils import find_all_library_files_and_names
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import ContractHandle
 
 

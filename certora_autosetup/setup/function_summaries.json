@@ -141,5 +141,11 @@
     "library_names": ["SafeERC20"],
     "summary_file": "specs/summaries/OpenZeppelin/OZ_SafeERC20.spec",
     "description": "OpenZeppelin SafeERC20.safeDecreaseAllowance"
+  },
+  "ctHelpers_getCollectionId": {
+    "names": ["getCollectionId"],
+    "library_names": ["CTHelpers"],
+    "summary_file": "specs/summaries/CTHelpers.spec",
+    "description": "Gnosis Conditional Tokens CTHelpers.getCollectionId (bn128 collection-id derivation)"
   }
 }

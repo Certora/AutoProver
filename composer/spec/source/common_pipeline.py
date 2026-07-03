@@ -28,6 +28,7 @@ from composer.spec.source.artifacts import ComponentSpec, InvariantSpec, ProverS
 from composer.spec.source.task_ids import (
     bug_analysis_task_id, cvl_gen_task_id, REPORT_TASK_ID,
 )
+from composer.spec.source.report import build as report_build
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportComponentInput
 from composer.spec.source.report_prover import make_prover_fetcher
@@ -258,6 +259,8 @@ async def generate_all_component_cvl(
         if report is not None:
             store.write_report(report)
     except Exception:
+        if report_build.RERAISE_REPORT_FAILURES:
+            raise
         _log.warning("autoprove report phase failed (continuing)", exc_info=True)
 
     failures: list[str] = []

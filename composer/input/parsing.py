@@ -1,7 +1,7 @@
 import argparse
 from typing import TypeVar, Protocol, cast, Annotated, get_type_hints, get_origin, Any, get_args, Union
-from composer.audit.db import DEFAULT_CONNECTION as AUDITDB_DEFAULT_CONNECTION
-from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions
+from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions, UploadPaths, InputData
+from composer.input.files import FileUploader
 
 ArgNS = TypeVar("ArgNS", covariant=True)
 
@@ -115,17 +115,12 @@ def _common_options(parser: argparse.ArgumentParser) -> None:
     # Summarization options
     parser.add_argument("--summarization-threshold", type=int, help="The number of messages that triggers summarization")
 
-    parser.add_argument("--audit-db", help="Database connection string for audit results, given as: postgresql://user:password@localhost:5432/db_name", default=AUDITDB_DEFAULT_CONNECTION)
-
     # prover options
     parser.add_argument("--prover-capture-output", action=argparse.BooleanOptionalAction, default=True, help="Whether to capture the stdout/stderr of the prover")
     parser.add_argument("--prover-keep-folders", action="store_true", help="Keep the temporary folders after the prover runs instead of deleting them")
     parser.add_argument("--local-prover", action="store_true", help="Run the prover locally instead of in the cloud")
 
     parser.add_argument("--debug-prompt-override", help="Append this text to the final prompt for debugging instructions to the LLM")
-    parser.add_argument("--requirements-oracle", action="append", help="Use existing files to automatically answer questions during requirement generation")
-    parser.add_argument("--set-reqs", help="The name of a file containing a list of additional requirements fed in as the implementation requirements. If " \
-    "this option starts with '@', taken to be the thread id of another run whose requirements should be copied.")
     parser.add_argument("--skip-reqs", action="store_true", help="If provided, no natural language requirements are added, and requirement judgment is skipped.")
 
 
@@ -138,6 +133,23 @@ def fresh_workflow_argument_parser() -> TypedArgumentParser[CommandLineArgs]:
     _common_options(parser)
 
     return cast(TypedArgumentParser[CommandLineArgs], parser)
+
+
+async def upload_input(args: UploadPaths) -> InputData:
+    """Turn the CLI's spec / interface / system-doc paths into an ``InputData``.
+
+    Spec and interface are unconditionally uploaded to the Files API as text
+    (``upload_text_file_if_needed`` → ``UploadedTextFile``, a ``TextDocument``);
+    the system doc goes through ``get_document`` so a PDF is uploaded while a
+    text design doc stays inline.
+    """
+    uploader = await FileUploader.fresh()
+    spec = await uploader.upload_text_file_if_needed(args.spec_file)
+    intf = await uploader.upload_text_file_if_needed(args.interface_file)
+    system_doc = await uploader.get_document(args.system_doc)
+    if system_doc is None:
+        raise FileNotFoundError(f"System document not found or not a file: {args.system_doc}")
+    return InputData(spec=spec, system_doc=system_doc, intf=intf)
 
 
 def _common_resume_args(parser: argparse.ArgumentParser) -> None:

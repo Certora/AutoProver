@@ -111,14 +111,24 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
 
     args = cast(AutoProveArgs, parser.parse_args())
+    async with autoprove_executor(args, summary) as runner:
+        yield runner
 
+
+@asynccontextmanager
+async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncIterator[Executor]:
+    """Set up services from already-parsed args and yield the pipeline runner.
+
+    ``_entry_point`` parses argv into ``AutoProveArgs`` then delegates here; tests
+    construct ``AutoProveArgs`` directly.
+    """
     # Parse main_contract (path:ContractName)
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
-        parser.error(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
+        raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
 
     relative_path = str(full_contract_path.relative_to(project_root))
 
@@ -164,7 +174,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         # Read input documents now that the uploader is available.
         content = await conns.uploader.get_document(sys_path)
         if content is None:
-            parser.error(f"cannot read {sys_path}")
+            raise ValueError(f"cannot read {sys_path}")
 
         system_doc = ProverSourceCode(
             content=content,
@@ -226,16 +236,22 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         try:
             yield runner
         finally:
-            # Persist final token usage into RunMeta.tags at run close (totals
-            # known only once the pipeline is done). Mirrors token_usage.json.
+            # Persist final token + prover usage into the run's data_ns at run close
+            # (totals known only once the pipeline is done). Mirror the *_usage.json
+            # artifacts. prover_usage is the prover's self-reported runtime
+            # (statsdata run_id.start_to_end_time) summed over every prover run.
             await data_logger(
                 "token_usage", summary.token_usage_summary()
             )
-            # Dump final LLM token usage for the run (success or failure). Single
+            await data_logger(
+                "prover_usage", summary.prover_usage_summary()
+            )
+            # Dump final usage diagnostics for the run (success or failure). Single
             # choke point both console and TUI entry points pass through, with
             # system_doc in scope and the summary fully populated. Guarded so a
             # diagnostics-dump failure can never mask the pipeline's own outcome.
             try:
                 system_doc.artifact_store.write_token_usage(summary)
+                system_doc.artifact_store.write_prover_usage(summary)
             except Exception:
-                _logger.exception("failed to dump token usage")
+                _logger.exception("failed to dump usage diagnostics")

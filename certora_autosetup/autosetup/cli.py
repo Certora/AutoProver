@@ -21,11 +21,21 @@ from certora_autosetup.setup.sanity_rule_generator import SanityRuleGenerator
 from certora_autosetup.setup.setup_prover import SetupProver
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.utils.cloud_runner import CloudProverRunner
-from certora_autosetup.utils.constants import CERTORA_REPORTS_DIR, DIR_CERTORA_INTERNAL, FILE_AUTOSETUP_RESULT
+from certora_autosetup.utils.constants import (
+    CERTORA_REPORTS_DIR,
+    DIR_CERTORA_INTERNAL,
+    FILE_AUTOSETUP_RESULT,
+    FILE_LLM_USAGE,
+    FILE_PROVER_USAGE,
+)
 from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 from certora_autosetup.utils.llm_util import LlmUsageReport, ledger_reset
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.prover_usage_ledger import (
+    reset as prover_usage_reset,
+    usage as prover_usage_rollup,
+)
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.scope import Scope
 
 
@@ -37,6 +47,9 @@ def main():
     # Start a clean per-process LLM usage ledger; every LLM response this process
     # makes is recorded into it (see llm_util).
     ledger_reset()
+    # Likewise a clean prover-usage ledger; every fresh (non-cached) prover run this
+    # process executes records its prover-reported runtime (see prover_usage_ledger).
+    prover_usage_reset()
 
     # Validate args
     if args.min_loop_iter < 1:
@@ -205,7 +218,7 @@ def main():
     # reports dir, where aggregate_llm_usage merges the per-contract files.
     ledger_rows = result.llm_usage
     reports_dir.mkdir(parents=True, exist_ok=True)
-    (reports_dir / "llm_usage.json").write_text(
+    (reports_dir / FILE_LLM_USAGE).write_text(
         json.dumps(LlmUsageReport.from_rows(ledger_rows).to_dict(), indent=2)
     )
 
@@ -249,5 +262,12 @@ def main():
             bytes_mappings=result.bytes_mappings,
             llm_usage=ledger_rows,
         )
+
+    # Persist this run's prover-reported runtime (only the jobs actually executed;
+    # cache hits are excluded by the runner ledger) for composer to ingest. Mirrors
+    # llm_usage.json. Written last, after conf_runner's prover runs have completed.
+    (reports_dir / FILE_PROVER_USAGE).write_text(
+        json.dumps(prover_usage_rollup(), indent=2)
+    )
 
     sys.exit(0)

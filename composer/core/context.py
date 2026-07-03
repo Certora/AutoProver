@@ -1,11 +1,9 @@
 from dataclasses import dataclass, field
 import hashlib
 
-from graphcore.graph import BoundLLM
 from graphcore.tools.vfs import VFSAccessor
 
 from composer.core.state import AIComposerState
-from composer.rag.db import ComposerRAGDB
 from composer.core.validation import ValidationType, prover
 from composer.prover.core import DEFAULT_GLOBAL_TIMEOUT
 
@@ -28,9 +26,9 @@ class ProverOptions:
 
 @dataclass
 class AIComposerContext:
-    llm: BoundLLM
-    rag_db: ComposerRAGDB
-    prover_opts: ProverOptions
+    # Genuinely graph-cross-cutting runtime state only. Prover-specific deps
+    # (CEX handler, prover options) ride ``ProverDeps`` on the prover tool, and
+    # ``rag_db`` is injected directly into the CVL tools — neither belongs here.
     vfs_materializer: VFSAccessor[AIComposerState]
     required_validations: list[ValidationType] = field(default_factory=lambda: [prover])
 

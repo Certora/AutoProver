@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from certora_autosetup.utils.llm_util import _load_anthropic_key, _get_cached_client, default_anthropic_model
 from certora_autosetup.utils.types import ContractHandle
 
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 
 import anthropic
 import anthropic.types

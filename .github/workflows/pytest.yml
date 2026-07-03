@@ -23,8 +23,8 @@ jobs:
       
       - name: sync-deps
         run: |
-          uv sync --group test
+          uv sync --group test --extra prover
 
       - name: Run pytest
         run: |
-          uv run pytest tests/
+          uv run pytest -m 'not expensive' tests/

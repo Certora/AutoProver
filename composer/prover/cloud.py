@@ -11,16 +11,40 @@ import tarfile
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 from urllib.parse import urlparse, parse_qs
 
 import aiohttp
+from prover_output_utility.models import JobStatus, convert_job_status
 
 logger = logging.getLogger("composer.spec")
 
-# Terminal job statuses — anything not in this set means "still running"
-_TERMINAL_STATUSES = frozenset({"FAILED", "ERROR", "CANCELLED", "TIMEOUT", "SUCCEEDED"})
+
+class CloudJobError(RuntimeError):
+    """Raised when a cloud prover job reaches a terminal status other than
+    SUCCEEDED, does not reach a terminal status within the poll timeout, or
+    finishes without an output archive. Carries the ``status`` and prover
+    ``link``.
+    """
+
+    def __init__(self, status: JobStatus, link: str) -> None:
+        super().__init__(f"Cloud job ended with status {status.value}")
+        self.status = status
+        self.link = link
+
+
+# Terminal cloud job statuses (the job is no longer running). A status outside
+# this set means the job is still in progress.
+_TERMINAL_STATUSES = frozenset({
+    JobStatus.SUCCEEDED,
+    JobStatus.FAILED,
+    JobStatus.CANCELED,
+    JobStatus.HALTED,
+    JobStatus.SERVICE_UNAVAILABLE,
+    JobStatus.UPLOAD_FAILED,
+})
 
 # Avoid requesting Brotli — aiohttp's brotli support is often broken/missing.
 _NO_BROTLI_HEADERS = {"Accept-Encoding": "gzip, deflate"}
@@ -87,7 +111,7 @@ async def _poll_job_inner(
             if on_status is not None:
                 await on_status(status)
 
-            if status in _TERMINAL_STATUSES:
+            if convert_job_status(status) in _TERMINAL_STATUSES:
                 return data
 
             await asyncio.sleep(interval)
@@ -105,6 +129,23 @@ async def poll_job(
     Raises TimeoutError if the job doesn't finish within `timeout` seconds.
     """
     return await asyncio.wait_for(_poll_job_inner(job, interval=interval, on_status=on_status), timeout=timeout)
+
+def _job_runtime_ms(job_data: dict) -> int | None:
+    """Prover execution time (ms) from the cloud job's ``startTime``→``finishTime`` —
+    the post-dequeue run window.
+
+    EXCLUDES queue wait: the job is created at ``postTime``, sits in the queue, then
+    ``startTime`` marks when the prover actually began executing. Returns ``None``
+    if either timestamp is absent or unparseable, so usage capture never breaks a run.
+    """
+    start, finish = job_data.get("startTime"), job_data.get("finishTime")
+    if not start or not finish:
+        return None
+    try:
+        return int((datetime.fromisoformat(finish) - datetime.fromisoformat(start)).total_seconds() * 1000)
+    except (ValueError, TypeError):
+        return None
+
 
 def find_results_root(dest: Path) -> Path:
     """Navigate past the extra TarName/ top-level directory in the extracted archive."""
@@ -127,12 +168,14 @@ async def cloud_results(
     *,
     poll_timeout: float,
     poll_callback: Callable[[str, str], Awaitable[None]] | None = None,
-) -> AsyncIterator[Path]:
-    """Async context manager: poll cloud job, download results, yield path, clean up.
+) -> AsyncIterator[tuple[Path, int | None]]:
+    """Async context manager: poll cloud job, download results, yield (path, runtime_ms),
+    clean up.
 
-    Parses the cloud link, polls until completion, downloads and extracts the
-    results archive, then yields the path to the results root. The temporary
-    directory is cleaned up on exit.
+    Parses the cloud link, polls until completion, downloads and extracts the results
+    archive, then yields ``(results_root, runtime_ms)`` where ``runtime_ms`` is the prover's
+    queue-free execution time from the job's ``startTime``→``finishTime`` (``None`` if
+    unavailable). The temporary directory is cleaned up on exit.
     """
     cloud_job = parse_cloud_link(run_result_link)
 
@@ -143,15 +186,20 @@ async def cloud_results(
         if poll_callback:
             await poll_callback(status, f"Cloud job {cloud_job.job_id[:8]}: {status}")
 
-    job_data = await poll_job(cloud_job, timeout=poll_timeout, on_status=on_status)
+    try:
+        job_data = await poll_job(cloud_job, timeout=poll_timeout, on_status=on_status)
+    except TimeoutError as exc:
+        raise CloudJobError(JobStatus.UNKNOWN, run_result_link) from exc
 
-    status = job_data.get("jobStatus", "UNKNOWN")
-    if status != "SUCCEEDED":
-        raise RuntimeError(f"Cloud job finished with status {status} (expected DONE)")
+    status = convert_job_status(job_data.get("jobStatus", "UNKNOWN"))
+    if status is not JobStatus.SUCCEEDED:
+        raise CloudJobError(status, run_result_link)
+
+    runtime_ms = _job_runtime_ms(job_data)
 
     zip_url = job_data.get("zipOutputUrl")
     if not zip_url:
-        raise RuntimeError("Cloud job completed but no zipOutputUrl in response")
+        raise CloudJobError(status, run_result_link)
 
     separator = "&" if "?" in zip_url else "?"
     full_url = f"{zip_url}{separator}anonymousKey={cloud_job.anonymous_key}"
@@ -169,8 +217,8 @@ async def cloud_results(
                             f.write(chunk)
 
             with tarfile.open(tmp_path, "r:gz") as tar:
-                tar.extractall(path=dest)
+                tar.extractall(path=dest, filter=lambda x, _: x)
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        yield find_results_root(dest)
+        yield (find_results_root(dest), runtime_ms)

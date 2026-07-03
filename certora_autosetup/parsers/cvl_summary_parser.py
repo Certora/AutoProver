@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List
 
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 
 
 IV_PREFIX = "iv_"
@@ -119,6 +119,7 @@ def _comment_out_nondet_entries(content: str) -> str:
             found_semicolon = False
             j = i
 
+            current_stripped = ""
             while j < len(lines):
                 current_stripped = lines[j].strip()
                 if j > i:

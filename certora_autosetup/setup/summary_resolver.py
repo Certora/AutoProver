@@ -105,6 +105,36 @@ def _vmtype_to_str(vmtype: dict) -> str:
     return base
 
 
+def _parse_ast_payload(stdout: str, returncode: int, stderr: str) -> Optional[dict]:
+    """Parse the JSON AST payload from ``ASTExtraction.jar`` stdout.
+
+    The jar prints ``Warning: …`` / ``Error: …``
+    diagnostic lines to stdout *before* the JSON payload, which it then prints
+    exactly once as the final output (on both the success and syntax-error paths).
+    So we drop the leading diagnostic lines and parse the remainder — rather than
+    ``json.loads`` the whole stream, which fails at char 0 on the first warning.
+    Returns the decoded payload, or ``None`` when the jar produced no AST
+    (``ast`` is null — a hard syntax error left for the TypecheckerLoop backstop).
+    """
+    lines = stdout.splitlines()
+    # Only LEADING diagnostic lines precede the JSON; never strip inside the payload.
+    while lines and lines[0].startswith(("Warning: ", "Error: ")):
+        lines.pop(0)
+    body = "\n".join(lines).strip()
+    # Empty stdout (or stdout that was nothing but diagnostics) means the jar gave us
+    # no payload — surface that with its stderr rather than an opaque JSONDecodeError.
+    if not body:
+        raise RuntimeError(f"{_AST_EXTRACTION_JAR} produced no JSON (exit {returncode}): {stderr.strip()}")
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"{_AST_EXTRACTION_JAR} output was not JSON after stripping diagnostics "
+            f"(exit {returncode}): {exc}; stdout_head={stdout!r} stderr={stderr.strip()!r}"
+        )
+    return payload if payload.get("ast") else None
+
+
 def _ast_extraction(blanked_source: str) -> Optional[dict]:
     """Run ``ASTExtraction.jar syntax-check`` on CVL source, return the parsed JSON.
 
@@ -125,15 +155,7 @@ def _ast_extraction(blanked_source: str) -> Optional[dict]:
         capture_output=True,
         text=True,
     )
-    # The jar prints the JSON payload to stdout even for syntax errors (ast=null). Empty
-    # stdout means it crashed before producing anything — surface that, with its stderr,
-    # rather than an opaque JSONDecodeError.
-    if not result.stdout.strip():
-        raise RuntimeError(
-            f"{_AST_EXTRACTION_JAR} produced no output (exit {result.returncode}): {result.stderr.strip()}"
-        )
-    payload = json.loads(result.stdout)
-    return payload if payload.get("ast") else None
+    return _parse_ast_payload(result.stdout, result.returncode, result.stderr)
 
 
 def parse_methods_entries(spec_path: Path, log: Optional[LogFn] = None) -> List[MethodEntry]:

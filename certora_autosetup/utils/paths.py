@@ -5,9 +5,12 @@ one well-known artifact. User-facing artifacts live under `certora/`;
 intermediate machinery lives under `.certora_internal/`.
 """
 
+import json
 from pathlib import Path
 
 from certora_autosetup.utils.constants import (
+    CERTORA_REPORTS_DIR,
+    DIR_CERTORA_INTERNAL,
     DIR_INTERNAL_CONFS,
     DIR_INTERNAL_DIFFICULT_RETRY,
     DIR_INTERNAL_MULTI_ASSERT,
@@ -18,9 +21,12 @@ from certora_autosetup.utils.constants import (
     DIR_USER_CONFS,
     DIR_USER_HARNESSES,
     DIR_USER_SPECS,
+    FILE_AUTOSETUP_RESULT,
     FILE_COMPILATION_CONF,
     FILE_COMPILATION_DUMMY_SPEC,
     FILE_ERC7201_SPEC,
+    FILE_LLM_USAGE,
+    FILE_PROVER_USAGE,
     SUMMARIES_SUBDIR,
 )
 
@@ -90,3 +96,51 @@ def internal_multi_assert_dir(project_root: Path) -> Path:
 
 def internal_difficult_retry_dir(project_root: Path) -> Path:
     return project_root / DIR_INTERNAL_DIFFICULT_RETRY
+
+
+def _resolve_autosetup_reports_file(project_root: Path, filename: str) -> Path | None:
+    """Locate ``filename`` in the reports dir the most recent autosetup run wrote under
+    ``project_root``.
+
+    Primary: read ``orchestration_timestamp`` from ``autosetup_result.json`` and build
+    ``<CERTORA_REPORTS_DIR>/<ts>/<filename>`` — the deterministic inverse of how the CLI names
+    that dir. Fallback (a ``--reports-dir`` override that kept the convention, or an older run): the
+    newest timestamped subdir holding ``<filename>``. Timestamps are ``%Y%m%d_%H%M%S``, so a
+    plain lexicographic max picks the most recent. Returns ``None`` if nothing is found.
+
+    This is the single source of truth for the on-disk usage-file layout; external consumers (e.g.
+    composer) should call the typed wrappers below rather than re-deriving these paths.
+    """
+    reports_root = project_root / CERTORA_REPORTS_DIR
+
+    result_path = project_root / DIR_CERTORA_INTERNAL / FILE_AUTOSETUP_RESULT
+    try:
+        timestamp = json.loads(result_path.read_text()).get("orchestration_timestamp")
+    except (OSError, ValueError):
+        timestamp = None
+    if timestamp:
+        candidate = reports_root / timestamp / filename
+        if candidate.exists():
+            return candidate
+
+    try:
+        subdirs = sorted((d for d in reports_root.iterdir() if d.is_dir()), key=lambda d: d.name)
+    except OSError:
+        return None
+    for d in reversed(subdirs):
+        candidate = d / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def resolve_autosetup_llm_usage_file(project_root: Path) -> Path | None:
+    """Locate the ``llm_usage.json`` the most recent autosetup run wrote under ``project_root``
+    (``None`` if absent). See :func:`_resolve_autosetup_reports_file`."""
+    return _resolve_autosetup_reports_file(project_root, FILE_LLM_USAGE)
+
+
+def resolve_autosetup_prover_usage_file(project_root: Path) -> Path | None:
+    """Locate the ``prover_usage.json`` the most recent autosetup run wrote under ``project_root``
+    (``None`` if absent). See :func:`_resolve_autosetup_reports_file`."""
+    return _resolve_autosetup_reports_file(project_root, FILE_PROVER_USAGE)

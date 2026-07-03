@@ -144,7 +144,7 @@ Examples:
 
     add_protocol_args(parser, ModelOptions)
     add_protocol_args(parser, WorkflowOptions)
-    parser.set_defaults(rag_db=SANITY_DEFAULT_CONNECTION, model="claude-sonnet-4-5-20250929", interleaved_thinking=True)
+    parser.set_defaults(rag_db=SANITY_DEFAULT_CONNECTION, model="claude-sonnet-4-6", interleaved_thinking=True)
 
     args = parser.parse_args()
     details = analyze(cast(SanityAnalysisArgs, args))

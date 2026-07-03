@@ -262,27 +262,27 @@ def _write_autosetup_usage(
 
 def test_read_autosetup_usage_returns_token_usage_dicts(tmp_path):
     _write_autosetup_usage(tmp_path, {
-        "claude-sonnet-4-5": _autosetup_bucket(100, 10, 5, 2),
+        "claude-sonnet-4-6": _autosetup_bucket(100, 10, 5, 2),
         "claude-opus-4": _autosetup_bucket(50, 5, 0, 1),
     })
     by_model = {u["model_name"]: u for u in read_autosetup_usage(tmp_path)}
 
-    assert by_model["claude-sonnet-4-5"] == {
-        "model_name": "claude-sonnet-4-5",
+    assert by_model["claude-sonnet-4-6"] == {
+        "model_name": "claude-sonnet-4-6",
         "input_tokens": 100,
         "output_tokens": 10,
         "cache_read_input_tokens": 5,
         "cache_creation_input_tokens": 2,
     }
     assert by_model["claude-opus-4"]["input_tokens"] == 50
-    assert "calls" not in by_model["claude-sonnet-4-5"]  # AutoSetup-only field dropped
+    assert "calls" not in by_model["claude-sonnet-4-6"]  # AutoSetup-only field dropped
 
 
 def test_autosetup_usage_folds_into_run_summary(tmp_path):
     """The exact fold run_autosetup_phase performs: under AUTOSETUP_TASK_ID, each
     model lands in run totals AND the 'autosetup' phase, with the
     cache_creation_input_tokens -> cache_write rename applied."""
-    _write_autosetup_usage(tmp_path, {"claude-sonnet-4-5": _autosetup_bucket(100, 10, 5, 2)})
+    _write_autosetup_usage(tmp_path, {"claude-sonnet-4-6": _autosetup_bucket(100, 10, 5, 2)})
 
     s = RunSummary()
     with set_current_task_id("autosetup"):
@@ -291,7 +291,7 @@ def test_autosetup_usage_folds_into_run_summary(tmp_path):
     s.record_phase(task_id="autosetup", label="AutoSetup", phase="autosetup",
                    wall_s=1.0, queue_wait_s=0.0)
 
-    m = s.token_usage_by_model["claude-sonnet-4-5"]
+    m = s.token_usage_by_model["claude-sonnet-4-6"]
     assert (m.input, m.output, m.cache_read, m.cache_write) == (100, 10, 5, 2)
     assert s.token_usage_summary()["by_phase"] == [{
         "task_id": "autosetup", "phase": "autosetup",

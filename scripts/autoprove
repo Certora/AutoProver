@@ -35,7 +35,12 @@ Options:
 
 Required environment:
   ANTHROPIC_API_KEY   Anthropic API key (drives the LLM pipeline).
-  CERTORAKEY          Certora cloud prover key.
+  CERTORAKEY          Certora cloud prover key (certoraRun job submission).
+
+Cloud credentials:
+  Run `certora-cloud login` once (install via `uv tool install certora-cloud`); it
+  writes ~/.certora/credentials.json, which is read automatically. Exporting
+  CERTORA_USER/CERTORA_TOKEN/CERTORA_REFRESH_TOKEN instead is an optional override.
 EOF
 }
 
@@ -83,6 +88,16 @@ DOC_RAW="${POSITIONAL[2]}"
 
 [[ -n "${ANTHROPIC_API_KEY:-}" ]] || { echo "[autoprove] error: ANTHROPIC_API_KEY is not set in your shell. Export it and rerun." >&2; exit 1; }
 [[ -n "${CERTORAKEY:-}" ]]       || { echo "[autoprove] error: CERTORAKEY is not set in your shell. Export it and rerun (cloud prover is required)." >&2; exit 1; }
+
+# Cloud job results are fetched with the credentials `certora-cloud login` writes to
+# ~/.certora/credentials.json (mounted into the container). Exported CERTORA_* tokens
+# override the file. Require one or the other; `mkdir -p` ensures the mount target exists.
+mkdir -p "$HOME/.certora"
+if [[ ! -f "$HOME/.certora/credentials.json" \
+      && ( -z "${CERTORA_TOKEN:-}" || -z "${CERTORA_REFRESH_TOKEN:-}" || -z "${CERTORA_USER:-}" ) ]]; then
+  echo "[autoprove] error: no Certora cloud credentials found. Install certora-cloud (uv tool install certora-cloud) and run 'certora-cloud login', or export CERTORA_USER/CERTORA_TOKEN/CERTORA_REFRESH_TOKEN." >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Resolve host-side paths; mount <project_root> itself as /work, so the
