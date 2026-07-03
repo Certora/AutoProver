@@ -260,6 +260,34 @@ def test_judge_system_prompt_accepts_harness_augmentation_flag():
         assert out
 
 
+@pytest.mark.parametrize("flag", [True, False])
+def test_harness_augmentation_reaches_both_judge_binds(flag: bool):
+    # property_feedback_judge threads its harness_augmentation parameter into BOTH
+    # template binds via _bind_harness_augmentation; the task-prompt gate (Criteria 7)
+    # reads the identically-named variable, so the two prompts cannot disagree.
+    from composer.spec.feedback import (
+        FeedbackSystemTemplate, FeedbackTemplate, Properties, _bind_harness_augmentation,
+    )
+
+    # System-prompt bind (as property_feedback_judge builds it).
+    sys_bind = _bind_harness_augmentation(
+        FeedbackSystemTemplate.bind({"sort": "existing"}), flag,
+    )
+    assert sys_bind.args["harness_augmentation"] is flag
+    assert sys_bind.render_to(load_jinja_template)
+
+    # Task-prompt bind, through the exact InjectedTemplate path batch_cvl_generation uses.
+    task_bind = _bind_harness_augmentation(
+        FeedbackTemplate.bind({
+            "sort": "existing", "context": None, "harness_api": _plan().api_lines() if flag else None,
+        }).depends(Properties).inject({"properties": [_Prop()]}),
+        flag,
+    )
+    assert task_bind.args["harness_augmentation"] is flag
+    assert task_bind.args["properties"]
+    assert task_bind.render_to(load_jinja_template)
+
+
 @pytest.mark.parametrize("with_harness", [True, False])
 def test_structural_invariant_prompt_main_harness(with_harness: bool):
     view = MainHarnessView(
