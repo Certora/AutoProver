@@ -219,6 +219,21 @@ this specification.
 </application>
 {% endif %}
 
+{% if harness_api %}
+<verification_harness>
+The contract is verified through an augmentation harness exposing the following verification API
+(external view getters over otherwise-unobservable storage, and thin external wrappers around internal
+steps of monolithic functions). The author may use these getters/helpers directly in rules and invariants:
+
+{% for line in harness_api %}
+* {{ line }}
+{% endfor %}
+
+When evaluating skips under Criteria 7: "the state is inaccessible / has no public getter" is NOT a valid
+skip justification when a harness getter above exposes that state.
+</verification_harness>
+{% endif %}
+
 <guidance>
 <hard_requirement>
 Do not provide ANY feedback except for the 7 criteria above.

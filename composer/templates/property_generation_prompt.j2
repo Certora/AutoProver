@@ -161,6 +161,22 @@ You may also make use of the following CVL resources, available as CVL files.
 {% endfor %}
 {% endif %}
 
+{% if harness_api %}
+<verification_harness>
+The contract is verified through an augmentation harness that extends {{ contract_name }} with the
+following verification API (external view getters over otherwise-unobservable storage, and thin external
+wrappers around internal steps of monolithic functions). You may — and should — use these getters/helpers
+directly in your rules and invariants, exactly like any other external function of the contract:
+
+{% for line in harness_api %}
+* {{ line }}
+{% endfor %}
+
+Because this API exists, "the state is inaccessible / has no public getter" is NOT a valid reason to skip
+a property when a harness getter above exposes that state.
+</verification_harness>
+{% endif %}
+
 <state>
 Use the available memory tools to track your progress through this algorithm, any important lessons about CVL you may have learned,
 or any other significant, relevant information to this task. In particular, be sure to update your memory before calling the prover to summarize

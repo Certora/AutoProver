@@ -8,3 +8,12 @@ This contract component is modelled using the following concrete "harnesses":
 {% endfor %}
 {% endif %}
 {% endcall %}
+{% if main_harness %}
+
+The main contract `{{ main_harness.harness_of }}` is verified through the augmentation harness
+`{{ main_harness.name }}` (located at `{{ main_harness.path }}`), which extends it with the following
+verification API — usable in rules/invariants like any other external function of the contract:
+{% for line in main_harness.api %}
+* {{ line }}
+{% endfor %}
+{% endif %}
