@@ -120,6 +120,10 @@ class GaveUpComponent(BaseModel):
     crashed), so none of its inferred properties were formalized. No per-property reason."""
     component: ComponentName
     properties: list[PropertyFormulation]
+    # The author's give-up classification (env_issue / needs_harness / prover_limit / other);
+    # None for crashes and for backends that don't classify give-ups. Optional-with-default
+    # so persisted pre-change reports still validate.
+    give_up_sort: str | None = None
 
 
 class PropertyGroup(BaseModel):

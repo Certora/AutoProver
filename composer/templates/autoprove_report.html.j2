@@ -298,7 +298,7 @@ footer.report-foot {
   {%- if gave_up %}
   <h3>Components that gave up ({{ gave_up | length }})</h3>
   {%- for gc in gave_up %}
-  <h4>{{ gc.component }}</h4>
+  <h4>{{ gc.component }}{% if gc.give_up_sort %} <span class="sort-tag">{{ gc.give_up_sort }}</span>{% endif %}</h4>
   <ul class="claims">
     {%- for p in gc.properties %}<li><span class="sort-tag">{{ p.sort }}</span> {{ p.description }}</li>{% endfor %}
   </ul>
