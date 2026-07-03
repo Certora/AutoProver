@@ -124,6 +124,10 @@ def property_feedback_judge(
             input_parts.append("The following properties were explicitly skipped by the author:")
             for s in skipped:
                 input_parts.append(f"  Property {s.property_title}: {s.reason}")
+                # The alternatives the author claims to have ruled out are part of the skip's
+                # justification: surface them so the judge can audit their substance.
+                for alt in s.alternatives_considered:
+                    input_parts.append(f"    Alternative considered: {alt}")
         if rebuttals:
             input_parts.append(
                 "The author has filed the following rebuttals against feedback from "

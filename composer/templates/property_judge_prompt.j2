@@ -182,9 +182,11 @@ Verify that the specification covers all {{ properties | length }} listed proper
   re-insist on the same proposal. If the rebuttal establishes that no working formalization was
   found, the skip is VALID on the grounds that your prior proposal proved unworkable.
 {% if sort != "greenfield" %}
-  If the property being skipped could be formalized with Solidity code changes, the skip is VALID. Do *NOT* reject
-  skips with advice to change the Solidity code. The Solidity code is *IMMUTABLE* and suggestions to change the Solidity
-  code are INVALID.
+  If the property being skipped could be formalized only with *protocol* Solidity code changes, the skip is VALID.
+  Do *NOT* reject skips with advice to change the protocol Solidity code. The *protocol* Solidity code is
+  *IMMUTABLE* and suggestions to change the protocol code are INVALID. Verification *harnesses* (contracts under
+  `certora/harnesses/`) are NOT protocol code: needing a harness getter or wrapper (mechanism (b) above) does
+  NOT make a skip valid under this rule.
 {% endif %}
 
 **Array quantification limitation**: The Certora Prover cannot universally quantify over

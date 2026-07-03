@@ -309,6 +309,34 @@ class TestSkipGate:
         assert msg.startswith("Recorded skip")
         assert len(skipped) == 1
 
+    async def test_hash_collision_reason_passes_gate(self):
+        # Collision/inversion/preimage reasoning is the one keccak-related skip that stays
+        # legitimate: a bare "keccak" away from slot/storage must not fire the access gate.
+        (msg, skipped) = await scenario(1).turn(
+            _skip("p0", "requires reasoning about keccak collisions to forge a valid signature")
+        ).map(self.gate_mapper).run()
+        assert msg.startswith("Recorded skip")
+        assert len(skipped) == 1
+
+    async def test_alternatives_are_recorded_on_the_skip(self):
+        # The judge audits alternatives_considered, so the recorded SkippedProperty must
+        # carry them (not just gate on them and drop them).
+        alts = [
+            "precomputed the keccak slot constant, but the slot depends on a runtime salt",
+            "an Sstore hook cannot fire because writes go through delegatecall",
+        ]
+        (msg, skipped) = await scenario(1).turn(
+            _skip("p0", "the balance lives in a keccak-derived storage slot", alternatives=alts)
+        ).map(self.gate_mapper).run()
+        assert msg.startswith("Recorded skip")
+        assert skipped[0].alternatives_considered == alts
+
+    async def test_skipped_property_backcompat_without_alternatives(self):
+        # Cached SkippedProperty instances predate alternatives_considered; deserialization
+        # must default it rather than fail validation.
+        s = SkippedProperty.model_validate({"property_title": "p0", "reason": "too hard"})
+        assert s.alternatives_considered == []
+
 
 # =========================================================================
 # Validation stamping + check_completion via graph

@@ -71,6 +71,17 @@ class TestJudgePrompt:
         assert "harness getter or direct storage access" in out
         assert "ghost state mirroring" in out
 
+    def test_criteria7_immutability_is_protocol_scoped(self):
+        # The immutability carve-out must not contradict checklist item (b): only
+        # *protocol* code changes validate a skip; harness getters/wrappers do not.
+        out = load_jinja_template(
+            "property_judge_prompt.j2", properties=_props(), sort="existing", context=None
+        )
+        assert "only with *protocol* Solidity code changes" in out
+        assert "NOT protocol code" in out
+        # The old blanket doctrine ("the Solidity code is IMMUTABLE", unqualified) is gone.
+        assert "The Solidity code is *IMMUTABLE*" not in out
+
 
 class TestGenerationPrompt:
     def test_storage_access_block_renders(self):

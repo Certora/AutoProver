@@ -51,6 +51,11 @@ class SkippedProperty(BaseModel):
     """A property the agent explicitly decided not to formalize."""
     property_title: str = Field(description="The unique snake_case title of the property from the batch listing")
     reason: str = Field(description="Justification for why this property was skipped")
+    # Defaulted for back-compat with cached instances that predate the field.
+    alternatives_considered: list[str] = Field(
+        default_factory=list,
+        description="The alternative mechanisms the author considered before skipping, and why each does not work",
+    )
 
 
 class PropertyRuleMapping(BaseModel):
@@ -152,6 +157,9 @@ def _compute_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
     digester = hashlib.md5()
     digester.update(curr_spec.encode())
     for s in skipped:
+        # alternatives_considered is deliberately excluded: the skip's identity is its
+        # title+reason, and including the (judge-visible but advisory) alternatives would
+        # stale-out validation stamps on cached pre-field skips.
         digester.update(f"{s.property_title}:{s.reason}".encode())
     return digester.hexdigest()
 
@@ -312,14 +320,19 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
 # ``alternatives_considered`` and the evidence pattern used to detect that the capability was
 # actually discussed. A skip whose reason fires a trigger is rejected until every triggered
 # capability is addressed.
+#
+# A bare "keccak" also appears in the one hash-related skip that stays legitimate — reasoning
+# about collisions/inversion/preimages of the hash function itself — so the keccak trigger
+# requires the word near "slot"/"storage", the access-shaped usage this gate targets.
+_KECCAK_SLOT = r"keccak\S*.{0,40}(?:slot|storage)|(?:slot|storage).{0,40}keccak"
 _SKIP_GATE_CHECKS: list[tuple[re.Pattern[str], str, re.Pattern[str]]] = [
     (
-        re.compile(r"keccak|storage slot|unstructured", re.IGNORECASE),
+        re.compile(rf"{_KECCAK_SLOT}|storage slot|unstructured", re.IGNORECASE),
         "a precomputed keccak storage-slot constant (keccak256 is a built-in CVL function)",
         re.compile(r"keccak|slot", re.IGNORECASE),
     ),
     (
-        re.compile(r"keccak|storage slot|unstructured|cannot (access|observe)", re.IGNORECASE),
+        re.compile(rf"{_KECCAK_SLOT}|storage slot|unstructured|cannot (access|observe)", re.IGNORECASE),
         "Sload/Sstore storage hooks on the slot/path in question",
         re.compile(r"sload|sstore|hook", re.IGNORECASE),
     ),
@@ -395,6 +408,7 @@ class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, W
         skip = SkippedProperty(
             property_title=self.property_title,
             reason=self.reason,
+            alternatives_considered=self.alternatives_considered,
         )
         return tool_state_update(
             self.tool_call_id,
