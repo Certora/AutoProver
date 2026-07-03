@@ -40,7 +40,10 @@ guards against vacuously-true implications whose antecedent `A` can never actual
 Information that is never stored in contract state — such as how many times a function was called, or the cumulative amount
 transferred across calls — can be tracked with a ghost updated through an expression summary. For example:
 `function _.deposit() external => countDeposit() expect void;` where `countDeposit` is a CVL function that increments a ghost
-counter. This does not conflict with the direct-storage-access guideline: that guideline is about mirroring values already
+counter. Two caveats: an expression summary *replaces* the summarized function's implementation (so only use it on calls whose
+real effects are not otherwise under test, e.g. calls from contract code to external dependencies), and summaries never apply
+to functions invoked directly from CVL — a ghost counting the verified contract's own entry points called from a rule stays 0.
+This does not conflict with the direct-storage-access guideline: that guideline is about mirroring values already
 present in contract storage, whereas this idiom tracks information never stored in contract state.
 </advice>
 </cvl_advice>
