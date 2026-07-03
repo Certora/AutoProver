@@ -6,7 +6,8 @@ from langchain_core.tools import BaseTool
 from pydantic import Field, BaseModel, Discriminator
 
 from graphcore.tools.schemas import (
-    WithAsyncImplementation, WithImplementation, WithInjectedId, WithInjectedState,
+    WithAsyncDependencies, WithAsyncImplementation, WithImplementation, WithInjectedId,
+    WithInjectedState,
 )
 from graphcore.graph import tool_state_update
 from graphcore.summary import SummaryConfig
@@ -22,7 +23,7 @@ from composer.spec.system_model import ContractComponentInstance, SolidityIdenti
 from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
 from langgraph.graph import MessagesState
 from langgraph.runtime import get_runtime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import CacheLevel
@@ -245,8 +246,54 @@ class RemoveLink(BaseModel):
     source_contract_name : SolidityIdentifier = Field(description="The Solidity identifier of the contract whose link should be removed")
     link_field_name : str = Field(description="The storage field holding the link within `source_contract_name` that should be removed")
 
-type ConfigEdit = Annotated[RemoveLink | AddLink | AddFile | RemoveFile, Discriminator("type")]
+class SetProverFlag(BaseModel):
+    """
+    Set a whitelisted top-level prover flag in the configuration:
 
+    * `optimistic_fallback` (bool): assume unresolved low-level calls (`.call{value: ...}`, `send`,
+      `transfer`) succeed instead of HAVOCing and always being able to fail. Step 3 of the vacuity
+      repair ladder.
+    * `loop_iter` (int, 1-8): the number of loop unrollings the prover performs.
+    * `global_timeout` (int, 1-7200): the overall run timeout in seconds.
+    * `contract_recursion_limit` (int, 0-10): the allowed depth of recursive calls between contracts.
+    """
+    # `rule_sanity` and `optimistic_loop` are DELIBERATELY not in this whitelist: vacuity
+    # detection (composer/prover/vacuity.py) depends on `rule_sanity: basic`, and
+    # `prover_config_overlay` sets both AFTER spreading the base config so they would win
+    # anyway — the whitelist keeps the agent from even trying (and from being confused by a
+    # silently-overridden edit).
+    type: Literal["set_flag"]
+    flag: Literal["optimistic_fallback", "loop_iter", "global_timeout", "contract_recursion_limit"]
+    value: bool | int = Field(description="The value to set: a bool for `optimistic_fallback`, an int for the other flags")
+
+def _validate_prover_flag(flag: str, value: bool | int) -> str | None:
+    """Per-flag validation for SetProverFlag; returns an error message or None if valid.
+
+    NB: ``bool`` is a subclass of ``int``, so the bool checks must come before any int check.
+    """
+    if flag == "optimistic_fallback":
+        if not isinstance(value, bool):
+            return f"optimistic_fallback expects a boolean value, got {value!r}"
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return f"{flag} expects an integer value, got {value!r}"
+    match flag:
+        case "loop_iter":
+            if not (1 <= value <= 8):
+                return f"loop_iter must be between 1 and 8, got {value}"
+        case "global_timeout":
+            if not (1 <= value <= 7200):
+                return f"global_timeout must be between 1 and 7200 (seconds), got {value}"
+        case "contract_recursion_limit":
+            if not (0 <= value <= 10):
+                return f"contract_recursion_limit must be between 0 and 10, got {value}"
+    return None
+
+type ConfigEdit = Annotated[RemoveLink | AddLink | AddFile | RemoveFile | SetProverFlag, Discriminator("type")]
+
+@tool_display(
+    lambda p: f"Editing prover configuration ({len(p['edits'])} edit(s))", None
+)
 class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, WithInjectedState[ProverStateExtra]):
     """
     Call this tool to make a edits to the prover configuration.
@@ -322,11 +369,57 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
                     if not found:
                         return f"No existing link found that matches {src}:{fld}"
                     curr_config["link"] = new_links
+                case SetProverFlag(flag=flag, value=value):
+                    if (err := _validate_prover_flag(flag, value)) is not None:
+                        return err
+                    curr_config[flag] = value
 
         return tool_state_update(
             self.tool_call_id,
             f"Accepted, new config is:\n```json\n{json.dumps(curr_config, indent=2)}\n```",
             config=curr_config
+        )
+
+
+# The only directory write_mock may write into, mirroring the harness generator's VFS
+# confinement (`forbidden_write="^(?!certora/harnesses)"` in harness.py) — but enforced
+# directly here because the authoring agent's source tools are read-only over the real
+# project tree and the prover compiles from the real tree, so the mock must land on disk.
+MOCKS_DIR = PurePosixPath("certora/mocks")
+
+
+@tool_display(lambda p: f"Writing mock `{p['file_path']}`", None)
+class WriteMockTool(WithAsyncDependencies[str, str]):
+    """
+    Write a minimal Solidity mock contract under `certora/mocks` implementing an interface, so
+    the prover can resolve calls to an otherwise-unresolved callee (step 2 of the vacuity repair
+    ladder). After writing the mock, register it in the prover configuration with `edit_config`
+    (an `add_file` edit, plus an `add_link` edit if the callee is reached through a storage field).
+
+    Keep the mock as small as possible: implement only the interface the caller needs, but
+    preserve the semantics that matter to the calling contract — in particular a `payable`
+    callee must remain `payable`. Writing to an existing path overwrites it, so you can iterate
+    on a mock in place.
+    """
+    file_path: str = Field(description=f"Project-root-relative path for the mock, under `{MOCKS_DIR}` (e.g. `{MOCKS_DIR}/MockOracle.sol`)")
+    content: str = Field(description="The full Solidity source of the mock contract")
+
+    @override
+    async def run(self) -> str:
+        rel = PurePosixPath(self.file_path)
+        if rel.is_absolute() or ".." in rel.parts:
+            return f"Invalid path `{self.file_path}`: must be a project-root-relative path without `..`"
+        if rel.parts[:len(MOCKS_DIR.parts)] != MOCKS_DIR.parts or len(rel.parts) <= len(MOCKS_DIR.parts):
+            return f"You may only write into the `{MOCKS_DIR}` directory (got `{self.file_path}`)"
+        if rel.suffix != ".sol":
+            return f"Mock must be a Solidity source file (`.sol`), got `{self.file_path}`"
+        with self.tool_deps() as project_root:
+            target = Path(project_root) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(self.content)
+        return (
+            f"Wrote mock to `{self.file_path}`. Remember to register it in the prover configuration "
+            "via `edit_config` (`add_file`, plus `add_link` if the callee is reached through a storage field)."
         )
 
 
@@ -371,7 +464,16 @@ async def batch_cvl_generation(
     ).with_tools(
         static_tools()
     ).with_tools(
-        [prover_tool, ExpectRulePassage.as_tool("expect_rule_passage"), ExpectRuleFailure.as_tool("expect_rule_failure"), GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"), ctx.get_memory_tool()]
+        [
+            prover_tool, ExpectRulePassage.as_tool("expect_rule_passage"), ExpectRuleFailure.as_tool("expect_rule_failure"),
+            GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"),
+            # Setup-repair tools for the vacuity repair ladder: edit_config covers ladder
+            # steps 2 (register a mock via add_file/add_link) and 3 (optimistic_fallback via
+            # set_flag); write_mock produces the step-2 mock itself.
+            ConfigEditTool.as_tool("edit_config"),
+            WriteMockTool.bind(source.project_root).as_tool("write_mock"),
+            ctx.get_memory_tool(),
+        ]
     ).with_state(
         SourceCVLGenerationState
     ).with_output_key(
