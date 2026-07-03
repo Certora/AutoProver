@@ -193,6 +193,10 @@ b. Monolithic external functions that are long sequences of internal-helper call
 If either applies, propose a "main contract harness plan" (the `main_contract_harness` field of your result):
 * For each flagged storage location: the desired getter name, the slot derivation (the keccak preimage or
   namespace string), the Solidity type of the value read from the slot, and a one-line rationale.
+  **IMPORTANT**: the slot derivation must QUOTE the exact source expression that derives the slot, with a
+  `file:line` citation (e.g. `keccak256("river.state.balance") - 1` — src/State.sol:42) — never a paraphrase
+  or a re-derivation from memory. A mis-transcribed slot constant compiles fine and silently "verifies"
+  properties about storage the contract never touches.
 * For each monolithic function: the thin helper wrappers to expose (name plus a one-line behavioral contract
   for each) and a rationale.
 

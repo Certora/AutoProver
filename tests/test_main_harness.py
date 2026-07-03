@@ -202,6 +202,9 @@ def test_state_analysis_renders_main_harness_step():
     )
     assert "main_contract_harness" in out
     assert "ERC-7201" in out
+    # Slot derivations must be source citations, not paraphrases.
+    assert "QUOTE the exact source expression" in out
+    assert "`file:line` citation" in out
 
 
 @pytest.mark.parametrize("with_api", [True, False])

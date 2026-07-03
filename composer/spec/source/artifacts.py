@@ -71,10 +71,10 @@ class ProverArtifactStore(ArtifactStore):
 
     def __init__(self, project_root: str, main_contract: str, verify_contract: str | None = None):
         super().__init__(project_root)
-        self._main_contract = main_contract
         # The contract identifier the prover verifies: the main-harness identifier
         # when the run verifies through an augmentation harness, otherwise the main
-        # contract itself.
+        # contract itself. ``main_contract`` (the protocol name) only serves as that
+        # default — the store's outputs (conf dumps) all name the verify target.
         self._verify_contract = verify_contract or main_contract
 
     def _deliverable_dir(self) -> Path:

@@ -89,8 +89,10 @@ class UnstructuredSlotSpec(BaseModel):
     """
     getter_name: str = Field(description="The name of the external view getter the harness should expose for this slot")
     slot_derivation: str = Field(description=(
-        "How the storage slot is derived: the keccak preimage or namespace string "
-        "(e.g. `keccak256(\"river.state.balance\") - 1` or the ERC-7201 namespace id)"
+        "How the storage slot is derived: quote the exact source expression computing "
+        "the slot, with a file:line citation — never a paraphrase "
+        "(e.g. `keccak256(\"river.state.balance\") - 1` — src/State.sol:42, or the "
+        "ERC-7201 namespace id as written in the source)"
     ))
     value_type: str = Field(description="The Solidity type of the value read from the slot (e.g. `uint256`, `address`)")
     rationale: str = Field(description="One line: why verification needs to observe this state")
