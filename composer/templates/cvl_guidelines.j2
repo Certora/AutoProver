@@ -41,5 +41,9 @@
     22. Instead of `forall $type i` in a invariant, invariant parameters should be used instead. That is, instead of `invariant foo() forall uint i.logical_predicate(i)` simply write
         `invariant foo(uint i) logical_predicate(i)`. The parameters of an invariant are implicitly universally quantified.
     23. Direct storage access should be used instead of mirroring contract state in ghosts via hooks. The only reason to use hooks and ghosts to reason about storage state is
-        if the ghost state is used for anything other than simply reading the values.
+        if the ghost state is used for anything other than simply reading the values. Hooks and ghosts are also appropriate when the information of interest is not stored in
+        contract state at all (e.g., counting how many times a function is called, or summing the amounts transferred across a sequence of calls).
+    24. A bare `require` that constrains contract state inside a rule or `preserved` block is a spec smell: the assumption may not actually hold in reachable states, silently
+        weakening the proof. The default discipline is to state the assumption as an `invariant`, prove it, and assume it via `requireInvariant`. Bare requires over contract
+        state are acceptable only when accompanied by a comment referencing a justification or a documented trust assumption.
 </cvl_guidelines>

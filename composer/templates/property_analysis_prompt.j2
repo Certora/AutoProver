@@ -78,6 +78,19 @@ Security properties fall into one of three categories:
     Bad example: "The protocol could be hacked" (overly broad)
     Bad example: "The underlying EVM consensus layer could be compromised allowing attackers to set arbitrary storage states" (implausible)
 
+To achieve broad coverage, sweep the component through the following six lenses while brainstorming:
+1. Unit behavior: the effect of a single function in isolation, including its *complete* revert conditions (when it must revert, and when it must NOT revert).
+2. Valid state: representational invariants that hold in every reachable state.
+3. Variable transition: how an individual variable may change — who may change it, when, and how (e.g., monotonicity: a counter only increases; a fee only changes via an admin setter).
+4. State transition: legality of transitions between modes/phases of the contract lifecycle (e.g., paused/unpaused, uninitialized/initialized, auction open/closed) — which transitions are allowed and who may trigger them.
+5. Multi-call / high-level: properties spanning a *sequence* of calls, e.g., round-trips (deposit then withdraw yields no more than deposited), no-free-profit, additivity of split vs. batched operations (two calls with x and y vs. one call with x + y).
+6. Risk / attack: adversarial scenarios detrimental to the protocol.
+
+Every property you keep must still be reported under one of the three categories above (lenses 2 and 6 map directly to
+categories 1 and 3; the rest usually land in category 2). The lenses are a brainstorming discipline, NOT a quota: it is
+expected and normal for several lenses to yield nothing for a given component, and the standing rule against padding
+with low-value properties applies in full force.
+
 {{ backend_guidance }}
 
 Note: Safety properties can (and should) include properties describing the intended, normal behavior of the smart contract. In other words, the properties
@@ -95,7 +108,8 @@ Review your rough draft. For each property/invariant in your rough draft, make s
 attention for properties/invariants explicitly described as being uninteresting or impossible to verify in the downstream verification tool.
 
 ## Step 4
-Output the results of your analysis using the result tool.
+Output the results of your analysis using the result tool. In the reasoning you record, note which of the six coverage
+lenses you swept and which of them yielded nothing for this component.
 </task>
 
 <guidance>
