@@ -65,6 +65,11 @@ def install_cvlmath_resource(project_root: str | Path) -> CVLResource:
     abstract_dest.write_text(cvlmath_abstract_spec_text())
 
     if under_project(project_root, AUTOSETUP_MATH_SPEC_PATH).exists():
+        # A previous run may have installed CVLMath.spec back when Math.spec
+        # was absent; a cached generated spec importing it alongside the new
+        # Math.spec would double-define the `*Summary` functions, so drop the
+        # now-stale copy.
+        under_project(project_root, CVLMATH_PROJECT_PATH).unlink(missing_ok=True)
         return CVLResource(
             path=CVLMATH_ABSTRACT_PROJECT_PATH,
             required=False,

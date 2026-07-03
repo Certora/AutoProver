@@ -93,6 +93,24 @@ def test_install_with_math_spec_ships_abstract_tier_only(tmp_path):
     assert not (tmp_path / CVLMATH_PROJECT_PATH).exists()
 
 
+def test_install_with_math_spec_removes_stale_cvlmath(tmp_path):
+    """Multi-run edge: run 1 installs the full library (no Math.spec yet),
+    then a later run's AutoSetup closure pulls Math.spec in — the leftover
+    CVLMath.spec must be removed or a cached generated spec importing it
+    would double-define the *Summary functions."""
+    first = install_cvlmath_resource(tmp_path)
+    assert first.path == CVLMATH_PROJECT_PATH
+    math_spec = tmp_path / AUTOSETUP_MATH_SPEC_PATH
+    math_spec.write_text("// AutoSetup-copied exact summaries\n")
+    res = install_cvlmath_resource(tmp_path)
+    assert res.path == CVLMATH_ABSTRACT_PROJECT_PATH
+    assert not (tmp_path / CVLMATH_PROJECT_PATH).exists()
+    # The abstract tier is still (re)installed for the aggregator import.
+    assert (
+        tmp_path / CVLMATH_ABSTRACT_PROJECT_PATH
+    ).read_text() == cvlmath_abstract_spec_text()
+
+
 @pytest.mark.parametrize(
     "spec_name",
     [CVLMATH_ABSTRACT_SPEC_NAME, CVLMATH_SPEC_NAME],
