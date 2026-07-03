@@ -27,8 +27,9 @@ from composer.prover.ptypes import RuleResult
 from graphcore.graph import LLM
 
 from composer.prover.core import (
-    ProverOptions, ProverCallbacks, run_prover, DefaultCexHandler
+    ProverOptions, ProverCallbacks, ProverReport, run_prover, DefaultCexHandler
 )
+from composer.prover.vacuity import format_filter_guard, undocumented_filtered_vacuous
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
@@ -50,6 +51,11 @@ def prover_config_overlay(base_config: dict, *, main_contract: str, verify_targe
 
     Shared by the live ``verify_spec`` run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
+
+    ``rule_sanity``/``optimistic_loop`` are set AFTER the base-config spread, so they win
+    over anything the agent's config edits put in ``base_config``. Vacuity detection
+    (``composer/prover/vacuity.py``) depends on ``rule_sanity: basic`` being forced here —
+    which is also why ``edit_config``'s ``SetProverFlag`` refuses those two flags.
     """
     return {
         **base_config,
@@ -83,6 +89,12 @@ class ProverStateExtra(TypedDict):
     # Link of the last prover run this generation performed (URL or local results dir).
     # Last-write-wins; absent until the first prover run. Read at completion onto GeneratedCVL.
     prover_link: NotRequired[str | None]
+    # Methods detected as vacuous by prior prover runs (instantiation name -> diagnosis).
+    # Must persist across verify_spec calls: once the agent excludes a vacuous method with a
+    # `filtered` block, later runs never re-instantiate it, so per-run detection alone would
+    # forget it. Shares the DELETE_SKIP-sentinel reducer with rule_skips — an entry is cleared
+    # when a later run instantiates the method without a sanity failure.
+    vacuous_methods: Annotated[dict[str, str], _merge_rule_skips]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
@@ -154,6 +166,30 @@ class _SpecCallbacks(ProverEventCallbacks):
         await super().on_prover_result(
             results
         )
+
+
+def _vacuity_state_update(
+    state: ProverStateExtra, result: ProverReport
+) -> tuple[dict[str, str], set[str]]:
+    """Fold this run's vacuity view into the persisted ``vacuous_methods`` state.
+
+    Returns ``(update, known_vacuous)``: the reducer delta to merge into state
+    (newly detected methods added, previously-recorded methods that this run
+    instantiated *without* a sanity failure cleared via DELETE_SKIP), and the
+    resulting set of methods still considered vacuous — the set the filtered-
+    vacuous guard checks against. ``state.get`` tolerates checkpoints predating
+    this field.
+    """
+    prior = state.get("vacuous_methods", {})
+    update: dict[str, str] = {m: ev.diagnosis for m, ev in result.vacuous_methods.items()}
+    for m in prior:
+        if m in result.instantiated_methods and m not in result.vacuous_methods:
+            update[m] = DELETE_SKIP
+    known_vacuous = {
+        m for m in (set(prior) | set(result.vacuous_methods))
+        if update.get(m) != DELETE_SKIP
+    }
+    return update, known_vacuous
 
 
 class VerifySpecSchema(BaseModel):
@@ -255,6 +291,7 @@ def get_prover_tool(
 
             if isinstance(result, str):
                 return result
+            vacuity_update, known_vacuous = _vacuity_state_update(state, result)
             all_verified = True
             for (r, stat) in result.rule_status.items():
                 if r in state["rule_skips"]:
@@ -263,12 +300,25 @@ def get_prover_tool(
                     all_verified = False
                     break
             if rules is None and all_verified:
+                # HARD GUARD: a detected-vacuous method sitting inside a `filtered` block
+                # makes the run pass trivially. Withhold the PROVER validation stamp
+                # unless a repair-ladder attempt is documented near the filter (the
+                # escape hatch — checked leniently; the judge assesses its quality).
+                blocked = undocumented_filtered_vacuous(state["curr_spec"], known_vacuous)
+                if blocked:
+                    return tool_state_update(
+                        tool_call_id=tool_call_id,
+                        content=f"{result.result_str}\n\n{format_filter_guard(blocked)}",
+                        prover_link=result.link, vacuous_methods=vacuity_update,
+                    )
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str,
                     prover_link=result.link, validations=stamper(state),
+                    vacuous_methods=vacuity_update,
                 )
             return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
+                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
+                vacuous_methods=vacuity_update,
             )
 
     return verify_spec

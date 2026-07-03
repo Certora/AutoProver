@@ -45,6 +45,9 @@ from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult
 from composer.prover.results import read_and_format_run_result
+from composer.prover.vacuity import (
+    VacuityEvidence, detect_vacuous_methods, format_vacuity_alert, instantiated_methods,
+)
 from composer.templates.loader import load_jinja_template
 from composer.prover.prover_protocol import ProverResult
 
@@ -97,10 +100,18 @@ class ProverReport:
     them through the return value.
 
     ``link`` is the prover run's URL (cloud) or local results directory.
+
+    ``vacuous_methods`` / ``instantiated_methods`` carry the per-run vacuity
+    view (see ``composer/prover/vacuity.py``): the methods detected as vacuous
+    in this run, and every method this run instantiated at all. The latter
+    lets the caller clear a previously-recorded vacuity verdict once a run
+    shows the method instantiated and healthy.
     """
     rule_status: dict[str, bool]
     result_str: str
     link: str
+    vacuous_methods: dict[str, VacuityEvidence] = field(default_factory=dict)
+    instantiated_methods: set[str] = field(default_factory=set)
 
     @property
     def all_verified(self) -> bool:
@@ -481,6 +492,11 @@ async def run_prover(
 
             all_results = list(parsed.values())
 
+            # Vacuity view of this run: methods whose sanity check failed across
+            # their instantiating rules. Computed here (rather than in callers)
+            # so every prover consumer sees the same alert in its report string.
+            vacuous = detect_vacuous_methods(all_results)
+
             # 10. Hand off to the handler when anything failed. It owns the
             # analysis approach, per-rule UI events, rendering, summarization
             # (if any), and storage of any keyed records (e.g. report_keys
@@ -498,6 +514,12 @@ async def run_prover(
                     rule_entries=[(r, None) for r in all_results],
                     diagnoses=[],
                 )
+
+            # Append the vacuity alert to whatever the handler/template rendered:
+            # a vacuous method most often surfaces as a *passing* (trivially
+            # verified) rule, so the alert must reach the agent on both branches.
+            if vacuous:
+                result_str = f"{result_str}\n\n{format_vacuity_alert(vacuous)}"
     except CloudJobError as exc:
         return f"Prover cloud job did not produce results (status {exc.status.value})."
 
@@ -512,4 +534,6 @@ async def run_prover(
         rule_status=prover_report,
         result_str=result_str,
         link=run_result["link"],
+        vacuous_methods=vacuous,
+        instantiated_methods=instantiated_methods(all_results),
     )

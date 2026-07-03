@@ -404,6 +404,7 @@ async def batch_cvl_generation(
             input=[],
             required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
             rule_skips={},
+            vacuous_methods={},
             skipped=[],
             property_rules=[],
             validations={},
