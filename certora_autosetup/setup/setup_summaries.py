@@ -61,6 +61,31 @@ from certora_autosetup.setup.summary_resolver import resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
 
 
+# CVL grammar keyword terminals that cannot double as an identifier. A Solidity parameter whose name
+# equals one of these is lexed as that keyword inside a methods{} entry, which is a syntax error; such
+# names are suffixed with "_" before emission (see _cvl_safe_param_name).
+#
+# This deliberately EXCLUDES the terminals listed under the `usable_keywords` production in cvl.cup
+# (exists, forall, sum, usum, using, as, import, use, builtin, override, sig, description, invariant,
+# preserved, weak, strong, onTransactionBoundary, old, hook, unresolved). The grammar accepts those
+# wherever an identifier is expected, so a parameter named after one parses fine and must NOT be
+# mangled. Note: uppercase "UNRESOLVED" is a distinct summary keyword and remains reserved.
+CVL_RESERVED_WORDS = frozenset({
+    "ALL", "ALWAYS", "ASSERT_FALSE", "AUTO", "CONSTANT", "Create", "DELETE", "DISPATCH", "DISPATCHER",
+    "HAVOC_ALL", "HAVOC_ECF", "NONDET", "PER_CALLEE_CONSTANT", "STORAGE", "Sload", "Sstore", "Tload",
+    "Tstore", "UNRESOLVED", "assert", "assuming", "at", "axiom", "default", "definition", "else",
+    "event", "expect", "fallback", "false", "filtered", "function", "ghost", "good_description",
+    "havoc", "if", "in", "indexed", "lastReverted", "lastStorage", "links", "mapping", "methods",
+    "new", "norevert", "persistent", "require", "requireInvariant", "reset_storage", "return",
+    "returns", "revert", "rule", "satisfy", "sort", "true", "void", "with", "withrevert", "xor",
+})
+
+
+def _cvl_safe_param_name(name: str) -> str:
+    """The parameter name with a trailing "_" if it equals a CVL reserved word, otherwise unchanged."""
+    return f"{name}_" if name in CVL_RESERVED_WORDS else name
+
+
 try:
     from dotenv import load_dotenv
 
@@ -195,8 +220,8 @@ class DecimalSummary(BaseModel):
 
     @property
     def summary_line(self) -> str:
-        params = ", ".join([ f"{_pprint_type(p.ty)} {p.name}" for p in self.param_list ])
-        return f"function _.{self.method_name}({params}) internal => {self.cvl_function_name}({self.amount_parameter}) expect {self.return_type.ty_name};"
+        params = ", ".join([ f"{_pprint_type(p.ty)} {_cvl_safe_param_name(p.name)}" for p in self.param_list ])
+        return f"function _.{self.method_name}({params}) internal => {self.cvl_function_name}({_cvl_safe_param_name(self.amount_parameter)}) expect {self.return_type.ty_name};"
 
     @property
     def cvl_function(self) -> str:
@@ -238,7 +263,7 @@ class NondetSummary(BaseModel):
 
     @property
     def summary_line(self) -> str:
-        params = ", ".join([f"{_pprint_type(p.ty)} {p.name}" for p in self.param_list])
+        params = ", ".join([f"{_pprint_type(p.ty)} {_cvl_safe_param_name(p.name)}" for p in self.param_list])
         if self.return_type is not None:
             return_types = ", ".join([
                 _pprint_type(ty) for ty in self.return_type
@@ -343,14 +368,38 @@ class SummarySetup:
         # the dedup set ("already emitted") across analyze_contract calls.
         self._methods_per_contract: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
-        # Curated function-summary keys matched upfront (main + additional_contracts).
-        # Populated by ``run`` after curated matching; consulted by autosetup's
+        # Curated function-summary keys matched for every contract that has entered the
+        # scene (initial main + additional_contracts, plus any added by call resolution).
+        # Populated by ``on_contracts_entered_scene``; consulted by autosetup's
         # ``_summarized_library_names`` to figure out which libraries have a curated
         # summary attached and therefore should be added to the scene.
         self.matched_functions: Set[str] = set()
 
+        # Accumulated import lines for the base aggregator spec. Rewritten (sorted) by
+        # ``_rewrite_aggregator`` after every batch of contracts entering the scene, so the
+        # initial scope and call-resolution batches all funnel through one writer.
+        self._aggregator_imports: Set[str] = set()
+
+        # Run configuration captured by ``configure`` so ``on_contracts_entered_scene`` applies it
+        # identically to the initial scene and to call-resolution batches.
+        self.main_contract: str = ""
+        self.additional_names: List[str] = []
+        self._enable_llm: bool = False
+        self._custom_recipe: Optional[str] = None
+        self._llm_contract_files: List[str] = []
+
         # Initialize TypeAnalyzer for resolving user-defined types in function declarations
         self.type_analyzer: TypeAnalyzer = self._init_type_analyzer()
+
+    @functools.cached_property
+    def methods_parser(self) -> MethodParser:
+        """Parsed ``all_methods.json``, loaded once and reused.
+
+        ``all_methods.json`` is written once by the build (``generate_all_methods_json``) and is
+        immutable afterward, so the parse is cached rather than repeated per match/recipe call.
+        Access only after confirming the file exists.
+        """
+        return MethodParser(str(PATH_ALL_METHODS_JSON))
 
     def _init_type_analyzer(self) -> TypeAnalyzer:
         """Initialize TypeAnalyzer. Fatal error if initialization fails."""
@@ -821,6 +870,15 @@ class SummarySetup:
             f"Processed template {template_file.name} with contract name: {contract_name}"
         )
 
+    @staticmethod
+    def _versioned_template_relpath(rel_under_summaries: Path, main_contract: str) -> Path:
+        """Summaries-dir-relative path of a curated summary, mapping a ``.template.spec`` to its
+        ``{base}-{main_contract}.spec`` name and returning any other path unchanged."""
+        stem = rel_under_summaries.stem
+        if not stem.endswith(".template"):
+            return rel_under_summaries
+        return rel_under_summaries.parent / f"{stem[: -len('.template')]}-{main_contract}.spec"
+
     def _materialize_template(self, template_path: str, main_contract: str) -> str:
         """Substitute ``$CONTRACT_NAME$`` in a bundled template and write the versioned
         spec into the user's ``certora/specs/summaries/`` tree.
@@ -844,11 +902,7 @@ class SummarySetup:
         rel_under_summaries = Path(template_path).relative_to(SUMMARIES_SUBDIR)
         src = self.summaries_dir / rel_under_summaries
 
-        base_stem = rel_under_summaries.stem  # e.g. "OZ_Math.template"
-        if base_stem.endswith(".template"):
-            base_stem = base_stem[: -len(".template")]
-        versioned_filename = f"{base_stem}-{main_contract}.spec"
-        versioned_rel_under = rel_under_summaries.parent / versioned_filename
+        versioned_rel_under = self._versioned_template_relpath(rel_under_summaries, main_contract)
 
         dst = self.user_summaries_dir / versioned_rel_under
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -857,80 +911,91 @@ class SummarySetup:
 
         return str(SUMMARIES_SUBDIR / versioned_rel_under)
 
-    def generate_base_aggregator(
-        self,
-        main_contract: str,
-        in_scene_contracts: List[str],
-        verified_functions: Set[str],
-    ) -> Path:
-        """Write the unified base summary aggregator at
-        ``certora/specs/summaries/{main_contract}_base_summaries.spec``.
+    def curated_summary_import_path(self, func_name: str, main_contract: str) -> str:
+        """Aggregator-relative import path for a matched curated-summary key.
 
-        The summary aggregator imports:
-        - One curated bundled spec per matched function in ``verified_functions``
-          (e.g. ``OpenZeppelin/OZ_Math.spec``). Library template files are
-          processed in place and their resulting non-template path is imported.
-        - One per-contract LLM spec ``./{C}_summaries.spec`` for each contract in
-          ``in_scene_contracts`` whose spec file already exists on disk.
+        A ``.template.spec`` entry is materialized into its ``{base}-{main_contract}.spec`` form first.
+        """
+        import_path: str = self.function_summaries[func_name]["summary_file"]
+        if import_path.endswith(".template.spec"):
+            import_path = self._materialize_template(import_path, main_contract)
+        return os.path.relpath(self.certora_dir / import_path, self.user_summaries_dir)
 
-        All paths are written relative to the summary aggregator's directory
-        (``certora/specs/summaries/``), so curated specs at e.g.
-        ``certora/specs/summaries/OpenZeppelin/OZ_Math.spec`` are imported as
-        ``"OpenZeppelin/OZ_Math.spec"``.
+    def _add_aggregator_imports(self, imports: Iterable[str]) -> List[str]:
+        """Record aggregator-relative import paths for the base summary aggregator.
 
-        Args:
-            main_contract: Determines the summary aggregator filename.
-            in_scene_contracts: Contract names whose ``{C}_summaries.spec`` should
-                be seeded into the summary aggregator if present (typically main +
-                additional_contracts; libraries are added via call resolution).
-            verified_functions: Curated function-summary keys from
-                ``match_summaries_from_all_methods``.
+        Paths are accumulated (not written) here; ``_rewrite_aggregator`` re-emits the
+        file sorted from the full set. Returns the paths that were newly added (for
+        logging); already-present paths are ignored so repeated registration is idempotent.
+        """
+        added = [imp for imp in imports if imp not in self._aggregator_imports]
+        self._aggregator_imports.update(added)
+        return added
 
-        Returns:
-            Path to the summary aggregator file.
+    def _rewrite_aggregator(self, main_contract: str) -> Path:
+        """(Re-)write the base summary aggregator at
+        ``certora/specs/summaries/{main_contract}_base_summaries.spec`` from the
+        accumulated import set.
+
+        The aggregator imports one line per accumulated path: curated bundled specs
+        (e.g. ``"OpenZeppelin/OZ_Math.spec"``, possibly a template materialized to a
+        ``{base}-{main}.spec`` versioned name) and per-contract LLM specs
+        (``"{C}_summaries.spec"``). All paths are relative to the aggregator's directory
+        and emitted sorted, so the file is deterministic regardless of the order in which
+        contracts entered the scene.
         """
         aggregator_path = self.user_summaries_dir / f"{main_contract}_base_summaries.spec"
-
-        unique_imports: Set[str] = set()
-
-        # Curated bundled summaries — paths in function_summaries.json are project-rooted
-        # (e.g. "specs/summaries/OpenZeppelin/OZ_Math.spec"). Convert to summary-aggregator-relative.
-        # For ``.template.spec`` entries we substitute ``$CONTRACT_NAME$`` here (writing
-        # the versioned ``{base}-{main}.spec`` directly into the user's dir) and import
-        # that versioned name.
-        for func_name in verified_functions:
-            func_info = self.function_summaries[func_name]
-            import_path: str = func_info["summary_file"]
-
-            if import_path.endswith(".template.spec"):
-                import_path = self._materialize_template(import_path, main_contract)
-
-            rel_to_aggregator = os.path.relpath(self.certora_dir / import_path, self.user_summaries_dir)
-            unique_imports.add(rel_to_aggregator)
-
-        # Per-contract LLM specs for the initial scope.
-        for c_name in in_scene_contracts:
-            spec_file = self.user_summaries_dir / f"{c_name}_summaries.spec"
-            if spec_file.exists():
-                unique_imports.add(f"{c_name}_summaries.spec")
-
         lines = [
             f"// Auto-generated base summaries for {main_contract}",
             "// Generated by setup_summaries.py",
             "",
         ]
-        if unique_imports:
-            for imp in sorted(unique_imports):
+        if self._aggregator_imports:
+            for imp in sorted(self._aggregator_imports):
                 lines.append(f'import "{imp}";')
         else:
             lines.append(f"// No summaries needed for {main_contract}")
 
         aggregator_path.write_text("\n".join(lines) + "\n")
         self.log(
-            f"Generated {aggregator_path} with {len(unique_imports)} import(s)",
-            "SUCCESS" if unique_imports else "INFO",
+            f"Wrote {aggregator_path} with {len(self._aggregator_imports)} import(s)",
+            "SUCCESS" if self._aggregator_imports else "INFO",
         )
         return aggregator_path
+
+    def prune_emitted_specs(self, main_contract: str) -> None:
+        """Comment out methods{} entries that don't resolve in the compiled scene, across ALL emitted
+        summary specs. Curated/dedicated library specs (in function_summaries.json key order) take
+        precedence over LLM-generated ones for duplicate (receiver, name, param_types) ownership.
+
+        Global by design — it needs every spec at once for that precedence — so it runs after summary
+        emission and before a prover submission, not inline per contract. Union templates and curated
+        specs added lazily during call resolution otherwise leave entries that fail CVL typechecking.
+
+        Each spec path is passed to the resolver at most once: several function_summaries keys can
+        share one summary_file (e.g. the SafeERC20 keys), and resolving the same file twice makes the
+        second pass treat the file's own kept entries as duplicates owned by the first and drop them.
+        """
+        if not PATH_ALL_METHODS_JSON.exists():
+            return
+        ordered_specs: List[Path] = []
+        seen: Set[Path] = set()
+
+        def _add(p: Path) -> None:
+            if p not in seen:
+                seen.add(p)
+                ordered_specs.append(p)
+
+        for key in self.function_summaries:  # function_summaries.json key order = curated precedence
+            if key not in self.matched_functions:
+                continue
+            rel_under = Path(self.function_summaries[key]["summary_file"]).relative_to(SUMMARIES_SUBDIR)
+            rel_under = self._versioned_template_relpath(rel_under, main_contract)
+            _add(self.user_summaries_dir / rel_under)
+        # Then any other emitted spec (LLM per-contract, call resolution) — lower dedup precedence.
+        for spec in walk_files_by_suffix(self.user_summaries_dir, ".spec"):
+            _add(spec)
+        resolve_summary_specs(ordered_specs, PATH_ALL_METHODS_JSON, log=self.log)
 
     def should_process_file(self, file_path: str) -> bool:
         """Check if a file should be processed (not a dependency or internal file).
@@ -1197,6 +1262,7 @@ If the function cannot be summarized (e.g., struct parameters), return an Invali
         params = []
         for i, param_type in enumerate(param_types):
             param_name = param_names[i] if i < len(param_names) and param_names[i] else f""
+            param_name = _cvl_safe_param_name(param_name)
             location = locations[i] if i < len(locations) else ""
 
             cvl_type, classification = classify_solidity_type(param_type)
@@ -1633,7 +1699,7 @@ Method signature: {method_signature}
             )
             return []
 
-        mp = MethodParser(str(methods_file))
+        mp = self.methods_parser
 
         # Filter methods by properties and originatingContract
         all_methods = mp.get_all_methods()
@@ -2022,6 +2088,12 @@ Method signature: {method_signature}
             header.extend(['import "./_helpers.spec";', ""])
         return "\n".join(header + body)
 
+    def _returns_reference_type(self, method: Dict[str, Any]) -> bool:
+        """Whether any of the method's returns is a reference type (string/bytes/array/struct/mapping),
+        determined from the per-return data location recorded in the build JSON.
+        """
+        return any(loc in ("memory", "calldata", "storage") for loc in method.get("returnLocations", []))
+
     def _append_method_summary(
         self,
         content: List[str],
@@ -2059,7 +2131,12 @@ Method signature: {method_signature}
         content.append("     */")
 
         if summary_type.upper() == "NONDET":
-            if method["stateMutability"] in ["view", "pure"]:
+            if self._returns_reference_type(method):
+                sig = self._get_function_signature(method, is_wildcard=False)
+                content.append(
+                    f"    // AUTO-DISABLED (NONDET unsound for reference types): {sig}"
+                )
+            elif method["stateMutability"] in ["view", "pure"]:
                 if has_ellipsis and (nondet_summary := self._generate_nondet_summary(
                     method, udt_context
                 )) is not None:
@@ -2273,7 +2350,7 @@ Method signature: {method_signature}
             self.log("all_methods.json not found", "ERROR")
             return set(), set()
 
-        mp = MethodParser(str(methods_file))
+        mp = self.methods_parser
 
         self.log(f"Matching summaries for {main_contract}...")
         # Filter to only methods that originate from this contract (compilation unit)
@@ -2330,7 +2407,74 @@ Method signature: {method_signature}
         self.log(f"Found {len(matched_functions)} summaries for {main_contract} ({len(matched_method_tuples)} method tuples)")
         return matched_functions, matched_method_tuples
 
-    def run(
+    async def on_contracts_entered_scene(self, contract_names: List[str], main_contract: str) -> None:
+        """Summarize a batch of contracts that have entered the verification scene — used for both
+        the initial scene and each batch added during call resolution.
+
+        Curated matching runs first so the LLM step can skip methods a curated summary already
+        covers; the base aggregator and the prune pass are refreshed once per batch.
+
+        ``main_contract`` only determines the aggregator filename — ``contract_names`` are the
+        contracts to summarize. LLM analysis honors the ``_enable_llm`` / ``_custom_recipe`` /
+        ``_llm_contract_files`` settings recorded by ``configure``. The affected per-contract specs
+        and the aggregator are re-written on each call, so manual edits to autosetup-managed specs
+        are overwritten.
+        """
+        contract_names = list(dict.fromkeys(contract_names))  # de-dup, preserve order
+        if not contract_names:
+            return
+
+        # TODO(precision): matching and LLM analysis below are scoped to each contract's whole
+        # compilation unit, not to the methods actually reachable from the main contract. A contract
+        # pulled in as a candidate link/dispatch target therefore gets curated + LLM summaries for
+        # functions the main contract never calls (e.g. a contract linked at an interface-typed field
+        # whose extra methods are unused) — the prover reports those as "unused". This is sound and
+        # the prover cost is negligible, but it spends LLM calls on unreachable methods. Scoping to the
+        # reachable set (a transitive closure over resolved call edges, or the prover's reachability
+        # report) would avoid the wasted LLM work, at the cost of computing reachability.
+
+        # 1. Curated summaries first — match per contract, accumulating both the matched keys
+        #    and the (contractName, methodName) tuples the LLM step must not re-summarize.
+        curated_keys: Set[str] = set()
+        per_contract_skip: Dict[str, Set[Tuple[str, str]]] = {}
+        for name in contract_names:
+            matched, tuples = self.match_summaries_from_all_methods(name)
+            curated_keys |= matched
+            per_contract_skip[name] = tuples
+        if curated_keys:
+            # Publish for downstream consumers (autosetup's library-scene filter) and for
+            # prune_emitted_specs's curated-over-LLM dedup precedence.
+            self.matched_functions |= curated_keys
+            self.copy_summaries_folder(curated_keys)
+            registered = self._add_aggregator_imports(
+                self.curated_summary_import_path(key, main_contract) for key in curated_keys
+            )
+            if registered:
+                self.log(f"Aggregator: registered curated specs {registered}")
+
+        # 2. LLM analysis per contract, skipping curated-covered methods.
+        if self._enable_llm:
+            for name in contract_names:
+                await self.analyze_contract(
+                    name,
+                    self._llm_contract_files,
+                    methods_to_skip=per_contract_skip.get(name),
+                    custom_recipe=self._custom_recipe,
+                )
+
+        # 3. Import the per-contract LLM specs that landed on disk.
+        self._add_aggregator_imports(
+            f"{name}_summaries.spec"
+            for name in contract_names
+            if (self.user_summaries_dir / f"{name}_summaries.spec").exists()
+        )
+
+        # 4. Refresh the aggregator (sorted, from accumulated state) and prune methods{} entries
+        #    that don't resolve in the compiled scene across all emitted specs (curated + LLM).
+        self._rewrite_aggregator(main_contract)
+        self.prune_emitted_specs(main_contract)
+
+    def configure(
         self,
         main_contract: str,
         contract_files: List[str] | None = None,
@@ -2340,33 +2484,20 @@ Method signature: {method_signature}
         enable_llm: bool = False,
         custom_recipe: Optional[str] = None,
     ) -> bool:
-        """Run the complete setup process for a single main contract.
+        """Capture the configuration for a summarization run; perform no summarization.
 
-        Sync-only: when ``enable_llm`` is True this calls ``asyncio.run(...)`` on the
-        upfront LLM coroutine, so ``run`` must NOT be invoked from a running event
-        loop (doing so will raise ``RuntimeError`` from asyncio). If you need to call
-        from async code, ``await``-call ``analyze_contract`` directly per contract.
+        Resolves the source file list (discovering all Solidity files when ``contract_files`` is
+        empty), parses the additional-contract names into ``self.additional_names``, and records the
+        main contract and the LLM settings on the instance for ``on_contracts_entered_scene`` to use.
 
-        Note on LLM-cache reuse and hand edits: the previous ``force_llm_regenerate``
-        flag and the "skip if ``llm_summaries-{C}.spec`` already exists" shortcut were
-        removed in favor of relying on ``call_llm_async_structured_cached``'s content-hash
-        cache. Re-runs over unchanged sources are effectively free at the LLM-call layer;
-        recipe pre/post-processing still runs but is cheap.
-
-        Caveat for users who hand-edit a per-contract spec to fix a typecheck error: the
-        spec file is **re-written** on every ``analyze_contract`` call (the LLM cache
-        returns identical content, so unchanged sources produce identical specs — but any
-        manual edits will be overwritten). The summary aggregator itself is also re-written on
-        each run by ``generate_base_aggregator``, so redirecting its imports doesn't
-        survive either — to keep an edit, work outside the autosetup-managed tree.
+        Returns True once configured, or False if no Solidity sources are found.
 
         Args:
             main_contract: Name of the main contract being verified.
             contract_files: List of contract files to analyze.
             additional_contracts: ``--additional-contracts`` strings (each
-                ``path/to/Foo.sol`` or ``path/to/Foo.sol:Foo``); used to seed
-                additional upfront LLM analysis since these are unconditionally
-                in the initial scene.
+                ``path/to/Foo.sol`` or ``path/to/Foo.sol:Foo``); seeded into the initial
+                scene alongside the main contract.
             include_test_files: Include test files in analysis.
             include_dependencies: Include dependency files in analysis.
             enable_llm: Enable LLM-based method analysis.
@@ -2386,101 +2517,20 @@ Method signature: {method_signature}
                 self.log("No Solidity files found in the project", "WARNING")
                 return False
 
-        additional_contracts = additional_contracts or []
-        additional_names = [split_contract_spec(ac)[1] for ac in additional_contracts]
+        self.main_contract = main_contract
+        self.additional_names = [split_contract_spec(ac)[1] for ac in (additional_contracts or [])]
 
         self.log(f"Main contract for analysis: {main_contract}")
-        if additional_names:
-            self.log(f"Additional contracts for analysis: {additional_names}")
+        if self.additional_names:
+            self.log(f"Additional contracts for analysis: {self.additional_names}")
 
-        # Step 2: Match curated function summaries (non-LLM matching) for the main
-        # contract AND every additional_contract. Each AC has its own compilation unit
-        # in all_methods.json, so library calls reachable only via an AC won't show up
-        # in the main contract's match. Tracking per-AC method tuples lets us tell the
-        # subsequent LLM step "don't re-summarize these — curated already covers them".
-        self.log("Matching function summaries from all_methods.json...")
-        matched_functions, main_method_tuples = self.match_summaries_from_all_methods(main_contract)
-        per_contract_skip: Dict[str, Set[Tuple[str, str]]] = {main_contract: main_method_tuples}
-        for ac_name in additional_names:
-            ac_funcs, ac_tuples = self.match_summaries_from_all_methods(ac_name)
-            matched_functions |= ac_funcs
-            per_contract_skip[ac_name] = ac_tuples
-        # Publish for downstream consumers (autosetup's library-scene filter).
-        self.matched_functions = matched_functions
-
-        # Step 3: Copy bundled curated summaries into certora/specs/summaries/.
-        # Only the files referenced by the matched curated keys are copied — unused
-        # library specs are left alone.
-        self.log("Copying matched curated summary files...")
-        self.copy_summaries_folder(matched_functions)
-
-        # Step 4: Upfront LLM analysis — main contract + each additional_contract.
-        # Contracts brought in later by call resolution are analyzed lazily there.
-        if enable_llm:
-            self.log("Running LLM-based method analysis upfront...")
-
-            async def _run_upfront_llm() -> None:
-                for c_name in [main_contract] + additional_names:
-                    await self.analyze_contract(
-                        c_name,
-                        contract_files,
-                        methods_to_skip=per_contract_skip.get(c_name),
-                        custom_recipe=custom_recipe,
-                    )
-
-            asyncio.run(_run_upfront_llm())
-        elif self.verbose:
+        # LLM settings + the (dependency-inclusive) source list, applied by on_contracts_entered_scene
+        # so the initial scene and later call-resolution batches share identical config.
+        self._enable_llm = enable_llm
+        self._custom_recipe = custom_recipe
+        self._llm_contract_files = contract_files
+        if not enable_llm and self.verbose:
             self.log("LLM analysis not enabled (use --enable-llm flag)", "INFO")
-
-        # Step 5: Write the unified base summary aggregator. This is the file that sanity/warmup
-        # specs import; call resolution will append to it lazily as new contracts join.
-        in_scene = [main_contract] + additional_names
-        self.generate_base_aggregator(main_contract, in_scene, matched_functions)
-
-        # Step 5b: Prune summary methods{} entries that don't resolve in the compiled
-        # scene. Union templates (e.g. FixedPointMathLib.spec carries both solmate and
-        # solady naming) otherwise leave entries whose method doesn't exist at the
-        # declared receiver, which fail CVL typechecking before any checker runs.
-        # Curated/dedicated library specs take precedence over LLM-generated ones for
-        # duplicate (receiver, name, param_types) ownership, so resolve them first.
-        if PATH_ALL_METHODS_JSON.exists():
-            ordered_specs: List[Path] = []
-            for key in self.function_summaries:  # function_summaries.json key order
-                if key not in matched_functions:
-                    continue
-                rel_under = Path(self.function_summaries[key]["summary_file"]).relative_to(SUMMARIES_SUBDIR)
-                if str(rel_under).endswith(".template.spec"):
-                    base_stem = rel_under.stem[: -len(".template")]
-                    rel_under = rel_under.parent / f"{base_stem}-{main_contract}.spec"
-                ordered_specs.append(self.user_summaries_dir / rel_under)
-            curated = set(ordered_specs)
-            # Then any other emitted summary spec (LLM per-contract, aggregator, call
-            # resolution) — lower precedence for dedup, but still pruned for nonexistent
-            # entries.
-            for spec in walk_files_by_suffix(self.user_summaries_dir, ".spec"):
-                if spec not in curated:
-                    ordered_specs.append(spec)
-            resolve_summary_specs(ordered_specs, PATH_ALL_METHODS_JSON, log=self.log)
-
-        if not matched_functions and not any(
-            (self.user_summaries_dir / f"{c}_summaries.spec").exists()
-            for c in in_scene
-        ):
-            self.log(f"No summaries needed for {main_contract}", "INFO")
-
-        # Report summary
-        self.log("\n=== Summary Report ===")
-        if matched_functions:
-            self.log(
-                f"✅ {main_contract}: {len(matched_functions)} summaries "
-                f"({', '.join(sorted(matched_functions))})",
-                "SUCCESS",
-            )
-            self.log("\n✅ Setup complete!", "SUCCESS")
-        else:
-            self.log(f"ℹ️  {main_contract}: No summaries needed", "INFO")
-            self.log("\nℹ️ Setup complete! No summaries were needed.", "INFO")
-
         return True
 
 
@@ -2573,7 +2623,7 @@ def main():
             )
         )
     else:
-        success = setup.run(
+        success = setup.configure(
             main_contract=args.main_contract,
             contract_files=args.contract_files if args.contract_files else None,
             include_test_files=args.include_test_files,
@@ -2581,6 +2631,12 @@ def main():
             enable_llm=args.enable_llm,
             custom_recipe=args.llm_recipe,
         )
+        if success:
+            asyncio.run(
+                setup.on_contracts_entered_scene(
+                    [args.main_contract] + setup.additional_names, args.main_contract
+                )
+            )
 
     sys.exit(0 if success else 1)
 
