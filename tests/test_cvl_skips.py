@@ -19,6 +19,7 @@ from langgraph.graph import MessagesState
 from composer.spec.cvl_generation import (
     CVLGenerationExtra,
     SkippedProperty,
+    _compute_digest,
     check_completion,
     _FeedbackSchema,
     _RecordSkipSchema,
@@ -302,6 +303,23 @@ class TestSkipGate:
         assert skipped == []
         assert "ghost state mirroring" in msg
 
+    async def test_passive_access_reason_triggers_gate(self):
+        # Passive phrasing ("cannot be accessed") must fire the same access-shaped
+        # triggers as the active form ("cannot access").
+        (msg, skipped) = await scenario(1).turn(
+            _skip("p0", "the accumulated fee cannot be accessed from outside the contract")
+        ).map(self.gate_mapper).run()
+        assert skipped == []
+        assert msg.startswith("Skip REJECTED:")
+        assert "ghost state mirroring" in msg
+
+    async def test_passive_observe_reason_triggers_gate(self):
+        (msg, skipped) = await scenario(1).turn(
+            _skip("p0", "the pending reward cannot be observed by any external caller")
+        ).map(self.gate_mapper).run()
+        assert skipped == []
+        assert "harness getter/helper" in msg
+
     async def test_unrelated_reason_passes_with_empty_alternatives(self):
         (msg, skipped) = await scenario(1).turn(
             _skip("p0", "requires quantifying over arbitrary-length arrays")
@@ -336,6 +354,35 @@ class TestSkipGate:
         # must default it rather than fail validation.
         s = SkippedProperty.model_validate({"property_title": "p0", "reason": "too hard"})
         assert s.alternatives_considered == []
+
+
+# =========================================================================
+# Digest coverage: alternatives_considered is part of the skip's audited identity
+# =========================================================================
+
+class TestDigestCoversAlternatives:
+    def test_digest_changes_with_alternatives(self):
+        bare = SkippedProperty(property_title="p0", reason="r")
+        with_alts = SkippedProperty(
+            property_title="p0", reason="r", alternatives_considered=["tried ghost mirroring"]
+        )
+        assert _compute_digest("spec", [bare]) != _compute_digest("spec", [with_alts])
+
+    def test_digest_changes_with_alternative_content(self):
+        a = SkippedProperty(
+            property_title="p0", reason="r", alternatives_considered=["tried ghost mirroring"]
+        )
+        b = SkippedProperty(
+            property_title="p0", reason="r", alternatives_considered=["tried Sstore hooks"]
+        )
+        assert _compute_digest("spec", [a]) != _compute_digest("spec", [b])
+
+    def test_empty_alternatives_preserve_legacy_digest(self):
+        # Cached pre-field skips deserialize with the default empty list; their digest
+        # must equal an explicitly-empty one so cached validation stamps stay fresh.
+        legacy = SkippedProperty.model_validate({"property_title": "p0", "reason": "r"})
+        explicit = SkippedProperty(property_title="p0", reason="r", alternatives_considered=[])
+        assert _compute_digest("spec", [legacy]) == _compute_digest("spec", [explicit])
 
 
 # =========================================================================
@@ -407,6 +454,23 @@ class TestValidationLogic:
             _skip("p0", "reason 1"),
             _feedback(),
             _skip("p0", "new reason"),
+            _result("I'm done")
+        ).map_run(is_result_rejection.check_reason(unsat_feedback_message))
+
+    async def test_changed_alternatives_no_result(self):
+        # Editing the judge-audited alternatives_considered after validation must stale
+        # the stamp just like editing the reason does.
+        reason = "the balance lives in a keccak-derived storage slot"
+        assert await scenario(1, curr_spec="whatever").turns(
+            _skip("p0", reason, alternatives=[
+                "the keccak slot constant depends on a runtime salt",
+                "an Sstore hook cannot fire through delegatecall",
+            ]),
+            _feedback(),
+            _skip("p0", reason, alternatives=[
+                "the slot constant is not computable at compile time here",
+                "storage hooks do not fire for delegatecall writes",
+            ]),
             _result("I'm done")
         ).map_run(is_result_rejection.check_reason(unsat_feedback_message))
 

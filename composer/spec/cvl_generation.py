@@ -157,10 +157,13 @@ def _compute_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
     digester = hashlib.md5()
     digester.update(curr_spec.encode())
     for s in skipped:
-        # alternatives_considered is deliberately excluded: the skip's identity is its
-        # title+reason, and including the (judge-visible but advisory) alternatives would
-        # stale-out validation stamps on cached pre-field skips.
         digester.update(f"{s.property_title}:{s.reason}".encode())
+        # The judge audits alternatives_considered as part of the skip's justification
+        # (feedback.py surfaces them), so changing them must stale the validation stamp.
+        # An empty list contributes nothing, so digests of cached pre-field skips (which
+        # deserialize with the default empty list) keep their legacy value.
+        for alt in s.alternatives_considered:
+            digester.update(f"|alt:{alt}".encode())
     return digester.hexdigest()
 
 
@@ -332,17 +335,17 @@ _SKIP_GATE_CHECKS: list[tuple[re.Pattern[str], str, re.Pattern[str]]] = [
         re.compile(r"keccak|slot", re.IGNORECASE),
     ),
     (
-        re.compile(rf"{_KECCAK_SLOT}|storage slot|unstructured|cannot (access|observe)", re.IGNORECASE),
+        re.compile(rf"{_KECCAK_SLOT}|storage slot|unstructured|cannot (be )?(access|observ)", re.IGNORECASE),
         "Sload/Sstore storage hooks on the slot/path in question",
         re.compile(r"sload|sstore|hook", re.IGNORECASE),
     ),
     (
-        re.compile(r"no (public )?getter|cannot (access|observe)|unstructured", re.IGNORECASE),
+        re.compile(r"no (public )?getter|cannot (be )?(access|observ)|unstructured", re.IGNORECASE),
         "a harness getter/helper or direct storage access (currentContract.<field>)",
         re.compile(r"harness|getter|helper|currentContract|direct storage", re.IGNORECASE),
     ),
     (
-        re.compile(r"cannot (access|observe)", re.IGNORECASE),
+        re.compile(r"cannot (be )?(access|observ)", re.IGNORECASE),
         "ghost state mirroring the value via hooks or summaries",
         re.compile(r"ghost", re.IGNORECASE),
     ),
