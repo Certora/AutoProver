@@ -43,8 +43,15 @@ _FEEDBACK_NAME = "feedback_tool"
 _RESULT_NAME = "result"
 _PUT_CVL = "put_cvl"
 
-def _skip(property_title: str, reason: str) -> ToolCallDict:
-    return tool_call_raw(name=_RECORD_SKIP_NAME, property_title=property_title, reason=reason)
+def _skip(property_title: str, reason: str, alternatives: list[str] | None = None) -> ToolCallDict:
+    # alternatives_considered is a required tool field; most tests use reasons that don't
+    # trigger the skip gate, so an empty list suffices unless a test exercises the gate.
+    return tool_call_raw(
+        name=_RECORD_SKIP_NAME,
+        property_title=property_title,
+        reason=reason,
+        alternatives_considered=alternatives if alternatives is not None else [],
+    )
 
 def _unskip(property_title: str) -> ToolCallDict:
     return tool_call_raw(_UNSKIP_NAME, property_title=property_title)
@@ -231,6 +238,76 @@ class TestMergeSkipsViaGraph:
         ).map(self.skip_error_mapper).run()
         assert len(st) == 1 and st[0].property_title == "p0"
         assert "A non-empty justification is" in msg
+
+
+# =========================================================================
+# Skip gate: access-shaped reasons require alternatives_considered coverage
+# =========================================================================
+
+class TestSkipGate:
+    def gate_mapper(self, st: CVLTestState) -> tuple[str, list[SkippedProperty]]:
+        return (
+            Scenario.last_single_tool(_RECORD_SKIP_NAME, st),
+            st["skipped"],
+        )
+
+    async def test_keccak_reason_without_alternatives_rejected(self):
+        (msg, skipped) = await scenario(1).turn(
+            _skip("p0", "the balance lives in a keccak-derived storage slot with no way to read it")
+        ).map(self.gate_mapper).run()
+        assert skipped == []
+        assert msg.startswith("Skip REJECTED:")
+        assert "keccak storage-slot constant" in msg
+        assert "Sload/Sstore storage hooks" in msg
+
+    async def test_keccak_reason_with_alternatives_accepted(self):
+        (msg, skipped) = await scenario(1).turn(
+            _skip(
+                "p0",
+                "the balance lives in a keccak-derived storage slot",
+                alternatives=[
+                    "precomputed the keccak slot constant, but the slot value depends on a runtime salt",
+                    "an Sstore hook on the slot cannot fire because writes go through delegatecall",
+                ],
+            )
+        ).map(self.gate_mapper).run()
+        assert msg.startswith("Recorded skip")
+        assert len(skipped) == 1 and skipped[0].property_title == "p0"
+
+    async def test_trigger_matching_is_case_insensitive(self):
+        (msg, skipped) = await scenario(1).turn(
+            _skip("p0", "state is in Unstructured Storage and CANNOT ACCESS it from CVL")
+        ).map(self.gate_mapper).run()
+        assert skipped == []
+        assert msg.startswith("Skip REJECTED:")
+
+    async def test_no_getter_reason_requires_harness_capability(self):
+        (msg, skipped) = await scenario(1).turn(
+            _skip("p0", "there is no public getter for the internal accumulator")
+        ).map(self.gate_mapper).run()
+        assert skipped == []
+        assert "harness getter/helper" in msg
+
+    async def test_cannot_observe_reason_requires_ghost_capability(self):
+        (msg, skipped) = await scenario(1).turn(
+            _skip(
+                "p0",
+                "we cannot observe the intermediate value",
+                alternatives=[
+                    "Sload/Sstore hooks don't fire on memory values",
+                    "a harness getter cannot expose transient memory",
+                ],
+            )
+        ).map(self.gate_mapper).run()
+        assert skipped == []
+        assert "ghost state mirroring" in msg
+
+    async def test_unrelated_reason_passes_with_empty_alternatives(self):
+        (msg, skipped) = await scenario(1).turn(
+            _skip("p0", "requires quantifying over arbitrary-length arrays")
+        ).map(self.gate_mapper).run()
+        assert msg.startswith("Recorded skip")
+        assert len(skipped) == 1
 
 
 # =========================================================================

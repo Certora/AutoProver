@@ -168,6 +168,15 @@ Verify that the specification covers all {{ properties | length }} listed proper
   perform your own research (or examine any CVL Document references cited in their skip)
   and critically examine their claims about CVL expressivity when evaluating the skip.
 
+  Before accepting ANY skip justified as "not expressible in CVL" — in particular one claiming that state is
+  private, unstructured, keccak-addressed, or lacks a getter — you must verify that NONE of the following
+  mechanisms make the property expressible:
+  (a) a precomputed keccak storage-slot constant (`keccak256` is a built-in CVL function; ERC-7201 namespaces
+      and EIP-1967 slots are compile-time constants) combined with an `Sload`/`Sstore` hook on that slot;
+  (b) a harness getter or direct storage access (e.g., `currentContract.<field>`);
+  (c) ghost state mirroring the value via storage hooks or function summaries.
+  If any of these mechanisms applies, reject the skip and name the applicable mechanism.
+
   *Exception*: if the author has filed an empirical rebuttal (see Step 1) against a prior-round
   formalization you proposed, accept that rebuttal per the Step 1 evaluation rules — do not
   re-insist on the same proposal. If the rebuttal establishes that no working formalization was

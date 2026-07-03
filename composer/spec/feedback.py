@@ -46,6 +46,11 @@ FeedbackTemplate = TypedTemplate[FeedbackInherentParams]("property_judge_prompt.
 
 class JudgeSystemParams(TypedDict):
     sort: Sort
+    # Whether the pipeline can (re)generate main-contract augmentation harnesses. When true,
+    # the judge template's "demand a harness getter/wrapper instead of accepting the skip"
+    # wording is rendered; the template defaults it to false, so pipelines without harness
+    # augmentation may simply omit it.
+    harness_augmentation: NotRequired[bool]
 
 # Judge system prompt, shared between the natspec and source-mode flows. The fs
 # primitives are always documented; ``sort`` drives the rest (the template

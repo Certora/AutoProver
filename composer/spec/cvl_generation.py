@@ -7,6 +7,7 @@ Parameterized by:
 """
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import Annotated, Callable, Literal, NotRequired, override, Awaitable, Any, Protocol
 from typing_extensions import TypedDict
@@ -305,6 +306,36 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
             )
         return tool_state_update(self.tool_call_id, msg)
 
+# Skip gate: reasons of the shape "the state is hard to *access*" name a capability gap that
+# CVL can bridge, not an expressiveness limit. Each entry pairs a trigger pattern (matched
+# against the skip reason) with the capability that must be addressed in
+# ``alternatives_considered`` and the evidence pattern used to detect that the capability was
+# actually discussed. A skip whose reason fires a trigger is rejected until every triggered
+# capability is addressed.
+_SKIP_GATE_CHECKS: list[tuple[re.Pattern[str], str, re.Pattern[str]]] = [
+    (
+        re.compile(r"keccak|storage slot|unstructured", re.IGNORECASE),
+        "a precomputed keccak storage-slot constant (keccak256 is a built-in CVL function)",
+        re.compile(r"keccak|slot", re.IGNORECASE),
+    ),
+    (
+        re.compile(r"keccak|storage slot|unstructured|cannot (access|observe)", re.IGNORECASE),
+        "Sload/Sstore storage hooks on the slot/path in question",
+        re.compile(r"sload|sstore|hook", re.IGNORECASE),
+    ),
+    (
+        re.compile(r"no (public )?getter|cannot (access|observe)|unstructured", re.IGNORECASE),
+        "a harness getter/helper or direct storage access (currentContract.<field>)",
+        re.compile(r"harness|getter|helper|currentContract|direct storage", re.IGNORECASE),
+    ),
+    (
+        re.compile(r"cannot (access|observe)", re.IGNORECASE),
+        "ghost state mirroring the value via hooks or summaries",
+        re.compile(r"ghost", re.IGNORECASE),
+    ),
+]
+
+
 @tool_display(
     lambda p: f"Skipping property `{p.get('property_title', '?')}`",
     suppress_ack("Skip result", ("Recorded skip",)),
@@ -312,7 +343,8 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
 class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, WithImplementation[Command]):
     """
     Declare that you are skipping a property from the batch.
-    You must provide the property's title and a justification.
+    You must provide the property's title, a justification, and the alternative
+    mechanisms you considered before skipping.
     The feedback judge will evaluate whether your justification is valid.
     Only use this after genuinely attempting to formalize the property.
     """
@@ -321,6 +353,14 @@ class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, W
     )
     reason: str = Field(
         description="Justification for why this property cannot be formalized"
+    )
+    alternatives_considered: list[str] = Field(
+        description=(
+            "The alternative CVL/verification mechanisms you considered before skipping, and why "
+            "each does not work for this property. Where applicable you MUST address: precomputed "
+            "keccak storage-slot constants (keccak256 is a built-in CVL function), Sload/Sstore "
+            "storage hooks, harness getters/helpers, and ghost mirroring of contract state."
+        )
     )
 
     @override
@@ -335,6 +375,22 @@ class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, W
             return tool_state_update(
                 self.tool_call_id,
                 "A non-empty justification is required when skipping a property.",
+            )
+        missing = [
+            capability
+            for trigger, capability, evidence in _SKIP_GATE_CHECKS
+            if trigger.search(self.reason)
+            and not any(evidence.search(alt) for alt in self.alternatives_considered)
+        ]
+        if missing:
+            return tool_state_update(
+                self.tool_call_id,
+                "Skip REJECTED: the stated reason suggests the state is merely hard to *access*, "
+                "which is a capability gap CVL can bridge, not an expressiveness limit. Before "
+                "this skip can be recorded, `alternatives_considered` must address: "
+                + "; ".join(missing)
+                + ". Either attempt the applicable mechanism, or explain in "
+                "`alternatives_considered` why it does not apply to this property.",
             )
         skip = SkippedProperty(
             property_title=self.property_title,
