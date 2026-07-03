@@ -44,13 +44,20 @@ _FEEDBACK_NAME = "feedback_tool"
 _RESULT_NAME = "result"
 _PUT_CVL = "put_cvl"
 
-def _skip(property_title: str, reason: str, alternatives: list[str] | None = None) -> ToolCallDict:
-    # alternatives_considered is a required tool field; most tests use reasons that don't
-    # trigger the skip gate, so an empty list suffices unless a test exercises the gate.
+def _skip(
+    property_title: str,
+    reason: str,
+    alternatives: list[str] | None = None,
+    category: str = "other",
+) -> ToolCallDict:
+    # reason_category and alternatives_considered are required tool fields; the gate only
+    # fires for category "storage_access", so the "other" default plus an empty list
+    # suffices unless a test exercises the gate.
     return tool_call_raw(
         name=_RECORD_SKIP_NAME,
         property_title=property_title,
         reason=reason,
+        reason_category=category,
         alternatives_considered=alternatives if alternatives is not None else [],
     )
 
@@ -242,7 +249,7 @@ class TestMergeSkipsViaGraph:
 
 
 # =========================================================================
-# Skip gate: access-shaped reasons require alternatives_considered coverage
+# Skip gate: storage_access skips require non-empty alternatives_considered
 # =========================================================================
 
 class TestSkipGate:
@@ -252,16 +259,35 @@ class TestSkipGate:
             st["skipped"],
         )
 
-    async def test_keccak_reason_without_alternatives_rejected(self):
+    async def test_storage_access_without_alternatives_rejected(self):
         (msg, skipped) = await scenario(1).turn(
-            _skip("p0", "the balance lives in a keccak-derived storage slot with no way to read it")
+            _skip(
+                "p0",
+                "the balance lives in a keccak-derived storage slot with no way to read it",
+                category="storage_access",
+            )
         ).map(self.gate_mapper).run()
         assert skipped == []
         assert msg.startswith("Skip REJECTED:")
         assert "keccak storage-slot constant" in msg
         assert "Sload/Sstore storage hooks" in msg
+        assert "harness getter/helper" in msg
+        assert "ghost state mirroring" in msg
 
-    async def test_keccak_reason_with_alternatives_accepted(self):
+    async def test_storage_access_with_blank_alternatives_rejected(self):
+        # Whitespace-only entries must not satisfy the non-empty requirement.
+        (msg, skipped) = await scenario(1).turn(
+            _skip(
+                "p0",
+                "the accumulator is private with no getter",
+                alternatives=["   ", ""],
+                category="storage_access",
+            )
+        ).map(self.gate_mapper).run()
+        assert skipped == []
+        assert msg.startswith("Skip REJECTED:")
+
+    async def test_storage_access_with_alternatives_accepted(self):
         (msg, skipped) = await scenario(1).turn(
             _skip(
                 "p0",
@@ -270,71 +296,47 @@ class TestSkipGate:
                     "precomputed the keccak slot constant, but the slot value depends on a runtime salt",
                     "an Sstore hook on the slot cannot fire because writes go through delegatecall",
                 ],
+                category="storage_access",
             )
         ).map(self.gate_mapper).run()
         assert msg.startswith("Recorded skip")
         assert len(skipped) == 1 and skipped[0].property_title == "p0"
 
-    async def test_trigger_matching_is_case_insensitive(self):
-        (msg, skipped) = await scenario(1).turn(
-            _skip("p0", "state is in Unstructured Storage and CANNOT ACCESS it from CVL")
-        ).map(self.gate_mapper).run()
-        assert skipped == []
-        assert msg.startswith("Skip REJECTED:")
-
-    async def test_no_getter_reason_requires_harness_capability(self):
-        (msg, skipped) = await scenario(1).turn(
-            _skip("p0", "there is no public getter for the internal accumulator")
-        ).map(self.gate_mapper).run()
-        assert skipped == []
-        assert "harness getter/helper" in msg
-
-    async def test_cannot_observe_reason_requires_ghost_capability(self):
+    async def test_hash_collision_passes_with_empty_alternatives(self):
+        # Collision/inversion/preimage reasoning is the one keccak-related skip that stays
+        # legitimate; it is not access-shaped, so no alternatives are structurally required
+        # (the judge still audits the classification's honesty).
         (msg, skipped) = await scenario(1).turn(
             _skip(
                 "p0",
-                "we cannot observe the intermediate value",
-                alternatives=[
-                    "Sload/Sstore hooks don't fire on memory values",
-                    "a harness getter cannot expose transient memory",
-                ],
+                "requires reasoning about keccak collisions to forge a valid signature",
+                category="hash_collision",
             )
         ).map(self.gate_mapper).run()
-        assert skipped == []
-        assert "ghost state mirroring" in msg
+        assert msg.startswith("Recorded skip")
+        assert len(skipped) == 1
 
-    async def test_passive_access_reason_triggers_gate(self):
-        # Passive phrasing ("cannot be accessed") must fire the same access-shaped
-        # triggers as the active form ("cannot access").
+    @pytest.mark.parametrize("category", ["prover_limitation", "environment", "other"])
+    async def test_non_access_categories_pass_with_empty_alternatives(self, category: str):
         (msg, skipped) = await scenario(1).turn(
-            _skip("p0", "the accumulated fee cannot be accessed from outside the contract")
-        ).map(self.gate_mapper).run()
-        assert skipped == []
-        assert msg.startswith("Skip REJECTED:")
-        assert "ghost state mirroring" in msg
-
-    async def test_passive_observe_reason_triggers_gate(self):
-        (msg, skipped) = await scenario(1).turn(
-            _skip("p0", "the pending reward cannot be observed by any external caller")
-        ).map(self.gate_mapper).run()
-        assert skipped == []
-        assert "harness getter/helper" in msg
-
-    async def test_unrelated_reason_passes_with_empty_alternatives(self):
-        (msg, skipped) = await scenario(1).turn(
-            _skip("p0", "requires quantifying over arbitrary-length arrays")
+            _skip("p0", "requires quantifying over arbitrary-length arrays", category=category)
         ).map(self.gate_mapper).run()
         assert msg.startswith("Recorded skip")
         assert len(skipped) == 1
 
-    async def test_hash_collision_reason_passes_gate(self):
-        # Collision/inversion/preimage reasoning is the one keccak-related skip that stays
-        # legitimate: a bare "keccak" away from slot/storage must not fire the access gate.
+    async def test_category_is_recorded_on_the_skip(self):
+        # The judge audits reason_category, so the recorded SkippedProperty must carry it
+        # (not just gate on it and drop it).
         (msg, skipped) = await scenario(1).turn(
-            _skip("p0", "requires reasoning about keccak collisions to forge a valid signature")
+            _skip(
+                "p0",
+                "the balance lives in a keccak-derived storage slot",
+                alternatives=["the slot constant depends on a runtime salt"],
+                category="storage_access",
+            )
         ).map(self.gate_mapper).run()
         assert msg.startswith("Recorded skip")
-        assert len(skipped) == 1
+        assert skipped[0].reason_category == "storage_access"
 
     async def test_alternatives_are_recorded_on_the_skip(self):
         # The judge audits alternatives_considered, so the recorded SkippedProperty must
@@ -344,16 +346,22 @@ class TestSkipGate:
             "an Sstore hook cannot fire because writes go through delegatecall",
         ]
         (msg, skipped) = await scenario(1).turn(
-            _skip("p0", "the balance lives in a keccak-derived storage slot", alternatives=alts)
+            _skip(
+                "p0",
+                "the balance lives in a keccak-derived storage slot",
+                alternatives=alts,
+                category="storage_access",
+            )
         ).map(self.gate_mapper).run()
         assert msg.startswith("Recorded skip")
         assert skipped[0].alternatives_considered == alts
 
-    async def test_skipped_property_backcompat_without_alternatives(self):
-        # Cached SkippedProperty instances predate alternatives_considered; deserialization
-        # must default it rather than fail validation.
+    async def test_skipped_property_backcompat_without_new_fields(self):
+        # Cached SkippedProperty instances predate alternatives_considered and
+        # reason_category; deserialization must default them rather than fail validation.
         s = SkippedProperty.model_validate({"property_title": "p0", "reason": "too hard"})
         assert s.alternatives_considered == []
+        assert s.reason_category == "other"
 
 
 # =========================================================================
@@ -382,6 +390,31 @@ class TestDigestCoversAlternatives:
         # must equal an explicitly-empty one so cached validation stamps stay fresh.
         legacy = SkippedProperty.model_validate({"property_title": "p0", "reason": "r"})
         explicit = SkippedProperty(property_title="p0", reason="r", alternatives_considered=[])
+        assert _compute_digest("spec", [legacy]) == _compute_digest("spec", [explicit])
+
+
+# =========================================================================
+# Digest coverage: reason_category is part of the skip's audited identity
+# =========================================================================
+
+class TestDigestCoversCategory:
+    def test_digest_changes_with_category(self):
+        a = SkippedProperty(property_title="p0", reason="r", reason_category="storage_access",
+                            alternatives_considered=["tried ghost mirroring"])
+        b = SkippedProperty(property_title="p0", reason="r", reason_category="hash_collision",
+                            alternatives_considered=["tried ghost mirroring"])
+        assert _compute_digest("spec", [a]) != _compute_digest("spec", [b])
+
+    def test_non_default_category_changes_digest(self):
+        default = SkippedProperty(property_title="p0", reason="r")
+        classified = SkippedProperty(property_title="p0", reason="r", reason_category="environment")
+        assert _compute_digest("spec", [default]) != _compute_digest("spec", [classified])
+
+    def test_default_category_preserves_legacy_digest(self):
+        # Cached pre-field skips deserialize with the default "other"; their digest must
+        # equal an explicitly-"other" one so cached validation stamps stay fresh.
+        legacy = SkippedProperty.model_validate({"property_title": "p0", "reason": "r"})
+        explicit = SkippedProperty(property_title="p0", reason="r", reason_category="other")
         assert _compute_digest("spec", [legacy]) == _compute_digest("spec", [explicit])
 
 
@@ -465,12 +498,23 @@ class TestValidationLogic:
             _skip("p0", reason, alternatives=[
                 "the keccak slot constant depends on a runtime salt",
                 "an Sstore hook cannot fire through delegatecall",
-            ]),
+            ], category="storage_access"),
             _feedback(),
             _skip("p0", reason, alternatives=[
                 "the slot constant is not computable at compile time here",
                 "storage hooks do not fire for delegatecall writes",
-            ]),
+            ], category="storage_access"),
+            _result("I'm done")
+        ).map_run(is_result_rejection.check_reason(unsat_feedback_message))
+
+    async def test_changed_category_no_result(self):
+        # Re-classifying a skip after validation must stale the stamp just like
+        # editing the reason does — the category is judge-audited.
+        reason = "requires reasoning about the hash function itself"
+        assert await scenario(1, curr_spec="whatever").turns(
+            _skip("p0", reason, category="hash_collision"),
+            _feedback(),
+            _skip("p0", reason, category="prover_limitation"),
             _result("I'm done")
         ).map_run(is_result_rejection.check_reason(unsat_feedback_message))
 

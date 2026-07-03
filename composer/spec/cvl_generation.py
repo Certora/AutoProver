@@ -7,7 +7,6 @@ Parameterized by:
 """
 
 import hashlib
-import re
 from dataclasses import dataclass
 from typing import Annotated, Callable, Literal, NotRequired, override, Awaitable, Any, Protocol
 from typing_extensions import TypedDict
@@ -47,6 +46,21 @@ CVL_JUDGE_KEY = CacheKey[CVLGeneration, CVLJudge]("judge")
 # Feedback types
 # ---------------------------------------------------------------------------
 
+# The author's self-classification of a skip reason. ``storage_access`` names the one
+# category that is a capability gap CVL can bridge (keccak slot constants, storage hooks,
+# harness getters, ghost mirroring) rather than an expressiveness limit, so it is the only
+# category the record_skip gate treats specially. The judge polices classification honesty
+# (Criteria 7 in property_judge_prompt.j2 audits access-shaped reasons categorized
+# otherwise as storage_access), so the enum is a declaration, not a trusted fact.
+ReasonCategory = Literal[
+    "storage_access",     # the state exists on-chain but is hard to *read* from CVL
+    "hash_collision",     # requires reasoning about collisions/preimages/inversion of a hash
+    "prover_limitation",  # a documented prover limit (e.g. quantifying over unbounded arrays)
+    "environment",        # depends on off-chain/environment behavior CVL cannot model
+    "other",
+]
+
+
 class SkippedProperty(BaseModel):
     """A property the agent explicitly decided not to formalize."""
     property_title: str = Field(description="The unique snake_case title of the property from the batch listing")
@@ -55,6 +69,11 @@ class SkippedProperty(BaseModel):
     alternatives_considered: list[str] = Field(
         default_factory=list,
         description="The alternative mechanisms the author considered before skipping, and why each does not work",
+    )
+    # Defaulted for back-compat with cached instances that predate the field.
+    reason_category: ReasonCategory = Field(
+        default="other",
+        description="The author's self-classification of the skip reason",
     )
 
 
@@ -158,6 +177,12 @@ def _compute_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
     digester.update(curr_spec.encode())
     for s in skipped:
         digester.update(f"{s.property_title}:{s.reason}".encode())
+        # The judge audits reason_category as part of the skip's justification
+        # (feedback.py surfaces it), so changing it must stale the validation stamp.
+        # The default "other" contributes nothing, so digests of cached pre-field
+        # skips (which deserialize with the default) keep their legacy value.
+        if s.reason_category != "other":
+            digester.update(f"|cat:{s.reason_category}".encode())
         # The judge audits alternatives_considered as part of the skip's justification
         # (feedback.py surfaces them), so changing them must stale the validation stamp.
         # An empty list contributes nothing, so digests of cached pre-field skips (which
@@ -317,40 +342,14 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
             )
         return tool_state_update(self.tool_call_id, msg)
 
-# Skip gate: reasons of the shape "the state is hard to *access*" name a capability gap that
-# CVL can bridge, not an expressiveness limit. Each entry pairs a trigger pattern (matched
-# against the skip reason) with the capability that must be addressed in
-# ``alternatives_considered`` and the evidence pattern used to detect that the capability was
-# actually discussed. A skip whose reason fires a trigger is rejected until every triggered
-# capability is addressed.
-#
-# A bare "keccak" also appears in the one hash-related skip that stays legitimate — reasoning
-# about collisions/inversion/preimages of the hash function itself — so the keccak trigger
-# requires the word near "slot"/"storage", the access-shaped usage this gate targets.
-_KECCAK_SLOT = r"keccak\S*.{0,40}(?:slot|storage)|(?:slot|storage).{0,40}keccak"
-_SKIP_GATE_CHECKS: list[tuple[re.Pattern[str], str, re.Pattern[str]]] = [
-    (
-        re.compile(rf"{_KECCAK_SLOT}|storage slot|unstructured", re.IGNORECASE),
-        "a precomputed keccak storage-slot constant (keccak256 is a built-in CVL function)",
-        re.compile(r"keccak|slot", re.IGNORECASE),
-    ),
-    (
-        re.compile(rf"{_KECCAK_SLOT}|storage slot|unstructured|cannot (be )?(access|observ)", re.IGNORECASE),
-        "Sload/Sstore storage hooks on the slot/path in question",
-        re.compile(r"sload|sstore|hook", re.IGNORECASE),
-    ),
-    (
-        re.compile(r"no (public )?getter|cannot (be )?(access|observ)|unstructured", re.IGNORECASE),
-        "a harness getter/helper or direct storage access (currentContract.<field>)",
-        re.compile(r"harness|getter|helper|currentContract|direct storage", re.IGNORECASE),
-    ),
-    (
-        re.compile(r"cannot (be )?(access|observ)", re.IGNORECASE),
-        "ghost state mirroring the value via hooks or summaries",
-        re.compile(r"ghost", re.IGNORECASE),
-    ),
-]
-
+# Skip gate: the author self-classifies each skip via ``reason_category``. A
+# ``storage_access`` skip ("the state is hard to *read*") names a capability gap that CVL
+# can bridge — precomputed keccak slot constants, Sload/Sstore hooks, harness getters,
+# ghost mirroring — not an expressiveness limit, so it cannot be recorded until
+# ``alternatives_considered`` is non-empty. The gate is purely structural (enum value +
+# non-empty field check); the judge audits the *substance* of the alternatives and
+# polices classification honesty (an access-shaped reason categorized otherwise is
+# audited as storage_access — see Criteria 7 in property_judge_prompt.j2).
 
 @tool_display(
     lambda p: f"Skipping property `{p.get('property_title', '?')}`",
@@ -359,8 +358,8 @@ _SKIP_GATE_CHECKS: list[tuple[re.Pattern[str], str, re.Pattern[str]]] = [
 class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, WithImplementation[Command]):
     """
     Declare that you are skipping a property from the batch.
-    You must provide the property's title, a justification, and the alternative
-    mechanisms you considered before skipping.
+    You must provide the property's title, a justification, a category classifying
+    the justification, and the alternative mechanisms you considered before skipping.
     The feedback judge will evaluate whether your justification is valid.
     Only use this after genuinely attempting to formalize the property.
     """
@@ -370,10 +369,24 @@ class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, W
     reason: str = Field(
         description="Justification for why this property cannot be formalized"
     )
+    reason_category: ReasonCategory = Field(
+        description=(
+            "Classify the skip reason: `storage_access` — the state exists on-chain but is hard "
+            "to READ from CVL (private/internal fields, unstructured or keccak-addressed storage, "
+            "no public getter); `hash_collision` — the property requires reasoning about "
+            "collisions, preimages, or inversion of a hash function itself; `prover_limitation` — "
+            "a documented prover limit (e.g. quantifying over arbitrary-length arrays); "
+            "`environment` — depends on off-chain/environment behavior that cannot be modeled; "
+            "`other` — anything else. The feedback judge audits this classification: an "
+            "access-shaped reason categorized as anything but `storage_access` will be re-audited "
+            "as `storage_access`."
+        )
+    )
     alternatives_considered: list[str] = Field(
         description=(
             "The alternative CVL/verification mechanisms you considered before skipping, and why "
-            "each does not work for this property. Where applicable you MUST address: precomputed "
+            "each does not work for this property. Required (non-empty) when `reason_category` is "
+            "`storage_access`, where you MUST address the applicable mechanisms among: precomputed "
             "keccak storage-slot constants (keccak256 is a built-in CVL function), Sload/Sstore "
             "storage hooks, harness getters/helpers, and ghost mirroring of contract state."
         )
@@ -392,25 +405,24 @@ class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, W
                 self.tool_call_id,
                 "A non-empty justification is required when skipping a property.",
             )
-        missing = [
-            capability
-            for trigger, capability, evidence in _SKIP_GATE_CHECKS
-            if trigger.search(self.reason)
-            and not any(evidence.search(alt) for alt in self.alternatives_considered)
-        ]
-        if missing:
+        if self.reason_category == "storage_access" and not any(
+            alt.strip() for alt in self.alternatives_considered
+        ):
             return tool_state_update(
                 self.tool_call_id,
-                "Skip REJECTED: the stated reason suggests the state is merely hard to *access*, "
-                "which is a capability gap CVL can bridge, not an expressiveness limit. Before "
-                "this skip can be recorded, `alternatives_considered` must address: "
-                + "; ".join(missing)
-                + ". Either attempt the applicable mechanism, or explain in "
-                "`alternatives_considered` why it does not apply to this property.",
+                "Skip REJECTED: a `storage_access` skip names a capability gap CVL can bridge, "
+                "not an expressiveness limit. Before this skip can be recorded, "
+                "`alternatives_considered` must address the applicable mechanisms among: a "
+                "precomputed keccak storage-slot constant (keccak256 is a built-in CVL function); "
+                "Sload/Sstore storage hooks on the slot/path in question; a harness getter/helper "
+                "or direct storage access (currentContract.<field>); ghost state mirroring the "
+                "value via hooks or summaries. Either attempt the applicable mechanism, or explain "
+                "in `alternatives_considered` why it does not apply to this property.",
             )
         skip = SkippedProperty(
             property_title=self.property_title,
             reason=self.reason,
+            reason_category=self.reason_category,
             alternatives_considered=self.alternatives_considered,
         )
         return tool_state_update(

@@ -175,6 +175,11 @@ Verify that the specification covers all {{ properties | length }} listed proper
       and EIP-1967 slots are compile-time constants) combined with an `Sload`/`Sstore` hook on that slot;
   (b) a harness getter or direct storage access (e.g., `currentContract.<field>`);
   (c) ghost state mirroring the value via storage hooks or function summaries.
+
+  The author self-classifies each skip with a reason category (shown alongside the skip): if the
+  reason is access-shaped — state described as private, unstructured, keccak-addressed, or lacking
+  a getter — but categorized as anything other than `storage_access`, audit it as `storage_access`
+  anyway, running the full mechanism checklist above; the category is the author's claim, not a fact.
 {# harness_augmentation mirrors the identically-named variable in property_judge_system_prompt.j2 and
    must be bound consistently with it: only pipelines that can (re)generate main-contract augmentation
    harnesses may instruct the judge to reject harness-shaped skips; everywhere else (default(false))

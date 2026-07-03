@@ -129,7 +129,12 @@ def property_feedback_judge(
         if skipped:
             input_parts.append("The following properties were explicitly skipped by the author:")
             for s in skipped:
-                input_parts.append(f"  Property {s.property_title}: {s.reason}")
+                # The author's self-classification is part of the skip's justification:
+                # Criteria 7 tells the judge to audit access-shaped reasons categorized
+                # as anything but storage_access as storage_access anyway.
+                input_parts.append(
+                    f"  Property {s.property_title} (reason category: {s.reason_category}): {s.reason}"
+                )
                 # The alternatives the author claims to have ruled out are part of the skip's
                 # justification: surface them so the judge can audit their substance.
                 for alt in s.alternatives_considered:
