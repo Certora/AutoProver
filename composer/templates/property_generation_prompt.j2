@@ -119,7 +119,8 @@ The `result` tool *also* requires a `property_rules` mapping: for every property
 its unique snake_case title from the batch listing above), list the name(s) of the rule(s)/invariant(s) in your
 spec that verify it. Every non-skipped property must appear in this mapping with at least one rule; skipped
 properties must NOT appear. The result tool will be rejected if this mapping is incomplete or references a
-skipped or unknown property title.
+skipped or unknown property title. Supporting invariants and companion witness rules must also be listed under
+the property they support: rules not referenced by any property are silently dropped from the final report.
 
 To clarify: for your result to be accepted, all verification results from the prover must either be
 VERIFIED *or* that rule must be explicitly marked as "expected to fail" using the `expect_rule_failure` tool.

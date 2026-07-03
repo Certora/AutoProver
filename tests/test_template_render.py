@@ -16,6 +16,13 @@ def test_cvl_guidelines_render():
     # Guideline 24: requireInvariant discipline over bare state requires.
     assert "requireInvariant" in out
     assert "spec smell" in out
+    # Guideline 24 carve-out: solver-capacity bounds need no invariant attempt.
+    assert "keep the solver tractable" in out
+    # Guideline 24 defers preserved blocks to the stricter (judge Criteria 4) standard.
+    assert "stricter standard" in out
+    # Guideline 20 carve-out: persistent counter ghosts are legitimate (judge-visible
+    # counterpart of the ghost-counter advice in cvl_additions.j2).
+    assert "never stored in contract state" in out
     # Guideline 23 carve-out: hooks/ghosts for information never stored in contract state.
     assert "not stored in" in out
     assert out.strip().endswith("</cvl_guidelines>")
@@ -26,8 +33,9 @@ def test_cvl_additions_render():
     # Storage snapshot / additivity idiom.
     assert "lastStorage" in out
     assert "at init" in out
-    # satisfy-witness companion rules.
+    # satisfy-witness companion rules, mapped under their parent property.
     assert "satisfy" in out
+    assert "property_rules" in out
     # Ghost counters via expression summaries.
     assert "countDeposit() expect void" in out
     assert out.strip().endswith("</cvl_advice>")

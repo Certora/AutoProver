@@ -35,7 +35,8 @@
     19. CVL automatically promotes operands of comparison/arithmetic operations to `mathint`. Explicit `to_mathint` casts are
         rarely need.
     20. `persistent` ghosts should be used sparingly, and should *never* be used on ghosts which are intended to model/mirror
-        contract state.
+        contract state. However, ghosts tracking information never stored in contract state (e.g., call counters, cumulative transfer
+        amounts) are a legitimate use of `persistent`, and of expression summaries on calls to external dependencies.
     21. When referring to meaningful numerical constants in a specification (e.g., max fee percentage, asset expiry period, etc.) prefer using the `definition` feature of CVL
         to provide meaningful names to the constants.
     22. Instead of `forall $type i` in a invariant, invariant parameters should be used instead. That is, instead of `invariant foo() forall uint i.logical_predicate(i)` simply write
@@ -45,5 +46,8 @@
         contract state at all (e.g., counting how many times a function is called, or summing the amounts transferred across a sequence of calls).
     24. A bare `require` that constrains contract state inside a rule or `preserved` block is a spec smell: the assumption may not actually hold in reachable states, silently
         weakening the proof. The default discipline is to state the assumption as an `invariant`, prove it, and assume it via `requireInvariant`. Bare requires over contract
-        state are acceptable only when accompanied by a comment referencing a justification or a documented trust assumption.
+        state are acceptable only when accompanied by a comment referencing a justification or a documented trust assumption. Exception: capacity/overflow-avoidance bounds on
+        supplies, balances, or timestamps (e.g. `require totalSupply() <= 2^128`) exist to keep the solver tractable, not to model contract behavior — they are a recognized
+        documented-trust-assumption class; a comment naming the bound's purpose suffices, and no invariant attempt is expected because such bounds are typically not preserved
+        by the contract. In `preserved` blocks the stricter standard applies — `requireInvariant` or verifiable outside evidence; a comment alone is insufficient.
 </cvl_guidelines>

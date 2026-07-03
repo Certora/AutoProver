@@ -34,7 +34,8 @@ from the *same* snapshot, and compare the resulting end states (e.g., final bala
 <advice>
 For implication-shaped assertions (`assert A => B;`), consider a companion witness rule containing `satisfy A;`. A `satisfy`
 statement checks that at least one execution reaches it with the condition true — a single witness execution suffices. This
-guards against vacuously-true implications whose antecedent `A` can never actually hold.
+guards against vacuously-true implications whose antecedent `A` can never actually hold. List the witness rule in the
+`property_rules` mapping under the same property as the implication rule it guards, so it is retained in the final report.
 </advice>
 <advice>
 Information that is never stored in contract state — such as how many times a function was called, or the cumulative amount
