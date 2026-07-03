@@ -140,6 +140,15 @@ Consider if any of the summaries added in the spec *trivialize* the verification
 if the specification summarizes away an invocation of a contract function which moves balances as "NONDET", then this effectively makes any balance
 transfers a NO-OP, which in turn trivializes any property that reasons about balances.
 
+A `NONDET` summary on a *payable* callee deserves explicit scrutiny: it drops the callee's ability to accept `msg.value`, which typically makes
+every caller revert on all paths, so any rule instantiated with those callers holds *vacuously*.
+
+A `filtered` block that excludes a method whose sanity failure stems from such a repairable summary is the same trivialization in disguise:
+the setup defect is hidden rather than fixed, and the property silently loses coverage of that method. Reject such filters unless their
+justification documents that the root-cause repairs were attempted and why each failed (fixing/replacing the offending summary while preserving
+payable semantics, providing a mock for the callee, or enabling `optimistic_fallback`). An undocumented filter of a vacuously-passing method
+must be rejected.
+
 ### Criteria 6: Manifest Errors
 
 {% if sort != "greenfield" %}
