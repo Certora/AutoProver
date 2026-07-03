@@ -16,6 +16,7 @@ from composer.spec.cvl_generation import (
     check_completion, validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
     GeneratedCVL, PropertyRuleMapping
 )
+from composer.spec.source.live_explorer import ExplorerInput
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.types import PropertyFormulation
 from composer.pipeline.core import GaveUp
@@ -38,7 +39,7 @@ from graphcore.graph import FlowInput
 class SourceAuthorExtra(TypedDict):
     failed: bool | None
 
-class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra):
+class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, ExplorerInput):
     pass
 
 class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):

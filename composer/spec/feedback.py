@@ -1,11 +1,11 @@
 
-from typing import Callable, NotRequired, Sequence
+from typing import Callable, NotRequired, Sequence, Iterable, Awaitable
 from typing_extensions import TypedDict
 from composer.spec.service_host import Sort, ServiceHost
 
 from pydantic import BaseModel, Field
 
-
+from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
 
 from graphcore.graph import FlowInput
@@ -53,35 +53,54 @@ class JudgeSystemParams(TypedDict):
 # ``sort == "existing"``, the only mode that wires those tools).
 FeedbackSystemTemplate = TypedTemplate[JudgeSystemParams]("property_judge_system_prompt.j2")
 
-def property_feedback_judge(
+
+class JudgeExtra(RoughDraftState):
+    curr_spec: str
+
+
+class FeedbackBaseState(MessagesState, JudgeExtra):
+    result: NotRequired[PropertyFeedback]
+
+class FeedbackBaseInput(FlowInput, JudgeExtra):
+    pass
+
+type ExtraInputPrompt = list[str | dict] | Callable[[], list[str | dict]] | None
+
+type ContextualFeedbackToolImpl[Ctx] = Callable[
+    [Ctx, str, list[SkippedProperty], list[Rebuttal], str],
+    Awaitable[PropertyFeedback]
+]
+
+
+def property_feedback_judge_generic[
+    S: FeedbackBaseState,
+    I: FeedbackBaseInput,
+    Ctx
+](
+    st: type[S],
+    i: type[I],
     ctx: WorkflowContext[CVLJudge],
     env: ServiceHost,
+    feedback_tools: Iterable[BaseTool],
     prompt: InjectedTemplate[Properties] | TemplateInstantiation,
     props: list[PropertyFormulation],
-    *,
-    extra_inputs: list[str | dict] | Callable[[], list[str | dict]] | None = None,
-    system_prompt: TemplateInstantiation | None = None,
-) -> FeedbackToolContext:
 
+    extra_inputs: ExtraInputPrompt,
+    system_prompt: TemplateInstantiation | None,
+
+    input_lift: Callable[[FeedbackBaseInput, Ctx], I],
+) -> ContextualFeedbackToolImpl[Ctx]:
+    
     if system_prompt is None:
         system_prompt = FeedbackSystemTemplate.bind({"sort": env.sort})
 
     builder = env.builder_heavy().with_tools(
-        env.all_tools
+        feedback_tools
     )
 
-    class JudgeExtra(RoughDraftState):
-        curr_spec: str
+    rough_draft_tools = get_rough_draft_tools(st)
 
-    class ST(MessagesState, JudgeExtra):
-        result: NotRequired[PropertyFeedback]
-
-    class SpecJudgeInput(FlowInput, JudgeExtra):
-        pass
-
-    rough_draft_tools = get_rough_draft_tools(ST)
-
-    def did_rough_draft_read(s: ST, _) -> str | None:
+    def did_rough_draft_read(s: S, _) -> str | None:
         if not s["did_read"]:
             return "Completion REJECTED: never read rough draft for review"
         return None
@@ -91,16 +110,17 @@ def property_feedback_judge(
     final_prompt = prompt if isinstance(prompt, TemplateInstantiation) else prompt.inject({"properties": props})
 
     workflow = bind_standard(
-        builder, ST, validator=did_rough_draft_read
+        builder, st, validator=did_rough_draft_read
     ).with_input(
-        SpecJudgeInput
+        i
     ).inject(
         lambda b: final_prompt.render_to(b.with_initial_prompt_template)
     ).inject(
         lambda g: system_prompt.render_to(g.with_sys_prompt_template)
-    ).with_tools([*rough_draft_tools, mem, get_cvl(ST), ]).compile_async()
+    ).with_tools([*rough_draft_tools, mem, get_cvl(st), ]).compile_async()
 
     async def the_tool(
+        exec_ctx: Ctx,
         cvl: str,
         skipped: Sequence[SkippedProperty],
         rebuttals: Sequence[Rebuttal],
@@ -136,7 +156,7 @@ def property_feedback_judge(
                 )
         res = await run_to_completion(
             workflow,
-            SpecJudgeInput(input=input_parts, curr_spec=cvl, memory=None, did_read=False),
+            input_lift(FeedbackBaseInput(input=input_parts, curr_spec=cvl, memory=None, did_read=False), exec_ctx),
             thread_id=uniq_thread_id("feedback"),
             recursion_limit=ctx.recursion_limit,
             description="Property feedback judge",
@@ -144,6 +164,32 @@ def property_feedback_judge(
         )
         assert "result" in res
         return res["result"]
+    return the_tool
 
-    return FeedbackToolContext(feedback_thunk=the_tool, titles=[p.title for p in props])
 
+def property_feedback_judge(
+    ctx: WorkflowContext[CVLJudge],
+    env: ServiceHost,
+    prompt: InjectedTemplate[Properties] | TemplateInstantiation,
+    props: list[PropertyFormulation],
+    *,
+    extra_inputs: list[str | dict] | Callable[[], list[str | dict]] | None = None,
+    system_prompt: TemplateInstantiation | None = None,
+) -> FeedbackToolContext:
+    to_wrap = property_feedback_judge_generic(
+        st=FeedbackBaseState,
+        i=FeedbackBaseInput,
+        ctx=ctx,
+        env=env,
+        extra_inputs=extra_inputs,
+        feedback_tools=env.all_tools,
+        prompt=prompt,
+        props=props,
+        system_prompt=system_prompt,
+        input_lift=lambda i, _: i
+    )
+
+    return FeedbackToolContext(
+        feedback_thunk=lambda spec, skip, rebuttal, tid: to_wrap(None, spec, skip, rebuttal, tid),
+        titles=[p.title for p in props]
+    )
