@@ -87,6 +87,19 @@ class FoundryConfig(BuildSystemConfig):
         # Apply common settings (solc, optimizer, via_ir) using base class helper
         result = self._apply_common_solc_settings(convert_solc_to_certora_format)
 
+        # Ignore foundry.toml's own optimizer setting by default, even when the project
+        # enables it: compilation_workarounds.py's escalation chain (yul_exception_add_optimizer,
+        # stack_too_deep_via_ir) already re-adds solc_optimize if compilation genuinely needs
+        # it, so we'd rather start unoptimized and let a real failure bring it back than
+        # inherit an optimizer setting that has nothing to do with Certora's own compilation.
+        if result.pop("solc_optimize", None) is not None:
+            logger.log(
+                "Ignoring foundry.toml's optimizer setting by default; compilation workarounds "
+                "will re-enable it if compilation requires it",
+                "INFO",
+                "FoundryConfig",
+            )
+
         # Apply packages (Foundry-specific)
         if include_packages and self.packages:
             result["packages"] = self._relativize_packages(self.packages)
