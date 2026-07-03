@@ -1142,6 +1142,20 @@ If the function cannot be summarized (e.g., struct parameters), return an Invali
 
         return result.summary_line
 
+    def _method_has_reference_return(self, method: Dict[str, Any]) -> bool:
+        """Check whether any of the method's return types is a CVL reference type.
+
+        NONDET summaries are unsound for reference-type returns (structs, arrays, bytes,
+        string) — the prover has no way to conjure a well-formed memory/calldata value,
+        so certoraRun rejects them at typecheck time ("using a NONDET summary for
+        reference types causes unsoundness").
+        """
+        for ret_type in method.get("returns", []):
+            category = self.type_analyzer._resolve_type_from_string(ret_type).category
+            if category in (TypeCategory.STRUCT, TypeCategory.ARRAY, TypeCategory.BYTES, TypeCategory.STRING):
+                return True
+        return False
+
     def _generate_function_declaration(self, method: Dict[str, Any], is_wildcard: bool) -> str:
         """Generate a CVL function declaration from structured method data.
 
@@ -1675,6 +1689,16 @@ Method signature: {method_signature}
                     )
                     continue
 
+                # Skip reference-type (struct/array/bytes/string) returns for NONDET recipes:
+                # NONDET is unsound for reference types and certoraRun rejects it at typecheck
+                # time, so there's no point spending an LLM call on these candidates.
+                if recipe.summary_type == "NONDET" and self._method_has_reference_return(method):
+                    self.log(
+                        f"Skipping {method['contractName']}.{method['name']} for NONDET "
+                        "(return type is a reference type - unsound for NONDET)"
+                    )
+                    continue
+
                 # Skip if this method was already matched by a previous recipe
                 if method_key not in methods_to_skip:
                     filtered_methods.append(method)
@@ -2059,18 +2083,24 @@ Method signature: {method_signature}
         content.append("     */")
 
         if summary_type.upper() == "NONDET":
-            if method["stateMutability"] in ["view", "pure"]:
+            if method["stateMutability"] not in ["view", "pure"]:
+                self.log(
+                    f"Warning: Cannot use NONDET for non-view method {contract}.{name}",
+                    "WARNING",
+                )
+            elif self._method_has_reference_return(method):
+                self.log(
+                    f"Warning: Cannot use NONDET for {contract}.{name}: return type is a "
+                    "reference type (struct/array/bytes/string) - unsound for NONDET",
+                    "WARNING",
+                )
+            else:
                 if has_ellipsis and (nondet_summary := self._generate_nondet_summary(
                     method, udt_context
                 )) is not None:
                     content.append(f"    {nondet_summary}")
                 else:
                     content.append(f"    {func_declaration} => NONDET;")
-            else:
-                self.log(
-                    f"Warning: Cannot use NONDET for non-view method {contract}.{name}",
-                    "WARNING",
-                )
         elif summary_type.upper() == "HAVOC_ALL_DELETE":
             if method["visibility"] == "external":
                 content.append(f"    {func_declaration} => HAVOC_ALL DELETE;")
