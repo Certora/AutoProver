@@ -132,6 +132,25 @@ class MainHarnessPlan(BaseModel):
                 )
         return lines
 
+def empty_main_harness_plan_error(plan: MainHarnessPlan | None) -> str | None:
+    """The classifier must deliver ``null`` rather than an all-empty plan.
+    Module-level (not inlined in the agent's result validator) so the rejection
+    is unit-testable without running the agent."""
+    if plan is not None and \
+            not plan.unstructured_slots and \
+            not plan.decompositions:
+        return "main_contract_harness was proposed but contains no getters and no decompositions; deliver null instead"
+    return None
+
+def main_harness_path_error(path: str) -> str | None:
+    """The delivered harness must live under ``certora/harnesses/``. The VFS
+    write confinement only blocks *writes* outside that directory; without this
+    check the agent could deliver a pre-existing project file (e.g. a protocol
+    source) as the "generated" harness. Module-level for unit-testability."""
+    if not path.startswith("certora/harnesses/"):
+        return f"Delivered harness at {path}, but the harness must be a new file under `certora/harnesses/`"
+    return None
+
 class MainHarnessView(BaseModel):
     """Prompt-facing view of the main-contract augmentation harness, rendered by
     `harnessed_application_context.j2` so downstream agents see the harness API."""
@@ -271,10 +290,8 @@ async def classifier_agent(
         for c in res.transitive_closure:
             if c.solidity_identifier not in contract_lkp:
                 return f"Contract {c.solidity_identifier} in the interaction closure doesn't appear in the application description"
-        if res.main_contract_harness is not None and \
-                not res.main_contract_harness.unstructured_slots and \
-                not res.main_contract_harness.decompositions:
-            return "main_contract_harness was proposed but contains no getters and no decompositions; deliver null instead"
+        if (plan_error := empty_main_harness_plan_error(res.main_contract_harness)) is not None:
+            return plan_error
         return None
 
     d = bind_standard(
@@ -550,6 +567,8 @@ async def generate_main_harness(
     ) -> str | None:
         if res.harness_name != expected_name:
             return f"Harness contract must be named {expected_name}, got {res.harness_name}"
+        if (path_error := main_harness_path_error(res.path)) is not None:
+            return path_error
         if mat.get(s, res.path) is None:
             return f"Delivered harness {res.harness_name} at {res.path}, but it doesn't exist on the VFS"
         return None

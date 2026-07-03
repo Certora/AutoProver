@@ -19,6 +19,8 @@ from composer.spec.source.harness import (
     MainHarnessView,
     SystemDescriptionHarnessed,
     UnstructuredSlotSpec,
+    empty_main_harness_plan_error,
+    main_harness_path_error,
 )
 from composer.spec.source.report.schema import GaveUpComponent
 from composer.spec.system_model import HarnessedApplication, SourceApplication
@@ -142,10 +144,23 @@ def test_main_harness_api_and_view():
 
 
 def test_classifier_rejects_empty_harness_plan():
-    # An all-empty plan should be delivered as null; mirror the validator's check.
-    plan = MainHarnessPlan(unstructured_slots=[], decompositions=[])
-    assert not plan.unstructured_slots and not plan.decompositions
-    assert plan.api_lines() == []
+    # An all-empty plan should be delivered as null; this is the exact check the
+    # classifier's result validator runs.
+    err = empty_main_harness_plan_error(MainHarnessPlan(unstructured_slots=[], decompositions=[]))
+    assert err is not None
+    assert "deliver null" in err
+    # A null plan and a non-empty plan both pass.
+    assert empty_main_harness_plan_error(None) is None
+    assert empty_main_harness_plan_error(_plan()) is None
+
+
+def test_main_harness_delivery_confined_to_harness_dir():
+    # The generation validator must reject deliveries outside certora/harnesses/
+    # (write confinement alone doesn't stop delivering a pre-existing project file).
+    assert main_harness_path_error("certora/harnesses/RiverHarness.sol") is None
+    err = main_harness_path_error("src/River.sol")
+    assert err is not None
+    assert "certora/harnesses" in err
 
 
 # ---------------------------------------------------------------------------
