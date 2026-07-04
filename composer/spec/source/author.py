@@ -20,6 +20,7 @@ from composer.spec.cvl_generation import (
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.prop import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
+from composer.prover.core import DEFAULT_GLOBAL_TIMEOUT
 from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
 from langgraph.graph import MessagesState
 from langgraph.runtime import get_runtime
@@ -312,15 +313,35 @@ class RemoveLink(BaseModel):
     source_contract_name : SolidityIdentifier = Field(description="The Solidity identifier of the contract whose link should be removed")
     link_field_name : str = Field(description="The storage field holding the link within `source_contract_name` that should be removed")
 
+# Agent-facing cost/soundness clamps for SetProverFlag (owner decision):
+#   * global_timeout may be raised to at most 2x the pipeline default the prover runs
+#     with anyway (DEFAULT_GLOBAL_TIMEOUT, the single source `make_prover_options`
+#     applies) — run cost stays owner-bounded, not agent-controlled.
+#   * loop_iter is capped at 5 unrollings.
+#   * optimistic_fallback is ADD-ONLY: the agent may enable it (repair-ladder step 3)
+#     but may never set it false — that could revert an autosetup-emitted
+#     recommendation, silently re-introducing the vacuity the flag was recommended for.
+_MAX_GLOBAL_TIMEOUT = 2 * int(DEFAULT_GLOBAL_TIMEOUT)
+_MAX_LOOP_ITER = 5
+
+type ProverFlagName = Literal[
+    "optimistic_fallback", "loop_iter", "global_timeout", "contract_recursion_limit"
+]
+
+
 class SetProverFlag(BaseModel):
-    """
+    # An explicit __doc__ (rather than a docstring literal) so the tool description the
+    # LLM sees carries the computed clamp bounds instead of hardcoded copies of them.
+    __doc__ = f"""
     Set a whitelisted top-level prover flag in the configuration:
 
-    * `optimistic_fallback` (bool): assume unresolved low-level calls (`.call{value: ...}`, `send`,
-      `transfer`) succeed instead of HAVOCing and always being able to fail. Step 3 of the vacuity
-      repair ladder.
-    * `loop_iter` (int, 1-8): the number of loop unrollings the prover performs.
-    * `global_timeout` (int, 1-7200): the overall run timeout in seconds.
+    * `optimistic_fallback` (bool, add-only — may only be set to `true`): assume unresolved
+      low-level calls (`.call{{value: ...}}`, `send`, `transfer`) succeed instead of HAVOCing
+      and always being able to fail. Step 3 of the vacuity repair ladder. Setting it back to
+      `false` is not allowed (it could revert an autosetup recommendation).
+    * `loop_iter` (int, 1-{_MAX_LOOP_ITER}): the number of loop unrollings the prover performs.
+    * `global_timeout` (int, 1-{_MAX_GLOBAL_TIMEOUT}): the overall run timeout in seconds
+      (capped at twice the pipeline default).
     * `contract_recursion_limit` (int, 0-10): the allowed depth of recursive calls between contracts.
     """
     # `rule_sanity` and `optimistic_loop` are DELIBERATELY not in this whitelist: vacuity
@@ -329,10 +350,10 @@ class SetProverFlag(BaseModel):
     # anyway — the whitelist keeps the agent from even trying (and from being confused by a
     # silently-overridden edit).
     type: Literal["set_flag"]
-    flag: Literal["optimistic_fallback", "loop_iter", "global_timeout", "contract_recursion_limit"]
+    flag: ProverFlagName
     value: bool | int = Field(description="The value to set: a bool for `optimistic_fallback`, an int for the other flags")
 
-def _validate_prover_flag(flag: str, value: bool | int) -> str | None:
+def _validate_prover_flag(flag: ProverFlagName, value: bool | int) -> str | None:
     """Per-flag validation for SetProverFlag; returns an error message or None if valid.
 
     NB: ``bool`` is a subclass of ``int``, so the bool checks must come before any int check.
@@ -340,16 +361,25 @@ def _validate_prover_flag(flag: str, value: bool | int) -> str | None:
     if flag == "optimistic_fallback":
         if not isinstance(value, bool):
             return f"optimistic_fallback expects a boolean value, got {value!r}"
+        if value is False:
+            return (
+                "optimistic_fallback is add-only: it may be set to true (repair-ladder "
+                "step 3) but never back to false — autosetup may have recommended it, and "
+                "unsetting that recommendation would re-introduce the vacuity it prevents"
+            )
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         return f"{flag} expects an integer value, got {value!r}"
     match flag:
         case "loop_iter":
-            if not (1 <= value <= 8):
-                return f"loop_iter must be between 1 and 8, got {value}"
+            if not (1 <= value <= _MAX_LOOP_ITER):
+                return f"loop_iter must be between 1 and {_MAX_LOOP_ITER}, got {value}"
         case "global_timeout":
-            if not (1 <= value <= 7200):
-                return f"global_timeout must be between 1 and 7200 (seconds), got {value}"
+            if not (1 <= value <= _MAX_GLOBAL_TIMEOUT):
+                return (
+                    f"global_timeout must be between 1 and {_MAX_GLOBAL_TIMEOUT} (seconds, "
+                    f"at most twice the pipeline default), got {value}"
+                )
         case "contract_recursion_limit":
             if not (0 <= value <= 10):
                 return f"contract_recursion_limit must be between 0 and 10, got {value}"

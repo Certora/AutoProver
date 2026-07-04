@@ -9,8 +9,10 @@ from pydantic import ValidationError
 
 from langgraph.graph import MessagesState
 
+from composer.prover.core import DEFAULT_GLOBAL_TIMEOUT
 from composer.spec.source.author import (
     ConfigEditTool, AddFile, RemoveFile, AddLink, RemoveLink, SetProverFlag,
+    _MAX_GLOBAL_TIMEOUT,
 )
 from composer.spec.source.prover import ProverStateExtra
 
@@ -225,6 +227,24 @@ class TestSetProverFlag:
         ).map_run(_config)
         assert "optimistic_fallback" not in config
 
+    async def test_optimistic_fallback_is_add_only(self):
+        """The agent may enable the flag but never disable it — setting false
+        could revert an autosetup-emitted recommendation."""
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("optimistic_fallback", False)),
+        ).map_run(_config)
+        assert "optimistic_fallback" not in config
+
+    async def test_optimistic_fallback_cannot_unset_autosetup_recommendation(self):
+        """An autosetup-recommended true in the base config survives a false edit."""
+        scenario = Scenario(ConfigTestState, TOOL).init(
+            config={"files": [], "optimistic_fallback": True}, rule_skips={},
+        )
+        config = await scenario.turn(
+            _edit(_set_flag("optimistic_fallback", False)),
+        ).map_run(_config)
+        assert config["optimistic_fallback"] is True
+
     async def test_set_loop_iter(self):
         config = await _scenario(files=[]).turn(
             _edit(_set_flag("loop_iter", 3)),
@@ -232,7 +252,7 @@ class TestSetProverFlag:
         assert config["loop_iter"] == 3
 
     async def test_loop_iter_out_of_range(self):
-        for bad in (0, 9):
+        for bad in (0, 6):
             config = await _scenario(files=[]).turn(
                 _edit(_set_flag("loop_iter", bad)),
             ).map_run(_config)
@@ -245,15 +265,17 @@ class TestSetProverFlag:
         ).map_run(_config)
         assert "loop_iter" not in config
 
-    async def test_set_global_timeout(self):
+    async def test_set_global_timeout_at_clamp(self):
         config = await _scenario(files=[]).turn(
-            _edit(_set_flag("global_timeout", 3600)),
+            _edit(_set_flag("global_timeout", _MAX_GLOBAL_TIMEOUT)),
         ).map_run(_config)
-        assert config["global_timeout"] == 3600
+        assert config["global_timeout"] == _MAX_GLOBAL_TIMEOUT
 
-    async def test_global_timeout_too_large(self):
+    async def test_global_timeout_clamped_to_twice_default(self):
+        """The ceiling derives from the pipeline default, not a hardcoded cap."""
+        assert _MAX_GLOBAL_TIMEOUT == 2 * int(DEFAULT_GLOBAL_TIMEOUT)
         config = await _scenario(files=[]).turn(
-            _edit(_set_flag("global_timeout", 7201)),
+            _edit(_set_flag("global_timeout", _MAX_GLOBAL_TIMEOUT + 1)),
         ).map_run(_config)
         assert "global_timeout" not in config
 
