@@ -215,10 +215,6 @@ class Autosetup:
         llm = set(setup._methods_per_contract.keys()) & self._library_names
         return curated | llm
 
-    def _build_job_msg(self, contract_name: str, conf_file: Path) -> str:
-        """Build the msg string for a prover job."""
-        return ProverJobSpec.build_job_msg(self.config.orchestration_timestamp, contract_name, conf_file)
-
     def run(self, main_contract_handle: ContractHandle, skip_warmup: bool = False) -> AutosetupResult:
         """Execute the full autosetup pipeline.
 
@@ -811,7 +807,6 @@ class Autosetup:
                     contract_name=contract_name,
                     phase=f"Sanity Test Run - {contract_name}",
                     extra_args=autosetup.config.extra_args,
-                    msg=autosetup._build_job_msg(contract_name, test_config.path),
                 ))
 
                 if skip_warmup:
@@ -831,7 +826,6 @@ class Autosetup:
                     contract_name=contract_name,
                     phase="Sanity Warmup - warmup",
                     extra_args=autosetup.config.extra_args,
-                    msg=autosetup._build_job_msg(contract_name, warmup_config.path),
                 )
 
             async def prepare_and_run_warmup():
@@ -903,20 +897,6 @@ class Autosetup:
 
             self.log(f"🔗 Running call resolution for {contract_handle.contract_name}")
             await call_resolution_phase.execute(max_iterations=10)
-
-            # Call resolution may recommend conf flags (e.g. optimistic_fallback when an
-            # unresolved low-level value transfer remains — no link/dispatcher can resolve
-            # those, and without the flag every caller can vacuously revert). The base conf
-            # was created before this phase ran, so merge into the existing conf here rather
-            # than at create_config time.
-            if call_resolution_phase.recommended_extra_flags:
-                self.log(
-                    f"Applying conf flags recommended by call resolution: "
-                    f"{call_resolution_phase.recommended_extra_flags}"
-                )
-                self.config_manager.apply_extra_flags(
-                    enhanced_config.path, call_resolution_phase.recommended_extra_flags
-                )
             return True
 
         except Exception as e:
