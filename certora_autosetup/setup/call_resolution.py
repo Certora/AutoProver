@@ -28,6 +28,10 @@ if str(project_root) not in sys.path:
 
 from prover_output_utility.models import CallResolutionInfo  # type: ignore
 
+from certora_autosetup.setup.native_value_transfers import (
+    NativeValueTransferSite,
+    find_native_value_transfer_sites,
+)
 from certora_autosetup.setup.proxy_detection import (
     ImplementationContract,
     ProxyDetector,
@@ -35,6 +39,7 @@ from certora_autosetup.setup.proxy_detection import (
 )
 from certora_autosetup.setup.setup_summaries import SummarySetup
 from certora_autosetup.setup.signature_types import extract_sighash_from_callee
+from certora_autosetup.utils.constants import PATH_ALL_ASTS_JSON
 from certora_autosetup.utils.llm_util import ledger_component
 from certora_autosetup.utils.contract_dispatcher import (
     ContractDispatcher,
@@ -50,7 +55,20 @@ from certora_autosetup.utils.enhanced_config_manager import (
 # PreAudit imports
 from certora_autosetup.utils.prover_runner import ProverRunner
 from certora_autosetup.utils.scope import Scope
-from certora_autosetup.utils.types import ContractHandle
+from certora_autosetup.utils.types import ContractHandle, ContractName
+
+
+def unresolved_selectorless_calls(calls: List[CallResolutionInfo]) -> List[CallResolutionInfo]:
+    """The unresolved calls neither the linker nor the dispatcher can ever act on.
+
+    Both mechanisms need a handle on the callee: linking needs a storage path,
+    dispatching needs a selector. Both are typed fields of the prover's call
+    resolution report; a call carrying neither stays havoced no matter how many
+    iterations run. Native value transfers (``send``/``transfer``/
+    ``.call{value: ...}("")``) always land here — they have no selector by
+    construction.
+    """
+    return [c for c in calls if c.selector is None and c.storage_path is None]
 
 
 class ContractSource(enum.StrEnum):
@@ -168,6 +186,15 @@ class CallResolutionPhase:
         self.contract_dispatcher = ContractDispatcher(self.scope, config_manager=config_manager)
         self.current_iteration = 0
         self._last_unresolved_calls: List[CallResolutionInfo] = []
+
+        # Structured conf-flag recommendation derived from the calls left unresolved when
+        # the loop finishes (currently only {"optimistic_fallback": True}, set when
+        # selector-less unresolved calls remain and the scene's AST contains native
+        # value-transfer sites). The autosetup call site merges these into the emitted
+        # conf via the ConfigManager extra-flags whitelist.
+        self.recommended_extra_flags: Dict[str, Any] = {}
+        # The AST evidence behind the recommendation, kept for the report.
+        self._value_transfer_sites: List[NativeValueTransferSite] = []
 
         # Report state: tracks every contract added to the scene with its provenance,
         # every proxy-detection scan result (hits and misses), and the prover job URL
@@ -337,6 +364,8 @@ class CallResolutionPhase:
                 else:
                     logger.info(f"  {call.caller_name} -> {call.callee_name}")
 
+            self._maybe_recommend_optimistic_fallback(remaining)
+
         # An empty `remaining` only means "all resolved" when the loop finished cleanly.
         # If a prover run failed, the loop broke before refreshing `remaining`, so the
         # spec is incomplete regardless of how many calls earlier iterations resolved.
@@ -351,6 +380,63 @@ class CallResolutionPhase:
         # Generate final report
         report_file = self.reports_dir / f"{self.contract_name}_call_resolution_report.md"
         self._generate_report(report_file, limit_reached)
+
+    def _scene_contract_names(self) -> Set[ContractName]:
+        """The contracts whose code is in the verification scene: every contract the
+        conf references, expanded with inheritance ancestors — inherited code is
+        stamped with the *base* contract's name in the AST dump."""
+        graph = self.summary_setup.inheritance_graph
+        names: Set[ContractName] = set()
+        frontier: List[ContractName] = [
+            h.contract_name
+            for h in self.config_manager.get_referenced_contracts(self.config_file)
+        ]
+        while frontier:
+            name = frontier.pop()
+            if name in names:
+                continue
+            names.add(name)
+            handle = graph.find_handle_by_name(name)
+            if handle is not None:
+                frontier.extend(p.contract_name for p in graph.get_parents(handle))
+        return names
+
+    def _maybe_recommend_optimistic_fallback(self, remaining: List[CallResolutionInfo]) -> None:
+        """Recommend `optimistic_fallback` when selector-less unresolved calls remain AND
+        the scene's contracts contain native value-transfer sites in the solc AST.
+
+        A native `send`/`transfer`/`.call{value: ...}("")` can never be linked or
+        dispatched (no selector), so it stays havoced — and a havoced call can always be
+        assumed to revert, making every caller vacuously revertible. `optimistic_fallback`
+        instead assumes such empty-input-buffer calls succeed.
+
+        The two conditions come from independent structured sources (prover report vs.
+        compiler AST); requiring both avoids recommending the flag — it is marked unsound
+        in certora-cli — for value transfers in dead code (no unresolved call would remain)
+        or for selector-carrying calls the dispatcher merely found no implementer for
+        (no AST site would exist).
+        """
+        if not unresolved_selectorless_calls(remaining):
+            return
+        try:
+            sites = find_native_value_transfer_sites(
+                PATH_ALL_ASTS_JSON, self._scene_contract_names(), self.scope.project_root
+            )
+        except Exception as e:
+            logger.warning(
+                f"Native value-transfer detection failed for {self.contract_name}; "
+                f"skipping the optimistic_fallback recommendation: {e}"
+            )
+            return
+        if not sites:
+            return
+        self._value_transfer_sites = sites
+        self.recommended_extra_flags["optimistic_fallback"] = True
+        logger.info(
+            f"Recommending optimistic_fallback for {self.contract_name}: "
+            f"{len(sites)} native value-transfer site(s) in the scene remain unresolvable: "
+            f"{', '.join(s.display() for s in sites)}"
+        )
 
     async def _add_skip_formula_checking_flag(self) -> None:
         self.config_manager.update_config_with_prover_args(
@@ -556,6 +642,14 @@ class CallResolutionPhase:
                 prior_parts = [f"[{n}]({u})" if u else f"{n}" for n, u in prior]
                 headline += f"  (earlier iterations {', '.join(prior_parts)})"
             lines.append(headline)
+        if self.recommended_extra_flags:
+            lines.append(
+                f"- **Recommended conf flags:** `{self.recommended_extra_flags}` — the scene "
+                "contains native value-transfer call site(s) no link/dispatcher can resolve; "
+                "without `optimistic_fallback` every caller of such a call can vacuously revert:"
+            )
+            for site in self._value_transfer_sites:
+                lines.append(f"    - {site.display()}")
         lines.append("")
 
         # Section B: Proxy Detection
