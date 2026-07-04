@@ -147,5 +147,29 @@
     "library_names": ["CTHelpers"],
     "summary_file": "specs/summaries/CTHelpers.spec",
     "description": "Gnosis Conditional Tokens CTHelpers.getCollectionId (bn128 collection-id derivation)"
+  },
+  "solady_safeTransfer": {
+    "names": ["safeTransfer"],
+    "library_names": ["SafeTransferLib"],
+    "summary_file": "specs/summaries/Solady/SafeTransferLib.spec",
+    "description": "Solady SafeTransferLib.safeTransfer"
+  },
+  "solady_safeTransferFrom": {
+    "names": ["safeTransferFrom"],
+    "library_names": ["SafeTransferLib"],
+    "summary_file": "specs/summaries/Solady/SafeTransferLib.spec",
+    "description": "Solady SafeTransferLib.safeTransferFrom"
+  },
+  "solady_safeApprove": {
+    "names": ["safeApprove", "safeApproveWithRetry"],
+    "library_names": ["SafeTransferLib"],
+    "summary_file": "specs/summaries/Solady/SafeTransferLib.spec",
+    "description": "Solady SafeTransferLib.safeApprove"
+  },
+  "solady_balanceOf": {
+    "names": ["balanceOf"],
+    "library_names": ["SafeTransferLib"],
+    "summary_file": "specs/summaries/Solady/SafeTransferLib.spec",
+    "description": "Solady SafeTransferLib.balanceOf"
   }
 }
