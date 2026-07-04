@@ -3,11 +3,14 @@ AST-driven detection of native value transfers: ``send``, ``transfer``, and
 ``.call{value: ...}("")``.
 
 The prover can never resolve these calls: they carry no function selector, so
-neither storage-path linking nor DISPATCHER summaries apply. The call HAVOCs, and
-a havoced call can always be assumed to revert — which makes every caller
-revertible on all paths (the vacuous-rule failure mode). Call resolution consults
+neither storage-path linking nor DISPATCHER summaries apply. By default the
+prover then havocs the storage of every external contract in the scene, so
+rules over the caller fail with spurious counterexamples built from that
+havoced state, and the call's nondeterministic success bool adds
+transfer-failure paths the contract may never exhibit. Call resolution consults
 the sites found here when deciding whether to recommend ``optimistic_fallback``,
-the prover flag that assumes unresolved *empty-input-buffer* calls succeed.
+the prover flag that instead dispatches unresolved *empty-input-buffer* calls
+to scene fallbacks or models a plain EOA value transfer.
 
 Detection walks the flattened solc ASTs the Certora build already produces
 (``.certora_internal/all_asts.json``). Classification relies exclusively on AST

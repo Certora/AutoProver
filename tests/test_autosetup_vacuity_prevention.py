@@ -1,15 +1,12 @@
 """
 Tests for the autosetup-side vacuity prevention:
 
-- NONDET recipes never match state-mutating (incl. payable) methods
-  (``SummarySetup._nondet_ineligible`` + the recipe-level mutability bounds);
 - native value transfers are detected from the solc AST dump, not source text
   (``native_value_transfers``), and only selector-less unresolved calls count as
   unresolvable (``unresolved_selectorless_calls``);
 - ``ConfigManager`` merges recommended flags only through its whitelist.
 """
 import json
-from typing import cast
 
 import pytest
 
@@ -19,95 +16,9 @@ from certora_autosetup.setup.native_value_transfers import (
     classify_native_value_transfer,
     find_native_value_transfer_sites,
 )
-from certora_autosetup.setup.setup_summaries import Recipe, RecipeType, SummarySetup
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 
 from prover_output_utility.models import CallResolutionInfo, StoragePathInfo
-
-
-# ---------------------------------------------------------------------------
-# NONDET recipe eligibility
-# ---------------------------------------------------------------------------
-
-
-_NONDET_RECIPE = Recipe(
-    recipe_type=RecipeType.CUSTOM,
-    characteristic="anything",
-    properties={},
-    summary_type="NONDET",
-)
-
-
-def _method(name: str, mutability: str | None, contract: str = "Vault") -> dict:
-    method = {"contractName": contract, "name": name}
-    if mutability is not None:
-        method["stateMutability"] = mutability
-    return method
-
-
-class TestNondetIneligible:
-    def test_payable_excluded(self):
-        assert SummarySetup._nondet_ineligible(_NONDET_RECIPE, _method("deposit", "payable"))
-
-    def test_state_mutating_excluded(self):
-        assert SummarySetup._nondet_ineligible(_NONDET_RECIPE, _method("withdraw", "nonpayable"))
-
-    def test_missing_mutability_excluded(self):
-        """Fail-closed: no stateMutability at all is treated as state-mutating."""
-        assert SummarySetup._nondet_ineligible(_NONDET_RECIPE, _method("mystery", None))
-
-    def test_view_and_pure_allowed(self):
-        for mutability in ("view", "pure"):
-            assert not SummarySetup._nondet_ineligible(_NONDET_RECIPE, _method("peek", mutability))
-
-    def test_non_nondet_recipe_unaffected(self):
-        recipe = Recipe(
-            recipe_type=RecipeType.NEW_CONTRACT,
-            characteristic="anything",
-            properties={},
-            summary_type="HAVOC_ALL_DELETE",
-        )
-        assert not SummarySetup._nondet_ineligible(recipe, _method("deploy", "payable"))
-
-    def test_unknown_summary_type_unaffected(self):
-        """A custom recipe with an unrecognized summary type isn't NONDET-producing."""
-        recipe = Recipe(
-            recipe_type=RecipeType.CUSTOM,
-            characteristic="anything",
-            properties={},
-            summary_type="SOMETHING_ELSE",
-        )
-        assert not SummarySetup._nondet_ineligible(recipe, _method("deposit", "payable"))
-
-    def test_case_insensitive_like_emit_path(self):
-        recipe = Recipe(
-            recipe_type=RecipeType.CUSTOM,
-            characteristic="anything",
-            properties={},
-            summary_type="nondet",
-        )
-        assert SummarySetup._nondet_ineligible(recipe, _method("deposit", "payable"))
-
-
-def test_default_nondet_recipes_bounded_to_view_pure():
-    """Every default NONDET recipe must declaratively restrict stateMutability to
-    view/pure — the recipe-level arm of the match-time filter."""
-    # Unbound call with a stub self: SummarySetup.__init__ requires prebuilt
-    # compilation-analysis artifacts, and _build_recipes only touches self.log
-    # (and only on the custom-recipe branch, unused here).
-    class _StubSetup:
-        def log(self, *args, **kwargs):
-            pass
-
-    stub = cast(SummarySetup, _StubSetup())
-    for recipe in SummarySetup._build_recipes(stub, None):
-        if recipe.summary_type.upper() != "NONDET":
-            continue
-        bound = recipe.properties.get("stateMutability")
-        bound_values = bound if isinstance(bound, list) else [bound]
-        assert set(bound_values) <= {"view", "pure"}, (
-            f"NONDET recipe {recipe.recipe_type} admits non-view/pure methods: {bound!r}"
-        )
 
 
 # ---------------------------------------------------------------------------

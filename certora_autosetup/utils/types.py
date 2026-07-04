@@ -11,11 +11,10 @@ from typing import Any, Optional, List, Dict, Set, assert_never
 from pathlib import Path
 from enum import Enum
 
-# Domain names for the two halves of a method key. Method inventories (all_methods.json,
-# summary dedup sets, payable/mutability lookups) key methods by (contract, method) —
-# these aliases keep such signatures self-describing instead of tuple[str, str] of bare strs.
+# Domain alias for a contract's Solidity name as it appears in build artifacts
+# (all_asts.json `certora_contract_name` stamps, scene listings). Keeps signatures
+# self-describing instead of passing bare strs around.
 type ContractName = str
-type MethodName = str
 
 
 class ContractKind(Enum):

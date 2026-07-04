@@ -406,9 +406,11 @@ class CallResolutionPhase:
         the scene's contracts contain native value-transfer sites in the solc AST.
 
         A native `send`/`transfer`/`.call{value: ...}("")` can never be linked or
-        dispatched (no selector), so it stays havoced — and a havoced call can always be
-        assumed to revert, making every caller vacuously revertible. `optimistic_fallback`
-        instead assumes such empty-input-buffer calls succeed.
+        dispatched (no selector), so it stays unresolved and the prover havocs the
+        storage of every external contract in the scene — rules over the caller then
+        fail with spurious counterexamples built from the havoced state.
+        `optimistic_fallback` instead dispatches such empty-input-buffer calls to
+        scene fallbacks or models a plain EOA value transfer.
 
         The two conditions come from independent structured sources (prover report vs.
         compiler AST); requiring both avoids recommending the flag — it is marked unsound
@@ -646,7 +648,8 @@ class CallResolutionPhase:
             lines.append(
                 f"- **Recommended conf flags:** `{self.recommended_extra_flags}` — the scene "
                 "contains native value-transfer call site(s) no link/dispatcher can resolve; "
-                "without `optimistic_fallback` every caller of such a call can vacuously revert:"
+                "without `optimistic_fallback` these calls havoc all external-contract storage, "
+                "producing spurious counterexamples in every caller:"
             )
             for site in self._value_transfer_sites:
                 lines.append(f"    - {site.display()}")
