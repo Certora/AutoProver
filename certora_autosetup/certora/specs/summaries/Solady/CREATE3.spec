@@ -22,10 +22,10 @@ methods {
     function CREATE3.predictDeterministicAddress(bytes32 salt, address deployer) internal returns (address) => NONDET;
 
     // deployDeterministic — older Solady order (initCode, salt).
-    function CREATE3.deployDeterministic(bytes initCode, bytes32 salt) internal returns (address) => NONDET;
-    function CREATE3.deployDeterministic(uint256 value, bytes initCode, bytes32 salt) internal returns (address) => NONDET;
+    function CREATE3.deployDeterministic(bytes memory initCode, bytes32 salt) internal returns (address) => NONDET;
+    function CREATE3.deployDeterministic(uint256 value, bytes memory initCode, bytes32 salt) internal returns (address) => NONDET;
 
     // deployDeterministic — newer Solady order (salt, initCode).
-    function CREATE3.deployDeterministic(bytes32 salt, bytes initCode) internal returns (address) => NONDET;
-    function CREATE3.deployDeterministic(uint256 value, bytes32 salt, bytes initCode) internal returns (address) => NONDET;
+    function CREATE3.deployDeterministic(bytes32 salt, bytes memory initCode) internal returns (address) => NONDET;
+    function CREATE3.deployDeterministic(uint256 value, bytes32 salt, bytes memory initCode) internal returns (address) => NONDET;
 }
