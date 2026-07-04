@@ -59,6 +59,7 @@ from certora_autosetup.parsers.method_parser import MethodParser
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
 from certora_autosetup.setup.summary_resolver import resolve_summary_specs
 from certora_autosetup.setup.signature_types import InheritanceGraph
+from certora_autosetup.utils.types import ContractName, MethodName
 
 
 # CVL grammar keyword terminals that cannot double as an identifier. A Solidity parameter whose name
@@ -291,6 +292,20 @@ class RecipeType(str, Enum):
     CUSTOM = "custom"
 
 
+class SummaryKind(Enum):
+    """Typed view of the summary shapes recipes can request (``Recipe.summary_type``)."""
+
+    NONDET = "NONDET"
+    HAVOC_ALL_DELETE = "HAVOC_ALL_DELETE"
+    DECIMAL_CONVERSION_IDENTITY = "DECIMAL_CONVERSION_IDENTITY"
+
+
+# The only stateMutability values a NONDET summary may be emitted for: erasing the
+# effects of a state-mutating (and especially payable) method typically makes every
+# caller revert on all paths, so rules over those callers pass vacuously.
+NONDET_ELIGIBLE_MUTABILITY = frozenset({"view", "pure"})
+
+
 # ERC4626 asset<->share conversions are internal/view and read vault state
 # (totalSupply/totalAssets), so they pass the DECIMAL_CONVERSION property filter and
 # look like unit conversions to the LLM. They are exchange rates, not stateless decimal
@@ -320,6 +335,16 @@ class Recipe:
         str, Any
     ]  # Required method properties (visibility, stateMutability, etc.)
     summary_type: str  # How to summarize matching methods (e.g., "NONDET")
+
+    @property
+    def summary_kind(self) -> Optional[SummaryKind]:
+        """Typed view of ``summary_type``; None for unknown kinds (custom recipes may
+        carry arbitrary strings — the emit path warns on those). Case-normalized the
+        same way the emit path normalizes ``_summary_type``."""
+        try:
+            return SummaryKind(self.summary_type.upper())
+        except ValueError:
+            return None
 
 
 class SummarySetup:
@@ -1668,11 +1693,33 @@ Method signature: {method_signature}
             await processed.put(None)
             return l
 
+    @staticmethod
+    def _nondet_ineligible(recipe: Recipe, method: Dict[str, Any]) -> bool:
+        """True when ``method`` must not be proposed to a NONDET-producing recipe.
+
+        Not a soundness guard: ``_append_method_summary`` already refuses to emit a
+        NONDET line for any non-view/pure method, on every path (payable included).
+        What an ineligible match costs without this filter is (a) a two-stage LLM
+        analysis whose result can never be emitted, and (b) an emit-time artifact:
+        the match is still recorded in ``_methods_per_contract``, so
+        ``_already_emitted_keys`` hides the method from every later recipe even
+        though its spec contains only an orphan recipe comment and no summary line.
+        Filtering at match time avoids both, and also covers custom recipes, whose
+        ``properties`` may not constrain mutability.
+
+        Fail-closed: a method with a missing ``stateMutability`` is treated as
+        state-mutating, mirroring the emit-time check (which only emits on an
+        explicit view/pure value).
+        """
+        if recipe.summary_kind is not SummaryKind.NONDET:
+            return False
+        return method.get("stateMutability") not in NONDET_ELIGIBLE_MUTABILITY
+
     async def analyze_with_llm(
         self,
         recipe: Recipe,
         contract_files: Set[str],
-        methods_to_skip: Set[Tuple[str, str]] | None = None,
+        methods_to_skip: Set[Tuple[ContractName, MethodName]] | None = None,
         main_contract: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Analyze methods using LLM based on a recipe.
@@ -1728,6 +1775,15 @@ Method signature: {method_signature}
             if matches:
                 # Skip methods with storage location parameters (internal-only, can't generate valid summaries)
                 if any(loc == "storage" for loc in method.get("location", [])):
+                    continue
+
+                # NONDET can only ever be emitted for view/pure methods, so don't even
+                # propose others (custom recipes included) — see _nondet_ineligible.
+                if self._nondet_ineligible(recipe, method):
+                    self.log(
+                        f"Skipping state-mutating method for NONDET recipe: "
+                        f"{method_key[0]}.{method_key[1]}"
+                    )
                     continue
 
                 # Skip known ERC4626 exchange-rate methods for the decimal-conversion recipe:
@@ -1991,7 +2047,7 @@ Method signature: {method_signature}
         except Exception as e:
             raise Exception(f"Error generating decimal conversion summary: {e}")
 
-    def _already_emitted_keys(self) -> Set[Tuple[str, str]]:
+    def _already_emitted_keys(self) -> Set[Tuple[ContractName, MethodName]]:
         """The (contractName, methodName) keys for everything already accumulated
         in ``self._methods_per_contract`` — i.e. the methods that have already been
         materialized into a per-contract spec at some point in this run."""
@@ -2136,7 +2192,7 @@ Method signature: {method_signature}
                 content.append(
                     f"    // AUTO-DISABLED (NONDET unsound for reference types): {sig}"
                 )
-            elif method["stateMutability"] in ["view", "pure"]:
+            elif method["stateMutability"] in NONDET_ELIGIBLE_MUTABILITY:
                 if has_ellipsis and (nondet_summary := self._generate_nondet_summary(
                     method, udt_context
                 )) is not None:
@@ -2257,7 +2313,15 @@ Method signature: {method_signature}
                 Recipe(
                     recipe_type=RecipeType.INLINE_ASSEMBLY,
                     characteristic="contains inline assembly blocks with `mload` or `mstore` instructions",
-                    properties={"visibility": "internal"},
+                    # Bounded to view/pure because the recipe requests NONDET, which the
+                    # emit path only ever writes for view/pure methods. Without the bound,
+                    # state-mutating internal assembly methods can match: the LLM analysis
+                    # is wasted and the match still poisons the emit-time dedup set (see
+                    # _nondet_ineligible).
+                    properties={
+                        "visibility": "internal",
+                        "stateMutability": ["view", "pure"],
+                    },
                     summary_type="NONDET",
                 ),
             ]
@@ -2267,7 +2331,7 @@ Method signature: {method_signature}
         self,
         contract_name: str,
         contract_files: List[str],
-        methods_to_skip: Optional[Set[Tuple[str, str]]] = None,
+        methods_to_skip: Optional[Set[Tuple[ContractName, MethodName]]] = None,
         custom_recipe: Optional[str] = None,
     ) -> bool:
         """Run all LLM recipes for one compilation unit and emit per-summarized-contract specs.
@@ -2294,11 +2358,11 @@ Method signature: {method_signature}
 
         self.log(f"Running LLM analysis for compilation unit: {contract_name}")
 
-        skip: Set[Tuple[str, str]] = set(methods_to_skip) if methods_to_skip else set()
+        skip: Set[Tuple[ContractName, MethodName]] = set(methods_to_skip) if methods_to_skip else set()
         skip.update(self._already_emitted_keys())
 
         all_matches: List[Dict[str, Any]] = []
-        seen: Set[Tuple[str, str]] = set()
+        seen: Set[Tuple[ContractName, MethodName]] = set()
         for recipe in recipes_sorted:
             self.log(f"  Recipe '{recipe.characteristic}'")
             matches = await self.analyze_with_llm(recipe, set(contract_files), skip, contract_name)
