@@ -183,5 +183,11 @@
     "library_names": ["CREATE3"],
     "summary_file": "specs/summaries/Solady/CREATE3.spec",
     "description": "Solady CREATE3.predictDeterministicAddress (NONDET address)"
+  },
+  "solady_libclone": {
+    "names": ["clone", "cloneDeterministic", "cloneDeterministic_PUSH0", "clone_PUSH0", "createDeterministicClone", "createDeterministicERC1967", "createDeterministicERC1967BeaconProxy", "createDeterministicERC1967I", "createDeterministicERC1967IBeaconProxy", "deployDeterministicERC1967", "deployDeterministicERC1967BeaconProxy", "deployDeterministicERC1967I", "deployDeterministicERC1967IBeaconProxy", "deployERC1967", "deployERC1967BeaconProxy", "deployERC1967I", "deployERC1967IBeaconProxy", "erc1967Bootstrap", "implementationOf", "initCodeHash", "initCodeHashERC1967", "initCodeHashERC1967BeaconProxy", "initCodeHashERC1967Bootstrap", "initCodeHashERC1967I", "initCodeHashERC1967IBeaconProxy", "initCodeHash_PUSH0", "predictDeterministicAddress", "predictDeterministicAddressERC1967", "predictDeterministicAddressERC1967BeaconProxy", "predictDeterministicAddressERC1967Bootstrap", "predictDeterministicAddressERC1967I", "predictDeterministicAddressERC1967IBeaconProxy", "predictDeterministicAddress_PUSH0"],
+    "library_names": ["LibClone"],
+    "summary_file": "specs/summaries/Solady/LibClone.spec",
+    "description": "Solady LibClone clone/deploy/predict/initCodeHash (NONDET)"
   }
 }
