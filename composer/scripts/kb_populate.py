@@ -396,7 +396,7 @@ CVL_HELP_MESSAGES : list[KBMessage] = [
     },
     {
         "title": "Vacuity — rule passes but `assert false` also passes",
-        "symptom": "A rule verifies successfully, but something feels wrong. You add `assert false;` and it also verifies.",
+        "symptom": "A single rule verifies successfully, but something feels wrong. You add `assert false;` to that rule and it also verifies — the rule's own requires or calls make its assertions unreachable.",
         "body": (
             "**Cause:** The rule is **vacuous** — the combination of `require` statements and/or implicit "
             "reverts makes it impossible for execution to reach the assertions. Common causes:\n"
@@ -405,7 +405,11 @@ CVL_HELP_MESSAGES : list[KBMessage] = [
             "3. Overflow/underflow causing implicit reverts in Solidity ≥0.8.\n\n"
             "**Fix:** Always run with `\"rule_sanity\": \"basic\"` (this is now the default in recent "
             "versions). This checks whether each rule and assert is reachable. If the sanity check fails, "
-            "revisit your `require` statements."
+            "revisit your `require` statements.\n\n"
+            "**Scope:** this article covers vacuity local to one rule. If the report flags a *method* "
+            "as vacuous across many rules (SANITY_FAILED with a `<vacuity_alert>` block), the "
+            "verification setup — not the rule — is the problem; see the article titled "
+            "\"Rule passes vacuously — a method always reverts under the model\"."
         ),
     },
     {
@@ -525,7 +529,8 @@ CVL_HELP_MESSAGES : list[KBMessage] = [
             "}\n"
             "```\n\n"
             "**Alternative — harness getter:** add `contract XHarness is X` with an `external view` "
-            "getter that `sload`s the slot constant (see the harness article). Prefer hooks for "
+            "getter that `sload`s the slot constant — see the article titled "
+            "\"No public getter for the state you need — write a harness\". Prefer hooks for "
             "tracking *writes*, getters for reading current values inside assertions."
         ),
     },
@@ -554,14 +559,14 @@ CVL_HELP_MESSAGES : list[KBMessage] = [
             "    balanceMirror[user] = v;\n"
             "}\n"
             "```\n\n"
-            "**Why a hook may never fire:**\n"
-            "- Hooks are only triggered by *contract* code. Direct storage access from CVL does not "
-            "fire them (calling a Solidity function from CVL does — the store happens in contract "
-            "code).\n"
-            "- Hooks are not applied recursively: stores performed inside a hook body do not trigger "
-            "further hooks.\n"
-            "- Non-persistent ghosts are havoced together with storage on unresolved calls — mirror "
-            "values can be wiped even though the hook fired."
+            "**If the hook never fires, or the mirror value is unexpectedly wiped**, the usual "
+            "causes have dedicated articles:\n"
+            "- hooks fire only on *contract* code — see the article titled "
+            "\"Hook is not triggered by CVL code\";\n"
+            "- stores inside a hook body do not re-trigger hooks — see the article titled "
+            "\"Hook is not triggered recursively\";\n"
+            "- non-persistent ghost mirrors are havoced together with storage — see the article "
+            "titled \"Ghost variable has unexpected value after an external call\"."
         ),
     },
     {
@@ -595,7 +600,7 @@ CVL_HELP_MESSAGES : list[KBMessage] = [
     },
     {
         "title": "Rule passes vacuously — a method always reverts under the model",
-        "symptom": "rule_sanity reports a rule vacuous (or `assert false` passes), or a parametric rule's instantiation for one method always reverts even though the method works on-chain.",
+        "symptom": "The prover reports SANITY_FAILED / SANITY_FAILURE (the rule_not_vacuous sanity sub-rule fails), or the report contains a <vacuity_alert> block flagging a method as vacuous across rules, or a parametric rule's instantiation for one method always reverts even though the method works on-chain.",
         "body": (
             "**Root-cause checklist, in order of likelihood:**\n"
             "1. **`NONDET` summary on a payable or side-effecting callee.** Canonical case: the "
@@ -604,17 +609,20 @@ CVL_HELP_MESSAGES : list[KBMessage] = [
             "of the call fail on every path and the caller always reverts in the model — every rule "
             "touching that path becomes vacuous. Inspect the auto-generated summaries first.\n"
             "2. **Conflicting `require`s** (including silent `require_*` casts) in the rule or a "
-            "preserved block.\n"
+            "preserved block — when only one rule is vacuous, see the article titled "
+            "\"Vacuity — rule passes but `assert false` also passes\".\n"
             "3. **`optimistic_loop: true` with `loop_iter` too small:** paths needing more "
             "iterations than `loop_iter` are silently assumed away — possibly all of them. (The "
             "pessimistic default instead fails loudly with a loop-unwinding violation.)\n"
-            "4. **`lastReverted` overwritten** by a later call (see the dedicated article).\n\n"
+            "4. **`lastReverted` overwritten** by a later call — see the article titled "
+            "\"`lastReverted` is overwritten by subsequent calls\".\n\n"
             "**Repair order — fix the root cause before filtering:**\n"
             "1. Replace the bad summary with a sound one (expression summary / ghost model of the "
             "callee).\n"
             "2. Write a small mock contract and link it into the scene.\n"
-            "3. `\"optimistic_fallback\": true` if the offender is an unresolved raw ETH transfer "
-            "(see the optimistic_fallback article).\n"
+            "3. `\"optimistic_fallback\": true` if the offender is an unresolved raw ETH transfer — "
+            "see the article titled \"Unresolved low-level call{value} havocs storage — "
+            "optimistic_fallback vs DISPATCHER vs mock\".\n"
             "4. Only if 1–3 are impossible: a `filtered` block, with a comment documenting which "
             "repairs were attempted and why they failed.\n\n"
             "Filtering first hides the setup bug and silently unverifies *every* property on that "

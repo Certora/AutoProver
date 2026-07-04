@@ -51,3 +51,27 @@ def test_titles_are_unique():
     assert len(titles) == len(set(titles)), (
         f"duplicate titles: {sorted(t for t in titles if titles.count(t) > 1)}"
     )
+
+
+# Bodies cross-reference other articles with the fixed phrase
+# `article titled "<exact title>"` so a following agent can KBGet by exact
+# key. The marker + closing quote delimit the title verbatim (titles contain
+# no double quotes, enforced below), so plain splitting recovers it exactly.
+CROSS_REF_MARKER = 'article titled "'
+
+
+def test_cross_references_resolve():
+    messages = _load_messages()
+    titles = {entry["title"] for entry in messages}
+    for title in titles:
+        assert '"' not in title, (
+            f"title {title!r} contains a double quote, breaking the "
+            f"cross-reference convention"
+        )
+    for entry in messages:
+        for chunk in entry["body"].split(CROSS_REF_MARKER)[1:]:
+            referenced = chunk.split('"', 1)[0]
+            assert referenced in titles, (
+                f"article {entry['title']!r} references unknown article "
+                f"{referenced!r}"
+            )
