@@ -11,6 +11,12 @@ from typing import Any, Optional, List, Dict, Set, assert_never
 from pathlib import Path
 from enum import Enum
 
+# Domain names for the two halves of a method key. Method inventories (all_methods.json,
+# summary dedup sets, payable/mutability lookups) key methods by (contract, method) —
+# these aliases keep such signatures self-describing instead of tuple[str, str] of bare strs.
+type ContractName = str
+type MethodName = str
+
 
 class ContractKind(Enum):
     """Types of contracts that can be defined in Solidity."""
