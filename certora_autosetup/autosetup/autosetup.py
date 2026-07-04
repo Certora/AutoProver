@@ -215,10 +215,6 @@ class Autosetup:
         llm = set(setup._methods_per_contract.keys()) & self._library_names
         return curated | llm
 
-    def _build_job_msg(self, contract_name: str, conf_file: Path) -> str:
-        """Build the msg string for a prover job."""
-        return ProverJobSpec.build_job_msg(self.config.orchestration_timestamp, contract_name, conf_file)
-
     def run(self, main_contract_handle: ContractHandle, skip_warmup: bool = False) -> AutosetupResult:
         """Execute the full autosetup pipeline.
 
@@ -811,7 +807,6 @@ class Autosetup:
                     contract_name=contract_name,
                     phase=f"Sanity Test Run - {contract_name}",
                     extra_args=autosetup.config.extra_args,
-                    msg=autosetup._build_job_msg(contract_name, test_config.path),
                 ))
 
                 if skip_warmup:
@@ -831,7 +826,6 @@ class Autosetup:
                     contract_name=contract_name,
                     phase="Sanity Warmup - warmup",
                     extra_args=autosetup.config.extra_args,
-                    msg=autosetup._build_job_msg(contract_name, warmup_config.path),
                 )
 
             async def prepare_and_run_warmup():
