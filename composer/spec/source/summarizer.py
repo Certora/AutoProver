@@ -22,7 +22,10 @@ from graphcore.graph import FlowInput, MessagesState, tool_state_update
 from graphcore.tools.schemas import WithImplementation, WithInjectedState, WithInjectedId
 
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.cvl.tools import get_cvl, put_cvl, put_cvl_raw, edit_cvl
+from composer.cvl.pretty_print import pretty_print
+from composer.cvl.schema import CVLFile
+from composer.cvl.summary_audit import load_payable_methods, view_summary_violations
+from composer.cvl.tools import DEFAULT_READ_KEY, DEFAULT_SPEC_KEY, get_cvl, maybe_update_cvl
 from composer.spec.gen_types import CVLResource, SUMMARIES_DIR, under_project
 from composer.spec.context import WorkflowContext, SourceCode, CacheKey
 from composer.spec.util import temp_certora_file, string_hash, ensure_dir
@@ -30,7 +33,7 @@ from composer.spec.service_host import ServiceHost
 from composer.spec.source.harness import ContractSetup, ExternalInterface, HarnessDef
 from composer.spec.system_model import HarnessedApplication, ExternalActor
 from composer.spec.gen_types import TypedTemplate
-from composer.ui.tool_display import tool_display
+from composer.ui.tool_display import suppress_ack, tool_display
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +147,41 @@ class _TypeChecker(
                 else:
                     return f"Typechecking failed:\nstdout:\n{res.stdout}\n{res.stderr}"
 
+@tool_display(lambda p: "Writing summaries spec", suppress_ack("Put result", ("Accepted",)))
+class _PutSummaries(WithInjectedId, WithImplementation[Command | str]):
+    """
+    Put the summaries CVL file using the structured AST representation.
+
+    The file is pretty printed and run through the official CVL parser; a parse
+    failure rejects the update with the reported errors. Additionally, view-class
+    summaries (NONDET / CONSTANT / PER_CALLEE_CONSTANT / ALWAYS) on payable
+    methods are rejected: they erase the callee's ETH effects and make every
+    compensating caller vacuously revert.
+    """
+    cvl_file: dict = Field(description="The CVL AST to put in the VFS")
+
+    @override
+    def run(self) -> Command | str:
+        source = get_runtime(SummaryContext).context.source
+        try:
+            parsed = CVLFile.model_validate(self.cvl_file)
+            pp = pretty_print(parsed)
+        except Exception:
+            return "Failed to pretty print the AST"
+        payable = load_payable_methods(pathlib.Path(source.project_root))
+        if payable is not None:
+            violations = view_summary_violations(parsed, payable, source.contract_name)
+            if violations:
+                return "Update rejected:\n" + "\n".join(f"- {v}" for v in violations)
+        return maybe_update_cvl(
+            tool_call_id=self.tool_call_id,
+            pp=pp,
+            ast_json=self.cvl_file,
+            reset_read=DEFAULT_READ_KEY,
+            spec_key=DEFAULT_SPEC_KEY,
+        )
+
+
 @tool_display("Writing Plan", None)
 class _PlanWrite(WithInjectedId, WithImplementation[Command]):
     """
@@ -205,11 +243,12 @@ async def _setup_summaries_impl(
             return "Spec has not been typechecked"
         return None
 
+    # Summaries specs are small, so every write goes through the structured
+    # put_cvl (here _PutSummaries) — that is what lets the payable audit see a
+    # typed AST instead of surface text. No raw/edit escape hatches.
     tools = [
         get_cvl(ST),
-        edit_cvl(ST),
-        put_cvl_raw,
-        put_cvl,
+        _PutSummaries.as_tool("put_cvl"),
         _PlanReader.as_tool("read_plan"),
         _PlanWrite.as_tool("plan_write"),
         _TypeChecker.as_tool("typechecker")

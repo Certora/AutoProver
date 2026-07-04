@@ -165,5 +165,11 @@ Signal the completion of your work by calling the "result" tool.
     DO NOT, under any circumstances, use "assert" in any of the summaries you write. If you need to "exceptionally abort"
     a summary, use the "revert" statement.
   </hard_requirement>
+  <hard_requirement>
+    Do *NOT* apply a view-class summary (NONDET, CONSTANT, PER_CALLEE_CONSTANT, ALWAYS) to a *payable* method.
+    Such a summary erases the callee's ETH effects, so a caller that accounts for the transferred value
+    (e.g. checks its balance after the call) reverts on every path and all of its rules pass vacuously.
+    Model payable methods with an expression summary over ghost state, or leave them havocing.
+  </hard_requirement>
 </guidance>
 </task>
