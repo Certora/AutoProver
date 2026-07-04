@@ -1741,6 +1741,16 @@ Method signature: {method_signature}
                     )
                     continue
 
+                # Skip reference-type (struct/array/bytes/string) returns for NONDET recipes:
+                # NONDET is unsound for reference types and certoraRun rejects it at typecheck
+                # time, so there's no point spending an LLM call on these candidates.
+                if recipe.summary_type == "NONDET" and self._returns_reference_type(method):
+                    self.log(
+                        f"Skipping {method['contractName']}.{method['name']} for NONDET "
+                        "(return type is a reference type - unsound for NONDET)"
+                    )
+                    continue
+
                 # Skip if this method was already matched by a previous recipe
                 if method_key not in methods_to_skip:
                     filtered_methods.append(method)
