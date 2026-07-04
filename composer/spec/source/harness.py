@@ -91,7 +91,7 @@ class UnstructuredSlotSpec(BaseModel):
     slot_derivation: str = Field(description=(
         "How the storage slot is derived: quote the exact source expression computing "
         "the slot, with a file:line citation — never a paraphrase "
-        "(e.g. `keccak256(\"river.state.balance\") - 1` — src/State.sol:42, or the "
+        "(e.g. `keccak256(\"vault.state.balance\") - 1` — src/State.sol:42, or the "
         "ERC-7201 namespace id as written in the source)"
     ))
     value_type: str = Field(description="The Solidity type of the value read from the slot (e.g. `uint256`, `address`)")
