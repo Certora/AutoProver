@@ -267,7 +267,10 @@ class Autosetup:
         # Step 5: Generate the user-facing sanity spec at certora/specs/sanity-{C}.spec.
         # It directly imports the summary aggregator, call resolution, and (when present) erc7201.
         # Must run after ERC-7201 detection (in setup_prover) so the erc7201 import is included.
-        self.rule_generator.generate_sanity_specs({main_contract_name: summary_spec_path})
+        self.rule_generator.generate_sanity_specs(
+            {main_contract_name: summary_spec_path},
+            reset_call_resolution_spec=not self.config.skip_call_resolution,
+        )
 
         # Step 6: Load bytes mappings
         self._load_bytes_mappings()

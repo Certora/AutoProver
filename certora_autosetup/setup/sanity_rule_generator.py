@@ -24,13 +24,24 @@ class SanityRuleGenerator:
         self.certora_dir = certora_dir
         self.log = log_func if log_func else lambda msg, level="INFO": print(f"[{level}] {msg}")
 
-    def generate_sanity_specs(self, per_contract_summaries_specs: Dict[str, Path]) -> None:
+    def generate_sanity_specs(
+        self,
+        per_contract_summaries_specs: Dict[str, Path],
+        reset_call_resolution_spec: bool = False,
+    ) -> None:
         """Create per-contract sanity specs at certora/specs/sanity-{C}.spec.
 
         Each spec is the bundled sanity.spec body with three imports prepended:
         summary aggregator, call-resolution, and (when present) erc7201. Skip-if-exists
         so user edits survive re-runs. Also touches an empty call-resolution
         spec so the import resolves before call_resolution.py runs.
+
+        When ``reset_call_resolution_spec`` is set, the call-resolution spec is emptied
+        even if it already exists. It is a generated artifact that call_resolution.py
+        rewrites during warmup; a stale, populated one left over from a previous run
+        would be typechecked (via the sanity spec's import) against the freshly-trimmed
+        base config before call resolution regenerates it, failing with
+        "<contract> does not exist". Callers pass this whenever call resolution will run.
         """
         sanity_template = self.certora_dir / "sanity.spec"
         if not sanity_template.exists():
@@ -49,7 +60,7 @@ class SanityRuleGenerator:
 
             call_res_spec = user_call_resolution_spec_path(project_root, contract_name)
             call_res_spec.parent.mkdir(parents=True, exist_ok=True)
-            if not call_res_spec.exists():
+            if reset_call_resolution_spec or not call_res_spec.exists():
                 call_res_spec.write_text("")
 
             if target_spec.exists():
