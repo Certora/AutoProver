@@ -10,6 +10,22 @@ class KBMessage(TypedDict):
     body: str
     symptom: str
 
+# Canonical-source policy for guidance that also exists elsewhere:
+# - Prompt templates (composer/templates/*.j2) own PHASE PROCEDURE and tool
+#   bindings — repair ladders, decision gates, references to concrete tools
+#   like write_mock/edit_config. They are always-on for the one phase that
+#   must act unprompted; do not shrink them to KB pointers.
+# - These KB articles own SYMPTOM-INDEXED CONCEPT KNOWLEDGE: tool-agnostic,
+#   retrieved on demand by any agent (cex remediation, cvl_research, natspec).
+#   Only the symptom field is embedded for retrieval, so symptoms should quote
+#   the literal tokens agents see in prover output; bodies stay
+#   decision-centric (what to do and why, not phase mechanics). Articles
+#   reference each other with the phrase `article titled "<exact title>"`
+#   (KBGet retrieves by exact title; tests/test_kb_populate.py checks the
+#   references resolve).
+# - Public docs derive from these concepts and are reference material.
+# When the same fact appears in more than one tier, edit the owning tier
+# first and bring the other copies along.
 CVL_HELP_MESSAGES : list[KBMessage] = [
     {
         "title": "Summary not being applied",
