@@ -22,8 +22,13 @@ from composer.spec.source.harness import (
     empty_main_harness_plan_error,
     main_harness_path_error,
 )
+from composer.spec.prop import PropertyFormulation
 from composer.spec.source.report.schema import GaveUpComponent
-from composer.spec.system_model import HarnessedApplication, SourceApplication
+from composer.spec.system_model import (
+    HarnessedApplication,
+    SolidityIdentifier,
+    SourceApplication,
+)
 from composer.templates.loader import load_jinja_template
 
 
@@ -63,10 +68,10 @@ def _plan() -> MainHarnessPlan:
 
 def _main_harness_contract() -> HarnessedContract:
     return HarnessedContract(
-        solidity_identifier="RiverHarness",
+        solidity_identifier=SolidityIdentifier("RiverHarness"),
         link_fields=[],
         harness_definition=HarnessDef(
-            harness_of="River",
+            harness_of=SolidityIdentifier("River"),
             harness_source="contract RiverHarness is River {}",
         ),
         path="certora/harnesses/RiverHarness.sol",
@@ -167,10 +172,13 @@ def test_main_harness_delivery_confined_to_harness_dir():
 # Template rendering
 # ---------------------------------------------------------------------------
 
-class _Prop:
-    sort = "safety"
-    title = "version_is_monotone"
-    description = "the version never decreases"
+def _prop() -> PropertyFormulation:
+    return PropertyFormulation(
+        title="version_is_monotone",
+        methods="invariant",
+        sort="safety_property",
+        description="the version never decreases",
+    )
 
 
 class _Spec:
@@ -212,7 +220,7 @@ def test_property_generation_prompt_harness_api(with_api: bool):
     api = _plan().api_lines() if with_api else None
     out = load_jinja_template(
         "property_generation_prompt.j2",
-        properties=[_Prop()],
+        properties=[_prop()],
         contract_name="River",
         resources=[],
         context=None,
@@ -230,7 +238,7 @@ def test_property_generation_prompt_harness_api(with_api: bool):
 def test_property_judge_prompt_harness_api():
     out = load_jinja_template(
         "property_judge_prompt.j2",
-        properties=[_Prop()],
+        properties=[_prop()],
         sort="existing",
         context=None,
         harness_api=_plan().api_lines(),
@@ -246,7 +254,7 @@ def test_property_judge_prompt_harness_api():
     # Binding without harness_api at all (the NotRequired key) renders harness-free.
     out = load_jinja_template(
         "property_judge_prompt.j2",
-        properties=[_Prop()],
+        properties=[_prop()],
         sort="existing",
         context=None,
     )
@@ -283,7 +291,7 @@ def test_harness_augmentation_reaches_both_judge_binds(flag: bool):
     task_bind = _bind_harness_augmentation(
         FeedbackTemplate.bind({
             "sort": "existing", "context": None, "harness_api": _plan().api_lines() if flag else None,
-        }).depends(Properties).inject({"properties": [_Prop()]}),
+        }).depends(Properties).inject({"properties": [_prop()]}),
         flag,
     )
     assert task_bind.args["harness_augmentation"] is flag
@@ -312,7 +320,7 @@ def _fallback_fixture(tmp_path):
     source = SourceCode(
         content=cast(Any, None),
         project_root=str(tmp_path),
-        contract_name="River",
+        contract_name=SolidityIdentifier("River"),
         relative_path="src/River.sol",
         forbidden_read="^$",
     )
@@ -437,9 +445,9 @@ def test_system_description_fallback_field_backcompat():
 @pytest.mark.parametrize("with_harness", [True, False])
 def test_structural_invariant_prompt_main_harness(with_harness: bool):
     view = MainHarnessView(
-        name="RiverHarness",
+        name=SolidityIdentifier("RiverHarness"),
         path="certora/harnesses/RiverHarness.sol",
-        harness_of="River",
+        harness_of=SolidityIdentifier("River"),
         api=_plan().api_lines(),
     ) if with_harness else None
     app = HarnessedApplication(application_type="Staking", description="desc", components=[])
