@@ -171,5 +171,17 @@
     "library_names": ["SafeTransferLib"],
     "summary_file": "specs/summaries/Solady/SafeTransferLib.spec",
     "description": "Solady SafeTransferLib.balanceOf"
+  },
+  "solady_create3_deploy": {
+    "names": ["deployDeterministic"],
+    "library_names": ["CREATE3"],
+    "summary_file": "specs/summaries/Solady/CREATE3.spec",
+    "description": "Solady CREATE3.deployDeterministic (NONDET address)"
+  },
+  "solady_create3_predict": {
+    "names": ["predictDeterministicAddress"],
+    "library_names": ["CREATE3"],
+    "summary_file": "specs/summaries/Solady/CREATE3.spec",
+    "description": "Solady CREATE3.predictDeterministicAddress (NONDET address)"
   }
 }
