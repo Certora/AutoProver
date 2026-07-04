@@ -788,6 +788,31 @@ CVL_HELP_MESSAGES : list[KBMessage] = [
     },
 ]
 
+# Cross-reference graph of the articles above, declared as data so the test
+# suite (tests/test_kb_populate.py) can check that references resolve without
+# parsing prose: each key is an article title, each value the exact titles its
+# body cites with the `article titled "<title>"` phrase. Keep this map in sync
+# when editing a body's cross-references.
+KB_CROSS_REFERENCES: dict[str, list[str]] = {
+    "Vacuity — rule passes but `assert false` also passes": [
+        "Rule passes vacuously — a method always reverts under the model",
+    ],
+    "Keccak-derived / unstructured storage slots are verifiable — don't skip": [
+        "No public getter for the state you need — write a harness",
+    ],
+    "Sload/Sstore hook grammar — paths, KEY/INDEX, ghost mirroring": [
+        "Hook is not triggered by CVL code",
+        "Hook is not triggered recursively",
+        "Ghost variable has unexpected value after an external call",
+    ],
+    "Rule passes vacuously — a method always reverts under the model": [
+        "Vacuity — rule passes but `assert false` also passes",
+        "`lastReverted` is overwritten by subsequent calls",
+        "Unresolved low-level call{value} havocs storage — "
+        "optimistic_fallback vs DISPATCHER vs mock",
+    ],
+}
+
 to_store : list[KnowledgeBaseArticle] = [
     {
         "title": d["title"],

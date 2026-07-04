@@ -16,19 +16,23 @@ KB_POPULATE_PATH = (
 REQUIRED_KEYS = {"title", "symptom", "body"}
 
 
-def _load_messages() -> list[dict[str, str]]:
+def _load_literal(name: str):
     tree = ast.parse(KB_POPULATE_PATH.read_text())
     for node in tree.body:
         if (
             isinstance(node, ast.AnnAssign)
             and isinstance(node.target, ast.Name)
-            and node.target.id == "CVL_HELP_MESSAGES"
+            and node.target.id == name
         ):
-            assert node.value is not None, "CVL_HELP_MESSAGES has no value"
-            # entries are pure literals (dicts of implicitly-concatenated
-            # string constants), so literal_eval reconstructs them exactly
+            assert node.value is not None, f"{name} has no value"
+            # the seed data is pure literals (dicts of implicitly-concatenated
+            # string constants), so literal_eval reconstructs it exactly
             return ast.literal_eval(node.value)
-    raise AssertionError("CVL_HELP_MESSAGES assignment not found in kb_populate.py")
+    raise AssertionError(f"{name} assignment not found in kb_populate.py")
+
+
+def _load_messages() -> list[dict[str, str]]:
+    return _load_literal("CVL_HELP_MESSAGES")
 
 
 def test_entries_are_well_formed():
@@ -55,23 +59,34 @@ def test_titles_are_unique():
 
 # Bodies cross-reference other articles with the fixed phrase
 # `article titled "<exact title>"` so a following agent can KBGet by exact
-# key. The marker + closing quote delimit the title verbatim (titles contain
-# no double quotes, enforced below), so plain splitting recovers it exactly.
-CROSS_REF_MARKER = 'article titled "'
-
-
+# key. The graph is declared as data (KB_CROSS_REFERENCES in kb_populate.py)
+# rather than recovered from the prose, so the test only checks declared
+# facts: every declared reference names an existing article and its citing
+# phrase appears verbatim in the declaring body. A cross-reference added to a
+# body without a matching map entry is not detected — keep the map in sync.
 def test_cross_references_resolve():
     messages = _load_messages()
-    titles = {entry["title"] for entry in messages}
+    cross_refs: dict[str, list[str]] = _load_literal("KB_CROSS_REFERENCES")
+    bodies = {entry["title"]: entry["body"] for entry in messages}
+    titles = set(bodies)
     for title in titles:
         assert '"' not in title, (
             f"title {title!r} contains a double quote, breaking the "
             f"cross-reference convention"
         )
-    for entry in messages:
-        for chunk in entry["body"].split(CROSS_REF_MARKER)[1:]:
-            referenced = chunk.split('"', 1)[0]
+    for source, referenced_titles in cross_refs.items():
+        assert source in titles, (
+            f"KB_CROSS_REFERENCES declares unknown source article {source!r}"
+        )
+        assert referenced_titles, (
+            f"KB_CROSS_REFERENCES entry for {source!r} is empty — drop it"
+        )
+        for referenced in referenced_titles:
             assert referenced in titles, (
-                f"article {entry['title']!r} references unknown article "
+                f"article {source!r} declares a reference to unknown article "
                 f"{referenced!r}"
+            )
+            assert f'article titled "{referenced}"' in bodies[source], (
+                f"article {source!r} declares a reference to {referenced!r} "
+                f"but its body lacks the citing phrase"
             )
