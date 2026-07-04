@@ -18,8 +18,11 @@ from composer.prover.vacuity import (
     format_vacuity_alert,
     instantiated_methods,
 )
-from composer.spec.cvl_generation import check_completion
-from composer.spec.source.author import AcknowledgeVacuousMethod, ExpectRuleFailure
+from composer.spec.cvl_generation import check_completion, state_digest
+from composer.spec.source.author import (
+    AcknowledgeVacuousMethod, ConfigEditTool, ExpectRuleFailure, WriteMockTool,
+    vacuity_judge_evidence,
+)
 from composer.spec.source.prover import StateWithSkips, VALIDATION_KEY
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
@@ -432,3 +435,180 @@ class TestVerifySpecVacuityGuard:
         assert acks == {}  # cleared by the healthy run, not re-established
         assert "vacuity_guard" in last_prover_msg
         assert "WITHHELD" in last_prover_msg
+
+
+# =========================================================================
+# Digest coverage of the agent-mutable setup
+# =========================================================================
+
+
+def _digest_state(**overrides) -> StateWithSkips:
+    base: dict = dict(
+        curr_spec="rule r { assert true; }",
+        skipped=[],
+        property_rules=[],
+        validations={},
+        required_validations=[VALIDATION_KEY],
+        rule_skips={},
+        vacuous_methods={},
+        acknowledged_vacuous={},
+        mocks={},
+        config={"files": ["src/Foo.sol"]},
+    )
+    base.update(overrides)
+    return base  # type: ignore[return-value]
+
+
+class TestStateDigest:
+    """The validation stamps must cover everything the agent can mutate after
+    stamping: the prover config, the mocks, and the acknowledgment ledger."""
+
+    def test_config_change_changes_digest(self):
+        assert state_digest(_digest_state()) != state_digest(
+            _digest_state(config={"files": ["src/Foo.sol"], "optimistic_fallback": True})
+        )
+
+    def test_mock_change_changes_digest(self):
+        assert state_digest(_digest_state()) != state_digest(
+            _digest_state(mocks={"certora/mocks/x/M.sol": "contract M {}"})
+        )
+
+    def test_acknowledgment_changes_digest(self):
+        assert state_digest(_digest_state()) != state_digest(
+            _digest_state(acknowledged_vacuous={DEPOSIT: "{}"})
+        )
+
+    def test_vacuous_verdicts_do_not_change_digest(self):
+        """Verdicts are prover observations, not agent edits: the stamp is
+        granted in the same Command that records them, so including them would
+        make every stamp instantly stale."""
+        assert state_digest(_digest_state()) == state_digest(
+            _digest_state(vacuous_methods={DEPOSIT: "diagnosis"})
+        )
+
+    def test_absent_and_empty_extras_hash_identically(self):
+        """Back-compat: flows without the source-mode state keys (natreq) and
+        checkpoints predating them must produce the pre-field digest."""
+        bare = {
+            "curr_spec": "rule r { assert true; }",
+            "skipped": [],
+            "property_rules": [],
+            "validations": {},
+            "required_validations": [],
+        }
+        assert state_digest(bare) == state_digest(  # type: ignore[arg-type]
+            _digest_state(config={}, mocks={}, acknowledged_vacuous={})
+        )
+
+
+class TestStampStalenessAfterSetupEdit:
+    """End-to-end: a PROVER stamp obtained before an edit_config / write_mock
+    call must not survive it — the persisted conf/mocks were never verified."""
+
+    def _scenario(self, certora_prover: ProverMock, *responses: ProverToolResponse):
+        prover_tool = certora_prover(responses)
+        return Scenario(
+            StateWithSkips,
+            prover_tool,
+            ConfigEditTool.as_tool("edit_config"),
+            WriteMockTool.bind("autospec_test").as_tool("write_mock"),
+            _result_tool,
+        ).init(
+            curr_spec=_SPEC,
+            skipped=[],
+            property_rules=[],
+            validations={},
+            required_validations=[VALIDATION_KEY],
+            rule_skips={},
+            vacuous_methods={},
+            acknowledged_vacuous={},
+            mocks={},
+            config={"files": ["src/Foo.sol"]},
+        )
+
+    @pytest.mark.asyncio
+    async def test_stamp_survives_without_edits(self, certora_prover: ProverMock):
+        scenario = self._scenario(
+            certora_prover, _vacuous_report(rule_status={"solvency": True}),
+        )
+        accepted = await scenario.turns(_verify(), _result("done")).map_run(_result_accepted)
+        assert accepted
+
+    @pytest.mark.asyncio
+    async def test_config_edit_invalidates_stamp(self, certora_prover: ProverMock):
+        scenario = self._scenario(
+            certora_prover, _vacuous_report(rule_status={"solvency": True}),
+        )
+        accepted = await scenario.turns(
+            _verify(),
+            tool_call_raw("edit_config", edits=[
+                {"type": "set_flag", "flag": "optimistic_fallback", "value": True},
+            ]),
+            _result("done"),
+        ).map_run(_result_accepted)
+        assert not accepted
+
+    @pytest.mark.asyncio
+    async def test_mock_write_invalidates_stamp(self, certora_prover: ProverMock):
+        scenario = self._scenario(
+            certora_prover, _vacuous_report(rule_status={"solvency": True}),
+        )
+        accepted = await scenario.turns(
+            _verify(),
+            tool_call_raw("write_mock", file_name="M.sol", content="contract M {}"),
+            _result("done"),
+        ).map_run(_result_accepted)
+        assert not accepted
+
+    @pytest.mark.asyncio
+    async def test_reverify_after_edit_restores_stamp(self, certora_prover: ProverMock):
+        scenario = self._scenario(
+            certora_prover,
+            _vacuous_report(rule_status={"solvency": True}),
+            _vacuous_report(rule_status={"solvency": True}),
+        )
+        accepted = await scenario.turns(
+            _verify(),
+            tool_call_raw("edit_config", edits=[
+                {"type": "set_flag", "flag": "optimistic_fallback", "value": True},
+            ]),
+            _verify(),
+            _result("done"),
+        ).map_run(_result_accepted)
+        assert accepted
+
+
+# =========================================================================
+# Judge evidence thunk
+# =========================================================================
+
+
+class TestVacuityJudgeEvidence:
+    def test_empty_state_contributes_nothing(self):
+        assert vacuity_judge_evidence({}) == []
+        assert vacuity_judge_evidence(
+            {"vacuous_methods": {}, "rule_skips": {}, "acknowledged_vacuous": {}}
+        ) == []
+
+    def test_all_three_sections_rendered(self):
+        record = json.dumps({
+            "steps_attempted": ["mock", "summary_fix"],
+            "justification": "mock failed to compile; summary fix rejected",
+        })
+        parts = vacuity_judge_evidence({
+            "vacuous_methods": {DEPOSIT: "sanity-failed in 2 of 2 rule(s)"},
+            "rule_skips": {"solvency": "expected CEX per threat model"},
+            "acknowledged_vacuous": {DEPOSIT: record},
+        })
+        assert len(parts) == 3
+        vacuous_part, skips_part, acks_part = (str(x) for x in parts)
+        assert "VACUOUS" in vacuous_part and DEPOSIT in vacuous_part
+        assert "solvency" in skips_part and "expected CEX" in skips_part
+        assert "acknowledge_vacuous_method" in acks_part
+        assert "mock, summary_fix" in acks_part
+        assert "failed to compile" in acks_part
+
+    def test_malformed_ack_record_falls_back_to_raw(self):
+        parts = vacuity_judge_evidence({"acknowledged_vacuous": {DEPOSIT: "not json"}})
+        assert len(parts) == 1
+        assert "not json" in str(parts[0])

@@ -1,4 +1,4 @@
-from typing import NotRequired, override, Literal, Annotated
+from typing import Any, Mapping, NotRequired, override, Literal, Annotated
 from typing_extensions import TypedDict
 import json
 
@@ -489,6 +489,54 @@ class WriteMockTool(WithAsyncDependencies[Command | str, str], WithInjectedId):
         )
 
 
+def vacuity_judge_evidence(state: Mapping[str, Any]) -> list[str | dict]:
+    """The prover-side evidence the feedback judge audits (Criteria 5's
+    filter-legitimacy taxonomy): outstanding vacuity verdicts, the rule-skip
+    map with its recorded reasons, and the acknowledged-vacuous ledger, passed
+    verbatim from the generation's graph state.
+
+    Wired as the ``extra_inputs`` thunk of ``property_feedback_judge`` at the
+    ``batch_cvl_generation`` call site — the judge cannot re-derive any of this
+    from the CVL text, because vacuity is a prover-run observation, not a
+    spec-text property. Evaluated per feedback round over the then-current
+    state. Empty state contributes nothing (the natreq-style silent default).
+    """
+    parts: list[str | dict] = []
+    vacuous: dict[str, str] = state.get("vacuous_methods") or {}
+    if vacuous:
+        parts.append(
+            "The prover flagged the following method(s) as VACUOUS (their sanity check "
+            "failed: every rule instantiated with them passes trivially). Verdicts clear "
+            "automatically once a run shows the method healthy — these are still "
+            "outstanding:\n" + "\n".join(f"  - {m}: {d}" for m, d in sorted(vacuous.items()))
+        )
+    rule_skips: dict[str, str] = state.get("rule_skips") or {}
+    if rule_skips:
+        parts.append(
+            "The author marked the following rule(s) as \"expected to fail\" (excluded "
+            "from the prover pass/fail verdict), with these reasons:\n"
+            + "\n".join(f"  - {r}: {reason}" for r, reason in sorted(rule_skips.items()))
+        )
+    acks: dict[str, str] = state.get("acknowledged_vacuous") or {}
+    if acks:
+        lines: list[str] = []
+        for m, record in sorted(acks.items()):
+            try:
+                rec = json.loads(record)
+                lines.append(
+                    f"  - {m}: steps attempted: {', '.join(rec['steps_attempted'])}; "
+                    f"justification: {rec['justification']}"
+                )
+            except (ValueError, KeyError, TypeError):
+                lines.append(f"  - {m}: {record}")
+        parts.append(
+            "The acknowledged-vacuous ledger (structured records from the "
+            "`acknowledge_vacuous_method` tool — audit each acknowledgment on its merits "
+            "per the Criteria 5 taxonomy):\n" + "\n".join(lines)
+        )
+    return parts
+
+
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
 
 async def batch_cvl_generation(
@@ -565,7 +613,10 @@ async def batch_cvl_generation(
         ctx.child(CVL_JUDGE_KEY), env, FeedbackTemplate.bind({
             "sort": "existing",
             "context": component
-        }), props
+        }), props,
+        # Vacuity verdicts, rule skips, and acknowledgments reach the judge with
+        # every feedback round — the evidence Criteria 5's taxonomy audits.
+        extra_inputs=vacuity_judge_evidence,
     )
 
     res_state = await run_cvl_generator(

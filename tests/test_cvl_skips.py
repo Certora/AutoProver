@@ -6,7 +6,7 @@ check_completion / _compute_digest validation logic end-to-end.
 """
 import pytest
 
-from typing import NotRequired, override, Iterable, Callable, Protocol
+from typing import Any, Mapping, NotRequired, override, Iterable, Callable, Protocol
 
 
 from dataclasses import dataclass
@@ -103,7 +103,8 @@ async def dummy_feedback(
     spec: str,
     s: list[SkippedProperty],
     rebuttals: list[Rebuttal],
-    within_tool: str
+    within_tool: str,
+    state: Mapping[str, Any],
 ) -> Feedback:
     return Feedback(good=True, feedback="")
 
@@ -130,6 +131,7 @@ def feedback_builder(
         skipped: list[SkippedProperty],
         rebuttals: list[Rebuttal],
         within_tool: str,
+        state: Mapping[str, Any],
     ) -> Feedback:
         for sk in skipped:
             if sk.property_title not in skippable:

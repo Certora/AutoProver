@@ -14,7 +14,7 @@ import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, Callable, Iterator, override, AsyncContextManager
+from typing import Annotated, Callable, Iterator, cast, override, AsyncContextManager
 from typing_extensions import TypedDict, NotRequired
 
 from langchain_core.tools import InjectedToolCallId, tool, BaseTool
@@ -369,9 +369,19 @@ def get_prover_tool(
                         prover_link=result.link, vacuous_methods=vacuity_update,
                         acknowledged_vacuous=ack_update,
                     )
+                # Stamp over the POST-update state: this same Command may clear
+                # acknowledged_vacuous entries (ack_update), and the ledger is part of
+                # the validation digest — stamping the pre-update state would yield a
+                # digest check_completion can never match.
+                effective = cast(StateWithSkips, {
+                    **state,
+                    "acknowledged_vacuous": _merge_rule_skips(
+                        state.get("acknowledged_vacuous", {}), ack_update
+                    ),
+                })
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state),
+                    prover_link=result.link, validations=stamper(effective),
                     vacuous_methods=vacuity_update, acknowledged_vacuous=ack_update,
                 )
             return tool_state_update(
