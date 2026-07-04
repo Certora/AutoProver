@@ -114,6 +114,23 @@ async def test_mocks_materialized_only_during_prover_run(tmp_path, monkeypatch, 
     ).turn(tool_call_raw("verify_spec", rules=None)).map_run(lambda st: st)
     assert seen == [True]
     assert not target.exists()
+    # The namespace dirs created for the run are cleaned up too.
+    assert not (tmp_path / "certora" / "mocks").exists()
+
+
+async def test_materialization_preserves_other_generations_dirs(tmp_path):
+    """Cleanup only removes the dirs this generation emptied: a concurrent
+    generation's still-materialized mocks (and the shared mocks root holding
+    them) must survive."""
+    from composer.spec.source.prover import materialized_mocks
+
+    other = tmp_path / "certora" / "mocks" / "other_ns" / "Keep.sol"
+    other.parent.mkdir(parents=True)
+    other.write_text("// keep")
+    with materialized_mocks(str(tmp_path), {_MOCK_PATH: _CONTENT}):
+        assert (tmp_path / _MOCK_PATH).read_text() == _CONTENT
+    assert not (tmp_path / "certora" / "mocks" / _NAMESPACE).exists()
+    assert other.read_text() == "// keep"
 
 
 # =========================================================================

@@ -40,7 +40,7 @@ from composer.spec.cvl_generation import CVLGenerationState, make_validation_sta
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
-from composer.spec.gen_types import SPECS_DIR
+from composer.spec.gen_types import MOCKS_DIR, SPECS_DIR
 
 
 _logger = logging.getLogger("composer.prover")
@@ -275,6 +275,19 @@ def materialized_mocks(root: str, mocks: dict[str, str]) -> Iterator[None]:
     finally:
         for target in written:
             target.unlink(missing_ok=True)
+        # Also drop the namespace dirs we created (up to and including the
+        # mocks root, never above it) so gave-up generations leave no empty
+        # directories behind. rmdir refuses non-empty dirs, so a concurrent
+        # generation's still-materialized mocks are never disturbed.
+        mocks_root = Path(root) / MOCKS_DIR
+        for target in written:
+            directory = target.parent
+            while directory == mocks_root or mocks_root in directory.parents:
+                try:
+                    directory.rmdir()
+                except OSError:
+                    break
+                directory = directory.parent
 
 
 def _prover_sem(cloud: bool) -> AsyncContextManager[None]:
