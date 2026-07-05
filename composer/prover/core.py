@@ -42,7 +42,7 @@ from graphcore.graph import LLM
 from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
-from composer.prover.cloud import cloud_results
+from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult
 from composer.prover.results import read_and_format_run_result
 from composer.templates.loader import load_jinja_template
@@ -458,43 +458,48 @@ async def run_prover(
             return f"Prover did not produce local results.\nstdout:\n{stdout}"
         results_cm = _local_results(Path(run_result["link"]), local_runtime_ms)
 
-    # 8. Parse results and run analysis, both inside ``results_cm`` so the report
-    # directory (which contains ``inputs/.certora_sources`` — the source files actually
-    # compiled into this verification problem) stays alive for the analyzer to read.
-    # Cloud runs unzip into a tmpdir whose lifetime is bound to ``cloud_results``; local
-    # runs hand back a stable path. Either way the analyzer must complete before the
-    # context manager exits. ``runtime_ms`` is the prover's queue-free run time, sourced
-    # by each context manager (cloud job window / local subprocess wall-clock).
-    async with results_cm as (emv_path, runtime_ms):
-        parsed = read_and_format_run_result(emv_path)
+    # 8. Parse results + run analysis. Both happen inside ``results_cm`` so
+    # the report directory (which contains ``inputs/.certora_sources`` —
+    # the source files actually compiled into this verification problem)
+    # stays alive for the analyzer to read. Cloud runs unzip into a tmpdir
+    # whose lifetime is bound to ``cloud_results``; local runs hand back
+    # a stable path. Either way the analyzer must complete before the
+    # context manager exits. ``runtime_ms`` is the prover's queue-free run
+    # time, sourced by each context manager (cloud job window / local
+    # subprocess wall-clock).
+    try:
+        async with results_cm as (emv_path, runtime_ms):
+            parsed = read_and_format_run_result(emv_path)
 
-        if isinstance(parsed, str):
-            return f"Failed to parse prover results: {parsed}"
+            if isinstance(parsed, str):
+                return f"Failed to parse prover results: {parsed}"
 
-        # 9. Notify runtime + prover_result callbacks
-        if runtime_ms is not None:
-            await callbacks.on_prover_runtime(runtime_ms)
-        await callbacks.on_prover_result(parsed)
+            # 9. Notify runtime + prover_result callbacks
+            if runtime_ms is not None:
+                await callbacks.on_prover_runtime(runtime_ms)
+            await callbacks.on_prover_result(parsed)
 
-        all_results = list(parsed.values())
+            all_results = list(parsed.values())
 
-        # 10. Hand off to the handler when anything failed. It owns the
-        # analysis approach, per-rule UI events, rendering, summarization
-        # (if any), and storage of any keyed records (e.g. report_keys
-        # for ``cex_remediation`` lookup). We get back the final report
-        # string. ``emv_path`` is the prover's report directory;
-        # implementations that read source narrow further to
-        # ``emv_path / "inputs" / ".certora_sources"``.
-        if any(r.status == "VIOLATED" for r in all_results):
-            result_str = await cex.analyze(
-                all_results, tool_call_id, callbacks, emv_path
-            )
-        else:
-            result_str = load_jinja_template(
-                "rule_feedback.j2",
-                rule_entries=[(r, None) for r in all_results],
-                diagnoses=[],
-            )
+            # 10. Hand off to the handler when anything failed. It owns the
+            # analysis approach, per-rule UI events, rendering, summarization
+            # (if any), and storage of any keyed records (e.g. report_keys
+            # for ``cex_remediation`` lookup). We get back the final report
+            # string. ``emv_path`` is the prover's report directory;
+            # implementations that read source narrow further to
+            # ``emv_path / "inputs" / ".certora_sources"``.
+            if any(r.status == "VIOLATED" for r in all_results):
+                result_str = await cex.analyze(
+                    all_results, tool_call_id, callbacks, emv_path
+                )
+            else:
+                result_str = load_jinja_template(
+                    "rule_feedback.j2",
+                    rule_entries=[(r, None) for r in all_results],
+                    diagnoses=[],
+                )
+    except CloudJobError as exc:
+        return f"Prover cloud job did not produce results (status {exc.status.value})."
 
     prover_report: dict[str, bool] = {}
     for i in parsed.values():

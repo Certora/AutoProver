@@ -17,11 +17,34 @@ from typing import AsyncIterator, Awaitable, Callable
 from urllib.parse import urlparse, parse_qs
 
 import aiohttp
+from prover_output_utility.models import JobStatus, convert_job_status
 
 logger = logging.getLogger("composer.spec")
 
-# Terminal job statuses — anything not in this set means "still running"
-_TERMINAL_STATUSES = frozenset({"FAILED", "ERROR", "CANCELLED", "TIMEOUT", "SUCCEEDED"})
+
+class CloudJobError(RuntimeError):
+    """Raised when a cloud prover job reaches a terminal status other than
+    SUCCEEDED, does not reach a terminal status within the poll timeout, or
+    finishes without an output archive. Carries the ``status`` and prover
+    ``link``.
+    """
+
+    def __init__(self, status: JobStatus, link: str) -> None:
+        super().__init__(f"Cloud job ended with status {status.value}")
+        self.status = status
+        self.link = link
+
+
+# Terminal cloud job statuses (the job is no longer running). A status outside
+# this set means the job is still in progress.
+_TERMINAL_STATUSES = frozenset({
+    JobStatus.SUCCEEDED,
+    JobStatus.FAILED,
+    JobStatus.CANCELED,
+    JobStatus.HALTED,
+    JobStatus.SERVICE_UNAVAILABLE,
+    JobStatus.UPLOAD_FAILED,
+})
 
 # Avoid requesting Brotli — aiohttp's brotli support is often broken/missing.
 _NO_BROTLI_HEADERS = {"Accept-Encoding": "gzip, deflate"}
@@ -88,7 +111,7 @@ async def _poll_job_inner(
             if on_status is not None:
                 await on_status(status)
 
-            if status in _TERMINAL_STATUSES:
+            if convert_job_status(status) in _TERMINAL_STATUSES:
                 return data
 
             await asyncio.sleep(interval)
@@ -163,17 +186,20 @@ async def cloud_results(
         if poll_callback:
             await poll_callback(status, f"Cloud job {cloud_job.job_id[:8]}: {status}")
 
-    job_data = await poll_job(cloud_job, timeout=poll_timeout, on_status=on_status)
+    try:
+        job_data = await poll_job(cloud_job, timeout=poll_timeout, on_status=on_status)
+    except TimeoutError as exc:
+        raise CloudJobError(JobStatus.UNKNOWN, run_result_link) from exc
 
-    status = job_data.get("jobStatus", "UNKNOWN")
-    if status != "SUCCEEDED":
-        raise RuntimeError(f"Cloud job finished with status {status} (expected DONE)")
+    status = convert_job_status(job_data.get("jobStatus", "UNKNOWN"))
+    if status is not JobStatus.SUCCEEDED:
+        raise CloudJobError(status, run_result_link)
 
     runtime_ms = _job_runtime_ms(job_data)
 
     zip_url = job_data.get("zipOutputUrl")
     if not zip_url:
-        raise RuntimeError("Cloud job completed but no zipOutputUrl in response")
+        raise CloudJobError(status, run_result_link)
 
     separator = "&" if "?" in zip_url else "?"
     full_url = f"{zip_url}{separator}anonymousKey={cloud_job.anonymous_key}"

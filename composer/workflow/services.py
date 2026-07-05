@@ -138,6 +138,12 @@ def _adapt_async(obj: T, pairs: list[tuple[str, str]]) -> T:
         setattr(obj, async_name, new_async_method)
     return obj
 
+# Bound each connect attempt; give getconn a long window to keep retrying so a
+# slow first connection doesn't fail the run.
+_DB_CONNECT_TIMEOUT_SECONDS = 10
+_DB_POOL_ACQUIRE_TIMEOUT_SECONDS = 180.0
+
+
 def _get_composer_connection_string(
      *,
     user: str,
@@ -146,7 +152,10 @@ def _get_composer_connection_string(
 ) -> str:
     host = os.environ.get("CERTORA_AI_COMPOSER_PGHOST", "localhost")
     port = os.environ.get("CERTORA_AI_COMPOSER_PGPORT", "5432")
-    conn_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    conn_string = (
+        f"postgresql://{user}:{password}@{host}:{port}/{database}"
+        f"?connect_timeout={_DB_CONNECT_TIMEOUT_SECONDS}"
+    )
     return conn_string
 
 def _get_composer_connection(
@@ -205,6 +214,7 @@ async def _get_async_composer_pool(
         kwargs=kwargs,
         min_size=1,
         max_size=1,
+        timeout=_DB_POOL_ACQUIRE_TIMEOUT_SECONDS,
         open=False,
     )
     await pool.open()
@@ -278,10 +288,12 @@ async def _async_pool_context_inner(
         kwargs=kwargs,
         min_size=1,
         max_size=1,
+        timeout=_DB_POOL_ACQUIRE_TIMEOUT_SECONDS,
         open=False,
     )
     async with pool:
         yield pool
+
 
 @asynccontextmanager
 async def checkpointer_context() -> AsyncIterator[AsyncPostgresSaver]:

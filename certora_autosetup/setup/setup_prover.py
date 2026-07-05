@@ -9,6 +9,7 @@ This module contains all the setup phase functionality including:
 - Summary compilation testing
 """
 
+import asyncio
 import json
 import shutil
 import subprocess
@@ -321,10 +322,13 @@ class SetupProver:
             # fail gracefully here rather than failing later via certoraRun.
             if main_contract not in surviving_names:
                 raise CompilationAnalysisError(
-                    f"Main contract '{main_contract}' is not among the files in the prover scene: "
-                    f"{sorted(surviving_names) or '(none)'}. "
-                    f"The active build system did not compile it — check the build config "
-                    f"or override with --build-system"
+                    f"Main contract '{main_contract}' is not among the compiled contracts in the "
+                    f"prover scene: {sorted(surviving_names) or '(none)'}. "
+                    f"Most often this means '{main_contract}' is abstract or an interface "
+                    f"(it compiles to no bytecode), so it is not deployable and cannot be verified "
+                    f"— re-run with a concrete implementation as the main contract. Otherwise the "
+                    f"active build system did not compile it — check the build config or override "
+                    f"with --build-system."
                 )
 
             # Precompute compiler_map and solc_via_ir_map from build artifacts (survivors only)
@@ -1036,7 +1040,9 @@ class SetupProver:
                 if not contract_name or not source_file:
                     continue
 
-                storage_layout = contract.get('storageLayout', {})
+                # solc <0.5.13 doesn't emit native storageLayout output — the key is present
+                # but explicitly null rather than absent, so .get(key, {}) alone doesn't catch it.
+                storage_layout = contract.get('storageLayout') or {}
                 bytes_mapping_fields = []
 
                 # Check each storage field
@@ -1467,7 +1473,7 @@ class SetupProver:
             setup = SummarySetup(verbose=max(1, self.verbose), inheritance_graph=inheritance_graph)
 
             with ledger_component("summaries"):
-                success = setup.run(
+                configured = setup.configure(
                     main_contract=main_contract,
                     contract_files=contract_files,
                     additional_contracts=self.additional_contracts,
@@ -1476,8 +1482,16 @@ class SetupProver:
                     enable_llm=not self.skip_llm,
                     custom_recipe=None,
                 )
+                if configured:
+                    # Summarize the initial scene (main + additional contracts); call resolution
+                    # later drives the same on_contracts_entered_scene for each contract it adds.
+                    asyncio.run(
+                        setup.on_contracts_entered_scene(
+                            [main_contract] + setup.additional_names, main_contract
+                        )
+                    )
 
-            if success:
+            if configured:
                 self.log("✓ Setup summaries completed successfully")
                 self.summary_setup = setup
                 return True
