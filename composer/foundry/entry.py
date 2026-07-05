@@ -225,10 +225,11 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
 
             root_key = _root_cache_key(str(project_root), doc_path, relative_path, contract_name)
             cache_root = _user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
-            # Record the namespaces this run used under its metadata so the cache
-            # explorer can be pointed at the run by id alone: the doc — hence root_key,
-            # hence cache_root — is only known here (after discovery), so it can't go in
-            # the up-front run tags.
+            # Record the namespaces this run used in its metadata so the cache explorer
+            # can be pointed at the run by id alone. root_key — hence cache_root — is
+            # derived from the resolved doc (supplied or discovered), which isn't known
+            # until here; so, unlike the doc-independent discovery_cache_root in the
+            # up-front run tags, it has to be recorded from inside runner.
             await data_logger("cache_root", {
                 "cache_root": list(cache_root) if cache_root is not None else None,
                 "contract_name": str(contract_name),
