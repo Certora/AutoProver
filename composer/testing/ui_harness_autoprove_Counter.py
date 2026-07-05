@@ -68,6 +68,7 @@ import uuid
 
 from composer.testing.harness_tape import HarnessFakeLLM
 from composer.spec.source.task_ids import (
+    DESIGN_DOC_DISCOVERY_TASK_ID,
     SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, INVARIANTS_TASK_ID,
     INVARIANT_CVL_TASK_ID, REPORT_TASK_ID, bug_analysis_task_id, cvl_gen_task_id,
 )
@@ -1382,11 +1383,36 @@ _REPORT_TAPE: list[BaseMessage] = [
 ]
 
 
+# Design-doc discovery lane. Only consumed when the run omits the design doc
+# (system_doc=None); the finder lists the project, reads the design doc, and selects
+# it. Counter's design doc is ``system.md`` at the scenario root. A single flat lane:
+# bare fs tools, no nested code_explorer.
+_DESIGN_DOC_TAPE: list[BaseMessage] = [
+    _ai(
+        "Inventorying the project to locate a design document.",
+        _tc("list_files"),
+    ),
+    _ai(
+        "Reading the most likely design document.",
+        _tc("get_file", path="system.md"),
+    ),
+    _ai(
+        "system.md specifies Counter's intended behavior. Selecting it.",
+        _tc(
+            "result",
+            selected_path="system.md",
+            reason="Describes the Counter's intended behavior and invariants.",
+        ),
+    ),
+]
+
+
 # The tape, as a per-phase lane map keyed by run_task task_id. HarnessFakeLLM
 # serves each LLM call from its lane's cursor, so the scripted responses stay
 # correct even though the pipeline runs phases concurrently. The Counter
 # scenario has one component, "Increment".
 _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
+    DESIGN_DOC_DISCOVERY_TASK_ID: _DESIGN_DOC_TAPE,
     SYSTEM_ANALYSIS_TASK_ID: _SYSTEM_ANALYSIS_TAPE,
     HARNESS_TASK_ID: _HARNESS_TAPE,
     INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
