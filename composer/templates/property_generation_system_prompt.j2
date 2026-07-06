@@ -25,3 +25,9 @@ are good reasons to use this "expect failure" functionality:
   the rule failure is the intended result.
 2. Verifying the rule is hitting some limitation in the prover (including prover errors, etc.),
    and you have exhausted all reasonable alternative formulations to work around these prover limitations (errors, timeouts, imprecision).
+
+A `SANITY_FAILED` rule whose method was flagged VACUOUS (in a `<vacuity_alert>`) is NEVER a good reason: marking such
+rules "expected to fail" hides a setup defect exactly like filtering the method would, and the prover validation stamp
+will be withheld while the vacuity verdict is outstanding. The verdict clears only when a prover run shows the method
+healthy or when you formally acknowledge it with the `acknowledge_vacuous_method` tool (recording which repair-ladder
+steps you attempted and why each failed — the feedback judge audits that record).

@@ -1,4 +1,4 @@
-from typing import NotRequired, override, Literal, Annotated
+from typing import Any, Mapping, NotRequired, override, Literal, Annotated
 from typing_extensions import TypedDict
 import json
 
@@ -6,7 +6,8 @@ from langchain_core.tools import BaseTool
 from pydantic import Field, BaseModel, Discriminator
 
 from graphcore.tools.schemas import (
-    WithAsyncImplementation, WithImplementation, WithInjectedId, WithInjectedState,
+    WithAsyncDependencies, WithAsyncImplementation, WithImplementation, WithInjectedId,
+    WithInjectedState,
 )
 from graphcore.graph import tool_state_update
 from graphcore.summary import SummaryConfig
@@ -19,11 +20,12 @@ from composer.spec.cvl_generation import (
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.prop import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
+from composer.prover.core import DEFAULT_GLOBAL_TIMEOUT
 from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
 from langgraph.graph import MessagesState
 from langgraph.runtime import get_runtime
-from pathlib import Path
-from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
+from pathlib import Path, PurePosixPath
+from composer.spec.gen_types import CVLResource, MOCKS_DIR, TypedTemplate, import_statement_for
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import CacheLevel
 
@@ -67,6 +69,72 @@ class ExpectRuleFailure(WithAsyncImplementation[Command], WithInjectedId):
                 self.rule_name: self.reason
             }
         )
+type RepairStep = Literal["summary_fix", "mock", "optimistic_fallback"]
+
+
+@tool_display(lambda p: f"Acknowledging vacuous method `{p['method']}`", None)
+class AcknowledgeVacuousMethod(
+    WithImplementation[Command], WithInjectedState[ProverStateExtra], WithInjectedId,
+):
+    """
+    Formally acknowledge a method that `verify_spec` flagged as VACUOUS (in a `<vacuity_alert>` /
+    `<vacuity_guard>` block), after the repair ladder failed to fix it. This is the ONLY way to
+    obtain the prover validation stamp while a known-vacuous method is excluded (via `filtered`,
+    `expect_rule_failure`, or rule removal): an unacknowledged vacuous method always withholds
+    the stamp. The feedback judge audits the quality of your acknowledgment, so record honestly
+    which repair-ladder steps you attempted and why each failed. The acknowledgment is cleared
+    automatically if a later run shows the method healthy.
+    """
+    method: str = Field(
+        description="The method's instantiation name exactly as flagged by the prover "
+        "(e.g. `Bank.deposit(uint256)`)"
+    )
+    steps_attempted: list[RepairStep] = Field(
+        description="The repair-ladder steps you actually attempted before acknowledging: "
+        "`summary_fix` (fixing/replacing the offending summary), `mock` (a mock contract via "
+        "`write_mock` + `edit_config`), `optimistic_fallback` (via `edit_config` set_flag). "
+        "Must be non-empty."
+    )
+    justification: str = Field(
+        description="Why each attempted step failed to repair the vacuity, concretely "
+        "(compiler/prover output, persisting sanity failure, etc.). The feedback judge "
+        "reads this verbatim."
+    )
+
+    @override
+    def run(self) -> Command:
+        known = self.state.get("vacuous_methods", {})
+        if self.method not in known:
+            return tool_state_update(
+                self.tool_call_id,
+                f"Method {self.method!r} is not currently flagged as vacuous. "
+                + (f"Currently flagged: {', '.join(sorted(known))}." if known
+                   else "No methods are currently flagged."),
+            )
+        if not self.steps_attempted:
+            return tool_state_update(
+                self.tool_call_id,
+                "At least one attempted repair-ladder step is required: acknowledge a vacuous "
+                "method only after genuinely attempting to repair the setup.",
+            )
+        if not self.justification.strip():
+            return tool_state_update(
+                self.tool_call_id,
+                "A non-empty justification is required: describe why each attempted "
+                "repair-ladder step failed.",
+            )
+        record = json.dumps({
+            "steps_attempted": sorted(set(self.steps_attempted)),
+            "justification": self.justification,
+        })
+        return tool_state_update(
+            self.tool_call_id,
+            f"Acknowledged {self.method} as vacuous. The feedback judge will audit this "
+            "justification; rerun `verify_spec` to obtain the validation stamp.",
+            acknowledged_vacuous={self.method: record},
+        )
+
+
 @tool_display(
     lambda p: f"Expecting rule `{p["rule_name"]}` to pass", None
 )
@@ -245,8 +313,83 @@ class RemoveLink(BaseModel):
     source_contract_name : SolidityIdentifier = Field(description="The Solidity identifier of the contract whose link should be removed")
     link_field_name : str = Field(description="The storage field holding the link within `source_contract_name` that should be removed")
 
-type ConfigEdit = Annotated[RemoveLink | AddLink | AddFile | RemoveFile, Discriminator("type")]
+# Agent-facing cost/soundness clamps for SetProverFlag (owner decision):
+#   * global_timeout may be raised to at most 2x the pipeline default the prover runs
+#     with anyway (DEFAULT_GLOBAL_TIMEOUT, the single source `make_prover_options`
+#     applies) — run cost stays owner-bounded, not agent-controlled.
+#   * loop_iter is capped at 5 unrollings.
+#   * optimistic_fallback is ADD-ONLY: the agent may enable it (repair-ladder step 3)
+#     but may never set it false — that could revert an autosetup-emitted
+#     recommendation, silently re-introducing the vacuity the flag was recommended for.
+_MAX_GLOBAL_TIMEOUT = 2 * int(DEFAULT_GLOBAL_TIMEOUT)
+_MAX_LOOP_ITER = 5
 
+type ProverFlagName = Literal[
+    "optimistic_fallback", "loop_iter", "global_timeout", "contract_recursion_limit"
+]
+
+
+class SetProverFlag(BaseModel):
+    # An explicit __doc__ (rather than a docstring literal) so the tool description the
+    # LLM sees carries the computed clamp bounds instead of hardcoded copies of them.
+    __doc__ = f"""
+    Set a whitelisted top-level prover flag in the configuration:
+
+    * `optimistic_fallback` (bool, add-only — may only be set to `true`): assume unresolved
+      low-level calls (`.call{{value: ...}}`, `send`, `transfer`) succeed instead of HAVOCing
+      and always being able to fail. Step 3 of the vacuity repair ladder. Setting it back to
+      `false` is not allowed (it could revert an autosetup recommendation).
+    * `loop_iter` (int, 1-{_MAX_LOOP_ITER}): the number of loop unrollings the prover performs.
+    * `global_timeout` (int, 1-{_MAX_GLOBAL_TIMEOUT}): the overall run timeout in seconds
+      (capped at twice the pipeline default).
+    * `contract_recursion_limit` (int, 0-10): the allowed depth of recursive calls between contracts.
+    """
+    # `rule_sanity` and `optimistic_loop` are DELIBERATELY not in this whitelist: vacuity
+    # detection (composer/prover/vacuity.py) depends on `rule_sanity: basic`, and
+    # `prover_config_overlay` sets both AFTER spreading the base config so they would win
+    # anyway — the whitelist keeps the agent from even trying (and from being confused by a
+    # silently-overridden edit).
+    type: Literal["set_flag"]
+    flag: ProverFlagName
+    value: bool | int = Field(description="The value to set: a bool for `optimistic_fallback`, an int for the other flags")
+
+def _validate_prover_flag(flag: ProverFlagName, value: bool | int) -> str | None:
+    """Per-flag validation for SetProverFlag; returns an error message or None if valid.
+
+    NB: ``bool`` is a subclass of ``int``, so the bool checks must come before any int check.
+    """
+    if flag == "optimistic_fallback":
+        if not isinstance(value, bool):
+            return f"optimistic_fallback expects a boolean value, got {value!r}"
+        if value is False:
+            return (
+                "optimistic_fallback is add-only: it may be set to true (repair-ladder "
+                "step 3) but never back to false — autosetup may have recommended it, and "
+                "unsetting that recommendation would re-introduce the vacuity it prevents"
+            )
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return f"{flag} expects an integer value, got {value!r}"
+    match flag:
+        case "loop_iter":
+            if not (1 <= value <= _MAX_LOOP_ITER):
+                return f"loop_iter must be between 1 and {_MAX_LOOP_ITER}, got {value}"
+        case "global_timeout":
+            if not (1 <= value <= _MAX_GLOBAL_TIMEOUT):
+                return (
+                    f"global_timeout must be between 1 and {_MAX_GLOBAL_TIMEOUT} (seconds, "
+                    f"at most twice the pipeline default), got {value}"
+                )
+        case "contract_recursion_limit":
+            if not (0 <= value <= 10):
+                return f"contract_recursion_limit must be between 0 and 10, got {value}"
+    return None
+
+type ConfigEdit = Annotated[RemoveLink | AddLink | AddFile | RemoveFile | SetProverFlag, Discriminator("type")]
+
+@tool_display(
+    lambda p: f"Editing prover configuration ({len(p['edits'])} edit(s))", None
+)
 class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, WithInjectedState[ProverStateExtra]):
     """
     Call this tool to make a edits to the prover configuration.
@@ -322,12 +465,106 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
                     if not found:
                         return f"No existing link found that matches {src}:{fld}"
                     curr_config["link"] = new_links
+                case SetProverFlag(flag=flag, value=value):
+                    if (err := _validate_prover_flag(flag, value)) is not None:
+                        return err
+                    curr_config[flag] = value
 
         return tool_state_update(
             self.tool_call_id,
             f"Accepted, new config is:\n```json\n{json.dumps(curr_config, indent=2)}\n```",
             config=curr_config
         )
+
+
+@tool_display(lambda p: f"Writing mock `{p['file_name']}`", None)
+class WriteMockTool(WithAsyncDependencies[Command | str, str], WithInjectedId):
+    """
+    Write a minimal Solidity mock contract implementing an interface, so the prover can resolve
+    calls to an otherwise-unresolved callee (step 2 of the vacuity repair ladder). The mock is
+    recorded against this generation's own `certora/mocks/` subdirectory and materialized on
+    disk for every prover run; the tool response names the exact project-root-relative path.
+    After writing the mock, register that path in the prover configuration with `edit_config`
+    (an `add_file` edit, plus an `add_link` edit if the callee is reached through a storage
+    field).
+
+    Keep the mock as small as possible: implement only the interface the caller needs, but
+    preserve the semantics that matter to the calling contract — in particular a `payable`
+    callee must remain `payable`. Writing an existing file name overwrites it, so you can
+    iterate on a mock in place.
+    """
+    # The bound dependency is the generation's namespace (its spec stem): mocks are held in
+    # graph state and materialized under certora/mocks/<namespace>/ only around prover runs,
+    # so concurrent batch generations never mutate shared paths in the project tree (the
+    # same isolation the tmp_spec idiom gives curr_spec).
+    file_name: str = Field(description="Bare file name for the mock, e.g. `MockOracle.sol` (no directories — the tool chooses this generation's mocks directory)")
+    content: str = Field(description="The full Solidity source of the mock contract")
+
+    @override
+    async def run(self) -> Command | str:
+        name = PurePosixPath(self.file_name)
+        if len(name.parts) != 1 or name.parts[0] in (".", ".."):
+            return f"Invalid file name `{self.file_name}`: provide a bare file name without directories"
+        if name.suffix != ".sol":
+            return f"Mock must be a Solidity source file (`.sol`), got `{self.file_name}`"
+        with self.tool_deps() as namespace:
+            rel = PurePosixPath(MOCKS_DIR.as_posix()) / namespace / name
+        return tool_state_update(
+            self.tool_call_id,
+            f"Recorded mock `{rel}`; it will be materialized there for every prover run. "
+            "Remember to register it in the prover configuration via `edit_config` "
+            f"(`add_file` with `{rel}`, plus `add_link` if the callee is reached through "
+            "a storage field).",
+            mocks={str(rel): self.content},
+        )
+
+
+def vacuity_judge_evidence(state: Mapping[str, Any]) -> list[str | dict]:
+    """The prover-side evidence the feedback judge audits (Criteria 5's
+    filter-legitimacy taxonomy): outstanding vacuity verdicts, the rule-skip
+    map with its recorded reasons, and the acknowledged-vacuous ledger, passed
+    verbatim from the generation's graph state.
+
+    Wired as the ``extra_inputs`` thunk of ``property_feedback_judge`` at the
+    ``batch_cvl_generation`` call site — the judge cannot re-derive any of this
+    from the CVL text, because vacuity is a prover-run observation, not a
+    spec-text property. Evaluated per feedback round over the then-current
+    state. Empty state contributes nothing (the natreq-style silent default).
+    """
+    parts: list[str | dict] = []
+    vacuous: dict[str, str] = state.get("vacuous_methods") or {}
+    if vacuous:
+        parts.append(
+            "The prover flagged the following method(s) as VACUOUS (their sanity check "
+            "failed: every rule instantiated with them passes trivially). Verdicts clear "
+            "automatically once a run shows the method healthy — these are still "
+            "outstanding:\n" + "\n".join(f"  - {m}: {d}" for m, d in sorted(vacuous.items()))
+        )
+    rule_skips: dict[str, str] = state.get("rule_skips") or {}
+    if rule_skips:
+        parts.append(
+            "The author marked the following rule(s) as \"expected to fail\" (excluded "
+            "from the prover pass/fail verdict), with these reasons:\n"
+            + "\n".join(f"  - {r}: {reason}" for r, reason in sorted(rule_skips.items()))
+        )
+    acks: dict[str, str] = state.get("acknowledged_vacuous") or {}
+    if acks:
+        lines: list[str] = []
+        for m, record in sorted(acks.items()):
+            try:
+                rec = json.loads(record)
+                lines.append(
+                    f"  - {m}: steps attempted: {', '.join(rec['steps_attempted'])}; "
+                    f"justification: {rec['justification']}"
+                )
+            except (ValueError, KeyError, TypeError):
+                lines.append(f"  - {m}: {record}")
+        parts.append(
+            "The acknowledged-vacuous ledger (structured records from the "
+            "`acknowledge_vacuous_method` tool — audit each acknowledgment on its merits "
+            "per the Criteria 5 taxonomy):\n" + "\n".join(lines)
+        )
+    return parts
 
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
@@ -343,10 +580,14 @@ async def batch_cvl_generation(
     description: str,
     source: SourceCode,
     spec_dir: Path,
+    mock_namespace: str,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
     # directory, so resource imports are expressed relative to *spec_dir*.
+    # *mock_namespace* (the spec's stem) names this generation's private
+    # certora/mocks/<namespace>/ subdirectory: write_mock records mocks against it, so
+    # concurrent batch generations can never clobber each other's mock files.
     resource_views: list[ResourceView] = [
         {
             "description": r.description,
@@ -371,7 +612,19 @@ async def batch_cvl_generation(
     ).with_tools(
         static_tools()
     ).with_tools(
-        [prover_tool, ExpectRulePassage.as_tool("expect_rule_passage"), ExpectRuleFailure.as_tool("expect_rule_failure"), GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"), ctx.get_memory_tool()]
+        [
+            prover_tool, ExpectRulePassage.as_tool("expect_rule_passage"), ExpectRuleFailure.as_tool("expect_rule_failure"),
+            GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"),
+            # Setup-repair tools for the vacuity repair ladder: edit_config covers ladder
+            # steps 2 (register a mock via add_file/add_link) and 3 (optimistic_fallback via
+            # set_flag); write_mock produces the step-2 mock itself;
+            # acknowledge_vacuous_method is the structured last-resort ledger entry the
+            # verify_spec stamp gate and the feedback judge consult.
+            ConfigEditTool.as_tool("edit_config"),
+            WriteMockTool.bind(mock_namespace).as_tool("write_mock"),
+            AcknowledgeVacuousMethod.as_tool("acknowledge_vacuous_method"),
+            ctx.get_memory_tool(),
+        ]
     ).with_state(
         SourceCVLGenerationState
     ).with_output_key(
@@ -390,7 +643,10 @@ async def batch_cvl_generation(
         ctx.child(CVL_JUDGE_KEY), env, FeedbackTemplate.bind({
             "sort": "existing",
             "context": component
-        }), props
+        }), props,
+        # Vacuity verdicts, rule skips, and acknowledgments reach the judge with
+        # every feedback round — the evidence Criteria 5's taxonomy audits.
+        extra_inputs=vacuity_judge_evidence,
     )
 
     res_state = await run_cvl_generator(
@@ -404,6 +660,9 @@ async def batch_cvl_generation(
             input=[],
             required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
             rule_skips={},
+            vacuous_methods={},
+            acknowledged_vacuous={},
+            mocks={},
             skipped=[],
             property_rules=[],
             validations={},
@@ -417,14 +676,16 @@ async def batch_cvl_generation(
         return GaveUp(reason=res_state["result"])
     d = res_state["curr_spec"]
     assert d is not None
-    # Persist the base prover config and last run link from the final state so a later cache
-    # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
+    # Persist the base prover config, mocks, and last run link from the final state so a
+    # later cache hit (which skips the prover) can still reconstruct certora/confs — and
+    # the mock files those confs reference — and retain the link.
     return GeneratedCVL(
         commentary=res_state["result"],
         cvl=d,
         skipped=res_state["skipped"],
         property_rules=res_state["property_rules"],
         config=res_state["config"],
+        mocks=res_state["mocks"],
         final_link=res_state.get("prover_link"),
     )
 

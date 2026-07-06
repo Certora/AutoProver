@@ -7,8 +7,11 @@ Parameterized by:
 """
 
 import hashlib
+import json
 from dataclasses import dataclass
-from typing import Annotated, Callable, Literal, NotRequired, override, Awaitable, Any, Protocol
+from typing import (
+    Annotated, Callable, Literal, Mapping, NotRequired, override, Awaitable, Any, Protocol, cast,
+)
 from typing_extensions import TypedDict
 
 from pydantic import BaseModel, Field
@@ -125,6 +128,10 @@ class GeneratedCVL(BaseModel):
     # (which skips the prover) can still reconstruct certora/confs. None for pre-existing
     # cache entries or runs where no config was established.
     config: dict | None = Field(default=None)
+    # The generation's mock contracts (state["mocks"]: project-root-relative path ->
+    # Solidity source), persisted so the conf's file references resolve on cache replay
+    # from a fresh checkout. Empty for pre-existing cache entries and mock-free runs.
+    mocks: dict[str, str] = Field(default_factory=dict)
     # The last prover-run link (URL or local results dir), persisted for the report and so a
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
@@ -147,12 +154,53 @@ class CVLGenerationExtra(TypedDict):
     required_validations: list[str]
 
 
-def _compute_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
+def _compute_digest(
+    curr_spec: str,
+    skipped: list[SkippedProperty],
+    *,
+    config: Mapping[str, Any] | None = None,
+    mocks: Mapping[str, str] | None = None,
+    acknowledged: Mapping[str, str] | None = None,
+) -> str:
     digester = hashlib.md5()
     digester.update(curr_spec.encode())
     for s in skipped:
         digester.update(f"{s.property_title}:{s.reason}".encode())
+    # The agent-mutable prover setup joins the digest the empty-contributes-nothing
+    # way: an absent or empty value hashes identically to the pre-field digest, so
+    # stamps from flows without these state keys (and cache entries predating them)
+    # stay valid. Canonical JSON keeps the hash order-independent and unambiguous.
+    if config:
+        digester.update(json.dumps(config, sort_keys=True).encode())
+    if mocks:
+        digester.update(json.dumps(mocks, sort_keys=True).encode())
+    if acknowledged:
+        digester.update(json.dumps(acknowledged, sort_keys=True).encode())
     return digester.hexdigest()
+
+
+def state_digest(state: CVLGenerationExtra) -> str:
+    """Digest of everything the validation stamps attest to: the spec text, the
+    skip declarations, and — when the flow carries them — the agent-mutable
+    prover setup (``config``, ``mocks``, and the ``acknowledged_vacuous``
+    ledger, layered onto this state by the source-mode ``ProverStateExtra``).
+
+    Both the FEEDBACK and PROVER stamps use this digest, so ANY post-stamp edit
+    to the setup (an ``edit_config`` flag flip, a rewritten mock, a new
+    acknowledgment) goes stale on completion and forces a re-verify AND a
+    re-judge over the setup that will actually be published — the stamp's
+    attestation would otherwise silently cover state the prover/judge never
+    saw. The extra keys are read dynamically with empty defaults because flows
+    without them (natreq) must hash identically to before.
+    """
+    extras = cast(Mapping[str, Any], state)
+    return _compute_digest(
+        state["curr_spec"] or "",
+        state["skipped"],
+        config=extras.get("config"),
+        mocks=extras.get("mocks"),
+        acknowledged=extras.get("acknowledged_vacuous"),
+    )
 
 
 def check_completion(
@@ -162,7 +210,7 @@ def check_completion(
     spec = state["curr_spec"]
     if spec is None:
         return "Completion REJECTED: no spec written yet."
-    digest = _compute_digest(spec, state["skipped"])
+    digest = state_digest(state)
     validations = state["validations"]
     required = state["required_validations"]
     for key in required:
@@ -218,14 +266,11 @@ def validate_property_rules(
 def make_validation_stamper(key: str) -> Callable[[CVLGenerationExtra], dict[str, str]]:
     """Create a stamper for future prover tool integration.
 
-    The stamper reads curr_spec/skipped from state and returns
-    a dict suitable for merging into the validations state key.
+    The stamper reads the digest-covered state (see :func:`state_digest`) and
+    returns a dict suitable for merging into the validations state key.
     """
     def stamp(state: CVLGenerationExtra) -> dict[str, str]:
-        return {key: _compute_digest(
-            state["curr_spec"] or "",
-            state["skipped"],
-        )}
+        return {key: state_digest(state)}
     return stamp
 
 
@@ -245,13 +290,15 @@ LAST_ATTEMPT_KEY = CacheKey[CVLGeneration, _LastAttemptCache]("last_attempt")
 DESCRIPTION = "CVL generation"
 
 type FeedbackToolImpl = Callable[
-    [str, list[SkippedProperty], list[Rebuttal], str],
+    [str, list[SkippedProperty], list[Rebuttal], str, Mapping[str, Any]],
     Awaitable[PropertyFeedbackProtocol],
 ]
-"""``(cvl, skipped, rebuttals, within_tool) -> PropertyFeedback``. ``within_tool``
-is the calling ``_FeedbackSchema``'s ``tool_call_id``, plumbed through to the
-sub-graph's ``run_to_completion`` so its UI panel anchors under the parent
-tool widget."""
+"""``(cvl, skipped, rebuttals, within_tool, state) -> PropertyFeedback``.
+``within_tool`` is the calling ``_FeedbackSchema``'s ``tool_call_id``, plumbed
+through to the sub-graph's ``run_to_completion`` so its UI panel anchors under
+the parent tool widget. ``state`` is the calling generation's full graph state,
+so a judge's ``extra_inputs`` thunk can surface flow-specific evidence (e.g.
+vacuity verdicts, rule skips, and acknowledgments in the source-mode flow)."""
 
 @dataclass
 class FeedbackToolContext:
@@ -295,10 +342,10 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
         if spec is None:
             return tool_return(self.tool_call_id, "No spec put yet")
         skipped = st["skipped"]
-        t = await feedback(spec, skipped, self.rebuttals, self.tool_call_id)
+        t = await feedback(spec, skipped, self.rebuttals, self.tool_call_id, st)
         msg = f"Good? {t.good}\nFeedback {t.feedback}"
         if t.good:
-            digest = _compute_digest(spec, skipped)
+            digest = state_digest(st)
             return tool_state_update(
                 self.tool_call_id, msg,
                 validations={FEEDBACK_VALIDATION_KEY: digest},

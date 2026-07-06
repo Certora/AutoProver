@@ -140,6 +140,22 @@ Consider if any of the summaries added in the spec *trivialize* the verification
 if the specification summarizes away an invocation of a contract function which moves balances as "NONDET", then this effectively makes any balance
 transfers a NO-OP, which in turn trivializes any property that reasons about balances.
 
+A `NONDET` summary on a *payable* callee deserves explicit scrutiny: it drops the callee's ability to accept `msg.value`, which typically makes
+every caller revert on all paths, so any rule instantiated with those callers holds *vacuously*.
+
+A `filtered` block that excludes a method whose sanity failure stems from such a repairable summary is the same trivialization in disguise:
+the setup defect is hidden rather than fixed, and the property silently loses coverage of that method. A method exclusion (a `filtered`
+block, or an "expected to fail" marking of the affected rules) is legitimate in exactly two cases:
+1. The excluded method is a *documented harness helper* — verification-only scaffolding the harness exposes, not production behavior — and
+   the exclusion keeps helper-only transitions out of a production-behavior property.
+2. The excluded method appears in the *acknowledged-vacuous ledger* provided in your inputs (when available): the author formally
+   acknowledged the method as vacuous, recording which repair-ladder steps were attempted (summary fix preserving payable semantics /
+   mock for the callee / `optimistic_fallback`) and why each failed. Audit that record on its merits — an acknowledgment whose
+   justification is vague, does not match the recorded steps, or skips obviously-applicable repair steps must be rejected just like
+   an unacknowledged exclusion.
+Any other exclusion of a vacuously-passing method must be rejected. When your inputs include vacuity verdicts and rule-skip reasons,
+cross-check them: an exclusion of a method flagged vacuous with no matching ledger entry is never acceptable.
+
 ### Criteria 6: Manifest Errors
 
 {% if sort != "greenfield" %}

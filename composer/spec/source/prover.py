@@ -14,7 +14,7 @@ import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, Callable, Iterator, override, AsyncContextManager
+from typing import Annotated, Callable, Iterator, cast, override, AsyncContextManager
 from typing_extensions import TypedDict, NotRequired
 
 from langchain_core.tools import InjectedToolCallId, tool, BaseTool
@@ -27,8 +27,9 @@ from composer.prover.ptypes import RuleResult
 from graphcore.graph import LLM
 
 from composer.prover.core import (
-    ProverOptions, ProverCallbacks, run_prover, DefaultCexHandler
+    ProverOptions, ProverCallbacks, ProverReport, run_prover, DefaultCexHandler
 )
+from composer.prover.vacuity import format_vacuity_guard
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
@@ -39,7 +40,7 @@ from composer.spec.cvl_generation import CVLGenerationState, make_validation_sta
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
-from composer.spec.gen_types import SPECS_DIR
+from composer.spec.gen_types import MOCKS_DIR, SPECS_DIR
 
 
 _logger = logging.getLogger("composer.prover")
@@ -50,6 +51,11 @@ def prover_config_overlay(base_config: dict, *, main_contract: str, verify_targe
 
     Shared by the live ``verify_spec`` run and the persisted ``certora/confs`` dump so the
     two can't drift. ``verify_target`` is the ``<contract>:<spec path>`` the run verifies.
+
+    ``rule_sanity``/``optimistic_loop`` are set AFTER the base-config spread, so they win
+    over anything the agent's config edits put in ``base_config``. Vacuity detection
+    (``composer/prover/vacuity.py``) depends on ``rule_sanity: basic`` being forced here —
+    which is also why ``edit_config``'s ``SetProverFlag`` refuses those two flags.
     """
     return {
         **base_config,
@@ -83,6 +89,27 @@ class ProverStateExtra(TypedDict):
     # Link of the last prover run this generation performed (URL or local results dir).
     # Last-write-wins; absent until the first prover run. Read at completion onto GeneratedCVL.
     prover_link: NotRequired[str | None]
+    # Methods detected as vacuous by prior prover runs (instantiation name -> diagnosis).
+    # Must persist across verify_spec calls: once the agent excludes a vacuous method with a
+    # `filtered` block, later runs never re-instantiate it, so per-run detection alone would
+    # forget it. Shares the DELETE_SKIP-sentinel reducer with rule_skips — an entry is cleared
+    # when a later run instantiates the method without a sanity failure.
+    vacuous_methods: Annotated[dict[str, str], _merge_rule_skips]
+    # Agent-written mock contracts (project-root-relative path under the generation's
+    # certora/mocks/<stem>/ namespace -> Solidity source), written by the write_mock tool.
+    # State-held rather than written to disk so concurrent batch generations never mutate
+    # the shared project tree: verify_spec materializes them for the duration of a prover
+    # run, and the artifact store persists them (with the conf that references them) only
+    # for completed generations. Shares the DELETE_SKIP reducer idiom of rule_skips.
+    mocks: Annotated[dict[str, str], _merge_rule_skips]
+    # The acknowledged-vacuous ledger (instantiation name -> JSON record with
+    # `steps_attempted` and `justification`), written by the acknowledge_vacuous_method
+    # tool. The verify_spec stamp gate is `known_vacuous - acknowledged`: an acknowledged
+    # method no longer withholds the stamp, and the feedback judge audits the record's
+    # quality. An entry is cleared alongside its vacuity verdict when a run shows the
+    # method healthy, so a method that later turns vacuous *again* needs a fresh
+    # acknowledgment.
+    acknowledged_vacuous: Annotated[dict[str, str], _merge_rule_skips]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
@@ -156,6 +183,36 @@ class _SpecCallbacks(ProverEventCallbacks):
         )
 
 
+def _vacuity_state_update(
+    state: ProverStateExtra, result: ProverReport
+) -> tuple[dict[str, str], dict[str, str], set[str]]:
+    """Fold this run's vacuity view into the persisted ``vacuous_methods`` state.
+
+    Returns ``(update, ack_update, known_vacuous)``: the reducer delta to merge
+    into ``vacuous_methods`` (newly detected methods added, previously-recorded
+    methods that this run instantiated *without* a sanity failure cleared via
+    DELETE_SKIP), the companion delta clearing ``acknowledged_vacuous`` entries
+    whose verdict just cleared (so a method that turns vacuous again later needs
+    a fresh acknowledgment), and the resulting set of methods still considered
+    vacuous — the set the stamp gate checks against. ``state.get`` tolerates
+    checkpoints predating these fields.
+    """
+    prior = state.get("vacuous_methods", {})
+    acks = state.get("acknowledged_vacuous", {})
+    update: dict[str, str] = {m: ev.diagnosis for m, ev in result.vacuous_methods.items()}
+    for m in prior:
+        if m in result.instantiated_methods and m not in result.vacuous_methods:
+            update[m] = DELETE_SKIP
+    ack_update = {
+        m: DELETE_SKIP for m, v in update.items() if v == DELETE_SKIP and m in acks
+    }
+    known_vacuous = {
+        m for m in (set(prior) | set(result.vacuous_methods))
+        if update.get(m) != DELETE_SKIP
+    }
+    return update, ack_update, known_vacuous
+
+
 class VerifySpecSchema(BaseModel):
     """
     Run the Certora prover to verify the current spec against the source code.
@@ -194,6 +251,44 @@ def tmp_spec(
         dest_dir=SPECS_DIR,
     ) as tmp:
         yield tmp
+
+@contextmanager
+def materialized_mocks(root: str, mocks: dict[str, str]) -> Iterator[None]:
+    """Materialize the generation's state-held mock files onto the real project
+    tree for the duration of a prover run (the prover compiles from disk), then
+    remove them.
+
+    Mock paths are namespaced per generation (``certora/mocks/<spec stem>/``),
+    so concurrent batch generations write disjoint files and never observe each
+    other's mocks mid-compile. Removing them afterward keeps gave-up generations
+    from leaving stray sources behind; completed generations get their mocks
+    persisted by the artifact store alongside the conf that references them.
+    """
+    written: list[Path] = []
+    for rel, content in mocks.items():
+        target = Path(root) / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+        written.append(target)
+    try:
+        yield
+    finally:
+        for target in written:
+            target.unlink(missing_ok=True)
+        # Also drop the namespace dirs we created (up to and including the
+        # mocks root, never above it) so gave-up generations leave no empty
+        # directories behind. rmdir refuses non-empty dirs, so a concurrent
+        # generation's still-materialized mocks are never disturbed.
+        mocks_root = Path(root) / MOCKS_DIR
+        for target in written:
+            directory = target.parent
+            while directory == mocks_root or mocks_root in directory.parents:
+                try:
+                    directory.rmdir()
+                except OSError:
+                    break
+                directory = directory.parent
+
 
 def _prover_sem(cloud: bool) -> AsyncContextManager[None]:
     if not cloud:
@@ -242,7 +337,7 @@ def get_prover_tool(
                 content=json.dumps(config, indent=2),
                 ext="conf",
                 prefix="verify"
-            ) as config_path:
+            ) as config_path, materialized_mocks(project_root, state.get("mocks", {})):
                 async with sem:
                     result = await run_prover(
                         Path(project_root),
@@ -255,6 +350,7 @@ def get_prover_tool(
 
             if isinstance(result, str):
                 return result
+            vacuity_update, ack_update, known_vacuous = _vacuity_state_update(state, result)
             all_verified = True
             for (r, stat) in result.rule_status.items():
                 if r in state["rule_skips"]:
@@ -263,12 +359,47 @@ def get_prover_tool(
                     all_verified = False
                     break
             if rules is None and all_verified:
+                # HARD GUARD, purely structural: a persisted vacuity verdict only clears
+                # when a run instantiates the method without a sanity failure, so ANY
+                # route that hides the method while it is still broken — a `filtered`
+                # block, `expect_rule_failure` on its sanity-failing rules (dropping
+                # them from the all_verified check above), even deleting the rule —
+                # leaves the verdict outstanding. Withhold the PROVER validation stamp
+                # while any known-vacuous method lacks an acknowledged_vacuous ledger
+                # entry (written by the acknowledge_vacuous_method tool; the feedback
+                # judge audits the entry's quality).
+                unacknowledged = known_vacuous - set(state.get("acknowledged_vacuous", {}))
+                if unacknowledged:
+                    prior_verdicts = state.get("vacuous_methods", {})
+                    blocked = {
+                        m: (result.vacuous_methods[m].diagnosis
+                            if m in result.vacuous_methods else prior_verdicts[m])
+                        for m in unacknowledged
+                    }
+                    return tool_state_update(
+                        tool_call_id=tool_call_id,
+                        content="\n\n".join([result.result_str, format_vacuity_guard(blocked)]),
+                        prover_link=result.link, vacuous_methods=vacuity_update,
+                        acknowledged_vacuous=ack_update,
+                    )
+                # Stamp over the POST-update state: this same Command may clear
+                # acknowledged_vacuous entries (ack_update), and the ledger is part of
+                # the validation digest — stamping the pre-update state would yield a
+                # digest check_completion can never match.
+                effective = cast(StateWithSkips, {
+                    **state,
+                    "acknowledged_vacuous": _merge_rule_skips(
+                        state.get("acknowledged_vacuous", {}), ack_update
+                    ),
+                })
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state),
+                    prover_link=result.link, validations=stamper(effective),
+                    vacuous_methods=vacuity_update, acknowledged_vacuous=ack_update,
                 )
             return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
+                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,
+                vacuous_methods=vacuity_update, acknowledged_vacuous=ack_update,
             )
 
     return verify_spec

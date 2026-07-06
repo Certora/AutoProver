@@ -1,5 +1,5 @@
 
-from typing import Callable, NotRequired, Sequence
+from typing import Any, Callable, Mapping, NotRequired, Sequence
 from typing_extensions import TypedDict
 from composer.spec.service_host import Sort, ServiceHost
 
@@ -59,9 +59,13 @@ def property_feedback_judge(
     prompt: InjectedTemplate[Properties] | TemplateInstantiation,
     props: list[PropertyFormulation],
     *,
-    extra_inputs: list[str | dict] | Callable[[], list[str | dict]] | None = None,
+    extra_inputs: list[str | dict] | Callable[[Mapping[str, Any]], list[str | dict]] | None = None,
     system_prompt: TemplateInstantiation | None = None,
 ) -> FeedbackToolContext:
+    # ``extra_inputs`` may be a static list, or a thunk over the calling
+    # generation's graph state (evaluated per feedback round, so the judge sees
+    # the evidence as it stands at judging time — e.g. the source-mode flow's
+    # vacuity verdicts, rule skips, and acknowledgments).
 
     if system_prompt is None:
         system_prompt = FeedbackSystemTemplate.bind({"sort": env.sort})
@@ -105,13 +109,14 @@ def property_feedback_judge(
         skipped: Sequence[SkippedProperty],
         rebuttals: Sequence[Rebuttal],
         within_tool: str,
+        state: Mapping[str, Any],
     ) -> PropertyFeedback:
         input_parts: list[str | dict] = []
         if extra_inputs:
             if isinstance(extra_inputs, list):
                 input_parts.extend(extra_inputs)
             else:
-                input_parts.extend(extra_inputs())
+                input_parts.extend(extra_inputs(state))
 
         input_parts.append("The proposed CVL file is")
         input_parts.append(cvl)

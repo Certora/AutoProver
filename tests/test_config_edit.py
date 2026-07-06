@@ -5,11 +5,14 @@ Verifies that edits produce correct state transitions via the state reducers,
 not just correct Command objects.
 """
 import pytest
+from pydantic import ValidationError
 
 from langgraph.graph import MessagesState
 
+from composer.prover.core import DEFAULT_GLOBAL_TIMEOUT
 from composer.spec.source.author import (
-    ConfigEditTool, AddFile, RemoveFile, AddLink, RemoveLink,
+    ConfigEditTool, AddFile, RemoveFile, AddLink, RemoveLink, SetProverFlag,
+    _MAX_GLOBAL_TIMEOUT,
 )
 from composer.spec.source.prover import ProverStateExtra
 
@@ -50,6 +53,12 @@ def _add_link(src: str, field: str, tgt: str) -> dict:
 
 def _remove_link(src: str, field: str) -> dict:
     return RemoveLink(type="remove_link", source_contract_name=src, link_field_name=field).model_dump()
+
+
+def _set_flag(flag: str, value: bool | int) -> dict:
+    # Raw dict (not SetProverFlag.model_dump()) so tests can exercise values the
+    # schema itself would reject before reaching the per-flag validation.
+    return {"type": "set_flag", "flag": flag, "value": value}
 
 
 def _edit(*edits: dict) -> ToolCallDict:
@@ -198,6 +207,104 @@ class TestRemoveLink:
             _edit(_remove_link("Foo", "token")),
         ).map_run(_links)
         assert links == ["A:b=C"]
+
+
+# =========================================================================
+# SetProverFlag
+# =========================================================================
+
+
+class TestSetProverFlag:
+    async def test_set_optimistic_fallback(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("optimistic_fallback", True)),
+        ).map_run(_config)
+        assert config["optimistic_fallback"] is True
+
+    async def test_optimistic_fallback_rejects_int(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("optimistic_fallback", 1)),
+        ).map_run(_config)
+        assert "optimistic_fallback" not in config
+
+    async def test_optimistic_fallback_is_add_only(self):
+        """The agent may enable the flag but never disable it — setting false
+        could revert an autosetup-emitted recommendation."""
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("optimistic_fallback", False)),
+        ).map_run(_config)
+        assert "optimistic_fallback" not in config
+
+    async def test_optimistic_fallback_cannot_unset_autosetup_recommendation(self):
+        """An autosetup-recommended true in the base config survives a false edit."""
+        scenario = Scenario(ConfigTestState, TOOL).init(
+            config={"files": [], "optimistic_fallback": True}, rule_skips={},
+        )
+        config = await scenario.turn(
+            _edit(_set_flag("optimistic_fallback", False)),
+        ).map_run(_config)
+        assert config["optimistic_fallback"] is True
+
+    async def test_set_loop_iter(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("loop_iter", 3)),
+        ).map_run(_config)
+        assert config["loop_iter"] == 3
+
+    async def test_loop_iter_out_of_range(self):
+        for bad in (0, 6):
+            config = await _scenario(files=[]).turn(
+                _edit(_set_flag("loop_iter", bad)),
+            ).map_run(_config)
+            assert "loop_iter" not in config
+
+    async def test_loop_iter_rejects_bool(self):
+        """bool is an int subclass; the validator must not accept True as a loop count."""
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("loop_iter", True)),
+        ).map_run(_config)
+        assert "loop_iter" not in config
+
+    async def test_set_global_timeout_at_clamp(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("global_timeout", _MAX_GLOBAL_TIMEOUT)),
+        ).map_run(_config)
+        assert config["global_timeout"] == _MAX_GLOBAL_TIMEOUT
+
+    async def test_global_timeout_clamped_to_twice_default(self):
+        """The ceiling derives from the pipeline default, not a hardcoded cap."""
+        assert _MAX_GLOBAL_TIMEOUT == 2 * int(DEFAULT_GLOBAL_TIMEOUT)
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("global_timeout", _MAX_GLOBAL_TIMEOUT + 1)),
+        ).map_run(_config)
+        assert "global_timeout" not in config
+
+    async def test_set_contract_recursion_limit(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("contract_recursion_limit", 2)),
+        ).map_run(_config)
+        assert config["contract_recursion_limit"] == 2
+
+    async def test_contract_recursion_limit_too_large(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("contract_recursion_limit", 11)),
+        ).map_run(_config)
+        assert "contract_recursion_limit" not in config
+
+    async def test_sanity_and_optimistic_loop_not_settable(self):
+        """The flags vacuity detection depends on (forced by prover_config_overlay)
+        are rejected at the schema level, not just by run-time validation."""
+        for forbidden in ("rule_sanity", "optimistic_loop"):
+            with pytest.raises(ValidationError):
+                SetProverFlag(type="set_flag", flag=forbidden, value=True)  # type: ignore[arg-type]
+
+    async def test_failed_flag_aborts_batch(self):
+        """Atomicity: a rejected flag value rolls back the whole edit list."""
+        config = await _scenario(files=[]).turn(
+            _edit(_set_flag("loop_iter", 3), _set_flag("global_timeout", 99999)),
+        ).map_run(_config)
+        assert "loop_iter" not in config
+        assert "global_timeout" not in config
 
 
 # =========================================================================

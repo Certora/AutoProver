@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Literal, override, Annotated, Literal
+from typing import Any, Callable, Literal, Mapping, override, Annotated, Literal
 from pydantic import Field, BaseModel, Discriminator
 
 from typing_extensions import TypedDict
@@ -209,7 +209,9 @@ async def generate_cvl_batch(
     if (cached := await root_ctx.cache_get(AuthorResult)) is not None:
         return cached.result_wrapped
 
-    def stub_feedback_extras() -> list[str | dict]:
+    def stub_feedback_extras(_state: Mapping[str, Any]) -> list[str | dict]:
+        # The judge-evidence thunk receives the generation's graph state; the
+        # natreq judge's extras are state-independent, so it is unused here.
         return [
             f"The current typechecking stub for the {contract_name} contract is",
             stub_reader(),
