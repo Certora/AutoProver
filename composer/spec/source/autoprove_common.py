@@ -280,23 +280,20 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             yield runner
         finally:
             # Persist final token + prover usage into the run's data_ns at run close
-            # (totals known only once the pipeline is done). Mirror the *_usage.json
-            # artifacts. prover_usage is the prover's self-reported runtime
-            # (statsdata run_id.start_to_end_time) summed over every prover run.
-            await data_logger(
-                "token_usage", summary.token_usage_summary()
-            )
-            await data_logger(
-                "prover_usage", summary.prover_usage_summary()
-            )
-            # Dump final usage diagnostics for the run (success or failure). Built from
-            # project_root/contract_name directly rather than the ProverSourceCode (which
-            # is constructed inside ``runner`` and may not exist if discovery failed), so
-            # usage is still dumped even on a discovery-time failure. Guarded so a
-            # diagnostics-dump failure can never mask the pipeline's own outcome.
+            # (totals known only once the pipeline is done). Guarded so a data_ns write
+            # that fails at teardown can't stop the on-disk dump below.
             try:
-                store = ProverArtifactStore(str(project_root), contract_name)
-                store.write_token_usage(summary)
-                store.write_prover_usage(summary)
+                await data_logger("token_usage", summary.token_usage_summary())
+                await data_logger("prover_usage", summary.prover_usage_summary())
             except Exception:
-                _logger.exception("failed to dump usage diagnostics")
+                _logger.exception("failed to log usage to run data")
+            # Dump the run manifest to disk — always, success or crash. Guarded so a dump
+            # failure can't mask the pipeline's own outcome. project_root/contract_name
+            # come straight from args (not ProverSourceCode, which may not exist yet if
+            # discovery crashed).
+            try:
+                ProverArtifactStore(str(project_root), contract_name).write_job_info(
+                    summary, user_id=get_uid()
+                )
+            except Exception:
+                _logger.exception("failed to dump job info")

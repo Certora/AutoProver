@@ -12,6 +12,7 @@ pipeline runs start to finish without raising.
 Marked ``expensive`` (live cloud prover + containers + the embedding model load)
 and skipped without testcontainers. Run with ``-m expensive``.
 """
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast, TYPE_CHECKING
@@ -213,15 +214,55 @@ def _install_mocks(pg_container: "PostgresContainer", monkeypatch) -> None:
     )
 
 
+def _read_job_info() -> dict:
+    """The always-written run manifest the entry point's ``finally`` dumps."""
+    return json.loads((_SCENARIO / "certora" / "ap_report" / "job_info.json").read_text())
+
+
 async def test_autoprove_counter_runs_end_to_end(
     pg_container: "PostgresContainer", provisioned_rag_url: str, monkeypatch
 ):
     assert _SCENARIO.is_dir(), _SCENARIO
     _install_mocks(pg_container, monkeypatch)
+    monkeypatch.setenv("AUTOPROVER_USER_ID", "e2e-user")
     # Run the whole pipeline. Pass == it completes without raising.
     summary = RunSummary()
     async with autoprove_executor(_make_args(provisioned_rag_url), summary) as run:
         await run(AutoProveConsoleHandler().make_handler)
+
+    # The finally dumped the run manifest to ap_report, carrying this run's identity
+    # and its (non-empty, since the pipeline ran the prover) usage totals.
+    job_info = _read_job_info()
+    assert job_info["user_id"] == "e2e-user"
+    assert job_info["run_id"] == summary.run_id
+    assert "token_usage" in job_info and "prover_usage" in job_info
+
+
+async def test_autoprove_dumps_job_info_when_pipeline_crashes(
+    pg_container: "PostgresContainer", provisioned_rag_url: str, monkeypatch
+):
+    """The core guarantee: job_info.json is written even when the run crashes. Patch the
+    pipeline to blow up after the executor is set up; the entry-point ``finally`` must
+    still land the manifest (with this run's identity) in ap_report."""
+    assert _SCENARIO.is_dir(), _SCENARIO
+    _install_mocks(pg_container, monkeypatch)
+    monkeypatch.setenv("AUTOPROVER_USER_ID", "crash-user")
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("pipeline exploded")
+
+    monkeypatch.setattr(
+        "composer.spec.source.autoprove_common.run_autoprove_pipeline", _boom
+    )
+
+    summary = RunSummary()
+    with pytest.raises(RuntimeError, match="pipeline exploded"):
+        async with autoprove_executor(_make_args(provisioned_rag_url), summary) as run:
+            await run(AutoProveConsoleHandler().make_handler)
+
+    job_info = _read_job_info()
+    assert job_info["user_id"] == "crash-user"
+    assert job_info["run_id"] == summary.run_id
 
 
 async def test_autoprove_counter_no_doc_runs_end_to_end(

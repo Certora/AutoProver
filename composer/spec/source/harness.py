@@ -593,7 +593,7 @@ async def run_autosetup_phase(
 
     # AutoSetup runs as a subprocess; its LLM token usage never reaches composer's
     # UsageCallback. Fold the counts it wrote to disk into the run summary so they
-    # land in token_usage.json, the run tag, and the end-of-run table. No task_id:
+    # land in job_info.json, the run tag, and the end-of-run table. No task_id:
     # the active task is already AUTOSETUP_TASK_ID, so this attributes to the
     # autosetup phase. Guarded — read_autosetup_usage returns [] if absent. This is
     # only reached on a cache miss (cache hits return above), so usage spent in this
