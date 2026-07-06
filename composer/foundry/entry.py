@@ -29,7 +29,7 @@ from composer.core.user import user_data_ns
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.input.parsing import Arg, add_protocol_args
-from composer.input.types import DEFAULT_RECURSION_LIMIT, TieredModelOptions, RAGDBOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import thread_logger, default_logging_ns
 from composer.kb.knowledge_base import DefaultEmbedder
@@ -66,7 +66,7 @@ class FoundryRAGDBOptions(RAGDBOptions, Protocol):
     )]
 
 
-class FoundryArgs(TieredModelOptions, FoundryRAGDBOptions, Protocol):
+class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
     project_root: str
     main_contract: str
     system_doc: str | None
@@ -112,13 +112,12 @@ type FoundryRunner = Callable[
 ]
 
 
-@asynccontextmanager
-async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Foundry-test author for a property-extraction pipeline",
     )
     add_protocol_args(parser, FoundryRAGDBOptions)
-    add_protocol_args(parser, TieredModelOptions)
+    add_protocol_args(parser, ExtendedModelOptions)
     parser.add_argument(
         "--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT,
         help=f"Max graph iterations (default: {DEFAULT_RECURSION_LIMIT})",
@@ -134,7 +133,12 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
     parser.add_argument("--forge-binary", default="forge", help="`forge` executable on PATH (default: forge)")
     parser.add_argument("--forge-timeout-s", type=int, default=600, help="Per-`forge test` invocation timeout in seconds (default: 600)")
+    return parser
 
+
+@asynccontextmanager
+async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
+    parser = _build_parser()
     args = cast(FoundryArgs, parser.parse_args())
 
     project_root = pathlib.Path(args.project_root).resolve()
