@@ -1,9 +1,8 @@
-from typing import Optional, cast, Any, Callable
+from typing import Optional
 import logging
 import uuid
 from dataclasses import dataclass
 import pathlib
-import psycopg
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -16,8 +15,8 @@ from graphcore.graph import Builder
 from graphcore.tools.memory import async_memory_tool
 from graphcore.tools.vfs import VFSState, VFSAccessor
 
-from composer.input.types import WorkflowOptions, InputData, ResumeFSData, ResumeIdData, ResumeInput, NativeFS
-from composer.input.files import Document, InMemoryTextFile
+from composer.input.types import WorkflowOptions, InputData, ResumeFSData, ResumeIdData, ResumeInput, TextNativeFS
+from composer.input.files import Document, TextDocument, Uploadable, TextUploadable
 from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools
 from composer.workflow.factories import get_vfs_tools, get_memory_ns
 from composer.workflow.services import standard_connections, IndexedConnections
@@ -29,7 +28,7 @@ from composer.prover.core import make_prover_options, CexHandler
 from composer.core.validation import ValidationType, prover, reqs as req_type
 from composer.rag.db import rag_context, ComposerRAGDB
 from composer.rag.models import get_model as get_rag_model
-from composer.audit.db import AuditDB, AuditDBSink, ResumeArtifact, InputFileLike
+from composer.audit.store import AuditStore, ResumeArtifact
 from composer.natreq.extractor import get_requirements
 from composer.natreq.judge import get_judge_tool
 from composer.spec.cvl_research import CVL_RESEARCH_BASE_DOC, cvl_research_tool
@@ -40,12 +39,10 @@ from composer.io.protocol import CodeGenIOHandler, WorkflowPurpose
 from composer.io.context import with_handler, run_graph
 from composer.ui.codegen_events import CodeGenEventHandler
 from composer.core.state import AIComposerInput, AIComposerExtra
-from composer.ui.tool_display import tool_context
 from composer.prover.agentic_analyzer import AgenticCexHandler
 from composer.prover.report_store import ReportStore
 from composer.spec.proposal_store import ProposalStore
-from composer.spec.cex_remediation import cex_remediation_tool, summary_critic_tool
-from composer.spec.guidance import ERC20TokenGuidance
+from composer.spec.cex_remediation import cex_remediation_tool
 from composer.tools.working_spec import ApplyRemediationProposal, CommitWorkingSpec, ReadWorkingSpec, WriteWorkingSpec
 from composer.tools.prover import CertoraProverTool, ProverDeps
 from composer.tools.proposal import propose_spec_change
@@ -123,9 +120,11 @@ def get_resume_prompt_common(
         changes.extend(other_changes)
 
     if res.new_system is not None:
+        prior_system = art.system_doc
+        new_system_text = res.new_system.string_contents
         changes.append(InputChangeDesc(
-            orig_text=art.system_doc,
-            updated_text=res.new_system.string_contents,
+            orig_text=prior_system if prior_system is not None else f"[prior {art.system_vfs_handle.basename}]",
+            updated_text=new_system_text if new_system_text is not None else f"[updated {res.new_system.basename}]",
             plural="system documents",
             single_form="system document",
             vfs_note=None
@@ -135,7 +134,7 @@ def get_resume_prompt_common(
         "resume_prompt.j2",
         commentary=art.commentary,
         spec_change_commentary=res.comments,
-        orig_spec=art.spec_file,
+        orig_spec=art.spec.contents,
         new_spec=updated_spec,
         other_changes=changes
     )]
@@ -159,7 +158,7 @@ def get_resume_id_input(input: ResumeIdData, resume_art: ResumeArtifact, workflo
         **_get_empty_extra()
     )
 
-def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflow_options: WorkflowOptions) -> tuple[AIComposerInput, InputFileLike, InputFileLike]:
+def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflow_options: WorkflowOptions) -> tuple[AIComposerInput, TextNativeFS, TextNativeFS]:
     path = pathlib.Path(input.file_path)
 
     spec_p = path / "rules.spec"
@@ -192,16 +191,7 @@ def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflo
     if workflow_options.debug_prompt_override is not None:
         input_messages.append(workflow_options.debug_prompt_override)
 
-    return (AIComposerInput(input=input_messages, vfs={}, **_get_empty_extra()), NativeFS(intf_p), NativeFS(spec_p))
-
-
-def _system_doc_as_document(fl: InputFileLike) -> Document:
-    """Bridge a resume-path system-doc handle to a ``Document`` for the CEX
-    agents. Audit/resume handles carry text (``InputFileLike.string_contents``
-    is typed ``str``), so an inline text document is the faithful
-    representation; binary system docs on resume await the input-layer rework.
-    """
-    return InMemoryTextFile(basename=fl.basename, string_contents=fl.string_contents)
+    return (AIComposerInput(input=input_messages, vfs={}, **_get_empty_extra()), TextNativeFS(intf_p), TextNativeFS(spec_p))
 
 
 async def execute_ai_composer_workflow(
@@ -214,10 +204,9 @@ async def execute_ai_composer_workflow(
 ) -> WorkflowResult:
     """Execute the AI Composer workflow with interrupt handling.
 
-    Opens the async langgraph connection bundle (store / checkpointer /
-    indexed store / memory / uploader) and the (still-sync) audit DB, then
-    delegates to ``_run_codegen``. The audit DB stays on psycopg for now;
-    only the langgraph side moves async.
+    Opens the async langgraph connection bundle (store / checkpointer / indexed
+    store / memory / uploader) + the RAG connection, then delegates to
+    ``_run_codegen``. The audit archive rides the same store as everything else.
     """
     # One embedding model, shared by the indexed-store embedder and the RAG
     # connection — get_model() loads a fresh SentenceTransformer per call, so
@@ -227,14 +216,10 @@ async def execute_ai_composer_workflow(
         standard_connections(embedder=DefaultEmbedder(model)) as conn,
         rag_context(workflow_options.rag_db, model) as rag_db,
     ):
-        audit_conn = psycopg.connect(workflow_options.audit_db)
-        try:
-            return await _run_codegen(
-                handler, llm, input, workflow_options, conn, rag_db, AuditDB(audit_conn),
-                memory_namespace=memory_namespace, resume_work_key=resume_work_key,
-            )
-        finally:
-            audit_conn.close()
+        return await _run_codegen(
+            handler, llm, input, workflow_options, conn, rag_db,
+            memory_namespace=memory_namespace, resume_work_key=resume_work_key,
+        )
 
 async def _run_codegen(
     handler: CodeGenIOHandler,
@@ -243,7 +228,6 @@ async def _run_codegen(
     workflow_options: WorkflowOptions,
     conn: IndexedConnections,
     rag_db: ComposerRAGDB,
-    audit_db: AuditDB,
     *,
     memory_namespace: str | None,
     resume_work_key: str | None,
@@ -261,46 +245,52 @@ async def _run_codegen(
 
     mem_root = memory_namespace or thread_id
 
+    store = conn.store
+    audit_store = AuditStore(store)
+    report_store = ReportStore(store=store)
+    codegen_store = CodegenStore(store)
+
     prompt_params: PromptParams
     fs_layer: str | None = None
     flow_input: AIComposerInput
 
-    system_doc: InputFileLike
+    # The three input documents register_run records + the system doc the CEX
+    # agents see. On a fresh run they are the uploaded inputs directly; on
+    # resume the audit / disk handles are ``Uploadable`` and get rehydrated into
+    # provider ``Document``s via the connection's FileUploader.
     system_doc_doc: Document
-    interface_file: InputFileLike
-    spec_file: InputFileLike
+    interface_doc: TextDocument
+    spec_doc: TextDocument
     resume_art : None | ResumeArtifact = None
 
     match input:
         case InputData():
             prompt_params = PromptParams(is_resume=False)
             flow_input = get_fresh_input(input, workflow_options)
-            system_doc = input.system_doc.to_file_like()
             system_doc_doc = input.system_doc
-            interface_file = input.intf
-            spec_file = input.spec
+            interface_doc = input.intf
+            spec_doc = input.spec
 
         case ResumeIdData() | ResumeFSData():
             prompt_params = PromptParams(is_resume=True)
 
-            resume_art = audit_db.get_resume_artifact(thread_id=input.thread_id)
-            if input.new_system is None:
-                system_doc = resume_art.system_vfs_handle
-            else:
-                system_doc = input.new_system
-            system_doc_doc = _system_doc_as_document(system_doc)
+            resume_art = await audit_store.get_resume_artifact(thread_id=input.thread_id)
+            system_src: Uploadable = (
+                resume_art.system_vfs_handle if input.new_system is None else input.new_system
+            )
+            system_doc_doc = await conn.uploader.document_from(system_src)
+            intf_src: TextUploadable
+            spec_src: TextUploadable
             match input:
                 case ResumeFSData():
-                    (flow_input, interface_file, spec_file) = get_resume_fs_input(input, resume_art, workflow_options)
+                    (flow_input, intf_src, spec_src) = get_resume_fs_input(input, resume_art, workflow_options)
                     fs_layer = input.file_path
                 case ResumeIdData():
-                    interface_file = resume_art.intf_vfs_handle
+                    intf_src = resume_art.intf_vfs_handle
+                    spec_src = input.new_spec
                     flow_input = get_resume_id_input(input, resume_art, workflow_options)
-                    spec_file = input.new_spec
-
-    store = conn.store
-    report_store = ReportStore(store=store)
-    codegen_store = CodegenStore(store)
+            interface_doc = conn.uploader.text_document_from(intf_src)
+            spec_doc = conn.uploader.text_document_from(spec_src)
 
     req_mem_tool = async_memory_tool(conn.memory(get_memory_ns(mem_root, "natreq")))
 
@@ -311,8 +301,8 @@ async def _run_codegen(
             handler,
             workflow_options,
             llm,
-            system_doc,
-            spec_file,
+            system_doc_doc,
+            spec_doc,
             req_mem_tool,
             resume_art,
         )
@@ -379,13 +369,14 @@ async def _run_codegen(
         "synthesis_prompt.j2", **prompt_params
     ).build_async()[0]
 
-    audit_db.register_run(
+    await audit_store.register_run(
         thread_id=thread_id,
-        system_doc=system_doc,
-        interface_file=interface_file,
-        spec_file=spec_file,
+        spec_vfs_path="rules.spec",
+        spec_file=spec_doc,
+        interface_file=interface_doc,
+        system_doc=system_doc_doc,
         vfs_init=materializer.iterate(flow_input),
-        reqs=reqs_list
+        reqs=reqs_list,
     )
 
     workflow_exec = workflow_graph.compile(checkpointer=checkpointer, store=store)
@@ -398,9 +389,16 @@ async def _run_codegen(
     if resume_work_key is not None:
         snapshot = await codegen_store.recovery(resume_work_key)
         if snapshot is not None:
-            vfs_files = list(snapshot.items())
-            recovery_msg = load_jinja_template("crash_recovery_context.j2", vfs_files=vfs_files)
+            # Put the salvaged files straight onto the VFS (recovered files win
+            # over the fresh overlay) so the agent needn't recreate them; the
+            # prompt just tells it they're already there.
+            flow_input["vfs"] = {**flow_input["vfs"], **snapshot["vfs"]}
+            recovery_msg = load_jinja_template(
+                "crash_recovery_context.j2", vfs_files=sorted(snapshot["vfs"].keys())
+            )
             flow_input["input"].insert(0, recovery_msg)
+            if snapshot["working_spec"] is not None:
+                flow_input["working_spec"] = snapshot["working_spec"]
 
     try:
         import grandalf
@@ -423,10 +421,8 @@ async def _run_codegen(
         vfs_materializer=materializer, required_validations=required_validations
     )
 
-    audit_sink = AuditDBSink(audit_db, thread_id)
-
     try:
-        async with with_handler(handler, CodeGenEventHandler(handler, audit_sink)):
+        async with with_handler(handler, CodeGenEventHandler(handler)):
             final_state = await run_graph(workflow_exec, work_context, flow_input, config, description="Code generation")
 
         result = final_state.get("generated_code", None)
@@ -434,7 +430,7 @@ async def _run_codegen(
             return WorkflowFailure()
 
         res_commentary = await create_resume_commentary(final_state, llm=llm)
-        audit_db.register_complete(
+        await audit_store.register_complete(
             thread_id, materializer.iterate(final_state), res_commentary.interface_path, res_commentary.commentary
         )
 
@@ -442,16 +438,10 @@ async def _run_codegen(
         return WorkflowSuccess()
     except Exception as exc:
         await handler.show_error(exc)
-        # Attempt to capture VFS from last checkpoint
+        # Salvage the VFS overlay + working-spec draft from the last checkpoint.
         resume_key: str | None = None
         try:
-            ct = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
-            if ct is not None:
-                channel_values = cast(VFSState, ct.checkpoint["channel_values"])
-                vfs_snapshot = {path: content.decode("utf-8") for path, content in materializer.iterate(channel_values)}
-                resume_key = f"crash_{thread_id}_{uuid.uuid4().hex[:8]}"
-                await codegen_store.save_recovery(resume_key, vfs_snapshot)
-                logger.info(f"Saved crash recovery snapshot: {resume_key}")
+            resume_key = await codegen_store.recovery_from_thread(checkpointer, thread_id)
         except Exception as snapshot_exc:
             logger.warning(f"Failed to capture crash snapshot: {snapshot_exc}")
         return WorkflowCrash(resume_work_key=resume_key, error=exc)

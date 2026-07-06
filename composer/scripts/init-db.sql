@@ -17,9 +17,6 @@ DO $$ BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'langgraph_checkpoint_user') THEN
         CREATE USER langgraph_checkpoint_user WITH PASSWORD 'langgraph_checkpoint_password';
     END IF;
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'audit_db_user') THEN
-        CREATE USER audit_db_user WITH PASSWORD 'audit_db_password';
-    END IF;
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'memory_tool_user') THEN
         CREATE USER memory_tool_user WITH PASSWORD 'memory_tool_password';
     END IF;
@@ -34,8 +31,6 @@ SELECT 'CREATE DATABASE langgraph_store_db OWNER langgraph_store_user'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'langgraph_store_db')\gexec
 SELECT 'CREATE DATABASE langgraph_checkpoint_db OWNER langgraph_checkpoint_user'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'langgraph_checkpoint_db')\gexec
-SELECT 'CREATE DATABASE audit_db OWNER audit_db_user'
-    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'audit_db')\gexec
 SELECT 'CREATE DATABASE memory_tool_db OWNER memory_tool_user'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'memory_tool_db')\gexec
 
@@ -93,90 +88,3 @@ CREATE TABLE IF NOT EXISTS memories_fs(
 CREATE INDEX IF NOT EXISTS memories_namespace_path ON memories_fs(namespace, full_path text_pattern_ops); -- text pattern ops lets us use the index for LIKE
 
 RESET ROLE;
-
-\c audit_db
-GRANT ALL PRIVILEGES ON DATABASE audit_db TO audit_db_user;
-GRANT ALL PRIVILEGES ON SCHEMA public TO audit_db_user;
-
--- Create audit_db schema
-CREATE TABLE IF NOT EXISTS file_blobs(
-    file_id VARCHAR(64) PRIMARY KEY,
-    file_blob BYTEA NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS run_info(
-    thread_id TEXT NOT NULL PRIMARY KEY,
-    spec_id VARCHAR(64) NOT NULL REFERENCES file_blobs(file_id),
-    spec_name TEXT NOT NULL,
-    interface_id VARCHAR(64) NOT NULL REFERENCES file_blobs(file_id),
-    interface_name TEXT NOT NULL,
-    system_id VARCHAR(64) NOT NULL REFERENCES file_blobs(file_id),
-    system_name TEXT NOT NULL,
-    num_reqs INT CHECK (num_reqs >= 0)
-);
-
-CREATE TABLE IF NOT EXISTS vfs_initial(
-    thread_id TEXT NOT NULL REFERENCES run_info(thread_id),
-    path TEXT NOT NULL,
-    file_id VARCHAR(64) REFERENCES file_blobs(file_id),
-    CONSTRAINT vfs_initial_pk PRIMARY KEY(thread_id, path)
-);
-
-CREATE INDEX IF NOT EXISTS vfs_init_thread_idx ON vfs_initial(thread_id);
-
-CREATE TABLE IF NOT EXISTS vfs_result(
-    thread_id TEXT NOT NULL REFERENCES run_info(thread_id),
-    path TEXT NOT NULL,
-    file_id VARCHAR(64) REFERENCES file_blobs(file_id),
-    CONSTRAINT vfs_result_pk PRIMARY KEY(thread_id, path)
-);
-
-CREATE INDEX IF NOT EXISTS vfs_thread_idx on vfs_result(thread_id);
-
-CREATE TABLE IF NOT EXISTS resume_artifact(
-    thread_id TEXT NOT NULL PRIMARY KEY REFERENCES run_info(thread_id),
-    interface_path TEXT NOT NULL,
-    commentary TEXT NOT NULL,
-    CONSTRAINT thread_interface_fk FOREIGN KEY (thread_id, interface_path) REFERENCES vfs_result(thread_id, path)
-);
-
-CREATE TABLE IF NOT EXISTS prover_results(
-    tool_id TEXT NOT NULL,
-    rule_name TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    result TEXT NOT NULL CHECK (result in ('VIOLATED', 'ERROR', 'TIMEOUT', 'VERIFIED', 'SANITY_FAILED')),
-    analysis TEXT,
-    CONSTRAINT prover_results_pk PRIMARY KEY (tool_id, rule_name, thread_id)
-);
-
-CREATE TABLE IF NOT EXISTS manual_results(
-    tool_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    similarity FLOAT NOT NULL,
-    text_body TEXT NOT NULL,
-    header_string TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS manual_result_idx ON manual_results (tool_id, thread_id);
-
-CREATE TABLE IF NOT EXISTS summarization(
-    thread_id TEXT NOT NULL REFERENCES run_info(thread_id),
-    checkpoint_id TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    CONSTRAINT summarization_pk PRIMARY KEY (thread_id, checkpoint_id)
-);
-
-CREATE TABLE IF NOT EXISTS run_requirements(
-    thread_id TEXT REFERENCES run_info(thread_id) NOT NULL,
-    req_num int NOT NULL,
-    req_text TEXT NOT NULL,
-    PRIMARY KEY(thread_id, req_num)
-);
-
-CREATE INDEX IF NOT EXISTS req_requirement_thead_idx ON run_requirements USING btree(thread_id);
-
--- Grant permissions to audit_db_user on all tables
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO audit_db_user;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO audit_db_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO audit_db_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO audit_db_user;

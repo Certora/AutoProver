@@ -16,6 +16,25 @@
 # Cloud Certora Prover only — the image does not bundle a local prover build.
 # CERTORAKEY (and the CERTORA_* cloud-login vars) must be supplied at runtime.
 
+# Hardened forge from Certora's public foundry fork, built from source and
+# copied into the final stage. Used by the autoprove path (`forge remappings`
+# during compilation setup) and by console-foundry (`forge test`). The fork adds
+# opt-in FFI / external-cheatcode guards that the entrypoint enables for
+# foundry-mode test execution. Bump FOUNDRY_SHA to move the pin.
+# NOTE: the --platform=linux/amd64 pin means this Rust build runs under QEMU
+# emulation on Apple Silicon — the first build is slow (~30-60 min); cached after.
+ARG FOUNDRY_REPO=https://github.com/Certora/foundry.git
+ARG FOUNDRY_SHA=69cdf8ddc3d19ee85ab3b3c389376e0b07e1179b
+FROM --platform=linux/amd64 rust:1-bookworm AS foundry-builder
+ARG FOUNDRY_REPO
+ARG FOUNDRY_SHA
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git libssl-dev pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone "$FOUNDRY_REPO" . && git checkout "$FOUNDRY_SHA" && git rev-parse HEAD
+RUN cargo build --release --bin forge && /src/target/release/forge --version
+
 # ---- Stage 1: build the CVL documentation HTML for the RAG DB ----
 FROM --platform=linux/amd64 python:3.12-slim AS docs-builder
 
@@ -90,6 +109,13 @@ RUN mkdir -p /etc/apt/keyrings \
 # checksum-verified against the official Solidity binary index. Public HTTPS.
 COPY scripts/install_solc.py /tmp/install_solc.py
 RUN python3 /tmp/install_solc.py && rm /tmp/install_solc.py
+
+# forge (hardened Certora fork), built from source above. Used by the autoprove
+# path (`forge remappings`) and by console-foundry (`forge test`). Root-owned
+# 0755, executable by the host-UID runtime user; the fork's FFI / external-
+# cheatcode guards are enabled per-mode by the entrypoint.
+COPY --from=foundry-builder /src/target/release/forge /usr/local/bin/forge
+RUN forge --version
 
 WORKDIR $AUTOPROVE_HOME/AutoProver
 
