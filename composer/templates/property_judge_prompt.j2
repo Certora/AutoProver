@@ -153,7 +153,7 @@ Audit the rules to determine if any are likely to fail because they are *OBVIOUS
 (and Y is, with overwhelming probability, the correct outcome). For example, if a rule asserts that user's balance *INCREASES* after a withdrawal, this is almost certainly a spec error.
 
 As stated above, do *not* apply this rejection criterion to rules that will fail because they demonstrate a potential vulnerability in the contract code;
-if there is a real bug, a rule failing* is the *intended* result, as it communicates to the developer something must be fixed.
+if there is a real bug, a rule *failing* is the *intended* result, as it communicates to the developer something must be fixed.
 {% else %}
 Audit the rules to determine if any are likely to fail because they are *OBVIOUSLY* wrong; they assert something that contradicts the expected behavior as described
 in the design document. For example, if a rule asserts that user's balance *INCREASES* after a withdrawal, this is almost certainly a spec error.
