@@ -216,6 +216,9 @@ footer.report-foot {
   </div>
   <dl class="meta-grid">
     <dt>Contract</dt><dd>{{ report.contract_name }}</dd>
+    {%- if report.main_harness %}
+    <dt>Verified via</dt><dd>{{ report.main_harness.name }} (augmentation harness extending {{ report.main_harness.harness_of }})</dd>
+    {%- endif %}
     <dt>Run timestamp</dt><dd>{{ report.run_timestamp_utc or "—" }}</dd>
     {%- if has_links %}
     <dt>Prover runs</dt>
@@ -245,6 +248,24 @@ footer.report-foot {
 <div class="warnings"><strong>Coverage warnings:</strong>
   <ul>{% for w in coverage.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
 </div>
+{%- endif %}
+
+{%- if report.main_harness_fallback %}
+<div class="warnings"><strong>Harness fallback:</strong> {{ report.main_harness_fallback }}</div>
+{%- endif %}
+
+{%- if report.main_harness %}
+<section class="gaps">
+  <h2>Verification harness</h2>
+  <p>Verification ran against <code>{{ report.main_harness.name }}</code>
+  (<code>{{ report.main_harness.path }}</code>), an augmentation harness extending
+  <code>{{ report.main_harness.harness_of }}</code> with the following verification-only
+  getters/wrappers. Universal claims proven over the harness also hold for
+  <code>{{ report.main_harness.harness_of }}</code>; the added entry points exist only for verification.</p>
+  <ul class="claims">
+    {%- for line in report.main_harness.api %}<li>{{ line }}</li>{% endfor %}
+  </ul>
+</section>
 {%- endif %}
 
 {%- for g in groups %}
@@ -298,7 +319,7 @@ footer.report-foot {
   {%- if gave_up %}
   <h3>Components that gave up ({{ gave_up | length }})</h3>
   {%- for gc in gave_up %}
-  <h4>{{ gc.component }}</h4>
+  <h4>{{ gc.component }}{% if gc.give_up_sort %} <span class="sort-tag">{{ gc.give_up_sort }}</span>{% endif %}</h4>
   <ul class="claims">
     {%- for p in gc.properties %}<li><span class="sort-tag">{{ p.sort }}</span> {{ p.description }}</li>{% endfor %}
   </ul>

@@ -15,6 +15,7 @@ Phases:
 """
 
 import asyncio
+from dataclasses import replace
 
 from composer.io.multi_job import (
     TaskInfo, HandlerFactory, run_task,
@@ -43,6 +44,7 @@ from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.author import batch_cvl_generation, GaveUp
 from composer.spec.source.artifacts import InvariantSpec, ProverSourceCode
 from composer.spec.source.common_pipeline import extract_all_components, generate_all_component_cvl, AutoProveResult
+from composer.spec.source.report.schema import HarnessDisclosure
 from composer.spec.source.task_ids import (
     SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, AUTOSETUP_TASK_ID,
     SUMMARIES_TASK_ID, INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
@@ -139,12 +141,13 @@ async def run_autoprove_pipeline(
         components=comp
     )
 
-    # Prover tool is stateless with respect to setup, so build it now; it is
-    # shared by every CVL-generation call below.
-    prover_tool = get_prover_tool(
-        env.llm_heavy(), source_input.contract_name,
-        source_input.project_root, prover_opts=prover_opts,
-    )
+    # Captured before the parallel phase below: the invariant formulator runs
+    # concurrently with AutoSetup, so it intentionally sees the pre-fallback
+    # harness view. If AutoSetup falls back to the raw contract mid-flight,
+    # invariants formulated over harness getters simply fail formalization
+    # downstream, where the post-fallback state (computed after the join)
+    # governs the verify target and prompts.
+    pre_fallback_harness_view = sys_desc.main_harness_view()
 
     # ------------------------------------------------------------------
     # Phase 3 (parallel branches, joined below):
@@ -186,7 +189,10 @@ async def run_autoprove_pipeline(
         return await run_task(
             handler_factory,
             TaskInfo(INVARIANTS_TASK_ID, "Structural Invariants", AutoProvePhase.INVARIANTS),
-            lambda: get_invariant_formulation(ctx, source_input, env, harnessed_app),
+            lambda: get_invariant_formulation(
+                ctx, source_input, env, harnessed_app,
+                main_harness=pre_fallback_harness_view,
+            ),
         )
 
     async def stream_bugs():
@@ -210,6 +216,34 @@ async def run_autoprove_pipeline(
 
     if not component_batches:
         raise ValueError("No properties extracted from any component.")
+
+    # The verified contract, computed ONCE here — after AutoSetup, so a raw-contract
+    # fallback (which clears sys_desc.main_harness) is already reflected: the
+    # main-harness identifier when the augmentation harness survived AutoSetup, the
+    # main contract itself otherwise. Everything downstream that names a verify
+    # target (prover tool, artifact-store conf dumps) derives from this.
+    verify_contract = sys_desc.verify_contract_name(source_input.contract_name)
+    source_input = replace(source_input, verify_contract=verify_contract)
+    # The harness API one-liners (None when no main harness), surfaced to the
+    # property authors and the feedback judge.
+    harness_api = sys_desc.main_harness_api()
+
+    # Report disclosure: which augmentation harness verification ran against
+    # (post-fallback view), so the report never overstates what was directly
+    # verified.
+    harness_view = sys_desc.main_harness_view()
+    main_harness_disclosure = HarnessDisclosure(
+        name=harness_view.name,
+        path=harness_view.path,
+        harness_of=harness_view.harness_of,
+        api=harness_view.api,
+    ) if harness_view is not None else None
+
+    # The prover tool is shared by every CVL-generation call below.
+    prover_tool = get_prover_tool(
+        env.llm_heavy(), verify_contract,
+        source_input.project_root, prover_opts=prover_opts,
+    )
 
     store = source_input.artifact_store
 
@@ -255,6 +289,7 @@ async def run_autoprove_pipeline(
                     description="Structural invariant CVL",
                     source=source_input,
                     spec_dir=SPECS_DIR,
+                    harness_api=harness_api,
                 ),
             )
             if isinstance(inv_cvl_result, GaveUp):
@@ -293,4 +328,7 @@ async def run_autoprove_pipeline(
         resources=resources,
         semaphore=semaphore,
         invariant_result=invariant_result,
+        harness_api=harness_api,
+        main_harness=main_harness_disclosure,
+        main_harness_fallback=sys_desc.main_harness_fallback,
     )

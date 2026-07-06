@@ -33,8 +33,12 @@ from composer.ui.tool_display import tool_display
 
 from graphcore.graph import FlowInput
 
+type GiveUpSort = Literal["env_issue", "needs_harness", "prover_limit", "other"]
+
 class SourceAuthorExtra(TypedDict):
     failed: bool | None
+    # Classification recorded by the give_up tool; None until (unless) it is called.
+    give_up_sort: GiveUpSort | None
 
 class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra):
     pass
@@ -47,6 +51,8 @@ class SourceCVLGenerationState(SourceCVLGenerationExtra, MessagesState):
 
 class GaveUp(BaseModel):
     reason: str
+    # Default keeps pre-change cached results deserializing.
+    sort: GiveUpSort = "other"
 
 type BatchGeneratedCVLResult = GeneratedCVL | GaveUp
 
@@ -135,6 +141,16 @@ class GiveUpTool(WithImplementation[Command], WithInjectedId):
     mechanisms to complete your task.
     """
     reason: str = Field(description="The reason for giving up on your task")
+    sort: GiveUpSort = Field(
+        default="other",
+        description=(
+            "Classification of the give-up: `env_issue` when a toolchain/environment "
+            "component is missing or broken; `needs_harness` when the properties require "
+            "observing state or entry points that the contract's external interface (and "
+            "any verification harness) does not expose; `prover_limit` when prover "
+            "timeouts/resource limits defeat every reformulation; `other` for anything else."
+        ),
+    )
 
     @override
     def run(self) -> Command:
@@ -143,6 +159,7 @@ class GiveUpTool(WithImplementation[Command], WithInjectedId):
             "Accepted",
             failed=True,
             result=self.reason,
+            give_up_sort=self.sort,
         )
 
 class ResourceView(TypedDict):
@@ -157,6 +174,9 @@ class PropertyGenParams(TypedDict):
     resources: list[ResourceView]
     properties: list[PropertyFormulation]
     contract_name: str
+    # One-liners describing the main-contract augmentation harness API
+    # (getters/helpers); None when the run has no main harness.
+    harness_api: list[str] | None
 
 class PropertyGenerationConfig(SummaryConfig[SourceCVLGenerationState]):
     def __init__(self):
@@ -343,10 +363,13 @@ async def batch_cvl_generation(
     description: str,
     source: SourceCode,
     spec_dir: Path,
+    harness_api: list[str] | None = None,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
     # directory, so resource imports are expressed relative to *spec_dir*.
+    # *harness_api* is the main-contract augmentation harness API (if any); it is
+    # surfaced to both the author and the feedback judge.
     resource_views: list[ResourceView] = [
         {
             "description": r.description,
@@ -359,7 +382,8 @@ async def batch_cvl_generation(
         "resources": resource_views,
         "context": component,
         "properties": props,
-        "contract_name": source.contract_name
+        "contract_name": source.contract_name,
+        "harness_api": harness_api
     })
 
     # use "cache=long" to account for very long prover runs.
@@ -389,8 +413,10 @@ async def batch_cvl_generation(
     feedback_env = property_feedback_judge(
         ctx.child(CVL_JUDGE_KEY), env, FeedbackTemplate.bind({
             "sort": "existing",
-            "context": component
-        }), props
+            "context": component,
+            "harness_api": harness_api
+        }), props,
+        harness_augmentation=harness_api is not None,
     )
 
     res_state = await run_cvl_generator(
@@ -408,13 +434,17 @@ async def batch_cvl_generation(
             property_rules=[],
             validations={},
             failed=None,
+            give_up_sort=None,
         )
     )
 
     assert "result" in res_state
     assert res_state["failed"] is not None
     if res_state["failed"]:
-        return GaveUp(reason=res_state["result"])
+        return GaveUp(
+            reason=res_state["result"],
+            sort=res_state.get("give_up_sort") or "other",
+        )
     d = res_state["curr_spec"]
     assert d is not None
     # Persist the base prover config and last run link from the final state so a later cache

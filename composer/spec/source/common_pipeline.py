@@ -31,6 +31,7 @@ from composer.spec.source.task_ids import (
 from composer.spec.source.report import build as report_build
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportComponentInput
+from composer.spec.source.report.schema import HarnessDisclosure
 from composer.spec.source.report_prover import make_prover_fetcher
 
 _log = logging.getLogger(__name__)
@@ -147,13 +148,20 @@ async def generate_all_component_cvl(
     resources: list[CVLResource],
     semaphore: asyncio.Semaphore,
     invariant_result: tuple[list[PropertyFormulation], GeneratedCVL] | None = None,
+    harness_api: list[str] | None = None,
+    main_harness: HarnessDisclosure | None = None,
+    main_harness_fallback: str | None = None,
 ) -> AutoProveResult:
     """Phase 6 — per-component CVL generation.
 
     Generates and writes a spec for each extracted batch in parallel
     (semaphore-bounded). ``resources`` is consumed read-only; callers that want
     the structural invariants assumed as preconditions must include
-    ``invariants.spec`` in ``resources`` before calling.
+    ``invariants.spec`` in ``resources`` before calling. ``harness_api`` is the
+    main-contract augmentation harness API (if any), surfaced to the authors
+    and the feedback judge. ``main_harness`` / ``main_harness_fallback`` are the
+    report's harness disclosure: the augmentation harness verification ran
+    against, or the reason the run fell back to the raw contract.
     """
     async def _generate_batch(
         task_id: str,
@@ -182,6 +190,7 @@ async def generate_all_component_cvl(
                 description=label,
                 source=source_input,
                 spec_dir=SPECS_DIR,
+                harness_api=harness_api,
             ),
             semaphore,
         )
@@ -234,6 +243,7 @@ async def generate_all_component_cvl(
                 props=batch.props,
                 result=result if isinstance(result, GeneratedCVL) else None,
                 run_link=component_runs.get(spec.run_key),
+                gave_up_sort=result.sort if isinstance(result, GaveUp) else None,
             ))
         if invariant_result is not None:
             inv_props, inv_cvl = invariant_result
@@ -254,6 +264,8 @@ async def generate_all_component_cvl(
                 components=report_components,
                 llm=env.llm_lite(),
                 fetch_verdicts=make_prover_fetcher(),
+                main_harness=main_harness,
+                main_harness_fallback=main_harness_fallback,
             ),
         )
         if report is not None:
@@ -270,7 +282,7 @@ async def generate_all_component_cvl(
         if isinstance(result, BaseException):
             failures.append(f"{batch.feat.component.name}: {result}")
         elif isinstance(result, GaveUp):
-            failures.append(f"{batch.feat.component.name}: GAVE_UP: {result.reason}")
+            failures.append(f"{batch.feat.component.name}: GAVE_UP[{result.sort}]: {result.reason}")
 
     return AutoProveResult(
         n_components=len(component_batches),

@@ -161,6 +161,47 @@ You may also make use of the following CVL resources, available as CVL files.
 {% endfor %}
 {% endif %}
 
+{% if harness_api %}
+<verification_harness>
+The contract is verified through an augmentation harness that extends {{ contract_name }} with the
+following verification API (external view getters over otherwise-unobservable storage, and thin external
+wrappers around internal steps of monolithic functions). You may — and should — use these getters/helpers
+directly in your rules and invariants, exactly like any other external function of the contract:
+
+{% for line in harness_api %}
+* {{ line }}
+{% endfor %}
+
+Because this API exists, "the state is inaccessible / has no public getter" is NOT a valid reason to skip
+a property when a harness getter above exposes that state.
+
+Because the harness is the *verified* contract, the harness API above also participates in parametric
+rules (`method f`) and in invariant preservation checks. The helper wrappers expose internal mid-states
+as standalone transitions that are NOT reachable in the production contract (in production those steps
+only execute inside their monolithic caller). Follow these rules:
+
+* If a parametric rule or invariant fails and the counterexample's only state-changing step is a harness
+  helper wrapper, the failure may be a harness artifact rather than a real violation. Assess whether the
+  violating transition is reachable through {{ contract_name }}'s production external interface. If it is
+  not, exclude the helper from that rule/invariant with a documented `filtered` block instead of weakening
+  the property with `require` statements. The idiom (the parametric method's contract is always the
+  verified harness here, so `f.selector` is the discriminator; combine exclusions with `&&`):
+
+  ```
+  invariant total_matches_sum()
+      ...
+      filtered { f -> f.selector != sig:helperStep(address).selector }
+  ```
+
+  Only filter methods that appear in the harness API list above, and add a comment on the `filtered`
+  block naming each excluded method as a documented harness helper. The storage getters are `view`
+  functions: they cannot change state and never need filtering.
+* HARD RULE: never use a harness helper wrapper as the witness of a `satisfy`, liveness, or reachability
+  claim. A state reachable only through a helper proves nothing about the production contract — the
+  witness must go through {{ contract_name }}'s real external interface.
+</verification_harness>
+{% endif %}
+
 <state>
 Use the available memory tools to track your progress through this algorithm, any important lessons about CVL you may have learned,
 or any other significant, relevant information to this task. In particular, be sure to update your memory before calling the prover to summarize

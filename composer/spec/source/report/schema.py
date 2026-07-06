@@ -120,6 +120,10 @@ class GaveUpComponent(BaseModel):
     crashed), so none of its inferred properties were formalized. No per-property reason."""
     component: ComponentName
     properties: list[PropertyFormulation]
+    # The author's give-up classification (env_issue / needs_harness / prover_limit / other);
+    # None for crashes and for backends that don't classify give-ups. Optional-with-default
+    # so persisted pre-change reports still validate.
+    give_up_sort: str | None = None
 
 
 class PropertyGroup(BaseModel):
@@ -151,6 +155,19 @@ class CoverageReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class HarnessDisclosure(BaseModel):
+    """Disclosure that verification ran against a main-contract augmentation harness rather than
+    the protocol contract directly. ``name``/``path`` identify the harness contract (the persisted
+    conf's verify target); ``harness_of`` is the protocol contract it extends (the report's primary
+    ``contract_name``); ``api`` lists the getters/wrappers the harness adds (the prompt-facing
+    one-liners), so a report consumer can reconcile the conf's contract name with the report's and
+    see exactly which entry points were added for verification."""
+    name: str
+    path: str
+    harness_of: str
+    api: list[str] = Field(default_factory=list)
+
+
 type ReportBackend = Literal["prover", "foundry"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
 this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test")
@@ -172,3 +189,9 @@ class AutoProverReport(BaseModel):
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
     coverage: CoverageReport
+    #: Present when verification ran through a main-contract augmentation harness.
+    #: Optional-with-default so persisted pre-change reports still validate.
+    main_harness: HarnessDisclosure | None = None
+    #: Set when a generated augmentation harness failed AutoSetup and the run fell back to
+    #: verifying the raw contract — the downgrade is disclosed rather than silent.
+    main_harness_fallback: str | None = None

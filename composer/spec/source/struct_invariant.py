@@ -24,6 +24,7 @@ from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.context import WorkflowContext, SourceCode, CacheKey, InvJudge
 from composer.spec.service_host import ServiceHost
+from composer.spec.source.harness import MainHarnessView
 from composer.spec.system_model import HarnessedApplication
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.util import uniq_thread_id
@@ -80,6 +81,9 @@ def _merge_invariant_feedback(
 class InvariantParams(TypedDict):
     context: HarnessedApplication
     contract_spec: SourceCode
+    # The main-contract augmentation harness (rendered by
+    # harnessed_application_context.j2); None when the run has no main harness.
+    main_harness: MainHarnessView | None
 
 _typed_invariant_prompt = TypedTemplate[InvariantParams]("structural_invariant_prompt.j2")
 
@@ -87,7 +91,9 @@ async def get_invariant_formulation(
     ctx: WorkflowContext[None],
     source: SourceCode,
     env: ServiceHost,
-    app: HarnessedApplication
+    app: HarnessedApplication,
+    *,
+    main_harness: MainHarnessView | None = None,
 ) -> Invariants:
     """Run the structural invariant formulation agent.
 
@@ -98,7 +104,10 @@ async def get_invariant_formulation(
     Args:
         ctx: Workflow context for threading, memory, and checkpointing.
         source: Source code metadata (used for template rendering).
-        source_tools: Builder with fs_tools for source code reading.
+        env: Service host providing the LLM builder and source tools.
+        main_harness: The main-contract augmentation harness view (if any),
+            rendered into the application context so proposed invariants can
+            reference the harness getters/helpers.
 
     Returns:
         Validated structural invariants.
@@ -199,7 +208,8 @@ async def get_invariant_formulation(
 
     bound_template = _typed_invariant_prompt.bind({
         "context": app,
-        "contract_spec": source
+        "contract_spec": source,
+        "main_harness": main_harness
     })
 
     graph = bind_standard(

@@ -1,0 +1,464 @@
+"""Tests for the main-contract augmentation harness (composer.spec.source.harness).
+
+Covers the pure pieces — pydantic cache back-compat (pre-change JSON without the
+new optional fields must still validate), the `verify_contract_name`/`verify_contract_path`
+accessors that thread the verify target through the pipeline, the prompt-facing
+`api_lines`/`main_harness_view` helpers, the `GiveUpTool` sort classification defaults,
+and rendering of the new/changed templates. No LLM / no prover / no DB.
+"""
+
+import pytest
+
+from composer.spec.source.author import GaveUp
+from composer.spec.source.harness import (
+    AgentSystemDescription,
+    HarnessDef,
+    HarnessedContract,
+    HelperDecomposition,
+    MainHarnessPlan,
+    MainHarnessView,
+    SystemDescriptionHarnessed,
+    UnstructuredSlotSpec,
+    empty_main_harness_plan_error,
+    main_harness_path_error,
+)
+from composer.spec.prop import PropertyFormulation
+from composer.spec.source.report.schema import GaveUpComponent
+from composer.spec.system_model import (
+    HarnessedApplication,
+    SolidityIdentifier,
+    SourceApplication,
+)
+from composer.templates.loader import load_jinja_template
+
+
+# ---------------------------------------------------------------------------
+# Builders
+# ---------------------------------------------------------------------------
+
+def _base_description_fields() -> dict:
+    """The pre-change wire shape shared by both system-description models."""
+    return {
+        "non_trivial_state": "some non-trivial state",
+        "transitive_closure": [],
+        "erc20_contracts": [],
+        "external_interfaces": [],
+    }
+
+
+def _plan() -> MainHarnessPlan:
+    return MainHarnessPlan(
+        unstructured_slots=[
+            UnstructuredSlotSpec(
+                getter_name="getVersionSlot",
+                slot_derivation='keccak256("vault.state.version") - 1',
+                value_type="uint256",
+                rationale="version invariants need to observe it",
+            )
+        ],
+        decompositions=[
+            HelperDecomposition(
+                target_function="depositAndTransfer(address)",
+                helpers={"helperDeposit": "performs the deposit accounting step"},
+                rationale="each step must be verifiable in isolation",
+            )
+        ],
+    )
+
+
+def _main_harness_contract() -> HarnessedContract:
+    return HarnessedContract(
+        solidity_identifier=SolidityIdentifier("VaultHarness"),
+        link_fields=[],
+        harness_definition=HarnessDef(
+            harness_of=SolidityIdentifier("Vault"),
+            harness_source="contract VaultHarness is Vault {}",
+        ),
+        path="certora/harnesses/VaultHarness.sol",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pydantic cache back-compat: pre-change JSON (no new fields) still validates
+# ---------------------------------------------------------------------------
+
+def test_agent_system_description_backcompat():
+    desc = AgentSystemDescription.model_validate({
+        **_base_description_fields(),
+        "transitive_closure": [
+            {"solidity_identifier": "Token", "link_fields": [], "num_instances": None}
+        ],
+    })
+    assert desc.main_contract_harness is None
+    assert not desc.needs_harnessing()
+
+
+def test_system_description_harnessed_backcompat():
+    desc = SystemDescriptionHarnessed.model_validate(_base_description_fields())
+    assert desc.main_harness is None
+    assert desc.main_harness_plan is None
+    assert desc.main_harness_api() is None
+    assert desc.main_harness_view() is None
+
+
+def test_gave_up_backcompat_defaults_sort_other():
+    gave_up = GaveUp.model_validate({"reason": "no solc"})
+    assert gave_up.sort == "other"
+
+
+def test_gave_up_component_backcompat():
+    gc = GaveUpComponent.model_validate({"component": "Vault", "properties": []})
+    assert gc.give_up_sort is None
+
+
+# ---------------------------------------------------------------------------
+# Verify-target accessors
+# ---------------------------------------------------------------------------
+
+def test_verify_contract_name_defaults_to_main_contract():
+    desc = SystemDescriptionHarnessed.model_validate(_base_description_fields())
+    assert desc.verify_contract_name("Vault") == "Vault"
+    assert desc.verify_contract_path("src/Vault.sol") == "src/Vault.sol"
+
+
+def test_verify_contract_name_prefers_main_harness():
+    desc = SystemDescriptionHarnessed.model_validate(_base_description_fields())
+    desc.main_harness = _main_harness_contract()
+    desc.main_harness_plan = _plan()
+    assert desc.verify_contract_name("Vault") == "VaultHarness"
+    assert desc.verify_contract_path("src/Vault.sol") == "certora/harnesses/VaultHarness.sol"
+
+
+def test_main_harness_api_and_view():
+    desc = SystemDescriptionHarnessed.model_validate(_base_description_fields())
+    desc.main_harness = _main_harness_contract()
+    desc.main_harness_plan = _plan()
+
+    api = desc.main_harness_api()
+    assert api is not None
+    # One line per getter, one per helper wrapper.
+    assert len(api) == 2
+    assert any("getVersionSlot" in line for line in api)
+    assert any("helperDeposit" in line for line in api)
+
+    view = desc.main_harness_view()
+    assert view is not None
+    assert view.name == "VaultHarness"
+    assert view.harness_of == "Vault"
+    assert view.api == api
+
+
+def test_classifier_rejects_empty_harness_plan():
+    # An all-empty plan should be delivered as null; this is the exact check the
+    # classifier's result validator runs.
+    err = empty_main_harness_plan_error(MainHarnessPlan(unstructured_slots=[], decompositions=[]))
+    assert err is not None
+    assert "deliver null" in err
+    # A null plan and a non-empty plan both pass.
+    assert empty_main_harness_plan_error(None) is None
+    assert empty_main_harness_plan_error(_plan()) is None
+
+
+def test_main_harness_delivery_confined_to_harness_dir():
+    # The generation validator must reject deliveries outside certora/harnesses/
+    # (write confinement alone doesn't stop delivering a pre-existing project file).
+    assert main_harness_path_error("certora/harnesses/VaultHarness.sol") is None
+    err = main_harness_path_error("src/Vault.sol")
+    assert err is not None
+    assert "certora/harnesses" in err
+
+
+# ---------------------------------------------------------------------------
+# Template rendering
+# ---------------------------------------------------------------------------
+
+def _prop() -> PropertyFormulation:
+    return PropertyFormulation(
+        title="version_is_monotone",
+        methods="invariant",
+        sort="safety_property",
+        description="the version never decreases",
+    )
+
+
+class _Spec:
+    contract_name = "Vault"
+    relative_path = "src/Vault.sol"
+
+
+def test_main_harness_generation_prompt_renders():
+    out = load_jinja_template(
+        "main_harness_generation_prompt.j2",
+        contract_name="Vault",
+        relative_path="src/Vault.sol",
+        harness_name="VaultHarness",
+        plan=_plan(),
+    )
+    assert "contract VaultHarness is Vault" in out
+    assert "getVersionSlot" in out
+    assert "helperDeposit" in out
+    assert "certora/harnesses/VaultHarness.sol" in out
+
+
+def test_state_analysis_renders_main_harness_step():
+    app = SourceApplication(application_type="Staking", description="desc", components=[])
+    out = load_jinja_template(
+        "state_analysis.j2",
+        contract_name="Vault",
+        relative_path="src/Vault.sol",
+        context=app,
+    )
+    assert "main_contract_harness" in out
+    assert "ERC-7201" in out
+    # Slot derivations must be source citations, not paraphrases.
+    assert "QUOTE the exact source expression" in out
+    assert "`file:line` citation" in out
+
+
+@pytest.mark.parametrize("with_api", [True, False])
+def test_property_generation_prompt_harness_api(with_api: bool):
+    api = _plan().api_lines() if with_api else None
+    out = load_jinja_template(
+        "property_generation_prompt.j2",
+        properties=[_prop()],
+        contract_name="Vault",
+        resources=[],
+        context=None,
+        harness_api=api,
+    )
+    assert ("<verification_harness>" in out) == with_api
+    assert ("getVersionSlot" in out) == with_api
+    # Soundness guardrails render exactly when the harness API does: parametric
+    # participation, the filtered-exclusion idiom, and the satisfy-witness ban.
+    assert ("NOT reachable in the production contract" in out) == with_api
+    assert ("filtered { f -> f.selector != sig:" in out) == with_api
+    assert ("never use a harness helper wrapper as the witness" in out) == with_api
+
+
+def test_property_judge_prompt_harness_api():
+    out = load_jinja_template(
+        "property_judge_prompt.j2",
+        properties=[_prop()],
+        sort="existing",
+        context=None,
+        harness_api=_plan().api_lines(),
+    )
+    assert "<verification_harness>" in out
+    assert "getVersionSlot" in out
+    # The judge mirrors the author guardrails: helper-witnessed satisfy claims,
+    # harness-artifact-driven weakenings, and the filter-legitimacy taxonomy
+    # (documented harness helper OR recorded vacuity acknowledgment).
+    assert "witness runs through a harness helper wrapper" in out
+    assert "reject the weakening" in out
+    assert "recorded vacuity acknowledgment" in out
+    # Binding without harness_api at all (the NotRequired key) renders harness-free.
+    out = load_jinja_template(
+        "property_judge_prompt.j2",
+        properties=[_prop()],
+        sort="existing",
+        context=None,
+    )
+    assert "<verification_harness>" not in out
+
+
+def test_judge_system_prompt_accepts_harness_augmentation_flag():
+    # This PR only plumbs the variable; the gated wording lands separately. The
+    # template must render regardless of the flag's value.
+    for flag in (True, False):
+        out = load_jinja_template(
+            "property_judge_system_prompt.j2", sort="existing", harness_augmentation=flag,
+        )
+        assert out
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_harness_augmentation_reaches_both_judge_binds(flag: bool):
+    # property_feedback_judge threads its harness_augmentation parameter into BOTH
+    # template binds via _bind_harness_augmentation; the task-prompt gate (Criteria 7)
+    # reads the identically-named variable, so the two prompts cannot disagree.
+    from composer.spec.feedback import (
+        FeedbackSystemTemplate, FeedbackTemplate, Properties, _bind_harness_augmentation,
+    )
+
+    # System-prompt bind (as property_feedback_judge builds it).
+    sys_bind = _bind_harness_augmentation(
+        FeedbackSystemTemplate.bind({"sort": "existing"}), flag,
+    )
+    assert sys_bind.args["harness_augmentation"] is flag
+    assert sys_bind.render_to(load_jinja_template)
+
+    # Task-prompt bind, through the exact InjectedTemplate path batch_cvl_generation uses.
+    task_bind = _bind_harness_augmentation(
+        FeedbackTemplate.bind({
+            "sort": "existing", "context": None, "harness_api": _plan().api_lines() if flag else None,
+        }).depends(Properties).inject({"properties": [_prop()]}),
+        flag,
+    )
+    assert task_bind.args["harness_augmentation"] is flag
+    assert task_bind.args["properties"]
+    assert task_bind.render_to(load_jinja_template)
+
+
+# ---------------------------------------------------------------------------
+# Raw-contract fallback when the harness fails AutoSetup
+# ---------------------------------------------------------------------------
+
+def _fallback_fixture(tmp_path):
+    """A WorkflowContext (in-memory store), a SourceCode rooted at tmp_path, and a
+    harnessed system description, for driving run_autosetup_phase directly."""
+    from typing import Any, cast
+    from langgraph.store.memory import InMemoryStore
+    from composer.spec.context import SourceCode, WorkflowContext
+
+    ctx = WorkflowContext.create(
+        services=cast(Any, None),
+        thread_id="fallback-test",
+        store=InMemoryStore(),
+        recursion_limit=25,
+        cache_namespace=("fallback-test",),
+    )
+    source = SourceCode(
+        content=cast(Any, None),
+        project_root=str(tmp_path),
+        contract_name=SolidityIdentifier("Vault"),
+        relative_path="src/Vault.sol",
+        forbidden_read="^$",
+    )
+    desc = SystemDescriptionHarnessed.model_validate(_base_description_fields())
+    desc.main_harness = _main_harness_contract()
+    desc.main_harness_plan = _plan()
+    return ctx, source, desc
+
+
+def _fake_autosetup(fail_for: set[str], calls: list[tuple[str, str]]):
+    from composer.spec.source.autosetup import SetupFailure, SetupSuccess
+
+    async def fake(project_root, relative_path, main_contract, prover_opts, *extra_files):
+        calls.append((relative_path, main_contract))
+        if main_contract in fail_for:
+            return SetupFailure(error=f"solc boom for {main_contract}", stderr="stderr text")
+        return SetupSuccess(
+            prover_config={"files": []},
+            summaries_path=f"certora/summaries/summaries-{main_contract}.spec",
+            user_types=[],
+        )
+
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_autosetup_falls_back_to_raw_contract(tmp_path, monkeypatch):
+    import composer.spec.source.harness as harness_mod
+    from composer.prover.core import ProverOptions
+    from composer.spec.system_model import SourceApplication as App
+
+    ctx, source, desc = _fallback_fixture(tmp_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(harness_mod, "run_autosetup", _fake_autosetup({"VaultHarness"}, calls))
+
+    app = App(application_type="Staking", description="desc", components=[])
+    result = await harness_mod.run_autosetup_phase(ctx, source, desc, app, ProverOptions())
+
+    # Harness attempt first, then the raw contract.
+    assert calls == [
+        ("certora/harnesses/VaultHarness.sol", "VaultHarness"),
+        ("src/Vault.sol", "Vault"),
+    ]
+    assert result.summaries_path.endswith("summaries-Vault.spec")
+    # The fallback clears the harness so every verify-target/prompt accessor reverts,
+    # and records the downgrade for the report.
+    assert desc.main_harness is None
+    assert desc.main_harness_plan is None
+    assert desc.verify_contract_name("Vault") == "Vault"
+    assert desc.main_harness_api() is None
+    assert desc.main_harness_fallback is not None
+    assert "VaultHarness" in desc.main_harness_fallback
+    assert "solc boom for VaultHarness" in desc.main_harness_fallback
+
+
+@pytest.mark.asyncio
+async def test_autosetup_harness_success_keeps_harness(tmp_path, monkeypatch):
+    import composer.spec.source.harness as harness_mod
+    from composer.prover.core import ProverOptions
+    from composer.spec.system_model import SourceApplication as App
+
+    ctx, source, desc = _fallback_fixture(tmp_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(harness_mod, "run_autosetup", _fake_autosetup(set(), calls))
+
+    app = App(application_type="Staking", description="desc", components=[])
+    result = await harness_mod.run_autosetup_phase(ctx, source, desc, app, ProverOptions())
+
+    assert calls == [("certora/harnesses/VaultHarness.sol", "VaultHarness")]
+    assert result.summaries_path.endswith("summaries-VaultHarness.spec")
+    assert desc.main_harness is not None
+    assert desc.main_harness_fallback is None
+
+
+@pytest.mark.asyncio
+async def test_autosetup_raw_failure_still_raises(tmp_path, monkeypatch):
+    import composer.spec.source.harness as harness_mod
+    from composer.prover.core import ProverOptions
+    from composer.spec.system_model import SourceApplication as App
+
+    ctx, source, desc = _fallback_fixture(tmp_path)
+    # No harness: a raw-contract failure has nothing to fall back to.
+    desc.main_harness = None
+    desc.main_harness_plan = None
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(harness_mod, "run_autosetup", _fake_autosetup({"Vault"}, calls))
+
+    app = App(application_type="Staking", description="desc", components=[])
+    with pytest.raises(RuntimeError, match="Auto setup failed"):
+        await harness_mod.run_autosetup_phase(ctx, source, desc, app, ProverOptions())
+    assert calls == [("src/Vault.sol", "Vault")]
+
+
+@pytest.mark.asyncio
+async def test_autosetup_fallback_failure_raises_too(tmp_path, monkeypatch):
+    import composer.spec.source.harness as harness_mod
+    from composer.prover.core import ProverOptions
+    from composer.spec.system_model import SourceApplication as App
+
+    ctx, source, desc = _fallback_fixture(tmp_path)
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        harness_mod, "run_autosetup", _fake_autosetup({"Vault", "VaultHarness"}, calls),
+    )
+
+    app = App(application_type="Staking", description="desc", components=[])
+    with pytest.raises(RuntimeError, match="Auto setup failed"):
+        await harness_mod.run_autosetup_phase(ctx, source, desc, app, ProverOptions())
+    # Both attempts ran; the downgrade was still recorded before the final failure.
+    assert calls == [
+        ("certora/harnesses/VaultHarness.sol", "VaultHarness"),
+        ("src/Vault.sol", "Vault"),
+    ]
+    assert desc.main_harness_fallback is not None
+
+
+def test_system_description_fallback_field_backcompat():
+    desc = SystemDescriptionHarnessed.model_validate(_base_description_fields())
+    assert desc.main_harness_fallback is None
+
+
+@pytest.mark.parametrize("with_harness", [True, False])
+def test_structural_invariant_prompt_main_harness(with_harness: bool):
+    view = MainHarnessView(
+        name=SolidityIdentifier("VaultHarness"),
+        path="certora/harnesses/VaultHarness.sol",
+        harness_of=SolidityIdentifier("Vault"),
+        api=_plan().api_lines(),
+    ) if with_harness else None
+    app = HarnessedApplication(application_type="Staking", description="desc", components=[])
+    out = load_jinja_template(
+        "structural_invariant_prompt.j2",
+        context=app,
+        contract_spec=_Spec(),
+        main_harness=view,
+    )
+    assert ("VaultHarness" in out) == with_harness
+    assert ("getVersionSlot" in out) == with_harness
+    # The shared harnessed context carries the parametric/witness caveat, so the
+    # invariant formulator sees the same soundness guardrails as the CVL author.
+    assert ("never use a helper as the witness" in out) == with_harness

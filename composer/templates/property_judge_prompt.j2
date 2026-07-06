@@ -219,6 +219,38 @@ this specification.
 </application>
 {% endif %}
 
+{% if harness_api %}
+<verification_harness>
+The contract is verified through an augmentation harness exposing the following verification API
+(external view getters over otherwise-unobservable storage, and thin external wrappers around internal
+steps of monolithic functions). The author may use these getters/helpers directly in rules and invariants:
+
+{% for line in harness_api %}
+* {{ line }}
+{% endfor %}
+
+When evaluating skips under Criteria 7: "the state is inaccessible / has no public getter" is NOT a valid
+skip justification when a harness getter above exposes that state.
+
+Because the harness is the *verified* contract, its helper wrappers also participate in parametric rules
+and invariant preservation, and they expose transitions that are NOT reachable in production (in production
+those steps only execute inside their monolithic caller). Enforce the following, as part of the criteria
+above:
+
+* Reject any `satisfy`/liveness/reachability claim whose witness runs through a harness helper wrapper: a
+  state reachable only via a helper proves nothing about the production contract. Demand a witness through
+  the production external interface.
+* If the author weakened a property (added `require`s, weakened an assertion) in response to a
+  counterexample whose only state-changing step was a harness helper, reject the weakening: the correct
+  response to a helper-only, production-unreachable counterexample is a documented `filtered` exclusion of
+  that helper, not a weaker property.
+* Filter legitimacy: a `filtered` block is legitimate if and only if every method it excludes is either
+  (i) a documented harness helper from the API list above (the filter should carry a comment naming it), or
+  (ii) covered by a recorded vacuity acknowledgment. Any other exclusion is suspect — treat it as
+  potentially hiding a real counterexample and demand the author justify or remove it.
+</verification_harness>
+{% endif %}
+
 <guidance>
 <hard_requirement>
 Do not provide ANY feedback except for the 7 criteria above.

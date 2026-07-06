@@ -81,6 +81,86 @@ class HarnessedContract(ClosureContractBase):
     harness_definition : HarnessDef | None
     path: str
 
+class UnstructuredSlotSpec(BaseModel):
+    """
+    A piece of main-contract state living in "unstructured" storage (assembly
+    sload/sstore, `StorageSlot`, ERC-7201 namespaces, constant keccak slots)
+    with no public getter, to be exposed via a harness getter.
+    """
+    getter_name: str = Field(description="The name of the external view getter the harness should expose for this slot")
+    slot_derivation: str = Field(description=(
+        "How the storage slot is derived: quote the exact source expression computing "
+        "the slot, with a file:line citation — never a paraphrase "
+        "(e.g. `keccak256(\"vault.state.balance\") - 1` — src/State.sol:42, or the "
+        "ERC-7201 namespace id as written in the source)"
+    ))
+    value_type: str = Field(description="The Solidity type of the value read from the slot (e.g. `uint256`, `address`)")
+    rationale: str = Field(description="One line: why verification needs to observe this state")
+
+class HelperDecomposition(BaseModel):
+    """
+    A monolithic external function to be decomposed into thin external wrappers
+    around the existing internal helpers it calls.
+    """
+    target_function: str = Field(description="The signature/name of the monolithic external function being decomposed")
+    helpers: dict[str, str] = Field(description=(
+        "The thin external wrappers to expose: a map from wrapper name to a one-line "
+        "behavioral contract of the internal step it wraps"
+    ))
+    rationale: str = Field(description="One line: why verification needs the decomposed entry points")
+
+class MainHarnessPlan(BaseModel):
+    """
+    The plan for the main-contract augmentation harness: getters for unstructured
+    storage plus helper decompositions of monolithic functions. Purely additive —
+    the harness never changes or duplicates protocol behavior.
+    """
+    unstructured_slots: list[UnstructuredSlotSpec] = Field(description="The unstructured-storage getters to expose (may be empty)")
+    decompositions: list[HelperDecomposition] = Field(description="The monolithic-function decompositions to expose (may be empty)")
+
+    def api_lines(self) -> list[str]:
+        """Prompt-facing one-liners describing the harness API, for downstream
+        property-generation/judge prompts."""
+        lines: list[str] = []
+        for s in self.unstructured_slots:
+            lines.append(
+                f"`{s.getter_name}()` returns (`{s.value_type}`) — reads the storage slot "
+                f"derived from {s.slot_derivation}. {s.rationale}"
+            )
+        for d in self.decompositions:
+            for (name, contract) in d.helpers.items():
+                lines.append(
+                    f"`{name}` — {contract} (thin external wrapper over a step of `{d.target_function}`)"
+                )
+        return lines
+
+def empty_main_harness_plan_error(plan: MainHarnessPlan | None) -> str | None:
+    """The classifier must deliver ``null`` rather than an all-empty plan.
+    Module-level (not inlined in the agent's result validator) so the rejection
+    is unit-testable without running the agent."""
+    if plan is not None and \
+            not plan.unstructured_slots and \
+            not plan.decompositions:
+        return "main_contract_harness was proposed but contains no getters and no decompositions; deliver null instead"
+    return None
+
+def main_harness_path_error(path: str) -> str | None:
+    """The delivered harness must live under ``certora/harnesses/``. The VFS
+    write confinement only blocks *writes* outside that directory; without this
+    check the agent could deliver a pre-existing project file (e.g. a protocol
+    source) as the "generated" harness. Module-level for unit-testability."""
+    if not path.startswith("certora/harnesses/"):
+        return f"Delivered harness at {path}, but the harness must be a new file under `certora/harnesses/`"
+    return None
+
+class MainHarnessView(BaseModel):
+    """Prompt-facing view of the main-contract augmentation harness, rendered by
+    `harnessed_application_context.j2` so downstream agents see the harness API."""
+    name: SolidityIdentifier
+    path: str
+    harness_of: SolidityIdentifier
+    api: list[str]
+
 class ExternalInterface(BaseModel):
     """
     An external actor interacted through an interface which is NOT included in the transitive closure
@@ -103,12 +183,20 @@ class AgentSystemDescription(SystemDescriptionBase[ClosureContract]):
     """
     The result of your analysis
     """
+    # Optional-with-default so cached pre-change analyses still validate.
+    main_contract_harness: MainHarnessPlan | None = Field(default=None, description=(
+        "The main-contract augmentation harness plan, if the main contract has "
+        "unstructured storage without getters and/or monolithic external functions "
+        "worth decomposing (null otherwise)"
+    ))
 
     def needs_harnessing(self) -> bool:
+        # Only gates the *external* N-instance harnessing; the main-contract
+        # augmentation harness is generated separately (see generate_main_harness).
         return any([
             c.num_instances for c in self.transitive_closure
         ])
-    
+
 class LocatedClosureContract(ClosureContract):
     path: str
 
@@ -116,7 +204,46 @@ class LocatedSystemDescription(SystemDescriptionBase[LocatedClosureContract]):
     pass
 
 class SystemDescriptionHarnessed(SystemDescriptionBase[HarnessedContract]):
-    pass
+    # Both optional-with-default so cached pre-change descriptions still validate.
+    # ``main_harness`` is the generated augmentation harness (the verify target when
+    # present); ``main_harness_plan`` is the analysis plan it was generated from,
+    # kept so downstream prompts can describe the harness API.
+    main_harness: HarnessedContract | None = None
+    main_harness_plan: MainHarnessPlan | None = None
+    # Human-readable reason when the generated harness failed AutoSetup and the run
+    # fell back to verifying the raw main contract (see ``run_autosetup_phase``).
+    # Set in-run only, never cached: the description is cached before AutoSetup runs,
+    # so a rerun retries the harness before falling back again.
+    main_harness_fallback: str | None = None
+
+    def verify_contract_name(self, default_name: str) -> str:
+        """The contract identifier the prover verifies: the main-harness identifier
+        when an augmentation harness exists, ``default_name`` otherwise."""
+        if self.main_harness is not None:
+            return self.main_harness.solidity_identifier
+        return default_name
+
+    def verify_contract_path(self, default_path: str) -> str:
+        """The source file the prover verifies, following ``verify_contract_name``."""
+        if self.main_harness is not None:
+            return self.main_harness.path
+        return default_path
+
+    def main_harness_api(self) -> list[str] | None:
+        """Prompt-facing one-liners for the harness API (None when no harness)."""
+        if self.main_harness is None or self.main_harness_plan is None:
+            return None
+        return self.main_harness_plan.api_lines()
+
+    def main_harness_view(self) -> MainHarnessView | None:
+        if self.main_harness is None or self.main_harness.harness_definition is None:
+            return None
+        return MainHarnessView(
+            name=self.main_harness.solidity_identifier,
+            path=self.main_harness.path,
+            harness_of=self.main_harness.harness_definition.harness_of,
+            api=self.main_harness_api() or [],
+        )
 
 class HarnessAnalysisParams(TypedDict):
     contract_name: str
@@ -170,6 +297,8 @@ async def classifier_agent(
         for c in res.transitive_closure:
             if c.solidity_identifier not in contract_lkp:
                 return f"Contract {c.solidity_identifier} in the interaction closure doesn't appear in the application description"
+        if (plan_error := empty_main_harness_plan_error(res.main_contract_harness)) is not None:
+            return plan_error
         return None
 
     d = bind_standard(
@@ -370,6 +499,129 @@ async def generate_harnesses(
     await child.cache_put(to_ret)
     return to_ret
 
+class MainHarnessAgentResult(BaseModel):
+    """
+    The result of your main-contract harness generation
+    """
+    path: str = Field(description="The relative path to the generated harness file")
+    harness_name: SolidityIdentifier = Field(description="The Solidity identifier of the harness contract defined in the file")
+
+class MainHarnessResult(MainHarnessAgentResult):
+    source: str
+
+class MainHarnessGenParams(TypedDict):
+    contract_name: str
+    relative_path: str
+    harness_name: str
+    plan: MainHarnessPlan
+
+_MainHarnessGenerationPrompt = TypedTemplate[MainHarnessGenParams]("main_harness_generation_prompt.j2")
+
+def main_harness_generation_key(
+    plan: MainHarnessPlan,
+    contract_name: str,
+) -> CacheKey[SystemDescriptionHarnessed, MainHarnessResult]:
+    return CacheKey[SystemDescriptionHarnessed, MainHarnessResult](
+        "main-harness-" + string_hash(plan.model_dump_json() + "\x00" + contract_name)
+    )
+
+async def generate_main_harness(
+    context: WorkflowContext[SystemDescriptionHarnessed],
+    env: ServiceHost,
+    source: SourceCode,
+    application: SourceApplication,
+    plan: MainHarnessPlan
+) -> MainHarnessResult:
+    """Generate the main-contract augmentation harness `<Main>Harness is <Main>`:
+    external view getters for unstructured storage plus thin external wrappers
+    decomposing monolithic functions. Same VFS confinement as
+    ``generate_harnesses`` (writes only under ``certora/harnesses``)."""
+    child = await context.child(
+        main_harness_generation_key(plan, source.contract_name), plan.model_dump()
+    )
+    if (cached := await child.cache_get(MainHarnessResult)) is not None:
+        return cached
+
+    tool_conf = VFSToolConfig(
+        fs_layer=source.project_root,
+        immutable=False,
+        put_doc_extra="You may only write into the `certora/harnesses` directory",
+        forbidden_write="^(?!certora/harnesses)",
+        forbidden_read=source.forbidden_read
+    )
+
+    class GenerationState(MessagesState, VFSState):
+        result: NotRequired[MainHarnessAgentResult]
+
+    class GenerationInput(FlowInput, VFSState):
+        pass
+
+    v_tools, mat = vfs_tools(tool_conf, GenerationState)
+
+    expected_name = f"{source.contract_name}Harness"
+
+    bound_template = _MainHarnessGenerationPrompt.bind({
+        "contract_name": source.contract_name,
+        "relative_path": source.relative_path,
+        "harness_name": expected_name,
+        "plan": plan
+    })
+
+    def result_validator(
+        s: GenerationState,
+        res: MainHarnessAgentResult,
+        tid: str
+    ) -> str | None:
+        if res.harness_name != expected_name:
+            return f"Harness contract must be named {expected_name}, got {res.harness_name}"
+        if (path_error := main_harness_path_error(res.path)) is not None:
+            return path_error
+        if mat.get(s, res.path) is None:
+            return f"Delivered harness {res.harness_name} at {res.path}, but it doesn't exist on the VFS"
+        return None
+
+    result_tool = result_tool_generator(
+        "result",
+        MainHarnessAgentResult,
+        "Signal the completion of your workflow",
+        validator=(GenerationState, result_validator)
+    )
+
+    g = env.builder_lite().with_input(
+        GenerationInput
+    ).with_state(
+        GenerationState
+    ).with_output_key(
+        "result"
+    ).inject(
+        lambda g: bound_template.render_to(g.with_initial_prompt_template)
+    ).with_sys_prompt_template(
+        "harness_generation_system_prompt.j2"
+    ).with_tools(
+        v_tools + [result_tool]
+    ).with_default_summarizer().compile_async()
+
+    res_state = await run_to_completion(
+        graph=g,
+        input=GenerationInput(input=[], vfs={}),
+        context=None,
+        description="Main Harness Generation",
+        recursion_limit=child.recursion_limit,
+        thread_id=child.thread_id
+    )
+
+    assert "result" in res_state
+    gen = res_state["result"]
+    source_code = mat.get(res_state, gen.path)
+    assert source_code is not None, gen.path
+    to_ret = MainHarnessResult(
+        path=gen.path,
+        harness_name=gen.harness_name,
+        source=source_code.decode("utf-8")
+    )
+    await child.cache_put(to_ret)
+    return to_ret
+
 def _multi_replace(
     s: list[SolidityIdentifier],
     patch: dict[SolidityIdentifier, list[SolidityIdentifier]]
@@ -494,6 +746,33 @@ async def run_setup_part1(
                 ) for c in located_desc.transitive_closure
             ]
         )
+
+    if analysis_results.main_contract_harness is not None:
+        main_harness = await generate_main_harness(
+            context=setup_ctx,
+            env=env,
+            source=source,
+            application=application_desc,
+            plan=analysis_results.main_contract_harness
+        )
+        # The harness extends the main contract, so it carries the main contract's
+        # (already harness-patched) link fields.
+        main_links = next(
+            (c.link_fields for c in harnessed_system.transitive_closure
+             if c.solidity_identifier == source.contract_name),
+            []
+        )
+        harnessed_system.main_harness = HarnessedContract(
+            solidity_identifier=main_harness.harness_name,
+            link_fields=main_links,
+            harness_definition=HarnessDef(
+                harness_of=source.contract_name,
+                harness_source=main_harness.source,
+            ),
+            path=main_harness.path
+        )
+        harnessed_system.main_harness_plan = analysis_results.main_contract_harness
+
     await setup_ctx.cache_put(harnessed_system)
     return harnessed_system
 
@@ -504,7 +783,10 @@ async def run_and_apply_part1(
     application_desc: SourceApplication
 ) -> SystemDescriptionHarnessed:
     res = await run_setup_part1(context, source, env, application_desc)
-    for c in res.transitive_closure:
+    to_write = list(res.transitive_closure)
+    if res.main_harness is not None:
+        to_write.append(res.main_harness)
+    for c in to_write:
         if c.harness_definition is not None:
             tgt = Path(source.project_root) / c.path
             tgt.parent.mkdir(parents=True, exist_ok=True)
@@ -544,14 +826,19 @@ async def run_harness_creation(
 def autosetup_key(
     app: SourceApplication,
     prover_opts: ProverOptions,
+    verify_contract: str | None = None,
 ) -> CacheKey[ContractSetup, SetupSuccess]:
     """Cache key for the AutoSetup phase. Includes ``prover_opts`` so cloud and
     local configurations never collide (the old composite ``config_key`` omitted
     them, which could reuse a stale config across modes)."""
+    payload = app.model_dump_json() + "\x00" + "\x00".join(prover_opts.extra_args)
+    # The verified contract participates in the key only when it deviates from
+    # the default (a main-contract augmentation harness), so cache entries from
+    # before harness support stay valid for harness-free runs.
+    if verify_contract is not None:
+        payload += "\x00verify=" + verify_contract
     return CacheKey[ContractSetup, SetupSuccess](
-        "autosetup-" + string_hash(
-            app.model_dump_json() + "\x00" + "\x00".join(prover_opts.extra_args)
-        )
+        "autosetup-" + string_hash(payload)
     )
 
 
@@ -566,47 +853,90 @@ async def run_autosetup_phase(
     return the compilation config + summaries. Depends on harness creation
     having run first: it reads the transitive-closure file paths from disk.
 
+    When a main-contract augmentation harness exists, the harness *is* the
+    verified contract: it becomes AutoSetup's target (the original main
+    contract enters the scene through inheritance, not as its own instance).
+    If AutoSetup fails on the harness, the phase falls back to the raw main
+    contract instead of hard-failing the run: it clears ``main_harness`` /
+    ``main_harness_plan`` on ``sys_desc`` (so every verify-target and prompt
+    accessor reverts automatically — the pipeline computes the verify target
+    after this phase) and records the downgrade in ``main_harness_fallback``
+    for the report. Failures are never cached, so a rerun retries the harness
+    before falling back again.
+
     Cache hits are guarded by the on-disk existence of ``summaries_path``."""
     config_ctxt = context.child(config_key)
-    cache = await config_ctxt.child(
-        autosetup_key(application_desc, prover_opts),
-        application_desc.model_dump(),
-    )
-    if (cached := await cache.cache_get(SetupSuccess)) is not None:
-        if under_project(source.project_root, certora_relative_to_project(cached.summaries_path)).exists():
-            return cached
 
     extra_files = [
         c.path for c in sys_desc.transitive_closure if c.solidity_identifier != source.contract_name
     ]
 
-    setup_result = await run_autosetup(
-        Path(source.project_root),
-        source.relative_path,
-        source.contract_name,
-        prover_opts,
-        *extra_files,
-    )
+    async def attempt(verify: HarnessedContract | None) -> SetupSuccess | SetupFailure:
+        """One AutoSetup attempt: against the augmentation harness when ``verify``
+        is given, the raw main contract otherwise. Each target caches under its
+        own key (``autosetup_key``'s verify component), so a fallback result can
+        never be replayed as a harness result or vice versa."""
+        cache = await config_ctxt.child(
+            autosetup_key(
+                application_desc, prover_opts,
+                verify.solidity_identifier if verify is not None else None,
+            ),
+            application_desc.model_dump(),
+        )
+        if (cached := await cache.cache_get(SetupSuccess)) is not None:
+            if under_project(source.project_root, certora_relative_to_project(cached.summaries_path)).exists():
+                return cached
+
+        setup_result = await run_autosetup(
+            Path(source.project_root),
+            verify.path if verify is not None else source.relative_path,
+            verify.solidity_identifier if verify is not None else source.contract_name,
+            prover_opts,
+            *extra_files,
+        )
+
+        if isinstance(setup_result, SetupFailure):
+            return setup_result
+
+        # AutoSetup runs as a subprocess; its LLM token usage never reaches composer's
+        # UsageCallback. Fold the counts it wrote to disk into the run summary so they
+        # land in token_usage.json, the run tag, and the end-of-run table. No task_id:
+        # the active task is already AUTOSETUP_TASK_ID, so this attributes to the
+        # autosetup phase. Guarded — read_autosetup_usage returns [] if absent. This is
+        # only reached on a cache miss (cache hits return above), so usage spent in this
+        # process's autosetup run is counted exactly once.
+        summary = get_run_summary()
+        for usage in read_autosetup_usage(Path(source.project_root)):
+            summary.record_token_usage(usage)
+        # Likewise fold AutoSetup's subprocess prover runtime (prover-reported, cache hits
+        # excluded) into the run's prover_usage under the active AUTOSETUP_TASK_ID. None if
+        # absent — guarded so missing external usage can't break the phase.
+        if (autosetup_prover_ms := read_autosetup_prover_usage(Path(source.project_root))) is not None:
+            summary.record_prover_runtime(autosetup_prover_ms)
+
+        await cache.cache_put(setup_result)
+        return setup_result
+
+    main_harness = sys_desc.main_harness
+    setup_result = await attempt(main_harness)
+
+    if isinstance(setup_result, SetupFailure) and main_harness is not None:
+        # Raw-contract fallback: a broken generated harness (classifier false
+        # positive, bad import/constructor/solc detail) must not kill a run that
+        # succeeds on the raw contract.
+        reason = (
+            f"AutoSetup failed for the augmentation harness {main_harness.solidity_identifier}; "
+            f"verification fell back to the raw contract {source.contract_name}. "
+            f"Error: {setup_result.error}"
+        )
+        _logger.warning("%s\nProc stderr:\n%s", reason, setup_result.stderr)
+        sys_desc.main_harness = None
+        sys_desc.main_harness_plan = None
+        sys_desc.main_harness_fallback = reason
+        setup_result = await attempt(None)
 
     if isinstance(setup_result, SetupFailure):
         raise RuntimeError(f"Auto setup failed: {setup_result.error}\nProc stderr:\n{setup_result.stderr}")
 
-    # AutoSetup runs as a subprocess; its LLM token usage never reaches composer's
-    # UsageCallback. Fold the counts it wrote to disk into the run summary so they
-    # land in token_usage.json, the run tag, and the end-of-run table. No task_id:
-    # the active task is already AUTOSETUP_TASK_ID, so this attributes to the
-    # autosetup phase. Guarded — read_autosetup_usage returns [] if absent. This is
-    # only reached on a cache miss (cache hits return above), so usage spent in this
-    # process's autosetup run is counted exactly once.
-    summary = get_run_summary()
-    for usage in read_autosetup_usage(Path(source.project_root)):
-        summary.record_token_usage(usage)
-    # Likewise fold AutoSetup's subprocess prover runtime (prover-reported, cache hits
-    # excluded) into the run's prover_usage under the active AUTOSETUP_TASK_ID. None if
-    # absent — guarded so missing external usage can't break the phase.
-    if (autosetup_prover_ms := read_autosetup_prover_usage(Path(source.project_root))) is not None:
-        summary.record_prover_runtime(autosetup_prover_ms)
-
-    await cache.cache_put(setup_result)
     return setup_result
 
