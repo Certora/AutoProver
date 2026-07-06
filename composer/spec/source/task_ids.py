@@ -8,6 +8,7 @@ task_id. Keeping the strings (and the per-component format) here means a rename
 is a single edit instead of a silent desync that only fails at smoke-run time.
 """
 
+DESIGN_DOC_DISCOVERY_TASK_ID = "doc-finder"
 SYSTEM_ANALYSIS_TASK_ID = "system-analysis"
 HARNESS_TASK_ID = "harness"
 AUTOSETUP_TASK_ID = "autosetup"

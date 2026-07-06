@@ -22,6 +22,7 @@ from composer.ui.multi_job_app import (
 )
 from composer.spec.source.prover import ProverOutputEvent, CloudPollingEvent
 from composer.spec.source.autosetup import AutoSetupEvents
+from composer.spec.source.design_doc_finder import DesignDocChosenEvent
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ type AutoProveEvent = ProverOutputEvent | CloudPollingEvent
 # ---------------------------------------------------------------------------
 
 class AutoProvePhase(enum.Enum):
+    DISCOVER_DESIGN_DOC = "discover_design_doc"
     HARNESS = "harness"
     AUTOSETUP = "autosetup"
     INVARIANTS = "invariants"
@@ -47,6 +49,7 @@ class AutoProvePhase(enum.Enum):
 
 
 AUTOPROVE_PHASE_LABELS: dict[AutoProvePhase, str] = {
+    AutoProvePhase.DISCOVER_DESIGN_DOC: "Design Doc Discovery",
     AutoProvePhase.HARNESS: "Harness Creation",
     AutoProvePhase.AUTOSETUP: "AutoSetup",
     AutoProvePhase.INVARIANTS: "Structural Invariants",
@@ -57,6 +60,7 @@ AUTOPROVE_PHASE_LABELS: dict[AutoProvePhase, str] = {
 }
 
 AUTOPROVE_SECTION_ORDER: list[str] = [
+    "Design Doc Discovery",
     "Harness Creation",
     "AutoSetup",
     "Structural Invariants",
@@ -119,8 +123,14 @@ class AutoProveTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
 
     @override
     async def handle_progress_event(self, payload: dict) -> None:
-        evt = cast(AutoSetupEvents, payload)
+        # The design-doc finder reports its choice as the discovery phase completes.
+        evt = cast(AutoSetupEvents | DesignDocChosenEvent, payload)
         match evt["type"]:
+            case "design_doc_chosen":
+                await self.post_notice(
+                    f"{evt['source']} design doc: {evt['path']}",
+                    evt["reason"] or None,
+                )
             case "auto_setup_complete":
                 log = await self._ensure_prover_log("_autosetup", "AutoSetup Agent")
                 p : Collapsible = log.parent #type: ignore

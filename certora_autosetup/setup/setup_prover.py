@@ -1040,7 +1040,9 @@ class SetupProver:
                 if not contract_name or not source_file:
                     continue
 
-                storage_layout = contract.get('storageLayout', {})
+                # solc <0.5.13 doesn't emit native storageLayout output — the key is present
+                # but explicitly null rather than absent, so .get(key, {}) alone doesn't catch it.
+                storage_layout = contract.get('storageLayout') or {}
                 bytes_mapping_fields = []
 
                 # Check each storage field
