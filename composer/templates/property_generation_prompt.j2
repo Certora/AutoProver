@@ -43,6 +43,14 @@ does not address a property and you have not declared a skip for it, the judge w
 If you have declared a skip but the judge considers the justification insufficient, it will also reject
 and may suggest how the property can in fact be formalized.
 
+The feedback judge allows you to file "rebuttals" against prior round feedback. Do *not* use this simply to update
+it on your progress against the prior round feedback. Instead, use it only to indicate when you took their suggestion
+and it ultimately didn't work (the rule timed out, the suggested CVL syntax didn't compile, there was a prover error, etc.)
+or you have overwhelming evidence that the prior round feedback was wrong.
+
+Rebuttals should be used sparingly and judiciously; they are first and foremost a way to communicate information about your
+experiece with the prover to the feedback agent, *not* a get-out-of-jail free card for feedback you don't want to address.
+
 ## Step 3
 
 Use the provided `verify_spec` tool to test your spec. If there are verification failures
