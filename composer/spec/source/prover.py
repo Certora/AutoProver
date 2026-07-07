@@ -29,7 +29,7 @@ from graphcore.graph import LLM
 from composer.prover.core import (
     ProverOptions, ProverCallbacks, run_prover, DefaultCexHandler
 )
-from composer.prover.runner import ProverEventCallbacks
+from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
     ProverOutputEvent, CloudPollingEvent, RuleAnalysisResult,
@@ -135,6 +135,12 @@ class _SpecCallbacks(ProverEventCallbacks):
             "tool_call_id": self._tool_call_id,
             "link": link,
         })
+
+    @override
+    async def on_prover_runtime(self, ms: int) -> None:
+        # Queue-free prover run time (cloud job startTime->finishTime, or local subprocess wall-clock).
+        # Attributed to the active task; folded into the phase / run "prover_usage" totals.
+        self._summary.record_prover_runtime(ms)
 
     @override
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None:

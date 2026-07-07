@@ -12,6 +12,7 @@ pipeline runs start to finish without raising.
 Marked ``expensive`` (live cloud prover + containers + the embedding model load)
 and skipped without testcontainers. Run with ``-m expensive``.
 """
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast, TYPE_CHECKING
@@ -106,12 +107,15 @@ def _db_url(pg: "PostgresContainer", database: str) -> str:
     )
 
 
-def _make_args(rag_conn: str) -> AutoProveArgs:
-    """Hand-built ``AutoProveArgs`` (the CLI path builds this via argparse)."""
+def _make_args(rag_conn: str, system_doc: str | None = str(_SCENARIO / "system.md")) -> AutoProveArgs:
+    """Hand-built ``AutoProveArgs`` (the CLI path builds this via argparse).
+
+    ``system_doc`` defaults to the scenario's ``system.md``; pass ``None`` to exercise
+    the auto-discovery path."""
     return cast(AutoProveArgs, SimpleNamespace(
         project_root=str(_SCENARIO),
         main_contract=f"{_SCENARIO / "src/Counter.sol"}:Counter",
-        system_doc=str(_SCENARIO / "system.md"),
+        system_doc=system_doc,
         max_concurrent=4,
         cache_ns=None,
         memory_ns=None,
@@ -132,12 +136,25 @@ def _make_args(rag_conn: str) -> AutoProveArgs:
         interleaved_thinking=False,
     ))
 
-async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContainer", monkeypatch):
-    assert _SCENARIO.is_dir(), _SCENARIO
+@pytest.fixture(scope="session")
+def provisioned_rag_url(pg_container: "PostgresContainer | None") -> str:
+    """Stand up the fixed-name roles / databases / extensions / schema the autoprove
+    pipeline connects to, once per session; return the RAG DB url.
 
-    # 1. Give the container the roles + databases the pipeline expects, matching
-    #    the hardcoded creds in services._DATABASE_CONFIGS (a login role owning its
-    #    own DB) — so the real connection-string path works unpatched.
+    These database names *and* login roles are hardcoded in
+    ``services._DATABASE_CONFIGS`` — only host/port are overridable (redirected
+    per-test in ``_install_mocks``). The pipeline therefore always talks to these same
+    databases: there is nothing per-test to make unique, so they are created once,
+    unconditionally. No other fixture creates these fixed names, so there is nothing to
+    collide with (unlike ``get_test_database``'s per-invocation ``test_store_<uuid>``).
+
+    Per-test isolation comes from namespacing, not fresh databases: each run uses a
+    unique ``thread_id`` (checkpoint/store) and ``memory_ns``, with caching off, so the
+    two integration tests don't step on each other despite sharing these DBs."""
+    if pg_container is None:
+        pytest.skip("No pgcontainers")
+    # Roles + databases matching services._DATABASE_CONFIGS (a login role owning its
+    # own DB), so the real connection-string path works unpatched.
     admin_url = pg_container.get_connection_url(driver=None)
     with psycopg.connect(admin_url, autocommit=True) as admin:
         for cfg in services._DATABASE_CONFIGS.values():
@@ -152,7 +169,8 @@ async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContaine
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     # The memory backend doesn't self-create its schema (the checkpointer/store do,
-    # via .setup()), so create memories_fs as the memory role (its DB owner).
+    # via .setup()), so create memories_fs as the memory role (its DB owner), not the
+    # superuser — the backend connects as that role and must own the table.
     mem = services._DATABASE_CONFIGS["memory"]
     mem_url = (
         f"postgresql://{mem['user']}:{mem['password']}"
@@ -160,12 +178,18 @@ async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContaine
     )
     with psycopg.connect(mem_url, autocommit=True) as conn:
         conn.execute(_MEMORIES_DDL)
+    return _db_url(pg_container, _RAG_DB)
 
-    # 2. Only host/port need redirecting — the role creds already match the configs.
+
+def _install_mocks(pg_container: "PostgresContainer", monkeypatch) -> None:
+    """Function-scoped connection redirection + LLM/AutoSetup mocks (undone per test by
+    ``monkeypatch``). The databases themselves are stood up once by the
+    ``provisioned_rag_url`` session fixture."""
+    # Only host/port need redirecting — the role creds already match the configs.
     monkeypatch.setenv("CERTORA_AI_COMPOSER_PGHOST", pg_container.get_container_host_ip())
     monkeypatch.setenv("CERTORA_AI_COMPOSER_PGPORT", str(pg_container.get_exposed_port(5432)))
 
-    # 3. Mock only the LLM (Counter tape) + disable the agent-index cache.
+    # Mock only the LLM (Counter tape) + disable the agent-index cache.
     install_harness_tape(with_delay=False)
     # autoprove_common imported `get_provider_for` by name, so install_harness_tape's
     # patch of registry.get_provider_for doesn't reach that binding — rebind it here.
@@ -192,7 +216,66 @@ async def test_autoprove_counter_runs_end_to_end(pg_container: "PostgresContaine
         "composer.spec.source.report.build.RERAISE_REPORT_FAILURES", True
     )
 
-    # 4. Run the whole pipeline. Pass == it completes without raising.
+
+def _read_job_info() -> dict:
+    """The always-written run manifest the entry point's ``finally`` dumps."""
+    return json.loads((_SCENARIO / "certora" / "ap_report" / "job_info.json").read_text())
+
+
+async def test_autoprove_counter_runs_end_to_end(
+    pg_container: "PostgresContainer", provisioned_rag_url: str, monkeypatch
+):
+    assert _SCENARIO.is_dir(), _SCENARIO
+    _install_mocks(pg_container, monkeypatch)
+    monkeypatch.setenv("AUTOPROVER_USER_ID", "e2e-user")
+    # Run the whole pipeline. Pass == it completes without raising.
     summary = RunSummary()
-    async with autoprove_executor(_make_args(_db_url(pg_container, _RAG_DB)), summary) as run:
+    async with autoprove_executor(_make_args(provisioned_rag_url), summary) as run:
+        await run(AutoProveConsoleHandler().make_handler)
+
+    # The finally dumped the run manifest to ap_report, carrying this run's identity
+    # and its (non-empty, since the pipeline ran the prover) usage totals.
+    job_info = _read_job_info()
+    assert job_info["user_id"] == "e2e-user"
+    assert job_info["run_id"] == summary.run_id
+    assert "token_usage" in job_info and "prover_usage" in job_info
+
+
+async def test_autoprove_dumps_job_info_when_pipeline_crashes(
+    pg_container: "PostgresContainer", provisioned_rag_url: str, monkeypatch
+):
+    """The core guarantee: job_info.json is written even when the run crashes. Patch the
+    pipeline to blow up after the executor is set up; the entry-point ``finally`` must
+    still land the manifest (with this run's identity) in ap_report."""
+    assert _SCENARIO.is_dir(), _SCENARIO
+    _install_mocks(pg_container, monkeypatch)
+    monkeypatch.setenv("AUTOPROVER_USER_ID", "crash-user")
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("pipeline exploded")
+
+    monkeypatch.setattr(
+        "composer.spec.source.autoprove_common.run_autoprove_pipeline", _boom
+    )
+
+    summary = RunSummary()
+    with pytest.raises(RuntimeError, match="pipeline exploded"):
+        async with autoprove_executor(_make_args(provisioned_rag_url), summary) as run:
+            await run(AutoProveConsoleHandler().make_handler)
+
+    job_info = _read_job_info()
+    assert job_info["user_id"] == "crash-user"
+    assert job_info["run_id"] == summary.run_id
+
+
+async def test_autoprove_counter_no_doc_runs_end_to_end(
+    pg_container: "PostgresContainer", provisioned_rag_url: str, monkeypatch
+):
+    """Same pipeline, design doc OMITTED: the Design Doc Discovery phase runs the
+    finder (its tape lane selects ``system.md``) and the run completes via the
+    discovered doc."""
+    assert _SCENARIO.is_dir(), _SCENARIO
+    _install_mocks(pg_container, monkeypatch)
+    summary = RunSummary()
+    async with autoprove_executor(_make_args(provisioned_rag_url, system_doc=None), summary) as run:
         await run(AutoProveConsoleHandler().make_handler)

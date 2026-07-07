@@ -12,6 +12,9 @@
 #   export HOST_UID=$(id -u) HOST_GID=$(id -g) HOST_WORK_DIR=/path/to/projects
 #   docker compose -f scripts/docker-compose.yml --profile autoprove run --rm autoprove \
 #       console-autoprove --cloud /work/<proj> /work/<proj>/src/X.sol:X /work/<proj>/docs/x.md
+#   # The design-doc path is optional; omit it to auto-discover one from the project:
+#   docker compose -f scripts/docker-compose.yml --profile autoprove run --rm autoprove \
+#       console-autoprove --cloud /work/<proj> /work/<proj>/src/X.sol:X
 name: composer_db
 
 services:

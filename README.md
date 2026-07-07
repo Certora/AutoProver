@@ -24,6 +24,9 @@ git clone https://github.com/Certora/AutoProverExamples.git
 # then runs the pipeline. The project root is mounted into the container; the
 # contract and design-doc paths are relative to it.
 scripts/autoprove AutoProverExamples/SmokeTest src/Answer.sol:Answer design.md
+
+# The design doc is optional — drop it and an agent discovers one from the project:
+scripts/autoprove AutoProverExamples/SmokeTest src/Answer.sol:Answer
 ```
 
 The prover runs in the Certora cloud. Add `--tui` for the interactive UI, `--rebuild` to force an image rebuild. Pass extra autoprove options after `--` (e.g. `-- --max-concurrent 2`). Under the hood this is just `scripts/docker-compose.yml` (a profile-gated `autoprove` service next to `postgres`); see the header of that file to drive it with raw `docker compose` commands instead.
@@ -121,14 +124,18 @@ Auto-prove has two entry points: a Textual-based TUI and a headless console mode
 ### TUI Mode
 
 ```bash
-tui-autoprove <project_root> <path/to/Contract.sol:ContractName> <design_doc>
+tui-autoprove <project_root> <path/to/Contract.sol:ContractName> [design_doc]
 ```
 
 ### Console Mode
 
 ```bash
-console-autoprove <project_root> <path/to/Contract.sol:ContractName> <design_doc>
+console-autoprove <project_root> <path/to/Contract.sol:ContractName> [design_doc]
 ```
+
+The `design_doc` is optional. When omitted, a "Design Doc Discovery" phase runs an
+agent that searches the project for the best design/specification document and uses
+it automatically; the run fails fast with guidance if it finds nothing suitable.
 
 Console mode prints the same pipeline output to stdout without the interactive TUI. Useful for CI or logging. NB if you need to do `print` debugging, the `console_autoprove.py` is your best
 bet. Debugging in the tui_autoprove.py workflow *mandates* the use of a python logger.
@@ -142,7 +149,7 @@ You will likely want to install the tool using the `--editable` flag. You'll als
 |---|---|
 | `project_root` | Root directory of the Solidity project |
 | `main_contract` | Path to the contract file and contract name, separated by `:`. The path must be relative to or within `project_root`. Example: `src/Token.sol:Token` |
-| `system_doc` | Path to a design document (plain text or PDF) describing the system |
+| `system_doc` | Path to a design document (plain text or PDF) describing the system. **Optional** — auto-discovered from the project when omitted |
 
 ### Options
 
@@ -219,6 +226,8 @@ The pipeline returns an `AutoProveResult` with counts of components analyzed, pr
 When `--cache-ns` is provided, auto-prove caches the results of expensive phases (system analysis, property extraction, invariant CVL generation) in the LangGraph store. On subsequent runs with the same `--cache-ns`, cached results are reused if the inputs (project root, contract path, design doc content) haven't changed.
 
 The cache key is derived from a SHA-256 hash of the project root, design document content, contract path, and contract name. Changing any of these invalidates the cache.
+
+When the design doc is auto-discovered, the discovery step is itself cached under a **doc-independent** key (project root, contract path, contract name) — so a repeat run on the same project reuses the previously discovered document and skips the discovery agent. Like the main cache, it only invalidates when the cache namespace rotates, not when project files change.
 
 ### Exploring the cache/memory
 

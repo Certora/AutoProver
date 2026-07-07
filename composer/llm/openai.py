@@ -12,6 +12,7 @@ signal and are ignored.
 """
 
 from typing import Literal, TypeGuard, Any, TYPE_CHECKING
+import io
 from dataclasses import dataclass, field
 import asyncio
 
@@ -145,10 +146,10 @@ class OpenAIFileUploader(_UploaderBase):
             return self.uploaded
 
     async def _upload_bytes(
-        self, crc_basename: str, file_path: str, mime: str
+        self, crc_basename: str, file_data: bytes, mime: str
     ) -> str:
         uploaded_file = await self.client.files.create(
-            file=(crc_basename, open(file_path, "rb"), mime),
+            file=(crc_basename, io.BytesIO(file_data), mime),
             purpose="user_data",
         )
         return uploaded_file.id

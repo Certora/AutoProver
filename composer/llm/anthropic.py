@@ -2,6 +2,7 @@
 ``ModelProvider`` implementation that mints ``ChatAnthropic`` instances."""
 
 from typing import Literal, TypeGuard, Any, TYPE_CHECKING
+from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
 
@@ -97,11 +98,15 @@ class AnthropicFileUploader(_UploaderBase):
             return self.uploaded
 
     async def _upload_bytes(
-        self, crc_basename: str, file_path: str, mime: str
+        self, crc_basename: str, file_data: bytes, mime: str
     ) -> str:
+        uploaded = await self._ensure_seeded()
+        if (res := uploaded.get(crc_basename)):
+            return res
         uploaded_file = await self.client.beta.files.upload(
-            file=(crc_basename, open(file_path, "rb"), mime)
+            file=(crc_basename, BytesIO(file_data), mime)
         )
+        uploaded[crc_basename] = uploaded_file.id
         return uploaded_file.id
 
     @staticmethod

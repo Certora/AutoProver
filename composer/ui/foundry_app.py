@@ -26,6 +26,7 @@ from composer.ui.tool_display import ToolDisplayConfig
 
 from composer.foundry.pipeline import FoundryPhase
 from composer.foundry.runner import ForgeTestRunEvent
+from composer.spec.source.design_doc_finder import DesignDocChosenEvent
 
 
 # ---------------------------------------------------------------------------
@@ -33,12 +34,14 @@ from composer.foundry.runner import ForgeTestRunEvent
 # ---------------------------------------------------------------------------
 
 FOUNDRY_PHASE_LABELS: dict[FoundryPhase, str] = {
+    FoundryPhase.DISCOVER_DESIGN_DOC: "Design Doc Discovery",
     FoundryPhase.SYSTEM_ANALYSIS: "System Analysis",
     FoundryPhase.PROPERTY_EXTRACTION: "Property Extraction",
     FoundryPhase.TEST_GENERATION: "Test Generation",
 }
 
 FOUNDRY_SECTION_ORDER: list[str] = [
+    "Design Doc Discovery",
     "System Analysis",
     "Property Extraction",
     "Test Generation",
@@ -91,6 +94,16 @@ class FoundryTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
                 log = await self._ensure_forge_log()
                 log.write(evt["summary"])
                 log.write(Text("─" * 40, style="dim"))
+
+    @override
+    async def handle_progress_event(self, payload: dict) -> None:
+        # The design-doc finder reports its choice as the discovery phase completes.
+        evt = cast(DesignDocChosenEvent, payload)
+        if evt["type"] == "design_doc_chosen":
+            await self.post_notice(
+                f"{evt['source']} design doc: {evt['path']}",
+                evt["reason"] or None,
+            )
 
 
 # ---------------------------------------------------------------------------

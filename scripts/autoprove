@@ -16,15 +16,16 @@ SETUP_SENTINEL="${XDG_CACHE_HOME:-$HOME/.cache}/autoprove/setup-db.done"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: scripts/autoprove <project_root> <path:Contract> <design_doc> [options]
+Usage: scripts/autoprove <project_root> <path:Contract> [design_doc] [options]
 
 Arguments:
   <project_root>   Path to your Foundry project (relative or absolute). Mounted
                    into the container as /work.
   <path:Contract>  Contract under verification, e.g. src/Vault.sol:Vault.
                    The path is resolved relative to <project_root>.
-  <design_doc>     Path to the design document. Resolved against <project_root>
-                   if not absolute. Must live under <project_root>.
+  [design_doc]     Path to the design document. Resolved against <project_root>
+                   if not absolute. Must live under <project_root>. OPTIONAL —
+                   when omitted, an agent discovers it from the project.
 
 Options:
   --tui            Run tui-autoprove instead of console-autoprove.
@@ -72,15 +73,15 @@ while (( $# > 0 )); do
   esac
 done
 
-if (( ${#POSITIONAL[@]} != 3 )); then
+if (( ${#POSITIONAL[@]} < 2 || ${#POSITIONAL[@]} > 3 )); then
   usage
-  echo "[autoprove] error: expected 3 positional arguments, got ${#POSITIONAL[@]}" >&2
+  echo "[autoprove] error: expected 2 or 3 positional arguments, got ${#POSITIONAL[@]}" >&2
   exit 1
 fi
 
 PROJECT_RAW="${POSITIONAL[0]}"
 CONTRACT_ARG="${POSITIONAL[1]}"
-DOC_RAW="${POSITIONAL[2]}"
+DOC_RAW="${POSITIONAL[2]:-}"   # optional; empty -> the design doc is auto-discovered
 
 # ---------------------------------------------------------------------------
 # Credential check (fail fast before touching docker)
@@ -116,21 +117,27 @@ CONTRACT_NAME="${CONTRACT_ARG##*:}"
 [[ -f "$PROJECT_HOST/$CONTRACT_PATH" ]] \
   || { echo "[autoprove] error: contract file not found: $PROJECT_HOST/$CONTRACT_PATH" >&2; exit 1; }
 
-if [[ "$DOC_RAW" = /* ]]; then
-  DOC_HOST="$DOC_RAW"
-else
-  DOC_HOST="$PROJECT_HOST/$DOC_RAW"
+# The design doc is optional. When given, resolve + validate it under the project
+# root and translate it to a /work-relative path; when omitted, leave DOC_ARGS empty
+# so the entry point auto-discovers it.
+DOC_ARGS=()
+if [[ -n "$DOC_RAW" ]]; then
+  if [[ "$DOC_RAW" = /* ]]; then
+    DOC_HOST="$DOC_RAW"
+  else
+    DOC_HOST="$PROJECT_HOST/$DOC_RAW"
+  fi
+  [[ -f "$DOC_HOST" ]] || { echo "[autoprove] error: design doc not found: $DOC_HOST" >&2; exit 1; }
+  DOC_HOST="$(cd -- "$(dirname -- "$DOC_HOST")" && pwd)/$(basename -- "$DOC_HOST")"
+  [[ "$DOC_HOST" == "$PROJECT_HOST/"* ]] \
+    || { echo "[autoprove] error: design doc must live under the project root ($PROJECT_HOST); got $DOC_HOST" >&2; exit 1; }
+  DOC_ARGS=("/work/${DOC_HOST#"$PROJECT_HOST"/}")
 fi
-[[ -f "$DOC_HOST" ]] || { echo "[autoprove] error: design doc not found: $DOC_HOST" >&2; exit 1; }
-DOC_HOST="$(cd -- "$(dirname -- "$DOC_HOST")" && pwd)/$(basename -- "$DOC_HOST")"
-[[ "$DOC_HOST" == "$PROJECT_HOST/"* ]] \
-  || { echo "[autoprove] error: design doc must live under the project root ($PROJECT_HOST); got $DOC_HOST" >&2; exit 1; }
 
 # <project_root> -> /work; the contract and doc are addressed relative to it.
 HOST_WORK_DIR="$PROJECT_HOST"
 CTR_PROJECT=/work
 CTR_CONTRACT="/work/${CONTRACT_PATH}:${CONTRACT_NAME}"
-CTR_DOC="/work/${DOC_HOST#"$PROJECT_HOST"/}"
 
 # ---------------------------------------------------------------------------
 # Derive the default cache namespace if the user didn't pass one. Caching is
@@ -187,6 +194,6 @@ CLOUD_FLAG=()
 echo "[autoprove] starting $ENTRY (cache-ns: $CACHE_NS, cloud: $CLOUD) ..." >&2
 exec compose --profile autoprove run --rm autoprove \
     "$ENTRY" ${CLOUD_FLAG[@]+"${CLOUD_FLAG[@]}"} \
-    "$CTR_PROJECT" "$CTR_CONTRACT" "$CTR_DOC" \
+    "$CTR_PROJECT" "$CTR_CONTRACT" ${DOC_ARGS[@]+"${DOC_ARGS[@]}"} \
     --cache-ns "$CACHE_NS" \
     ${EXTRA[@]+"${EXTRA[@]}"}

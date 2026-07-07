@@ -76,6 +76,19 @@ def _format_types(udts: list[dict]) -> str:
     return "\n".join(to_format)
 
 
+def _types_input(udts: str) -> list[str | dict]:
+    """Initial-prompt fragment advertising the available user-defined types.
+
+    Returns [] when there are none — never a list containing an empty string,
+    which would become an empty Anthropic text content block and get the whole
+    request rejected ("messages: text content blocks must be non-empty"). The
+    return type mirrors ``FlowInput.input`` so it drops straight into ``Input``.
+    """
+    if not udts:
+        return []
+    return ["The following types are available for use in your spec", udts]
+
+
 class SummarizerExtra(TypedDict):
     plan: str | None
     curr_spec: str | None
@@ -251,10 +264,7 @@ async def _setup_summaries_impl(
             typechecked="",
             plan=None,
             curr_spec=None,
-            input=[
-                "The following types are available for use in your spec",
-                udts,
-            ],
+            input=_types_input(udts),
         ),
         thread_id=ctx.thread_id,
         recursion_limit=ctx.recursion_limit,

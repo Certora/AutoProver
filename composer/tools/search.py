@@ -3,9 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Annotated, Protocol, ClassVar, Any, Callable, overload
 
 from langchain_core.tools import tool, InjectedToolCallId, BaseTool
-from langgraph.config import get_stream_writer
 from langgraph.runtime import get_runtime
-from composer.diagnostics.stream import ManualSearchResult
 from composer.rag.db import ComposerRAGDB
 from composer.rag.types import ManualRef
 from dataclasses import Field as DField
@@ -64,7 +62,6 @@ def _cvl_manual_search_factory(
     ) -> str:
         """Search the CVL manual database for relevant documentation."""
         rag_db = db_provider()
-        writer = get_stream_writer()
 
         try:
             refs = await rag_db.find_refs(
@@ -73,13 +70,6 @@ def _cvl_manual_search_factory(
                 top_k=max_results,
                 manual_section=manual_section,
             )
-            for t in refs:
-                upd: ManualSearchResult = {
-                    "type": "manual_search",
-                    "tool_id": tool_call_id,
-                    "ref": t,
-                }
-                writer(upd)
             return _format_results(refs)
         except Exception as e:
             return f"Failed to search CVL manual: {str(e)}"

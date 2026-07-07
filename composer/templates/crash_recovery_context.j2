@@ -1,10 +1,7 @@
-A previous run of this workflow crashed. The following files were recovered from the in-progress virtual filesystem at the time of the crash. Use these as a starting point — they may be incomplete or contain errors:
+A previous run of this workflow crashed. The in-progress files from that run have already been restored to your virtual filesystem — you do not need to recreate them. They may be incomplete or contain errors. Recovered files:
 
-{% for path, content in vfs_files %}
-## {{ path }}
-```
-{{ content }}
-```
+{% for path in vfs_files %}
+- {{ path }}
 {% endfor %}
 
-Resume from where the previous run left off, fixing any issues in the recovered files.
+Resume from where the previous run left off, reading and fixing any issues in the recovered files as needed.

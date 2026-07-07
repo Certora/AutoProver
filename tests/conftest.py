@@ -22,6 +22,7 @@ from psycopg.connection_async import AsyncConnection
 from psycopg.sql import SQL, Identifier
 from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
+import composer.diagnostics.timing as timing_mod
 from composer.prover.core import ProverOptions, ProverReport
 from composer.spec.source.prover import get_prover_tool, LLM
 
@@ -40,6 +41,16 @@ needs_postgres = pytest.mark.skipif(
     not _HAS_TESTCONTAINERS,
     reason="testcontainers[postgres] not installed",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_run_summary():
+    """Keep the run-summary context var from leaking between tests."""
+    tok = timing_mod._run_summary.set(None)
+    try:
+        yield
+    finally:
+        timing_mod._run_summary.reset(tok)
 
 
 # =========================================================================
