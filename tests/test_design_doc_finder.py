@@ -14,13 +14,16 @@ The agent's real file-reading over a live model is covered by the (nightly) Coun
 integration tape.
 """
 
-from typing import Any, cast
+from typing import Any, cast, Literal
+
+from dataclasses import dataclass
 
 import pytest
 
 from collections.abc import Callable, Sequence
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
@@ -32,7 +35,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from composer.input.files import InMemoryTextFile
 from composer.spec.context import WorkflowContext
-from composer.spec.service_host import ModelProvider
+from composer.spec.service_host import ModelProvider, CoreModelProvider
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.templates.loader import load_jinja_template
 from composer.ui.autoprove_app import AutoProvePhase
@@ -85,7 +88,7 @@ class _StubUploader:
         p = pathlib.Path(path)
         if not p.is_file():
             return None
-        return InMemoryTextFile(basename=p.name, string_contents=p.read_text())
+        return InMemoryTextFile(basename=p.name, string_contents=p.read_text(), provider="anthropic")
 
 
 # ---------------------------------------------------------------------------
@@ -343,12 +346,22 @@ def _finder_responses() -> list[BaseMessage]:
     ]
 
 
+@dataclass
+class FakeModelFactory:
+    fake: BaseChatModel
+
+    @property
+    def provider(self):
+        return "anthropic"
+
+    def builder_for(self, *args, **kwargs):
+        return self.fake
+
 def _fake_models() -> ModelProvider:
     fake = _ToolBindingFakeLLM(responses=_finder_responses())
     return ModelProvider(
-        factory=cast(Any, lambda _name, **_kw: fake),
-        heavy_model="fake-heavy",
-        lite_model="fake-lite",
+        heavy_model=FakeModelFactory(fake),
+        lite_model=FakeModelFactory(fake),
         checkpointer=InMemorySaver(),
     )
 
@@ -382,8 +395,9 @@ async def test_discover_runs_as_task_surfaces_choice_and_caches(tmp_path, capsys
     # Second run: same project + namespace -> cache hit, no agent. Surfaced as cached.
     # A fresh fake LLM with NO scripted responses would raise if the agent ran.
     no_llm = ModelProvider(
-        factory=cast(Any, lambda _name, **_kw: _ToolBindingFakeLLM(responses=[])),
-        heavy_model="h", lite_model="l", checkpointer=InMemorySaver(),
+        FakeModelFactory(_ToolBindingFakeLLM(responses=[])),
+        FakeModelFactory(_ToolBindingFakeLLM(responses=[])),
+        checkpointer=InMemorySaver(),
     )
     choice2 = await _discover(models=no_llm, **common)
     assert choice2.selected_path == "design.md"
