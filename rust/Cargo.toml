@@ -1,0 +1,24 @@
+# Cargo workspace for AutoProver's Rust extension framework.
+#
+# * `autoprover-sdk` — the library new Rust-based applications import. It defines
+#   the ABI (serde types), the `Application` / `FormalizeSession` traits, the FFI
+#   helpers, and the `export_app!` macro that emits the PyO3 module.
+# * `example-app`   — a self-contained demonstration application built into a
+#   Python wheel via maturin, used by the framework's round-trip test.
+#
+# A new application is its own crate (cdylib) that depends on `autoprover-sdk`
+# and invokes `autoprover_sdk::export_app!`. It lives outside this workspace in
+# real use; `example-app` is kept here so the framework has something to test.
+[workspace]
+resolver = "2"
+members = ["autoprover-sdk", "example-app"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pyo3 = "0.24"

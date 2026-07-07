@@ -151,10 +151,12 @@ class CoverageReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-type ReportBackend = Literal["prover", "foundry"]
+type ReportBackend = Literal["prover", "foundry"] | str
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
 this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test")
-for a report.json it reads cold."""
+for a report.json it reads cold. The two built-in backends are ``"prover"`` / ``"foundry"``; the
+type stays open (``| str``) so out-of-tree backends — e.g. a Rust application via
+``composer.rustapp`` — can stamp their own tag without editing this union."""
 
 
 class AutoProverReport(BaseModel):
