@@ -148,7 +148,7 @@ class OpenAIFileUploader(_UploaderBase):
     async def _upload_bytes(
         self, crc_basename: str, file_data: bytes, mime: str
     ) -> str:
-        uploaded = await self._ensure_seeded():
+        uploaded = await self._ensure_seeded()
         if crc_basename in uploaded:
             return uploaded[crc_basename]
         uploaded_file = await self.client.files.create(
