@@ -18,7 +18,7 @@ import enum
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Callable, Awaitable, TypedDict
+from typing import Protocol, Callable, Awaitable, TypedDict, cast
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
@@ -32,6 +32,7 @@ from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
     SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication
 )
+from composer.pipeline.ecosystem import Ecosystem, EVM, main_instance
 from composer.spec.types import PropertyFormulation, FormalResult, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
 from composer.spec.prop_inference import run_property_inference
@@ -194,15 +195,9 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
 PROPERTIES_KEY = CacheKey[None, Properties]("properties")
 
 
-def main_instance(app: AnyApplication, source: SourceCode) -> ContractInstance:
-    """Locate the application's main contract — the one whose solidity identifier matches
-    ``source.contract_name`` — and return a ``ContractInstance`` pointing at it. Backends call this
-    from ``prepare_system`` to seed the per-component loop; component analysis should already have
-    guaranteed the contract is present (via ``expected_main_id``)."""
-    for i, c in enumerate(app.contract_components):
-        if c.solidity_identifier == source.contract_name:
-            return ContractInstance(i, app)
-    raise ValueError(f"main contract {source.contract_name!r} not found in analyzed application")
+# ``main_instance`` now lives in composer.pipeline.ecosystem (it is the EVM ecosystem's
+# ``locate_main``); it is imported above and re-exported here so existing backends can keep
+# doing ``from composer.pipeline.core import main_instance``.
 
 
 @dataclass
@@ -232,35 +227,41 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
+    ecosystem: Ecosystem = EVM,
 ) -> CorePipelineResult[FormT]:
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
 
-    # 1. System analysis (shared primitive, backend-parameterized; always yields SourceApplication).
+    # 1. System analysis (shared primitive; the ecosystem supplies the analyzed model type,
+    #    prompts, validation, and front-matter — EVM reproduces prior behavior exactly).
     analyzed = await run.runner(
         TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
         lambda: run_component_analysis(
-            ty=SourceApplication, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
-            input=source, env=run.env, extra_input=[
-                f"The main entry point of this application has been explicitly identified as {source.contract_name} at relative path {source.relative_path}. "
-                "Your output MUST contain an explicit contract instance with this solidity identifier.",
-                *spec.extra_input
-            ],
+            ty=ecosystem.system_model, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
+            input=source, env=run.env,
+            extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
             expected_main_id=source.contract_name,
+            system_template=ecosystem.analysis_prompts.system,
+            initial_template=ecosystem.analysis_prompts.initial,
+            validate=ecosystem.validate_analysis,
         ),
     )
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
 
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
-    prepared = await backend.prepare_system(analyzed, run)
+    #    Phase 1: the only ecosystem is EVM, whose model IS SourceApplication, and the backend
+    #    protocol is still typed to SourceApplication; Phase 2 adds the `App` type parameter
+    #    that pairs backend↔ecosystem and removes this cast.
+    prepared = await backend.prepare_system(cast(SourceApplication, analyzed), run)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
     formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
 
     batches = await _extract_all(prepared.main, backend.backend_guidance, run,
-                                phases["extraction"], interactive, threat_model, max_bug_rounds)
+                                phases["extraction"], interactive, threat_model, max_bug_rounds,
+                                ecosystem)
     formalizer = await formalizer_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
@@ -332,22 +333,24 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 async def _extract_all[P: enum.Enum, H](
     main: ContractInstance, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
+    ecosystem: Ecosystem,
 ) -> list[_Batch]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY)
 
-    async def _one(idx: int) -> _Batch | None:
-        feat = ContractComponentInstance(_contract=main, ind=idx)
+    async def _one(feat: ContractComponentInstance) -> _Batch | None:
         feat_ctx = await prop_ctx.child(_component_cache_key(feat),
                                         {"component": feat.component.model_dump()})
         props = await run.runner(
-            TaskInfo(extract_task_id(idx), feat.component.name, phase),
+            TaskInfo(extract_task_id(feat.ind), feat.component.name, phase),
             lambda conv: run_property_inference(
                 feat_ctx, run.env, feat, refinement=conv if interactive else None,
-                threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance),
+                threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance,
+                system_template=ecosystem.property_prompts.system,
+                initial_template=ecosystem.property_prompts.initial),
         )
         return _Batch(feat, props, feat_ctx) if props else None
 
-    got = await asyncio.gather(*[_one(i) for i in range(len(main.contract.components))])
+    got = await asyncio.gather(*[_one(u) for u in ecosystem.units(main)])
     return [b for b in got if b is not None]
 
 

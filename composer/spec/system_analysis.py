@@ -1,4 +1,4 @@
-from typing import NotRequired, Any
+from typing import NotRequired, Any, Callable
 
 from graphcore.graph import MessagesState, FlowInput
 
@@ -95,8 +95,16 @@ async def run_component_analysis[T: BaseApplication](
     env: ServiceHost,
     extra_input: list[str | dict],
     expected_main_id: SolidityIdentifier | None = None,
+    *,
+    system_template: str = "application_analysis_system.j2",
+    initial_template: str = "application_analysis_prompt.j2",
+    validate: Callable[[BaseApplication, SolidityIdentifier | None], str | None] = _validate_connectivity,
 ) -> T | None:
-    """Analyze application components from a system doc and optionally source code."""
+    """Analyze application components from a system doc and optionally source code.
+
+    The prompt templates and connectivity ``validate`` are parameters so the ecosystem
+    (``composer.pipeline.ecosystem``) can supply domain-specific ones; the defaults are the
+    EVM/Solidity values, so existing callers are unaffected."""
     if (cached := await child_ctxt.cache_get(ty)) is not None:
         return cached
 
@@ -112,7 +120,7 @@ async def run_component_analysis[T: BaseApplication](
     def _validation_wrapper(
         _: Any, app: BaseApplication
     ) -> str | None:
-        return _validate_connectivity(app, expected_main_id)
+        return validate(app, expected_main_id)
 
     b = bind_standard(
         builder=env.builder_lite(),
@@ -121,12 +129,12 @@ async def run_component_analysis[T: BaseApplication](
     ).with_input(
         AnalysisInput
     ).with_sys_prompt_template(
-        "application_analysis_system.j2",
+        system_template,
         sort=env.sort,
     ).with_tools(
         [memory, *get_rough_draft_tools(AnalysisState), *env.analysis_tools]
     ).with_initial_prompt_template(
-        "application_analysis_prompt.j2",
+        initial_template,
         sort=env.sort,
     )
 
