@@ -14,8 +14,13 @@ import logging
 import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Annotated, Callable, Iterator, override, AsyncContextManager
+from typing import (
+    Annotated, Any, AsyncIterator, Callable, Iterator, Mapping, override,
+    AsyncContextManager, cast,
+)
 from typing_extensions import TypedDict, NotRequired
+
+from graphcore.tools.vfs import VFSAccessor, VFSState
 
 from langchain_core.tools import InjectedToolCallId, tool, BaseTool
 from langgraph.prebuilt import InjectedState
@@ -211,10 +216,40 @@ def _prover_sem(cloud: bool) -> AsyncContextManager[None]:
 
     return ToRet()
 
+
+type ProjectDirectory = Callable[[dict[str, str]], AsyncContextManager[str]]
+"""Per-run choice of the directory the prover executes in, given the author's
+current VFS overlay. Yields the directory path; its lifetime is the run."""
+
+
+def in_situ_project(project_root: str) -> ProjectDirectory:
+    """The no-editing strategy: every run executes directly in the project
+    directory."""
+    @asynccontextmanager
+    async def provide(vfs: dict[str, str]) -> AsyncIterator[str]:
+        yield project_root
+    return provide
+
+
+def materializing_project(
+    project_root: str, accessor: VFSAccessor[VFSState]
+) -> ProjectDirectory:
+    """The editing strategy: an empty VFS runs in-situ; a non-empty VFS is
+    materialized over the project into a temporary directory that lives for
+    the duration of the run."""
+    @asynccontextmanager
+    async def provide(vfs: dict[str, str]) -> AsyncIterator[str]:
+        if not vfs:
+            yield project_root
+            return
+        with accessor.materialize({"vfs": vfs}) as tmp:
+            yield tmp
+    return provide
+
 def get_prover_tool(
     llm: LLM,
     main_contract: str,
-    project_root: str,
+    project_directory: ProjectDirectory,
     prover_opts: ProverOptions,
 ) -> BaseTool:
     sem = _prover_sem(prover_opts.cloud)
@@ -235,7 +270,8 @@ def get_prover_tool(
         state: Annotated[StateWithSkips, InjectedState],
         rules: list[str] | None = None
     ) -> str | Command:
-        if state["curr_spec"] is None:
+        spec = state["curr_spec"]
+        if spec is None:
             return "Specification not yet put on VFS"
         conf = state["config"]
         # With a seeded stem, name the spec/conf after it (so on-disk names match the

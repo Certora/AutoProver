@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing_extensions import TypedDict
-from typing import Callable, Awaitable, cast, NotRequired
+from typing import Annotated, Callable, Awaitable, cast, NotRequired
 
 from pydantic import Field
 
@@ -24,8 +24,20 @@ from composer.spec.graph_builder import run_to_completion
 
 
 
+WIPE_HISTORY = "__wipe__"
+"""Sentinel for the ``version_history`` reducer: an update whose first element
+is this constant *replaces* the history with the remaining elements instead of
+appending. ``RevertToEdit`` uses it to truncate history back to a prior edit."""
+
+
+def _merge_version_history(left: list[str], right: list[str]) -> list[str]:
+    if right and right[0] == WIPE_HISTORY:
+        return right[1:]
+    return left + right
+
+
 class VersionedHistory(TypedDict):
-    version_history: list[str]
+    version_history: Annotated[list[str], _merge_version_history]
 
 class ExplorerInput(VersionedHistory, VFSState):
     ...
@@ -88,8 +100,18 @@ class LiveDocumentRef(WithAsyncDependencies[str, VersionedAgentIndex], WithInjec
 
 @dataclass
 class LiveEditTools:
+    """The vfs-aware tool suite for the editing pipeline.
+
+    ``read_tools`` are the raw primitives (get/list/grep over the working
+    copy): safe for any consumer whose state carries a ``vfs``. ``explorer``
+    and ``doc_tool`` additionally require ``version_history`` in the consumer's
+    state (they key the finding cache by version), so they are separate slots —
+    a consumer reviewing an *uncommitted* draft (the munge feedback judge) must
+    take the primitives only, both because it lacks the history and because
+    draft-derived answers must not enter the version-keyed cache."""
     read_tools: tuple[BaseTool, ...]
     write_tools: tuple[BaseTool, ...]
+    explorer: BaseTool
     doc_tool: BaseTool
     mat: VFSAccessor[VFSState]
 
@@ -188,6 +210,7 @@ def setup_live_edits(
     return LiveEditTools(
         doc_tool=doc_retriever,
         mat=mat,
-        read_tools=tuple(read_tools) + (explorer,),
+        read_tools=tuple(read_tools),
+        explorer=explorer,
         write_tools=tuple(write_tools)
     )

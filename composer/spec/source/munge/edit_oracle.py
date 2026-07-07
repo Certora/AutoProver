@@ -63,7 +63,8 @@ def mk_oracle(
         assert new is not None, f"end version {end_version!r} absent from edit store"
 
         root = pathlib.Path(sc.project_root)
-        overlay = None if start_version is None else await edit_store.read(start_version)
+        start = None if start_version is None else await edit_store.read(start_version)
+        overlay = None if start is None else start.vfs
 
         def old(path: str) -> str | None:
             # Union FS: an edited path uses the overlay's content, everything else
@@ -75,7 +76,7 @@ def mk_oracle(
             except (OSError, UnicodeDecodeError):
                 return None
 
-        diff = compute_diff(old, new)
+        diff = compute_diff(old, new.vfs)
         if not diff:
             # Nothing observable changed between the two views, so no edit we can
             # see could have invalidated the finding.

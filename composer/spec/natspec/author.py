@@ -12,8 +12,8 @@ from graphcore.summary import SummaryConfig
 from graphcore.graph import tool_state_update
 from graphcore.tools.schemas import WithImplementation, WithInjectedId, WithInjectedState, WithAsyncDependencies
 from composer.spec.cvl_generation import (
-    static_tools, run_cvl_generator, CVLGenerationInput, CVLGenerationState,
-    FeedbackToolContext, check_completion, CVLGenerationExtra
+    static_tools, property_tools, run_cvl_generator, CVLGenerationInput, CVLGenerationState,
+    check_completion, CVLGenerationExtra
 )
 
 
@@ -24,7 +24,7 @@ from composer.spec.types import PropertyFormulation
 from composer.spec.feedback import property_feedback_judge, Properties, FeedbackTemplate
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.system_model import ContractComponentInstance, ContractName
-from composer.spec.cvl_generation import CVL_JUDGE_KEY, FeedbackToolContext, static_tools, SkippedProperty
+from composer.spec.cvl_generation import CVL_JUDGE_KEY, SkippedProperty
 from composer.spec.service_host import ServiceHost
 from composer.ui.tool_display import tool_display, suppress_ack
 from composer.spec.natspec.task_description import Assembler, ConfigurationBuilder
@@ -219,7 +219,7 @@ async def generate_cvl_batch(
 
     ctx = root_ctx.abstract(CVLGeneration)
 
-    feedback_ctxt = property_feedback_judge(
+    feedback_services = property_feedback_judge(
         ctx=ctx.child(CVL_JUDGE_KEY), env=env, prompt=FeedbackTemplate.bind({
             "context": component,
             "sort": env.sort,
@@ -231,6 +231,7 @@ async def generate_cvl_batch(
         .with_tools(env.all_tools)
         .with_tools(injected_tools)
         .with_tools(static_tools())
+        .with_tools(property_tools(feedback_services))
         .with_tools([
             GiveUpTool.as_tool("give_up"),
             AdvisoryTypecheck.bind(typechecker).as_tool("advisory_typecheck"),
@@ -240,7 +241,6 @@ async def generate_cvl_batch(
         .with_output_key("result")
         .with_input(NatspecGenerationInput)
         .with_state(NatspecGenerationState)
-        .with_context(FeedbackToolContext)
         .with_sys_prompt_template("nosource_property_generation_system_prompt.j2")
         .inject(
             lambda b: NoSourceGen.bind({
@@ -265,7 +265,6 @@ async def generate_cvl_batch(
             suggested_spec_path=None,
             property_rules=[],
         ),
-        ctxt=feedback_ctxt,
         description = f"{contract_name} {component.component.name} ({len(props)} properties)"
     )
     assert "result" in res

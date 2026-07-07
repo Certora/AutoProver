@@ -7,6 +7,7 @@ Parameterized by:
 """
 
 import hashlib
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Annotated, Callable, Literal, NotRequired, override, Awaitable, Any, Protocol
 from typing_extensions import TypedDict
@@ -18,10 +19,9 @@ from langchain_core.tools import BaseTool
 from langgraph.types import Command
 from langgraph.graph import MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.runtime import get_runtime
 
 from graphcore.graph import FlowInput, tool_state_update, tool_return
-from graphcore.tools.schemas import WithImplementation, WithInjectedState, WithInjectedId, WithAsyncImplementation
+from graphcore.tools.schemas import WithInjectedState, WithInjectedId, WithAsyncDependencies
 
 from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
@@ -120,6 +120,12 @@ def _output_link(link: str | None) -> str | None:
     """Rewrite a prover ``/jobStatus/`` URL to its ``/output/`` view; local result dirs (and
     ``None``) pass through unchanged."""
     return link.replace("/jobStatus/", "/output/") if link else None
+class AppliedEdit(BaseModel):
+    """Provenance of one applied source edit: its edit-store id and the
+    editor's account of what changed and why it is acceptable."""
+    edit_id: str
+    executive_summary: str
+    why_sound: str
 
 
 class GeneratedCVL(BaseModel):
@@ -134,6 +140,13 @@ class GeneratedCVL(BaseModel):
     # The last prover-run link (URL or local results dir), persisted for the report and so a
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
+    # The author's working copy at completion: the edited source files the proof
+    # actually ran against (empty when no edits were applied — always the case
+    # outside the editing-enabled source pipeline), and the provenance of each
+    # applied edit in application order. A cache hit replays these along with
+    # the spec, so the proof's source view is never silently lost.
+    vfs: dict[str, str] = Field(default_factory=dict)
+    applied_edits: list[AppliedEdit] = Field(default_factory=list)
 
     def property_units(self) -> list[tuple[str, list[str]]]:
         """Property title -> the CVL rule names that formalize it (the report's `ReportableResult`
@@ -265,12 +278,15 @@ type FeedbackToolImpl = Callable[
     Awaitable[PropertyFeedbackProtocol],
 ]
 """``(cvl, skipped, rebuttals, within_tool) -> PropertyFeedback``. ``within_tool``
-is the calling ``_FeedbackSchema``'s ``tool_call_id``, plumbed through to the
+is the calling feedback tool's ``tool_call_id``, plumbed through to the
 sub-graph's ``run_to_completion`` so its UI panel anchors under the parent
 tool widget."""
 
 @dataclass
-class FeedbackToolContext:
+class FeedbackServices:
+    """Runtime dependencies of the property-management tool suite, bound into
+    the tools at construction time (``WithAsyncDependencies``) by whoever
+    assembles the generation graph — the natspec author, the source author."""
     feedback_thunk: FeedbackToolImpl
     # The batch's property titles (unique, enforced at extraction). Used to validate that
     # the titles named by record_skip / unskip_property / the result mapping refer to real
@@ -279,8 +295,7 @@ class FeedbackToolContext:
 
 FEEDBACK_VALIDATION_KEY = "feedback"
 
-@tool_display("Getting feedback", "Feedback")
-class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, WithAsyncImplementation[Command]):
+class FeedbackToolBase[ST: CVLGenerationState](WithInjectedState[ST], WithInjectedId, ABC):
     """
     Receive feedback on your CVL and any skip declarations.
     The judge will evaluate coverage (all properties accounted for)
@@ -303,15 +318,21 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
         ),
     )
 
-    @override
+    @abstractmethod
+    async def _get_feedback(
+        self, spec: str, skipped: list[SkippedProperty]
+    ) -> PropertyFeedbackProtocol:
+        """Invoke the judge. Subclasses own how the judge is reached and what
+        extra context (if any) rides along with the invocation."""
+        ...
+
     async def run(self) -> Command:
-        feedback = get_runtime(FeedbackToolContext).context.feedback_thunk
         st = self.state
         spec = st["curr_spec"]
         if spec is None:
             return tool_return(self.tool_call_id, "No spec put yet")
         skipped = st["skipped"]
-        t = await feedback(spec, skipped, self.rebuttals, self.tool_call_id)
+        t = await self._get_feedback(spec, skipped)
         msg = f"Good? {t.good}\nFeedback {t.feedback}"
         if t.good:
             digest = _compute_digest(spec, skipped)
@@ -321,11 +342,26 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
             )
         return tool_state_update(self.tool_call_id, msg)
 
+
+@tool_display("Getting feedback", "Feedback")
+class VanillaFeedbackTool(
+    FeedbackToolBase[CVLGenerationState],
+    WithAsyncDependencies[Command, FeedbackServices],
+):
+    __doc__ = FeedbackToolBase.__doc__
+
+    @override
+    async def _get_feedback(
+        self, spec: str, skipped: list[SkippedProperty]
+    ) -> PropertyFeedbackProtocol:
+        with self.tool_deps() as svc:
+            return await svc.feedback_thunk(spec, skipped, self.rebuttals, self.tool_call_id)
+
 @tool_display(
     lambda p: f"Skipping property `{p.get('property_title', '?')}`",
     suppress_ack("Skip result", ("Recorded skip",)),
 )
-class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, WithImplementation[Command]):
+class _RecordSkipSchema(WithInjectedId, WithAsyncDependencies[Command, list[str]]):
     """
     Declare that you are skipping a property from the batch.
     You must provide the property's title and a justification.
@@ -340,33 +376,33 @@ class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, W
     )
 
     @override
-    def run(self) -> Command:
-        titles = get_runtime(FeedbackToolContext).context.titles
-        if self.property_title not in titles:
+    async def run(self) -> Command:
+        with self.tool_deps() as titles:
+            if self.property_title not in titles:
+                return tool_state_update(
+                    self.tool_call_id,
+                    f"Unknown property title {self.property_title!r}. Must be one of: {', '.join(titles)}.",
+                )
+            if not self.reason.strip():
+                return tool_state_update(
+                    self.tool_call_id,
+                    "A non-empty justification is required when skipping a property.",
+                )
+            skip = SkippedProperty(
+                property_title=self.property_title,
+                reason=self.reason,
+            )
             return tool_state_update(
                 self.tool_call_id,
-                f"Unknown property title {self.property_title!r}. Must be one of: {', '.join(titles)}.",
+                f"Recorded skip for property {self.property_title}.",
+                skipped=[skip],
             )
-        if not self.reason.strip():
-            return tool_state_update(
-                self.tool_call_id,
-                "A non-empty justification is required when skipping a property.",
-            )
-        skip = SkippedProperty(
-            property_title=self.property_title,
-            reason=self.reason,
-        )
-        return tool_state_update(
-            self.tool_call_id,
-            f"Recorded skip for property {self.property_title}.",
-            skipped=[skip],
-        )
 
 @tool_display(
     lambda p: f"Un-skipping property `{p.get('property_title', '?')}`",
     suppress_ack("Unskip result", ("Removed skip",)),
 )
-class _UnskipSchema(WithInjectedId, WithImplementation[Command]):
+class _UnskipSchema(WithInjectedId, WithAsyncDependencies[Command, list[str]]):
     """
     Remove a previously declared skip for a property.
     Use this if you later find a way to formalize a property you previously skipped.
@@ -376,30 +412,30 @@ class _UnskipSchema(WithInjectedId, WithImplementation[Command]):
     )
 
     @override
-    def run(self) -> Command:
-        titles = get_runtime(FeedbackToolContext).context.titles
-        if self.property_title not in titles:
+    async def run(self) -> Command:
+        with self.tool_deps() as titles:
+            if self.property_title not in titles:
+                return tool_state_update(
+                    self.tool_call_id,
+                    f"Unknown property title {self.property_title!r}. Must be one of: {', '.join(titles)}.",
+                )
+            # Empty reason is the sentinel for "not skipped"
+            skip = SkippedProperty(
+                property_title=self.property_title,
+                reason="",
+            )
             return tool_state_update(
                 self.tool_call_id,
-                f"Unknown property title {self.property_title!r}. Must be one of: {', '.join(titles)}.",
+                f"Removed skip for property {self.property_title}.",
+                skipped=[skip],
             )
-        # Empty reason is the sentinel for "not skipped"
-        skip = SkippedProperty(
-            property_title=self.property_title,
-            reason="",
-        )
-        return tool_state_update(
-            self.tool_call_id,
-            f"Removed skip for property {self.property_title}.",
-            skipped=[skip],
-        )
 
 def static_tools() -> list[BaseTool]:
+    """The dependency-free CVL authoring tools. The property-management suite
+    (feedback / skip tools) is NOT here — it carries runtime deps; see
+    :func:`skip_tools` and :class:`FeedbackToolBase`."""
     return [
         put_cvl, put_cvl_raw,
-        _FeedbackSchema.as_tool("feedback_tool"),
-        _RecordSkipSchema.as_tool("record_skip"),
-        _UnskipSchema.as_tool("unskip_property"),
         get_cvl(CVLGenerationState),
         edit_cvl(CVLGenerationState),
         ERC20TokenGuidance.as_tool("erc20_guidance"),
@@ -407,11 +443,29 @@ def static_tools() -> list[BaseTool]:
     ]
 
 
-async def run_cvl_generator[S: CVLGenerationState, C: FeedbackToolContext, I: CVLGenerationInput](
+def skip_tools(titles: list[str]) -> list[BaseTool]:
+    """The skip-management pair, bound to the batch's property titles."""
+    return [
+        _RecordSkipSchema.bind(titles).as_tool("record_skip"),
+        _UnskipSchema.bind(titles).as_tool("unskip_property"),
+    ]
+
+
+def property_tools(services: FeedbackServices) -> list[BaseTool]:
+    """The full property-management suite with the vanilla feedback tool.
+    Callers with a custom feedback tool (e.g. the editor-aware source author)
+    bind their own :class:`FeedbackToolBase` subclass and use
+    :func:`skip_tools` directly."""
+    return [
+        VanillaFeedbackTool.bind(services).as_tool("feedback_tool"),
+        *skip_tools(services.titles),
+    ]
+
+
+async def run_cvl_generator[S: CVLGenerationState, I: CVLGenerationInput](
     ctx: WorkflowContext[CVLGeneration],
-    d: CompiledStateGraph[S, C, I, Any],
+    d: CompiledStateGraph[S, None, I, Any],
     in_state: I,
-    ctxt: C,
     description: str,
     skip_mnemonic: bool = False
 ) -> S:
@@ -436,7 +490,7 @@ async def run_cvl_generator[S: CVLGenerationState, C: FeedbackToolContext, I: CV
             d,
             in_state_copy,
             thread_id=tid,
-            context=ctxt,
+            context=None,
             description=desc,
             recursion_limit=ctx.recursion_limit,
         )

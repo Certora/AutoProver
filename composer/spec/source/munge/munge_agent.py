@@ -116,7 +116,11 @@ class EditMungeTool(WithAsyncDependencies[str, MungeToolDeps], WithInjectedId, W
             if isinstance(d, MungeRefusal):
                 return f"The editor refused your request with the following reason:\n\n{d.explanation}"
             
-            application_key = await deps.edit_store.commit(res["vfs"])
+            application_key = await deps.edit_store.commit(
+                res["vfs"],
+                executive_summary=d.executive_summary,
+                why_sound=d.why_sound,
+            )
             diff = summarize_changes(
                 res, deps.accessor, self.state["vfs"]
             )

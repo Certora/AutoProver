@@ -16,26 +16,30 @@ from graphcore.graph import tool_state_update
 from graphcore.summary import SummaryConfig
 
 from composer.spec.cvl_generation import (
-    static_tools, CVLGenerationExtra, FeedbackToolContext, FEEDBACK_VALIDATION_KEY,
+    static_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
     check_completion, validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
-    GeneratedCVL, PropertyRuleMapping
+    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase, SkippedProperty,
+    PropertyFeedbackProtocol,
 )
-from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools
+from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.types import PropertyFormulation
 from composer.pipeline.core import GaveUp
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
 from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
 from langgraph.graph import MessagesState
-from langgraph.runtime import get_runtime
 from pathlib import Path
 from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
-from composer.spec.service_host import ServiceHost
+from composer.spec.service_host import ServiceHost, Sort
 from composer.workflow.services import CacheLevel
 
 
 from langgraph.types import Command
-from composer.spec.feedback import property_feedback_judge, FeedbackTemplate
+from graphcore.graph import Builder
+from composer.spec.feedback import (
+    property_feedback_judge, source_feedback_judge, FeedbackTemplate, Properties,
+    SourceSnapshot, ContextualFeedbackToolImpl,
+)
 from composer.ui.tool_display import tool_display
 
 from composer.spec.source.munge.edit_store import EditStore
@@ -100,7 +104,7 @@ class ExpectRulePassage(WithAsyncImplementation[Command], WithInjectedId):
     result=None,
 )
 class PublishResultTool(
-    WithImplementation[Command | str],
+    WithAsyncDependencies[Command | str, list[str]],
     WithInjectedState[SourceCVLGenerationState],
     WithInjectedId,
 ):
@@ -116,12 +120,12 @@ class PublishResultTool(
     )
 
     @override
-    def run(self) -> Command | str:
+    async def run(self) -> Command | str:
         if (err := check_completion(self.state)) is not None:
             return err
-        titles = get_runtime(FeedbackToolContext).context.titles
-        if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
-            return err
+        with self.tool_deps() as titles:
+            if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
+                return err
         return tool_state_update(
             self.tool_call_id,
             "Accepted",
@@ -167,12 +171,19 @@ class PropertyGenParams(TypedDict):
     contract_name: str
 
 class PropertyGenerationConfig(SummaryConfig[SourceCVLGenerationState]):
-    def __init__(self):
+    def __init__(self, source_editing: bool = False):
         super().__init__()
+        self._source_editing = source_editing
 
     @override
     def get_summarization_prompt(self, state: SourceCVLGenerationState) -> str:
-            return """
+            edit_item = (
+                "\n7. The source edits you have applied (their edit ids and what each was for), "
+                "any edit ids the editor produced that you chose NOT to apply, and any plans "
+                "you had to request further edits"
+                if self._source_editing else ""
+            )
+            return f"""
 You are approaching the context limit for your task. After this point, your context will be cleared
 and the task restarted from the initial prompt.
 
@@ -186,7 +197,7 @@ To enable you to continue to work effectively after this compaction, summarize t
 3. If you have any outstanding, unaddressed feedback from your last iteration with the feedback tool, include that unaddressed feedback in your summary
 4. If you have any outstanding, unaddressed tasks from the most recent iteration with the prover, include those unaddressed tasks in your summary
 5. Any techniques/attempts that you or the feedback rejected or didn't work
-6. Any techniques/attempts that you attempted but were rejected by the prover
+6. Any techniques/attempts that you attempted but were rejected by the prover{edit_item}
 
 In other words, your summary should include all information necessary to prevent the next iteration on this task from repeating work
 or repeating mistakes.
@@ -196,9 +207,14 @@ If your current task itself began with a summary, include the salient parts of t
 
     @override
     def get_resume_prompt(self, state: SourceCVLGenerationState, summary: str) -> str:
+        edit_note = (
+            "\nAny source edits you applied remain in effect on your working copy; "
+            "the `edit_history_log` tool shows each applied edit and its diff.\n"
+            if self._source_editing else ""
+        )
         return f"""
 You are resuming this task already in progress. The current version of your spec (if any) is available via the `get_cvl` tool.
-
+{edit_note}
 A summary of your work up until this point is as follows:
 
 BEGIN SUMMARY:
@@ -354,7 +370,7 @@ class ApplyEditTool(WithAsyncDependencies[str | Command, EditStore], WithInjecte
             return tool_state_update(
                 tool_call_id=self.tool_call_id,
                 content="Edit applied",
-                vfs=new_state,
+                vfs=new_state.vfs,
                 version_history=[self.edit_id]
             )
 
@@ -374,8 +390,8 @@ class EditHistoryLog(WithAsyncDependencies[str, HistoryDeps], WithInjectedState[
         hist = self.state["version_history"]
         if len(hist) == 0:
             return "No edits applied, working against clean project directory"
-        fetched_states = []
-        history : list[tuple[str, str]]= []
+        fetched_states: list[dict[str, str]] = []
+        history : list[tuple[str, str, str]] = []
         with self.tool_deps() as dep:
             for (i, edit_id) in enumerate(hist):
                 edit_state = await dep.edit_store.read(edit_id)
@@ -386,19 +402,21 @@ class EditHistoryLog(WithAsyncDependencies[str, HistoryDeps], WithInjectedState[
                 else:
                     prev = fetched_states[i - 1]
                 diff = summarize_changes(
-                    {"vfs": edit_state}, dep.mat, prev
+                    {"vfs": edit_state.vfs}, dep.mat, prev
                 )
-                history.append((edit_id, diff))
-                fetched_states.append(edit_state)
+                history.append((edit_id, edit_state.executive_summary, diff))
+                fetched_states.append(edit_state.vfs)
         to_format = [
             f"""
 --- Edit #{i} (ID: {t})
+
+Summary: {summary}
 
 Diff from {"prior edit" if i > 0 else "project directory"}:
 
 {diff}
 """
-            for (i,(t,diff)) in enumerate(history)
+            for (i,(t, summary, diff)) in enumerate(history)
         ]
         return "\n\n".join(to_format)
     
@@ -415,12 +433,14 @@ class RevertToEdit(WithAsyncDependencies[Command | str, EditStore], WithInjected
             return f"Already at edit id {self.edit_id}, nothing to do"
         with self.tool_deps() as dep:
             i = self.state["version_history"].index(self.edit_id)
-            target_vfs = await dep.read(self.edit_id)
+            target = await dep.read(self.edit_id)
+            if target is None:
+                return f"{self.edit_id} is in your history but absent from the edit store; this is an unrecoverable error"
             return tool_state_update(
                 self.tool_call_id,
                 f"Reverted to id {self.edit_id}",
-                vfs=target_vfs,
-                version_history=["__wipe__", *self.state["version_history"][:i+1]]
+                vfs=target.vfs,
+                version_history=[WIPE_HISTORY, *self.state["version_history"][:i+1]]
             )
 
 
@@ -436,9 +456,69 @@ def generate_edit_management_tools(
         edit_tools=live_tools,
         edit_store=edit
     )
-    return [editor, ApplyEditTool.bind(edit).as_tool("blah"), EditHistoryLog.bind(HistoryDeps(
-        live_tools.mat, edit
-    )).as_tool("edit_history_log"), RevertToEdit.bind(edit).as_tool("revert_to_edit")]
+    return [
+        editor,
+        # "commit_edit" is the name the editor's result message tells the author
+        # to call (see EditMungeTool.run's result_msg) — keep them in sync.
+        ApplyEditTool.bind(edit).as_tool("commit_edit"),
+        EditHistoryLog.bind(HistoryDeps(live_tools.mat, edit)).as_tool("edit_history_log"),
+        RevertToEdit.bind(edit).as_tool("revert_to_edit"),
+    ]
+
+
+@dataclass(frozen=True)
+class SourceEditing:
+    """The editing-enabled generation phase's kit: the live tool suite
+    (vfs-aware reads + versioned explorer + live doc ref, plus the write tools
+    the editor sub-agent uses) and the edit snapshot store. Phases whose output
+    must hold against the unedited source — structural invariants — run
+    without one."""
+    live: LiveEditTools
+    store: EditStore
+
+
+@dataclass(frozen=True)
+class _LiveJudgeHost:
+    """Judge construction surface for the editing pipeline: RAG tools plus the
+    vfs-aware read suite, so the judge reads the author's working copy (seeded
+    into its state per invocation via the SourceSnapshot lift) rather than the
+    on-disk baseline."""
+    env: ServiceHost
+    editing: SourceEditing
+
+    def builder_heavy(self) -> Builder[None, None, None]:
+        return self.env.builder_heavy()
+
+    @property
+    def sort(self) -> Sort:
+        return self.env.sort
+
+    @property
+    def judge_tools(self) -> tuple[BaseTool, ...]:
+        return (
+            self.env.rag_tools
+            + tuple(self.editing.live.read_tools)
+            + (self.editing.live.explorer, self.editing.live.doc_tool)
+        )
+
+
+@tool_display("Getting feedback", "Feedback")
+class EditorAwareFeedbackTool(
+    FeedbackToolBase[SourceCVLGenerationState],
+    WithAsyncDependencies[Command, ContextualFeedbackToolImpl[SourceSnapshot]],
+):
+    __doc__ = FeedbackToolBase.__doc__
+
+    @override
+    async def _get_feedback(
+        self, spec: str, skipped: list[SkippedProperty]
+    ) -> PropertyFeedbackProtocol:
+        with self.tool_deps() as judge:
+            snap = SourceSnapshot(
+                vfs=self.state["vfs"],
+                version_history=self.state["version_history"],
+            )
+            return await judge(snap, spec, skipped, self.rebuttals, self.tool_call_id)
 
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
@@ -455,8 +535,7 @@ async def batch_cvl_generation(
     source: SourceCode,
     spec_dir: Path,
     spec_stem: str,
-    edit: LiveEditTools,
-    edit_store: EditStore,
+    editing: "SourceEditing | None",
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
@@ -478,26 +557,53 @@ async def batch_cvl_generation(
         "contract_name": source.contract_name
     })
 
+    titles = [p.title for p in props]
+    judge_ctx = ctx.child(CVL_JUDGE_KEY)
+    judge_prompt = FeedbackTemplate.bind({
+        "sort": "existing",
+        "context": component,
+        "source_editing": editing is not None,
+    }).depends(Properties)
+    if editing is None:
+        feedback_suite = property_tools(
+            property_feedback_judge(judge_ctx, env, judge_prompt, props)
+        )
+    else:
+        judge_impl = source_feedback_judge(
+            judge_ctx, _LiveJudgeHost(env, editing), judge_prompt, props
+        )
+        feedback_suite = [
+            EditorAwareFeedbackTool.bind(judge_impl).as_tool("feedback_tool"),
+            *skip_tools(titles),
+        ]
+
     # use "cache=long" to account for very long prover runs.
     # on anthropic (the only backend we support) a long cache is 1hr
     # NB that on longer prover runs we'll still get a cache miss;
     # this is a trade off we may have to revisit later.
-    task_graph = env.builder_heavy(cache_level=CacheLevel.LONG).with_tools(
+    b = env.builder_heavy(cache_level=CacheLevel.LONG).with_tools(
         env.rag_tools
-    ).with_tools(
-        edit.read_tools
-    ).with_tools(
-        [edit.doc_tool]
-    ).with_tools(
-        generate_edit_management_tools(ctx, env, edit_store, edit)
-    ).with_tools(
+    )
+    if editing is not None:
+        b = b.with_tools(
+            editing.live.read_tools
+        ).with_tools(
+            [editing.live.explorer, editing.live.doc_tool]
+        ).with_tools(
+            generate_edit_management_tools(ctx, env, editing.store, editing.live)
+        )
+    else:
+        b = b.with_tools(env.source_tools)
+    task_graph = b.with_tools(
         static_tools()
+    ).with_tools(
+        feedback_suite
     ).with_tools(
         [prover_tool,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
          GiveUpTool.as_tool("give_up"),
-         PublishResultTool.as_tool("result"),
+         PublishResultTool.bind(titles).as_tool("result"),
          ctx.get_memory_tool()]
     ).with_state(
         SourceCVLGenerationState
@@ -505,26 +611,18 @@ async def batch_cvl_generation(
         "result"
     ).with_input(
         SourceCVLGenerationInput
-    ).with_context(
-        FeedbackToolContext
     ).with_sys_prompt_template(
-        "property_generation_system_prompt.j2"
+        "property_generation_system_prompt.j2", source_editing=editing is not None
     ).inject(
         lambda d: bound_template.render_to(d.with_initial_prompt_template)
-    ).with_summary_config(PropertyGenerationConfig()).compile_async()
-
-    feedback_env = property_feedback_judge(
-        ctx.child(CVL_JUDGE_KEY), env, FeedbackTemplate.bind({
-            "sort": "existing",
-            "context": component
-        }), props
-    )
+    ).with_summary_config(
+        PropertyGenerationConfig(source_editing=editing is not None)
+    ).compile_async()
 
     res_state = await run_cvl_generator(
         ctx = ctx,
         d = task_graph,
         description=description,
-        ctxt=feedback_env,
         in_state=SourceCVLGenerationInput(
             curr_spec=None,
             config=init_config,
@@ -547,6 +645,16 @@ async def batch_cvl_generation(
         return GaveUp(reason=res_state["result"])
     d = res_state["curr_spec"]
     assert d is not None
+    applied_edits: list[AppliedEdit] = []
+    if editing is not None:
+        for edit_id in res_state["version_history"]:
+            rec = await editing.store.read(edit_id)
+            assert rec is not None, f"edit {edit_id} in history but absent from the edit store"
+            applied_edits.append(AppliedEdit(
+                edit_id=edit_id,
+                executive_summary=rec.executive_summary,
+                why_sound=rec.why_sound,
+            ))
     # Persist the base prover config and last run link from the final state so a later cache
     # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
     return GeneratedCVL(
@@ -556,5 +664,7 @@ async def batch_cvl_generation(
         property_rules=res_state["property_rules"],
         config=res_state["config"],
         final_link=res_state.get("prover_link"),
+        vfs=res_state["vfs"],
+        applied_edits=applied_edits,
     )
 
