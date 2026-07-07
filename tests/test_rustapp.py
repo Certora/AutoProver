@@ -145,3 +145,75 @@ def test_effects_protocol_is_satisfied_by_fake():
     # Structural sanity: FakeEffects satisfies the Effects protocol.
     fx: Effects = FakeEffects()
     assert fx is not None
+
+
+# ---------------------------------------------------------------------------
+# Generic host: entry point (argparse), shared-enum identity, frontend.
+# These import the heavier host (needs the full composer stack). If it can't
+# import (e.g. running against a slim env), skip rather than error.
+# ---------------------------------------------------------------------------
+
+host = pytest.importorskip(
+    "composer.rustapp.host", reason="needs the full composer stack installed"
+)
+
+
+def test_entry_argparser_has_positionals_and_declared_flags():
+    from composer.rustapp.entry import build_arg_parser
+
+    app = host.build_application("echoprover")
+    parser = build_arg_parser(app)
+
+    # Declared flag default (from the descriptor's ArgSpec) is applied.
+    args = parser.parse_args(["/proj", "src/C.sol:C", "doc.md"])
+    assert args.project_root == "/proj"
+    assert args.main_contract == "src/C.sol:C"
+    assert args.system_doc == "doc.md"
+    assert args.max_concurrent == 4
+    assert args.echo_tag == "demo"
+
+    # …and is overridable.
+    args2 = parser.parse_args(["/proj", "src/C.sol:C", "doc.md", "--echo-tag", "hi"])
+    assert args2.echo_tag == "hi"
+
+
+def test_frontend_labels_and_backend_phases_share_one_enum():
+    # The correctness invariant: the phases the driver stamps on TaskInfo (from
+    # the backend's core_phases) must be the SAME enum members the frontend's
+    # phase_labels are keyed by, or label lookup silently misses.
+    app = host.build_application("echoprover")
+    backend = app.make_backend("/tmp/echo-proj")
+    for slot, member in backend.core_phases.items():
+        assert member in app.phase_labels, (slot, member)
+    # Section order lists every declared phase's label.
+    assert set(app.section_order) == set(app.phase_labels.values())
+
+
+def test_generic_console_handler_renders_declared_events(capsys):
+    import asyncio
+
+    from composer.rustapp.frontend import GenericRustConsoleHandler, _render_event
+
+    assert _render_event({"type": "solver_line", "line": "hello"}) == "hello"
+    assert _render_event({"type": "x", "a": 1}) == '{"a": 1}'
+
+    handler = GenericRustConsoleHandler({"solver_line"})
+    asyncio.run(handler.handle_event({"type": "solver_line", "line": "L1"}, ["t"], "cp"))
+    # An undeclared kind is ignored.
+    asyncio.run(handler.handle_event({"type": "other", "line": "nope"}, ["t"], "cp"))
+    out = capsys.readouterr().out
+    assert "solver_line: L1" in out
+    assert "nope" not in out
+
+
+def test_generic_tui_app_constructs():
+    from composer.rustapp.frontend import GenericRustApp
+
+    app = host.build_application("echoprover")
+    tui = GenericRustApp(
+        phase_labels=app.phase_labels,
+        section_order=app.section_order,
+        header_text=app.header_text,
+        event_kinds={e.kind for e in app.descriptor.event_kinds},
+    )
+    assert tui is not None

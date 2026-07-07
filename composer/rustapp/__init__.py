@@ -20,10 +20,15 @@ bridge is involved.
 
 Entry points:
 
-* :func:`composer.rustapp.host.run_rust_pipeline` — build the backend from a
-  module name and run the shared driver.
+* :func:`composer.rustapp.cli.tui_main` / ``console_main`` — a complete runnable
+  application from a module name (the descriptor drives argparse, the entry point,
+  the frontend, and ``main()``). This is the whole vertical.
 * :func:`composer.rustapp.host.build_application` — synthesize the phase enum,
   labels, section order and backend factory for a frontend / ``main()``.
+* :func:`composer.rustapp.entry.rust_entry_point` — the async entry point context
+  manager (services + ``WorkflowContext``), yielding the Executor.
+* :func:`composer.rustapp.host.run_rust_pipeline` — headless: build the backend
+  from a module name and run the shared driver directly.
 """
 
 from composer.rustapp.descriptor import (
@@ -47,8 +52,26 @@ from composer.rustapp.host import (
     build_phase_enum,
     load_descriptor,
     load_module,
+    run_application,
     run_rust_pipeline,
 )
+from composer.rustapp.entry import (
+    EnvBuilder,
+    RustRunner,
+    build_arg_parser,
+    build_neutral_env,
+    rust_entry_point,
+)
+from composer.rustapp.frontend import (
+    GenericRustApp,
+    GenericRustConsoleHandler,
+    GenericRustTaskHandler,
+)
+
+# NOTE: composer.rustapp.cli is intentionally NOT imported here — it runs
+# `import composer.bind` (import-time DI / test-tape bootstrap), which the
+# built-in apps only trigger from their `main` modules. Import it explicitly:
+#     from composer.rustapp.cli import tui_main, console_main
 
 __all__ = [
     "AppDescriptor",
@@ -74,5 +97,14 @@ __all__ = [
     "build_phase_enum",
     "load_descriptor",
     "load_module",
+    "run_application",
     "run_rust_pipeline",
+    "EnvBuilder",
+    "RustRunner",
+    "build_arg_parser",
+    "build_neutral_env",
+    "rust_entry_point",
+    "GenericRustApp",
+    "GenericRustConsoleHandler",
+    "GenericRustTaskHandler",
 ]

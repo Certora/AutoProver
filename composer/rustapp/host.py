@@ -116,12 +116,41 @@ async def run_rust_pipeline(
     feedback: FeedbackHook | None = None,
 ) -> CorePipelineResult[RustFormalResult]:
     """Build the backend from ``module_name`` and run the shared driver — the Rust
-    analogue of ``run_autoprove_pipeline`` / ``run_foundry_pipeline``."""
+    analogue of ``run_autoprove_pipeline`` / ``run_foundry_pipeline``.
+
+    This synthesizes a *fresh* phase enum internal to the backend. It is the right
+    entry for headless callers whose handler ignores phases; for a TUI/console
+    frontend, build a :class:`RustApplication` once and use :func:`run_application`
+    so the frontend's labels and the backend's phases share one enum object."""
     module = load_module(module_name)
     descriptor = load_descriptor(module)
     backend = build_backend(
         module, descriptor, source_input.project_root, prover=prover, feedback=feedback
     )
+    run = PipelineRun(
+        ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent)
+    )
+    return await run_pipeline(
+        backend, run, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+    )
+
+
+async def run_application(
+    app: "RustApplication",
+    source_input: SourceCode,
+    ctx: WorkflowContext[None],
+    handler_factory: HandlerFactory,
+    env: ServiceHost,
+    *,
+    max_concurrent: int = 4,
+    max_bug_rounds: int = 3,
+    interactive: bool = False,
+) -> CorePipelineResult[RustFormalResult]:
+    """Run a pre-built :class:`RustApplication`. The backend is constructed from the
+    app's already-synthesized phase enum, so the ``TaskInfo`` phases the driver emits
+    are the *same* enum members the frontend's ``phase_labels`` are keyed by — the
+    identity the frontend's label lookup relies on."""
+    backend = app.make_backend(source_input.project_root)
     run = PipelineRun(
         ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent)
     )

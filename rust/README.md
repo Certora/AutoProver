@@ -8,7 +8,7 @@ through the generic Python pipeline via PyO3. Design rationale:
 ## Layout
 
 | Crate | Role |
-|---|---|
+| --- | --- |
 | [`autoprover-sdk`](autoprover-sdk) | The library a Rust application imports: the ABI (serde types), the `Application` / `FormalizeSession` traits, the FFI helpers, and the `export_app!` macro. |
 | [`example-app`](example-app) | The `echoprover` demo — a complete, self-contained application built into a wheel and exercised by `tests/test_rustapp.py`. |
 
@@ -22,7 +22,7 @@ LLM, prover, cache, event streaming — Rust only decides the next one). No
 
 A wheel exports exactly (all synchronous, JSON strings across the boundary):
 
-```
+```text
 descriptor() -> str                          # the AppDescriptor
 validate_preconditions(args_json) -> str|None
 new_session(input_json) -> RustSession       # .resume(observation_json) -> command_json
@@ -55,10 +55,25 @@ finalize(outcomes_json) -> str|None
    cd my-app && maturin develop      # or: maturin build --out dist
    ```
 
-5. Run it from Python:
+5. Ship a CLI. The generic entry point + frontend are synthesized from the
+   descriptor — a runnable app is a two-line `main()`:
 
    ```python
-   from composer.rustapp import run_rust_pipeline, build_application
+   # my_app_cli.py
+   from composer.rustapp.cli import tui_main, console_main
+   def main() -> int:      return tui_main("my_app")       # Textual TUI
+   def main_console() -> int: return console_main("my_app")   # stdout
+   ```
+
+   Register them in `pyproject.toml` under `[project.scripts]`. No bespoke
+   argparse, entry point, frontend, or `main()` to write — the descriptor drives
+   all of it (CLI flags, precondition validation, phase labels, event rendering,
+   artifact layout).
+
+   For programmatic / headless use, the pipeline wrapper is also exposed directly:
+
+   ```python
+   from composer.rustapp import run_rust_pipeline
    result = await run_rust_pipeline("my_app", source_input, ctx, handler_factory, env)
    ```
 
