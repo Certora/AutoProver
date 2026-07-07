@@ -36,6 +36,7 @@ from composer.pipeline.core import (
     CorePhases, main_instance, Delivered,
     run_pipeline
 )
+from composer.pipeline.ecosystem import EVM
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.context import (
@@ -241,7 +242,7 @@ async def run_foundry_pipeline(
     )
 
     to_ret = await run_pipeline(
-        backend, run_conf, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+        backend, run_conf, EVM, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
     )
 
     return FoundryPipelineResult(

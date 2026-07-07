@@ -18,7 +18,7 @@ import enum
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Callable, Awaitable, TypedDict, cast
+from typing import Protocol, Callable, Awaitable, TypedDict
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
@@ -30,7 +30,7 @@ from composer.spec.context import (
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
-    SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication
+    SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication, BaseApplication
 )
 from composer.pipeline.ecosystem import Ecosystem, EVM, main_instance
 from composer.spec.types import PropertyFormulation, FormalResult, ArtifactIdentifier
@@ -170,7 +170,7 @@ class PreparedSystem[FormT: BackendResult](ABC):
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT]: ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, App: BaseApplication](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -184,7 +184,7 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     def artifact_store(self) -> ArtifactStore[A, FormT]: ...
 
     async def prepare_system(
-        self, analyzed: SourceApplication,
+        self, analyzed: App,
         run: PipelineRun[P, H]
     ) -> PreparedSystem[FormT]: ...
 
@@ -220,14 +220,14 @@ def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](
-    backend: PipelineBackend[P, FormT, H, A],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, App: BaseApplication](
+    backend: PipelineBackend[P, FormT, H, A, App],
     run: PipelineRun[P, H],
+    ecosystem: Ecosystem[App],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
-    ecosystem: Ecosystem = EVM,
 ) -> CorePipelineResult[FormT]:
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
@@ -250,10 +250,10 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         raise ValueError("System analysis produced no result.")
 
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
-    #    Phase 1: the only ecosystem is EVM, whose model IS SourceApplication, and the backend
-    #    protocol is still typed to SourceApplication; Phase 2 adds the `App` type parameter
-    #    that pairs backend↔ecosystem and removes this cast.
-    prepared = await backend.prepare_system(cast(SourceApplication, analyzed), run)
+    #    `analyzed` is the ecosystem's `App`, which the paired backend's `prepare_system`
+    #    consumes directly — the backend↔ecosystem type parameter (Phase 2) is what lets this
+    #    type-check without a cast.
+    prepared = await backend.prepare_system(analyzed, run)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.

@@ -22,7 +22,7 @@ import asyncio
 import enum
 import importlib
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from composer.io.multi_job import HandlerFactory
 from composer.pipeline.core import (
@@ -31,6 +31,7 @@ from composer.pipeline.core import (
     PipelineRun,
     run_pipeline,
 )
+from composer.pipeline.ecosystem import EVM
 from composer.rustapp.adapter import FeedbackHook, ProverHook, RustBackend
 from composer.rustapp.descriptor import AppDescriptor, CoreSlot
 from composer.rustapp.result import RustFormalResult
@@ -55,7 +56,9 @@ def build_phase_enum(descriptor: AppDescriptor) -> type[enum.Enum]:
     identity checks against a static class)."""
     ordered = descriptor.ordered_phases()
     name = "".join(part.capitalize() for part in descriptor.name.split("_")) + "Phase"
-    return enum.Enum(name, {p.key: p.key for p in ordered})
+    # enum.Enum's functional API is typed as returning an ``Enum`` instance, not the new
+    # class; it does return a class at runtime.
+    return cast(type[enum.Enum], enum.Enum(name, {p.key: p.key for p in ordered}))
 
 
 def build_core_phases(
@@ -131,7 +134,7 @@ async def run_rust_pipeline(
         ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent)
     )
     return await run_pipeline(
-        backend, run, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+        backend, run, EVM, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
     )
 
 
@@ -155,7 +158,7 @@ async def run_application(
         ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent)
     )
     return await run_pipeline(
-        backend, run, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+        backend, run, EVM, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
     )
 
 

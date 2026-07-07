@@ -61,6 +61,7 @@ from composer.pipeline.core import (
     CorePhases, SystemAnalysisSpec, ComponentOutcome, CorePipelineResult,
     run_pipeline, main_instance,
 )
+from composer.pipeline.ecosystem import EVM
 
 
 INV_CVL_KEY = CacheKey[None, GeneratedCVL]("invariant-cvl")
@@ -326,5 +327,5 @@ async def run_autoprove_pipeline(
     )
     run = PipelineRun(ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent))
     return await run_pipeline(
-        backend, run, interactive=interactive, threat_model=threat_model, max_bug_rounds=max_bug_rounds,
+        backend, run, EVM, interactive=interactive, threat_model=threat_model, max_bug_rounds=max_bug_rounds,
     )

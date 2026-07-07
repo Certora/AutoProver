@@ -17,7 +17,7 @@ Soroban chains and the prompt-fragment split land in later phases.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CODE_EXPLORER_SYS_PROMPT
@@ -27,6 +27,7 @@ from composer.spec.system_model import (
     BaseApplication,
     ContractComponentInstance,
     ContractInstance,
+    SolidityIdentifier,
     SourceApplication,
 )
 from composer.spec.util import FS_FORBIDDEN_READ
@@ -59,22 +60,32 @@ class Language:
 
 
 @dataclass(frozen=True)
-class Ecosystem:
+class Ecosystem[App: BaseApplication]:
     """A resolved ecosystem = a chain that carries its language. The driver consumes it to
-    drive the shared front half without hardcoding any one domain."""
+    drive the shared front half without hardcoding any one domain.
+
+    Generic over ``App`` — the analyzed system-model type this ecosystem produces. A backend
+    is paired with an ecosystem by that type: ``run_pipeline`` ties
+    ``PipelineBackend[..., App]`` to ``Ecosystem[App]``, so ``prepare_system(analyzed: App)``
+    type-checks without a cast. (``Main`` / ``Unit`` — the main-instance and per-unit wrappers
+    — stay the EVM ``ContractInstance`` / ``ContractComponentInstance`` for now; generalizing
+    those pairs with a non-contract model in a later phase.)"""
 
     name: ChainTag
     language: Language
-    #: The pydantic model the analysis phase produces (a ``BaseApplication`` subtype).
-    system_model: type[BaseApplication]
+    #: The pydantic model the analysis phase produces.
+    system_model: type[App]
     #: Prompts for the system-analysis agent.
     analysis_prompts: PromptPair
     #: Prompts for the per-component property-inference agent.
     property_prompts: PromptPair
     #: Connectivity/shape validation of the analyzed model (retry feedback on failure).
-    validate_analysis: Callable[[BaseApplication, str | None], str | None]
+    #: Typed over ``BaseApplication`` (not ``App``): the validator receives the produced model
+    #: and narrows internally (as ``_validate_connectivity`` does), and this keeps it assignable
+    #: to ``run_component_analysis``'s ``validate`` parameter without a contravariance clash.
+    validate_analysis: Callable[[BaseApplication, SolidityIdentifier | None], str | None]
     #: Locate the target unit (the "main contract"/program) in the analyzed model.
-    locate_main: Callable[[AnyApplication, SourceCode], ContractInstance]
+    locate_main: Callable[[App, SourceCode], ContractInstance]
     #: Enumerate the per-unit items the extraction phase infers properties for.
     units: Callable[[ContractInstance], list[ContractComponentInstance]]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
@@ -123,7 +134,7 @@ SOLIDITY = Language(
     code_explorer_prompt=CODE_EXPLORER_SYS_PROMPT,
 )
 
-EVM = Ecosystem(
+EVM: Ecosystem[SourceApplication] = Ecosystem(
     name="evm",
     language=SOLIDITY,
     system_model=SourceApplication,
@@ -141,5 +152,5 @@ EVM = Ecosystem(
 
 
 #: Registry of available ecosystems, keyed by chain tag. Solana/Soroban register here in
-#: later phases.
-ECOSYSTEMS: dict[ChainTag, Ecosystem] = {"evm": EVM}
+#: later phases. Heterogeneous in ``App`` (each chain has its own model), hence ``Ecosystem[Any]``.
+ECOSYSTEMS: dict[ChainTag, Ecosystem[Any]] = {"evm": EVM}
