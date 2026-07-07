@@ -386,6 +386,26 @@ class CallResolutionPhase:
         )
         await asyncio.gather(*(self._detect_proxy_for(h) for h in candidates))
 
+    def _resolve_implementation_handle(self, impl: ImplementationContract) -> ContractHandle:
+        """Resolve a proxy-detected implementation to a handle with a project-relative path,
+        using the compiled build index (keyed by contract name) as the single source of truth.
+
+        The proxy-detection agent's ``impl.source_file`` is an unreliable free-form string — its
+        search tools report absolute paths, so the value comes back absolute
+        (``/workspace/sources/contracts/X.sol``) or mis-prefixed (``sources/contracts/X.sol``
+        when the project root is ``/workspace/sources``). So we ignore the agent's path and resolve the file
+        authoritatively by contract name.
+        """
+        source = self.scope.signature_database.get_source_file_for_contract(impl.contract_name)
+        if source is None:
+            raise RuntimeError(
+                f"Proxy implementation {impl.contract_name!r} was not found in the compiled "
+                f"build index (proxy detection reported it at {impl.source_file!r}). It was not "
+                f"compiled, so its source file cannot be resolved — aborting rather than writing "
+                f"an unverified path into the conf."
+            )
+        return ContractHandle(impl.contract_name, self.scope.get_relative_path(source))
+
     async def _detect_proxy_for(self, handle: ContractHandle) -> None:
         """Per-contract proxy detection. The lock serializes the consolidated
         contract_extensions write since update_config_with_properties does top-level
@@ -419,7 +439,7 @@ class CallResolutionPhase:
         logger.info(f"{handle.contract_name} detected as {result.proxy_pattern} proxy")
 
         impl_handles = [
-            ContractHandle(impl.contract_name, impl.source_file)
+            self._resolve_implementation_handle(impl)
             for impl in result.implementations
         ]
 
