@@ -52,6 +52,7 @@ from composer.rustapp.host import (
     build_phase_enum,
     load_descriptor,
     load_module,
+    resolve_ecosystem,
     run_application,
     run_rust_pipeline,
 )
@@ -97,6 +98,7 @@ __all__ = [
     "build_phase_enum",
     "load_descriptor",
     "load_module",
+    "resolve_ecosystem",
     "run_application",
     "run_rust_pipeline",
     "EnvBuilder",

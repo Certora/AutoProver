@@ -31,7 +31,7 @@ from composer.pipeline.core import (
     PipelineRun,
     run_pipeline,
 )
-from composer.pipeline.ecosystem import EVM
+from composer.pipeline.ecosystem import ECOSYSTEMS, Ecosystem
 from composer.rustapp.adapter import FeedbackHook, ProverHook, RustBackend
 from composer.rustapp.descriptor import AppDescriptor, CoreSlot
 from composer.rustapp.result import RustFormalResult
@@ -48,6 +48,18 @@ def load_module(module_name: str) -> Any:
 def load_descriptor(module: Any) -> AppDescriptor:
     """Parse a module's ``descriptor()`` JSON into an :class:`AppDescriptor`."""
     return AppDescriptor.model_validate_json(module.descriptor())
+
+
+def resolve_ecosystem(descriptor: AppDescriptor) -> Ecosystem[Any]:
+    """Resolve the descriptor's declared ecosystem against the registry. Raises a clear
+    error if the chain isn't registered yet (e.g. Solana/Soroban land in later phases)."""
+    eco = ECOSYSTEMS.get(descriptor.ecosystem)
+    if eco is None:
+        raise ValueError(
+            f"application {descriptor.name!r} selects ecosystem {descriptor.ecosystem!r}, "
+            f"which is not registered. Available: {sorted(ECOSYSTEMS)}."
+        )
+    return eco
 
 
 def build_phase_enum(descriptor: AppDescriptor) -> type[enum.Enum]:
@@ -127,6 +139,7 @@ async def run_rust_pipeline(
     so the frontend's labels and the backend's phases share one enum object."""
     module = load_module(module_name)
     descriptor = load_descriptor(module)
+    ecosystem = resolve_ecosystem(descriptor)
     backend = build_backend(
         module, descriptor, source_input.project_root, prover=prover, feedback=feedback
     )
@@ -134,7 +147,7 @@ async def run_rust_pipeline(
         ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent)
     )
     return await run_pipeline(
-        backend, run, EVM, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+        backend, run, ecosystem, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
     )
 
 
@@ -158,7 +171,7 @@ async def run_application(
         ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent)
     )
     return await run_pipeline(
-        backend, run, EVM, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+        backend, run, app.ecosystem, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
     )
 
 
@@ -172,6 +185,7 @@ class RustApplication:
 
     descriptor: AppDescriptor
     module: Any
+    ecosystem: Ecosystem[Any]
     phase: type[enum.Enum]
     core_phases: CorePhases
     phase_labels: dict[Any, str]
@@ -202,6 +216,7 @@ def build_application(
     """Load a Rust wheel and synthesize a :class:`RustApplication`."""
     module = load_module(module_name)
     descriptor = load_descriptor(module)
+    ecosystem = resolve_ecosystem(descriptor)
     phase = build_phase_enum(descriptor)
     core = build_core_phases(descriptor, phase)
     ordered = descriptor.ordered_phases()
@@ -223,6 +238,7 @@ def build_application(
     return RustApplication(
         descriptor=descriptor,
         module=module,
+        ecosystem=ecosystem,
         phase=phase,
         core_phases=core,
         phase_labels=phase_labels,

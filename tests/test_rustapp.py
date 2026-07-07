@@ -217,3 +217,39 @@ def test_generic_tui_app_constructs():
         event_kinds={e.kind for e in app.descriptor.event_kinds},
     )
     assert tui is not None
+
+
+def test_descriptor_carries_ecosystem_and_resolves():
+    from composer.pipeline.ecosystem import EVM
+    from composer.rustapp.host import resolve_ecosystem
+
+    desc = AppDescriptor.model_validate_json(echoprover.descriptor())
+    assert desc.ecosystem == "evm"
+    assert resolve_ecosystem(desc) is EVM
+
+
+def test_build_application_carries_resolved_ecosystem():
+    from composer.pipeline.ecosystem import EVM
+
+    app = host.build_application("echoprover")
+    assert app.ecosystem is EVM
+
+
+def test_resolve_ecosystem_rejects_unregistered_chain():
+    from composer.rustapp.host import resolve_ecosystem
+
+    desc = AppDescriptor.model_validate_json(echoprover.descriptor())
+    # solana is a valid ChainTag but not registered until a later phase.
+    unregistered = desc.model_copy(update={"ecosystem": "solana"})
+    with pytest.raises(ValueError, match="not registered"):
+        resolve_ecosystem(unregistered)
+
+
+def test_descriptor_ecosystem_defaults_to_evm_when_absent():
+    # Wheels built before the field existed omit it; the mirror defaults to evm.
+    import json
+
+    raw = json.loads(echoprover.descriptor())
+    del raw["ecosystem"]
+    desc = AppDescriptor.model_validate(raw)
+    assert desc.ecosystem == "evm"

@@ -140,6 +140,7 @@ impl Application for EchoApp {
         AppDescriptor {
             name: "echoprover".to_string(),
             header_text: "Echo Prover (Rust demo) | AutoProver".to_string(),
+            ecosystem: "evm".to_string(),
             backend_tag: "echoprover".to_string(),
             backend_guidance: "These properties are checked by the echo backend, a demo that \
                 accepts any well-formed spec. Feel free to state universal properties."

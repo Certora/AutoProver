@@ -98,6 +98,11 @@ pub struct ArtifactLayout {
 pub struct AppDescriptor {
     pub name: String,
     pub header_text: String,
+    /// The ecosystem (chain) tag: "evm" | "solana" | "soroban". Selects the shared front
+    /// half's system model + prompts; the Python host resolves it against its ecosystem
+    /// registry. Defaults to "evm" so a descriptor built before this field existed still loads.
+    #[serde(default = "default_ecosystem")]
+    pub ecosystem: String,
     /// The report's backend tag (`AutoProverReport.backend`).
     pub backend_tag: String,
     /// Prose injected into the property-extraction prompt (verification-surface guidance).
@@ -112,6 +117,10 @@ pub struct AppDescriptor {
     #[serde(default)]
     pub event_kinds: Vec<EventKind>,
     pub artifact_layout: ArtifactLayout,
+}
+
+fn default_ecosystem() -> String {
+    "evm".to_string()
 }
 
 // ===========================================================================

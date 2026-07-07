@@ -373,17 +373,32 @@ The Solana/Soroban *backends* (formalization) are out of scope here — each plu
 
 ## 10. Phased plan
 
-1. **Extract `Language` + `Chain` + `EVM` (= `SOLIDITY ⊕ evm`), behavior-preserving.** Add
-   `composer/pipeline/ecosystem.py`; move the `SourceApplication` reference, template names,
-   `_validate_connectivity`, `main_instance`, and unit-enumeration into `EVM`, and the
-   `forbidden_read`/`code_explorer` defaults into `SOLIDITY`. Thread `ecosystem` through
-   `run_pipeline` / `run_component_analysis` / `run_property_inference`; default `EVM`. Prompts
-   stay monolithic for now (no fragment split yet). **Gate:** autoprove + foundry suites
-   unchanged; a golden-run diff is empty.
-2. **Add the `App` type parameter** to `PipelineBackend` / `SystemAnalysisSpec` so the
-   ecosystem↔backend pairing type-checks.
-3. **Wire selection into `rustapp`.** `AppDescriptor.ecosystem: ChainTag` (SDK + Python mirror) +
-   registry lookup in `host.py`.
+*Status: Phases 1–3 implemented on branch `eric/ecosystem-abstraction`.*
+
+1. ✅ **Done — Extract `Language` + `Chain` + `EVM` (= `SOLIDITY ⊕ evm`), behavior-preserving.**
+   Added `composer/pipeline/ecosystem.py`; moved the `SourceApplication` reference, template
+   names, `_validate_connectivity`, `main_instance`, and unit-enumeration into `EVM`, and the
+   `forbidden_read`/`code_explorer` defaults into `SOLIDITY`. Threaded `ecosystem` through
+   `run_pipeline` / `run_component_analysis` / `run_property_inference`. Prompts stay monolithic
+   (no fragment split yet). **Gate met:** the autoprove end-to-end integration test passes
+   identically on this commit and its pre-refactor parent (real Postgres + live prover), and EVM
+   reproduces the prior template names / validator / analysis front-matter verbatim.
+   > **Env note (orthogonal to the refactor):** running that gate surfaced a pre-existing solc
+   > provisioning issue — the Counter scenario pins `pragma ^0.8.29` but the environment's default
+   > `solc` was 0.8.21, so the prover couldn't compile it (manifesting as an "exhausted tape"). The
+   > fix is environmental (point `solc` at ≥0.8.29; versioned `solc8.29` was already present), not a
+   > tape re-record. Worth pinning a matching `solc` in the gate's prover config so it's robust.
+2. ✅ **Done — Add the `App` type parameter.** `PipelineBackend[P, FormT, H, A, App]` with
+   `prepare_system(analyzed: App)`; `Ecosystem` is generic over `App` (`EVM: Ecosystem[SourceApplication]`);
+   `run_pipeline` takes `ecosystem: Ecosystem[App]` explicitly and the Phase 1
+   `cast(SourceApplication, analyzed)` is gone. `SystemAnalysisSpec` was intentionally **not**
+   parameterized — it carries only `analysis_key` + `extra_input`, no `App`-typed member.
+   **Gate met:** pyright reports 0 errors on the touched files (pairing type-checks, no cast).
+3. ✅ **Done — Wire selection into `rustapp`.** `AppDescriptor.ecosystem: ChainTag` (Rust SDK,
+   default `"evm"`, + the Python mirror) and `resolve_ecosystem()` in `host.py` (registry lookup,
+   clear error for an unregistered chain), threaded through `build_application` /
+   `run_application` / `run_rust_pipeline` in place of the hardcoded `EVM`. **Gate met:** rustapp
+   tests + pyright green; only `evm` resolves for now (Solana/Soroban register in Phases 4–5).
 4. **Author the `RUST` language facet + the Solana chain.** `RUST` (Cargo `forbidden_read`, Rust
    `code_explorer` prompt, `rust/_failure_modes.j2`); introduce the fragment-composition
    convention (`property_prompt_base.j2` + `{% include %}`); `SolanaApplication` model, Solana

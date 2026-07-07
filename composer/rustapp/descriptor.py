@@ -13,6 +13,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+#: Ecosystem/chain tag. Mirrors ``composer.pipeline.ecosystem.ChainTag`` (kept local so this
+#: ABI-mirror module stays decoupled from the pipeline); the host resolves it against the
+#: ecosystem registry.
+ChainTag = Literal["evm", "solana", "soroban"]
+
 
 class CoreSlot(str, enum.Enum):
     """Which driver-tagged core phase a declared phase fills."""
@@ -72,6 +77,10 @@ class AppDescriptor(BaseModel):
 
     name: str
     header_text: str
+    #: The ecosystem (chain) whose system model / prompts the shared front half uses. The
+    #: host resolves it against ``composer.pipeline.ecosystem.ECOSYSTEMS``. Defaults to
+    #: ``"evm"`` so wheels built before this field existed keep working.
+    ecosystem: ChainTag = "evm"
     backend_tag: str
     backend_guidance: str
     analysis_key: str
