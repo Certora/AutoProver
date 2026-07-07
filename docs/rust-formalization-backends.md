@@ -68,7 +68,7 @@ Four properties of this boundary drive the entire design.
 Every real method is a coroutine, driven by `asyncio.create_task` /
 `asyncio.gather(..., return_exceptions=True)` in the driver
 ([core.py](../composer/pipeline/core.py)). PyO3 does not make Rust `async fn` visible to
-Python for free — see [§4](#4-the-async-problem-two-tiers).
+Python for free — see [§4](#4-the-async-problem-three-tiers).
 
 ### 2.2 The result type must stay cacheable
 
@@ -177,18 +177,39 @@ These are the same steps any new backend takes ([application-abstraction.md](./a
 
 ---
 
-## 4. The async problem, two tiers
+## 4. The async problem, three tiers
 
-Everything above assumes the Rust backend is **self-contained**: given its inputs, it
-produces a result without calling back into Python. That is Tier 1, and it is easy.
-Tier 2 — Rust that must `await` Python services mid-computation — is where the real
-additional work lives.
+Extensions **will** need LLM authoring loops — a backend that authors an artifact, runs a
+verifier, reads the feedback, and revises, turn after turn, is the whole point. That work
+is inherently a dance with async Python services (the LLM, the prover tool, the feedback
+judge, the cache). The naive way to give Rust that capability is to let Rust `await` Python
+coroutines directly — the full async FFI bridge. **We can avoid that**, because of one fact
+about how this codebase is already built.
+
+### 4.0 The enabling fact: the loop already separates *decide* from *do*
+
+The authoring loop is a langgraph `StateGraph` (`initial → tools ⇄ tool_result → __end__`),
+but underneath, every node is a **pure generator** ([graphcore/graph.py](../graphcore/graphcore/graph.py)):
+
+```python
+type PureFunctionGenerator[ResT] = Generator[list[AnyMessage], BaseMessage, ResT]
+```
+
+A node *yields* the messages it wants sent to the LLM and *receives* the reply via
+`.send()`. A tiny adapter, `_stitch_async_impl`, performs the one awaited effect
+(`res = await llm_impl(d)`) between the yield and the send. **The "decide next action" logic
+is already pure and synchronous; only the effect in the middle is async.** The routing
+predicates that end the loop — `should_end`, `ai_message_router`, `check_completion` —
+are ordinary side-effect-free functions of the state dict
+([cvl_generation.py](../composer/spec/cvl_generation.py)).
+
+That split is exactly what we relocate across the FFI boundary. Rust owns the pure decider;
+Python keeps owning the async effects. No bridge required.
 
 ### 4.1 Tier 1 — self-contained Rust (`asyncio.to_thread`)
 
-If the Rust `formalize` does its own verification (spawns a solver, shells out to a
-tool, computes an artifact) and only needs its inputs, the adapter wraps a **synchronous**
-Rust call in a thread:
+If the Rust work does its own thing (spawns a solver, shells out, computes an artifact) and
+needs no Python callbacks, the adapter wraps a **synchronous** Rust call in a thread:
 
 ```python
 async def formalize(self, label, feat, props, ctx, run) -> FormT | GaveUp:
@@ -202,74 +223,124 @@ async def formalize(self, label, feat, props, ctx, run) -> FormT | GaveUp:
 
 This is exactly the pattern the CVL backend already uses for its off-thread prover query
 ([formalization-abstraction.md §4.5](./formalization-abstraction.md)). No new
-infrastructure. **Prefer designing the Rust backend to fit here.**
+infrastructure. Good for pure computation, useless for an LLM loop.
 
-### 4.2 Tier 2 — Rust that calls back into async Python
+### 4.2 Tier 2 — inversion of control: Rust decides, Python does the I/O ⭐
 
-The moment the Rust backend wants to *reuse* the Python machinery mid-run — the LLM
-authoring loop, `run.runner(...)` for task tracking/telemetry, `ctx.cache_get/put`, the
-`verify_spec` prover tool, the `property_feedback_judge` agent — it must `await` Python
-coroutines from inside Rust. That is a genuine async FFI bridge, and it requires:
+**This is the recommended way to give an extension an LLM authoring loop.** It requires
+**no async bridge at all** — the FFI stays 100% synchronous.
 
-**A. An async runtime bridge — `pyo3-async-runtimes`.**
-This crate converts a Python awaitable into a Rust `Future` (`into_future`) and a Rust
-`Future` into a Python awaitable (`future_into_py`). The Rust `formalize` becomes an
-`async fn` exposed to Python as a coroutine:
+Python owns the async event loop and *every* effect (LLM call, prover run, feedback judge,
+cache). Rust is a **pure, synchronous state machine**. Python calls one sync FFI function,
+`resume(handle, observation) -> Command`; Rust decides the next action and returns a
+`Command`; Python performs that async effect and calls `resume` again with the outcome.
+This is the classic **sans-I/O** pattern, and it mirrors the `PureFunctionGenerator` split
+above one-to-one — the generator's `yield` becomes a returned `Command`, its `.send()`
+becomes the next `resume` argument.
+
+**The command vocabulary** (a closed enum, JSON across the wire) is read straight off the
+real loop's effects:
 
 ```rust
-#[pyfunction]
-fn formalize<'py>(py: Python<'py>, ctx: PyObject, payload: String) -> PyResult<Bound<'py, PyAny>> {
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        // ... Rust logic that awaits Python callbacks ...
-    })
+enum Command {                         // Rust → Python: "please perform this effect"
+    CallLlm      { messages: Json },   // an LLM turn (initial / tool_result node)
+    RunProver    { spec: String, config: Json, rules: Option<Vec<String>> },
+    RunFeedback  { spec: String, skipped: Json, rebuttals: Json },  // nested judge agent
+    CacheGet     { key: String },
+    CachePut     { key: String, value: Json },
+    Summarize    { messages: Json },   // history-compaction LLM turn
+    Publish      { result: Json },     // ⇒ FormT ; loop ends
+    GiveUp       { reason: String },   // ⇒ GaveUp ; loop ends
+}
+
+enum Observation {                     // Python → Rust: "here is the result"
+    LlmReply(Json), ProverResult(Json), FeedbackResult(Json),
+    Cached(Option<Json>), Ack, Start,
 }
 ```
 
-**B. A single, agreed event-loop/runtime pairing.** Python drives one asyncio loop; Rust
-drives a Tokio runtime. `pyo3-async-runtimes` must be initialized to marry the two
-(`tokio::init` + the current running loop). Every `await` of a Python callback re-acquires
-the GIL, so callbacks must be *coarse-grained* — one `await` per LLM turn, not per token.
-
-**C. A callback ABI — the "host services" trait.** Rather than let Rust reach into
-arbitrary Python objects, expose a **small, explicit Python shim** of just the services
-Rust needs, and hand it across as a `PyObject`. For example:
+The Python driver is a plain `while` loop with **no bridge, no Tokio, no `pyo3-async-runtimes`**:
 
 ```python
-class RustHostServices:                 # constructed by the adapter, passed into Rust
-    async def run_task(self, task_json: str) -> str: ...     # wraps run.runner(...)
-    async def cache_get(self, key: str) -> str | None: ...   # wraps ctx.cache_get
-    async def cache_put(self, key: str, val: str) -> None: ...
-    async def llm_author(self, prompt_json: str) -> str: ...  # wraps batch_cvl_generation
-    async def run_prover(self, conf_json: str) -> str: ...    # wraps the verify_spec tool
+async def formalize(self, label, feat, props, ctx, run) -> FormT | GaveUp:
+    handle = _rs.new_session(_marshal(feat, props, self._config))   # sync: build Rust state
+    obs = _rs.START
+    while True:
+        cmd = json.loads(_rs.resume(handle, obs))       # sync FFI: Rust decides
+        match cmd["kind"]:
+            case "call_llm":     obs = await self._llm(cmd["messages"])        # async, in PYTHON
+            case "run_prover":   obs = await self._verify_spec(cmd)            # async, in PYTHON
+            case "run_feedback": obs = await self._feedback_judge(cmd)         # async, in PYTHON
+            case "cache_get":    obs = await ctx.cache_get_raw(cmd["key"])     # async, in PYTHON
+            case "cache_put":    await ctx.cache_put_raw(cmd["key"], cmd["value"]); obs = _rs.ACK
+            case "publish":      return GeneratedRustResult.model_validate(cmd["result"])
+            case "give_up":      return GaveUp(reason=cmd["reason"])
 ```
 
-Rust holds this `PyObject`, calls a method, gets back a Python awaitable, and
-`into_future().await`s it. The ABI is **JSON strings in, JSON strings out** — no pydantic
-or deep graphs cross the FFI line even for callbacks.
+Because Python owns the loop, the extension inherits everything for free: `run.runner(...)`
+task/telemetry wrapping, the existing `verify_spec` prover tool, the
+`property_feedback_judge` sub-agent, the hierarchical cache, cancellation
+(`asyncio.CancelledError` just unwinds the Python loop), and structured-concurrency
+isolation under `gather(return_exceptions=True)`. Rust contributes only the *policy*: prompt
+construction, response interpretation, the validation-gate check, and the publish/give-up
+decision.
 
-**D. Cancellation and error semantics.** asyncio task cancellation must translate into
-Tokio cancellation (drop the future) and vice versa; a Python exception raised inside a
-callback surfaces as a Rust `PyErr` that the backend must either handle or propagate back
-out as a `PyErr` on the outer coroutine. This is the fiddliest part and needs explicit
-tests.
+**Ergonomics for the Rust author — two flavors:**
 
-**E. Structured-concurrency parity.** The driver relies on
-`asyncio.gather(..., return_exceptions=True)` treating a per-component failure as an
-isolated `ComponentOutcome`. A Tier-2 Rust backend spawning its own concurrent work must
-not let a Tokio task panic escape as a process abort; wrap task bodies so failures become
-`PyErr`, preserving the driver's isolation guarantee.
+- **Explicit state machine.** Author writes `fn resume(&mut self, obs) -> Command` over an
+  explicit state enum. Simple, zero dependencies, but verbose for a rich loop.
+- **Self-driven coroutine (recommended).** Author writes *linear, idiomatic* `async fn`
+  Rust, but `await`s custom `HostCall` futures whose leaf `poll` suspends a **Rust-owned,
+  single-threaded** executor and hands a `Command` out through `resume`. Python resumes by
+  feeding the `Observation` back in. The executor never leaves Rust and never touches
+  asyncio, so there is still **no cross-language async bridge** — it's a coroutine whose
+  "syscalls" happen to be Python async operations. This gives the write-it-linearly feel of
+  the full bridge at the cost of a ~200-line effect runtime, entirely in Rust.
 
-> **Recommendation.** Treat Tier 2 as a separate, later milestone. It roughly triples the
-> effort and the test surface. Most of the value (native-speed verification, fast artifact
-> transforms) is reachable at Tier 1 by keeping the Rust backend self-contained and doing
-> the LLM/tooling orchestration in the Python adapter. Adopt Tier 2 only when the Rust
-> side genuinely needs to *drive* the async services rather than be driven by them.
+**What Tier 2 must reproduce that langgraph gives for free:**
+
+- **State threading.** The loop state is a flat, reducer-merged dict — `curr_spec`,
+  `skipped`, `property_rules`, `validations: dict[str,str]`, `required_validations`,
+  `rule_skips`, `config`, `prover_link`, `messages` ([author.py](../composer/spec/source/author.py)).
+  Rust holds this as its session struct; each `Command`'s observation merges in exactly as
+  the langgraph reducers do today.
+- **The validation gates.** Publication is gated by `check_completion`: a content digest of
+  `(spec, skipped)` must match a stored digest for each of `required_validations`
+  (`["feedback","prover"]`), and **any spec edit invalidates both** by changing the digest.
+  Rust owns this predicate — it is pure — and only emits `Publish` when it passes; otherwise
+  it emits another `CallLlm` with the rejection reason, exactly as `PublishResultTool` does
+  today.
+- **A turn budget.** langgraph's `recursion_limit` bounds the loop; Rust owns the counter and
+  emits `GiveUp` when it's exhausted.
+- **Injection.** Today tools reach state/identity via langgraph `InjectedState` /
+  `InjectedToolCallId` and a `contextvars` runtime. Across FFI there is no ambient context —
+  the adapter passes what the effect needs explicitly in each `Command`.
+
+The one genuine constraint: **effects must be coarse-grained** — one `resume` per LLM turn
+or per tool call, not per token. That is already the loop's natural granularity, so it costs
+nothing here. Treat `RunFeedback` as a single opaque effect (Python runs the whole nested
+judge agent) rather than recursing the state machine.
+
+### 4.3 Tier 3 — the full async bridge (only if Rust must *drive*)
+
+If Rust must genuinely `await` Python coroutines from inside deeply nested Rust `async`
+code — e.g. it spawns its own concurrent Tokio tasks that each need to call Python
+mid-flight — then and only then do you need `pyo3-async-runtimes` (Python awaitable ↔ Rust
+`Future` via `into_future` / `future_into_py`), a pinned asyncio-loop ↔ Tokio-runtime
+pairing, two-way cancellation translation, and panic-isolation so a Tokio task abort
+doesn't kill the process. This roughly triples the effort and the test surface.
+
+> **Recommendation.** Deliver LLM authoring loops at **Tier 2** — inversion of control.
+> It gives extensions the full author→verify→revise loop with none of the bridge's cost,
+> and it fits the codebase's existing decide/do seam exactly. Reach for Tier 3 only if a
+> concrete backend must drive concurrent async Python from within Rust — a need none of the
+> current backends have.
 
 ---
 
 ## 5. Hypothetical: the CVL prover backend in Rust
 
-To make the two tiers concrete, here is how the CVL backend
+To make the tiers concrete, here is how the CVL backend
 ([formalization-abstraction.md §4](./formalization-abstraction.md)) *might* be structured
 in Rust. This is illustrative, not a proposal to rewrite it.
 
@@ -313,9 +384,9 @@ The CVL backend's heavy, self-contained steps are natural Rust:
   (`property_units()`, `artifact_text`, `output_link`) remain Python one-liners so the
   cache/report keep working.
 
-### 5.2 What forces Tier 2
+### 5.2 The authoring loop — Tier 2, inversion of control
 
-`formalize` for CVL is *not* self-contained. `batch_cvl_generation`
+`formalize` for CVL is the interesting case: it is *not* self-contained. `batch_cvl_generation`
 ([author.py](../composer/spec/source/author.py)) runs an **LLM agent graph to a fixpoint**,
 interleaving:
 
@@ -325,55 +396,70 @@ interleaving:
 - two hard validation gates (`PROVER_VALIDATION_KEY`, `FEEDBACK_VALIDATION_KEY`) before the
   agent may publish.
 
-A Rust `formalize` that *owned* this loop would need to `await` all of those Python
-services mid-computation — squarely Tier 2, needing the `RustHostServices` shim and the
-`pyo3-async-runtimes` bridge from [§4.2](#42-tier-2--rust-that-calls-back-into-async-python).
-Sketch:
+Under [§4.2](#42-tier-2--inversion-of-control-rust-decides-python-does-the-io-), Rust owns
+this loop as a **synchronous decider** while Python performs each async effect. The Rust
+side is a plain state machine over the same state the langgraph loop threads today:
 
 ```rust
-async fn formalize(host: HostServices, batch: Batch) -> Result<GaveUpOr<Cvl>, PyErr> {
-    let mut state = AuthorState::new(&batch);
-    loop {
-        let draft   = host.llm_author(&state.prompt()).await?;   // Python LLM turn
-        let prover  = host.run_prover(&draft.conf).await?;       // verify_spec tool
-        let feedback = host.judge_feedback(&draft, &prover).await?;
-        state.record(prover, feedback);
-        match state.gate() {
-            Gate::Publish(cvl) => return Ok(GaveUpOr::Value(cvl)),
-            Gate::GiveUp(reason) => return Ok(GaveUpOr::GaveUp(reason)),
-            Gate::Continue => {}                                  // loop again
-        }
+// Rust: a pure step function. No async, no PyO3 awaitables — just decide the next effect.
+fn resume(session: &mut Author, obs: Observation) -> Command {
+    match obs {
+        Observation::Start          => Command::CallLlm { messages: session.opening_prompt() },
+        Observation::LlmReply(msg)  => session.interpret(msg),   // draft edit? verify? publish?
+        Observation::ProverResult(r) => { session.record_prover(r); session.next() }
+        Observation::FeedbackResult(f) => { session.record_feedback(f); session.next() }
+        Observation::Cached(hit)    => session.after_cache(hit),
+        Observation::Ack            => session.next(),
+    }
+}
+
+// session.next() enforces the SAME publish gate check_completion does today:
+fn next(&mut self) -> Command {
+    if self.turns_left == 0 { return Command::GiveUp { reason: "turn budget exhausted".into() }; }
+    match self.gate() {                                  // digest(spec, skipped) vs required keys
+        Gate::NeedProver   => Command::RunProver { spec: self.spec(), config: self.conf(), rules: None },
+        Gate::NeedFeedback => Command::RunFeedback { spec: self.spec(), skipped: self.skipped(),
+                                                     rebuttals: self.rebuttals() },
+        Gate::Ready(res)   => Command::Publish { result: res },   // both digests fresh ⇒ publish
+        Gate::KeepAuthoring(reason) => Command::CallLlm { messages: self.reprompt(reason) },
     }
 }
 ```
 
-### 5.3 `prepare_formalization` — mixed
+The Python adapter's driver loop ([§4.2](#42-tier-2--inversion-of-control-rust-decides-python-does-the-io-))
+maps each `Command` onto the *existing* async services — `self._llm`, the real `verify_spec`
+tool, `property_feedback_judge`, `ctx.cache_*` — so Rust reuses all of them without ever
+awaiting. The validation gates stay in Rust because `check_completion` is already pure: a
+content digest of `(spec, skipped)` that must match a stored digest per `required_validation`,
+with any spec edit invalidating both. **No `pyo3-async-runtimes`, no Tokio, no bridge.**
+
+### 5.3 `prepare_formalization` — orchestration stays in Python
 
 CVL's `prepare_formalization` ([formalization-abstraction.md §4.2](./formalization-abstraction.md))
 runs AutoSetup ∥ summaries ∥ structural-invariant formulation concurrently, then generates
-`invariants.spec` once (with a cache short-circuit) and folds it into the resource set. The
-concurrency and cache calls are async Python service calls → Tier 2. The *invariant
-formulation logic* itself could be a Tier-1 Rust helper, but the orchestration is easiest
-left in the Python adapter.
+`invariants.spec` once (with a cache short-circuit) and folds it into the resource set. This
+is async orchestration of Python services — easiest left in the Python adapter. The
+invariant *formulation logic* (once it has its inputs) and the invariant CVL authoring can
+each be a Tier-1 helper or reuse the Tier-2 loop, but the `gather`/cache dance stays Python.
 
 ### 5.4 The pragmatic split
 
-A realistic first cut of a Rust CVL backend would be **hybrid**:
+A realistic Rust CVL backend would be **hybrid**:
 
-| Method | Where it lives |
-|---|---|
-| `prepare_system` (harness lift, prover-tool build) | Python adapter |
-| `prepare_formalization` (orchestration) | Python adapter; invariant formulation → Rust helper |
-| `formalize` (LLM authoring loop) | Python adapter **until** Tier 2 lands; then Rust owns the loop |
-| `fetch_verdicts` | **Rust** (Tier 1) |
-| `finalize` | **Rust** (Tier 1) |
-| artifact formatting (`.spec`/`.conf`) | **Rust** helper, Python `ArtifactStore` shell |
-| `GeneratedCVL` (`FormT`) | Python pydantic |
+| Method | Tier | Where it lives |
+| --- | --- | --- |
+| `prepare_system` (harness lift, prover-tool build) | — | Python adapter |
+| `prepare_formalization` (concurrency + cache orchestration) | — | Python adapter |
+| `formalize` **decider** (prompt policy, gate check, publish/give-up) | 2 | **Rust** state machine |
+| `formalize` **effects** (LLM, `verify_spec`, feedback judge, cache) | 2 | Python adapter loop |
+| `fetch_verdicts` (prover-output parse → verdicts) | 1 | **Rust** |
+| `finalize` (run-link map) | 1 | **Rust** |
+| artifact formatting (`.spec`/`.conf`) | 1 | **Rust** helper, Python `ArtifactStore` shell |
+| `GeneratedCVL` (`FormT`) | — | Python pydantic |
 
-That captures the native-speed wins (verdict parsing, artifact assembly, invariant
-computation) without paying for the async bridge, and leaves the LLM-orchestration loop —
-the part that fundamentally *is* a dance with async Python services — for a deliberate
-Tier-2 milestone.
+Every native-speed win (verdict parsing, artifact assembly, and now the authoring *policy*
+itself) lands in Rust, and the LLM authoring loop works end-to-end — all without the Tier-3
+async bridge.
 
 ---
 
@@ -393,34 +479,57 @@ Tier-2 milestone.
 - Wiring: `run_<rust>_pipeline`, CLI entry, widen `ReportBackend`.
 - Tests: cache hit/miss round-trips, `GaveUp` path, exception → `ComponentOutcome`.
 
-### Phase 2 — async callback bridge (Tier 2, only if needed)
+### Phase 2 — the LLM authoring loop via inversion of control (Tier 2)
+
+This is the milestone that unlocks the capability extensions actually need. **No async
+bridge.**
+
+- Define the `Command` / `Observation` JSON enums (the effect vocabulary of one turn).
+- Rust: the `new_session` / `resume` sync FFI pair — the pure decider, holding the
+  loop state (`curr_spec`, `skipped`, `validations`, `rule_skips`, `config`, turn counter),
+  with the `check_completion` digest gate reproduced in Rust.
+- Python: the adapter driver loop mapping each `Command` onto the *existing* async services
+  (`self._llm`, `verify_spec`, `property_feedback_judge`, `ctx.cache_*`).
+- Decide the Rust-author ergonomics: ship the explicit-state-machine API first; add the
+  self-driven-coroutine effect runtime if authors want linear code.
+- Tests: a full author→verify→feedback→publish trace; gate staleness on spec edit;
+  turn-budget give-up; `CancelledError` unwinds cleanly.
+
+### Phase 3 — full async bridge (Tier 3, only if a backend must *drive*)
 - Adopt `pyo3-async-runtimes`; pin the asyncio-loop/Tokio-runtime pairing.
-- Define and stabilize the `RustHostServices` JSON ABI (task-run, cache, LLM, prover).
-- Implement cancellation + error propagation both directions; test cancellation storms.
+- Two-way cancellation translation; panic isolation so a Tokio abort ≠ process abort.
 - Verify structured-concurrency parity (per-component isolation under
   `gather(return_exceptions=True)`).
 
 ### Cross-cutting
+
 - Build/CI: cross-platform abi3 wheels, `uv` source wiring, reproducible Rust toolchain.
-- Docs: fold the final ABI into [formalization-abstraction.md §9](./formalization-abstraction.md)'s
-  "new backend" checklist.
+- Docs: fold the final `Command`/`Observation` ABI and the marshalling schemas into
+  [formalization-abstraction.md §9](./formalization-abstraction.md)'s "new backend" checklist.
 
 ---
 
 ## 7. Open questions
 
-1. **Do we actually need Tier 2?** If the target Rust backends are self-contained
-   verifiers, we may never pay for the async bridge. This should be decided per concrete
-   backend, not up front.
-2. **Wheel vs mixed build** — does any consumer need `ai-composer` itself to remain a pure
+1. **Do we ever need Tier 3?** Tier 2 (inversion of control) delivers the LLM authoring
+   loop with no bridge. Tier 3 only pays off if a concrete backend must drive concurrent
+   async Python from within Rust — decide per backend, not up front.
+2. **Rust-author ergonomics for Tier 2** — ship the explicit `resume` state machine, or
+   invest in the self-driven-coroutine effect runtime so authors write linear `async` Rust?
+   Start with the former; graduate to the latter only if the loops get complex enough to
+   warrant it.
+3. **Wheel vs mixed build** — does any consumer need `ai-composer` itself to remain a pure
    sdist-installable package? If so, the separate-wheel path is mandatory.
-3. **ABI stability** — the `RustHostServices` / marshalling JSON schemas become a
-   versioned contract between the wheel and `ai-composer`. Where does that schema live, and
-   how is it version-checked at load time?
-4. **Observability** — the driver's `run.runner(TaskInfo(...))` wrapping is what gives
-   per-task telemetry/UI rows. A Tier-1 Rust method invoked via `asyncio.to_thread` still
-   sits inside one `runner` task (good); a Tier-2 backend spawning its own work needs to
-   route sub-tasks back through `run_task` to stay visible in the TUI.
+4. **ABI stability** — the `Command`/`Observation` enums and the marshalling JSON schemas
+   become a versioned contract between the wheel and `ai-composer`. Where does that schema
+   live, and how is it version-checked at load time?
+5. **Effect granularity** — the IoC loop assumes one `resume` per turn/tool-call. Is any
+   effect an extension might want finer-grained than that (e.g. streaming LLM tokens)? If so
+   it must still be batched to a turn boundary, or it forces Tier 3.
+6. **Observability** — the driver's `run.runner(TaskInfo(...))` wrapping gives per-task
+   telemetry/UI rows. A Tier-1 Rust method invoked via `asyncio.to_thread` still sits inside
+   one `runner` task (good); a Tier-2 loop's per-turn effects should each be wrapped by the
+   Python adapter in `run.runner(...)` so they stay visible in the TUI.
 
 ---
 
@@ -432,8 +541,9 @@ Tier-2 milestone.
 | Result protocols (`FormalResult`, `ArtifactIdentifier`) | [composer/spec/types.py](../composer/spec/types.py) |
 | `ReportableResult`, `Verdict`, `collect` | [composer/spec/source/report/collect.py](../composer/spec/source/report/collect.py) |
 | CVL backend (reference for the sketch) | [composer/spec/source/pipeline.py](../composer/spec/source/pipeline.py) |
-| CVL authoring loop (Tier-2 driver) | [composer/spec/source/author.py](../composer/spec/source/author.py) |
-| CVL result type (`FormT`) | [composer/spec/cvl_generation.py](../composer/spec/cvl_generation.py) |
+| CVL authoring loop + completion tools (`batch_cvl_generation`, `PublishResultTool`) | [composer/spec/source/author.py](../composer/spec/source/author.py) |
+| `PureFunctionGenerator` decide/do seam + graph topology (the IoC precedent) | [graphcore/graphcore/graph.py](../graphcore/graphcore/graph.py) |
+| `check_completion` validation-gate predicate + loop state (`FormT`, gate digest) | [composer/spec/cvl_generation.py](../composer/spec/cvl_generation.py) |
 | Foundry backend (simplest backend to copy) | [composer/foundry/pipeline.py](../composer/foundry/pipeline.py) |
 | `ReportBackend` literal to widen | [composer/spec/source/report/collect.py](../composer/spec/source/report/collect.py) |
 | Packaging | [pyproject.toml](../pyproject.toml) |
