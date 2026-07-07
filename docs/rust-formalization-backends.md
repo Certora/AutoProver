@@ -9,7 +9,9 @@
 > defines the backend seam this leans on, and
 > [application-abstraction.md](./application-abstraction.md), which covers how a backend
 > is wired into a runnable application. Read the formalization doc first — this document
-> assumes its vocabulary (`FormT`, `Formalizer`, `PreparedSystem`, the phase chain).
+> assumes its vocabulary (`FormT`, `Formalizer`, `PreparedSystem`, the phase chain). For
+> the *rest* of the vertical around a Rust backend — phase enum, entry point, frontend,
+> `main()` — see [rust-applications.md](./rust-applications.md).
 
 ---
 
