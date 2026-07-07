@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceCode
 from composer.spec.cvl_generation import GeneratedCVL
@@ -130,12 +131,29 @@ class ProverArtifactStore(ArtifactStore):
         out_dir = ensure_dir(self._internal_dir())
         (out_dir / "components_to_prover_runs.json").write_text(json.dumps(runs, indent=2))
 
+    def _report_dir(self) -> Path:
+        """The ap_report deliverable dir (``certora/ap_report``), created on demand."""
+        return ensure_dir(under_project(self._project_root, AP_REPORT_DIR))
+
     def write_report(self, report: AutoProverReport) -> None:
         """The autoprove final report to ``certora/ap_report/report.json``."""
-        report_dir = ensure_dir(under_project(self._project_root, AP_REPORT_DIR))
-        out = report_dir / "report.json"
+        out = self._report_dir() / "report.json"
         out.write_text(report.model_dump_json(indent=2) + "\n")
         _log.info("autoprove report: wrote %s", out)
+
+    def write_job_info(self, summary: RunSummary, *, user_id: str) -> None:
+        """The run's identity + usage manifest — ``user_id``, ``run_id``, and the
+        ``token_usage`` / ``prover_usage`` summaries — to ``certora/ap_report/job_info.json``.
+        ``user_id`` is passed in so this stays a pure serializer of run state."""
+        payload = {
+            "user_id": user_id,
+            "run_id": summary.run_id,
+            "token_usage": summary.token_usage_summary(),
+            "prover_usage": summary.prover_usage_summary(),
+        }
+        out = self._report_dir() / "job_info.json"
+        out.write_text(json.dumps(payload, indent=2) + "\n")
+        _log.info("autoprove job info: wrote %s", out)
 
 
 class ProverSourceCode(SourceCode):
