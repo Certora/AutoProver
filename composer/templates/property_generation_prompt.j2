@@ -115,6 +115,38 @@ within the generated summary, match the callee contract against known implemente
 For those callees, simply dispatch the call to the relevant implementation. For calls "outside" of the prover
 inputs, fall back on a sound model of the external behavior, using e.g., ghosts.
 
+### Math-Heavy Properties
+
+<math_properties>
+When formalizing properties about arithmetic-heavy code (mulDiv, WAD/RAY fixed-point math, share/asset
+conversions), prefer *relational* properties over rules that mirror the implementation's exact formula:
+
+* monotonicity (e.g., depositing more assets never mints fewer shares),
+* bounds (e.g., a fee never exceeds the amount it is charged on),
+* round-trip inequalities (e.g., `withdraw(deposit(x)) <= x`),
+* additivity up to rounding (e.g., `f(a) + f(b) <= f(a + b)` for round-down math),
+* zero-preservation (e.g., converting zero assets yields zero shares).
+
+A rule that just re-computes the implementation's formula in CVL only proves the code matches its own
+source text; the relational forms capture the *intent* (no value creation, rounding favors the protocol)
+and are far easier on the solver.
+
+If the prover *times out* on a property because of exact nonlinear formulas, do NOT weaken or skip the
+property. Instead, summarize the underlying math function (e.g., `mulDiv`) with the relational
+abstractions from the CVLMathAbstract.spec resource (see the resources list, when available): the
+`...Abstract` variants replace the nonlinear formula with solver-friendly axioms (zero-preservation,
+exactness at the denominator, monotonicity, down/up rounding within 1) that suffice to prove relational
+properties. The exact `...Summary` models (faithful rounding and revert behavior) live in the Math.spec
+summaries resource; use those by default and switch to the `...Abstract` variants only on timeout.
+
+Be aware that the `...Abstract` constraints are imposed with `require`-based axioms and do not model the
+overflow revert: a rule whose other assumptions contradict the axioms is silently pruned rather than
+reported (potential vacuity). Prefer them for relational properties, avoid relying on them under
+`satisfy` (a witness drawn from an over-constrained model proves nothing), and treat a SANITY_FAILURE
+that first appears after adopting them as a sign the axioms conflict with your rule's assumptions rather
+than a code bug.
+</math_properties>
+
 ## Step 4
 
 Once all non-skipped properties have been approved by the feedback judge, AND all rules that are not expected

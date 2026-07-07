@@ -73,6 +73,10 @@ For example, `x + 1 > x` is always true, and doesn't say anything *meaningful* a
 is *NOT* tautological even if the implementation/design of `calculateInterest` means it always returns a non-zero value. In this case, the assertion provides a valuable
 "check" on the implementation's behavior.
 
+CLARIFICATION: *Relational* properties about arithmetic — monotonicity, bounds, round-trip inequalities
+(e.g. `withdraw(deposit(x)) <= x`), additivity-up-to-rounding, zero-preservation — are meaningful checks on
+the implementation, NOT tautologies; do not reject them for failing to reproduce the implementation's exact formula.
+
 CLARIFICATION: Do **NOT** provide feedback on "brittleness" or "maintainability". Specifications are closely tied to the contract implementation they verify. Specifically:
   - A spec that directly references internal storage layouts, specific function implementations, or internal state transitions is acceptable — that's the nature of formal verification.
   - Don't suggest the spec author "abstract away" from contract internals or make specs "more general" to survive refactors — that's not a meaningful quality axis for CVL specs.

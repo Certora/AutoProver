@@ -152,6 +152,9 @@ include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
 
 [tool.setuptools.package-data]
 composer = ["templates/*.j2", "scripts/init-db.sql"]
+# Static CVL assets (composer/spec/assets/) the pipeline copies into generated
+# projects; resolved via importlib.resources, so they must ship with the wheel.
+"composer.spec.assets" = ["*.spec"]
 # Bundled CVL summaries, spec templates, mocks and conf templates the prover
 # reads directly off disk; ship them with the wheel.
 certora_autosetup = [
