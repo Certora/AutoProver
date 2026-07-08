@@ -22,9 +22,8 @@ from composer.spec.cvl_generation import (
     PropertyFeedbackProtocol,
 )
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
-from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
+from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
 from composer.spec.types import PropertyFormulation
-from composer.pipeline.core import GaveUp
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
 from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
 from langgraph.graph import MessagesState
@@ -480,6 +479,24 @@ class SourceEditing:
     store: EditStore
 
 
+class _LastAttemptEdits(BaseModel):
+    """Sibling of cvl_generation's last-attempt draft cache: the applied-edit
+    history at snapshot time. The working copy itself is deliberately not
+    stored — the author's vfs only ever changes wholesale to an edit-store
+    snapshot, so it is always recoverable as ``store[version_history[-1]].vfs``.
+
+    Written on the same exit path as the draft cache but *after* it (the inner
+    ``finally`` runs first), so a crash between the two puts can leave a fresh
+    draft paired with stale history. Accepted risk: that resume degrades to
+    the pre-snapshot behavior (a draft referencing edits that were not
+    restored), and the window is two consecutive store puts.
+    """
+    version_history: list[str]
+
+
+LAST_ATTEMPT_EDITS_KEY = CacheKey[CVLGeneration, _LastAttemptEdits]("last_attempt_edits")
+
+
 @dataclass(frozen=True)
 class _LiveJudgeHost:
     """Judge construction surface for the editing pipeline: RAG tools plus the
@@ -627,25 +644,56 @@ async def batch_cvl_generation(
         PropertyGenerationConfig(source_editing=editing is not None)
     ).compile_async()
 
-    res_state = await run_cvl_generator(
-        ctx = ctx,
-        d = task_graph,
-        description=description,
-        in_state=SourceCVLGenerationInput(
-            curr_spec=None,
-            config=init_config,
-            spec_stem=spec_stem,
-            input=[],
-            required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
-            rule_skips={},
-            skipped=[],
-            property_rules=[],
-            validations={},
-            failed=None,
-            vfs={},
-            version_history=[]
+    # Crash recovery for the working copy, sibling to cvl_generation's draft
+    # recovery: restore the applied-edit history and rehydrate the vfs from the
+    # durable edit store. Independent of whether a draft snapshot exists — a
+    # crash after edits but before any draft still restores the fork.
+    restored_history: list[str] = []
+    restored_vfs: dict[str, str] = {}
+    resume_note: list[str] = []
+    if editing is not None:
+        prior = await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_get(_LastAttemptEdits)
+        if prior is not None and prior.version_history:
+            tail = await editing.store.read(prior.version_history[-1])
+            assert tail is not None, (
+                f"recovered edit {prior.version_history[-1]} absent from the edit store"
+            )
+            restored_history = prior.version_history
+            restored_vfs = tail.vfs
+            resume_note = [
+                "Source edits applied during your previous attempt at this task have "
+                "been restored to your working copy; use `edit_history_log` to review them."
+            ]
+
+    try:
+        res_state = await run_cvl_generator(
+            ctx = ctx,
+            d = task_graph,
+            description=description,
+            in_state=SourceCVLGenerationInput(
+                curr_spec=None,
+                config=init_config,
+                input=resume_note,
+                required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
+                rule_skips={},
+                skipped=[],
+                property_rules=[],
+                validations={},
+                failed=None,
+                vfs=restored_vfs,
+                version_history=restored_history
+            )
         )
-    )
+    finally:
+        if editing is not None:
+            last_state = (
+                await task_graph.aget_state({"configurable": {"thread_id": ctx.thread_id}})
+            ).values
+            hist = last_state.get("version_history")
+            if hist is not None:
+                await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_put(
+                    _LastAttemptEdits(version_history=list(hist))
+                )
 
     assert "result" in res_state
     assert res_state["failed"] is not None
