@@ -53,18 +53,37 @@ class JudgeSystemParams(TypedDict):
 # ``sort == "existing"``, the only mode that wires those tools).
 FeedbackSystemTemplate = TypedTemplate[JudgeSystemParams]("property_judge_system_prompt.j2")
 
+
+def _bind_harness_augmentation(
+    prompt: TemplateInstantiation, harness_augmentation: bool
+) -> TemplateInstantiation:
+    """Inject the ``harness_augmentation`` flag into an already-instantiated template bind.
+
+    Both judge templates gate their harness-skip policy on this variable; injecting it
+    from the single ``property_feedback_judge`` parameter into BOTH binds is what keeps
+    the system prompt and Criteria 7 in agreement. The templates' ``default(false)`` is
+    a render fail-safe only, never the mechanism that decides the value.
+    """
+    return TemplateInstantiation(
+        prompt.template,
+        {**prompt.args, "harness_augmentation": harness_augmentation},
+    )
+
+
 def property_feedback_judge(
     ctx: WorkflowContext[CVLJudge],
     env: ServiceHost,
     prompt: InjectedTemplate[Properties] | TemplateInstantiation,
     props: list[PropertyFormulation],
     *,
+    harness_augmentation: bool = False,
     extra_inputs: list[str | dict] | Callable[[], list[str | dict]] | None = None,
     system_prompt: TemplateInstantiation | None = None,
 ) -> FeedbackToolContext:
 
     if system_prompt is None:
         system_prompt = FeedbackSystemTemplate.bind({"sort": env.sort})
+    system_prompt = _bind_harness_augmentation(system_prompt, harness_augmentation)
 
     builder = env.builder_heavy().with_tools(
         env.all_tools
@@ -88,7 +107,10 @@ def property_feedback_judge(
 
     mem = ctx.get_memory_tool()
 
-    final_prompt = prompt if isinstance(prompt, TemplateInstantiation) else prompt.inject({"properties": props})
+    final_prompt = _bind_harness_augmentation(
+        prompt if isinstance(prompt, TemplateInstantiation) else prompt.inject({"properties": props}),
+        harness_augmentation,
+    )
 
     workflow = bind_standard(
         builder, ST, validator=did_rough_draft_read
@@ -118,7 +140,16 @@ def property_feedback_judge(
         if skipped:
             input_parts.append("The following properties were explicitly skipped by the author:")
             for s in skipped:
-                input_parts.append(f"  Property {s.property_title}: {s.reason}")
+                # The author's self-classification is part of the skip's justification:
+                # Criteria 7 tells the judge to audit access-shaped reasons categorized
+                # as anything but storage_access as storage_access anyway.
+                input_parts.append(
+                    f"  Property {s.property_title} (reason category: {s.reason_category}): {s.reason}"
+                )
+                # The alternatives the author claims to have ruled out are part of the skip's
+                # justification: surface them so the judge can audit their substance.
+                for alt in s.alternatives_considered:
+                    input_parts.append(f"    Alternative considered: {alt}")
         if rebuttals:
             input_parts.append(
                 "The author has filed the following rebuttals against feedback from "

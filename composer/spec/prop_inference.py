@@ -88,8 +88,15 @@ Prover:
 
 1. Attack vectors or invariants that reference off-chain events (like
    key compromising, phishing, etc.)
-2. Reasoning about hash function behavior or hash collisions (e.g.,
-   "invalid signatures should be rejected")
+2. Reasoning about hash function *collisions or inversion* (e.g.,
+   "invalid signatures should be rejected"). NB: this exclusion is
+   narrow. `keccak256` is a built-in CVL function, and storage-slot
+   constants derived from it (ERC-7201 namespaces, EIP-1967 proxy
+   slots, `keccak256(name) - 1` patterns) are compile-time constants
+   that can be precomputed and hooked via `Sload`/`Sstore` slot hooks.
+   Unstructured storage is likewise reachable via such hooks or via
+   harness getters. NEVER reject a property merely because the state
+   it references lives in keccak-derived storage slots.
 3. Event emission (not impossible, simply difficult and tedious)
 
 In addition, due to the advent of checked arithmetic, properties that

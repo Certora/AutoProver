@@ -20,12 +20,29 @@
 {% endwith %}
 
 {% if sort != "greenfield" %}
-## No Source Changes
+## No Protocol Source Changes
 
-Do NOT provide any feedback suggesting the Solidity code under verification (including verification harnesses)
-be modified. The Solidity code under verification is *immutable* and cannot be changed. If the only feedback you can provide
-involves changing the source code, do *NOT* provide that feedback, it is *INVALID*.
+Do NOT provide any feedback suggesting the *protocol* Solidity code under verification be modified. The protocol
+code is *immutable* and cannot be changed. If the only feedback you can provide involves changing the protocol
+source code, do *NOT* provide that feedback, it is *INVALID*.
 
 Note that this includes rejecting property skipping with feedback to the effect of "change the code". If the only way to formalize
-and prove a property is to change the source code, then skipping that property *IS* acceptable.
+and prove a property is to change the *protocol* source code, then skipping that property *IS* acceptable.
+
+Verification *harnesses* (contracts under `certora/harnesses/`) are NOT protocol code: they are verification
+infrastructure, existing precisely to expose state and behavior the protocol does not surface publicly.
+{# harness_augmentation is injected by property_feedback_judge (composer/spec/feedback.py) into both
+   this template's bind and property_judge_prompt.j2's bind from one function parameter, so the two
+   templates always agree. It is set only by pipelines that can actually (re)generate main-contract
+   augmentation harnesses; default(false) keeps the demand-wording a no-op as a render fail-safe. #}
+{% if harness_augmentation | default(false) %}
+If a property is skipped only because state or behavior is not publicly exposed, do NOT accept the skip as
+"not expressible in CVL". Instead, demand a harness augmentation (an external view getter or a thin wrapper
+under `certora/harnesses/`) that exposes the needed state, and reject the skip until the property has been
+attempted against the augmented harness.
+{% else %}
+If a property is skipped only because state or behavior is not publicly exposed, you must label the skip as
+"missing harness support, not CVL inexpressibility" in your feedback — do NOT endorse claims that such
+properties are beyond CVL's expressiveness.
+{% endif %}
 {% endif %}

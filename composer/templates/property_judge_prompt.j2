@@ -177,14 +177,57 @@ Verify that the specification covers all {{ properties | length }} listed proper
   perform your own research (or examine any CVL Document references cited in their skip)
   and critically examine their claims about CVL expressivity when evaluating the skip.
 
+  Before accepting ANY skip justified as "not expressible in CVL" — in particular one claiming that state is
+  private, unstructured, keccak-addressed, or lacks a getter — you must verify that NONE of the following
+  mechanisms make the property expressible:
+  (a) a precomputed keccak storage-slot constant (`keccak256` is a built-in CVL function; ERC-7201 namespaces
+      and EIP-1967 slots are compile-time constants) combined with an `Sload`/`Sstore` hook on that slot;
+  (b) a harness getter or direct storage access (e.g., `currentContract.<field>`);
+  (c) ghost state mirroring the value via storage hooks or function summaries.
+
+  The author self-classifies each skip with a reason category (shown alongside the skip): if the
+  reason is access-shaped — state described as private, unstructured, keccak-addressed, or lacking
+  a getter — but categorized as anything other than `storage_access`, audit it as `storage_access`
+  anyway, running the full mechanism checklist above; the category is the author's claim, not a fact.
+{# harness_augmentation is injected by property_feedback_judge (composer/spec/feedback.py) into both
+   this template's bind and property_judge_system_prompt.j2's bind from one function parameter, so
+   the two templates always agree; default(false) is a render fail-safe only. Only pipelines that
+   can (re)generate main-contract augmentation harnesses may instruct the judge to reject
+   harness-shaped skips; everywhere else (the false default)
+   such skips are accepted with the "missing harness support" label the system prompt mandates.
+   Greenfield is checked first because harness pipelines (and the immutability rule the fallback
+   compensates for) only exist for pre-existing source: the greenfield author shapes the stub's API
+   themselves, so a missing getter is never a capability gap there. #}
+{% if sort == "greenfield" %}
+  If any of these mechanisms applies, reject the skip and name the applicable mechanism. There is no
+  pre-existing implementation here: the author defines the contract API through the stub, so a skip
+  claiming state lacks a getter is invalid — reject it and advise exposing the state through a getter
+  in the stub.
+{% elif harness_augmentation | default(false) %}
+  If any of these mechanisms applies, reject the skip and name the applicable mechanism.
+{% else %}
+  If mechanism (a) or (c) applies, or (b) applies via direct storage access, reject the skip and name the
+  applicable mechanism. If the property is expressible ONLY through a new harness getter or wrapper —
+  a mechanism that cannot be generated in this pipeline — do NOT reject the skip on those grounds;
+  accept it, but label it as "missing harness support, not CVL inexpressibility". Never endorse a claim
+  that such a property is beyond CVL's expressiveness.
+{% endif %}
+
   *Exception*: if the author has filed an empirical rebuttal (see Step 1) against a prior-round
   formalization you proposed, accept that rebuttal per the Step 1 evaluation rules — do not
   re-insist on the same proposal. If the rebuttal establishes that no working formalization was
   found, the skip is VALID on the grounds that your prior proposal proved unworkable.
 {% if sort != "greenfield" %}
-  If the property being skipped could be formalized with Solidity code changes, the skip is VALID. Do *NOT* reject
-  skips with advice to change the Solidity code. The Solidity code is *IMMUTABLE* and suggestions to change the Solidity
-  code are INVALID.
+  If the property being skipped could be formalized only with *protocol* Solidity code changes, the skip is VALID.
+  Do *NOT* reject skips with advice to change the protocol Solidity code. The *protocol* Solidity code is
+  *IMMUTABLE* and suggestions to change the protocol code are INVALID. Verification *harnesses* (contracts under
+  `certora/harnesses/`) are NOT protocol code:
+  {% if harness_augmentation | default(false) %}
+  needing a harness getter or wrapper (mechanism (b) above) does NOT make a skip valid under this rule.
+  {% else %}
+  a skip needing only a harness getter or wrapper is NOT validated by this rule — it falls under the
+  "missing harness support" labeling above.
+  {% endif %}
 {% endif %}
 
 **Array quantification limitation**: The Certora Prover cannot universally quantify over

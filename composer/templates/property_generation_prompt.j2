@@ -115,6 +115,27 @@ within the generated summary, match the callee contract against known implemente
 For those callees, simply dispatch the call to the relevant implementation. For calls "outside" of the prover
 inputs, fall back on a sound model of the external behavior, using e.g., ghosts.
 
+<storage_access>
+Never conclude that contract state is "unreachable" (and never skip a property on that basis) merely because
+the state lives in keccak-derived storage slots (ERC-7201 namespaced storage, EIP-1967 proxy slots,
+`keccak256(name) - 1` patterns) or lacks a public getter. `keccak256` is a built-in CVL function, and these
+slots are compile-time constants. The available mechanisms are:
+
+* **Slot-constant `definition`s**: compute the concrete 32-byte slot value *once* (from the constant declared
+  in the source, or by evaluating the keccak expression yourself) and bind it with a CVL `definition`, e.g.,
+  `definition IMPLEMENTATION_SLOT() returns uint256 = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;`
+* **`Sload`/`Sstore` hooks**: hook reads/writes of the storage in question to observe or constrain its value.
+  For state reached through named storage paths, use the named-path hook patterns with `KEY`, e.g.,
+  `hook Sstore _balances[KEY address user] uint256 newVal { ... }`.
+* **Ghost mirroring**: declare a ghost variable updated by an `Sstore` hook (and constrained by the matching
+  `Sload` hook), then reference the ghost in your rules/invariants.
+* **Harness getters**: as a fallback, if the verification setup includes harness contracts, their external
+  view getters expose otherwise-private/unstructured state directly.
+
+Before concluding that any state is unreachable, search the knowledge base for "keccak storage slot" and
+"unstructured storage hook" — these entries document the exact hook grammar and worked examples.
+</storage_access>
+
 ## Step 4
 
 Once all non-skipped properties have been approved by the feedback judge, AND all rules that are not expected
