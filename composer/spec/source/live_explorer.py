@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import PurePath
 from typing_extensions import TypedDict
 from typing import Annotated, Callable, Awaitable, cast, NotRequired
 
@@ -139,6 +140,16 @@ remain true, you may reuse (in part or in whole) the existing answer as you woul
 an up-to-date answer.
 """
 
+def _prover_output_dirs(p: PurePath) -> bool:
+    """Globally exclude prover outputs from the live tool surface AND the
+    materializer: they are never compilation inputs, and copying prior runs'
+    ``.certora_internal`` / ``emv-*`` trees into each prover-run
+    materialization would be enormously wasteful."""
+    return bool(p.parts) and (
+        p.parts[0] == ".certora_internal" or p.parts[0].startswith("emv-")
+    )
+
+
 def setup_live_edits(
     builder: Builder[None, None, None],
     sc: SourceCode,
@@ -158,14 +169,16 @@ def setup_live_edits(
     read_tools, mat = vfs_tools({
         "forbidden_read": sc.forbidden_read,
         "fs_layer": sc.project_root,
-        "immutable": True
+        "immutable": True,
+        "global_exclude": _prover_output_dirs,
     }, VFSState)
 
     write_tools, _ = vfs_tools({
         "forbidden_read": sc.forbidden_read,
         'forbidden_write': r'^.+\.spec$',
         "immutable": False,
-        "fs_layer": sc.project_root
+        "fs_layer": sc.project_root,
+        "global_exclude": _prover_output_dirs,
     }, VFSState)
 
     d = (

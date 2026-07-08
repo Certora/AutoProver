@@ -12,15 +12,16 @@ import asyncio
 import json
 import logging
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, asynccontextmanager, ExitStack, nullcontext
 from pathlib import Path
 from typing import (
-    Annotated, Any, AsyncIterator, Callable, Iterator, Mapping, override,
-    AsyncContextManager, cast,
+    Annotated, AsyncIterator, Callable, Iterator, override, AsyncContextManager,
 )
 from typing_extensions import TypedDict, NotRequired
 
 from graphcore.tools.vfs import VFSAccessor, VFSState
+
+from composer.spec.source.live_explorer import VersionedHistory
 
 from langchain_core.tools import InjectedToolCallId, tool, BaseTool
 from langgraph.prebuilt import InjectedState
@@ -91,10 +92,20 @@ class ProverStateExtra(TypedDict):
     # Basename the spec is materialized/persisted under (e.g. "autospec_<slug>").
     # NotRequired so other ProverStateExtra injectors (e.g. config_edit) needn't set it.
     spec_stem: NotRequired[str]
+    # The author's working copy of the source under verification; verify_spec runs
+    # against its materialization when non-empty (see ProjectDirectory). Absent/empty
+    # outside the editing-enabled pipeline. No merge op intentionally: the vfs is
+    # only ever replaced wholesale (commit_edit / revert_to_edit).
+    vfs: NotRequired[dict[str, str]]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
-class StateWithSkips(CVLGenerationState, ProverStateExtra):
+# ``verify_spec`` only runs in the source pipeline, whose state always seeds
+# ``version_history`` — permanently empty in phases without the edit tools
+# (structural invariants, never-edited authors), in which case it contributes
+# nothing to the digest. The prover's validation stamp is bound to it so a
+# post-run edit invalidates the stamp.
+class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory):
     pass
 
 class _SpecCallbacks(ProverEventCallbacks):
@@ -236,14 +247,22 @@ def materializing_project(
 ) -> ProjectDirectory:
     """The editing strategy: an empty VFS runs in-situ; a non-empty VFS is
     materialized over the project into a temporary directory that lives for
-    the duration of the run."""
+    the duration of the run. The copy (and the teardown) run in a worker
+    thread — materializing a whole project is blocking IO that would
+    otherwise stall every concurrently-streaming batch."""
     @asynccontextmanager
     async def provide(vfs: dict[str, str]) -> AsyncIterator[str]:
         if not vfs:
             yield project_root
             return
-        with accessor.materialize({"vfs": vfs}) as tmp:
+        stack = ExitStack()
+        tmp = await asyncio.to_thread(
+            stack.enter_context, accessor.materialize({"vfs": vfs})
+        )
+        try:
             yield tmp
+        finally:
+            await asyncio.to_thread(stack.close)
     return provide
 
 def get_prover_tool(
@@ -320,10 +339,16 @@ def get_prover_tool(
                 if rules is None and all_verified:
                     return tool_state_update(
                         tool_call_id=tool_call_id, content=result.result_str,
-                        prover_link=result.link, validations=stamper(state),
+                        prover_link=result.link,
+                        validations=stamper(state, state["version_history"]),
                     )
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
                 )
+
+        # The author's working copy decides where this run executes; see
+        # ProjectDirectory.
+        async with project_directory(state.get("vfs") or {}) as run_root:
+            return await run_in(run_root)
 
     return verify_spec

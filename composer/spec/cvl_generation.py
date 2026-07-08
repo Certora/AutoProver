@@ -9,7 +9,7 @@ Parameterized by:
 import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Annotated, Callable, Literal, NotRequired, override, Awaitable, Any, Protocol
+from typing import Annotated, Callable, Literal, NotRequired, Sequence, override, Awaitable, Any, Protocol
 from typing_extensions import TypedDict
 
 from pydantic import BaseModel, Field
@@ -176,22 +176,34 @@ class CVLGenerationExtra(TypedDict):
     required_validations: list[str]
 
 
-def _compute_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
+def _compute_digest(
+    curr_spec: str,
+    skipped: list[SkippedProperty],
+    version_history: Sequence[str] = (),
+) -> str:
+    """Digest of everything a validation stamp vouches for: the spec, the skip
+    set, and — in the editing-enabled source pipeline — the applied-edit
+    history, so a stamp earned before a source edit goes stale with it.
+    Pipelines without source editing pass no history and hash identically to
+    before."""
     digester = hashlib.md5()
     digester.update(curr_spec.encode())
     for s in skipped:
         digester.update(f"{s.property_title}:{s.reason}".encode())
+    for edit_id in version_history:
+        digester.update(f"edit:{edit_id}".encode())
     return digester.hexdigest()
 
 
 def check_completion(
     state: CVLGenerationExtra,
+    version_history: Sequence[str] = (),
 ) -> str | None:
     """Returns None if valid, error string if not."""
     spec = state["curr_spec"]
     if spec is None:
         return "Completion REJECTED: no spec written yet."
-    digest = _compute_digest(spec, state["skipped"])
+    digest = _compute_digest(spec, state["skipped"], version_history)
     validations = state["validations"]
     required = state["required_validations"]
     for key in required:
@@ -244,16 +256,20 @@ def validate_property_rules(
     return None
 
 
-def make_validation_stamper(key: str) -> Callable[[CVLGenerationExtra], dict[str, str]]:
+def make_validation_stamper(
+    key: str,
+) -> Callable[[CVLGenerationExtra, Sequence[str]], dict[str, str]]:
     """Create a stamper for future prover tool integration.
 
-    The stamper reads curr_spec/skipped from state and returns
-    a dict suitable for merging into the validations state key.
+    The stamper reads curr_spec/skipped from state — plus the caller's
+    applied-edit history — and returns a dict suitable for merging into the
+    validations state key.
     """
-    def stamp(state: CVLGenerationExtra) -> dict[str, str]:
+    def stamp(state: CVLGenerationExtra, version_history: Sequence[str]) -> dict[str, str]:
         return {key: _compute_digest(
             state["curr_spec"] or "",
             state["skipped"],
+            version_history,
         )}
     return stamp
 
@@ -326,6 +342,13 @@ class FeedbackToolBase[ST: CVLGenerationState](WithInjectedState[ST], WithInject
         extra context (if any) rides along with the invocation."""
         ...
 
+    @abstractmethod
+    def _version_history(self) -> Sequence[str]:
+        """The applied-edit history a good verdict's stamp is bound to, so the
+        stamp goes stale if the source is edited afterwards. Pipelines without
+        source editing return ()."""
+        ...
+
     async def run(self) -> Command:
         st = self.state
         spec = st["curr_spec"]
@@ -335,7 +358,7 @@ class FeedbackToolBase[ST: CVLGenerationState](WithInjectedState[ST], WithInject
         t = await self._get_feedback(spec, skipped)
         msg = f"Good? {t.good}\nFeedback {t.feedback}"
         if t.good:
-            digest = _compute_digest(spec, skipped)
+            digest = _compute_digest(spec, skipped, self._version_history())
             return tool_state_update(
                 self.tool_call_id, msg,
                 validations={FEEDBACK_VALIDATION_KEY: digest},
@@ -356,6 +379,10 @@ class VanillaFeedbackTool(
     ) -> PropertyFeedbackProtocol:
         with self.tool_deps() as svc:
             return await svc.feedback_thunk(spec, skipped, self.rebuttals, self.tool_call_id)
+
+    @override
+    def _version_history(self) -> Sequence[str]:
+        return ()
 
 @tool_display(
     lambda p: f"Skipping property `{p.get('property_title', '?')}`",

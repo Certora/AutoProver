@@ -1,4 +1,4 @@
-from typing import NotRequired, override, Literal, Annotated
+from typing import NotRequired, Sequence, override, Literal, Annotated
 from typing_extensions import TypedDict
 import json
 
@@ -51,8 +51,11 @@ from graphcore.graph import FlowInput
 class SourceAuthorExtra(TypedDict):
     failed: bool | None
 
+# ``vfs`` comes from ProverStateExtra (NotRequired, no merge op — replaced
+# wholesale by commit_edit / revert_to_edit); the generation input always
+# seeds it explicitly.
 class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, VersionedHistory):
-    vfs: dict[str, str] # no merge op intentionally, vfs is only ever replaced wholesale
+    pass
 
 class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):
     pass
@@ -121,7 +124,7 @@ class PublishResultTool(
 
     @override
     async def run(self) -> Command | str:
-        if (err := check_completion(self.state)) is not None:
+        if (err := check_completion(self.state, self.state["version_history"])) is not None:
             return err
         with self.tool_deps() as titles:
             if (err := validate_property_rules(self.property_rules, self.state["skipped"], titles)) is not None:
@@ -514,11 +517,16 @@ class EditorAwareFeedbackTool(
         self, spec: str, skipped: list[SkippedProperty]
     ) -> PropertyFeedbackProtocol:
         with self.tool_deps() as judge:
+            assert "vfs" in self.state
             snap = SourceSnapshot(
                 vfs=self.state["vfs"],
                 version_history=self.state["version_history"],
             )
             return await judge(snap, spec, skipped, self.rebuttals, self.tool_call_id)
+
+    @override
+    def _version_history(self) -> Sequence[str]:
+        return self.state["version_history"]
 
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
@@ -535,7 +543,7 @@ async def batch_cvl_generation(
     source: SourceCode,
     spec_dir: Path,
     spec_stem: str,
-    editing: "SourceEditing | None",
+    editing: SourceEditing | None,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
@@ -657,6 +665,7 @@ async def batch_cvl_generation(
             ))
     # Persist the base prover config and last run link from the final state so a later cache
     # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
+    assert "vfs" in res_state
     return GeneratedCVL(
         commentary=res_state["result"],
         cvl=d,
