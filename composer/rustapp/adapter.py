@@ -19,7 +19,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable, override
 
 from composer.pipeline.core import (
@@ -31,6 +33,7 @@ from composer.pipeline.core import (
     SystemAnalysisSpec,
     main_instance,
 )
+from composer.rustapp.command import DEFAULT_TIMEOUT_S, run_local_command
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.loop import Effects, GaveUp as LoopGaveUp, drive_session
 from composer.rustapp.result import RustArtifact, RustFormalResult
@@ -63,11 +66,18 @@ class RealEffects:
         *,
         prover: ProverHook | None = None,
         feedback: FeedbackHook | None = None,
+        command_sem: asyncio.Semaphore | None = None,
+        command_timeout_s: int = DEFAULT_TIMEOUT_S,
     ):
         self._ctx = ctx
         self._run = run
         self._prover = prover
         self._feedback = feedback
+        self._command_sem = command_sem
+        self._command_timeout_s = command_timeout_s
+        # Per-formalize workdir for RunCommand effects (a session materializes its
+        # crate once and runs several commands against it). Created lazily.
+        self._workdir: Path | None = None
         # Loop-scratch cache (within one formalize). Cross-run persistence is the
         # driver's result-level cache, keyed by formalized_type — not this.
         self._scratch: dict[str, Any] = {}
@@ -98,6 +108,26 @@ class RealEffects:
                 "was supplied to RealEffects."
             )
         return await self._feedback(spec, skipped, rebuttals)
+
+    def _ensure_workdir(self) -> Path:
+        # Lazily create a per-formalize scratch workdir. Left on disk (under the OS
+        # temp dir) for post-run inspection; sandbox/cleanup is phase 6 (§7.4).
+        if self._workdir is None:
+            self._workdir = Path(tempfile.mkdtemp(prefix="autoprover-cmd-"))
+        return self._workdir
+
+    async def run_command(
+        self, program: str, args: list[str], files: dict[str, str]
+    ) -> dict:
+        result = await run_local_command(
+            program,
+            args,
+            files,
+            workdir=self._ensure_workdir(),
+            timeout_s=self._command_timeout_s,
+            sem=self._command_sem,
+        )
+        return result.as_observation()
 
     async def cache_get(self, key: str) -> Any | None:
         return self._scratch.get(key)

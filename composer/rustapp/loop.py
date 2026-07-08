@@ -49,6 +49,14 @@ class Effects(Protocol):
         """Run the verifier over ``spec``; return a backend-shaped result dict."""
         ...
 
+    async def run_command(
+        self, program: str, args: list[str], files: dict[str, str]
+    ) -> dict:
+        """Materialize ``files`` into the session workdir, run ``program args`` there
+        (no shell), and return ``{exit_code, stdout, stderr}``. The command line is the
+        decider's; only file *contents* may be LLM-derived."""
+        ...
+
     async def run_feedback(self, spec: str, skipped: Any, rebuttals: Any) -> dict:
         """Run the feedback judge; return a backend-shaped result dict."""
         ...
@@ -100,6 +108,18 @@ async def drive_session(
                 command["spec"], command.get("skipped"), command.get("rebuttals")
             )
             observation = {"kind": "feedback_result", "data": data}
+        elif kind == "run_command":
+            result = await effects.run_command(
+                command["program"],
+                command.get("args") or [],
+                command.get("files") or {},
+            )
+            observation = {
+                "kind": "command_result",
+                "exit_code": result.get("exit_code", -1),
+                "stdout": result.get("stdout", ""),
+                "stderr": result.get("stderr", ""),
+            }
         elif kind == "cache_get":
             value = await effects.cache_get(command["key"])
             observation = {"kind": "cached", "value": value}

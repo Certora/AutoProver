@@ -204,6 +204,14 @@ pub enum Observation {
     FeedbackResult { data: serde_json::Value },
     /// The value read from the cache (`None` on miss).
     Cached { value: Option<serde_json::Value> },
+    /// The result of a `RunCommand` effect: the process's exit code and captured
+    /// streams. Python has already materialized the requested files, run the
+    /// command (no shell), and captured its output.
+    CommandResult {
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+    },
     /// Acknowledgement of a fire-and-forget effect (`CachePut`, `Emit`).
     Ack,
 }
@@ -222,6 +230,24 @@ pub enum Command {
         config: serde_json::Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rules: Option<Vec<String>>,
+    },
+    /// General effect: materialize `files` (workdir-relative path → contents) into
+    /// this session's workdir, then run `program` with `args` there — as a child
+    /// process, never through a shell. Yields [`Observation::CommandResult`].
+    ///
+    /// The **command line is authored by this decider**, not the LLM: `program`
+    /// and `args` come from the backend's own compiled logic; only file *contents*
+    /// may derive from LLM output (see `docs/crucible-application.md` §7.2). Python
+    /// enforces exec-not-shell + workdir path-confinement, and (once built) runs it
+    /// inside the sandbox (§7.4). Any backend that gates artifacts with a local CLI
+    /// (Crucible, `cargo build-sbf`, `anchor idl`, …) uses this rather than the
+    /// prover-specific `RunProver`.
+    RunCommand {
+        program: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        files: BTreeMap<String, String>,
     },
     /// Run the feedback judge.
     RunFeedback {
