@@ -1,0 +1,106 @@
+<background>
+You are performing a security review of a single instruction of a Solana program, in the context
+of a larger audit effort.
+</background>
+
+<inputs>
+{% include "solana/instruction_context.j2" %}
+</inputs>
+
+{% if prior_properties %}
+<prior_properties>
+You are running iteratively. {{ prior_properties | length }} prior round(s) have already analyzed
+this instruction. Their findings and reasoning are below. The properties listed here MUST NOT be
+re-proposed — including reframings of the same underlying claim as a different sort. Your task this
+round is to surface security properties that prior rounds *missed*.
+
+{% for round_result in prior_properties %}
+### Round {{ loop.index }} extracted properties:
+{% for p in round_result.items %}
+- [{{ p.sort }}] `{{ p.title }}`: {{ p.description }}
+{% endfor %}
+
+### Round {{ loop.index }} reasoning:
+{{ round_result.reasoning }}
+
+{% endfor %}
+
+Treat the prior rounds' reasoning as the authoritative record of what has been considered. If a
+prior round is silent on an angle, that angle is fair game. If the meaningful surface is already
+covered, returning an empty list is the right answer.
+</prior_properties>
+{% endif %}
+
+<task>
+Input: {% if sort != "greenfield" %}the Rust/Anchor implementation of a Solana program{% else %}a design document for a Solana program{% endif %}, and a description of one instruction of it.
+Output: a list of "security properties".
+
+Follow these steps exactly:
+
+## Step 1
+
+Analyze the provided {% if sort != "greenfield" %}implementation{% else %}design{% endif %} and instruction description and formulate a set of security
+properties that are PLAUSIBLE for this instruction. Each description must be precise and concise.
+
+Security properties fall into three categories:
+
+1. **Invariants** — representational invariants that should always hold for the program's accounts/state.
+   Good: "The vault's token balance always equals the sum of all depositors' recorded shares."
+   Good: "A config PDA's `admin` field is only ever the key that signed the last `set_admin`."
+   Bad: "The accounts should be correct" (overly broad).
+
+2. **Safety properties** — concrete statements about what should not be possible in a correct program.
+   These SHOULD include intended-normal-behavior properties, not only immediately-security-critical ones.
+   Good: "Only the account stored in `vault.authority` (and it must sign) can call `withdraw`."
+   Good: "`initialize` can succeed at most once for a given config PDA."
+   Good: "A `deposit` credits the signer's own share account and no other."
+   Bad: "A user should not be able to hack the program" (overly broad).
+
+3. **Attack vectors** — plausible issues/edge cases exploitable to the protocol's detriment. You do
+   NOT need evidence they exist, only that they are PLAUSIBLE given the {% if sort != "greenfield" %}implementation{% else %}design{% endif %}.
+   Good: "If `vault` is an `UncheckedAccount` whose owner is not checked, an attacker can pass a
+   look-alike account they control and redirect the withdrawal."
+   Good: "If the `authority` account is not constrained to sign, anyone can invoke `withdraw` as
+   the authority (missing signer check)."
+   Good: "If the fee PDA's `bump` is taken from the instruction rather than re-derived, an attacker
+   can substitute a different PDA."
+   Bad: "The program could be exploited somehow" (overly broad).
+
+When reasoning about attack vectors and the checks each account requires, consider these failure modes:
+
+{% include "rust/_failure_modes.j2" %}
+
+{% include "solana/_failure_modes.j2" %}
+
+{{ backend_guidance }}
+
+NB: you do **NOT** need to formalize the properties yourself; limit your analysis to properties that
+can reasonably be formalized by the downstream verification tool.
+
+## Step 2
+Write a rough-draft list of your properties using the `write_rough_draft` tool.
+
+## Step 3
+Review your rough draft. For each property, confirm it meets the Step-1 guidelines — a clear
+violation consequence, non-trivial, plausibly verifiable. Drop anything you cannot defend.
+
+## Step 4
+Output the results using the result tool.
+</task>
+
+<guidance>
+  {% if sort != "greenfield" %}
+  <hard_requirement>
+     Derive invariants and safety properties from first principles — what the program SHOULD
+     guarantee — relying as little as possible on what the code CURRENTLY does.
+  </hard_requirement>
+  {% endif %}
+  <hard_requirement>
+    You need not prove a safety property/invariant definitely holds — only that it, with extreme
+    likelihood, SHOULD hold for a correct implementation.
+  </hard_requirement>
+  <reminder>
+     For attack vectors you need not find evidence the issue exists — only that it is plausible
+     given the instruction and its {% if sort != "greenfield" %}implementation{% else %}design{% endif %}.
+  </reminder>
+</guidance>

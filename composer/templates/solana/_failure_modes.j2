@@ -1,0 +1,30 @@
+Solana platform failure modes (the account/PDA/CPI model — reason about these specifically):
+
+- **Missing signer check.** An instruction that mutates state or moves value on behalf of an
+  authority but never checks that authority `is_signer` (or omits the Anchor `Signer<'info>` /
+  `has_one` / `#[account(signer)]` constraint) lets anyone act as that authority.
+- **Missing owner check.** An account deserialized as a program type without verifying its
+  `owner` is the expected program lets an attacker substitute a look-alike account they created
+  under a program they control (`UncheckedAccount` / `AccountInfo` without checks is the smell;
+  Anchor `Account<'info, T>` checks owner, raw does not).
+- **Account substitution / confused deputy.** Two accounts that must be related (e.g. a vault and
+  its authority, a token account and its mint/owner) but whose relationship is not constrained
+  (`has_one`, `constraint = a.key() == b.x`, `address = ...`) let an attacker pass a mismatched
+  pair — draining a different user's vault, minting to the wrong mint, etc.
+- **Unvalidated PDA seeds / bump.** A PDA account not re-derived and checked against its expected
+  `seeds` + canonical `bump` lets an attacker pass an arbitrary account in its place; a mutable
+  bump or non-canonical bump enables collisions/hijacking.
+- **Arbitrary CPI / program substitution.** Invoking a program taken from an unchecked account
+  (not pinned to a known program id) lets an attacker redirect the CPI to malicious code; missing
+  checks on the callee for token/system operations.
+- **Signer-seed / authority misuse in CPI.** A PDA that signs a CPI (`invoke_signed`) with seeds
+  an attacker can influence, or over-broad authority, lets value move without proper authorization.
+- **Lamport / rent draining & account close bugs.** Manual lamport transfers that don't preserve
+  rent exemption, or `close` handling that doesn't zero data / send to the right account, enable
+  reinitialization attacks or fund theft.
+- **Duplicate mutable accounts.** Passing the same account twice where the program assumes two
+  distinct accounts (e.g. `from`/`to`) can double-count or bypass a balance check.
+- **Missing reinitialization / init guards.** An `init`-like path callable twice, or state that
+  can be re-initialized after close, resets ownership/config.
+- **Sysvar / clock spoofing.** Reading a sysvar (clock, rent) from a passed account rather than the
+  canonical sysvar lets an attacker forge time/rent values.
