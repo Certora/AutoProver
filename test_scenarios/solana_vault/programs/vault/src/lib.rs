@@ -3,13 +3,15 @@
 //! A user creates a vault (a PDA) with themselves as the authority, deposits lamports into it,
 //! and later withdraws. Only the vault's authority may withdraw. Illustrative — not audited.
 
+#![allow(unexpected_cfgs)]
 use anchor_lang::prelude::*;
-use anchor_lang::system_program;
+use anchor_lang::prelude::program::invoke;
+use anchor_lang::solana_program::system_instruction;
 
-declare_id!("Vau1t1111111111111111111111111111111111111");
+declare_id!("BdmwBcVB95UpLzXFwqRnbeJBsrMDLKB4sgJb123oxUoj");
 
 #[program]
-pub mod vault {
+pub mod vault_program {
     use super::*;
 
     /// Create a vault PDA owned by `authority`. Fails if the vault already exists.
@@ -23,15 +25,17 @@ pub mod vault {
 
     /// Deposit `amount` lamports from the depositor into the vault PDA.
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
-        system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                system_program::Transfer {
-                    from: ctx.accounts.depositor.to_account_info(),
-                    to: ctx.accounts.vault.to_account_info(),
-                },
+        invoke(
+            &system_instruction::transfer(
+                &ctx.accounts.depositor.key(),
+                &ctx.accounts.vault.key(),
+                amount,
             ),
-            amount,
+            &[
+                ctx.accounts.depositor.to_account_info(),
+                ctx.accounts.vault.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
         )?;
         let vault = &mut ctx.accounts.vault;
         vault.balance = vault.balance.checked_add(amount).ok_or(VaultError::Overflow)?;
