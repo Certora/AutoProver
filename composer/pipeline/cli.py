@@ -1,4 +1,4 @@
-from typing import Protocol, AsyncIterator
+from typing import Protocol, AsyncIterator, TYPE_CHECKING
 import sys
 import pathlib
 import enum
@@ -34,7 +34,9 @@ from composer.core.user import user_data_ns, get_uid
 from composer.spec.source.design_doc_finder import (
     resolve_design_doc, DESIGN_DOC_DISCOVERY_TASK_ID, discovery_cache_key
 )
-from sentence_transformers import SentenceTransformer
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+
 from composer.spec.util import FS_FORBIDDEN_READ
 import hashlib
 
@@ -105,7 +107,7 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
 class StagedPipeline:
     conns: IndexedConnections
     llm_models: ModelProvider
-    embed_model: SentenceTransformer
+    embed_model: "SentenceTransformer"
     source: SourceCode
     logger: RunDataLogger
     root_key: str
