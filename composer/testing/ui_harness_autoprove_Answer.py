@@ -18,7 +18,7 @@ import json
 
 from langchain_core.messages import AIMessage, BaseMessage
 
-from composer.testing.harness_tape import HarnessFakeLLM
+from composer.testing.harness_tape import HarnessFakeLLM, install_fake_llm
 
 # task_id -> ordered list of recorded AIMessage responses (pydantic model_dump JSON).
 _TAPE_JSON = r"""
@@ -793,14 +793,12 @@ def get_autoprove_Answer_llm() -> HarnessFakeLLM:
 
 
 def install_harness_tape() -> HarnessFakeLLM:
-    """Monkeypatch create_llm / create_llm_base so the pipeline receives the fake.
+    """Route the pipeline's models to the Answer tape's fake LLM.
     composer/bind.py calls this when COMPOSER_TEST_TAPE=autoprove_Answer is set."""
     fake = get_autoprove_Answer_llm()
     import composer.spec.agent_index as a_ind
     a_ind._UNSAFE_DISABLE_CACHE = True
-    import composer.workflow.services as services
-    services.create_llm = lambda args: fake
-    services.create_llm_base = lambda args: fake
+    install_fake_llm(fake)
     return fake
 
 

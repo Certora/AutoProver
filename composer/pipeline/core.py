@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task, ConversationContextProvider
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import (
-    WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode,
+    WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode, SourceFields
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
@@ -42,90 +42,9 @@ from composer.spec.source.report.collect import ReportableResult, ReportComponen
 from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
+from .ptypes import *
 
 _log = logging.getLogger(__name__)
-
-class BackendResult(FormalResult, ReportableResult, Protocol):
-    ...
-
-
-class GaveUp(BaseModel):
-    """The single, unified give-up signal (replaces the two structurally-identical copies in
-    spec.source.author and foundry.author)."""
-    reason: str
-
-
-# ---- run-scoped shared infra, handed to every hook ---------------------------
-@dataclass
-class PipelineRun[P: enum.Enum, H]:
-    ctx: WorkflowContext[None]
-    env: ServiceHost
-    source: SourceCode
-    _handler_factory: HandlerFactory[P, H]
-    _semaphore: asyncio.Semaphore
-
-    async def runner[T](
-        self,
-        task_info: TaskInfo[P],
-        job: Callable[[], Awaitable[T]] | Callable[[ConversationContextProvider], Awaitable[T]],
-    ) -> T:
-        return await run_task(
-            factory=self._handler_factory,
-            fn=job,
-            info=task_info,
-            semaphore=self._semaphore
-        )
-
-
-class CorePhases[P: enum.Enum](TypedDict):
-    """The backend maps its own phase enum onto the three core phases the driver tags."""
-    analysis: P
-    extraction: P
-    formalization: P
-    report: P
-
-
-@dataclass(frozen=True)
-class SystemAnalysisSpec:
-    """The backend's contribution to the shared analysis call. The analyzed type is always
-    SourceApplication (the prover's harnessed lift is its prepare_system, not analysis)."""
-    analysis_key: str
-    extra_input: list[str | dict] = field(default_factory=list)
-
-
-@dataclass
-class BackendJob:
-    feat: ContractComponentInstance
-    props: list[PropertyFormulation]
-
-@dataclass(frozen=True)
-class Delivered[FormT: BackendResult]:
-    """A successful formalization and the project-relative path it was persisted to. The path exists
-    only because the result does, so the two travel together rather than as independent fields."""
-    result: FormT
-    deliverable: Path
-
-    @property
-    def unit_file(self) -> str:
-        # The verdict-disambiguation key (file, unit_name), never displayed; must match what the
-        # verdict fetchers emit — the prover's is `Path(loc.file).name` (basename) — so basename,
-        # not the full project-relative path.
-        return self.deliverable.name
-
-    @property
-    def run_link(self) -> str | None:
-        return self.result.output_link
-
-@dataclass
-class ComponentOutcome[FormT: BackendResult](BackendJob):
-    result: Delivered[FormT] | GaveUp | BaseException
-
-@dataclass
-class CorePipelineResult[FormT: BackendResult]:
-    n_components: int
-    n_properties: int
-    outcomes: list[ComponentOutcome[FormT]]
-    failures: list[str]
 
 @dataclass
 class Formalizer[FormT: BackendResult](ABC):

@@ -5,7 +5,8 @@ Covers the three layers of the feature:
   * **Accumulation** — :class:`RunSummary` per-model totals, per-task attribution
     folded into :class:`PhaseRecord`, ``total_tokens``, and the ``_format_summary``
     token block.
-  * **Serialization** — ``ProverArtifactStore.write_token_usage`` JSON shape.
+  * **Summary / persistence** — ``RunSummary.token_usage_summary`` JSON shape and its
+    persistence into the run's data_ns (``token_usage`` key).
   * **Wiring** — the ``UsageCallback`` attached at model construction fires on both
     ``.invoke`` and ``.ainvoke`` (including through a bound derivative), records into
     the active ``RunSummary``, and attributes to the active task. Driven by a fake
@@ -19,7 +20,6 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
-import composer.diagnostics.timing as timing_mod
 from composer.diagnostics.timing import (
     RunSummary,
     TokenTotals,
@@ -27,19 +27,8 @@ from composer.diagnostics.timing import (
     set_current_task_id,
 )
 from composer.diagnostics.usage_callback import UsageCallback
-from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.source.autosetup import read_autosetup_usage
 from graphcore.utils import TokenUsageDict
-
-
-@pytest.fixture(autouse=True)
-def _isolate_run_summary():
-    """Keep the run-summary context var from leaking between tests."""
-    tok = timing_mod._run_summary.set(None)
-    try:
-        yield
-    finally:
-        timing_mod._run_summary.reset(tok)
 
 
 def _usage(model: str, i: int, o: int, cr: int, cw: int) -> TokenUsageDict:
@@ -98,25 +87,8 @@ def test_format_summary_omits_token_block_when_no_usage():
 
 
 # --------------------------------------------------------------------------- #
-# Serialization
+# Summary shape / data_ns persistence
 # --------------------------------------------------------------------------- #
-
-def test_dump_token_usage_shape(tmp_path):
-    s = RunSummary()
-    with set_current_task_id("t1"):
-        s.record_token_usage(_usage("opus", 100, 10, 5, 2))
-    s.record_phase(task_id="t1", label="t1", phase="p", wall_s=1.0, queue_wait_s=0.0)
-
-    ProverArtifactStore(str(tmp_path), "Token").write_token_usage(s)
-    out = tmp_path / ".certora_internal" / "autoProve" / "token_usage.json"
-    data = json.loads(out.read_text())
-
-    assert data["run_id"] == s.run_id
-    assert data["totals"] == {"input": 100, "output": 10, "cache_read": 5, "cache_write": 2}
-    assert data["by_model"]["opus"]["input"] == 100
-    assert data["by_phase"][0]["task_id"] == "t1"
-    assert data["by_phase"][0]["phase"] == "p"
-
 
 def test_token_usage_summary_shape():
     s = RunSummary()
@@ -151,16 +123,6 @@ async def test_token_usage_persisted_to_run_meta_tags():
     token_usage = item.value
     assert token_usage["totals"] == {"input": 100, "output": 10, "cache_read": 5, "cache_write": 2}
     assert token_usage["by_model"] == {"opus": {"input": 100, "output": 10, "cache_read": 5, "cache_write": 2}}
-
-
-def test_dump_token_usage_empty_run(tmp_path):
-    """A run with no LLM calls still writes a well-formed (zeroed) file."""
-    s = RunSummary()
-    ProverArtifactStore(str(tmp_path), "Token").write_token_usage(s)
-    data = json.loads((tmp_path / ".certora_internal" / "autoProve" / "token_usage.json").read_text())
-    assert data["totals"] == {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
-    assert data["by_model"] == {}
-    assert data["by_phase"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -262,27 +224,27 @@ def _write_autosetup_usage(
 
 def test_read_autosetup_usage_returns_token_usage_dicts(tmp_path):
     _write_autosetup_usage(tmp_path, {
-        "claude-sonnet-4-5": _autosetup_bucket(100, 10, 5, 2),
+        "claude-sonnet-4-6": _autosetup_bucket(100, 10, 5, 2),
         "claude-opus-4": _autosetup_bucket(50, 5, 0, 1),
     })
     by_model = {u["model_name"]: u for u in read_autosetup_usage(tmp_path)}
 
-    assert by_model["claude-sonnet-4-5"] == {
-        "model_name": "claude-sonnet-4-5",
+    assert by_model["claude-sonnet-4-6"] == {
+        "model_name": "claude-sonnet-4-6",
         "input_tokens": 100,
         "output_tokens": 10,
         "cache_read_input_tokens": 5,
         "cache_creation_input_tokens": 2,
     }
     assert by_model["claude-opus-4"]["input_tokens"] == 50
-    assert "calls" not in by_model["claude-sonnet-4-5"]  # AutoSetup-only field dropped
+    assert "calls" not in by_model["claude-sonnet-4-6"]  # AutoSetup-only field dropped
 
 
 def test_autosetup_usage_folds_into_run_summary(tmp_path):
     """The exact fold run_autosetup_phase performs: under AUTOSETUP_TASK_ID, each
     model lands in run totals AND the 'autosetup' phase, with the
     cache_creation_input_tokens -> cache_write rename applied."""
-    _write_autosetup_usage(tmp_path, {"claude-sonnet-4-5": _autosetup_bucket(100, 10, 5, 2)})
+    _write_autosetup_usage(tmp_path, {"claude-sonnet-4-6": _autosetup_bucket(100, 10, 5, 2)})
 
     s = RunSummary()
     with set_current_task_id("autosetup"):
@@ -291,7 +253,7 @@ def test_autosetup_usage_folds_into_run_summary(tmp_path):
     s.record_phase(task_id="autosetup", label="AutoSetup", phase="autosetup",
                    wall_s=1.0, queue_wait_s=0.0)
 
-    m = s.token_usage_by_model["claude-sonnet-4-5"]
+    m = s.token_usage_by_model["claude-sonnet-4-6"]
     assert (m.input, m.output, m.cache_read, m.cache_write) == (100, 10, 5, 2)
     assert s.token_usage_summary()["by_phase"] == [{
         "task_id": "autosetup", "phase": "autosetup",

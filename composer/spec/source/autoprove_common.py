@@ -4,29 +4,22 @@ import argparse
 import hashlib
 import logging
 import pathlib
-import sys
 import uuid
 from contextlib import asynccontextmanager
 from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 
-from graphcore.tools.memory import async_memory_tool
-
-from composer.diagnostics.logging_setup import setup_autoprove_logging
-from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.diagnostics.timing import RunSummary
 from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
 from composer.input.parsing import add_protocol_args
-from composer.kb.knowledge_base import DefaultEmbedder, DEFAULT_KB_NS
+from composer.kb.knowledge_base import DEFAULT_KB_NS
 from composer.rag.db import PostgreSQLRAGDatabase
-from composer.rag.models import get_model
-from composer.workflow.services import llm_factory, standard_connections
 from composer.pipeline.core import CorePipelineResult
 
-from composer.spec.service_host import ModelProvider
-from composer.spec.system_model import SolidityIdentifier
 from composer.spec.context import (
-    WorkflowContext, SourceCode
+    SourceFields
 )
-from composer.spec.source.pipeline import run_autoprove_pipeline, GeneratedCVL
+from composer.pipeline.cli import cli_pipeline
+from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
 from composer.spec.source.artifacts import ProverArtifactStore
@@ -34,8 +27,7 @@ from composer.spec.agent_index import agent_index_config_from_env
 from composer.core.user import get_uid, user_data_ns
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.autoprove_app import AutoProvePhase
-from composer.ui.tool_display import async_tool_context
-from composer.io.thread_logging import thread_logger, default_logging_ns
+from composer.io.thread_logging import RunDataLogger
 
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.io.multi_job import HandlerFactory
@@ -60,7 +52,7 @@ def user_ns(
 class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     project_root: str
     main_contract: str
-    system_doc: str
+    system_doc: str | None
     max_concurrent: int
     cache_ns: str | None
     memory_ns: str | None
@@ -69,21 +61,6 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     threat_model: str
     recursion_limit: int
     max_bug_rounds: int
-
-# ---------------------------------------------------------------------------
-# Cache
-# ---------------------------------------------------------------------------
-
-def _root_cache_key(
-    project_root: str,
-    system_doc_path: pathlib.Path,
-    relative_path: str,
-    contract_name: str,
-) -> str:
-    """Generate a cache key from all inputs that affect the analysis."""
-    doc_hash = hashlib.sha256(system_doc_path.read_bytes()).hexdigest()
-    combined = "|".join([project_root, doc_hash, relative_path, contract_name])
-    return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +79,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT, help=f"The number of iterations of the graph to allow (default: {DEFAULT_RECURSION_LIMIT})")
     parser.add_argument("project_root", help="Root directory of the Solidity project")
     parser.add_argument("main_contract", help="Main contract as path:ContractName")
-    parser.add_argument("system_doc", help="Path to the design document (text or PDF)")
+    parser.add_argument("system_doc", nargs="?", default=None, help="Path to the design document (text or PDF). Optional — auto-discovered from the project when omitted.")
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
@@ -123,130 +100,62 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
     ``_entry_point`` parses argv into ``AutoProveArgs`` then delegates here; tests
     construct ``AutoProveArgs`` directly.
     """
-    # Parse main_contract (path:ContractName)
-    project_root = pathlib.Path(args.project_root).resolve()
-    main_contract_path, contract_name = args.main_contract.split(":", 1)
-
-    full_contract_path = pathlib.Path(main_contract_path).resolve()
-    if not full_contract_path.is_relative_to(project_root):
-        raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
-
-    relative_path = str(full_contract_path.relative_to(project_root))
-
-    sys_path = pathlib.Path(args.system_doc)
-
-    # Set up services
-    model_factory = llm_factory(args)
-    model = get_model()
-
-
-    cache_root: tuple[str, ...] | None = None
-
-    root_key = _root_cache_key(
-            str(project_root), sys_path, relative_path, contract_name,
-        )
-
-    if args.cache_ns is not None:
-        cache_root = user_ns(args.cache_ns, root_key)
 
     thread_id = f"autoprove_{uuid.uuid4().hex[:12]}"
 
-    text_log, events_log = setup_autoprove_logging(project_root, thread_id)
-    print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
-    install_run_summary(summary)
-
-    async with (
-        standard_connections(
-            embedder=DefaultEmbedder(model)
-        ) as conns,
-        PostgreSQLRAGDatabase.rag_context(model, args.rag_db) as rag_db,
-        async_tool_context(),
-        thread_logger(
-            conns.store,
-            {"root_thread_id": thread_id},
-            default_logging_ns(None),
-            run_id=summary.run_id,
-        ) as data_logger
+    async def exit_logger(
+        run: SourceFields,
+        logger: RunDataLogger
     ):
-        # Source-code agent caches are always per-user — the conventional
-        # ``user_data_ns(uid)`` prefix lives directly in the ns we pass
-        # so the AgentIndex runs single-pool (no overlay).
-        source_data_ns = user_ns("source_agent", "cache", root_key)
-        # Read input documents now that the uploader is available.
-        content = await conns.uploader.get_document(sys_path)
-        if content is None:
-            raise ValueError(f"cannot read {sys_path}")
-
-        system_doc = SourceCode(
-            content=content,
-            project_root=str(project_root),
-            contract_name=SolidityIdentifier(contract_name),
-            relative_path=relative_path,
-            forbidden_read=FS_FORBIDDEN_READ,
-        )
-
-        threat_model = (
-            await conns.uploader.get_document(pathlib.Path(threat_path))
-            if (threat_path := args.threat_model) is not None else None
-        )
-        models = ModelProvider(
-            factory=model_factory,
-            heavy_model=args.heavy_model,
-            lite_model=args.lite_model,
-            checkpointer=conns.checkpointer,
-        )
-        source_env = build_source_env(
-            models=models,
-            db=rag_db,
-            forbidden_read=FS_FORBIDDEN_READ,
-            kb_ns=DEFAULT_KB_NS,
-            root=args.project_root,
-            store=conns.indexed_store,
-            source_question_ns=source_data_ns,
-            recursion_limit=args.recursion_limit,
-            cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
-        )
-
-        memory_ns = args.memory_ns
-        if memory_ns:
-            memory_ns = get_uid() + "/" + memory_ns
-        ctx = WorkflowContext.create(
-            services=lambda namespace: async_memory_tool(conns.memory(namespace)),
-            thread_id=thread_id,
-            store=conns.store,
-            recursion_limit=args.recursion_limit,
-            cache_namespace=cache_root,
-            memory_namespace=memory_ns,
-        )
-
-        prover_opts = make_prover_options(cloud=args.cloud)
-
-        async def runner(handler: HandlerFactory[AutoProvePhase, None]) -> CorePipelineResult[GeneratedCVL]:
-            return await run_autoprove_pipeline(
-                    ctx=ctx,
-                    source_input=system_doc,
-                    env=source_env,
-                    handler_factory=handler,
-                    prover_opts=prover_opts,
-                    max_concurrent=args.max_concurrent,
-                    interactive=args.interactive,
-                    threat_model=threat_model,
-                    max_bug_rounds=args.max_bug_rounds,
-                )
-
         try:
-            yield runner
-        finally:
-            # Persist final token usage into RunMeta.tags at run close (totals
-            # known only once the pipeline is done). Mirrors token_usage.json.
-            await data_logger(
-                "token_usage", summary.token_usage_summary()
+            await logger("token_usage", summary.token_usage_summary())
+            await logger("prover_usage", summary.prover_usage_summary())
+        except Exception:
+            _logger.exception("failed to log usage to run data")
+        # Dump the run manifest to disk — always, success or crash. Guarded so a dump
+        # failure can't mask the pipeline's own outcome. project_root/contract_name
+        # come straight from args (not ProverSourceCode, which may not exist yet if
+        # discovery crashed).
+        try:
+            ProverArtifactStore(run.project_root, run.contract_name).write_job_info(
+                summary, user_id=get_uid()
             )
-            # Dump final LLM token usage for the run (success or failure). Single
-            # choke point both console and TUI entry points pass through, with
-            # system_doc in scope and the summary fully populated. Guarded so a
-            # diagnostics-dump failure can never mask the pipeline's own outcome.
-            try:
-                ProverArtifactStore(main_contract=system_doc.contract_name, project_root=system_doc.project_root).write_token_usage(summary)
-            except Exception:
-                _logger.exception("failed to dump token usage")
+        except Exception:
+            _logger.exception("failed to dump job info")
+    design_phase : AutoProvePhase = cast(AutoProvePhase, AutoProvePhase.DISCOVER_DESIGN_DOC)
+
+    async def callback(
+        handler: HandlerFactory[AutoProvePhase, None]
+    ) -> CorePipelineResult[GeneratedCVL]:    
+        async with (
+            cli_pipeline(
+                args=args, design_doc_phase=design_phase,
+                summary=summary,
+                thread_id=thread_id,
+                task_handler=handler,
+                at_exit=exit_logger,
+                
+                worfklow="autoprove"
+            ) as (staged, cont),
+            PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag_db
+
+        ):
+            source_data_ns = user_ns("source_agent", "cache", staged.root_key)
+
+            source_env = build_source_env(
+                models=staged.llm_models,
+                db=rag_db,
+                forbidden_read=FS_FORBIDDEN_READ,
+                kb_ns=DEFAULT_KB_NS,
+                root=staged.source.project_root,
+                store=staged.conns.indexed_store,
+                source_question_ns=source_data_ns,
+                recursion_limit=args.recursion_limit,
+                cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
+            )
+            backend = ProverBackend(
+                ProverArtifactStore(staged.source.project_root, staged.source.contract_name),
+                make_prover_options(cloud=args.cloud)
+            )
+            return await cont(source_env, backend)
+    yield callback

@@ -34,7 +34,7 @@ from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun,
     GaveUp, SystemAnalysisSpec,
     CorePhases, main_instance, Delivered,
-    run_pipeline
+    run_pipeline, CorePipelineResult
 )
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
@@ -102,6 +102,7 @@ class _ForgeRunConfig:
 class FoundryPhase(enum.Enum):
     """Task-grouping phases of the foundry pipeline (the ``P`` of its
     ``HandlerFactory``)."""
+    DISCOVER_DESIGN_DOC = "discover_design_doc"
     SYSTEM_ANALYSIS = "system_analysis"
     PROPERTY_EXTRACTION = "property_extraction"
     TEST_GENERATION = "test_generation"
@@ -191,39 +192,15 @@ PROPERTIES_KEY = CacheKey[None, Properties]("foundry-properties")
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class FoundryPipelineResult:
-    n_components: int
-    n_properties: int
-    written: list[pathlib.Path] = field(default_factory=list)
-    failures: list[str] = field(default_factory=list)
+type FoundryPipelineResult = CorePipelineResult[GeneratedFoundryTest]
 
-
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
-
-async def run_foundry_pipeline(
+def backend(
     source_input: SourceCode,
-    ctx: WorkflowContext[None],
-    handler_factory: HandlerFactory[FoundryPhase, None],
-    env: ServiceHost,
     *,
-    max_concurrent: int = 4,
-    max_bug_rounds: int = 3,
-    interactive: bool = False,
     forge_binary: str = "forge",
     forge_timeout_s: int = 600,
     forge_concurrency: int = 1
-) -> FoundryPipelineResult:
-    """Run the foundry test-generation pipeline against an existing project.
-
-    ``source_input.project_root`` must point at a configured foundry project
-    (``foundry.toml`` + ``lib/forge-std`` + the contracts under test). The
-    pipeline does NOT modify ``foundry.toml`` / ``lib/`` / ``src/`` — only
-    writes generated ``.t.sol`` files under ``<project>/test/``.
-    """
-    semaphore = asyncio.Semaphore(max_concurrent)
+) -> FoundryBackend:
     artifacts = FoundryArtifactStore(
         source_input.project_root
     )
@@ -235,20 +212,7 @@ async def run_foundry_pipeline(
         forge_sem=foundry_sem
     )
 
-    backend = FoundryBackend(artifacts, forge_conf)
-    run_conf = PipelineRun(
-        ctx, env, source_input, handler_factory, semaphore
-    )
-
-    to_ret = await run_pipeline(
-        backend, run_conf, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
-    )
-
-    return FoundryPipelineResult(
-        to_ret.n_components, to_ret.n_properties, written=[
-            i.result.deliverable for i in to_ret.outcomes if isinstance(i.result, Delivered)
-        ], failures=to_ret.failures
-    )
+    return FoundryBackend(artifacts, forge_conf)
 
 type FoundryPipelineExecutor = Callable[
     [HandlerFactory[FoundryPhase, None]], Awaitable[FoundryPipelineResult],

@@ -305,26 +305,3 @@ class ProverBackend:
 
     def to_artifact_id(self, c: ContractComponentInstance) -> ComponentSpec:
         return ComponentSpec(c.slugified_name)
-
-
-async def run_autoprove_pipeline(
-    source_input: SourceCode,
-    ctx: WorkflowContext[None],
-    handler_factory: HandlerFactory[AutoProvePhase, None],
-    env: ServiceHost,
-    *,
-    prover_opts: ProverOptions,
-    max_concurrent: int = 4,
-    interactive: bool,
-    threat_model: Document | None = None,
-    max_bug_rounds: int = 3,
-) -> CorePipelineResult[GeneratedCVL]:
-    """Run the auto-prove pipeline via the generic driver."""
-    backend = ProverBackend(
-        ProverArtifactStore(source_input.project_root, source_input.contract_name),
-        prover_opts,
-    )
-    run = PipelineRun(ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent))
-    return await run_pipeline(
-        backend, run, interactive=interactive, threat_model=threat_model, max_bug_rounds=max_bug_rounds,
-    )

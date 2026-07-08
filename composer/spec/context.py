@@ -34,7 +34,7 @@ class SystemDoc:
 
 
 @dataclass
-class SourceCode(SystemDoc):
+class SourceFields:
     """Input when source code is also available (source_spec).
 
     ``contract_name`` is the Solidity identifier of the main contract being
@@ -46,6 +46,9 @@ class SourceCode(SystemDoc):
     relative_path: str
     forbidden_read: str
 
+@dataclass
+class SourceCode(SystemDoc, SourceFields):
+    ...
 
 # ---------------------------------------------------------------------------
 # Services protocol

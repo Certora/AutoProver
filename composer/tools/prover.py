@@ -1,21 +1,33 @@
 from typing import Annotated, Optional
+from dataclasses import dataclass
+from pathlib import Path
 
 from pydantic import Field
 
 from graphcore.graph import tool_return
-from graphcore.tools.schemas import WithInjectedId, WithAsyncImplementation
+from graphcore.tools.schemas import WithInjectedId, WithAsyncDependencies
 
 from langchain_core.messages import ToolMessage
+from langgraph.config import get_stream_writer
 from langgraph.prebuilt import InjectedState
-from langgraph.types import Command
 from langgraph.runtime import get_runtime
+from langgraph.types import Command
 
 from composer.core.state import AIComposerState
-from composer.core.context import AIComposerContext, compute_state_digest
+from composer.core.context import AIComposerContext, ProverOptions, compute_state_digest
 from composer.core.validation import prover as prover_key
-from composer.prover.runner import certora_prover as prover_impl
-from composer.prover.core import ProverReport
+from composer.prover.core import ProverReport, CexHandler, ProverOptions as CoreProverOptions, run_prover
+from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
+
+
+@dataclass
+class ProverDeps:
+    """Per-run dependencies injected into the prover tool — the CEX-analysis
+    strategy and the prover options — bound at workflow setup (see the codegen
+    executor) rather than read off the runtime context."""
+    cex_handler: CexHandler
+    prover_opts: ProverOptions
 
 
 @tool_display(
@@ -25,7 +37,7 @@ from composer.ui.tool_display import tool_display
     ),
     None,
 )
-class CertoraProverTool(WithInjectedId, WithAsyncImplementation[Command]):
+class CertoraProverTool(WithAsyncDependencies[Command, ProverDeps], WithInjectedId):
     """
     Invoke the Certora Prover, a powerful symbolic reasoning tool for verifying the correctness of smart contracts.
 
@@ -91,16 +103,8 @@ class CertoraProverTool(WithInjectedId, WithAsyncImplementation[Command]):
     state: Annotated[AIComposerState, InjectedState]
 
     async def run(self) -> Command:
-        result = await prover_impl(
-            self.source_files,
-            self.target_contract,
-            self.compiler_version,
-            self.loop_iter,
-            self.rule,
-            self.state,
-            self.tool_call_id,
-            self.use_working_spec
-        )
+        with self.tool_deps() as deps:
+            result = await _run_certora_prover(self, deps.cex_handler, deps.prover_opts)
         match result:
             case str():
                 return tool_return(tool_call_id=self.tool_call_id, content=result)
@@ -127,4 +131,53 @@ class CertoraProverTool(WithInjectedId, WithAsyncImplementation[Command]):
                 return tool_return(tool_call_id=self.tool_call_id, content=result.result_str)
 
 
-certora_prover = CertoraProverTool.as_tool("certora_prover")
+async def _run_certora_prover(
+    tool: CertoraProverTool,
+    cex_handler: CexHandler,
+    prover_opts: ProverOptions,
+) -> ProverReport | str:
+    """Codegen-specific prover invocation: materialize the VFS, assemble the
+    fixed codegen ``certoraRun`` args from the tool's fields, and run. Reads
+    everything off ``tool`` (its args map ~1:1 onto a prover run); the only
+    runtime-context read is ``vfs_materializer``."""
+    if tool.use_working_spec and not tool.state["working_spec"]:
+        return "No working spec written."
+    ctxt = get_runtime(AIComposerContext).context
+    writer = get_stream_writer()
+
+    with ctxt.vfs_materializer.materialize(tool.state, debug=prover_opts.keep_folder) as temp_dir:
+        if tool.use_working_spec:
+            ws = tool.state["working_spec"]
+            assert ws is not None
+            (Path(temp_dir) / "rules.spec").write_text(ws)
+        try:
+            args = tool.source_files.copy()
+            args.extend([
+                "--verify",
+                f"{tool.target_contract}:./rules.spec",
+                "--optimistic_loop",
+                "--optimistic_hashing",
+                "--loop_iter",
+                str(tool.loop_iter),
+                "--solc", tool.compiler_version,
+                "--solc_via_ir",
+                "--strict_solc_optimizer",
+                "--prover_args",
+                "-timeoutCracker true",
+            ])
+            if tool.rule is not None:
+                args.extend(["--rule", tool.rule])
+
+            return await run_prover(
+                Path(temp_dir),
+                args,
+                tool.tool_call_id,
+                CoreProverOptions(extra_args=prover_opts.extra_args),
+                ProverEventCallbacks(writer, tool.tool_call_id),
+                cex_handler,
+            )
+        except Exception as e:
+            print(e)
+            import traceback
+            traceback.print_exc()
+            raise e

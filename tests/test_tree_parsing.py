@@ -39,7 +39,7 @@ async def _run_test_prover_job(
     
     async with cloud_results(
         prover_res["link"], poll_timeout=600
-    ) as dir:
+    ) as (dir, _runtime_ms):
         res = read_and_format_run_result(dir)
     assert not isinstance(res, str), "Parse failed"
     return res

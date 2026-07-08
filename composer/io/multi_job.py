@@ -51,7 +51,6 @@ class HandlerFactory[P: HasName, H](Protocol):
     ) -> Awaitable[TaskHandle[H]]:
         ...
 
-
 # ---------------------------------------------------------------------------
 # run_task helper
 # ---------------------------------------------------------------------------
@@ -66,10 +65,12 @@ async def maybe_semaphore(
         async with sem:
             yield
 
+type TaskCallable[T] = Callable[[], Awaitable[T]] | Callable[[ConversationContextProvider], Awaitable[T]]
+
 async def run_task[P: HasName, T, H](
     factory: HandlerFactory[P, H],
     info: TaskInfo[P],
-    fn: Callable[[], Awaitable[T]] | Callable[[ConversationContextProvider], Awaitable[T]],
+    fn: TaskCallable[T],
     semaphore: asyncio.Semaphore | None = None,
 ) -> T:
     """Create a handler via *factory* and run *fn* in its ``with_handler`` scope.

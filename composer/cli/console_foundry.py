@@ -7,7 +7,7 @@ import composer.bind as _
 from composer.diagnostics.timing import RunSummary
 from composer.foundry.entry import _entry_point
 from composer.ui.foundry_console import FoundryConsoleHandler
-
+from composer.pipeline.ptypes import Delivered
 
 # ---------------------------------------------------------------------------
 # Main
@@ -21,8 +21,11 @@ async def _main() -> int:
         print(summary.format())
         print(f"\n  Components:    {result.n_components}")
         print(f"  Properties:    {result.n_properties}")
-        print(f"  Tests written: {len(result.written)}")
-        for p in result.written:
+        written_paths = [
+            d.result.deliverable for d in result.outcomes if isinstance(d.result, Delivered)
+        ]
+        print(f"  Tests written: {len(written_paths)}")
+        for p in written_paths:
             print(f"    - {p}")
         if result.failures:
             print(f"  Failures:      {len(result.failures)}")

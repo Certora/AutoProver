@@ -2,8 +2,8 @@
 Fake-LLM end-to-end UI harness for ``tui_autoprove.py`` (auto-prove
 multi-agent pipeline).
 
-Substitutes the real ``ChatAnthropic`` built by
-``composer.workflow.services.create_llm`` / ``create_llm_base`` with a
+Substitutes the real ``ChatAnthropic`` built via
+``composer.llm.registry.get_provider_for(...).builder_for(...)`` with a
 ``FakeMessagesListChatModel`` preloaded with a hand-authored tape of
 responses. Every other part of the pipeline runs normally — ``AutoProveApp``
 TUI, real tool execution (solc, Typechecker.jar, certoraTypeCheck.py,
@@ -66,8 +66,9 @@ so their responses live in the parent's lane.
 from typing import Any
 import uuid
 
-from composer.testing.harness_tape import HarnessFakeLLM
+from composer.testing.harness_tape import HarnessFakeLLM, install_fake_llm
 from composer.spec.source.task_ids import (
+    DESIGN_DOC_DISCOVERY_TASK_ID,
     SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, INVARIANTS_TASK_ID,
     INVARIANT_CVL_TASK_ID, REPORT_TASK_ID, bug_analysis_task_id, cvl_gen_task_id,
 )
@@ -1382,11 +1383,36 @@ _REPORT_TAPE: list[BaseMessage] = [
 ]
 
 
+# Design-doc discovery lane. Only consumed when the run omits the design doc
+# (system_doc=None); the finder lists the project, reads the design doc, and selects
+# it. Counter's design doc is ``system.md`` at the scenario root. A single flat lane:
+# bare fs tools, no nested code_explorer.
+_DESIGN_DOC_TAPE: list[BaseMessage] = [
+    _ai(
+        "Inventorying the project to locate a design document.",
+        _tc("list_files"),
+    ),
+    _ai(
+        "Reading the most likely design document.",
+        _tc("get_file", path="system.md"),
+    ),
+    _ai(
+        "system.md specifies Counter's intended behavior. Selecting it.",
+        _tc(
+            "result",
+            selected_path="system.md",
+            reason="Describes the Counter's intended behavior and invariants.",
+        ),
+    ),
+]
+
+
 # The tape, as a per-phase lane map keyed by run_task task_id. HarnessFakeLLM
 # serves each LLM call from its lane's cursor, so the scripted responses stay
 # correct even though the pipeline runs phases concurrently. The Counter
 # scenario has one component, "Increment".
 _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
+    DESIGN_DOC_DISCOVERY_TASK_ID: _DESIGN_DOC_TAPE,
     SYSTEM_ANALYSIS_TASK_ID: _SYSTEM_ANALYSIS_TAPE,
     HARNESS_TASK_ID: _HARNESS_TAPE,
     INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
@@ -1417,35 +1443,20 @@ def get_autoprove_Counter_llm(with_delay: bool = True) -> HarnessFakeLLM:
 
 
 def install_harness_tape(with_delay: bool = True) -> HarnessFakeLLM:
-    """Monkey-patch ``composer.workflow.services.create_llm`` and
-    ``create_llm_base`` so the real autoprove pipeline receives the fake.
+    """Route the autoprove pipeline's models to the Counter tape's fake LLM.
 
-    Call this BEFORE importing ``tui_autoprove`` — the entry path
-    (``composer.cli.tui_autoprove`` → ``composer.spec.source.autoprove_common``)
-    imports ``create_llm`` at module load time, so the local binding is
-    captured the first time the module is imported. Calling
-    ``install_autoprove_tape()`` after that import would be a no-op at
-    the real call site.
+    Call this BEFORE importing the entry path — ``get_provider_for`` is imported
+    by name in ``composer.spec.source.autoprove_common`` at module load, so the
+    patch (``install_fake_llm``) must land first (``composer/bind.py`` is that
+    hook). One fake instance backs every tier, so all lanes share one set of
+    cursors, keeping the per-lane tape deterministic regardless of heavy/lite.
 
-    Returns the fake instance so the caller can inspect ``.i`` /
-    ``.responses`` for debugging.
+    Returns the fake so the caller can inspect lane state for debugging.
     """
     fake = get_autoprove_Counter_llm(with_delay)
     import composer.spec.agent_index as a_ind
     a_ind._UNSAFE_DISABLE_CACHE = True
-
-    import composer.workflow.services as services
-
-    services.create_llm = lambda args: fake
-    services.create_llm_base = lambda args: fake
-    # The ServiceHost path mints models via ``llm_factory(args)`` (then calls
-    # the returned factory per tier), bypassing ``create_llm`` entirely. Patch
-    # that seam too. The returned factory closes over the single ``fake``, so
-    # every tier shares one instance — i.e. one set of lane cursors — which is
-    # what keeps the per-lane tape deterministic regardless of heavy/lite.
-    services.llm_factory = lambda args: (
-        lambda model_name, *, cache_level=None, disable_thinking=False: fake
-    )
+    install_fake_llm(fake)
     return fake
 
 
