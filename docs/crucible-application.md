@@ -295,7 +295,7 @@ What this means for the backend:
 
 ## 7. New infrastructure a fuzzing backend forces
 
-The prover and Foundry backends fit the existing seam cleanly. Crucible stresses four assumptions
+The prover and Foundry backends fit the existing seam cleanly. Crucible stresses five assumptions
 that were previously EVM/prover/Foundry-shaped. These are the genuinely new build items.
 
 ### 7.1 Multi-file, one-crate-shared-across-components deliverable
@@ -453,6 +453,71 @@ phases — but it is **required, not optional**: the backend is not considered d
 environment on trusted input (the gate scenario, §8), never on an untrusted program. See the
 definition of done in §9.
 
+### 7.5 Giving the LLM the Crucible documentation
+
+Authoring a Crucible harness demands framework-specific knowledge the base model won't reliably have:
+the `TestContext` builder chain, the `#[fuzz_fixture]`/`action_*`/`#[invariant_test]` conventions, the
+`fuzz_assert_*!` macros, `crucible-idl-gen` usage, and — above all — the *Harness Guide*'s blocker→fix
+playbook (admin whitelists, PDA seed encoding, init order, the Anchor error-code tables). We need to
+put that in front of the author.
+
+**Precedent.** Each backend already ships a domain knowledge base as a `ComposerRAGDB` (pgvector):
+autoprove's CVL manual, Foundry's cheatcode DB. The pattern is a `populate_<domain>_rag.sh` that
+collects the source docs, chunks them by markdown header, embeds them (`DefaultEmbedder`), and ingests
+into a dedicated Postgres DB ([scripts/populate_foundry_rag.sh](../scripts/populate_foundry_rag.sh));
+the DB is exposed as keyword + vector **search tools** ([foundry_rag.py](../composer/tools/foundry_rag.py))
+bound into the author's env, and selected per-app via `AppDescriptor.rag_db_default` / `--rag-db`.
+
+**A blocker specific to the Rust-app path.** The Foundry/CVL authors are agent loops with those RAG
+tools bound. The Rust IoC `call_llm` effect is **not** — it is a single, tool-less turn
+(`model.ainvoke([HumanMessage(content)])`, [adapter.py:75](../composer/rustapp/adapter.py#L75)). So the
+Crucible author cannot *search* a RAG DB mid-loop until we change one of:
+
+- **(a) tool-enabled `call_llm`** — `RealEffects.call_llm` runs a bounded agent turn with the
+  ecosystem/backend `rag_tools` (+ source tools) bound, returning final text. Closest to how the
+  Foundry/CVL authors work, and a **general** rustapp-framework improvement (any Rust backend whose LLM
+  needs tools benefits), not Crucible-specific.
+- **(b) a retrieval effect** — `SearchDocs { query } → Observation::Docs`, so the Rust decider
+  explicitly retrieves and injects results into its next prompt. More IoC-pure; keeps `call_llm` simple.
+- **(c) Python pre-injects** the docs into the `call_llm` messages — no tool-calling at all.
+
+**Recommendation: design the knowledge *seam* for large corpora now; fill it cheaply for Crucible.**
+Crucible's own docs are small, but a **Certora Prover / CVLR backend for Solana is on the roadmap**,
+and it will carry a documentation set the size of today's CVL manual — far too large to inject. If we
+ship Crucible on static injection and stop, we will have to retrofit tool-based RAG into the Rust-app
+framework for CVLR. So make the *framework* RAG-capable from the start, even though Crucible starts
+small:
+
+1. **Build (a) — tool-enabled `call_llm` — now, as a shared rustapp capability (not Crucible-specific).**
+   `RealEffects.call_llm` runs a bounded agent turn whose tool belt the host assembles from: the
+   backend's knowledge-base **search tools** (standard keyword + vector search over the `ComposerRAGDB`
+   named by the descriptor), the shared **learned-KB tools** (`kb_tools`), and **source-navigation**
+   tools. This is exactly how the CVL and Foundry authors already work; it scales to any corpus size
+   and is backend-agnostic, so **CVLR-Solana ships only a large `cvlr_manual` DB and reuses the
+   mechanism with zero framework change.** (Chosen over (b) because it directly reuses the existing RAG
+   tool implementations and the agent-with-tools machinery; over (c) because (c) cannot scale to CVLR.)
+2. **Knowledge is per-*backend*, not per-ecosystem.** Crucible and CVLR are both Solana backends but
+   have entirely different manuals, so the selector is already the right grain:
+   `AppDescriptor.rag_db_default` names the wheel's own DB (`crucible_kb` vs `cvlr_manual`). Corpus size
+   is invisible to the framework. (This mirrors [ecosystem-abstraction.md §2](./ecosystem-abstraction.md)'s
+   "multiple backends per ecosystem" — knowledge rides the backend axis, prompts ride the ecosystem
+   axis.)
+3. **Static injection is a Crucible *content* shortcut layered on top — not the mechanism.** Because
+   Crucible's docs are small, its wheel *may additionally* inject a compact **harness cheat-sheet**
+   (assertion macros, the `TestContext` builder chain, fixture/action conventions, the Anchor
+   error-code table) + one or two curated example harnesses (`examples/staking`, `examples/escrow`) for
+   the always-needed basics, while the same tool surface serves the rest. CVLR simply skips injection
+   and relies on the search tools. So Crucible's `crucible_kb` can even start nearly empty without
+   blocking the framework work.
+4. **Ingestion** reuses the `populate_<domain>_rag.sh` pattern per backend — `populate_crucible_rag.sh`
+   over the crucible repo's `docs/` (+ examples, + Anchor/Solana account-model docs) now; a
+   CVL-manual-style builder for CVLR later.
+5. **Learned knowledge (orthogonal, shared).** The Harness Guide's blockers are often *program-specific*
+   (which keypair is admin, string-vs-binary PDA seeds, init order) — discovered during authoring, in
+   no manual. Persist them via the existing learned-KB / memory store (`kb_tools` `KBPut`,
+   [knowledge_base.py](../composer/kb/knowledge_base.py)) so a later component's author reuses what an
+   earlier one learned about the same program. Generic; benefits every backend.
+
 ---
 
 ## 8. The gate
@@ -494,10 +559,14 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    / layout that writes a *compilable* crate. **Gate:** a hand-authored fixture + one hand-authored
    invariant test, written through the store, compiles and `crucible run <test> --dry-run` passes;
    `certora/crucible/` metadata + `fuzz/<program>/` deliverable coexist with any EVM outputs.
-3. **The `prepare_formalization` authoring loop (shared fixture/actions).** The LLM IoC decider that
-   authors the fixture + `action_*` from `SolanaApplication`, gated by `--dry-run`. **Gate:** on
-   `solana_vault`, the agent authors a fixture whose `setup()` + all three actions succeed
-   (`--dry-run` green) with no human edits.
+3. **The `prepare_formalization` authoring loop (shared fixture/actions) + the knowledge seam (§7.5).**
+   The LLM IoC decider that authors the fixture + `action_*` from `SolanaApplication`, gated by
+   `--dry-run`. Build the **tool-enabled `call_llm`** framework change now (host-assembled tool belt:
+   backend RAG search over the descriptor's `ComposerRAGDB` + learned-KB + source tools) so the future
+   CVLR-Solana backend needs no framework change; seed a (possibly minimal) `crucible_kb` and inject
+   the harness cheat-sheet + example harnesses for the basics. **Gate:** on `solana_vault`, the agent
+   authors a fixture whose `setup()` + all three actions succeed (`--dry-run` green) with no human
+   edits, using the tool-enabled loop.
 4. **`formalize` per-component tests + verdicts.** Per component, author one test, run bounded fuzz,
    `fetch_verdicts` off the result (§5.3–5.4); `finalize` assembles the crate (§5.5). **Gate:** the
    full live gate (§8.2) — every component yields a compiling test that runs to timeout; the seeded
@@ -554,9 +623,14 @@ trail.)
    much the generic Rust-app host must grow. Prototype (a) in Phase 2 before committing.
 6. **Coverage as a first-class signal.** Crucible emits LCOV and edge counts. Should low coverage
    *downgrade* a GOOD verdict (i.e. "held, but the fuzzer barely explored this path")? Powerful but
-   out of scope for v1; note it and defer (Phase 6).
-
----
+   out of scope for v1; note it and defer (Phase 7).
+7. **Is one `rag_db` + standard keyword/vector search enough for CVLR? (§7.5)** The tool-enabled
+   `call_llm` binds a *single* descriptor-named `ComposerRAGDB` with the standard search tools — which
+   covers Crucible and, we expect, CVLR-Solana (whose CVL manual is the same *shape* as today's CVL
+   DB). But the current CVL backend also exposes richer surfaces (`cvl_research`, multiple
+   `cvl_manual_*` tools). Decide whether the descriptor should let a backend declare **multiple KBs /
+   bespoke knowledge tools**, or whether one DB + standard search suffices; keep it to one DB until
+   CVLR proves it needs more.
 
 ## 11. Key files
 
@@ -568,6 +642,8 @@ trail.)
 | The Python host / IoC loop / adapter to extend | [composer/rustapp/host.py](../composer/rustapp/host.py) · [composer/rustapp/loop.py](../composer/rustapp/loop.py) · [composer/rustapp/adapter.py](../composer/rustapp/adapter.py) |
 | The Solana ecosystem (reused front half) | [composer/spec/solana/model.py](../composer/spec/solana/model.py) · [composer/pipeline/ecosystem.py](../composer/pipeline/ecosystem.py) · `composer/templates/{rust,solana}/…` |
 | Closest backend precedent (local-CLI, refutation) | [composer/foundry/pipeline.py](../composer/foundry/pipeline.py) · [composer/foundry/runner.py](../composer/foundry/runner.py) |
+| Knowledge/RAG precedent to mirror (§7.5) | [composer/tools/foundry_rag.py](../composer/tools/foundry_rag.py) · [scripts/populate_foundry_rag.sh](../scripts/populate_foundry_rag.sh) · [composer/kb/knowledge_base.py](../composer/kb/knowledge_base.py) |
 | The Crucible backend crate (new) | `rust/crucible-app/` |
+| Crucible knowledge base / builder (new) | `crucible_kb` RAG DB · `scripts/populate_crucible_rag.sh` (new) |
 | Scenario + gate | [test_scenarios/solana_vault/](../test_scenarios/solana_vault/) · `tests/test_crucible_gate.py` (new) |
 | Crucible itself (docs) | `/home/eric/src/crucible/docs/` (harness-guide, writing-tests, cli-reference, remote-fuzzing) |
