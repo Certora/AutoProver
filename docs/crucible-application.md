@@ -594,10 +594,18 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    `get_file`) and authored a clean `Fixture` (`#[fuzz_fixture] setup()` + actions, no test fn) that
    passed `crucible run --dry-run` with no human edits — green in ~37s. (Pipeline store-selection +
    driving the setup session from `prepare_formalization` is packaging, Phase 5.)
-4. **`formalize` per-component tests + verdicts.** Per component, author one test, run bounded fuzz,
-   `fetch_verdicts` off the result (§5.3–5.4); `finalize` assembles the crate (§5.5). **Gate:** the
-   full live gate (§8.2) — every component yields a compiling test that runs to timeout; the seeded
-   bug is refuted and `tmin`-minimized.
+4. **`formalize` per-component tests + verdicts.** `new_session` is now a per-component IoC decider:
+   author one test fn `c_<slug>` (CallLlm, against the shared fixture) → fuzz it (RunCommand: `crucible
+   run --mode explore --timeout`) → bake a verdict — clean run to budget = GOOD, `[FUZZ_FINDING]` =
+   BAD, compile error = revise/give-up. Verdicts ride a new `Formalized.verdicts` field (a
+   self-contained backend publishes them directly; `fetch_verdicts` returns them without an FFI call).
+   **Gate met (core):** with a real model, the agent authored a genuine invariant (reads `VaultState`
+   on-chain, `fuzz_assert_le!` on the recorded balance) that compiled, fuzzed to a 15s timeout with no
+   violation, and published GOOD with a correct property→unit map (`tests/test_crucible_formalize_gate.py`,
+   ~59s). The BAD path is verified at the state-machine level; a **live seeded-bug refutation gate**
+   (§8.2 — a buggy vault variant refuted + `tmin`-minimized) remains a follow-up. Per-run crate
+   assembly via `finalize`/the store and the fuzz-nondeterminism caching question (§10 Q4) land with
+   packaging (Phase 5).
 5. **Package as the `crucible` application.** The Rust wheel's `AppDescriptor`
    (`ecosystem="solana"`, phases, args, event kinds, layout) + `export_app!`; register with the host;
    TUI + console entry points; store-selection (use the `CrucibleArtifactStore`) and driving the setup
