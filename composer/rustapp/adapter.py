@@ -21,10 +21,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, NotRequired, override
-
-from graphcore.graph import FlowInput
-from langgraph.graph import MessagesState
+from typing import Any, Awaitable, Callable, override
 
 from composer.pipeline.core import (
     CorePhases,
@@ -51,16 +48,6 @@ _log = logging.getLogger(__name__)
 # A run_prover / run_feedback hook: async, backend-shaped JSON in and out.
 ProverHook = Callable[[str, Any, "list[str] | None"], Awaitable[dict]]
 FeedbackHook = Callable[[str, Any, Any], Awaitable[dict]]
-
-
-# State + input for the tool-enabled `call_llm` agent (module scope so the
-# NotRequired result annotation type-checks). ``result`` is the agent's final text.
-class _LlmState(MessagesState):
-    result: NotRequired[str]
-
-
-class _LlmInput(FlowInput):
-    pass
 
 
 class RealEffects:
@@ -97,33 +84,11 @@ class RealEffects:
         shared by every Rust backend, so a large-corpus backend (CVLR-Solana) reuses
         it by shipping only a knowledge DB. Must run inside a ``with_handler`` scope
         (the caller wraps it in ``run.runner``)."""
-        from composer.spec.graph_builder import bind_standard, run_to_completion
-        from composer.spec.util import uniq_thread_id
+        from composer.rustapp._llm_agent import run_llm_agent
 
-        env = self._run.env
-        tools = list(getattr(env, "all_tools", None) or env.rag_tools)
-
-        graph = (
-            bind_standard(
-                env.builder_heavy(),
-                _LlmState,
-                doc="Your complete final answer as a single string (e.g. the authored source file).",
-            )
-            .with_input(_LlmInput)
-            .with_tools(tools)
-            .compile_async()
+        return await run_llm_agent(
+            self._run.env, messages, recursion_limit=self._ctx.recursion_limit
         )
-
-        content = messages if isinstance(messages, str) else json.dumps(messages)
-        res = await run_to_completion(
-            graph,
-            _LlmInput(input=[content]),
-            thread_id=uniq_thread_id("rust-llm"),
-            recursion_limit=self._ctx.recursion_limit,
-            description="Rust backend authoring turn",
-        )
-        result = res.get("result")
-        return result if isinstance(result, str) else json.dumps(result)
 
     async def run_prover(self, spec: str, config: Any, rules: list[str] | None) -> dict:
         if self._prover is None:
