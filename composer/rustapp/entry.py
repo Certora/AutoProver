@@ -73,10 +73,12 @@ def build_neutral_env(
     store: BaseStore,
     source_question_ns: tuple[str, ...],
     recursion_limit: int,
+    forbidden_read: str = FS_FORBIDDEN_READ,
 ) -> ServiceHost:
     """A source-navigation env with no RAG surface — the same ``code_explorer`` +
-    fs tools the built-in backends use for analysis/authoring."""
-    basic = build_basic_source_tools(root=project_root, forbidden_read=FS_FORBIDDEN_READ)
+    fs tools the built-in backends use for analysis/authoring. ``forbidden_read``
+    is the ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry for EVM)."""
+    basic = build_basic_source_tools(root=project_root, forbidden_read=forbidden_read)
     full = build_source_tools(
         basic, model_provider, store, source_question_ns, recursion_limit=recursion_limit
     )
@@ -129,6 +131,7 @@ async def rust_entry_point(
     *,
     argv: list[str] | None = None,
     env_builder: EnvBuilder | None = None,
+    run_pipeline_fn: Callable[..., Awaitable[CorePipelineResult[RustFormalResult, Any]]] | None = None,
 ) -> AsyncIterator[RustRunner]:
     """Parse args, open services, and yield the Executor for ``app``.
 
@@ -210,12 +213,16 @@ async def rust_entry_point(
         content = await conns.uploader.get_document(sys_path)
         if content is None:
             parser.error(f"cannot read {sys_path}")
+        # The ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry for EVM).
+        forbidden_read = getattr(
+            app.ecosystem.language, "default_forbidden_read", FS_FORBIDDEN_READ
+        )
         source_input = SourceCode(
             content=content,
             project_root=str(project_root),
             contract_name=contract_name,
             relative_path=relative_path,
-            forbidden_read=FS_FORBIDDEN_READ,
+            forbidden_read=forbidden_read,
         )
 
         model_provider = ModelProvider(
@@ -233,6 +240,7 @@ async def rust_entry_point(
             store=conns.indexed_store,
             source_question_ns=source_question_ns,
             recursion_limit=args.recursion_limit,
+            forbidden_read=forbidden_read,
         )
 
         ctx = WorkflowContext.create(
@@ -245,6 +253,13 @@ async def rust_entry_point(
         )
 
         async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult, Any]:
+            # A backend that needs a bespoke store/pipeline (e.g. Crucible's crate
+            # store) supplies run_pipeline_fn; everything else uses the generic host.
+            if run_pipeline_fn is not None:
+                return await run_pipeline_fn(
+                    source_input=source_input, ctx=ctx, handler_factory=handler,
+                    env=env, args=args,
+                )
             return await run_application(
                 app,
                 source_input=source_input,

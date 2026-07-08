@@ -21,7 +21,9 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, override
+from typing import Any, Awaitable, Callable, cast, override
+
+from composer.io.multi_job import TaskInfo
 
 from composer.pipeline.core import (
     CorePhases,
@@ -36,7 +38,7 @@ from composer.rustapp.command import DEFAULT_TIMEOUT_S, run_local_command
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.loop import Effects, GaveUp as LoopGaveUp, drive_session
 from composer.rustapp.result import RustArtifact, RustFormalResult
-from composer.rustapp.store import RustArtifactStore
+from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import Outcome, RuleName
@@ -164,11 +166,17 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         *,
         prover: ProverHook | None = None,
         feedback: FeedbackHook | None = None,
+        component_config: dict | None = None,
+        command_timeout_s: int = DEFAULT_TIMEOUT_S,
     ):
         super().__init__(RustFormalResult, descriptor.backend_tag)
         self._module = module
         self._descriptor = descriptor
         self._hooks = _RustFormalizerCfg(prover=prover, feedback=feedback)
+        # A base config merged into every per-component session (e.g. the shared
+        # fixture authored by the setup session, the program name, the fuzz budget).
+        self._component_config = component_config or {}
+        self._command_timeout_s = command_timeout_s
 
     @override
     async def formalize(
@@ -187,12 +195,13 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                     {"title": p.title, "sort": p.sort, "description": p.description}
                     for p in props
                 ],
-                "config": {},
+                "config": {**self._component_config, "slug": feat.slug},
             }
         )
         session = self._module.new_session(session_input)
         effects = RealEffects(
-            ctx, run, prover=self._hooks.prover, feedback=self._hooks.feedback
+            ctx, run, prover=self._hooks.prover, feedback=self._hooks.feedback,
+            command_timeout_s=self._command_timeout_s,
         )
         result = await drive_session(session, effects)
         if isinstance(result, LoopGaveUp):
@@ -203,7 +212,8 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     async def fetch_verdicts(
         self, inp: ReportComponentInput[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
-        if inp.formalized is None:
+        formalized = inp.formalized
+        if formalized is None:
             return {}
 
         def _mk(v: dict) -> Verdict:
@@ -211,12 +221,12 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 outcome=Outcome(v["outcome"]),
                 line=v.get("line"),
                 duration_seconds=v.get("duration_seconds"),
-                unit_file=v.get("unit_file") or inp.formalized.unit_file,
+                unit_file=v.get("unit_file") or formalized.unit_file,
             )
 
         # Self-contained backend (e.g. Crucible fuzzer): the verdict is known at
         # formalize time and baked into the result — use it directly, no FFI call.
-        baked = inp.formalized.result.verdicts
+        baked = formalized.result.verdicts
         if baked:
             return {unit: _mk(v) for unit, v in baked.items()}
 
@@ -224,9 +234,9 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         payload = json.dumps(
             {
                 "name": inp.name,
-                "unit_file": inp.formalized.unit_file,
-                "run_link": inp.formalized.run_link,
-                "property_units": inp.formalized.result.property_units(),
+                "unit_file": formalized.unit_file,
+                "run_link": formalized.run_link,
+                "property_units": formalized.result.property_units(),
             }
         )
         raw = json.loads(await asyncio.to_thread(self._module.fetch_verdicts, payload))
@@ -265,14 +275,58 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
 @dataclass
 class RustPreparedSystem(PreparedSystem[RustFormalResult, Any]):
     backend: "RustBackend"
+    analyzed: Any = None
 
     @override
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult, FeatureUnit]:
+        b = self.backend
+        # Base config threaded into every per-component session.
+        component_config: dict = {
+            "program": str(run.source.contract_name),
+            "fuzz_timeout": b.fuzz_timeout_s,
+        }
+
+        # Author the program-wide shared setup (e.g. the Crucible fixture) once, if
+        # the wheel declares a setup session — reusing the same IoC loop. The result
+        # (fixture source) is set on the store and threaded into per-component config.
+        new_setup = getattr(b.module, "new_setup_session", None)
+        if new_setup is not None and self.analyzed is not None:
+            setup_input = json.dumps(
+                {
+                    "program": str(run.source.contract_name),
+                    "analyzed": self.analyzed.model_dump(mode="json"),
+                    "config": {},
+                }
+            )
+            session = new_setup(setup_input)
+            if session is not None:
+
+                async def _drive():
+                    eff = RealEffects(
+                        cast(Any, run.ctx), run, prover=b.prover, feedback=b.feedback,
+                        command_timeout_s=b.command_timeout_s,
+                    )
+                    return await drive_session(session, eff)
+
+                result = await run.runner(
+                    TaskInfo(f"{b.descriptor.name}-setup", "Build Harness", b._core_phases["formalization"]),
+                    _drive,
+                )
+                if isinstance(result, LoopGaveUp):
+                    raise RuntimeError(f"{b.descriptor.name} setup session gave up: {result.reason}")
+                fixture = result.data.get("artifact_text", "")
+                component_config["fixture"] = fixture
+                set_fixture = getattr(b.artifact_store, "set_shared_fixture", None)
+                if set_fixture is not None:
+                    set_fixture(fixture)
+
         return RustFormalizer(
-            self.backend.module,
-            self.backend.descriptor,
-            prover=self.backend.prover,
-            feedback=self.backend.feedback,
+            b.module,
+            b.descriptor,
+            prover=b.prover,
+            feedback=b.feedback,
+            component_config=component_config,
+            command_timeout_s=b.command_timeout_s,
         )
 
 
@@ -287,10 +341,14 @@ class RustBackend:
     descriptor: AppDescriptor
     _phase: type
     _core_phases: CorePhases
-    artifact_store: RustArtifactStore
+    artifact_store: ArtifactStore[Any, RustFormalResult]
     ecosystem: Ecosystem[Any, Any, Any]
     prover: ProverHook | None = None
     feedback: FeedbackHook | None = None
+    # Wall-clock ceiling for a single RunCommand effect (a first harness build +
+    # fuzz can be minutes); and the per-component fuzzing budget.
+    command_timeout_s: int = DEFAULT_TIMEOUT_S
+    fuzz_timeout_s: int = 30
 
     @property
     def backend_guidance(self) -> str:
@@ -308,7 +366,7 @@ class RustBackend:
         self, analyzed: Any, run: PipelineRun
     ) -> PreparedSystem[RustFormalResult, Any]:
         # The ecosystem locates its own Main (EVM contract, Solana program, …).
-        return RustPreparedSystem(self.ecosystem.locate_main(analyzed, run.source), self)
+        return RustPreparedSystem(self.ecosystem.locate_main(analyzed, run.source), self, analyzed)
 
     def to_artifact_id(self, c: FeatureUnit) -> RustArtifact:
         return RustArtifact(
