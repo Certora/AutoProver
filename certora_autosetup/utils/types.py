@@ -73,12 +73,17 @@ class TypeParseMode(Enum):
     QUALIFIED  - Qualifies user-defined types via canonicalId, preserves contract names.
                  Used for fullSignature in all_methods.json. Note - all_methods.json will
                  be deprecated at some point, and then this mode might become redundant.
+    SOLIDITY   - Emits a type reference that compiles in generated Solidity source (e.g.
+                 harnesses). Unlike QUALIFIED, a file-level user-defined type keeps its
+                 bare name (e.g. "ResolutionChain") rather than being prefixed with a
+                 contract that does not actually declare it. Used for harness generation.
     """
 
     CANONICAL = "canonical"
     INTERNAL = "internal"
     DISPATCHER = "dispatcher"
     QUALIFIED = "qualified"
+    SOLIDITY = "solidity"
 
 
 def _qualify_user_defined_type(type_desc: dict, contract_name: str) -> str:
@@ -99,6 +104,28 @@ def _qualify_user_defined_type(type_desc: dict, contract_name: str) -> str:
     if not name:
         raise ValueError(f"type descriptor {type_desc} has no canonical name")
     return f"{contract_name}.{name}"
+
+
+def _solidity_user_defined_type(type_desc: dict) -> str:
+    """Resolve a user-defined type to a reference that compiles in generated Solidity.
+
+    Unlike ``_qualify_user_defined_type``, this never prefixes a file-level type with a
+    consuming contract name. The canonicalId right side is already the correct source
+    reference: a contract-nested type keeps its "Contract.TypeName" form, while a
+    file-level type stays a bare "TypeName" (resolved via the harness' import of the
+    source file, which re-exports the file's own imports).
+    """
+    canonical_id = type_desc.get("canonicalId", "")
+    if "|" in canonical_id:
+        return canonical_id.split("|", 1)[1]
+    name = (
+        type_desc.get("name")
+        or type_desc.get("enumName")
+        or type_desc.get("structName")
+    )
+    if not name:
+        raise ValueError(f"type descriptor {type_desc} has no canonical name")
+    return name
 
 
 def parse_type_descriptor(type_desc: dict, mode: TypeParseMode, contract_name: str = "") -> str:
@@ -146,6 +173,8 @@ def parse_type_descriptor(type_desc: dict, mode: TypeParseMode, contract_name: s
                 return f"({','.join(members)})"
             elif mode == TypeParseMode.INTERNAL:
                 return type_desc.get("name", "unknown")
+            elif mode == TypeParseMode.SOLIDITY:
+                return _solidity_user_defined_type(type_desc)
             else:  # DISPATCHER or QUALIFIED
                 return _qualify_user_defined_type(type_desc, contract_name)
         case TypeDescKind.USER_DEFINED_VALUE_TYPE:
@@ -153,6 +182,8 @@ def parse_type_descriptor(type_desc: dict, mode: TypeParseMode, contract_name: s
                 return recurse(type_desc.get("underlying", {}))
             elif mode == TypeParseMode.INTERNAL:
                 return type_desc.get("name", "unknown")
+            elif mode == TypeParseMode.SOLIDITY:
+                return _solidity_user_defined_type(type_desc)
             else:  # DISPATCHER or QUALIFIED
                 return _qualify_user_defined_type(type_desc, contract_name)
         case TypeDescKind.USER_DEFINED_ENUM:
@@ -160,6 +191,8 @@ def parse_type_descriptor(type_desc: dict, mode: TypeParseMode, contract_name: s
                 return "uint8"
             elif mode == TypeParseMode.INTERNAL:
                 return type_desc.get("name", "unknown")
+            elif mode == TypeParseMode.SOLIDITY:
+                return _solidity_user_defined_type(type_desc)
             else:  # DISPATCHER or QUALIFIED
                 return _qualify_user_defined_type(type_desc, contract_name)
         case TypeDescKind.ARRAY:

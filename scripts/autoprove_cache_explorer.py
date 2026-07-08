@@ -2,10 +2,15 @@
 Cache & Memory Explorer for the Auto-Prove pipeline.
 
 Usage:
-    python scripts/autoprove_cache_explorer.py <project_root> <main_contract> <system_doc> --cache-ns <ns> [--memory-ns <ns>]
+    # by run id (recommended — works even when the design doc was auto-discovered):
+    python scripts/autoprove_cache_explorer.py run <run_id>
+
+    # by reconstructing the namespace from the original inputs (requires the doc):
+    python scripts/autoprove_cache_explorer.py inputs <project_root> <main_contract> <system_doc> --cache-ns <ns> [--memory-ns <ns>]
 """
 
 import argparse
+import asyncio
 import pathlib
 import sys
 from typing import AsyncGenerator
@@ -19,7 +24,7 @@ from composer.ui.cache_explorer import (
     CacheNode, OrgNode, CacheTreeNode, CacheExplorerApp, DummyServices,
     node, node_for, leaf, memory, collect_tree,
 )
-from composer.spec.context import WorkflowContext, get_system_doc, CVLGeneration, CVLJudge
+from composer.spec.context import WorkflowContext, CVLGeneration, CVLJudge
 from composer.spec.source.system_analysis import SOURCE_ANALYSIS_KEY
 from composer.spec.source.harness import (
     config_key,
@@ -33,6 +38,9 @@ from composer.spec.source.harness import (
 )
 from composer.spec.source.autoprove_common import _root_cache_key, user_ns
 from composer.core.user import get_uid
+from composer.workflow.services import get_async_store
+from composer.io.run_index import get_run_data
+from langgraph.store.base import BaseStore
 from composer.spec.source.summarizer import _summary_key, _SummaryCache
 from composer.spec.source.struct_invariant import STRUCTURAL_INV_KEY, Invariants
 from composer.spec.source.common_pipeline import PROPERTIES_KEY, INV_CVL_KEY, _component_cache_key, _batch_cache_key
@@ -326,7 +334,7 @@ def format_value(val: AutoProveCachedValue) -> list[str]:
                 lines.append(line)
             if len(cvl.splitlines()) > 40:
                 lines.append(f"... ({len(cvl.splitlines()) - 40} more lines)")
-        
+
         case _BugAnalysisCache(items=items):
             lines.append(f"Properties ({len(items)}):")
             for p in items:
@@ -348,43 +356,95 @@ def format_value(val: AutoProveCachedValue) -> list[str]:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Cache & Memory Explorer for Auto-Prove pipeline"
-    )
-    parser.add_argument("project_root", help="Root directory of the Solidity project")
-    parser.add_argument("main_contract", help="Main contract as path:ContractName")
-    parser.add_argument("system_doc", help="Path to the design document (text or PDF)")
-    parser.add_argument("--cache-ns", required=True, dest="cache_ns",
-                        help="Cache namespace (same as passed to tui_autoprove.py)")
-    parser.add_argument("--memory-ns", dest="memory_ns", default=None,
-                        help="Memory namespace (enables memory browsing)")
+Resolved = tuple[tuple[str, ...], str | None, str]
+"""``(cache_root, memory_ns, contract_name)`` — everything the explorer needs to
+open a run's cache/memory, however it was resolved."""
 
-    args = parser.parse_args()
 
+def _resolve_from_inputs(args: argparse.Namespace) -> Resolved | None:
+    """Reconstruct the namespaces from the original CLI inputs. Requires the design
+    doc (it feeds the byte-hash root key), so it does not work for auto-discovered
+    runs — use the ``run`` subcommand for those. Returns ``None`` if the doc is unreadable."""
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     relative_path = str(full_contract_path.relative_to(project_root))
 
     sys_path = pathlib.Path(args.system_doc)
-    content = get_system_doc(sys_path)
-    if content is None:
+    if not sys_path.is_file():
         print(f"Error: cannot read {sys_path}")
-        return 1
+        return None
 
-    from composer.workflow.services import get_store
-    store = get_store()
-
-    root_key = _root_cache_key(
-        str(project_root), sys_path, relative_path, contract_name,
+    root_ns = user_ns(
+        args.cache_ns,
+        _root_cache_key(str(project_root), sys_path, relative_path, contract_name),
     )
-    root_ns = user_ns(args.cache_ns, root_key)
-    print(f"Root namespace: {root_ns}")
-
     memory_ns = args.memory_ns
     if memory_ns:
         memory_ns = get_uid() + "/" + memory_ns
+    return root_ns, memory_ns, contract_name
+
+
+async def _resolve_from_run(store: BaseStore, run_id: str, uid: str | None) -> Resolved | None:
+    """Look up the namespaces the pipeline recorded for ``run_id`` — the
+    ``data_logger("cache_root", ...)`` record written from autoprove_common /
+    foundry entry once the design doc (hence cache root) is resolved. Returns
+    ``None`` if the run isn't found or ran without caching."""
+    rec = await get_run_data(store, run_id, "cache_root", uid=uid)
+    if rec is None:
+        print(f"Error: no cache metadata for run {run_id!r} (looked under uid={uid!r}).")
+        return None
+    raw_ns = rec.get("cache_root")
+    if raw_ns is None:
+        print(f"Error: run {run_id!r} ran without caching — nothing to explore.")
+        return None
+    return tuple(raw_ns), rec.get("memory_ns"), rec["contract_name"]
+
+
+async def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Cache & Memory Explorer for the Auto-Prove pipeline"
+    )
+    sub = parser.add_subparsers(dest="mode", required=True)
+
+    p_run = sub.add_parser(
+        "run",
+        help="Explore a run by id (recommended). Reads the cache namespace the run "
+             "recorded in its metadata — works even when the design doc was auto-discovered.",
+    )
+    p_run.add_argument("run_id", help="Run id (from the autoprove logs / ap-trail).")
+    p_run.add_argument(
+        "--uid", default=None,
+        help="User-id namespace the run was logged under (default: the run's default namespace).",
+    )
+
+    p_inputs = sub.add_parser(
+        "inputs",
+        help="Reconstruct the cache namespace from the original CLI inputs. Requires "
+             "the supplied design doc, so it does NOT work for auto-discovered runs.",
+    )
+    p_inputs.add_argument("project_root", help="Root directory of the Solidity project")
+    p_inputs.add_argument("main_contract", help="Main contract as path:ContractName")
+    p_inputs.add_argument("system_doc", help="Path to the design document (text or PDF)")
+    p_inputs.add_argument("--cache-ns", required=True, dest="cache_ns",
+                          help="Cache namespace (same as passed to autoprove)")
+    p_inputs.add_argument("--memory-ns", dest="memory_ns", default=None,
+                          help="Memory namespace (enables memory browsing)")
+
+    args = parser.parse_args()
+
+    store = await get_async_store()
+
+    resolved = (
+        await _resolve_from_run(store, args.run_id, args.uid)
+        if args.mode == "run"
+        else _resolve_from_inputs(args)
+    )
+    if resolved is None:
+        return 1
+    root_ns, memory_ns, contract_name = resolved
+
+    print(f"Root namespace: {root_ns}")
 
     root_ctx: WorkflowContext[None] = WorkflowContext.create(
         services=DummyServices(),  # type: ignore[arg-type]
@@ -405,9 +465,9 @@ def main() -> int:
         store=store,
         status=status,
     )
-    app.run()
+    await app.run_async()
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))

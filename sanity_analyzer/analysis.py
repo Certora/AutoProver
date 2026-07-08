@@ -1,4 +1,4 @@
-from typing import NotRequired
+from typing import NotRequired, assert_never
 import pathlib
 import uuid
 
@@ -14,10 +14,11 @@ from composer.rag.models import get_model
 from composer.tools.search import cvl_manual_search
 from composer.templates.loader import load_jinja_template
 from composer.workflow.services import create_llm, get_memory
+from composer.workflow.provider import provider_for
 
 from composer.tools.thinking import get_rough_draft_tools, RoughDraftState
 
-from graphcore.tools.memory import memory_tool
+from graphcore.tools.memory import anthropic_memory_tool, openai_memory_tool
 from graphcore.tools.vfs import fs_tools
 from graphcore.graph import build_workflow, FlowInput, build_async_workflow
 from graphcore.tools.results import result_tool_generator
@@ -144,7 +145,7 @@ Examples:
 
     add_protocol_args(parser, ModelOptions)
     add_protocol_args(parser, WorkflowOptions)
-    parser.set_defaults(rag_db=SANITY_DEFAULT_CONNECTION, model="claude-sonnet-4-5-20250929", interleaved_thinking=True)
+    parser.set_defaults(rag_db=SANITY_DEFAULT_CONNECTION, model="claude-sonnet-4-6", interleaved_thinking=True)
 
     args = parser.parse_args()
     details = analyze(cast(SanityAnalysisArgs, args))
@@ -248,10 +249,18 @@ async def async_analyze(args: SanityAnalysisArgs) -> SanityAnalysisResult | None
     if args.thread_id is None:
         print(f"Chose thread id: {tid}")
 
+    provider = provider_for(args.model)
     rag_db = await get_rag_db(args.rag_db, model=get_model())
     tools = [cvl_manual_search(rag_db), sanity_analysis_output_tool, *get_rough_draft_tools(SanityState), *v_tools]
     if args.memory_tool:
-        tools.append(memory_tool(get_memory(tid, "sanity")))
+        match provider:
+            case "anthropic":
+                mem_factory = anthropic_memory_tool
+            case "openai":
+                mem_factory = openai_memory_tool
+            case _:
+                assert_never(provider)
+        tools.append(mem_factory(get_memory(tid, "sanity")))
 
     llm = create_llm(args)
 

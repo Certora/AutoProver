@@ -29,7 +29,7 @@ from graphcore.graph import LLM
 from composer.prover.core import (
     ProverOptions, ProverCallbacks, run_prover, DefaultCexHandler
 )
-from composer.prover.runner import ProverEventCallbacks
+from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.stream import (
     ProverOutputEvent, CloudPollingEvent, RuleAnalysisResult,
@@ -138,6 +138,12 @@ class _SpecCallbacks(ProverEventCallbacks):
             "tool_call_id": self._tool_call_id,
             "link": link,
         })
+
+    @override
+    async def on_prover_runtime(self, ms: int) -> None:
+        # Queue-free prover run time (cloud job startTime->finishTime, or local subprocess wall-clock).
+        # Attributed to the active task; folded into the phase / run "prover_usage" totals.
+        self._summary.record_prover_runtime(ms)
 
     @override
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
@@ -268,10 +274,6 @@ def get_prover_tool(
 
                 if isinstance(result, str):
                     return result
-                if isinstance(result, SummarizedReport):
-                    return tool_state_update(
-                        tool_call_id=tool_call_id, content=result.todo_list, prover_link=result.link
-                    )
                 all_verified = True
                 for (r, stat) in result.rule_status.items():
                     if r in state["rule_skips"]:
@@ -284,23 +286,8 @@ def get_prover_tool(
                         tool_call_id=tool_call_id, content=result.result_str,
                         prover_link=result.link, validations=stamper(state),
                     )
-
-            if isinstance(result, str):
-                return result
-            all_verified = True
-            for (r, stat) in result.rule_status.items():
-                if r in state["rule_skips"]:
-                    continue
-                if not stat:
-                    all_verified = False
-                    break
-            if rules is None and all_verified:
                 return tool_state_update(
-                    tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state),
+                    tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
                 )
-            return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
-            )
 
     return verify_spec

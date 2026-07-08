@@ -48,7 +48,7 @@ class _SanityArgs:
     thinking_tokens: int = 2048
     tokens: int = 4096
     rag_db: str = field(default_factory=lambda: SANITY_DEFAULT_CONNECTION)
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str = "claude-sonnet-4-6"
     memory_tool: bool = True
     interleaved_thinking: bool = True
     prover_capture_output: bool = False
@@ -364,14 +364,6 @@ class SanityPhase:
         """Directory for transient conf copies, kept out of the user-facing certora/confs/ tree."""
         return self.prover_runner.project_root / DIR_INTERNAL_CONFS
 
-    def _build_job_msg(self, conf_file: Path) -> Optional[str]:
-        """Build the msg string for a prover job.
-
-        Format: "ProverLite <timestamp> <ContractName>: <conf_name>"
-        Returns None if no orchestration_timestamp is set.
-        """
-        return ProverJobSpec.build_job_msg(self.orchestration_timestamp, self.contract_name, conf_file)
-
     def log(self, level: str, message: str):
         """Simple contract logging utility."""
         log_with_contract("Sanity", level, self.contract_name, message)
@@ -575,7 +567,7 @@ class SanityPhase:
             skipped = failing_methods[MAX_RERUNS:]
             self.log("warning", f"Too many methods failed sanity ({len(failing_methods)}), running reruns only for the first {MAX_RERUNS}. Skipped: {skipped}")
             failing_methods = failing_methods[:MAX_RERUNS]
-        
+
         self.log(
             "info",
             f"Running sanity coverage reruns for {len(failing_methods)} failing method(s): {failing_methods}",
@@ -598,7 +590,6 @@ class SanityPhase:
                 phase=f"Sanity Coverage Rerun - {self.contract_name} - {method}",
                 config_file=coverage_config,
                 extra_args=self.extra_args,
-                msg=self._build_job_msg(coverage_config.path),
             ))
         return await self.prover_runner.submit_and_wait_for_jobs(job_specs, completion_callback=completion_callback)
 
@@ -728,7 +719,6 @@ class SanityPhase:
                 phase="hashing_bound_detection",
                 config_file=bound_detection_config,
                 extra_args=self.extra_args,
-                msg=self._build_job_msg(bound_detection_config.path),
             )
 
             result = await self.prover_runner.check_with_prover(job_spec)
@@ -904,7 +894,6 @@ class SanityPhase:
                 config_file=test_config,
                 extra_args=self.extra_args,
                 context=config,  # Store BoundConfiguration as context
-                msg=self._build_job_msg(test_config.path),
             )
             job_specs.append(job_spec)
 

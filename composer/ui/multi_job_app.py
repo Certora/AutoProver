@@ -91,6 +91,34 @@ def _render_row(label: str, status: TaskStatus) -> Text:
 
 
 # ---------------------------------------------------------------------------
+# Notice — compact, persistent callout for a single important result
+# ---------------------------------------------------------------------------
+
+class Notice(Static):
+    """A compact, persistent callout for one important result.
+
+    A ``Collapsible`` wrapping a ``RichLog`` is built for *streaming* output — it is
+    sized tall and folds its contents away — so it is the wrong shape for a one-shot
+    "here is the notable thing that happened" line. ``Notice`` mounts a short,
+    always-visible block (styled via the ``.notice`` CSS): a bold, marker-prefixed
+    headline plus an optional dim detail line."""
+
+    def __init__(
+        self,
+        headline: str | Text,
+        detail: str | Text | None = None,
+        *,
+        marker_style: str = "cyan",
+    ) -> None:
+        head = headline if isinstance(headline, Text) else Text(headline, style="bold")
+        body = dot(marker_style, head)
+        if detail:
+            body.append("\n  ")
+            body.append_text(detail if isinstance(detail, Text) else Text(detail, style="dim"))
+        super().__init__(body, classes="notice")
+
+
+# ---------------------------------------------------------------------------
 # Conversation rendering (refinement loop)
 # ---------------------------------------------------------------------------
 
@@ -298,6 +326,8 @@ class TaskHost(Protocol):
     def update_tokens(self, msg: AIMessage) -> None: ...
     def make_content_link(self, label: str, content: str, filename: str) -> Static: ...
     def hitl_input(self, task_id: str, input: Input) -> AbstractAsyncContextManager[asyncio.Queue[str]]: ...
+    # Transient toast (satisfied by textual.app.App.notify). Used by post_notice.
+    def notify(self, message: str, *, title: str = "", markup: bool = True) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +416,25 @@ class MultiJobTaskHandler[H]:
         """Mount a clickable content link in the task panel."""
         widget = self._host.make_content_link(label, content, filename)
         await self._mount_to(self._panel, widget)
+
+    # ── Important-result notices ─────────────────────────────
+
+    async def post_notice(
+        self,
+        headline: str | Text,
+        detail: str | Text | None = None,
+        *,
+        toast: bool = True,
+    ) -> None:
+        """Surface one important result. Mounts a persistent :class:`Notice` callout in
+        this task's panel and — unless ``toast=False`` — also raises a transient toast,
+        so the result is visible without drilling into the panel. Prefer this over a
+        ``Collapsible`` + ``RichLog`` (which is for streaming output) for a one-shot
+        notice such as "the discovered design doc is X"."""
+        await self._mount_to(self._panel, Notice(headline, detail))
+        if toast:
+            message = headline.plain if isinstance(headline, Text) else headline
+            self._host.notify(message, title=self._label, markup=False)
 
     # ── Subclass hooks ────────────────────────────────────────
 
@@ -483,6 +532,7 @@ class MultiJobApp[P: HasName, T: MultiJobTaskHandler](LogViewerMixin, IDEContent
     .task-panel > * { margin-bottom: 1; }
     .content-pane { height: 1fr; padding: 0 1; }
     .nested-workflow { margin-left: 2; border-left: solid $secondary; padding-left: 1; }
+    .notice { border-left: thick $accent; background: $surface; padding: 0 1; margin: 1 0; }
     .interaction-hint { color: $text-muted; padding: 0 1; }
     Collapsible { background: transparent; border: none; padding: 0; }
     CollapsibleTitle { padding: 0 1; }

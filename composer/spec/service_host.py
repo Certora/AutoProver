@@ -32,8 +32,8 @@ from graphcore.graph import Builder
 from langchain_core.language_models.chat_models import BaseChatModel as LLM
 from langchain_core.tools import BaseTool
 
+from composer.llm.provider import ModelProvider as CoreModelProvider, CacheLevel
 from composer.templates.loader import load_jinja_template
-from composer.workflow.services import CacheLevel, LLMFactory
 
 
 Sort = Literal["greenfield", "existing", "update"]
@@ -51,20 +51,19 @@ class ModelProvider:
     ``llm_heavy``. ``cache_level`` / ``disable_thinking`` are honoured either
     way, so a collapsed provider still gives access to those knobs."""
 
-    factory: LLMFactory
-    heavy_model: str
-    lite_model: str
+    heavy_model: CoreModelProvider
+    lite_model: CoreModelProvider
     checkpointer: Checkpointer
 
     def llm_heavy(
         self, *, cache_level: CacheLevel = CacheLevel.SHORT, disable_thinking: bool = False
     ) -> LLM:
-        return self.factory(self.heavy_model, cache_level=cache_level, disable_thinking=disable_thinking)
+        return self.heavy_model.builder_for(cache_level=cache_level, disable_thinking=disable_thinking)
 
     def llm_lite(
         self, *, cache_level: CacheLevel = CacheLevel.SHORT, disable_thinking: bool = False
     ) -> LLM:
-        return self.factory(self.lite_model, cache_level=cache_level, disable_thinking=disable_thinking)
+        return self.lite_model.builder_for(cache_level=cache_level, disable_thinking=disable_thinking)
 
     def builder_heavy(
         self, *, cache_level: CacheLevel = CacheLevel.SHORT, disable_thinking: bool = False
