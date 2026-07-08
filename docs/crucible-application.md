@@ -583,14 +583,17 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    fixture + one test written through the store assembles a crate that `crucible run vault c_deposit
    --dry-run` accepts; metadata lands under `certora/crucible/` and a co-located EVM `certora/specs/`
    deliverable is left untouched.
-3. **The `prepare_formalization` authoring loop (shared fixture/actions) + the knowledge seam (§7.5).**
-   The LLM IoC decider that authors the fixture + `action_*` from `SolanaApplication`, gated by
-   `--dry-run`. Build the **tool-enabled `call_llm`** framework change now (host-assembled tool belt:
-   backend RAG search over the descriptor's `ComposerRAGDB` + learned-KB + source tools) so the future
-   CVLR-Solana backend needs no framework change; seed a (possibly minimal) `crucible_kb` and inject
-   the harness cheat-sheet + example harnesses for the basics. **Gate:** on `solana_vault`, the agent
-   authors a fixture whose `setup()` + all three actions succeed (`--dry-run` green) with no human
-   edits, using the tool-enabled loop.
+3. **The fixture-authoring loop (shared fixture/actions) + the knowledge seam (§7.5).** Implemented as
+   a new IoC hook: `Application::new_setup_session` (SDK) drives a Rust decider through the effect loop
+   — `CallLlm` (author a `Fixture` from the analyzed model + a harness cheat-sheet, reading source via
+   tools) → `RunCommand` (assemble the crate with a `c_probe` test, `crucible run --dry-run`) → publish
+   / revise / give up. Built the **tool-enabled `call_llm`** framework change (host-assembled tool belt:
+   source + RAG + learned-KB) so a future CVLR-Solana backend reuses it unchanged; the §7.5 cheat-sheet
+   is embedded by the decider (a `crucible_kb` RAG DB is layered on at packaging). **Gate met:** with a
+   real model (`tests/test_crucible_setup_gate.py`), the agent read the vault source (`list_files` /
+   `get_file`) and authored a clean `Fixture` (`#[fuzz_fixture] setup()` + actions, no test fn) that
+   passed `crucible run --dry-run` with no human edits — green in ~37s. (Pipeline store-selection +
+   driving the setup session from `prepare_formalization` is packaging, Phase 5.)
 4. **`formalize` per-component tests + verdicts.** Per component, author one test, run bounded fuzz,
    `fetch_verdicts` off the result (§5.3–5.4); `finalize` assembles the crate (§5.5). **Gate:** the
    full live gate (§8.2) — every component yields a compiling test that runs to timeout; the seeded
