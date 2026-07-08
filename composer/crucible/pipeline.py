@@ -95,6 +95,12 @@ async def run_crucible_pipeline(
     """Run the whole Crucible vertical: the SOLANA ecosystem front half (analysis +
     property extraction) → the Crucible backend (shared fixture via the setup
     session, then per-component test authoring + fuzzing) → report."""
+    # Build the program to sBPF up front (docs §5.1) — the harness loads the `.so`,
+    # and it's the shared Solana build step, not per-component work.
+    from composer.spec.solana.build import build_program
+
+    await build_program(source_input.project_root, str(source_input.contract_name), timeout_s=command_timeout_s)
+
     backend = build_crucible_backend(
         source_input,
         crucible_repo=resolve_crucible_repo(str(crucible_repo) if crucible_repo else None),

@@ -66,6 +66,13 @@ class CrucibleArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
         deps itself (§6.1)."""
         return self.harness.write_manifest(self.fuzz_dir(), (self.PROBE_FEATURE,))
 
+    def prepare_component(self, slug: str) -> Path:
+        """Pre-place ``Cargo.toml`` declaring this component's feature (plus the probe
+        + any already-registered features) so its per-component session can write
+        ``src/main.rs`` and fuzz ``c_<slug>``."""
+        feature = CrucibleHarness.feature_for(slug)
+        return self.harness.write_manifest(self.fuzz_dir(), (feature, self.PROBE_FEATURE))
+
     @override
     def _artifact_dir(self) -> Path:
         # The crate's source dir. (The base's one-file-per-component writer is not

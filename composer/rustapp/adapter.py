@@ -168,6 +168,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         feedback: FeedbackHook | None = None,
         component_config: dict | None = None,
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
+        store: Any = None,
     ):
         super().__init__(RustFormalResult, descriptor.backend_tag)
         self._module = module
@@ -177,6 +178,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # fixture authored by the setup session, the program name, the fuzz budget).
         self._component_config = component_config or {}
         self._command_timeout_s = command_timeout_s
+        self._store = store
 
     @override
     async def formalize(
@@ -187,6 +189,12 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         ctx: WorkflowContext[RustFormalResult],
         run: PipelineRun,
     ) -> RustFormalResult | GaveUp:
+        # Pre-place the manifest declaring this component's feature so its session
+        # can write main.rs + fuzz (the decider can't render host-resolved deps).
+        prep = getattr(self._store, "prepare_component", None)
+        if prep is not None:
+            prep(feat.slug)
+
         session_input = json.dumps(
             {
                 "label": label,
@@ -291,6 +299,11 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, Any]):
         # (fixture source) is set on the store and threaded into per-component config.
         new_setup = getattr(b.module, "new_setup_session", None)
         if new_setup is not None and self.analyzed is not None:
+            # Pre-place the harness manifest (deps + probe feature) so the setup
+            # session can write main.rs and dry-run (the decider can't render deps).
+            wsm = getattr(b.artifact_store, "write_setup_manifest", None)
+            if wsm is not None:
+                wsm()
             setup_input = json.dumps(
                 {
                     "program": str(run.source.contract_name),
@@ -327,6 +340,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, Any]):
             feedback=b.feedback,
             component_config=component_config,
             command_timeout_s=b.command_timeout_s,
+            store=b.artifact_store,
         )
 
 
