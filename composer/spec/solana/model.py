@@ -184,3 +184,11 @@ class SolanaInstructionInstance:
 
     def context_tag(self) -> dict:
         return {"instruction": self.instruction.model_dump()}
+
+    def feature_json(self) -> dict:
+        # The unit's semantic content for a backend marshalling it across a boundary:
+        # the instruction, tagged with its program (a Solana backend needs both).
+        return {
+            "program": self.program.name,
+            "instruction": self.instruction.model_dump(mode="json"),
+        }

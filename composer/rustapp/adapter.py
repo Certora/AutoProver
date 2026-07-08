@@ -31,8 +31,8 @@ from composer.pipeline.core import (
     PipelineRun,
     PreparedSystem,
     SystemAnalysisSpec,
-    main_instance,
 )
+from composer.pipeline.ecosystem import Ecosystem
 from composer.rustapp.command import DEFAULT_TIMEOUT_S, run_local_command
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.loop import Effects, GaveUp as LoopGaveUp, drive_session
@@ -41,11 +41,7 @@ from composer.rustapp.store import RustArtifactStore
 from composer.spec.context import WorkflowContext
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import Outcome, RuleName
-from composer.spec.system_model import (
-    ContractComponentInstance,
-    ContractInstance,
-    SourceApplication,
-)
+from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 
 _log = logging.getLogger(__name__)
@@ -152,10 +148,11 @@ class _RustFormalizerCfg:
     feedback: FeedbackHook | None = None
 
 
-class RustFormalizer(Formalizer[RustFormalResult, ContractComponentInstance]):
+class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     """Drives the Rust decider. ``formalize`` builds a session from the marshalled
-    component + properties and runs the IoC loop; ``fetch_verdicts`` / ``finalize``
-    are off-thread sync FFI calls."""
+    unit + properties and runs the IoC loop; ``fetch_verdicts`` / ``finalize``
+    are off-thread sync FFI calls. Ecosystem-agnostic: the unit is any
+    :class:`FeatureUnit` and is marshalled via ``feature_json()``."""
 
     def __init__(
         self,
@@ -174,7 +171,7 @@ class RustFormalizer(Formalizer[RustFormalResult, ContractComponentInstance]):
     async def formalize(
         self,
         label: str,
-        feat: ContractComponentInstance,
+        feat: FeatureUnit,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[RustFormalResult],
         run: PipelineRun,
@@ -182,7 +179,7 @@ class RustFormalizer(Formalizer[RustFormalResult, ContractComponentInstance]):
         session_input = json.dumps(
             {
                 "label": label,
-                "component": feat.component.model_dump(mode="json"),
+                "component": feat.feature_json(),
                 "props": [
                     {"title": p.title, "sort": p.sort, "description": p.description}
                     for p in props
@@ -232,7 +229,7 @@ class RustFormalizer(Formalizer[RustFormalResult, ContractComponentInstance]):
 
         summary = [
             {
-                "name": o.feat.component.name,
+                "name": o.feat.display_name,
                 "delivered": isinstance(o.result, Delivered),
                 "unit_file": (
                     o.result.unit_file if isinstance(o.result, Delivered) else None
@@ -255,11 +252,11 @@ class RustFormalizer(Formalizer[RustFormalResult, ContractComponentInstance]):
 
 
 @dataclass
-class RustPreparedSystem(PreparedSystem[RustFormalResult, ContractInstance]):
+class RustPreparedSystem(PreparedSystem[RustFormalResult, Any]):
     backend: "RustBackend"
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult, ContractComponentInstance]:
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult, FeatureUnit]:
         return RustFormalizer(
             self.backend.module,
             self.backend.descriptor,
@@ -271,13 +268,16 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, ContractInstance]):
 @dataclass
 class RustBackend:
     """A :class:`PipelineBackend` backed by a Rust wheel. Structurally satisfies the
-    protocol — the driver never imports it."""
+    protocol — the driver never imports it. Ecosystem-agnostic: it locates the main
+    and marshals units through the resolved ``ecosystem`` + the ``FeatureUnit``
+    protocol, so an ``evm`` and a ``solana`` wheel share this one adapter."""
 
     module: Any
     descriptor: AppDescriptor
     _phase: type
     _core_phases: CorePhases
     artifact_store: RustArtifactStore
+    ecosystem: Ecosystem[Any, Any, Any]
     prover: ProverHook | None = None
     feedback: FeedbackHook | None = None
 
@@ -294,13 +294,14 @@ class RustBackend:
         return self._core_phases
 
     async def prepare_system(
-        self, analyzed: SourceApplication, run: PipelineRun
-    ) -> PreparedSystem[RustFormalResult, ContractInstance]:
-        return RustPreparedSystem(main_instance(analyzed, run.source), self)
+        self, analyzed: Any, run: PipelineRun
+    ) -> PreparedSystem[RustFormalResult, Any]:
+        # The ecosystem locates its own Main (EVM contract, Solana program, …).
+        return RustPreparedSystem(self.ecosystem.locate_main(analyzed, run.source), self)
 
-    def to_artifact_id(self, c: ContractComponentInstance) -> RustArtifact:
+    def to_artifact_id(self, c: FeatureUnit) -> RustArtifact:
         return RustArtifact(
-            c.slugified_name,
+            c.slug,
             self.descriptor.artifact_layout.artifact_prefix,
             self.descriptor.artifact_layout.artifact_extension,
         )

@@ -38,6 +38,12 @@ class FeatureUnit(Protocol):
         """The tag persisted alongside this unit's workflow context."""
         ...
 
+    def feature_json(self) -> dict:
+        """The unit's semantic content as a JSON-able dict, for a backend that
+        marshals it across a boundary (e.g. a Rust wheel's ``FormalizeInput.component``).
+        The shape is ecosystem-specific; the paired backend knows how to read it."""
+        ...
+
 type ContractSort = Literal["dynamic", "singleton", "multiple"]
 
 
@@ -288,6 +294,9 @@ class ContractComponentInstance:
 
     def context_tag(self) -> dict:
         return {"component": self.component.model_dump()}
+
+    def feature_json(self) -> dict:
+        return self.component.model_dump(mode="json")
 
     @staticmethod
     def from_app(

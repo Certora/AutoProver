@@ -102,7 +102,7 @@ def build_backend(
     feedback: FeedbackHook | None = None,
 ) -> RustBackend:
     """Construct the :class:`RustBackend` (synthesizes the phase enum + core phases
-    + artifact store)."""
+    + artifact store, and resolves the descriptor's ecosystem)."""
     phase = build_phase_enum(descriptor)
     core = build_core_phases(descriptor, phase)
     store = RustArtifactStore(project_root, descriptor.artifact_layout)
@@ -112,6 +112,7 @@ def build_backend(
         _phase=phase,
         _core_phases=core,
         artifact_store=store,
+        ecosystem=resolve_ecosystem(descriptor),
         prover=prover,
         feedback=feedback,
     )
@@ -231,6 +232,7 @@ def build_application(
             _phase=phase,
             _core_phases=core,
             artifact_store=store,
+            ecosystem=ecosystem,
             prover=prover,
             feedback=feedback,
         )
