@@ -86,6 +86,9 @@ ragbuild = [
     "markdown-it-py>=3.0",
     "mdit-py-plugins>=0.4",
 ]
+dev = [
+    "maturin>=1.14.1",
+]
 
 [tool.uv]
 conflicts = [
