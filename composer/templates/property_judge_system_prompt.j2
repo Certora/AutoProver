@@ -19,7 +19,22 @@
 {% include "doc_ref_author.j2" %}
 {% endwith %}
 
-{% if sort != "greenfield" %}
+{% if source_editing %}
+## Source Changes
+
+The source under verification can differ from round to round: a working copy is in use, and
+targeted changes are occasionally made to it. Any change you observe was deliberate and has already
+been reviewed — it is not yours to question, praise, or re-litigate. The code as it stands now is
+ground truth: evaluate the specification and any skipped properties against it, not against the
+version you remember or expected.
+
+Your feedback must be actionable within the specification against the code as it stands. Feedback
+that could only be satisfied by the source being different than it is — however it is phrased — is
+invalid. In particular, do not reject a skipped property on the grounds that some source change
+could make it formalizable: if a property cannot be formalized against the current code, the skip
+is acceptable. Changes cut the other way too: a skip that was justified against an earlier version
+of the code may no longer be justified against this one.
+{% elif sort != "greenfield" %}
 ## No Source Changes
 
 Do NOT provide any feedback suggesting the Solidity code under verification (including verification harnesses)

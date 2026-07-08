@@ -1,4 +1,5 @@
 
+import inspect
 from typing import Callable, NotRequired, Sequence, Iterable, Awaitable
 from typing_extensions import TypedDict
 from composer.spec.service_host import Sort, ServiceHost
@@ -41,16 +42,25 @@ class FeedbackInherentParams(TypedDict):
     #   ``existing``   — pre-existing codebase being verified as-is; target
     #                    has real immutable source.
     sort: Sort
+    # True when the pipeline can modify the source under verification (the
+    # editor tool is wired). Swaps the immutable-source skip guidance for the
+    # "evaluate against the code as it stands" variant. Absent/False keeps the
+    # immutable story, which remains true for pipelines without the editor.
+    source_editing: NotRequired[bool]
 
 FeedbackTemplate = TypedTemplate[FeedbackInherentParams]("property_judge_prompt.j2")
 
 class JudgeSystemParams(TypedDict):
     sort: Sort
+    source_editing: NotRequired[bool]
 
 # Judge system prompt, shared between the natspec and source-mode flows. The fs
 # primitives are always documented; ``sort`` drives the rest (the template
 # compiles out the code_explorer / code_document_ref guidance unless
 # ``sort == "existing"``, the only mode that wires those tools).
+# ``source_editing`` replaces the "No Source Changes" block with the "Source
+# Changes" one: the code can differ between rounds, but feedback must stay
+# actionable against the code as it stands.
 FeedbackSystemTemplate = TypedTemplate[JudgeSystemParams]("property_judge_system_prompt.j2")
 
 
@@ -64,7 +74,16 @@ class FeedbackBaseState(MessagesState, JudgeExtra):
 class FeedbackBaseInput(FlowInput, JudgeExtra):
     pass
 
-type ExtraInputPrompt = list[str | dict] | Callable[[], list[str | dict]] | None
+# Extra input parts prepended to every judge invocation. A bare list is static;
+# a callable is evaluated per invocation (and may be async) so the producer can
+# reflect state that changes between review rounds — e.g. a notice that the
+# source under verification has changed since the judge last saw it.
+type ExtraInputPrompt = (
+    list[str | dict]
+    | Callable[[], list[str | dict]]
+    | Callable[[], Awaitable[list[str | dict]]]
+    | None
+)
 
 type ContextualFeedbackToolImpl[Ctx] = Callable[
     [Ctx, str, list[SkippedProperty], list[Rebuttal], str],
@@ -89,10 +108,13 @@ def property_feedback_judge_generic[
     system_prompt: TemplateInstantiation | None,
 
     input_lift: Callable[[FeedbackBaseInput, Ctx], I],
+    source_editing: bool = False,
 ) -> ContextualFeedbackToolImpl[Ctx]:
-    
+
     if system_prompt is None:
-        system_prompt = FeedbackSystemTemplate.bind({"sort": env.sort})
+        system_prompt = FeedbackSystemTemplate.bind(
+            {"sort": env.sort, "source_editing": source_editing}
+        )
 
     builder = env.builder_heavy().with_tools(
         feedback_tools
@@ -131,7 +153,10 @@ def property_feedback_judge_generic[
             if isinstance(extra_inputs, list):
                 input_parts.extend(extra_inputs)
             else:
-                input_parts.extend(extra_inputs())
+                produced = extra_inputs()
+                if inspect.isawaitable(produced):
+                    produced = await produced
+                input_parts.extend(produced)
 
         input_parts.append("The proposed CVL file is")
         input_parts.append(cvl)
@@ -173,8 +198,9 @@ def property_feedback_judge(
     prompt: InjectedTemplate[Properties] | TemplateInstantiation,
     props: list[PropertyFormulation],
     *,
-    extra_inputs: list[str | dict] | Callable[[], list[str | dict]] | None = None,
+    extra_inputs: ExtraInputPrompt = None,
     system_prompt: TemplateInstantiation | None = None,
+    source_editing: bool = False,
 ) -> FeedbackToolContext:
     to_wrap = property_feedback_judge_generic(
         st=FeedbackBaseState,
@@ -186,7 +212,8 @@ def property_feedback_judge(
         prompt=prompt,
         props=props,
         system_prompt=system_prompt,
-        input_lift=lambda i, _: i
+        input_lift=lambda i, _: i,
+        source_editing=source_editing,
     )
 
     return FeedbackToolContext(

@@ -2,12 +2,16 @@ from typing import NotRequired, override, Literal, Annotated
 from typing_extensions import TypedDict
 import json
 
+from dataclasses import dataclass
+
 from langchain_core.tools import BaseTool
 from pydantic import Field, BaseModel, Discriminator
 
 from graphcore.tools.schemas import (
     WithAsyncImplementation, WithImplementation, WithInjectedId, WithInjectedState,
+    WithAsyncDependencies
 )
+from graphcore.tools.vfs import VFSAccessor, VFSState
 from graphcore.graph import tool_state_update
 from graphcore.summary import SummaryConfig
 
@@ -16,7 +20,7 @@ from composer.spec.cvl_generation import (
     check_completion, validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
     GeneratedCVL, PropertyRuleMapping
 )
-from composer.spec.source.live_explorer import ExplorerInput
+from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.types import PropertyFormulation
 from composer.pipeline.core import GaveUp
@@ -34,13 +38,17 @@ from langgraph.types import Command
 from composer.spec.feedback import property_feedback_judge, FeedbackTemplate
 from composer.ui.tool_display import tool_display
 
+from composer.spec.source.munge.edit_store import EditStore
+from composer.spec.source.munge.munge_agent import editor_tool
+from composer.spec.source.munge.vfs_diff import summarize_changes
+
 from graphcore.graph import FlowInput
 
 class SourceAuthorExtra(TypedDict):
     failed: bool | None
 
-class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, ExplorerInput):
-    pass
+class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra, VersionedHistory):
+    vfs: dict[str, str] # no merge op intentionally, vfs is only ever replaced wholesale
 
 class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):
     pass
@@ -329,6 +337,109 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
             config=curr_config
         )
 
+class ApplyEditTool(WithAsyncDependencies[str | Command, EditStore], WithInjectedState[SourceCVLGenerationExtra], WithInjectedId):
+    """
+     Apply the edit staged by the edit agent to your working tree.
+    """
+    edit_id: str = Field(description="The unique edit ID produced by the editor you want to apply")
+
+    @override
+    async def run(self) -> str | Command:
+        with self.tool_deps() as dep:
+            if self.edit_id in self.state["version_history"]:
+                return f"{self.edit_id} has already been applied; if you want to revert to that state, use the revert_to_edit tool"
+            new_state = await dep.read(self.edit_id)
+            if new_state is None:
+                return f"{self.edit_id} does not denote any known edit"
+            return tool_state_update(
+                tool_call_id=self.tool_call_id,
+                content="Edit applied",
+                vfs=new_state,
+                version_history=[self.edit_id]
+            )
+
+@dataclass
+class HistoryDeps:
+    mat: VFSAccessor[VFSState]
+    edit_store: EditStore
+
+class EditHistoryLog(WithAsyncDependencies[str, HistoryDeps], WithInjectedState[SourceCVLGenerationExtra]):
+    """
+    Use this to view a list of the applied edit ids, and the changes to the source code made on
+    each edit
+    """
+
+    @override
+    async def run(self) -> str:
+        hist = self.state["version_history"]
+        if len(hist) == 0:
+            return "No edits applied, working against clean project directory"
+        fetched_states = []
+        history : list[tuple[str, str]]= []
+        with self.tool_deps() as dep:
+            for (i, edit_id) in enumerate(hist):
+                edit_state = await dep.edit_store.read(edit_id)
+                if edit_state is None:
+                    return "Something has gone very wrong; your edit history has an orphan ID. This is an unrecoverable error; terminate your task immediately"
+                if i == 0:
+                    prev = {}
+                else:
+                    prev = fetched_states[i - 1]
+                diff = summarize_changes(
+                    {"vfs": edit_state}, dep.mat, prev
+                )
+                history.append((edit_id, diff))
+                fetched_states.append(edit_state)
+        to_format = [
+            f"""
+--- Edit #{i} (ID: {t})
+
+Diff from {"prior edit" if i > 0 else "project directory"}:
+
+{diff}
+"""
+            for (i,(t,diff)) in enumerate(history)
+        ]
+        return "\n\n".join(to_format)
+    
+class RevertToEdit(WithAsyncDependencies[Command | str, EditStore], WithInjectedId, WithInjectedState[SourceCVLGenerationExtra]):
+    """
+    Call this tool to revert to a prior edit in your history
+    """
+    edit_id: str = Field(description="An edit ID to revert to; it must appear in your history")
+
+    async def run(self) -> str | Command:
+        if self.edit_id not in self.state["version_history"]:
+            return f"{self.edit_id} does not appear in your edit history, nothing to revert to"
+        if self.state["version_history"][-1] == self.edit_id:
+            return f"Already at edit id {self.edit_id}, nothing to do"
+        with self.tool_deps() as dep:
+            i = self.state["version_history"].index(self.edit_id)
+            target_vfs = await dep.read(self.edit_id)
+            return tool_state_update(
+                self.tool_call_id,
+                f"Reverted to id {self.edit_id}",
+                vfs=target_vfs,
+                version_history=["__wipe__", *self.state["version_history"][:i+1]]
+            )
+
+
+def generate_edit_management_tools(
+    ctx: WorkflowContext[CVLGeneration],
+    source_env: ServiceHost,
+    edit: EditStore,
+    live_tools: LiveEditTools,
+) -> list[BaseTool]:
+    editor = editor_tool(
+        ctx=ctx,
+        env=source_env,
+        edit_tools=live_tools,
+        edit_store=edit
+    )
+    return [editor, ApplyEditTool.bind(edit).as_tool("blah"), EditHistoryLog.bind(HistoryDeps(
+        live_tools.mat, edit
+    )).as_tool("edit_history_log"), RevertToEdit.bind(edit).as_tool("revert_to_edit")]
+
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
 
@@ -344,6 +455,8 @@ async def batch_cvl_generation(
     source: SourceCode,
     spec_dir: Path,
     spec_stem: str,
+    edit: LiveEditTools,
+    edit_store: EditStore,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
@@ -370,11 +483,22 @@ async def batch_cvl_generation(
     # NB that on longer prover runs we'll still get a cache miss;
     # this is a trade off we may have to revisit later.
     task_graph = env.builder_heavy(cache_level=CacheLevel.LONG).with_tools(
-        env.all_tools
+        env.rag_tools
+    ).with_tools(
+        edit.read_tools
+    ).with_tools(
+        [edit.doc_tool]
+    ).with_tools(
+        generate_edit_management_tools(ctx, env, edit_store, edit)
     ).with_tools(
         static_tools()
     ).with_tools(
-        [prover_tool, ExpectRulePassage.as_tool("expect_rule_passage"), ExpectRuleFailure.as_tool("expect_rule_failure"), GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"), ctx.get_memory_tool()]
+        [prover_tool,
+         ExpectRulePassage.as_tool("expect_rule_passage"),
+         ExpectRuleFailure.as_tool("expect_rule_failure"),
+         GiveUpTool.as_tool("give_up"),
+         PublishResultTool.as_tool("result"),
+         ctx.get_memory_tool()]
     ).with_state(
         SourceCVLGenerationState
     ).with_output_key(
@@ -412,6 +536,8 @@ async def batch_cvl_generation(
             property_rules=[],
             validations={},
             failed=None,
+            vfs={},
+            version_history=[]
         )
     )
 

@@ -416,3 +416,7 @@ def editor_tool(
         edit_store=edit_store,
         graph_runner=runner
     )).as_tool("code_editor")
+
+__all__ = [
+    "editor_tool"
+]

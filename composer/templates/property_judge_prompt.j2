@@ -181,7 +181,11 @@ Verify that the specification covers all {{ properties | length }} listed proper
   formalization you proposed, accept that rebuttal per the Step 1 evaluation rules — do not
   re-insist on the same proposal. If the rebuttal establishes that no working formalization was
   found, the skip is VALID on the grounds that your prior proposal proved unworkable.
-{% if sort != "greenfield" %}
+{% if source_editing %}
+  If the property being skipped could only be formalized were the Solidity source different than it
+  is, the skip is VALID. Evaluate the skip against the code as it stands — whether the source might
+  change is outside your review (see "Source Changes" in your instructions).
+{% elif sort != "greenfield" %}
   If the property being skipped could be formalized with Solidity code changes, the skip is VALID. Do *NOT* reject
   skips with advice to change the Solidity code. The Solidity code is *IMMUTABLE* and suggestions to change the Solidity
   code are INVALID.
