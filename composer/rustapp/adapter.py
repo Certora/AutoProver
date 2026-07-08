@@ -22,7 +22,10 @@ import logging
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, override
+from typing import Any, Awaitable, Callable, NotRequired, override
+
+from graphcore.graph import FlowInput
+from langgraph.graph import MessagesState
 
 from composer.pipeline.core import (
     CorePhases,
@@ -49,6 +52,16 @@ _log = logging.getLogger(__name__)
 # A run_prover / run_feedback hook: async, backend-shaped JSON in and out.
 ProverHook = Callable[[str, Any, "list[str] | None"], Awaitable[dict]]
 FeedbackHook = Callable[[str, Any, Any], Awaitable[dict]]
+
+
+# State + input for the tool-enabled `call_llm` agent (module scope so the
+# NotRequired result annotation type-checks). ``result`` is the agent's final text.
+class _LlmState(MessagesState):
+    result: NotRequired[str]
+
+
+class _LlmInput(FlowInput):
+    pass
 
 
 class RealEffects:
@@ -79,13 +92,42 @@ class RealEffects:
         self._scratch: dict[str, Any] = {}
 
     async def call_llm(self, messages: Any) -> str:
-        from langchain_core.messages import HumanMessage
+        """Run one bounded, **tool-enabled** authoring turn and return its final text.
 
-        model = self._run.env.llm_heavy()
+        Unlike a bare ``ainvoke``, this binds the env's tool belt (source navigation
+        + RAG search over the backend's knowledge base) and runs an agent to
+        completion, so the decider's prompt can pull in framework docs / read the
+        program. This is the ``docs/crucible-application.md`` §7.5 framework change —
+        shared by every Rust backend, so a large-corpus backend (CVLR-Solana) reuses
+        it by shipping only a knowledge DB. Must run inside a ``with_handler`` scope
+        (the caller wraps it in ``run.runner``)."""
+        from composer.spec.graph_builder import bind_standard, run_to_completion
+        from composer.spec.util import uniq_thread_id
+
+        env = self._run.env
+        tools = list(getattr(env, "all_tools", None) or env.rag_tools)
+
+        graph = (
+            bind_standard(
+                env.builder_heavy(),
+                _LlmState,
+                doc="Your complete final answer as a single string (e.g. the authored source file).",
+            )
+            .with_input(_LlmInput)
+            .with_tools(tools)
+            .compile_async()
+        )
+
         content = messages if isinstance(messages, str) else json.dumps(messages)
-        reply = await model.ainvoke([HumanMessage(content=content)])
-        text = reply.content
-        return text if isinstance(text, str) else json.dumps(text)
+        res = await run_to_completion(
+            graph,
+            _LlmInput(input=[content]),
+            thread_id=uniq_thread_id("rust-llm"),
+            recursion_limit=self._ctx.recursion_limit,
+            description="Rust backend authoring turn",
+        )
+        result = res.get("result")
+        return result if isinstance(result, str) else json.dumps(result)
 
     async def run_prover(self, spec: str, config: Any, rules: list[str] | None) -> dict:
         if self._prover is None:
