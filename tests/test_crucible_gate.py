@@ -28,7 +28,10 @@ from pathlib import Path
 
 import pytest
 
+from composer.crucible.harness import CrucibleDep
+from composer.crucible.store import CrucibleArtifactStore
 from composer.rustapp.command import run_local_command
+from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.spec.solana.build import build_program
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
@@ -213,5 +216,84 @@ async def test_crucible_phase1_build_and_dry_run():
     )
     assert res.exit_code == 0, (
         f"crucible --dry-run failed (exit {res.exit_code})\n"
+        f"STDOUT:\n{res.stdout[-3000:]}\n\nSTDERR:\n{res.stderr[-3000:]}"
+    )
+
+
+# --- Phase 2: the deliverable model (CrucibleArtifactStore assembles the crate) ---
+
+# The shared fixture is the phase-1 harness minus its test fn (the store composes
+# fixture + per-component test sections).
+_FIXTURE_SRC = _FUZZ_MAIN_RS.partition("#[invariant_test]")[0]
+
+# One component's test section. Its fn name MUST equal its feature (c_deposit) —
+# Crucible's #[invariant_test] macro gates main() by #[cfg(feature = "<fn name>")].
+_DEPOSIT_SECTION = """\
+#[invariant_test]
+fn c_deposit(fixture: &mut VaultFixture) {
+    if let Ok(vault) = fixture.ctx.read_anchor_account::<VaultState>(&fixture.vault_pda) {
+        fuzz_assert_le!(vault.balance, INITIAL_BALANCE, "recorded balance exceeds initial funds");
+    }
+}
+"""
+
+
+async def test_crucible_phase2_store_assembles_crate():
+    _require(_SCENARIO.is_dir(), f"scenario missing: {_SCENARIO}")
+    _require(shutil.which("cargo-build-sbf") is not None, "cargo-build-sbf not on PATH")
+    _require(shutil.which("crucible") is not None, "crucible CLI not on PATH")
+    crucible_repo = _crucible_repo()
+    _require(crucible_repo is not None, "set CRUCIBLE_REPO to a local crucible checkout")
+    assert crucible_repo is not None
+
+    built = await build_program(_SCENARIO, _PROGRAM, timeout_s=590)
+    assert built.so_path.is_file(), built.so_path
+
+    # A co-located EVM (autoprove) deliverable, to prove the layouts don't collide.
+    evm_sentinel = _SCENARIO / "certora" / "specs" / "autospec_sentinel.spec"
+    evm_sentinel.parent.mkdir(parents=True, exist_ok=True)
+    evm_sentinel.write_text("// pretend EVM output\n")
+
+    # Build the store and give it the shared fixture (in the real pipeline this comes
+    # from the authoring loop in prepare_formalization; here it is hand-authored).
+    dep = CrucibleDep(
+        crucible_repo=crucible_repo,
+        program_crate=_PROGRAM,
+        program_rel=f"../../programs/{_PROGRAM}",
+    )
+    store = CrucibleArtifactStore(str(_SCENARIO), program=_PROGRAM, dep=dep)
+    store.harness.fixture_source = _FIXTURE_SRC
+
+    # One component written through the store, exactly as the driver would.
+    comp = RustArtifact("deposit", "harness", "rs")
+    result = RustFormalResult(
+        commentary="The recorded vault balance never exceeds the authority's initial funds.",
+        artifact_text=_DEPOSIT_SECTION,
+        units=[("balance bounded by initial funds", ["c_deposit"])],
+    )
+    store.write_properties(comp, [])
+    main_rel = store.write_artifact(comp, result)
+
+    # Deliverable crate under fuzz/<program>/ ...
+    assert (_SCENARIO / main_rel).is_file()
+    assert (_SCENARIO / "fuzz" / _PROGRAM / "Cargo.toml").is_file()
+    assert 'c_deposit = []' in (_SCENARIO / "fuzz" / _PROGRAM / "Cargo.toml").read_text()
+    # ... metadata under certora/crucible/ (not under fuzz/, not under certora/specs/) ...
+    props = _SCENARIO / "certora" / "crucible" / "properties"
+    assert (props / "harness_deposit.commentary.md").is_file()
+    assert (props / "harness_deposit.property_tests.json").is_file()
+    # ... and the EVM output is untouched (coexistence).
+    assert evm_sentinel.read_text() == "// pretend EVM output\n"
+
+    # The assembled crate compiles and dry-runs (feature == the component's).
+    res = await run_local_command(
+        "crucible",
+        ["run", _PROGRAM, "c_deposit", "--release", "--dry-run"],
+        {},
+        workdir=_SCENARIO,
+        timeout_s=590,
+    )
+    assert res.exit_code == 0, (
+        f"assembled-crate --dry-run failed (exit {res.exit_code})\n"
         f"STDOUT:\n{res.stdout[-3000:]}\n\nSTDERR:\n{res.stderr[-3000:]}"
     )

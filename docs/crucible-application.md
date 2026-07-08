@@ -307,20 +307,42 @@ the layout fields in [autoprover-sdk](../rust/autoprover-sdk/src/lib.rs) are `ar
 fixture/actions plus *one test fn per component*, with a *per-component feature* in a shared
 `Cargo.toml`. There is no clean "one file per component."
 
-**Options.**
-- **(a) Per-component `[[bin]]`/module, shared code in a lib.** Each component → its own
-  `src/bin/<slug>.rs` (or a `#[cfg(feature)]` module) that imports the shared fixture from a sibling
-  `lib.rs`. Restores one-file-per-component and lets the generic layout mostly stand; costs a
-  slightly less idiomatic harness and more Cargo wiring.
-- **(b) A Crucible-specific `ArtifactStore` that owns a crate.** The per-component "artifact_text" is
-  that component's test fn (for the report/commentary), and the store *assembles* the final
-  `main.rs` + `Cargo.toml` from the shared scaffold + all per-component fns (in `finalize`, §5.5).
-  Most faithful to Crucible; requires extending the Rust-app host's artifact model beyond the
-  single-file `ArtifactLayout` (a new descriptor shape, or an app-owned store).
+**A constraint that decides it (found while building phase 1).** Crucible's CLI hardcodes the harness
+binary name: `crucible run` builds `cargo build --features <test>` and then runs the single
+`target/<profile>/invariant_test` binary (`find_fuzz_binary` in
+[crucible-fuzz-cli/src/lib.rs](../../crucible/crates/crucible-fuzz-cli/src/lib.rs)). So the tempting
+"one `[[bin]]` per component" layout is a **dead end** — `crucible run` would never execute those
+bins. A component must instead be selected by a **Cargo feature** that gates its test inside the one
+`invariant_test` binary. That is exactly how Crucible's own examples work (`escrow` = one `[[bin]]`,
+one `#[invariant_test]`, one feature).
 
-**Recommendation:** start with **(a)** to reuse the fan-out + caching + generic store with minimal
-host changes; move to **(b)** only if the split harness proves awkward. Either way this is the
-first concrete deliverable to prototype, because it shapes everything downstream.
+**The model, therefore.** One crate per program, one `[[bin]] invariant_test`, and **per component: a
+Cargo feature whose name is the component's test fn**, all sharing the fixture/actions:
+
+```rust
+fuzz/<program>/
+  Cargo.toml          // [[bin]] invariant_test; [features] one per component (c_<slug> = [])
+  src/main.rs         // shared #[fuzz_fixture] + action_* ; then, per component, verbatim:
+                      //   #[invariant_test] fn c_<slug>(fx) { … }     (NOT user-#[cfg]-wrapped)
+```
+
+The gating is done *by Crucible's macros*, not by us: `#[invariant_test] fn <name>` expands to a
+`main()` behind `#[cfg(feature = "<name>")]` (verified in
+[crucible-invariant-macro/src/lib.rs](../../crucible/crates/crucible-invariant-macro/src/lib.rs)). So
+the load-bearing rule is **the test fn's name equals its Cargo feature** (`c_<slug>`); building
+`--features c_<slug>` keeps exactly one `main()`, and `crucible run <program> c_<slug>` runs it. The
+store therefore emits each section *verbatim* and only declares the features — wrapping a section in
+its own `#[cfg]` (or a fn-name/feature mismatch) desyncs the macro's gate and the crate loses its
+`main` (a mistake the phase-2 gate caught). The fn must live at crate root in `main.rs`, not a
+submodule, since the macro generates the entrypoint there.
+
+**Implication for the store.** This is a **Crucible-specific `ArtifactStore`** (not the generic
+single-file `RustArtifactStore`): each component's `artifact_text` is its `#[invariant_test]` fn,
+and the store **assembles** `src/main.rs` (shared fixture + all fns) + `Cargo.toml` (the feature
+list) from the shared scaffold plus every component. The base `ArtifactStore` still writes the
+per-component metadata (`properties.json`, `commentary.md`, the property→units map) under
+`certora/crucible/`, so only the deliverable bundle is bespoke. The generic host keeps the
+single-file store for backends that fit it (echoprover); the Crucible wheel opts into the crate store.
 
 ### 7.2 A general "run a local command over a set of files" effect
 
@@ -555,10 +577,12 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    semaphore-bounded). **Gate:** given `solana_vault`, the pipeline resolves a concrete version combo,
    builds the `.so`, emits an IDL, and a hand-written trivial fixture passes `crucible run --dry-run` —
    no LLM, no property authoring.
-2. **Deliverable model.** Decide + implement §7.1 (recommend option (a)); a Crucible `ArtifactStore`
-   / layout that writes a *compilable* crate. **Gate:** a hand-authored fixture + one hand-authored
-   invariant test, written through the store, compiles and `crucible run <test> --dry-run` passes;
-   `certora/crucible/` metadata + `fuzz/<program>/` deliverable coexist with any EVM outputs.
+2. **Deliverable model (§7.1).** A Crucible-specific `ArtifactStore` + harness assembler that write a
+   *compilable* crate: one `[[bin]] invariant_test`, per component a feature whose name is the test fn
+   (macro self-gated), shared fixture + all fns in one `src/main.rs`. **Gate met:** a hand-authored
+   fixture + one test written through the store assembles a crate that `crucible run vault c_deposit
+   --dry-run` accepts; metadata lands under `certora/crucible/` and a co-located EVM `certora/specs/`
+   deliverable is left untouched.
 3. **The `prepare_formalization` authoring loop (shared fixture/actions) + the knowledge seam (§7.5).**
    The LLM IoC decider that authors the fixture + `action_*` from `SolanaApplication`, gated by
    `--dry-run`. Build the **tool-enabled `call_llm`** framework change now (host-assembled tool belt:
