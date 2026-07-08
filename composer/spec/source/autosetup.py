@@ -20,8 +20,11 @@ from composer.prover.core import ProverOptions
 
 from graphcore.utils import TokenUsageDict
 from composer.io.context import emit_custom_event
-# Locator for autosetup's on-disk llm_usage.json (certora_autosetup owns that layout).
-from certora_autosetup.utils.paths import resolve_autosetup_llm_usage_file
+# Locators for autosetup's on-disk usage files (certora_autosetup owns that layout).
+from certora_autosetup.utils.paths import (
+    resolve_autosetup_llm_usage_file,
+    resolve_autosetup_prover_usage_file,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -211,8 +214,8 @@ async def run_autosetup(
 # --- AutoSetup LLM token-usage ingestion -----------------------------------
 # AutoSetup runs as a separate process, so its LLM calls never pass through
 # composer's model factory and are invisible to the UsageCallback. Its only
-# trace is the llm_usage.json it writes to disk. certora_autosetup owns that
-# on-disk layout and exposes resolve_autosetup_llm_usage_file() to locate it.
+# trace is the llm_usage.json / prover_usage.json it writes to disk. certora_autosetup
+# owns that on-disk layout and exposes resolve_autosetup_{llm,prover}_usage_file() to locate them.
 
 
 def _to_token_usage(model: str, bucket: dict) -> TokenUsageDict:
@@ -248,3 +251,27 @@ def read_autosetup_usage(project_root: Path) -> list[TokenUsageDict]:
         return []
 
     return [_to_token_usage(model, bucket) for model, bucket in by_model.items()]
+
+
+def read_autosetup_prover_usage(project_root: Path) -> int | None:
+    """Prover-reported runtime (milliseconds) AutoSetup's subprocess prover runs
+    consumed on this run — ready to fold into the run's prover usage via
+    ``RunSummary.record_prover_runtime``.
+
+    AutoSetup runs the prover in a separate process, so its runs never reach composer's
+    native ``run_prover`` capture; its only trace is the ``prover_usage.json`` it writes
+    (resolved from the same timestamped reports dir as ``read_autosetup_usage``). The
+    value already EXCLUDES cache hits — AutoSetup's ledger only counts freshly-executed
+    jobs, which is what "minutes each job ran" means.
+
+    Returns ``None`` on any failure (file absent — autosetup skipped, full cache hit,
+    crash, replayed snapshot, or an AutoSetup too old to emit it — or malformed JSON):
+    missing external usage must never break the phase."""
+    usage_file = resolve_autosetup_prover_usage_file(project_root)
+    if usage_file is None:
+        return None
+    try:
+        return int(json.loads(usage_file.read_text())["ms"])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        _logger.warning(f"Could not read AutoSetup prover usage from {usage_file}: {e}")
+        return None

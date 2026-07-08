@@ -1,31 +1,13 @@
-from typing import Any
-
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
-from langgraph.graph import StateGraph
 
-from graphcore.graph import build_workflow, BoundLLM, Builder
 from graphcore.tools.vfs import vfs_tools, VFSAccessor, VFSToolConfig, VFSState
 
-from composer.workflow.types import PromptParams
-from composer.core.context import AIComposerContext
-from composer.core.state import AIComposerState, AIComposerInput
-
-from composer.templates.loader import load_jinja_template
-from composer.workflow.summarization import SummaryGeneration
-
+from composer.core.state import AIComposerState
 
 
 def get_memory_ns(thread_id: str, ns: str) -> str:
     return f"ai-composer-{thread_id}-{ns}"
 
-# def get_system_prompt() -> str:
-#     """Load and render the system prompt from Jinja template"""
-#     return load_jinja_template("system_prompt.j2")
-
-# def get_initial_prompt(prompt: PromptParams) -> str:
-#     """Load and render the initial prompt from Jinja template"""
-#     return load_jinja_template("synthesis_prompt.j2", **prompt)
 
 def get_vfs_tools(
     fs_layer: str | None,
@@ -51,49 +33,3 @@ def get_vfs_tools(
     add new specification files.
     """
         ), AIComposerState)
-
-def get_cryptostate_builder(
-    llm: BaseChatModel,
-    fs_layer: str | None,
-) -> tuple[Builder[AIComposerState, AIComposerContext, AIComposerInput], VFSAccessor[VFSState]]:
-    (vfs_tooling, mat) = get_vfs_tools(fs_layer=fs_layer, immutable=False)
-    # import here to avoid loading these for non-composer factory uses
-
-    from composer.tools.prover import certora_prover
-    from composer.tools.proposal import propose_spec_change
-    from composer.tools.question import human_in_the_loop
-    from composer.tools.result import code_result
-    from composer.tools.search import cvl_manual_search
-    from composer.tools.working_spec import CommitWorkingSpec, ReadWorkingSpec, WriteWorkingSpec
-
-    crypto_tools: list[BaseTool] = [
-        certora_prover,
-        propose_spec_change,
-        human_in_the_loop,
-        code_result,
-        cvl_manual_search(AIComposerContext),
-        *vfs_tooling,
-        ReadWorkingSpec.as_tool("read_working_spec"),
-        WriteWorkingSpec.as_tool("write_working_spec"),
-        CommitWorkingSpec.as_tool("commit_working_spec")
-    ]
-
-    builder : Builder[None, None, None] = Builder()
-
-    res = builder.with_context(
-        AIComposerContext
-    ).with_loader(
-        load_jinja_template
-    ).with_input(
-        AIComposerInput
-    ).with_tools(
-        crypto_tools
-    ).with_state(
-        AIComposerState
-    ).with_llm(
-        llm
-    ).with_output_key(
-        "generated_code"
-    ).with_summary_config(SummaryGeneration())
-
-    return (res, mat)

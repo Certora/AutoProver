@@ -15,11 +15,13 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@d427b0f5f039c84c9b170d184d35c352339ddcda",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@8b9d320316a2cfbfa775da0a961501539a4124f0",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
     "langgraph-checkpoint-postgres>=3.0",
+    "langchain-openai>=1.0",
+    "openai>=2.0",
     "numpy>=2.4",
     "prompt-toolkit>=3.0",
     "psycopg[binary]>=3.2",

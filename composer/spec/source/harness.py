@@ -33,7 +33,7 @@ from graphcore.tools.results import result_tool_generator
 
 from composer.diagnostics.timing import get_run_summary
 from composer.spec.graph_builder import run_to_completion, bind_standard
-from composer.spec.source.autosetup import run_autosetup, read_autosetup_usage, SetupFailure, SetupSuccess
+from composer.spec.source.autosetup import run_autosetup, read_autosetup_usage, read_autosetup_prover_usage, SetupFailure, SetupSuccess
 from composer.spec.service_host import ServiceHost
 from composer.spec.context import WorkflowContext, SourceCode, CacheKey
 from composer.spec.util import string_hash
@@ -593,7 +593,7 @@ async def run_autosetup_phase(
 
     # AutoSetup runs as a subprocess; its LLM token usage never reaches composer's
     # UsageCallback. Fold the counts it wrote to disk into the run summary so they
-    # land in token_usage.json, the run tag, and the end-of-run table. No task_id:
+    # land in job_info.json, the run tag, and the end-of-run table. No task_id:
     # the active task is already AUTOSETUP_TASK_ID, so this attributes to the
     # autosetup phase. Guarded — read_autosetup_usage returns [] if absent. This is
     # only reached on a cache miss (cache hits return above), so usage spent in this
@@ -601,6 +601,11 @@ async def run_autosetup_phase(
     summary = get_run_summary()
     for usage in read_autosetup_usage(Path(source.project_root)):
         summary.record_token_usage(usage)
+    # Likewise fold AutoSetup's subprocess prover runtime (prover-reported, cache hits
+    # excluded) into the run's prover_usage under the active AUTOSETUP_TASK_ID. None if
+    # absent — guarded so missing external usage can't break the phase.
+    if (autosetup_prover_ms := read_autosetup_prover_usage(Path(source.project_root))) is not None:
+        summary.record_prover_runtime(autosetup_prover_ms)
 
     await cache.cache_put(setup_result)
     return setup_result

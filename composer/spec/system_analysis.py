@@ -9,6 +9,7 @@ from composer.spec.context import (
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.system_model import BaseApplication, ExplicitContract, ExternalActor, ExternalDependency, SolidityIdentifier
 from composer.spec.service_host import ServiceHost
+from composer.spec.util import slugify_filename
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 
 DESCRIPTION = "Component analysis"
@@ -31,10 +32,20 @@ def _validate_connectivity(
                 errors.append(f"Duplicate contract names: {c.name}")
             else:
                 known_components[c.name] = set()
+            slug_origin: dict[str, str] = {}
             for sub_comp in c.components:
                 if sub_comp.name in known_components[c.name]:
                     errors.append(f"Duplicate component names in {c.name}: {sub_comp.name}")
                 known_components[c.name].add(sub_comp.name)
+                slug = slugify_filename(sub_comp.name)
+                if slug in slug_origin:
+                    errors.append(
+                        f"Components {slug_origin[slug]!r} and {sub_comp.name!r} in {c.name} "
+                        f"both reduce to the filename slug {slug!r} (punctuation and symbols are "
+                        f"normalized to underscores); give them names that differ in more than that."
+                    )
+                else:
+                    slug_origin[slug] = sub_comp.name
         else:
             assert isinstance(c, ExternalActor)
             if c.name in known_external:

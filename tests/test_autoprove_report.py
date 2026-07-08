@@ -11,6 +11,7 @@ which is how a caller hands a gap to the report layer).
 """
 from types import SimpleNamespace
 from typing import cast
+import pathlib
 
 import pytest
 from prover_output_utility.models import NodeStatus
@@ -19,8 +20,10 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
-from composer.spec.prop import PropertyFormulation, PropertyType
+from composer.spec.types import PropertyFormulation, PropertyType
 from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping, SkippedProperty
+
+from composer.pipeline.core import Delivered
 
 from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.source.report import build
@@ -68,8 +71,8 @@ def _fetcher(by_link: dict[str, list]):
     return make_prover_fetcher(_FakeAPI(by_link))
 
 
-def _prop(title, desc, *, sort: PropertyType = "safety_property", methods=None) -> PropertyFormulation:
-    return PropertyFormulation(title=title, methods=methods or ["m"], sort=sort, description=desc)
+def _prop(title, desc, *, sort: PropertyType = "safety_property") -> PropertyFormulation:
+    return PropertyFormulation(title=title, sort=sort, description=desc)
 
 
 def _gen(mapping: dict[str, list[str]] | None = None,
@@ -85,14 +88,21 @@ def _gen(mapping: dict[str, list[str]] | None = None,
     )
 
 
-def _input(name, unit_file, props, result: GeneratedCVL | None,
-           link: str | None = "L1") -> ReportComponentInput[GeneratedCVL]:
-    return ReportComponentInput(name=name, unit_file=unit_file, props=props,
-                                result=result, run_link=link)
+def _input(name, unit_file, props, result: GeneratedCVL | None, link : str | None="L1") -> ReportComponentInput[GeneratedCVL]:
+    """``link`` is the result's prover run link (``GeneratedCVL.final_link``); the prover fetcher
+    keys its verdicts off it. ``None`` (or a ``None`` result) means no run link, so no verdicts."""
+    return ReportComponentInput(
+        name=name,
+        props=props,
+        formalized=Delivered(
+            deliverable=pathlib.Path(unit_file),
+            result=result.model_copy(update={"final_link": link})
+        ) if result is not None else None
+    )
 
 
 def _fp(component, title, refs, desc="d", sort: PropertyType = "safety_property") -> FormalizedProperty:
-    return FormalizedProperty(component=component, title=title, methods=["m"],
+    return FormalizedProperty(component=component, title=title,
                               sort=sort, description=desc, rule_refs=refs)
 
 
@@ -129,7 +139,7 @@ class _GroupingStubModel(BaseChatModel):
 @pytest.mark.asyncio
 async def test_collect_joins_properties_to_rules_and_verdicts():
     props = [_prop("count_increases", "count up by one"),
-             _prop("count_eq_sum", "count == sum", sort="invariant", methods="invariant")]
+             _prop("count_eq_sum", "count == sum", sort="invariant")]
     gen = _gen({"count_increases": ["increment_increases_count"], "count_eq_sum": ["countEqualsSum"]})
     fetch = _fetcher({"L1": [
         _fake_check("increment_increases_count", NodeStatus.VERIFIED, line=12, duration=1.5),
@@ -334,7 +344,7 @@ def test_validate_reports_rules_spanning_groups_as_stat():
 
 def test_validate_carries_gap_counts():
     p1 = _fp("C", "p1", [("s.spec", "a")])
-    sk = [SkippedClaim(component="C", title="s1", methods=["m"], sort="safety_property",
+    sk = [SkippedClaim(component="C", title="s1", sort="safety_property",
                        description="d", reason="r")]
     gu = [GaveUpComponent(component="D", properties=[_prop("x", "d")])]
     cov = validate(properties=[p1], rules=[_rv("s.spec", "a")], groups=[_pg("g", [("C", "p1")])],
@@ -356,7 +366,7 @@ def _mini_report() -> AutoProverReport:
                          line=7, prover_link="https://prover.example/run/abc")]
     groups = [PropertyGroup(slug="deposit-openness", title="Deposit is open", description="d",
                             status=GroupStatus.GOOD, members=[("C", "p_pay"), ("C", "p_open")])]
-    skipped = [SkippedClaim(component="C", title="atomic_on_revert", methods=["m"],
+    skipped = [SkippedClaim(component="C", title="atomic_on_revert",
                             sort="safety_property", description="revert rolls back state",
                             reason="tautological under EVM semantics")]
     cov = CoverageReport(total_properties=2, total_rules=1, total_groups=1,

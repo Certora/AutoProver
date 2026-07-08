@@ -6,11 +6,10 @@ import asyncio
 import sys
 
 from composer.input.parsing import fresh_workflow_argument_parser, upload_input
-from composer.workflow.services import create_llm
+from composer.llm.registry import get_provider_for, uploader_for
 from composer.workflow.executor import execute_ai_composer_workflow
 from composer.ui.codegen_rich import CodeGenRichApp
 from composer.ui.ide_bridge import IDEBridge
-from composer.diagnostics.debug import setup_logging
 from composer.ui.tool_display import tool_context
 
 
@@ -23,10 +22,11 @@ async def _main() -> int:
     )
     args = parser.parse_args()
 
-    setup_logging(args.debug)
 
-    llm = create_llm(args)
-    input_data = await upload_input(args)
+    llm = get_provider_for(options=args)
+    uploader = uploader_for(llm.provider)
+
+    input_data = await upload_input(uploader, args)
 
     async with IDEBridge.connect() as ide:
         app = CodeGenRichApp(show_checkpoints=args.show_checkpoints, ide=ide) # type: ignore[attr-defined]

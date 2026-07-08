@@ -23,6 +23,7 @@ CEX analysis flow:
 import asyncio
 import sys
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,11 +38,12 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.graph import MessagesState
 
 from graphcore.graph import LLM
+from graphcore.utils import ainvoke
 
 from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
-from composer.prover.cloud import cloud_results
+from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult
 from composer.prover.results import read_and_format_run_result
 from composer.templates.loader import load_jinja_template
@@ -194,6 +196,10 @@ class ProverCallbacks:
     """Fires once per run as soon as the prover emits its result link. For
     cloud runs ``link`` is the prover UI URL; for local runs it is a
     filesystem path to the results directory."""
+    async def on_prover_runtime(self, ms: int) -> None: pass
+    """Fires once per run with the prover's queue-free run time in milliseconds — the
+    cloud job's ``startTime``->``finishTime`` execution window, or (local) the prover
+    subprocess wall-clock. Only fires when that value is available."""
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None: pass
     async def on_analysis_start(self, rule: RuleResult) -> None: pass
     async def on_analysis_complete(self, rule: RuleResult, explanation: str) -> None: pass
@@ -312,9 +318,14 @@ DefaultCexHandler = TrivialFanoutCexHandler
 
 
 @asynccontextmanager
-async def _local_results(path: Path) -> AsyncIterator[Path]:
-    """Trivial context manager that yields a local results path unchanged."""
-    yield path
+async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[tuple[Path, int | None]]:
+    """Trivial context manager yielding ``(local results path, runtime_ms)``.
+
+    Mirrors ``cloud_results``' interface so ``run_prover`` consumes both uniformly. Where
+    ``cloud_results`` computes the runtime from the polled job, the local run already
+    happened in ``run_prover_inner``, so its wall-clock (queue-free — local isn't queued)
+    is measured there and handed in here."""
+    yield (path, runtime_ms)
 
 
 async def _report_to_todo_list(
@@ -340,7 +351,7 @@ PROVER REPORT:
     # max_tokens budget on reasoning, leaving nothing for actual text output.
     if isinstance(llm, BaseChatModel):
         llm = llm.model_copy(update={"thinking": None})
-    res = await llm.ainvoke(fresh_messages)
+    res = await ainvoke(llm, fresh_messages)
     return res.text
 
 async def run_prover_inner(
@@ -409,12 +420,18 @@ async def run_prover(
 
     # 2. Notify callback
     await callbacks.on_prover_run(effective_args)
+    # Wall-clock of the prover subprocess. For LOCAL this IS the run time (certoraRun runs
+    # the prover and blocks until done; local runs aren't queued). For cloud the subprocess
+    # only submits and returns, so this isn't used — cloud runtime comes from the job's
+    # execution window (see cloud_results / _job_runtime_ms).
+    _t0 = time.perf_counter()
     run_result, stdout = await run_prover_inner(
         folder,
         effective_args,
         lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
         callbacks.on_stdout_line
     )
+    local_runtime_ms = int((time.perf_counter() - _t0) * 1000)
     if isinstance(run_result, str):
         return run_result
 
@@ -440,7 +457,7 @@ async def run_prover(
     else:
         if not run_result["is_local_link"]:
             return f"Prover did not produce local results.\nstdout:\n{stdout}"
-        results_cm = _local_results(Path(run_result["link"]))
+        results_cm = _local_results(Path(run_result["link"]), local_runtime_ms)
 
     # 8. Parse results + run analysis. Both happen inside ``results_cm`` so
     # the report directory (which contains ``inputs/.certora_sources`` —
@@ -448,35 +465,42 @@ async def run_prover(
     # stays alive for the analyzer to read. Cloud runs unzip into a tmpdir
     # whose lifetime is bound to ``cloud_results``; local runs hand back
     # a stable path. Either way the analyzer must complete before the
-    # context manager exits.
-    async with results_cm as emv_path:
-        parsed = read_and_format_run_result(emv_path)
+    # context manager exits. ``runtime_ms`` is the prover's queue-free run
+    # time, sourced by each context manager (cloud job window / local
+    # subprocess wall-clock).
+    try:
+        async with results_cm as (emv_path, runtime_ms):
+            parsed = read_and_format_run_result(emv_path)
 
-        if isinstance(parsed, str):
-            return f"Failed to parse prover results: {parsed}"
+            if isinstance(parsed, str):
+                return f"Failed to parse prover results: {parsed}"
 
-        # 9. Notify prover_result callback
-        await callbacks.on_prover_result(parsed)
+            # 9. Notify runtime + prover_result callbacks
+            if runtime_ms is not None:
+                await callbacks.on_prover_runtime(runtime_ms)
+            await callbacks.on_prover_result(parsed)
 
-        all_results = list(parsed.values())
+            all_results = list(parsed.values())
 
-        # 10. Hand off to the handler when anything failed. It owns the
-        # analysis approach, per-rule UI events, rendering, summarization
-        # (if any), and storage of any keyed records (e.g. report_keys
-        # for ``cex_remediation`` lookup). We get back the final report
-        # string. ``emv_path`` is the prover's report directory;
-        # implementations that read source narrow further to
-        # ``emv_path / "inputs" / ".certora_sources"``.
-        if any(r.status == "VIOLATED" for r in all_results):
-            result_str = await cex.analyze(
-                all_results, tool_call_id, callbacks, emv_path
-            )
-        else:
-            result_str = load_jinja_template(
-                "rule_feedback.j2",
-                rule_entries=[(r, None) for r in all_results],
-                diagnoses=[],
-            )
+            # 10. Hand off to the handler when anything failed. It owns the
+            # analysis approach, per-rule UI events, rendering, summarization
+            # (if any), and storage of any keyed records (e.g. report_keys
+            # for ``cex_remediation`` lookup). We get back the final report
+            # string. ``emv_path`` is the prover's report directory;
+            # implementations that read source narrow further to
+            # ``emv_path / "inputs" / ".certora_sources"``.
+            if any(r.status == "VIOLATED" for r in all_results):
+                result_str = await cex.analyze(
+                    all_results, tool_call_id, callbacks, emv_path
+                )
+            else:
+                result_str = load_jinja_template(
+                    "rule_feedback.j2",
+                    rule_entries=[(r, None) for r in all_results],
+                    diagnoses=[],
+                )
+    except CloudJobError as exc:
+        return f"Prover cloud job did not produce results (status {exc.status.value})."
 
     prover_report: dict[str, bool] = {}
     for i in parsed.values():

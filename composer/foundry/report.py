@@ -22,13 +22,14 @@ async def _foundry_verdicts(
 ) -> dict[RuleName, Verdict]:
     """Per-test verdicts from forge ground truth: a ran test is GOOD unless the author marked it an
     expected failure (BAD). No external service — read straight off the result."""
-    res = inp.result
-    if res is None:
+    fm = inp.formalized
+    if fm is None:
         return {}
+    res = fm.result
     return {
         name: Verdict(
             outcome=Outcome.BAD if res.expected_failures.get(name) else Outcome.GOOD,
-            unit_file=inp.unit_file,
+            unit_file=fm.unit_file,
         )
         for name in res.ran_tests
     }

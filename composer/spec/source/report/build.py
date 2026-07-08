@@ -88,7 +88,8 @@ async def build_report[R: ReportableResult](
         backend=backend,
         contract_name=contract_name,
         run_timestamp_utc=datetime.now(timezone.utc).isoformat(),
-        prover_links={c.name: c.run_link for c in components if c.run_link},
+        prover_links={c.name: c.formalized.run_link for c in components
+                      if c.formalized and c.formalized.run_link},
         properties=properties,
         rules=rules,
         groups=groups,

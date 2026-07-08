@@ -50,6 +50,12 @@ Understand the properties being formalized:
 </{{ prop.sort }}>
 {% endfor %}
 
+**IMPORTANT**: If the attack vector *DOES* exist, or the safety property/invariant *DOES NOT*
+exist, then a specification *must* produce a violation (an unsatisfied proof) in the corresponding properties.
+A "green" verification result should *never* testify to the presence of a bug, only to a lack of them.
+A rule/invariant that fails to verify against the current code because it demonstrates a potential
+vulnerability/attack vector is the *desired* result.
+
 ## Step 3
 
 Evaluate the CVL specification against the following criteria.
@@ -145,6 +151,9 @@ transfers a NO-OP, which in turn trivializes any property that reasons about bal
 {% if sort != "greenfield" %}
 Audit the rules to determine if any are likely to fail because they are *OBVIOUSLY* wrong; they assert that the contract does X, but the contract actually does Y
 (and Y is, with overwhelming probability, the correct outcome). For example, if a rule asserts that user's balance *INCREASES* after a withdrawal, this is almost certainly a spec error.
+
+As stated above, do *not* apply this rejection criterion to rules that will fail because they demonstrate a potential vulnerability in the contract code;
+if there is a real bug, a rule *failing* is the *intended* result, as it communicates to the developer something must be fixed.
 {% else %}
 Audit the rules to determine if any are likely to fail because they are *OBVIOUSLY* wrong; they assert something that contradicts the expected behavior as described
 in the design document. For example, if a rule asserts that user's balance *INCREASES* after a withdrawal, this is almost certainly a spec error.

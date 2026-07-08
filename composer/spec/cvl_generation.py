@@ -116,6 +116,12 @@ def _merge_skips(
     )
 
 
+def _output_link(link: str | None) -> str | None:
+    """Rewrite a prover ``/jobStatus/`` URL to its ``/output/`` view; local result dirs (and
+    ``None``) pass through unchanged."""
+    return link.replace("/jobStatus/", "/output/") if link else None
+
+
 class GeneratedCVL(BaseModel):
     commentary: str
     cvl: str
@@ -133,6 +139,16 @@ class GeneratedCVL(BaseModel):
         """Property title -> the CVL rule names that formalize it (the report's `ReportableResult`
         adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.rules) for m in self.property_rules]
+    
+    @property
+    def artifact_text(self) -> str:
+        return self.cvl
+
+    @property
+    def output_link(self) -> str | None:
+        """The prover run's ``/output/`` link, rewritten from the raw ``/jobStatus/`` job URL;
+        ``None`` when no run link was produced. Drives the report's ``run_link``."""
+        return _output_link(self.final_link)
 
 
 # ---------------------------------------------------------------------------
