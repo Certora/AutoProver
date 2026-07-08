@@ -148,6 +148,18 @@ pub struct FormalizeInput {
     pub config: serde_json::Value,
 }
 
+/// The input handed to [`Application::new_setup_session`] — the *program-wide*
+/// setup authored once, before per-component formalization (e.g. a Crucible
+/// fixture + actions). `analyzed` is the ecosystem's system model as JSON (e.g. a
+/// `SolanaApplication`); `program` is the target program's identifier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupInput {
+    pub program: String,
+    pub analyzed: serde_json::Value,
+    #[serde(default)]
+    pub config: serde_json::Value,
+}
+
 /// A property the author declined to formalize (mirrors `SkippedProperty`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skipped {
@@ -338,6 +350,15 @@ pub trait Application: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Author program-wide shared setup once, before per-component formalization
+    /// (e.g. a Crucible fixture + `action_*`), as an IoC decider driven through the
+    /// same effect loop. `None` (the default) means the backend has no shared setup
+    /// phase. The published `Formalized.artifact_text` is the setup source, which
+    /// the host hands to the artifact store (e.g. as the harness fixture).
+    fn new_setup_session(&self, _input: SetupInput) -> Option<Box<dyn FormalizeSession>> {
+        None
+    }
+
     /// Begin formalizing one component's property batch.
     fn new_session(&self, input: FormalizeInput) -> Box<dyn FormalizeSession>;
 
@@ -391,6 +412,19 @@ pub fn ffi_new_session(app: &dyn Application, input_json: &str) -> Box<dyn Forma
     match serde_json::from_str::<FormalizeInput>(input_json) {
         Ok(input) => app.new_session(input),
         Err(e) => Box::new(FailSession(format!("invalid FormalizeInput JSON: {e}"))),
+    }
+}
+
+/// `new_setup_session(input_json) -> Session | None`. `None` if the app declares no
+/// setup phase; a give-up session if the input fails to parse (so the host sees a
+/// clean `GiveUp` rather than a silent skip).
+pub fn ffi_new_setup_session(
+    app: &dyn Application,
+    input_json: &str,
+) -> Option<Box<dyn FormalizeSession>> {
+    match serde_json::from_str::<SetupInput>(input_json) {
+        Ok(input) => app.new_setup_session(input),
+        Err(e) => Some(Box::new(FailSession(format!("invalid SetupInput JSON: {e}")))),
     }
 }
 
@@ -483,6 +517,14 @@ macro_rules! export_app {
         }
 
         #[$crate::pyo3::pyfunction]
+        fn new_setup_session(
+            input_json: ::std::string::String,
+        ) -> ::std::option::Option<RustSession> {
+            $crate::ffi_new_setup_session(__autoprover_app(), &input_json)
+                .map(|inner| RustSession { inner })
+        }
+
+        #[$crate::pyo3::pyfunction]
         fn fetch_verdicts(input_json: ::std::string::String) -> ::std::string::String {
             $crate::ffi_fetch_verdicts(__autoprover_app(), &input_json)
         }
@@ -502,6 +544,7 @@ macro_rules! export_app {
             m.add_function($crate::pyo3::wrap_pyfunction!(descriptor, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(validate_preconditions, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(new_session, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(new_setup_session, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(fetch_verdicts, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(finalize, m)?)?;
             m.add_class::<RustSession>()?;

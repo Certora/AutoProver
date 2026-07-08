@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, NotRequired, override
@@ -84,9 +83,6 @@ class RealEffects:
         self._feedback = feedback
         self._command_sem = command_sem
         self._command_timeout_s = command_timeout_s
-        # Per-formalize workdir for RunCommand effects (a session materializes its
-        # crate once and runs several commands against it). Created lazily.
-        self._workdir: Path | None = None
         # Loop-scratch cache (within one formalize). Cross-run persistence is the
         # driver's result-level cache, keyed by formalized_type — not this.
         self._scratch: dict[str, Any] = {}
@@ -148,11 +144,11 @@ class RealEffects:
         return await self._feedback(spec, skipped, rebuttals)
 
     def _ensure_workdir(self) -> Path:
-        # Lazily create a per-formalize scratch workdir. Left on disk (under the OS
-        # temp dir) for post-run inspection; sandbox/cleanup is phase 6 (§7.4).
-        if self._workdir is None:
-            self._workdir = Path(tempfile.mkdtemp(prefix="autoprover-cmd-"))
-        return self._workdir
+        # Build-based backends (Crucible) run commands in the project tree — the
+        # generated harness references the program crate + the built `.so` by
+        # relative path, and the artifact store writes into it. Isolation is the
+        # sandbox's job (phase 6, §7.4), which will bind-mount what a command needs.
+        return Path(self._run.source.project_root)
 
     async def run_command(
         self, program: str, args: list[str], files: dict[str, str]

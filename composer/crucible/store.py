@@ -48,9 +48,23 @@ class CrucibleArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
         self._program = program
         self.harness = CrucibleHarness(program=program, dep=dep)
 
+    # Reserved feature/fn used only to dry-run a candidate fixture (no real test yet).
+    PROBE_FEATURE = "c_probe"
+
     def fuzz_dir(self) -> Path:
         """``fuzz/<program>/`` — where ``crucible run`` expects the harness."""
         return ensure_dir(Path(self._project_root) / "fuzz" / self._program)
+
+    def set_shared_fixture(self, source: str) -> None:
+        """Install the authored shared fixture/actions (from the setup session) that
+        every per-component test section will build on."""
+        self.harness.fixture_source = source
+
+    def write_setup_manifest(self) -> Path:
+        """Pre-place ``Cargo.toml`` (with the probe feature) so the setup session can
+        write ``src/main.rs`` + dry-run; the decider can't render the host-resolved
+        deps itself (§6.1)."""
+        return self.harness.write_manifest(self.fuzz_dir(), (self.PROBE_FEATURE,))
 
     @override
     def _artifact_dir(self) -> Path:

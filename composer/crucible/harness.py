@@ -98,8 +98,9 @@ class CrucibleHarness:
     def features(self) -> list[str]:
         return sorted(self._components)
 
-    def render_cargo_toml(self) -> str:
-        features = "\n".join(f"{f} = []" for f in self.features) or "# (no components yet)"
+    def render_cargo_toml(self, extra_features: tuple[str, ...] = ()) -> str:
+        feats = sorted(set(self.features) | set(extra_features))
+        features = "\n".join(f"{f} = []" for f in feats) or "# (no components yet)"
         return f"""\
 [package]
 name = "{self.program}_fuzz"
@@ -133,3 +134,12 @@ path = "src/main.rs"
         main = fuzz_dir / "src" / "main.rs"
         main.write_text(self.render_main_rs())
         return main
+
+    def write_manifest(self, fuzz_dir: Path, extra_features: tuple[str, ...] = ()) -> Path:
+        """Write only ``Cargo.toml`` (with ``extra_features`` unioned in). Used to
+        pre-place the manifest before the setup session writes ``src/main.rs`` —
+        the fixture decider can't render the deps (they're host-resolved, §6.1)."""
+        fuzz_dir.mkdir(parents=True, exist_ok=True)
+        cargo = fuzz_dir / "Cargo.toml"
+        cargo.write_text(self.render_cargo_toml(extra_features))
+        return cargo

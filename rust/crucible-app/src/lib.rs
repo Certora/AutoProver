@@ -14,7 +14,8 @@ use std::path::Path;
 
 use autoprover_sdk::{
     AppDescriptor, ArgDefault, ArgSpec, Application, ArtifactLayout, Command, CoreSlot, EventKind,
-    FormalizeInput, FormalizeSession, Observation, PhaseSpec, Verdict, VerdictInput,
+    FormalizeInput, FormalizeSession, Formalized, Observation, PhaseSpec, SetupInput, Verdict,
+    VerdictInput,
 };
 
 /// Backend-guidance prose injected into the property-extraction prompt. Crucible is
@@ -57,6 +58,183 @@ impl FormalizeSession for Phase1Stub {
             reason: "crucible authoring loop is not implemented yet (phase 1 covers \
                      preconditions + build/IDL + dry-run only)"
                 .to_string(),
+        }
+    }
+}
+
+// ===========================================================================
+// Setup session: author the shared fixture + actions once (docs §5.2).
+// ===========================================================================
+
+/// Concise Crucible harness API reference injected into the authoring prompt (the
+/// §7.5 static cheat-sheet; RAG over a `crucible_kb` is layered on at packaging).
+const HARNESS_CHEAT_SHEET: &str = r#"
+Crucible harness API (author a FIXTURE only — no test fns):
+
+- Imports:
+    use crucible_fuzzer::*;                          // TestContext, macros, fuzz_assert_*
+    use crucible_fuzzer::anchor_lang::system_program;
+    use <program>::*;                                // instruction, accounts, ID, state types
+    use solana_keypair::Keypair; use solana_pubkey::Pubkey; use solana_signer::Signer;
+    use std::rc::Rc;
+
+- The fixture struct MUST be named `Fixture` and derive Clone; keypairs go in `Rc`:
+    #[derive(Clone)]
+    struct Fixture { ctx: TestContext, program_id: Pubkey, /* pdas, users (Rc<Keypair>) */ }
+
+- #[fuzz_fixture] impl Fixture { ... } with:
+    pub fn setup() -> Self {
+        let mut ctx = TestContext::new();
+        let program_id = Pubkey::new_from_array(ID.to_bytes());
+        ctx.add_program(&program_id, "../../target/deploy/<program>.so").unwrap();
+        // create funded accounts: ctx.create_account().pubkey(kp.pubkey())
+        //     .lamports(N).owner(system_program::ID).create().unwrap();
+        // derive PDAs: Pubkey::find_program_address(&[b"seed", key.as_ref()], &program_id)
+        // run any init instruction (see calling convention). Panic on setup failure.
+        Self { ctx, program_id, /* ... */ }
+    }
+    // one `action_<name>` per instruction; fuzzable args get #[range(lo..hi)]:
+    pub fn action_<name>(&mut self, #[range(0..1_000_000)] amount: u64) -> bool {
+        self.ctx.program(self.program_id)
+            .call(instruction::<Name> { amount })
+            .accounts(accounts::<Name> { /* fields */ })
+            .signers(&[&*self.some_keypair])
+            .send().map(|o| o.is_success()).unwrap_or(false)
+    }
+
+- Read the program source for exact instruction args, Accounts structs, PDA seeds
+  (binary vs string), and signer requirements — the model below is a summary.
+- Output ONLY the fixture module source (imports + struct + #[fuzz_fixture] impl).
+  Do NOT write `fn main`, `#[invariant_test]`, or `#[crucible_fuzz]` — those are added later.
+"#;
+
+/// A `#[invariant_test]` probe appended (by the host) only to validate the fixture
+/// via `crucible run … --dry-run`: it must compile and `setup()` must run once.
+const PROBE_FN: &str = "\n\n#[invariant_test]\nfn c_probe(fixture: &mut Fixture) {\n    let _ = fixture;\n}\n";
+
+const SETUP_MAX_ATTEMPTS: u32 = 4;
+
+#[derive(PartialEq)]
+enum SetupStage {
+    Start,
+    AwaitDraft,
+    AwaitBuild,
+    Done,
+}
+
+/// The fixture-authoring decider: draft (CallLlm) → validate (RunCommand dry-run)
+/// → revise on failure → publish the fixture source, or give up.
+struct SetupSession {
+    program: String,
+    analyzed: serde_json::Value,
+    fixture: String,
+    attempts: u32,
+    stage: SetupStage,
+}
+
+impl SetupSession {
+    fn author_prompt(&self, error: Option<&str>) -> serde_json::Value {
+        let model = serde_json::to_string_pretty(&self.analyzed)
+            .unwrap_or_else(|_| self.analyzed.to_string());
+        let mut task = format!(
+            "Author a Crucible fuzz-harness FIXTURE (only) for the Solana program `{program}`.\n\
+             {cheat}\n\n\
+             Analyzed system model (instructions, accounts, PDAs, authorities):\n{model}\n\n\
+             Use the source-exploration tools to read the program's Rust source for exact \
+             signatures. Return the complete fixture module source as your final answer.",
+            program = self.program,
+            cheat = HARNESS_CHEAT_SHEET.replace("<program>", &self.program),
+            model = model,
+        );
+        if let Some(err) = error {
+            task.push_str(&format!(
+                "\n\nThe previous fixture FAILED to build / dry-run. Fix it. Prior fixture:\n\
+                 ```rust\n{prev}\n```\nBuild/dry-run output:\n{err}",
+                prev = self.fixture,
+                err = &err[err.len().saturating_sub(4000)..],
+            ));
+        }
+        serde_json::json!({ "instruction": task })
+    }
+
+    fn validate_command(&self) -> Command {
+        let mut main_rs = self.fixture.clone();
+        main_rs.push_str(PROBE_FN);
+        let mut files = BTreeMap::new();
+        files.insert(format!("fuzz/{}/src/main.rs", self.program), main_rs);
+        Command::RunCommand {
+            program: "crucible".to_string(),
+            args: vec![
+                "run".into(),
+                self.program.clone(),
+                "c_probe".into(),
+                "--release".into(),
+                "--dry-run".into(),
+            ],
+            files,
+        }
+    }
+}
+
+/// Strip a leading/trailing ```rust code fence if the model wrapped its answer.
+fn strip_code_fence(text: &str) -> String {
+    let t = text.trim();
+    if let Some(rest) = t.strip_prefix("```") {
+        // drop an optional language tag on the first line, and the trailing fence
+        let rest = rest.splitn(2, '\n').nth(1).unwrap_or(rest);
+        return rest.trim_end().trim_end_matches("```").trim_end().to_string();
+    }
+    t.to_string()
+}
+
+impl FormalizeSession for SetupSession {
+    fn resume(&mut self, observation: Observation) -> Command {
+        match self.stage {
+            SetupStage::Start => {
+                self.stage = SetupStage::AwaitDraft;
+                Command::CallLlm { messages: self.author_prompt(None) }
+            }
+            SetupStage::AwaitDraft => {
+                if let Observation::LlmReply { text } = observation {
+                    self.fixture = strip_code_fence(&text);
+                    self.stage = SetupStage::AwaitBuild;
+                    self.validate_command()
+                } else {
+                    self.stage = SetupStage::Done;
+                    Command::GiveUp { reason: "expected an LLM reply while drafting the fixture".into() }
+                }
+            }
+            SetupStage::AwaitBuild => match observation {
+                Observation::CommandResult { exit_code: 0, .. } => {
+                    self.stage = SetupStage::Done;
+                    Command::Publish {
+                        result: Formalized::new(
+                            self.fixture.clone(),
+                            format!("Crucible shared fixture for `{}` (dry-run OK).", self.program),
+                        ),
+                    }
+                }
+                Observation::CommandResult { stdout, stderr, .. } => {
+                    if self.attempts + 1 >= SETUP_MAX_ATTEMPTS {
+                        self.stage = SetupStage::Done;
+                        Command::GiveUp {
+                            reason: format!(
+                                "fixture did not pass --dry-run after {SETUP_MAX_ATTEMPTS} attempts"
+                            ),
+                        }
+                    } else {
+                        self.attempts += 1;
+                        self.stage = SetupStage::AwaitDraft;
+                        let err = format!("{stdout}\n{stderr}");
+                        Command::CallLlm { messages: self.author_prompt(Some(&err)) }
+                    }
+                }
+                _ => {
+                    self.stage = SetupStage::Done;
+                    Command::GiveUp { reason: "expected a command result after dry-run".into() }
+                }
+            },
+            SetupStage::Done => Command::GiveUp { reason: "setup session already finished".into() },
         }
     }
 }
@@ -164,6 +342,16 @@ impl Application for CrucibleApp {
         } else {
             Err(problems.join("\n"))
         }
+    }
+
+    fn new_setup_session(&self, input: SetupInput) -> Option<Box<dyn FormalizeSession>> {
+        Some(Box::new(SetupSession {
+            program: input.program,
+            analyzed: input.analyzed,
+            fixture: String::new(),
+            attempts: 0,
+            stage: SetupStage::Start,
+        }))
     }
 
     fn new_session(&self, _input: FormalizeInput) -> Box<dyn FormalizeSession> {
