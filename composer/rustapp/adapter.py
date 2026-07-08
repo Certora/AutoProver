@@ -205,6 +205,22 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     ) -> dict[RuleName, Verdict]:
         if inp.formalized is None:
             return {}
+
+        def _mk(v: dict) -> Verdict:
+            return Verdict(
+                outcome=Outcome(v["outcome"]),
+                line=v.get("line"),
+                duration_seconds=v.get("duration_seconds"),
+                unit_file=v.get("unit_file") or inp.formalized.unit_file,
+            )
+
+        # Self-contained backend (e.g. Crucible fuzzer): the verdict is known at
+        # formalize time and baked into the result — use it directly, no FFI call.
+        baked = inp.formalized.result.verdicts
+        if baked:
+            return {unit: _mk(v) for unit, v in baked.items()}
+
+        # Otherwise defer to the wheel (a run-service-backed backend).
         payload = json.dumps(
             {
                 "name": inp.name,
@@ -214,15 +230,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             }
         )
         raw = json.loads(await asyncio.to_thread(self._module.fetch_verdicts, payload))
-        return {
-            unit: Verdict(
-                outcome=Outcome(v["outcome"]),
-                line=v.get("line"),
-                duration_seconds=v.get("duration_seconds"),
-                unit_file=v.get("unit_file"),
-            )
-            for unit, v in raw.items()
-        }
+        return {unit: _mk(v) for unit, v in raw.items()}
 
     @override
     async def finalize(self, outcomes, run: PipelineRun) -> None:

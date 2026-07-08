@@ -184,6 +184,14 @@ pub struct Formalized {
     /// The verification-run link, or `None` for backends with no run service.
     #[serde(default)]
     pub output_link: Option<String>,
+    /// Per-unit verdicts baked in at formalize time, for a **self-contained**
+    /// backend whose pass/fail is known when the artifact is produced (e.g. a
+    /// fuzzer: crash = BAD, clean run to budget = GOOD). Keyed by unit name (the
+    /// test/rule). When non-empty the host uses these directly and does not call
+    /// `fetch_verdicts`; a run-service-backed backend leaves this empty and answers
+    /// through `fetch_verdicts` instead.
+    #[serde(default)]
+    pub verdicts: BTreeMap<String, Verdict>,
 }
 
 impl Formalized {

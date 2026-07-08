@@ -30,6 +30,10 @@ class RustFormalResult(BaseModel):
     units: list[tuple[str, list[str]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
     output_link: str | None = None
+    # Per-unit verdicts baked in at formalize time by a self-contained backend
+    # (unit name -> the Rust ``Verdict`` dict: {outcome, line?, duration_seconds?,
+    # unit_file?}). Empty for run-service-backed backends (they use fetch_verdicts).
+    verdicts: dict[str, dict] = Field(default_factory=dict)
 
     def property_units(self) -> list[tuple[str, list[str]]]:
         return [(title, list(names)) for title, names in self.units]
@@ -43,6 +47,7 @@ class RustFormalResult(BaseModel):
             units=[(t, list(u)) for t, u in formalized.get("property_units", [])],
             skipped=[SkippedProperty(**s) for s in formalized.get("skipped", [])],
             output_link=formalized.get("output_link"),
+            verdicts=dict(formalized.get("verdicts", {})),
         )
 
 
