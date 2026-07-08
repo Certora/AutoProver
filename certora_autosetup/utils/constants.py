@@ -75,6 +75,13 @@ FILE_PROVER_USAGE = "prover_usage.json"
 FILE_ALL_METHODS_JSON = "all_methods.json"
 PATH_ALL_METHODS_JSON = Path(DIR_CERTORA_INTERNAL) / FILE_ALL_METHODS_JSON
 
+# Flattened solc AST dump (the build's .asts.json) copied under .certora_internal/
+# during compilation analysis. Structure:
+# {compilation_unit_file: {source_file: {node_id: node}}}, every node stamped with
+# `certora_contract_name` by certoraBuild.collect_asts.
+FILE_ALL_ASTS_JSON = "all_asts.json"
+PATH_ALL_ASTS_JSON = Path(DIR_CERTORA_INTERNAL) / FILE_ALL_ASTS_JSON
+
 SUMMARIES_SUBDIR = Path("specs") / "summaries"
 
 # User-facing layout under certora/

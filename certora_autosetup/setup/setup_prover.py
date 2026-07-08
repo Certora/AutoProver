@@ -38,6 +38,7 @@ from certora_autosetup.utils.constants import (
     DEFAULT_SOLC_VERSION,
     DIR_CERTORA_INTERNAL,
     FILE_BUILD_ASTS,
+    PATH_ALL_ASTS_JSON,
     SolcConvention,
     SUMMARIES_SUBDIR,
 )
@@ -1372,7 +1373,7 @@ class SetupProver:
         return child_ids
 
     def getASTPath(self) -> Path:
-        return Path(".certora_internal/all_asts.json")
+        return PATH_ALL_ASTS_JSON
 
     def getBytesMappingsPath(self) -> Path:
         return Path(".certora_internal/bytes_mappings.json")

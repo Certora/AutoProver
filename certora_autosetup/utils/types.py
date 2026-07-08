@@ -11,6 +11,11 @@ from typing import Any, Optional, List, Dict, Set, assert_never
 from pathlib import Path
 from enum import Enum
 
+# Domain alias for a contract's Solidity name as it appears in build artifacts
+# (all_asts.json `certora_contract_name` stamps, scene listings). Keeps signatures
+# self-describing instead of passing bare strs around.
+type ContractName = str
+
 
 class ContractKind(Enum):
     """Types of contracts that can be defined in Solidity."""
