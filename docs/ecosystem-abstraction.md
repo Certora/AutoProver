@@ -373,7 +373,8 @@ The Solana/Soroban *backends* (formalization) are out of scope here — each plu
 
 ## 10. Phased plan
 
-*Status: Phases 1–3 implemented on branch `eric/ecosystem-abstraction`.*
+*Status: Phases 1–4 implemented (EVM preserved; Solana front half verified by a live gate).
+Phase 5 (Soroban) and Phase 6 (verification backends) remain.*
 
 1. ✅ **Done — Extract `Language` + `Chain` + `EVM` (= `SOLIDITY ⊕ evm`), behavior-preserving.**
    Added `composer/pipeline/ecosystem.py`; moved the `SourceApplication` reference, template
@@ -399,11 +400,21 @@ The Solana/Soroban *backends* (formalization) are out of scope here — each plu
    clear error for an unregistered chain), threaded through `build_application` /
    `run_application` / `run_rust_pipeline` in place of the hardcoded `EVM`. **Gate met:** rustapp
    tests + pyright green; only `evm` resolves for now (Solana/Soroban register in Phases 4–5).
-4. **Author the `RUST` language facet + the Solana chain.** `RUST` (Cargo `forbidden_read`, Rust
-   `code_explorer` prompt, `rust/_failure_modes.j2`); introduce the fragment-composition
-   convention (`property_prompt_base.j2` + `{% include %}`); `SolanaApplication` model, Solana
-   prompts + `solana/_failure_modes.j2`, `locate_main`/`units`. **Gate:** analysis + extraction
-   produce sane properties on a sample Anchor program (a null/echo backend suffices).
+4. ✅ **Done — Author the `RUST` language facet + the Solana chain.** This phase also performed
+   the driver's `Unit`/`Main` generalization deferred from Phase 2 (a `FeatureUnit` protocol in
+   `system_model`, threaded as type params through `Ecosystem`/`PreparedSystem`/`PipelineBackend`/
+   `Formalizer`/`run_pipeline`; EVM stays bound to `ContractComponentInstance`/`ContractInstance`
+   with byte-identical cache keys). Added the standalone `SolanaApplication` model
+   (`composer/spec/solana/model.py`), the `RUST` language (Cargo `forbidden_read`, Rust
+   `code_explorer` prompt, `rust/_failure_modes.j2`) and the `SOLANA` chain (validate /
+   `locate_main` / `units`). The fragment-composition convention is realized with `{% include %}`
+   of the shared `rust/_failure_modes.j2` + `solana/_failure_modes.j2` into the Solana templates
+   (a neutral `property_prompt_base.j2` proved unnecessary — the Solana templates are
+   self-contained and just pull the fragments). A reusable `NullSolanaBackend` + an Anchor
+   `solana_vault` scenario back the gate. **Gate met:** a live-LLM run
+   (`tests/test_solana_gate.py`) analyzed the vault into 3 instructions and extracted 27 sane,
+   Solana-native properties (signer/owner checks, PDA + canonical-bump derivation, System-Program
+   substitution, reinit-once, arithmetic overflow) — no prover needed.
 5. **Author the Soroban chain, reusing `RUST`.** `SorobanApplication` model + Soroban prompts;
    the *only* new prompt content is `soroban/_failure_modes.j2` and the Soroban analysis template
    — the Rust language fragments are inherited. **Gate:** the shared `rust/_failure_modes.j2` is
