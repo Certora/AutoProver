@@ -37,9 +37,8 @@ from langchain_core.messages import AIMessage
 from composer.ui.message_renderer import MessageRenderer, MountFn, TokenStats, dot, KNOWN_NODES
 from composer.ui.tool_call_renderer import ToolCallRenderer
 from composer.ui.tool_display import ToolDisplayConfig
+from composer.ui.file_content import FileContentMixin
 from composer.io.event_handler import EventHandler, NullEventHandler
-from composer.ui.ide_bridge import IDEBridge
-from composer.ui.ide_content import IDEContentMixin
 from composer.ui.log_screen import LogViewerMixin
 from composer.io.conversation import (
     ConversationClient, AIYapping, ToolComplete, ThinkingStart, ToolBatch, ProgressPayload,
@@ -509,7 +508,7 @@ class MultiJobTaskHandler[H]:
 # MultiJobApp — generic multi-job Textual app
 # ---------------------------------------------------------------------------
 
-class MultiJobApp[P: HasName, T: MultiJobTaskHandler](LogViewerMixin, IDEContentMixin, App):
+class MultiJobApp[P: HasName, T: MultiJobTaskHandler](LogViewerMixin, FileContentMixin, App):
     """Generic multi-job TUI with summary panel, task drill-down, and HITL routing.
 
     Implements ``TaskHost`` so that task handlers interact through a
@@ -550,11 +549,10 @@ class MultiJobApp[P: HasName, T: MultiJobTaskHandler](LogViewerMixin, IDEContent
         phase_labels: dict[P, str],
         section_order: list[str],
         header_text: str,
-        ide: IDEBridge | None = None,
     ):
         super().__init__()
         self._init_log_viewer()
-        self._init_ide_content(ide)
+        self._init_file_content()
         self._phase_labels = phase_labels
         self._section_order = section_order
         self._header_text = header_text

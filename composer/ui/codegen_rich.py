@@ -11,7 +11,6 @@ from textual.timer import Timer
 from rich.syntax import Syntax
 from rich.text import Text
 
-from composer.ui.ide_bridge import IDEBridge
 from composer.ui.tool_display import ToolDisplayConfig, ToolDisplay
 from composer.ui.rich_console import BaseRichConsoleApp
 from composer.io.protocol import WorkflowPurpose
@@ -67,7 +66,7 @@ class _ProverSpinner(Static):
 class CodeGenRichApp(BaseRichConsoleApp[HumanInteractionType, ProgressUpdate]):
     """Textual TUI for the code generation workflow."""
 
-    def __init__(self, show_checkpoints: bool = False, ide: IDEBridge | None = None):
+    def __init__(self, show_checkpoints: bool = False):
         super().__init__(
             tool_config=ToolDisplayConfig(
                 tool_display={
@@ -97,7 +96,6 @@ class CodeGenRichApp(BaseRichConsoleApp[HumanInteractionType, ProgressUpdate]):
                 }
             ),
             show_checkpoints=show_checkpoints,
-            ide=ide,
         )
         self._prover_table: DataTable | None = None
         self._analysis_col: ColumnKey | None = None
@@ -245,20 +243,12 @@ class CodeGenRichApp(BaseRichConsoleApp[HumanInteractionType, ProgressUpdate]):
             for k, val in node_data["vfs"].items()
         }
 
-        if self._ide is not None:
-            links = []
-            for name in names:
-                snap_id = self._store_snapshot(name, contents[name], name)
-                links.append(self._make_content_link_markup(snap_id, name))
-            markup = f"[cyan]{_DOT}[/cyan]Wrote {count} file{'s' if count != 1 else ''}: " + ", ".join(links)
-            widget = Static(markup, classes="vfs-change")
-        else:
-            file_parts: list[tuple[str, str] | str] = [(_DOT, "cyan"), f"Wrote {count} file{'s' if count != 1 else ''}: "]
-            for i, name in enumerate(names):
-                if i > 0:
-                    file_parts.append(", ")
-                file_parts.append((name, "bold underline cyan"))
-            widget = Static(Text.assemble(*file_parts), classes="vfs-change")
+        file_parts: list[tuple[str, str] | str] = [(_DOT, "cyan"), f"Wrote {count} file{'s' if count != 1 else ''}: "]
+        for i, name in enumerate(names):
+            if i > 0:
+                file_parts.append(", ")
+            file_parts.append((name, "bold underline cyan"))
+        widget = Static(Text.assemble(*file_parts), classes="vfs-change")
         await self._mount_to(target, widget)
 
     # ── DataTable cell click (analysis view) ──────────────────
@@ -270,18 +260,8 @@ class CodeGenRichApp(BaseRichConsoleApp[HumanInteractionType, ProgressUpdate]):
             if row_key == event.cell_key.row_key:
                 if rule_name in self._rule_analyses:
                     text = self._rule_analyses[rule_name]
-                    if self._ide is not None:
-                        self.run_worker(self._ide_show_analysis(rule_name, text), thread=False)
-                    else:
-                        self.notify(text[:200] + "...", title=f"Analysis: {rule_name}", timeout=10)
+                    self.notify(text[:200] + "...", title=f"Analysis: {rule_name}", timeout=10)
                 return
-
-    async def _ide_show_analysis(self, rule_name: str, analysis: str) -> None:
-        try:
-            assert self._ide is not None
-            await self._ide.show_webview(analysis, title=f"Analysis: {rule_name}")
-        except Exception:
-            self.notify("Failed to show analysis in VS Code", severity="warning")
 
     # ── Interaction builders ──────────────────────────────────
 
@@ -293,41 +273,30 @@ class CodeGenRichApp(BaseRichConsoleApp[HumanInteractionType, ProgressUpdate]):
             "\n\n",
         ]
 
-        if self._ide is not None:
-            self.run_worker(self._show_proposal_diff(ty), thread=False)
-            parts.append(("Diff opened in VS Code.\n", "dim italic"))
-        else:
-            current_lines = ty["current_spec"].splitlines(keepends=True)
-            proposed_lines = ty["proposed_spec"].splitlines(keepends=True)
-            diff_lines = list(difflib.unified_diff(
-                current_lines, proposed_lines,
-                fromfile="current", tofile="proposed",
-            ))
-            if diff_lines:
-                diff_text = Text()
-                for line in diff_lines:
-                    stripped = line.rstrip("\n")
-                    if line.startswith("+++") or line.startswith("---"):
-                        diff_text.append(stripped + "\n", style="bold white")
-                    elif line.startswith("@@"):
-                        diff_text.append(stripped + "\n", style="cyan")
-                    elif line.startswith("+"):
-                        diff_text.append(stripped + "\n", style="green")
-                    elif line.startswith("-"):
-                        diff_text.append(stripped + "\n", style="red")
-                    else:
-                        diff_text.append(stripped + "\n")
-                parts.append(("Diff:\n", "bold"))
-                parts.append(diff_text)
+        current_lines = ty["current_spec"].splitlines(keepends=True)
+        proposed_lines = ty["proposed_spec"].splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(
+            current_lines, proposed_lines,
+            fromfile="current", tofile="proposed",
+        ))
+        if diff_lines:
+            diff_text = Text()
+            for line in diff_lines:
+                stripped = line.rstrip("\n")
+                if line.startswith("+++") or line.startswith("---"):
+                    diff_text.append(stripped + "\n", style="bold white")
+                elif line.startswith("@@"):
+                    diff_text.append(stripped + "\n", style="cyan")
+                elif line.startswith("+"):
+                    diff_text.append(stripped + "\n", style="green")
+                elif line.startswith("-"):
+                    diff_text.append(stripped + "\n", style="red")
+                else:
+                    diff_text.append(stripped + "\n")
+            parts.append(("Diff:\n", "bold"))
+            parts.append(diff_text)
 
         return Text.assemble(*parts)
-
-    async def _show_proposal_diff(self, ty: ProposalType) -> None:
-        try:
-            assert self._ide is not None
-            await self._ide.show_diff(ty["current_spec"], ty["proposed_spec"], "Spec Change Proposal")
-        except Exception:
-            self.notify("Failed to open diff in VS Code", severity="warning")
 
     @staticmethod
     def _build_question(ty: QuestionType) -> Text:
@@ -393,93 +362,20 @@ class CodeGenRichApp(BaseRichConsoleApp[HumanInteractionType, ProgressUpdate]):
             assert file_contents is not None
             files[path] = file_contents.decode("utf-8")
 
-        if self._ide is not None:
-            # Show files collapsed in TUI for reference
-            for path, content in files.items():
-                lexer = "cvl" if path.endswith(".spec") else "solidity"
-                syntax = Syntax(content, lexer, theme="monokai", line_numbers=True)
-                coll = Collapsible(Static(syntax), title=path, collapsed=True)
-                await self._mount_to(target, coll)
+        for path, content in files.items():
+            lexer = "cvl" if path.endswith(".spec") else "solidity"
+            syntax = Syntax(content, lexer, theme="monokai", line_numbers=True)
+            coll = Collapsible(Static(syntax), title=path, collapsed=False)
+            await self._mount_to(target, coll)
 
-            if res.comments:
-                await self._mount_to(
-                    target,
-                    Static(Text.assemble(("\nComments: ", "bold"), res.comments))
-                )
-
-            # Preview in VS Code
-            preview_id: str | None = None
-            try:
-                preview_id = await self._ide.preview_results(files)
-            except Exception:
-                self.notify("Failed to preview results in VS Code", severity="warning")
-
-            if preview_id is not None:
-                # Show inline ACCEPT/REJECT prompt
-                prompt_widget = Static(Text.assemble(
-                    ("Results previewed in VS Code.\n", "bold"),
-                    ("Type ACCEPT to write files or REJECT to discard.", "dim"),
-                ))
-                hint_widget = Static("Response must be ACCEPT or REJECT", classes="interaction-hint")
-                input_widget = Input(placeholder="ACCEPT / REJECT", validate_on=["submitted"])
-                input_widget.validators = [Function(
-                    lambda x: x.strip().upper() in ("ACCEPT", "REJECT"),
-                    "Response must be ACCEPT or REJECT",
-                )]
-                await self._mount_to(target, prompt_widget, input_widget, hint_widget)
-                input_widget.focus()
-
-                response = await self._input_queue.get()
-                await prompt_widget.remove()
-                await input_widget.remove()
-                await hint_widget.remove()
-                decision = response.strip().upper()
-
-                if decision == "ACCEPT":
-                    try:
-                        written = await self._ide.accept_results(preview_id)
-                        await self._mount_to(
-                            target,
-                            Static(Text(f"Results accepted — wrote {len(written)} file(s).", style="bold green"))
-                        )
-                    except Exception:
-                        self.notify("Failed to accept results in VS Code", severity="warning")
-                else:
-                    try:
-                        await self._ide.reject_results(preview_id)
-                    except Exception:
-                        pass
-                    await self._mount_to(
-                        target,
-                        Static(Text("Results rejected.", style="yellow"))
-                    )
-            else:
-                await self._mount_to(
-                    target,
-                    Static(Text("Preview unavailable — results shown above.", style="dim"))
-                )
-
-            self._graph_done = True
+        if res.comments:
             await self._mount_to(
                 target,
-                Static(Text("Press q to quit.", style="dim"))
+                Static(Text.assemble(("\nComments: ", "bold"), res.comments))
             )
-        else:
-            # No IDE — current behavior: show files expanded
-            for path, content in files.items():
-                lexer = "cvl" if path.endswith(".spec") else "solidity"
-                syntax = Syntax(content, lexer, theme="monokai", line_numbers=True)
-                coll = Collapsible(Static(syntax), title=path, collapsed=False)
-                await self._mount_to(target, coll)
 
-            if res.comments:
-                await self._mount_to(
-                    target,
-                    Static(Text.assemble(("\nComments: ", "bold"), res.comments))
-                )
-
-            self._graph_done = True
-            await self._mount_to(
-                target,
-                Static(Text("Press q to quit.", style="dim"))
-            )
+        self._graph_done = True
+        await self._mount_to(
+            target,
+            Static(Text("Press q to quit.", style="dim"))
+        )
