@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Annotated, Callable, Iterator, override, AsyncContextManager
 from typing_extensions import TypedDict, NotRequired
@@ -39,7 +39,7 @@ from composer.spec.cvl_generation import CVLGenerationState, make_validation_sta
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
-from composer.spec.gen_types import SPECS_DIR
+from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
 
 
 _logger = logging.getLogger("composer.prover")
@@ -83,6 +83,9 @@ class ProverStateExtra(TypedDict):
     # Link of the last prover run this generation performed (URL or local results dir).
     # Last-write-wins; absent until the first prover run. Read at completion onto GeneratedCVL.
     prover_link: NotRequired[str | None]
+    # Basename the spec is materialized/persisted under (e.g. "autospec_<slug>").
+    # NotRequired so other ProverStateExtra injectors (e.g. config_edit) needn't set it.
+    spec_stem: NotRequired[str]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
@@ -181,7 +184,7 @@ def tmp_spec(
     *,
     root: str,
     content: str,
-    prefix: str = "generated"
+    name: str | None = None,
 ) -> Iterator[str]:
     # Materialize under the canonical specs dir -- the same directory the spec is
     # ultimately persisted to -- so the prover resolves the spec's CVL imports
@@ -190,7 +193,7 @@ def tmp_spec(
         root=root,
         ext="spec",
         content=content,
-        prefix=prefix,
+        name=name,
         dest_dir=SPECS_DIR,
     ) as tmp:
         yield tmp
@@ -216,6 +219,14 @@ def get_prover_tool(
 ) -> BaseTool:
     sem = _prover_sem(prover_opts.cloud)
     stamper = make_validation_stamper(VALIDATION_KEY)
+    # Serialize verify calls targeting the same spec name: the spec/conf are written
+    # under a deterministic name and unlinked on exit, so two overlapping same-stem
+    # calls (e.g. parallel verify_spec for one component) would race. Distinct stems
+    # stay concurrent (notably on cloud, where ``sem`` is a no-op).
+    # Not pruned: bounded by this run's stems (per-component + invariants) and dies with
+    # the per-run tool; popping a held lock would let a later same-stem call mint a fresh,
+    # non-excluding one.
+    spec_locks: dict[str, asyncio.Lock] = {}
 
     @tool_display("Running prover", None)
     @tool(args_schema=VerifySpecSchema)
@@ -227,48 +238,56 @@ def get_prover_tool(
         if state["curr_spec"] is None:
             return "Specification not yet put on VFS"
         conf = state["config"]
-        with tmp_spec(root=project_root, content=state["curr_spec"]) as generated:
-            config = prover_config_overlay(
-                conf, main_contract=main_contract, verify_target=f"{main_contract}:{generated}"
-            )
-
-            if rules:
-                config["rule"] = rules
-
-            summary = get_run_summary()
-
-            with temp_certora_file(
-                root = project_root,
-                content=json.dumps(config, indent=2),
-                ext="conf",
-                prefix="verify"
-            ) as config_path:
-                async with sem:
-                    result = await run_prover(
-                        Path(project_root),
-                        [config_path],
-                        tool_call_id,
-                        prover_opts,
-                        _SpecCallbacks(get_stream_writer(), tool_call_id, summary, config),
-                        DefaultCexHandler(llm, state, summarization_threshold=10)
-                    )
-
-            if isinstance(result, str):
-                return result
-            all_verified = True
-            for (r, stat) in result.rule_status.items():
-                if r in state["rule_skips"]:
-                    continue
-                if not stat:
-                    all_verified = False
-                    break
-            if rules is None and all_verified:
-                return tool_state_update(
-                    tool_call_id=tool_call_id, content=result.result_str,
-                    prover_link=result.link, validations=stamper(state),
+        # With a seeded stem, name the spec/conf after it (so on-disk names match the
+        # dump) under a lock; else fall back to unique uid names (no lock needed).
+        spec_stem = state.get("spec_stem")
+        conf_dir = (CERTORA_DIR / "confs") if spec_stem is not None else CERTORA_DIR
+        lock = spec_locks.setdefault(spec_stem, asyncio.Lock()) if spec_stem is not None else nullcontext()
+        async with lock:
+            with tmp_spec(root=project_root, content=state["curr_spec"], name=spec_stem) as generated:
+                config = prover_config_overlay(
+                    conf, main_contract=main_contract, verify_target=f"{main_contract}:{generated}"
                 )
-            return tool_state_update(
-                tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
-            )
+
+                if rules:
+                    config["rule"] = rules
+
+                summary = get_run_summary()
+
+                with temp_certora_file(
+                    root=project_root,
+                    content=json.dumps(config, indent=2),
+                    ext="conf",
+                    name=spec_stem,
+                    prefix="verify",
+                    dest_dir=conf_dir,
+                ) as config_path:
+                    async with sem:
+                        result = await run_prover(
+                            Path(project_root),
+                            [config_path],
+                            tool_call_id,
+                            prover_opts,
+                            _SpecCallbacks(get_stream_writer(), tool_call_id, summary, config),
+                            DefaultCexHandler(llm, state, summarization_threshold=10)
+                        )
+
+                if isinstance(result, str):
+                    return result
+                all_verified = True
+                for (r, stat) in result.rule_status.items():
+                    if r in state["rule_skips"]:
+                        continue
+                    if not stat:
+                        all_verified = False
+                        break
+                if rules is None and all_verified:
+                    return tool_state_update(
+                        tool_call_id=tool_call_id, content=result.result_str,
+                        prover_link=result.link, validations=stamper(state),
+                    )
+                return tool_state_update(
+                    tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
+                )
 
     return verify_spec

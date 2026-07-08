@@ -119,16 +119,17 @@ class ProverRunner(Formalizer[GeneratedCVL]):
         run: PipelineRun,
     ) -> GeneratedCVL | GaveUp:
         return await batch_cvl_generation(
-            ctx.abstract(CVLGeneration),
-            self._prover_config,
-            props,
-            feat,
-            self._resources,
-            self._prover_tool,
-            run.env,
-            label,
-            run.source,
-            SPECS_DIR,
+            ctx=ctx.abstract(CVLGeneration),
+            init_config=self._prover_config,
+            props=props,
+            component=feat,
+            resources=self._resources,
+            prover_tool=self._prover_tool,
+            env=run.env,
+            description=label,
+            source=run.source,
+            spec_dir=SPECS_DIR,
+            spec_stem=ComponentSpec(feat.slugified_name).stem
         )
 
     @override
@@ -197,16 +198,17 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
                 inv_result = await run.runner(
                     TaskInfo(INVARIANT_CVL_TASK_ID, "Invariant CVL", AutoProvePhase.CVL_GEN),
                     lambda: batch_cvl_generation(
-                        inv_cvl_ctx.abstract(CVLGeneration),
-                        setup_config.prover_config,
-                        inv_props,
-                        None,
-                        resources,
-                        self._prover_tool,
-                        run.env,
-                        "Structural invariant CVL",
-                        run.source,
-                        SPECS_DIR,
+                        ctx=inv_cvl_ctx.abstract(CVLGeneration),
+                        init_config=setup_config.prover_config,
+                        props=inv_props,
+                        component=None,
+                        resources=resources,
+                        prover_tool=self._prover_tool,
+                        env=run.env,
+                        description="Structural invariant CVL",
+                        source=run.source,
+                        spec_dir=SPECS_DIR,
+                        spec_stem=InvariantSpec().stem
                     ),
                 )
                 if isinstance(inv_result, GaveUp):
