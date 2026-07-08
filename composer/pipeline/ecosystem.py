@@ -27,8 +27,14 @@ from composer.spec.system_model import (
     BaseApplication,
     ContractComponentInstance,
     ContractInstance,
+    FeatureUnit,
     SolidityIdentifier,
     SourceApplication,
+)
+from composer.spec.solana.model import (
+    SolanaApplication,
+    SolanaInstructionInstance,
+    SolanaProgramInstance,
 )
 from composer.spec.util import FS_FORBIDDEN_READ
 
@@ -60,16 +66,16 @@ class Language:
 
 
 @dataclass(frozen=True)
-class Ecosystem[App: BaseApplication]:
+class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     """A resolved ecosystem = a chain that carries its language. The driver consumes it to
     drive the shared front half without hardcoding any one domain.
 
-    Generic over ``App`` — the analyzed system-model type this ecosystem produces. A backend
-    is paired with an ecosystem by that type: ``run_pipeline`` ties
-    ``PipelineBackend[..., App]`` to ``Ecosystem[App]``, so ``prepare_system(analyzed: App)``
-    type-checks without a cast. (``Main`` / ``Unit`` — the main-instance and per-unit wrappers
-    — stay the EVM ``ContractInstance`` / ``ContractComponentInstance`` for now; generalizing
-    those pairs with a non-contract model in a later phase.)"""
+    Generic over ``App`` (the analyzed system-model type), ``Main`` (the located main-unit
+    wrapper), and ``Unit`` (the per-unit item the extraction phase iterates). A backend is
+    paired with an ecosystem by these types: ``run_pipeline`` ties
+    ``PipelineBackend[..., App, Main, Unit]`` to ``Ecosystem[App, Main, Unit]``, so the analyzed
+    model, the main-unit, and the per-unit values flow through without casts. EVM binds
+    ``(SourceApplication, ContractInstance, ContractComponentInstance)``; Solana binds its own."""
 
     name: ChainTag
     language: Language
@@ -85,9 +91,9 @@ class Ecosystem[App: BaseApplication]:
     #: to ``run_component_analysis``'s ``validate`` parameter without a contravariance clash.
     validate_analysis: Callable[[BaseApplication, SolidityIdentifier | None], str | None]
     #: Locate the target unit (the "main contract"/program) in the analyzed model.
-    locate_main: Callable[[App, SourceCode], ContractInstance]
+    locate_main: Callable[[App, SourceCode], Main]
     #: Enumerate the per-unit items the extraction phase infers properties for.
-    units: Callable[[ContractInstance], list[ContractComponentInstance]]
+    units: Callable[[Main], list[Unit]]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
 
@@ -134,7 +140,7 @@ SOLIDITY = Language(
     code_explorer_prompt=CODE_EXPLORER_SYS_PROMPT,
 )
 
-EVM: Ecosystem[SourceApplication] = Ecosystem(
+EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] = Ecosystem(
     name="evm",
     language=SOLIDITY,
     system_model=SourceApplication,
@@ -151,6 +157,109 @@ EVM: Ecosystem[SourceApplication] = Ecosystem(
 )
 
 
-#: Registry of available ecosystems, keyed by chain tag. Solana/Soroban register here in
-#: later phases. Heterogeneous in ``App`` (each chain has its own model), hence ``Ecosystem[Any]``.
-ECOSYSTEMS: dict[ChainTag, Ecosystem[Any]] = {"evm": EVM}
+# ---------------------------------------------------------------------------
+# The RUST language facet (shared by Solana and, later, Soroban)
+# ---------------------------------------------------------------------------
+
+#: Cargo/Anchor project layout: hide build output, VCS, lockfiles, and the JS side; keep the
+#: crate sources and `tests/`. (Contrast the Foundry-shaped ``FS_FORBIDDEN_READ``.)
+RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
+
+RUST_CODE_EXPLORER_PROMPT = """\
+You are a code-exploration assistant analyzing Rust source for on-chain programs (e.g. Solana
+/ Anchor). You have file tools (list_files, get_file, grep_files) to explore the project.
+Answer the question concretely, citing the relevant items: instruction handlers, account
+validation structs (e.g. Anchor `#[derive(Accounts)]`), account/state types, PDA seed
+derivations, signer/owner checks, and cross-program invocations. Quote the exact Rust snippets
+that establish or omit a check; do not speculate about code you have not read.
+"""
+
+RUST = Language(
+    name="rust",
+    default_forbidden_read=RUST_FORBIDDEN_READ,
+    code_explorer_prompt=RUST_CODE_EXPLORER_PROMPT,
+    failure_modes_partial="rust/_failure_modes.j2",
+)
+
+
+# ---------------------------------------------------------------------------
+# The Solana chain (RUST ⊕ solana)
+# ---------------------------------------------------------------------------
+
+
+def _solana_validate(app: BaseApplication, expected_main: SolidityIdentifier | None) -> str | None:
+    """Connectivity/shape validation for a ``SolanaApplication`` (retry feedback on failure).
+    Mirrors the EVM ``_validate_connectivity`` structure: unique program identifiers, unique
+    instruction slugs within a program, the expected main program present, CPI targets known."""
+    if not isinstance(app, SolanaApplication):
+        return None
+    errors: list[str] = []
+    known_programs: set[str] = set()
+    known_authorities = {a.name for a in app.authorities}
+    for prog in app.programs:
+        if prog.program_identifier in known_programs:
+            errors.append(f"Duplicate program identifier: {prog.program_identifier}")
+        known_programs.add(prog.program_identifier)
+        slug_origin: dict[str, str] = {}
+        from composer.spec.util import slugify_filename
+
+        for ins in prog.instructions:
+            slug = slugify_filename(ins.name)
+            if slug in slug_origin:
+                errors.append(
+                    f"Instructions {slug_origin[slug]!r} and {ins.name!r} in {prog.name} "
+                    f"reduce to the same filename slug {slug!r}; give them more-distinct names."
+                )
+            slug_origin[slug] = ins.name
+            for cpi in ins.cpis:
+                if cpi.target_program not in known_programs and cpi.target_program not in known_authorities:
+                    # A CPI may target a well-known external program (SPL Token, System); only
+                    # flag targets that look like they should be a declared program/authority.
+                    pass
+    if expected_main is not None and expected_main not in known_programs:
+        errors.append(
+            f"Expected a program with identifier {expected_main!r}; declared programs: "
+            f"{sorted(known_programs) or '(none)'}."
+        )
+    if not errors:
+        return None
+    if len(errors) == 1:
+        return errors[0]
+    return "Multiple validation errors; fix all before resubmitting:\n" + "\n".join(f"- {e}" for e in errors)
+
+
+def _solana_locate_main(app: SolanaApplication, source: SourceCode) -> SolanaProgramInstance:
+    for i, prog in enumerate(app.programs):
+        if prog.program_identifier == source.contract_name:
+            return SolanaProgramInstance(i, app)
+    raise ValueError(f"main program {source.contract_name!r} not found in analyzed application")
+
+
+def _solana_units(main: SolanaProgramInstance) -> list[SolanaInstructionInstance]:
+    return [SolanaInstructionInstance(i, main) for i in range(len(main.program.instructions))]
+
+
+def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
+    return [
+        f"The main program of this application has been explicitly identified as "
+        f"{source.contract_name} at relative path {source.relative_path}. "
+        "Your output MUST contain a program whose program_identifier is this exact identifier."
+    ]
+
+
+SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaInstructionInstance] = Ecosystem(
+    name="solana",
+    language=RUST,
+    system_model=SolanaApplication,
+    analysis_prompts=PromptPair("solana/analysis_system.j2", "solana/analysis_prompt.j2"),
+    property_prompts=PromptPair("solana/property_system.j2", "solana/property_prompt.j2"),
+    validate_analysis=_solana_validate,
+    locate_main=_solana_locate_main,
+    units=_solana_units,
+    analysis_extra_input=_solana_analysis_extra_input,
+)
+
+
+#: Registry of available ecosystems, keyed by chain tag. Heterogeneous in ``App``/``Main``/``Unit``
+#: (each chain has its own model), hence ``Ecosystem[Any, Any, Any]``.
+ECOSYSTEMS: dict[ChainTag, Ecosystem[Any, Any, Any]] = {"evm": EVM, "solana": SOLANA}

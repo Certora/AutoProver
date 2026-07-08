@@ -7,7 +7,7 @@ import pathlib
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
+from typing import cast, Any, AsyncIterator, Protocol, Callable, Awaitable
 
 from graphcore.tools.memory import async_memory_tool
 
@@ -90,7 +90,7 @@ def _root_cache_key(
 # Main
 # ---------------------------------------------------------------------------
 
-type Executor = Callable[[HandlerFactory[AutoProvePhase, None]], Awaitable[CorePipelineResult[GeneratedCVL]]]
+type Executor = Callable[[HandlerFactory[AutoProvePhase, None]], Awaitable[CorePipelineResult[GeneratedCVL, Any]]]
 
 @asynccontextmanager
 async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
@@ -221,7 +221,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
 
         prover_opts = make_prover_options(cloud=args.cloud)
 
-        async def runner(handler: HandlerFactory[AutoProvePhase, None]) -> CorePipelineResult[GeneratedCVL]:
+        async def runner(handler: HandlerFactory[AutoProvePhase, None]) -> CorePipelineResult[GeneratedCVL, Any]:
             return await run_autoprove_pipeline(
                     ctx=ctx,
                     source_input=system_doc,

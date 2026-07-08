@@ -122,7 +122,7 @@ class _RustFormalizerCfg:
     feedback: FeedbackHook | None = None
 
 
-class RustFormalizer(Formalizer[RustFormalResult]):
+class RustFormalizer(Formalizer[RustFormalResult, ContractComponentInstance]):
     """Drives the Rust decider. ``formalize`` builds a session from the marshalled
     component + properties and runs the IoC loop; ``fetch_verdicts`` / ``finalize``
     are off-thread sync FFI calls."""
@@ -225,11 +225,11 @@ class RustFormalizer(Formalizer[RustFormalResult]):
 
 
 @dataclass
-class RustPreparedSystem(PreparedSystem[RustFormalResult]):
+class RustPreparedSystem(PreparedSystem[RustFormalResult, ContractInstance]):
     backend: "RustBackend"
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult]:
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult, ContractComponentInstance]:
         return RustFormalizer(
             self.backend.module,
             self.backend.descriptor,
@@ -265,7 +265,7 @@ class RustBackend:
 
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun
-    ) -> PreparedSystem[RustFormalResult]:
+    ) -> PreparedSystem[RustFormalResult, ContractInstance]:
         return RustPreparedSystem(main_instance(analyzed, run.source), self)
 
     def to_artifact_id(self, c: ContractComponentInstance) -> RustArtifact:

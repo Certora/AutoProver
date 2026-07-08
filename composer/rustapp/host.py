@@ -50,7 +50,7 @@ def load_descriptor(module: Any) -> AppDescriptor:
     return AppDescriptor.model_validate_json(module.descriptor())
 
 
-def resolve_ecosystem(descriptor: AppDescriptor) -> Ecosystem[Any]:
+def resolve_ecosystem(descriptor: AppDescriptor) -> Ecosystem[Any, Any, Any]:
     """Resolve the descriptor's declared ecosystem against the registry. Raises a clear
     error if the chain isn't registered yet (e.g. Solana/Soroban land in later phases)."""
     eco = ECOSYSTEMS.get(descriptor.ecosystem)
@@ -129,7 +129,7 @@ async def run_rust_pipeline(
     interactive: bool = False,
     prover: ProverHook | None = None,
     feedback: FeedbackHook | None = None,
-) -> CorePipelineResult[RustFormalResult]:
+) -> CorePipelineResult[RustFormalResult, Any]:
     """Build the backend from ``module_name`` and run the shared driver — the Rust
     analogue of ``run_autoprove_pipeline`` / ``run_foundry_pipeline``.
 
@@ -161,7 +161,7 @@ async def run_application(
     max_concurrent: int = 4,
     max_bug_rounds: int = 3,
     interactive: bool = False,
-) -> CorePipelineResult[RustFormalResult]:
+) -> CorePipelineResult[RustFormalResult, Any]:
     """Run a pre-built :class:`RustApplication`. The backend is constructed from the
     app's already-synthesized phase enum, so the ``TaskInfo`` phases the driver emits
     are the *same* enum members the frontend's ``phase_labels`` are keyed by — the
@@ -185,7 +185,7 @@ class RustApplication:
 
     descriptor: AppDescriptor
     module: Any
-    ecosystem: Ecosystem[Any]
+    ecosystem: Ecosystem[Any, Any, Any]
     phase: type[enum.Enum]
     core_phases: CorePhases
     phase_labels: dict[Any, str]

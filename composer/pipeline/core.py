@@ -18,7 +18,7 @@ import enum
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Callable, Awaitable, TypedDict
+from typing import Protocol, Callable, Awaitable, TypedDict, Any
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
@@ -30,7 +30,8 @@ from composer.spec.context import (
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
-    SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication, BaseApplication
+    SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication, BaseApplication,
+    FeatureUnit,
 )
 from composer.pipeline.ecosystem import Ecosystem, EVM, main_instance
 from composer.spec.types import PropertyFormulation, FormalResult, ArtifactIdentifier
@@ -95,8 +96,8 @@ class SystemAnalysisSpec:
 
 
 @dataclass
-class BackendJob:
-    feat: ContractComponentInstance
+class BackendJob[Unit: FeatureUnit]:
+    feat: Unit
     props: list[PropertyFormulation]
 
 @dataclass(frozen=True)
@@ -118,29 +119,29 @@ class Delivered[FormT: BackendResult]:
         return self.result.output_link
 
 @dataclass
-class ComponentOutcome[FormT: BackendResult](BackendJob):
+class ComponentOutcome[FormT: BackendResult, Unit: FeatureUnit](BackendJob[Unit]):
     result: Delivered[FormT] | GaveUp | BaseException
 
 @dataclass
-class CorePipelineResult[FormT: BackendResult]:
+class CorePipelineResult[FormT: BackendResult, Unit: FeatureUnit]:
     n_components: int
     n_properties: int
-    outcomes: list[ComponentOutcome[FormT]]
+    outcomes: list[ComponentOutcome[FormT, Unit]]
     failures: list[str]
 
 @dataclass
-class Formalizer[FormT: BackendResult](ABC):
+class Formalizer[FormT: BackendResult, Unit: FeatureUnit](ABC):
     """Immutable, fully constructed by prepare_formalization. Carries the prover's
     config/resources/prover_tool/invariant-results (or nothing, for foundry) as constructor
     state — never set post-hoc. `FormT: ReportableResult` is what makes the report a core step."""
     formalized_type: type[FormT]
     backend_tag: ReportBackend
-    
+
     @abstractmethod
     async def formalize(
         self,
         label: str,
-        feat: ContractComponentInstance,
+        feat: Unit,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[FormT],
         run: PipelineRun
@@ -157,20 +158,20 @@ class Formalizer[FormT: BackendResult](ABC):
         off-thread. Foundry: read straight off inp.formalized.result."""
         ...
 
-    async def finalize(self, outcomes: list[ComponentOutcome[FormT]], run: PipelineRun) -> None:
+    async def finalize(self, outcomes: list[ComponentOutcome[FormT, Unit]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
         components_to_prover_runs.json). Default: none."""
         return None
 
 @dataclass
-class PreparedSystem[FormT: BackendResult](ABC):
-    main: ContractInstance
+class PreparedSystem[FormT: BackendResult, Main](ABC):
+    main: Main
 
     @abstractmethod
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT]: ...
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT, Any]: ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, App: BaseApplication](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, App: BaseApplication, Main, Unit: FeatureUnit](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -186,9 +187,9 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     async def prepare_system(
         self, analyzed: App,
         run: PipelineRun[P, H]
-    ) -> PreparedSystem[FormT]: ...
+    ) -> PreparedSystem[FormT, Main]: ...
 
-    def to_artifact_id(self, c: ContractComponentInstance) -> A: ...
+    def to_artifact_id(self, c: Unit) -> A: ...
 
 
 # ---- shared helpers (the de-duplicated cache keys + batch) -------------------
@@ -201,11 +202,11 @@ PROPERTIES_KEY = CacheKey[None, Properties]("properties")
 
 
 @dataclass
-class _Batch(BackendJob):
+class _Batch[Unit: FeatureUnit](BackendJob[Unit]):
     feat_ctx: WorkflowContext[ComponentGroup]
 
-def _component_cache_key(c: ContractComponentInstance) -> CacheKey[Properties, ComponentGroup]:
-    return CacheKey(string_hash("|".join([c.app.model_dump_json(), str(c.ind), str(c._contract.ind)])))
+def _component_cache_key(c: FeatureUnit) -> CacheKey[Properties, ComponentGroup]:
+    return CacheKey(string_hash(c.cache_material()))
 
 
 def _batch_cache_key[FormT: BaseModel](props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, FormT]:
@@ -220,15 +221,15 @@ def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, App: BaseApplication](
-    backend: PipelineBackend[P, FormT, H, A, App],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, App: BaseApplication, Main, Unit: FeatureUnit](
+    backend: PipelineBackend[P, FormT, H, A, App, Main, Unit],
     run: PipelineRun[P, H],
-    ecosystem: Ecosystem[App],
+    ecosystem: Ecosystem[App, Main, Unit],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
-) -> CorePipelineResult[FormT]:
+) -> CorePipelineResult[FormT, Unit]:
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
 
@@ -267,7 +268,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         raise ValueError("No properties extracted from any component.")
 
     # 4. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
-    async def _run(batch: _Batch) -> ComponentOutcome[FormT]:
+    async def _run(batch: _Batch[Unit]) -> ComponentOutcome[FormT, Unit]:
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
         child : WorkflowContext[FormT] = await batch.feat_ctx.child(
@@ -276,11 +277,11 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         cached_result: FormT | None = await child.cache_get(formalizer.formalized_type)
         result : FormT | GaveUp
         if cached_result is None:
-            label = f"{batch.feat.component.name} ({len(batch.props)} properties)"
+            label = f"{batch.feat.display_name} ({len(batch.props)} properties)"
             result : FormT | GaveUp = await run.runner(
                 TaskInfo(
-                    formalize_task_id(batch.feat.ind),
-                    f"{batch.feat.component.name} ({len(batch.props)} properties)",
+                    formalize_task_id(batch.feat.unit_index),
+                    label,
                     phases["formalization"]
                 ),
                 lambda: formalizer.formalize(label, batch.feat, batch.props, child, run),
@@ -289,7 +290,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
                 await child.cache_put(result)
         else:
             result = cached_result
-        
+
         outcome: Delivered[FormT] | GaveUp = (
             result if isinstance(result, GaveUp)
             else Delivered(result, backend.artifact_store.write_artifact(result_key, result))
@@ -308,7 +309,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     # never fails the run.
     inputs = [
         ReportComponentInput(
-            name=o.feat.component.name,
+            name=o.feat.display_name,
             props=o.props,
             formalized=o.result if isinstance(o.result, Delivered) else None,
         )
@@ -330,18 +331,17 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     return _tally(outcomes)
 
-async def _extract_all[P: enum.Enum, H](
-    main: ContractInstance, backend_guidance: str, run: PipelineRun[P, H],
+async def _extract_all[P: enum.Enum, H, Main, Unit: FeatureUnit](
+    main: Main, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
-    ecosystem: Ecosystem,
-) -> list[_Batch]:
+    ecosystem: Ecosystem[Any, Main, Unit],
+) -> list[_Batch[Unit]]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY)
 
-    async def _one(feat: ContractComponentInstance) -> _Batch | None:
-        feat_ctx = await prop_ctx.child(_component_cache_key(feat),
-                                        {"component": feat.component.model_dump()})
+    async def _one(feat: Unit) -> _Batch[Unit] | None:
+        feat_ctx = await prop_ctx.child(_component_cache_key(feat), feat.context_tag())
         props = await run.runner(
-            TaskInfo(extract_task_id(feat.ind), feat.component.name, phase),
+            TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),
             lambda conv: run_property_inference(
                 feat_ctx, run.env, feat, refinement=conv if interactive else None,
                 threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance,
@@ -354,11 +354,11 @@ async def _extract_all[P: enum.Enum, H](
     return [b for b in got if b is not None]
 
 
-def _tally[FormT: BackendResult](outcomes: list[ComponentOutcome[FormT]]) -> CorePipelineResult[FormT]:
+def _tally[FormT: BackendResult, Unit: FeatureUnit](outcomes: list[ComponentOutcome[FormT, Unit]]) -> CorePipelineResult[FormT, Unit]:
     failures: list[str] = []
     for o in outcomes:
         if isinstance(o.result, BaseException):
-            failures.append(f"{o.feat.component.name}: {o.result}")
+            failures.append(f"{o.feat.display_name}: {o.result}")
         elif isinstance(o.result, GaveUp):
-            failures.append(f"{o.feat.component.name}: GAVE_UP: {o.result.reason}")
+            failures.append(f"{o.feat.display_name}: GAVE_UP: {o.result.reason}")
     return CorePipelineResult(len(outcomes), sum(len(o.props) for o in outcomes), outcomes, failures)

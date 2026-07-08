@@ -101,7 +101,7 @@ def _lift_harnessed(
 
 
 @dataclass
-class ProverRunner(Formalizer[GeneratedCVL]):
+class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
     """Immutable formalizer: per-batch CVL generation against a fixed prover
     config + resource set (already including ``invariants.spec`` when there are
     structural invariants), plus the in-memory invariant result for the report."""
@@ -151,7 +151,7 @@ class ProverRunner(Formalizer[GeneratedCVL]):
         return await self._fetch(inp)
 
     @override
-    async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL]], run: PipelineRun) -> None:
+    async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]], run: PipelineRun) -> None:
         # components_to_prover_runs.json: {run_key (slug): prover /output/ link}.
         runs: dict[str, str] = {
             ComponentSpec(o.feat.slugified_name).run_key: o.result.run_link
@@ -166,7 +166,7 @@ class ProverRunner(Formalizer[GeneratedCVL]):
 
 
 @dataclass
-class ProverPrepared(PreparedSystem[GeneratedCVL]):
+class ProverPrepared(PreparedSystem[GeneratedCVL, ContractInstance]):
     """Post-harness system: holds the harnessed app + prover tool, and runs the
     prover-only pre-formalization fan-out in ``prepare_formalization``."""
     _store: ProverArtifactStore
@@ -177,7 +177,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
     _analyzed: SourceApplication
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL]:
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL, ContractComponentInstance]:
         # AutoSetup (+ custom summaries) ∥ structural-invariant formulation; both
         # depend only on the harnessed app, so they run concurrently.
         (setup_config, resources), invariants = await asyncio.gather(
@@ -288,7 +288,7 @@ class ProverBackend:
 
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
-    ) -> PreparedSystem[GeneratedCVL]:
+    ) -> PreparedSystem[GeneratedCVL, ContractInstance]:
         sys_desc = await run.runner(
             TaskInfo(HARNESS_TASK_ID, "Harness Creation", AutoProvePhase.HARNESS),
             lambda: run_harness_creation(run.ctx, run.source, run.env, analyzed),
@@ -319,7 +319,7 @@ async def run_autoprove_pipeline(
     interactive: bool,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
-) -> CorePipelineResult[GeneratedCVL]:
+) -> CorePipelineResult[GeneratedCVL, ContractComponentInstance]:
     """Run the auto-prove pipeline via the generic driver."""
     backend = ProverBackend(
         ProverArtifactStore(source_input.project_root, source_input.contract_name),

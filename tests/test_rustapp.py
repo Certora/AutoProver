@@ -239,8 +239,8 @@ def test_resolve_ecosystem_rejects_unregistered_chain():
     from composer.rustapp.host import resolve_ecosystem
 
     desc = AppDescriptor.model_validate_json(echoprover.descriptor())
-    # solana is a valid ChainTag but not registered until a later phase.
-    unregistered = desc.model_copy(update={"ecosystem": "solana"})
+    # soroban is a valid ChainTag but not registered until a later phase.
+    unregistered = desc.model_copy(update={"ecosystem": "soroban"})
     with pytest.raises(ValueError, match="not registered"):
         resolve_ecosystem(unregistered)
 

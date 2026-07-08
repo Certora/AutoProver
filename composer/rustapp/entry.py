@@ -25,7 +25,7 @@ import pathlib
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, cast
 
 from graphcore.tools.memory import async_memory_tool
 from langgraph.store.base import BaseStore
@@ -62,7 +62,7 @@ EnvBuilder = Callable[..., ServiceHost]
 
 # The Executor a frontend drives.
 RustRunner = Callable[
-    [HandlerFactory], Awaitable[CorePipelineResult[RustFormalResult]]
+    [HandlerFactory], Awaitable[CorePipelineResult[RustFormalResult, Any]]
 ]
 
 
@@ -188,7 +188,9 @@ async def rust_entry_point(
     print(f"{descriptor.name} logs: {text_log}\n         events: {events_log}", file=sys.stderr)
     install_run_summary(summary)
 
-    model_fact = llm_factory(args)
+    # argparse Namespace duck-types the ModelConfiguration protocol (the model flags come from
+    # ExtendedModelOptions); the built-in entries cast their args the same way.
+    model_fact = llm_factory(cast(Any, args))
 
     async with (
         standard_connections(embedder=DefaultEmbedder(model)) as conns,
@@ -242,7 +244,7 @@ async def rust_entry_point(
             memory_namespace=args.memory_ns,
         )
 
-        async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult]:
+        async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult, Any]:
             return await run_application(
                 app,
                 source_input=source_input,

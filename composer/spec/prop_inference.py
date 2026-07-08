@@ -21,7 +21,7 @@ from composer.input.files import Document
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
-from composer.spec.system_model import ContractComponentInstance
+from composer.spec.system_model import FeatureUnit
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.service_host import Sort, ServiceHost
 from composer.io.conversation import ConversationContextProvider
@@ -101,7 +101,7 @@ field not exceeding 2^128 - 1, etc.)
 
 
 def _get_initial_prompt(
-    context: ContractComponentInstance,
+    context: FeatureUnit,
     sort: Sort,
     prev_results: list[_AgentRoundResult],
     backend_guidance: str,
@@ -280,7 +280,7 @@ def _unique_titles_validator(
 
 async def _run_bug_round(
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: FeatureUnit,
     front_matter_items: Sequence[str | dict],
     ctx: WorkflowContext[_AgentResult],
     round: int,
@@ -344,7 +344,7 @@ async def _run_bug_round(
 async def _run_bug_analysis_inner(
     agent_component_analysis: WorkflowContext[_AgentResult],
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: FeatureUnit,
     extra_input: Sequence[str | dict],
     threat_model: Document | None,
     max_rounds: int,
@@ -394,7 +394,7 @@ async def _run_bug_analysis_inner(
 async def run_property_inference(
     ctx: WorkflowContext[ComponentGroup],
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: FeatureUnit,
     extra_input : Sequence[str | dict] = tuple(),
     threat_model: Document | None = None,
     refinement: ConversationContextProvider | None = None,
