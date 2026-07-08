@@ -4,8 +4,10 @@ These run WITHOUT postgres or a live LLM:
 
 - The discovery cache round-trips a ``DesignDocChoice`` through a ``WorkflowContext``
   backed by an in-memory store (the doc-independent cache the user asked for).
-- ``resolve_design_doc``'s branches: supplied path, discovered path, and the
-  fail-fast no-doc case (``_discover`` stubbed).
+- ``resolve_design_doc``'s discovered-path and fail-fast no-doc branches
+  (``_discover`` stubbed). Supplying a doc explicitly is handled upstream in
+  ``cli_pipeline`` (which only calls the finder when no doc was given), so it is
+  not exercised here.
 - The finder graph itself selects the right file when driven by a fake LLM
   scripting ``list_files -> get_file -> result`` (proves the templated prompt
   builds and the structured BaseModel result reconstructs — no string parsing).
@@ -34,7 +36,7 @@ from graphcore.graph import Builder, FlowInput
 from langgraph.checkpoint.memory import InMemorySaver
 
 from composer.input.files import InMemoryTextFile
-from composer.spec.context import WorkflowContext
+from composer.spec.context import WorkflowContext, SourceFields
 from composer.spec.service_host import ModelProvider, CoreModelProvider
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.templates.loader import load_jinja_template
@@ -50,6 +52,8 @@ from composer.spec.source.design_doc_finder import (
     read_document_tool,
     resolve_design_doc,
 )
+from composer.io.multi_job import run_task, TaskInfo
+from composer.spec.source.task_ids import DESIGN_DOC_DISCOVERY_TASK_ID
 
 pytestmark = pytest.mark.asyncio
 
@@ -89,6 +93,19 @@ class _StubUploader:
         if not p.is_file():
             return None
         return InMemoryTextFile(basename=p.name, string_contents=p.read_text(), provider="anthropic")
+
+
+def _source(
+    project_root: str,
+    contract_name: str = "C",
+    relative_path: str = "src/C.sol",
+) -> SourceFields:
+    return SourceFields(
+        project_root=project_root,
+        contract_name=cast(Any, contract_name),
+        relative_path=relative_path,
+        forbidden_read=FS_FORBIDDEN_READ,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -132,41 +149,6 @@ async def test_discovery_cache_disabled_when_no_namespace():
 # ---------------------------------------------------------------------------
 
 
-async def test_resolve_supplied_doc_skips_discovery(tmp_path):
-    doc = tmp_path / "design.md"
-    doc.write_text("the spec")
-    path, content = await resolve_design_doc(
-        system_doc_arg=str(doc),
-        project_root=str(tmp_path),
-        contract_name="C",
-        relative_path="src/C.sol",
-        forbidden_read=FS_FORBIDDEN_READ,
-        uploader=cast(Any, _StubUploader()),
-        models=cast(Any, None),
-        handler=cast(Any, None),
-        discover_phase=AutoProvePhase.DISCOVER_DESIGN_DOC,
-        disc_ctx=cast(Any, None),
-    )
-    assert path == doc
-    assert content is not None
-
-
-async def test_resolve_supplied_doc_unreadable_raises(tmp_path):
-    with pytest.raises(ValueError, match="cannot read"):
-        await resolve_design_doc(
-            system_doc_arg=str(tmp_path / "nope.md"),
-            project_root=str(tmp_path),
-            contract_name="C",
-            relative_path="src/C.sol",
-            forbidden_read=FS_FORBIDDEN_READ,
-            uploader=cast(Any, _StubUploader()),
-            models=cast(Any, None),
-            handler=cast(Any, None),
-            discover_phase=AutoProvePhase.DISCOVER_DESIGN_DOC,
-            disc_ctx=cast(Any, None),
-        )
-
-
 async def test_resolve_discovered_doc(tmp_path, monkeypatch):
     doc = tmp_path / "docs" / "design.md"
     doc.parent.mkdir()
@@ -177,20 +159,13 @@ async def test_resolve_discovered_doc(tmp_path, monkeypatch):
 
     monkeypatch.setattr("composer.spec.source.design_doc_finder._discover", fake_discover)
 
-    path, content = await resolve_design_doc(
-        system_doc_arg=None,
-        project_root=str(tmp_path),
-        contract_name="C",
-        relative_path="src/C.sol",
-        forbidden_read=FS_FORBIDDEN_READ,
+    path = await resolve_design_doc(
+        source=_source(str(tmp_path)),
         uploader=cast(Any, _StubUploader()),
         models=cast(Any, None),
-        handler=cast(Any, None),
-        discover_phase=AutoProvePhase.DISCOVER_DESIGN_DOC,
         disc_ctx=cast(Any, None),
     )
     assert path == doc
-    assert content is not None
 
 
 async def test_resolve_no_doc_fails_fast_with_reason(tmp_path, monkeypatch):
@@ -201,15 +176,9 @@ async def test_resolve_no_doc_fails_fast_with_reason(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="only a build README here"):
         await resolve_design_doc(
-            system_doc_arg=None,
-            project_root=str(tmp_path),
-            contract_name="C",
-            relative_path="src/C.sol",
-            forbidden_read=FS_FORBIDDEN_READ,
+            source=_source(str(tmp_path)),
             uploader=cast(Any, _StubUploader()),
             models=cast(Any, None),
-            handler=cast(Any, None),
-            discover_phase=AutoProvePhase.DISCOVER_DESIGN_DOC,
             disc_ctx=cast(Any, None),
         )
 
@@ -366,28 +335,34 @@ def _fake_models() -> ModelProvider:
     )
 
 
-async def test_discover_runs_as_task_surfaces_choice_and_caches(tmp_path, capsys):
-    """End-to-end: _discover runs the finder under a real run_task + console handler,
-    prints the chosen doc as the phase completes, caches it, and a second run reports
-    the choice from cache without invoking the agent."""
+async def test_discover_surfaces_choice_and_caches(tmp_path, capsys):
+    """_discover runs the finder, emits the chosen doc as a progress event, and caches it;
+    a second run on the same project + namespace hits the cache and re-surfaces the choice
+    without invoking the agent. The caller wraps _discover in a run_task scope (as
+    cli_pipeline does) so ``emit_custom_event`` has a handler to render into and the phase
+    label is surfaced."""
     (tmp_path / "design.md").write_text("# Design\nThe counter must never decrease.\n")
     store = InMemoryStore()
     disc_ctx = _ctx(store, ("u", "discovery", "k"))
     handler = AutoProveConsoleHandler()
 
+    info = TaskInfo(
+        task_id=DESIGN_DOC_DISCOVERY_TASK_ID,
+        label="Design Doc Discovery",
+        phase=AutoProvePhase.DISCOVER_DESIGN_DOC,
+    )
     common = dict(
-        project_root=str(tmp_path),
-        contract_name="Counter",
-        relative_path="src/Counter.sol",
-        forbidden_read=FS_FORBIDDEN_READ,
+        source=_source(str(tmp_path), contract_name="Counter", relative_path="src/Counter.sol"),
         uploader=cast(Any, _StubUploader()),
-        handler=handler.make_handler,
-        discover_phase=AutoProvePhase.DISCOVER_DESIGN_DOC,
         disc_ctx=disc_ctx,
     )
 
     # First run: agent discovers and the choice is surfaced at completion.
-    choice = await _discover(models=_fake_models(), **common)
+    choice = await run_task(
+        factory=handler.make_handler,
+        info=info,
+        fn=lambda: _discover(models=_fake_models(), **common),
+    )
     assert choice.selected_path == "design.md"
     out = capsys.readouterr().out
     assert "Design Doc Discovery" in out and "discovered design doc: design.md" in out
@@ -399,7 +374,11 @@ async def test_discover_runs_as_task_surfaces_choice_and_caches(tmp_path, capsys
         FakeModelFactory(_ToolBindingFakeLLM(responses=[])),
         checkpointer=InMemorySaver(),
     )
-    choice2 = await _discover(models=no_llm, **common)
+    choice2 = await run_task(
+        factory=handler.make_handler,
+        info=info,
+        fn=lambda: _discover(models=no_llm, **common),
+    )
     assert choice2.selected_path == "design.md"
     out2 = capsys.readouterr().out
     assert "reusing cached design doc: design.md" in out2

@@ -25,7 +25,7 @@ from composer.spec.system_analysis import SolidityIdentifier
 from .core import PipelineBackend, run_pipeline
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
-from llm.registry import get_provider_for
+from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
 from composer.kb.knowledge_base import DefaultEmbedder
