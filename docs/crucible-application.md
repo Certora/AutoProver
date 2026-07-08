@@ -606,18 +606,26 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    (§8.2 — a buggy vault variant refuted + `tmin`-minimized) remains a follow-up. Per-run crate
    assembly via `finalize`/the store and the fuzz-nondeterminism caching question (§10 Q4) land with
    packaging (Phase 5).
-5. **Package as the `crucible` application.** The Rust wheel's `AppDescriptor`
-   (`ecosystem="solana"`, phases, args, event kinds, layout) + `export_app!`; register with the host;
-   TUI + console entry points; store-selection (use the `CrucibleArtifactStore`) and driving the setup
-   session from `prepare_formalization`. **Knowledge base**: build `crucible_kb` via a
-   `scripts/populate_crucible_rag.sh` (clone the crucible docs + example harnesses → chunk-by-header →
-   embed → ingest into a `ComposerRAGDB`, mirroring `populate_foundry_rag.sh`), and have the entry
-   point open the DB named by `rag_db_default` and bind its search tools into `env.rag_tools` — so the
-   already-built tool-enabled `call_llm` (§7.5) can retrieve docs alongside the static cheat-sheet.
-   (Pull this forward if the cheat-sheet proves insufficient before Phase 5; the same builder is the
-   template for CVLR-Solana's `cvlr_manual`.) **Gate:** `console-crucible <project> <program>
-   <system.md>` runs the whole vertical from the CLI with zero bespoke Python beyond the wheel (still
-   restricted to trusted input until Phase 6 lands).
+5. **Package as the `crucible` application.** Done: `composer/crucible/pipeline.py`
+   (`run_crucible_pipeline` / `build_crucible_backend`) assembles the `RustBackend` with the
+   `CrucibleArtifactStore` + host-resolved `CrucibleDep` (§6.1) + build/fuzz timeouts; the adapter's
+   `prepare_formalization` drives the setup session and threads the fixture/config into per-component
+   `formalize`; the entry point takes the ecosystem's `forbidden_read` (Cargo) and gained a
+   `run_pipeline_fn` hook; `composer/crucible/cli.py` + the `console-crucible` script are the thin
+   console glue. Manifest pre-placement (the decider can't render host-resolved deps) is generic guarded
+   store hooks (`write_setup_manifest` / `prepare_component`). **Gate met:** one `run_crucible_pipeline`
+   call on `solana_vault` with a real model ran the whole vertical (`tests/test_crucible_e2e_gate.py`,
+   ~21 min) — analyzed 3 instructions, extracted 28 properties, authored the shared fixture, and
+   produced per-instruction fuzz verdicts (deposit/withdraw delivered with BAD — the fuzzer found
+   counterexamples; initialize gave up cleanly after failing to compile, surfaced as a handled
+   failure), then a report. **Knowledge base — still deferred** (the static cheat-sheet carried phases
+   3–5; RAG wasn't needed): build `crucible_kb` via a `scripts/populate_crucible_rag.sh` (clone the
+   crucible docs + example harnesses → chunk-by-header → embed → ingest into a `ComposerRAGDB`,
+   mirroring `populate_foundry_rag.sh`) and bind its search tools into `env.rag_tools` at the entry
+   point when the cheat-sheet proves insufficient — the same builder is the template for CVLR-Solana's
+   `cvlr_manual`. Remaining polish: a TUI entry, wiring the `--fuzz-timeout`/`--crucible-version` args
+   through, and **verdict triage** (a BAD may be a true bug or an over-strict invariant — §10 Q4). The
+   application still runs on **trusted input only** until Phase 6.
 6. **Sandbox every `RunCommand` (required — §7.4).** Move all command execution (`cargo build-sbf`,
    `anchor idl`, `crucible run`) behind the sandbox in `RealEffects`: Linux `bwrap` with network-off,
    a clean/secret-free env, a minimal bind-mounted workdir, resource caps + wall-clock kill, and an
