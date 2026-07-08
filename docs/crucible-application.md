@@ -600,9 +600,16 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    bug is refuted and `tmin`-minimized.
 5. **Package as the `crucible` application.** The Rust wheel's `AppDescriptor`
    (`ecosystem="solana"`, phases, args, event kinds, layout) + `export_app!`; register with the host;
-   TUI + console entry points. **Gate:** `console-crucible <project> <program> <system.md>` runs the
-   whole vertical from the CLI with zero bespoke Python beyond the wheel (still restricted to trusted
-   input until Phase 6 lands).
+   TUI + console entry points; store-selection (use the `CrucibleArtifactStore`) and driving the setup
+   session from `prepare_formalization`. **Knowledge base**: build `crucible_kb` via a
+   `scripts/populate_crucible_rag.sh` (clone the crucible docs + example harnesses → chunk-by-header →
+   embed → ingest into a `ComposerRAGDB`, mirroring `populate_foundry_rag.sh`), and have the entry
+   point open the DB named by `rag_db_default` and bind its search tools into `env.rag_tools` — so the
+   already-built tool-enabled `call_llm` (§7.5) can retrieve docs alongside the static cheat-sheet.
+   (Pull this forward if the cheat-sheet proves insufficient before Phase 5; the same builder is the
+   template for CVLR-Solana's `cvlr_manual`.) **Gate:** `console-crucible <project> <program>
+   <system.md>` runs the whole vertical from the CLI with zero bespoke Python beyond the wheel (still
+   restricted to trusted input until Phase 6 lands).
 6. **Sandbox every `RunCommand` (required — §7.4).** Move all command execution (`cargo build-sbf`,
    `anchor idl`, `crucible run`) behind the sandbox in `RealEffects`: Linux `bwrap` with network-off,
    a clean/secret-free env, a minimal bind-mounted workdir, resource caps + wall-clock kill, and an
