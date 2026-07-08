@@ -18,13 +18,13 @@ from composer.pipeline.core import CorePipelineResult
 from composer.spec.context import (
     SourceFields
 )
-from composer.pipeline.cli import cli_pipeline
+from composer.pipeline.cli import cli_pipeline, user_ns
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
 from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.agent_index import agent_index_config_from_env
-from composer.core.user import get_uid, user_data_ns
+from composer.core.user import get_uid
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.io.thread_logging import RunDataLogger
@@ -33,17 +33,6 @@ from composer.spec.util import FS_FORBIDDEN_READ
 from composer.io.multi_job import HandlerFactory
 
 _logger = logging.getLogger(__name__)
-
-def user_ns(
-    *parts: str | tuple[str, ...]
-) -> tuple[str,...]:
-    to_ret : list[str] = []
-    for p in parts:
-        if isinstance(p, str):
-            to_ret.append(p)
-        else:
-            to_ret.extend(p)
-    return user_data_ns() + tuple(to_ret)
 
 # ---------------------------------------------------------------------------
 # Args
@@ -134,7 +123,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 thread_id=thread_id,
                 task_handler=handler,
                 at_exit=exit_logger,
-                
+
                 worfklow="autoprove"
             ) as (staged, cont),
             PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag_db

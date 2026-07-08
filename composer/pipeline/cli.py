@@ -1,4 +1,4 @@
-from typing import Any, Protocol, AsyncContextManager, Callable, AsyncIterator, Awaitable
+from typing import Protocol, AsyncIterator
 import sys
 import pathlib
 import enum
@@ -16,9 +16,10 @@ from composer.spec.context import SourceFields, WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import IndexedConnections, standard_connections
 from composer.pipeline.ptypes import (
-    PipelineInitContext, PipelineRun, BackendResult, ArtifactIdentifier,
+    PipelineRun, BackendResult,
     CorePipelineResult
 )
+from composer.spec.artifacts import ArtifactIdentifier
 from composer.spec.service_host import ModelProvider
 from composer.spec.system_analysis import SolidityIdentifier
 from .core import PipelineBackend, run_pipeline
@@ -36,6 +37,7 @@ from composer.spec.source.design_doc_finder import (
 from sentence_transformers import SentenceTransformer
 from composer.spec.util import FS_FORBIDDEN_READ
 import hashlib
+
 
 def root_cache_key(
     project_root: str,

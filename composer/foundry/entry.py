@@ -16,37 +16,22 @@ from the non-source spec modules).
 """
 
 import argparse
-import hashlib
-import pathlib
-import sys
 import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, AsyncIterator, Awaitable, Callable, Protocol, cast
 
-from composer.core.user import user_data_ns
-from composer.diagnostics.logging_setup import setup_autoprove_logging
-from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.diagnostics.timing import RunSummary
 from composer.input.parsing import Arg, add_protocol_args
-from composer.input.types import DEFAULT_RECURSION_LIMIT, TieredModelOptions, RAGDBOptions, ExtendedModelOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions
 from composer.io.multi_job import HandlerFactory
-from composer.io.thread_logging import thread_logger, default_logging_ns
-from composer.kb.knowledge_base import DefaultEmbedder
 from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
-from composer.rag.models import get_model
-from composer.spec.context import WorkflowContext, SourceCode
-from composer.spec.system_model import SolidityIdentifier
-from composer.spec.service_host import ModelProvider
 from composer.spec.util import FS_FORBIDDEN_READ
-from composer.ui.tool_display import async_tool_context
-from composer.workflow.services import standard_connections, llm_factory
-from composer.llm.registry import get_provider_for
 
 from composer.foundry.env import build_foundry_env
 from composer.foundry.pipeline import (
-    FoundryPhase, FoundryPipelineResult, backend, FoundryBackend
+    FoundryPhase, FoundryPipelineResult, backend
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
-from composer.spec.source.design_doc_finder import resolve_design_doc, discovery_cache_key
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +139,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
             f_backend = backend(
                 forge_binary=args.forge_binary,
                 forge_timeout_s=args.forge_timeout_s,
-                source_input=staged.source
+                source_input=staged.source,
+                forge_concurrency=args.max_forge_runners
             )
             return await cont(env, f_backend)
 

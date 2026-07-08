@@ -1,11 +1,12 @@
-"""Canonical ``run_task`` task_ids for the AutoProve pipeline phases.
+"""Canonical ``run_task`` task_ids for the AutoProve pipeline's fixed phases.
 
 These strings are a contract between the orchestration that sets them on
-``TaskInfo`` (``pipeline.py`` / ``common_pipeline.py``) and anything that keys
+``TaskInfo`` (``pipeline.core`` for system-analysis/report, ``spec.source.pipeline``
+for the prover phases, ``pipeline.cli`` for doc discovery) and anything that keys
 off them — notably the fake-LLM tape lanes in
-``composer/testing/ui_harness_autoprove_Counter.py``, which route scripted responses by
-task_id. Keeping the strings (and the per-component format) here means a rename
-is a single edit instead of a silent desync that only fails at smoke-run time.
+``composer/testing/ui_harness_autoprove_Counter.py``, which route scripted
+responses by task_id. The per-component ids (``extract-{i}`` / ``formalize-{i}``)
+are backend-agnostic and live with the driver in ``pipeline.core``.
 """
 
 DESIGN_DOC_DISCOVERY_TASK_ID = "doc-finder"
@@ -16,13 +17,3 @@ SUMMARIES_TASK_ID = "summaries"
 INVARIANTS_TASK_ID = "invariants"
 INVARIANT_CVL_TASK_ID = "invariant-cvl"
 REPORT_TASK_ID = "report"
-
-
-def bug_analysis_task_id(component_idx: int, slug: str) -> str:
-    """task_id for a component's property-extraction ("bug analysis") phase."""
-    return f"bug-{component_idx}-{slug}"
-
-
-def cvl_gen_task_id(component_idx: int, slug: str) -> str:
-    """task_id for a component's CVL-generation phase."""
-    return f"cvl-{component_idx}-{slug}"

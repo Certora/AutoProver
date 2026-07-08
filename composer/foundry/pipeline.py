@@ -21,8 +21,7 @@ give-ups are reported as failures in the result.
 import asyncio
 import enum
 import logging
-import pathlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Awaitable, Callable, override
 
 from composer.foundry.author import (
@@ -33,15 +32,14 @@ from composer.foundry.report import _foundry_verdicts
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun,
     GaveUp, SystemAnalysisSpec,
-    CorePhases, main_instance, Delivered,
-    run_pipeline, CorePipelineResult
+    CorePhases, main_instance, CorePipelineResult,
+    COMMON_SYSTEM_CACHE_KEY
 )
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.context import (
-    CacheKey, Properties, WorkflowContext, SourceCode, FoundryGeneration
+    WorkflowContext, SourceCode, FoundryGeneration
 )
-from composer.spec.service_host import ServiceHost
 from composer.spec.types import PropertyFormulation
 from composer.spec.artifacts import ArtifactStore
 
@@ -158,7 +156,7 @@ class FoundryBackend:
         "report": FoundryPhase.REPORT
     })
 
-    analysis_spec = SystemAnalysisSpec("foundry-application")
+    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "foundry-properties")
 
     artifact_store: ArtifactStore[FoundryTestArtifact, GeneratedFoundryTest]
 
@@ -178,14 +176,6 @@ class FoundryBackend:
 
     def to_artifact_id(self, c: ContractComponentInstance) -> FoundryTestArtifact:
         return FoundryTestArtifact(c.slugified_name)
-
-# ---------------------------------------------------------------------------
-# Cache keys (parallel to common_pipeline's)
-# ---------------------------------------------------------------------------
-
-SOURCE_ANALYSIS_KEY = CacheKey[None, SourceApplication]("foundry-source-analysis")
-PROPERTIES_KEY = CacheKey[None, Properties]("foundry-properties")
-
 
 # ---------------------------------------------------------------------------
 # Result

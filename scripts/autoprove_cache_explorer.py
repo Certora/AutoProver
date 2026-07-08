@@ -24,8 +24,7 @@ from composer.ui.cache_explorer import (
     CacheNode, OrgNode, CacheTreeNode, CacheExplorerApp, DummyServices,
     node, node_for, leaf, memory, collect_tree,
 )
-from composer.spec.context import WorkflowContext, CVLGeneration, CVLJudge
-from composer.spec.source.system_analysis import SOURCE_ANALYSIS_KEY
+from composer.spec.context import WorkflowContext, CVLGeneration, CVLJudge, CacheKey
 from composer.spec.source.harness import (
     config_key,
     system_setup_key,
@@ -36,14 +35,17 @@ from composer.spec.source.harness import (
     AgentSystemDescription,
     HarnessResult,
 )
-from composer.spec.source.autoprove_common import _root_cache_key, user_ns
+from composer.pipeline.cli import root_cache_key, user_ns
 from composer.core.user import get_uid
 from composer.workflow.services import get_async_store
 from composer.io.run_index import get_run_data
 from langgraph.store.base import BaseStore
 from composer.spec.source.summarizer import _summary_key, _SummaryCache
 from composer.spec.source.struct_invariant import STRUCTURAL_INV_KEY, Invariants
-from composer.spec.source.common_pipeline import PROPERTIES_KEY, INV_CVL_KEY, _component_cache_key, _batch_cache_key
+from composer.pipeline.core import (
+    COMMON_SYSTEM_CACHE_KEY, PROPERTIES_KEY, _component_cache_key, _batch_cache_key,
+)
+from composer.spec.source.pipeline import INV_CVL_KEY
 from composer.spec.prop_inference import (
     _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
     bug_analysis_key, agent_round_key, AGENT_RESULT_KEY,
@@ -54,6 +56,11 @@ from composer.spec.system_model import (
     HarnessedApplication, HarnessedExplicitContract, HarnessDefinition,
     ContractInstance, ContractComponentInstance,
 )
+
+
+# The driver writes the analyzed SourceApplication under CacheKey(COMMON_SYSTEM_CACHE_KEY)
+# (pipeline.core.run_pipeline); mirror that key here to read it back.
+SYSTEM_ANALYSIS_KEY = CacheKey[None, SourceApplication](COMMON_SYSTEM_CACHE_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +173,7 @@ async def build_tree_inner(
     root_ctx: WorkflowContext[None],
     contract_name: str,
 ) -> AsyncGenerator[CacheTreeNode[AutoProveCachedValue], None]:
-    sa_leaf = await leaf(root_ctx, SOURCE_ANALYSIS_KEY, "source-analysis", SourceApplication)
+    sa_leaf = await leaf(root_ctx, SYSTEM_ANALYSIS_KEY, "system-analysis", SourceApplication)
     yield sa_leaf
 
     # Read config value upfront so we can derive the summary key outside the with block
@@ -208,8 +215,7 @@ async def build_tree_inner(
     harnessed_app = _build_harnessed_app(sa_leaf.value, config_val)
 
     # Find the main contract. The pipeline matches the entry point by
-    # solidity_identifier (common_pipeline.run_generation_pipeline), so the
-    # explorer does too.
+    # solidity_identifier (pipeline.core.main_instance), so the explorer does too.
     contract_ind = -1
     for i, c in enumerate(harnessed_app.contract_components):
         if c.solidity_identifier == contract_name:
@@ -377,7 +383,7 @@ def _resolve_from_inputs(args: argparse.Namespace) -> Resolved | None:
 
     root_ns = user_ns(
         args.cache_ns,
-        _root_cache_key(str(project_root), sys_path, relative_path, contract_name),
+        root_cache_key(str(project_root), sys_path, relative_path, contract_name),
     )
     memory_ns = args.memory_ns
     if memory_ns:

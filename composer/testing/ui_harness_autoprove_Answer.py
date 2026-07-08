@@ -11,7 +11,7 @@ Replay with the SAME CLI flags used to record:
     COMPOSER_TEST_TAPE=autoprove_Answer console-autoprove <project> <Contract.sol:Contract> \
         <system.md> --max-bug-rounds 1 [--interactive]
 
-Lanes captured: system-analysis=4, harness=4, bug-0-Answer=3, invariants=9, cvl-0-Answer=7
+Lanes captured: system-analysis=4, harness=4, extract-0=3, invariants=9, formalize-0=7
 """
 
 import json
@@ -252,7 +252,7 @@ _TAPE_JSON = r"""
       "invalid_tool_calls": []
     }
   ],
-  "bug-0-Answer": [
+  "extract-0": [
     {
       "content": [
         "\n\nI'll start by examining the implementation of the Answer contract.",
@@ -565,7 +565,7 @@ _TAPE_JSON = r"""
       "invalid_tool_calls": []
     }
   ],
-  "cvl-0-Answer": [
+  "formalize-0": [
     {
       "content": [
         "Writing the component spec for the sole property.",

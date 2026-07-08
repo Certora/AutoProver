@@ -16,33 +16,35 @@ phase objects, and never inspected by the driver.
 import asyncio
 import enum
 import logging
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Protocol, Callable, Awaitable, TypedDict
+from dataclasses import dataclass
+from typing import Protocol
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
-from composer.io.multi_job import HandlerFactory, TaskInfo, run_task, ConversationContextProvider
+from composer.io.multi_job import TaskInfo
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import (
-    WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode, SourceFields
+    WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode
 )
-from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
     SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication
 )
-from composer.spec.types import PropertyFormulation, FormalResult, ArtifactIdentifier
+from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
 from composer.spec.prop_inference import run_property_inference
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportableResult, ReportComponentInput, Verdict
+from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
-from .ptypes import *
+from .ptypes import (
+    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp, PipelineRun, SystemAnalysisSpec
+)
+
+COMMON_SYSTEM_CACHE_KEY = "system-analysis"
 
 _log = logging.getLogger(__name__)
 

@@ -25,14 +25,12 @@ from typing import override
 
 from langchain_core.tools import BaseTool
 
-from composer.io.multi_job import HandlerFactory, TaskInfo
-from composer.input.files import Document
-from composer.spec.context import WorkflowContext, CacheKey, CVLGeneration, SourceCode
+from composer.io.multi_job import TaskInfo
+from composer.spec.context import WorkflowContext, CacheKey, CVLGeneration
 from composer.spec.types import PropertyFormulation
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
-from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
-    ContractComponentInstance, ContractInstance, SourceApplication, HarnessedApplication,
+    ContractComponentInstance, SourceApplication, HarnessedApplication,
     SourceExplicitContract, HarnessedExplicitContract, SourceExternalActor,
     HarnessDefinition, SolidityIdentifier,
 )
@@ -58,8 +56,8 @@ from composer.prover.core import ProverOptions
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun, Delivered, GaveUp,
-    CorePhases, SystemAnalysisSpec, ComponentOutcome, CorePipelineResult,
-    run_pipeline, main_instance,
+    CorePhases, SystemAnalysisSpec, ComponentOutcome, main_instance,
+    COMMON_SYSTEM_CACHE_KEY
 )
 
 
@@ -280,7 +278,7 @@ class ProverBackend:
         "formalization": AutoProvePhase.CVL_GEN,
         "report": AutoProvePhase.REPORT
     })
-    analysis_spec = SystemAnalysisSpec("source-analysis")
+    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "ap-properties")
 
     artifact_store: ProverArtifactStore
     _prover_opts: ProverOptions
