@@ -658,9 +658,12 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    provider is `launcher`** (fail-closed if `run-confined` is absent; `COMPOSER_SANDBOX_PROVIDER=none`
    to opt out). **Gate green:** the escape suite denies every vector (planted secret env,
    `/proc/<parent>/environ`, a host file outside the workdir, external TCP and `169.254.169.254`), a
-   real `cargo-build-sbf` and a real `crucible run --dry-run` of `solana_vault` both succeed confined
-   and offline, and the full vertical runs end-to-end with zero sandbox denials. (One orthogonal
-   caveat: LLM fixture-authoring reliability — §10 Q3 — is a separate follow-up, not a sandbox concern.)
+   real `cargo-build-sbf` and `crucible run --dry-run` of `solana_vault` succeed confined and offline,
+   and **the full LLM e2e passes under the launcher** (`test_crucible_e2e_gate.py`, ~24 min: shared
+   fixture authored, deposit + withdraw delivered with fuzz verdicts) with zero sandbox denials.
+   Getting the vertical green surfaced (and fixed) a policy gap — the linker's `/tmp` scratch, now a
+   private per-run `TMPDIR` under the workdir. (Orthogonal follow-up: a shared-`Cargo.toml` feature
+   race dropped the third instruction — §10 Q1 / command-sandbox.md §11.)
 7. **Polish (optional).** Report nouns (§7.3); coverage surfacing (`--coverage`/LCOV as a report
    attachment); stateful-mode tuning; crash-artifact rendering in the frontend.
 
@@ -694,14 +697,16 @@ safety one.
    Infra-layer hardening (VM-per-run / gVisor / IMDSv2 / least-priv IAM) is orthogonal and
    non-blocking, decided per deployment.
 3. **Fixture authoring difficulty.** `setup()` for real DeFi programs is hard (init order, admin
-   whitelists, account patching — the Harness Guide is a long playbook), and the setup session is the
-   observed failure point (the model authoring wrong Anchor module paths). The authoring loop already
-   drives a `--dry-run` refine loop; it was hardened (crucible-app decider): more attempts (4→7),
-   **compiler errors extracted + front-loaded** in the revise prompt (above the raw cargo log), a
-   concise **"PROGRAM API FACTS"** block (crate id, `declare_id`, each instruction's snake→Pascal
-   `instruction::`/`accounts::` names + args + accounts) mined from the analyzed model, and explicit
-   **Anchor path conventions** in the cheat-sheet. Whether that closes the gap needs measuring on the
-   live gate (variance-prone); a further multi-round/self-critique loop is the next lever if not.
+   whitelists, account patching — the Harness Guide is a long playbook). The setup session *looked*
+   like the failure point, but the live gate revealed the real blocker was a sandbox `/tmp` gap (the
+   linker's scratch), not authoring — a link failure reads as "could not compile," so the model
+   churned on a fine fixture; once fixed, the fixture authored and the e2e passed. The authoring loop
+   was hardened anyway (crucible-app decider): more attempts (4→7); **compiler errors extracted +
+   front-loaded** in the revise prompt; a concise **"PROGRAM API FACTS"** block (crate id — the real
+   dep crate, not the `#[program] mod` name — `declare_id`, each instruction's snake→Pascal
+   `instruction::`/`accounts::` names + args + accounts); a full **worked example** fixture; explicit
+   **Anchor path conventions**; and `RunCommand` **failure logging** (which surfaced the `/tmp` bug).
+   A multi-round/self-critique loop remains the next lever if genuine authoring difficulty recurs.
 4. **Nondeterminism in verdicts + caching.** A clean fuzz run is "no bug found in N seconds," not a
    stable fact — re-running may differ. How do we cache a `formalize` result keyed by the property
    batch when the *verdict* isn't deterministic? Likely cache the authored harness (deterministic)

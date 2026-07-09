@@ -2,9 +2,10 @@
 
 **Status:** implemented. Design + record for [crucible-application.md §7.4](./crucible-application.md#L436)
 and [§9 Phase 6](./crucible-application.md#L634) — the *required*, definition-of-done phase. The
-sandbox mechanism is built and validated (§9 steps 1–5 done, gate §10 green); Crucible runs confined
-by default. The one open item is orthogonal to the sandbox — LLM fixture-authoring reliability
-([crucible-application.md §10 Q3](./crucible-application.md#L653)).
+sandbox mechanism is built and validated (§9 steps 1–5 done, gate §10 green — incl. the full LLM
+e2e passing under the launcher); Crucible runs confined by default. Open items are orthogonal to the
+sandbox (§11): a shared-`Cargo.toml` feature race that lost one of three instructions, and per-run
+`CARGO_HOME`/tightening follow-ups.
 
 **One-line summary.** Every command run through the `RunCommand` effect compiles and/or runs
 LLM-authored *native* code (§7.2). Today that runs with the full ambient environment of the
@@ -406,11 +407,19 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
      — this caught the relative-policy-path bug; grants must be absolute), and a real
      `crucible run --dry-run` under the launcher builds the harness *offline* and runs LiteSVM
      (`Harness validation passed!`).
-   - **Full LLM vertical**: run under the launcher end-to-end with **zero sandbox denials** across
-     analysis → property extraction → the fixture build (`cargo-build-sbf`, the harness `cargo build`,
-     `crucible run` all confined + offline). The run's *failure* was the LLM authoring a
-     non-compiling vault fixture (Anchor module-path errors) — orthogonal fixture-authoring variance
-     ([crucible-application.md §10 Q3](./crucible-application.md#L653)), not a sandbox issue.
+   - **Full LLM vertical — green**: the e2e gate (`tests/test_crucible_e2e_gate.py`) passes under the
+     launcher (`COMPOSER_SANDBOX_PROVIDER=launcher`, ~24 min): analysis → 23 properties → shared
+     fixture authored → per-instruction harness build + fuzz, all confined + offline, with **deposit
+     and withdraw delivered with fuzz verdicts** (`BAD` — counterexamples found). Getting here
+     required the `/tmp` fix below; `initialize` gave up on a *separate* shared-`Cargo.toml` feature
+     race (§11).
+
+   **Root cause found via the gate:** every fresh harness build initially failed at the *link* step —
+   `Cannot create temporary file in /tmp/: Permission denied` (the linker's `$TMPDIR` scratch, which
+   the policy didn't grant). A link failure reads as "could not compile", so the LLM kept rewriting a
+   fine fixture. Fixed by redirecting `TMPDIR` to a private `<workdir>/.sandbox_tmp` (§3) rather than
+   granting the shared `/tmp`. The `RunCommand` failure logging added alongside the authoring
+   improvements is what surfaced it.
 
 Each step is behind the seam, so the earlier Phase 1–5 gates keep passing. **Prerequisite of the
 flip:** `run-confined` must be on PATH (built into the Docker image; `cargo build -p run-confined
@@ -481,3 +490,9 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    least-privilege instance IAM role, IMDSv2 with hop limit 1, egress-restricted security group, and
    (if desired) VM-per-run or a gVisor runtime. Decide per deployment when the tenancy model is
    settled; none of it blocks Phase 6.
+8. **Shared-`Cargo.toml` feature race (not a sandbox issue — crucible backend).** The per-component
+   sessions share one `fuzz/<prog>/Cargo.toml`; concurrent `prepare_component` writes clobber each
+   other's feature, so a `crucible run <prog> c_<slug>` can hit "package does not contain this
+   feature: `c_<slug>`" (seen for `initialize` in the passing e2e — handled/gave-up, but a lost
+   component). Serialize the manifest write around each per-component build, register all features
+   up-front, or give each component its own crate. Tracked with §10 Q1 (unit granularity).
