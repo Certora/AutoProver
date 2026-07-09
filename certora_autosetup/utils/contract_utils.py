@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from certora_autosetup.parsers.build_system_detector import BuildSystem, BuildSystemDetector
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import ContractHandle
 from certora_autosetup.parsers.foundry import FoundryContractExtractor
 

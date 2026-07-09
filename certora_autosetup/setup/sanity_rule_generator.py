@@ -49,8 +49,13 @@ class SanityRuleGenerator:
 
             call_res_spec = user_call_resolution_spec_path(project_root, contract_name)
             call_res_spec.parent.mkdir(parents=True, exist_ok=True)
-            if not call_res_spec.exists():
-                call_res_spec.write_text("")
+            # Always reset this machine-generated spec to empty, even when it already
+            # exists. A stale spec from a prior run registers contracts that are not in
+            # the freshly-stripped scene, which fails the pre-call-resolution typechecker
+            # during warmup ("Tried to register X as C but C does not exist"). call_resolution.py
+            # repopulates it after the typechecker runs. (Unlike the sanity spec below,
+            # which is skip-if-exists to preserve user edits, this file is never user-edited.)
+            call_res_spec.write_text("")
 
             if target_spec.exists():
                 self.log(f"Sanity spec already exists, leaving untouched: {target_spec}")

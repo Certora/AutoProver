@@ -173,7 +173,7 @@ class _RustFormalizerCfg:
     feedback: FeedbackHook | None = None
 
 
-class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
+class RustFormalizer(Formalizer[RustFormalResult]):
     """Drives the Rust decider. ``formalize`` builds a session from the marshalled
     unit + properties and runs the IoC loop; ``fetch_verdicts`` / ``finalize``
     are off-thread sync FFI calls. Ecosystem-agnostic: the unit is any
@@ -309,12 +309,12 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
 
 
 @dataclass
-class RustPreparedSystem(PreparedSystem[RustFormalResult, Any]):
+class RustPreparedSystem(PreparedSystem[RustFormalResult]):
     backend: "RustBackend"
     analyzed: Any = None
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult, FeatureUnit]:
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult]:
         b = self.backend
         # Base config threaded into every per-component session.
         component_config: dict = {
@@ -408,7 +408,7 @@ class RustBackend:
 
     @property
     def analysis_spec(self) -> SystemAnalysisSpec:
-        return SystemAnalysisSpec(self.descriptor.analysis_key)
+        return SystemAnalysisSpec(self.descriptor.analysis_key, "rust-properties")
 
     @property
     def core_phases(self) -> CorePhases:
@@ -416,7 +416,7 @@ class RustBackend:
 
     async def prepare_system(
         self, analyzed: Any, run: PipelineRun
-    ) -> PreparedSystem[RustFormalResult, Any]:
+    ) -> PreparedSystem[RustFormalResult]:
         # The ecosystem locates its own Main (EVM contract, Solana program, …).
         return RustPreparedSystem(self.ecosystem.locate_main(analyzed, run.source), self, analyzed)
 

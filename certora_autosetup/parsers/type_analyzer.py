@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import TypeDescKind, parse_type_desc_kind
 
 

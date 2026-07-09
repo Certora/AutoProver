@@ -28,7 +28,6 @@ from composer.ui.tool_display import async_tool_context
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.workflow.services import standard_connections, llm_factory
 from composer.kb.knowledge_base import DefaultEmbedder
-from graphcore.tools.memory import async_memory_tool
 
 from tests.conftest import needs_postgres, MockSentenceTransformer
 from tests.test_autoprove_integration import _RAG_DB, _VECTOR_DBS, _MEMORIES_DDL, _db_url
@@ -103,15 +102,15 @@ async def test_solana_vault_front_half(pg_container: "PostgresContainer", monkey
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
 
         ctx = WorkflowContext.create(
-            services=lambda ns: async_memory_tool(conns.memory(ns)),
+            services=conns.memory,
             thread_id="solana_gate", store=conns.store, recursion_limit=100,
             cache_namespace=None, memory_namespace=None,
         )
 
         import asyncio
         backend = NullSolanaBackend(NullSolanaArtifactStore(str(_SCENARIO)))
-        run = PipelineRun(ctx, env, source, GenericRustConsoleHandler(set()).make_handler, asyncio.Semaphore(4))
-        result = await run_pipeline(backend, run, SOLANA, interactive=False, threat_model=None, max_bug_rounds=1)
+        run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(4), env=env)
+        result = await run_pipeline(backend, run, ecosystem=SOLANA, interactive=False, threat_model=None, max_bug_rounds=1)
 
     # Pass: front half ran and extracted properties.
     print(f"\nSolana gate: {result.n_components} instruction(s), {result.n_properties} properties")

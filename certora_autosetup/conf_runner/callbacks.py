@@ -18,7 +18,7 @@ from certora_autosetup.setup.setup_completeness_checker import SetupCompleteness
 from certora_autosetup.utils.enhanced_config_manager import FileContent, ProverJobSpec
 from certora_autosetup.utils.paths import internal_difficult_retry_dir, internal_multi_assert_dir
 from certora_autosetup.utils.runner_types import ProverResult
-from certora_autosetup.utils import logger
+from certora_autosetup.utils.logger import logger
 
 
 COMPONENT = "ConfRunner"
@@ -191,7 +191,6 @@ class JobCallbacks:
                     phase=f"{result.job_spec.phase}_{rule_name}_multi_assert",
                     extra_args=result.job_spec.extra_args,
                     context=result.job_spec.context,
-                    msg=ProverJobSpec.build_job_msg(self.orchestration_timestamp, contract_name, new_config_path),
                 )
                 new_jobs.append(new_job_spec)
 
@@ -294,7 +293,6 @@ class JobCallbacks:
                     phase=f"{result.job_spec.phase}_{rule_name}_difficult_retry",
                     extra_args=result.job_spec.extra_args,
                     context=result.job_spec.context,
-                    msg=ProverJobSpec.build_job_msg(self.orchestration_timestamp, contract_name, new_config_path),
                 )
                 new_jobs.append(new_job_spec)
 

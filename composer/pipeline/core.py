@@ -16,132 +16,55 @@ phase objects, and never inspected by the driver.
 import asyncio
 import enum
 import logging
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Protocol, Callable, Awaitable, TypedDict, Any
+from dataclasses import dataclass
+from typing import Protocol, Any
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
-from composer.io.multi_job import HandlerFactory, TaskInfo, run_task, ConversationContextProvider
+from composer.io.multi_job import TaskInfo
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import (
-    WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode,
+    WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode
 )
-from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
-    SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication, BaseApplication,
-    FeatureUnit,
+    SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication, FeatureUnit
 )
-from composer.pipeline.ecosystem import Ecosystem, EVM, main_instance
-from composer.spec.types import PropertyFormulation, FormalResult, ArtifactIdentifier
+from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
 from composer.spec.prop_inference import run_property_inference
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportableResult, ReportComponentInput, Verdict
+from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
+# The ecosystem seam supplies the domain-specific front half (analyzed model type, prompts,
+# analysis validation, unit enumeration). ``main_instance`` moved here too and is re-exported
+# so existing EVM backends keep doing ``from composer.pipeline.core import main_instance``.
+from composer.pipeline.ecosystem import Ecosystem, EVM, main_instance
+from .ptypes import (
+    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp, PipelineRun, SystemAnalysisSpec
+)
+
+COMMON_SYSTEM_CACHE_KEY = "system-analysis"
 
 _log = logging.getLogger(__name__)
 
-class BackendResult(FormalResult, ReportableResult, Protocol):
-    ...
-
-
-class GaveUp(BaseModel):
-    """The single, unified give-up signal (replaces the two structurally-identical copies in
-    spec.source.author and foundry.author)."""
-    reason: str
-
-
-# ---- run-scoped shared infra, handed to every hook ---------------------------
 @dataclass
-class PipelineRun[P: enum.Enum, H]:
-    ctx: WorkflowContext[None]
-    env: ServiceHost
-    source: SourceCode
-    _handler_factory: HandlerFactory[P, H]
-    _semaphore: asyncio.Semaphore
-
-    async def runner[T](
-        self,
-        task_info: TaskInfo[P],
-        job: Callable[[], Awaitable[T]] | Callable[[ConversationContextProvider], Awaitable[T]],
-    ) -> T:
-        return await run_task(
-            factory=self._handler_factory,
-            fn=job,
-            info=task_info,
-            semaphore=self._semaphore
-        )
-
-
-class CorePhases[P: enum.Enum](TypedDict):
-    """The backend maps its own phase enum onto the three core phases the driver tags."""
-    analysis: P
-    extraction: P
-    formalization: P
-    report: P
-
-
-@dataclass(frozen=True)
-class SystemAnalysisSpec:
-    """The backend's contribution to the shared analysis call. The analyzed type is always
-    SourceApplication (the prover's harnessed lift is its prepare_system, not analysis)."""
-    analysis_key: str
-    extra_input: list[str | dict] = field(default_factory=list)
-
-
-@dataclass
-class BackendJob[Unit: FeatureUnit]:
-    feat: Unit
-    props: list[PropertyFormulation]
-
-@dataclass(frozen=True)
-class Delivered[FormT: BackendResult]:
-    """A successful formalization and the project-relative path it was persisted to. The path exists
-    only because the result does, so the two travel together rather than as independent fields."""
-    result: FormT
-    deliverable: Path
-
-    @property
-    def unit_file(self) -> str:
-        # The verdict-disambiguation key (file, unit_name), never displayed; must match what the
-        # verdict fetchers emit — the prover's is `Path(loc.file).name` (basename) — so basename,
-        # not the full project-relative path.
-        return self.deliverable.name
-
-    @property
-    def run_link(self) -> str | None:
-        return self.result.output_link
-
-@dataclass
-class ComponentOutcome[FormT: BackendResult, Unit: FeatureUnit](BackendJob[Unit]):
-    result: Delivered[FormT] | GaveUp | BaseException
-
-@dataclass
-class CorePipelineResult[FormT: BackendResult, Unit: FeatureUnit]:
-    n_components: int
-    n_properties: int
-    outcomes: list[ComponentOutcome[FormT, Unit]]
-    failures: list[str]
-
-@dataclass
-class Formalizer[FormT: BackendResult, Unit: FeatureUnit](ABC):
+class Formalizer[FormT: BackendResult](ABC):
     """Immutable, fully constructed by prepare_formalization. Carries the prover's
     config/resources/prover_tool/invariant-results (or nothing, for foundry) as constructor
     state — never set post-hoc. `FormT: ReportableResult` is what makes the report a core step."""
     formalized_type: type[FormT]
     backend_tag: ReportBackend
-
+    
     @abstractmethod
     async def formalize(
         self,
         label: str,
-        feat: Unit,
+        feat: ContractComponentInstance,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[FormT],
         run: PipelineRun
@@ -158,20 +81,20 @@ class Formalizer[FormT: BackendResult, Unit: FeatureUnit](ABC):
         off-thread. Foundry: read straight off inp.formalized.result."""
         ...
 
-    async def finalize(self, outcomes: list[ComponentOutcome[FormT, Unit]], run: PipelineRun) -> None:
+    async def finalize(self, outcomes: list[ComponentOutcome[FormT]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
         components_to_prover_runs.json). Default: none."""
         return None
 
 @dataclass
-class PreparedSystem[FormT: BackendResult, Main](ABC):
-    main: Main
+class PreparedSystem[FormT: BackendResult](ABC):
+    main: ContractInstance
 
     @abstractmethod
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT, Any]: ...
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT]: ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, App: BaseApplication, Main, Unit: FeatureUnit](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -185,27 +108,24 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     def artifact_store(self) -> ArtifactStore[A, FormT]: ...
 
     async def prepare_system(
-        self, analyzed: App,
+        self, analyzed: SourceApplication,
         run: PipelineRun[P, H]
-    ) -> PreparedSystem[FormT, Main]: ...
+    ) -> PreparedSystem[FormT]: ...
 
-    def to_artifact_id(self, c: Unit) -> A: ...
+    def to_artifact_id(self, c: ContractComponentInstance) -> A: ...
 
 
 # ---- shared helpers (the de-duplicated cache keys + batch) -------------------
 PROPERTIES_KEY = CacheKey[None, Properties]("properties")
 
 
-# ``main_instance`` now lives in composer.pipeline.ecosystem (it is the EVM ecosystem's
-# ``locate_main``); it is imported above and re-exported here so existing backends can keep
-# doing ``from composer.pipeline.core import main_instance``.
-
-
 @dataclass
-class _Batch[Unit: FeatureUnit](BackendJob[Unit]):
+class _Batch(BackendJob):
     feat_ctx: WorkflowContext[ComponentGroup]
 
 def _component_cache_key(c: FeatureUnit) -> CacheKey[Properties, ComponentGroup]:
+    # ``cache_material`` is the ecosystem-agnostic view of what identifies a unit; EVM's
+    # implementation reproduces the previous inline key (app JSON | ind | contract ind) exactly.
     return CacheKey(string_hash(c.cache_material()))
 
 
@@ -221,15 +141,18 @@ def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, App: BaseApplication, Main, Unit: FeatureUnit](
-    backend: PipelineBackend[P, FormT, H, A, App, Main, Unit],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](
+    backend: PipelineBackend[P, FormT, H, A],
     run: PipelineRun[P, H],
-    ecosystem: Ecosystem[App, Main, Unit],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
-) -> CorePipelineResult[FormT, Unit]:
+    ecosystem: Ecosystem = EVM,
+) -> CorePipelineResult[FormT]:
+    # ``ecosystem`` supplies the domain-specific front half; it defaults to ``EVM``, which
+    # reproduces the previous hardcoded Solidity behavior exactly, so EVM callers (and cli.py)
+    # need pass nothing. Non-EVM backends (e.g. the Rust/Crucible backend) pass ``ecosystem=SOLANA``.
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
 
@@ -251,9 +174,6 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         raise ValueError("System analysis produced no result.")
 
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
-    #    `analyzed` is the ecosystem's `App`, which the paired backend's `prepare_system`
-    #    consumes directly — the backend↔ecosystem type parameter (Phase 2) is what lets this
-    #    type-check without a cast.
     prepared = await backend.prepare_system(analyzed, run)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
@@ -268,7 +188,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         raise ValueError("No properties extracted from any component.")
 
     # 4. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
-    async def _run(batch: _Batch[Unit]) -> ComponentOutcome[FormT, Unit]:
+    async def _run(batch: _Batch) -> ComponentOutcome[FormT]:
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
         child : WorkflowContext[FormT] = await batch.feat_ctx.child(
@@ -290,7 +210,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
                 await child.cache_put(result)
         else:
             result = cached_result
-
+        
         outcome: Delivered[FormT] | GaveUp = (
             result if isinstance(result, GaveUp)
             else Delivered(result, backend.artifact_store.write_artifact(result_key, result))
@@ -331,14 +251,14 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     return _tally(outcomes)
 
-async def _extract_all[P: enum.Enum, H, Main, Unit: FeatureUnit](
-    main: Main, backend_guidance: str, run: PipelineRun[P, H],
+async def _extract_all[P: enum.Enum, H](
+    main: Any, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
-    ecosystem: Ecosystem[Any, Main, Unit],
-) -> list[_Batch[Unit]]:
+    ecosystem: Ecosystem,
+) -> list[_Batch]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY)
 
-    async def _one(feat: Unit) -> _Batch[Unit] | None:
+    async def _one(feat: FeatureUnit) -> _Batch | None:
         feat_ctx = await prop_ctx.child(_component_cache_key(feat), feat.context_tag())
         props = await run.runner(
             TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),
@@ -354,7 +274,7 @@ async def _extract_all[P: enum.Enum, H, Main, Unit: FeatureUnit](
     return [b for b in got if b is not None]
 
 
-def _tally[FormT: BackendResult, Unit: FeatureUnit](outcomes: list[ComponentOutcome[FormT, Unit]]) -> CorePipelineResult[FormT, Unit]:
+def _tally[FormT: BackendResult](outcomes: list[ComponentOutcome[FormT]]) -> CorePipelineResult[FormT]:
     failures: list[str] = []
     for o in outcomes:
         if isinstance(o.result, BaseException):

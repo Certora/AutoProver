@@ -21,8 +21,7 @@ give-ups are reported as failures in the result.
 import asyncio
 import enum
 import logging
-import pathlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Awaitable, Callable, override
 
 from composer.foundry.author import (
@@ -33,16 +32,14 @@ from composer.foundry.report import _foundry_verdicts
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun,
     GaveUp, SystemAnalysisSpec,
-    CorePhases, main_instance, Delivered,
-    run_pipeline
+    CorePhases, main_instance, CorePipelineResult,
+    COMMON_SYSTEM_CACHE_KEY
 )
-from composer.pipeline.ecosystem import EVM
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.context import (
-    CacheKey, Properties, WorkflowContext, SourceCode, FoundryGeneration
+    WorkflowContext, SourceCode, FoundryGeneration
 )
-from composer.spec.service_host import ServiceHost
 from composer.spec.types import PropertyFormulation
 from composer.spec.artifacts import ArtifactStore
 
@@ -81,7 +78,7 @@ assert no overflow are uninteresting. Properties implied by the type
 system (a uint256 being non-negative, etc.) are also uninteresting.
 """
 from composer.spec.system_model import (
-    ContractComponentInstance, ContractInstance, SourceApplication,
+    ContractComponentInstance, SourceApplication,
 )
 
 from composer.io.multi_job import HandlerFactory
@@ -103,12 +100,13 @@ class _ForgeRunConfig:
 class FoundryPhase(enum.Enum):
     """Task-grouping phases of the foundry pipeline (the ``P`` of its
     ``HandlerFactory``)."""
+    DISCOVER_DESIGN_DOC = "discover_design_doc"
     SYSTEM_ANALYSIS = "system_analysis"
     PROPERTY_EXTRACTION = "property_extraction"
     TEST_GENERATION = "test_generation"
     REPORT = "report"
 
-class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstance]):
+class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
     def __init__(self, conf: _ForgeRunConfig):
         super().__init__(GeneratedFoundryTest, "foundry")
         self.conf = conf
@@ -140,11 +138,11 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstan
         return await _foundry_verdicts(inp)
 
 @dataclass
-class FoundrySystem(PreparedSystem[GeneratedFoundryTest, ContractInstance]):
+class FoundrySystem(PreparedSystem[GeneratedFoundryTest]):
     form: FoundryFormalizer
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedFoundryTest, ContractComponentInstance]:
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedFoundryTest]:
         return self.form
 
 @dataclass
@@ -158,7 +156,7 @@ class FoundryBackend:
         "report": FoundryPhase.REPORT
     })
 
-    analysis_spec = SystemAnalysisSpec("foundry-application")
+    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "foundry-properties")
 
     artifact_store: ArtifactStore[FoundryTestArtifact, GeneratedFoundryTest]
 
@@ -168,7 +166,7 @@ class FoundryBackend:
         self,
         analyzed: SourceApplication,
         run: PipelineRun[FoundryPhase, None]
-    ) -> PreparedSystem[GeneratedFoundryTest, ContractInstance]:
+    ) -> PreparedSystem[GeneratedFoundryTest]:
         return FoundrySystem(
             main_instance(
                 analyzed, run.source
@@ -180,51 +178,19 @@ class FoundryBackend:
         return FoundryTestArtifact(c.slugified_name)
 
 # ---------------------------------------------------------------------------
-# Cache keys (parallel to common_pipeline's)
-# ---------------------------------------------------------------------------
-
-SOURCE_ANALYSIS_KEY = CacheKey[None, SourceApplication]("foundry-source-analysis")
-PROPERTIES_KEY = CacheKey[None, Properties]("foundry-properties")
-
-
-# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class FoundryPipelineResult:
-    n_components: int
-    n_properties: int
-    written: list[pathlib.Path] = field(default_factory=list)
-    failures: list[str] = field(default_factory=list)
+type FoundryPipelineResult = CorePipelineResult[GeneratedFoundryTest]
 
-
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
-
-async def run_foundry_pipeline(
+def backend(
     source_input: SourceCode,
-    ctx: WorkflowContext[None],
-    handler_factory: HandlerFactory[FoundryPhase, None],
-    env: ServiceHost,
     *,
-    max_concurrent: int = 4,
-    max_bug_rounds: int = 3,
-    interactive: bool = False,
     forge_binary: str = "forge",
     forge_timeout_s: int = 600,
     forge_concurrency: int = 1
-) -> FoundryPipelineResult:
-    """Run the foundry test-generation pipeline against an existing project.
-
-    ``source_input.project_root`` must point at a configured foundry project
-    (``foundry.toml`` + ``lib/forge-std`` + the contracts under test). The
-    pipeline does NOT modify ``foundry.toml`` / ``lib/`` / ``src/`` — only
-    writes generated ``.t.sol`` files under ``<project>/test/``.
-    """
-    semaphore = asyncio.Semaphore(max_concurrent)
+) -> FoundryBackend:
     artifacts = FoundryArtifactStore(
         source_input.project_root
     )
@@ -236,20 +202,7 @@ async def run_foundry_pipeline(
         forge_sem=foundry_sem
     )
 
-    backend = FoundryBackend(artifacts, forge_conf)
-    run_conf = PipelineRun(
-        ctx, env, source_input, handler_factory, semaphore
-    )
-
-    to_ret = await run_pipeline(
-        backend, run_conf, EVM, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
-    )
-
-    return FoundryPipelineResult(
-        to_ret.n_components, to_ret.n_properties, written=[
-            i.result.deliverable for i in to_ret.outcomes if isinstance(i.result, Delivered)
-        ], failures=to_ret.failures
-    )
+    return FoundryBackend(artifacts, forge_conf)
 
 type FoundryPipelineExecutor = Callable[
     [HandlerFactory[FoundryPhase, None]], Awaitable[FoundryPipelineResult],

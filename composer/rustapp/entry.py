@@ -27,7 +27,6 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, cast
 
-from graphcore.tools.memory import async_memory_tool
 from langgraph.store.base import BaseStore
 
 from composer.core.user import user_data_ns
@@ -62,7 +61,7 @@ EnvBuilder = Callable[..., ServiceHost]
 
 # The Executor a frontend drives.
 RustRunner = Callable[
-    [HandlerFactory], Awaitable[CorePipelineResult[RustFormalResult, Any]]
+    [HandlerFactory], Awaitable[CorePipelineResult[RustFormalResult]]
 ]
 
 
@@ -131,7 +130,7 @@ async def rust_entry_point(
     *,
     argv: list[str] | None = None,
     env_builder: EnvBuilder | None = None,
-    run_pipeline_fn: Callable[..., Awaitable[CorePipelineResult[RustFormalResult, Any]]] | None = None,
+    run_pipeline_fn: Callable[..., Awaitable[CorePipelineResult[RustFormalResult]]] | None = None,
 ) -> AsyncIterator[RustRunner]:
     """Parse args, open services, and yield the Executor for ``app``.
 
@@ -244,7 +243,7 @@ async def rust_entry_point(
         )
 
         ctx = WorkflowContext.create(
-            services=lambda ns: async_memory_tool(conns.memory(ns)),
+            services=conns.memory,
             thread_id=thread_id,
             store=conns.store,
             recursion_limit=args.recursion_limit,
@@ -252,7 +251,7 @@ async def rust_entry_point(
             memory_namespace=args.memory_ns,
         )
 
-        async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult, Any]:
+        async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult]:
             # A backend that needs a bespoke store/pipeline (e.g. Crucible's crate
             # store) supplies run_pipeline_fn; everything else uses the generic host.
             if run_pipeline_fn is not None:

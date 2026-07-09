@@ -15,8 +15,6 @@ import uuid
 from typing import cast, Protocol
 
 
-from graphcore.tools.memory import async_memory_tool
-
 from composer.core.user import user_data_ns
 from composer.input.types import ModelOptions, RAGDBOptions, DEFAULT_RECURSION_LIMIT
 from composer.input.parsing import add_protocol_args
@@ -32,6 +30,7 @@ from composer.spec.services import build_rag_tool_env
 from composer.spec.context import (
     WorkflowContext, SystemDoc,
 )
+from composer.llm.registry import get_provider_for
 from composer.spec.natspec.pipeline import run_natspec_pipeline
 from composer.spec.natspec.run_tags import NatspecRunTags
 from composer.spec.util import FS_FORBIDDEN_READ
@@ -132,11 +131,13 @@ async def _main() -> int:
     model_factory = llm_factory(args)
     model = get_model()
 
+    llm_provider = get_provider_for(options=args)
+
     logging_ns = user_data_ns() + DEFAULT_META_NS
     run_id = uuid.uuid4().hex
 
     async with (
-        standard_connections(embedder=DefaultEmbedder(model)) as conn,
+        standard_connections(provider=llm_provider.provider, embedder=DefaultEmbedder(model)) as conn,
         PostgreSQLRAGDatabase.rag_context(model, args.rag_db) as rag,
         async_tool_context(),
     ):
@@ -174,9 +175,8 @@ async def _main() -> int:
             start_env = build_rag_tool_env(
                 sort=sort,
                 models=ModelProvider(
-                    factory=model_factory,
-                    heavy_model=args.model,
-                    lite_model=args.model,
+                    heavy_model=llm_provider,
+                    lite_model=llm_provider,
                     checkpointer=conn.checkpointer,
                 ),
                 db=rag,
@@ -200,7 +200,7 @@ async def _main() -> int:
             cache_root = (args.cache_ns, doc_digest) if args.cache_ns else None
 
             ctx = WorkflowContext.create(
-                services=lambda ns: async_memory_tool(conn.memory(ns)),
+                services=lambda ns: conn.memory(ns),
                 thread_id=thread_id,
                 store=conn.store,
                 recursion_limit=args.recursion_limit,

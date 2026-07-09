@@ -3,12 +3,11 @@
 Each workflow's ``ArtifactStore`` owns its own deliverable layout so the path
 conventions live in one place rather than smeared across the pipeline. This base
 hosts what is *identical* across workflows — the analysis-phase
-``properties.json``, the ``{property title: [demonstrating names]}`` map,
-``commentary.md``, and the run's ``token_usage.json`` — keyed off a per-component
-``stem`` plus two abstract directories. The workflow-specific bundles (CVL
-``.spec``/``.conf`` for the prover, ``.t.sol`` metadata for foundry) live in the
-subclasses, which translate their domain objects into ``stem``s and call these
-primitives.
+``properties.json``, the ``{property title: [demonstrating names]}`` map, and
+``commentary.md`` — keyed off a per-component ``stem`` plus two abstract
+directories. The workflow-specific bundles (CVL ``.spec``/``.conf`` for the prover,
+``.t.sol`` metadata for foundry) live in the subclasses, which translate their
+domain objects into ``stem``s and call these primitives.
 """
 
 import json

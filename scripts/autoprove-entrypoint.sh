@@ -75,6 +75,16 @@ case "${1:-}" in
     fi
     exec "$cmd" "$@"
     ;;
+  console-foundry|tui-foundry)
+    # Foundry mode runs the project's own `forge test`, which can use the `ffi`
+    # cheatcode and external cheatcodes. Enable the hardened fork's guards so
+    # untrusted project tests can't shell out via FFI or reach external
+    # cheatcodes. These guards only affect test/script execution; the autoprove
+    # path calls forge only for `forge remappings` (a static config query that
+    # runs no cheatcodes/FFI), so it needs no guard either way.
+    export FOUNDRY_DISABLE_EXTERNAL_CHEATCODES=true FOUNDRY_FFI=false
+    exec "$@"
+    ;;
   *)
     exec "$@"
     ;;

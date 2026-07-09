@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import override
 
+from composer.diagnostics.timing import RunSummary
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.gen_types import (
@@ -119,3 +120,17 @@ class ProverArtifactStore(ArtifactStore[SpecIdentity, GeneratedCVL]):
         ``.certora_internal/autoProve/components_to_prover_runs.json``."""
         out_dir = ensure_dir(self._internal_dir())
         (out_dir / "components_to_prover_runs.json").write_text(json.dumps(runs, indent=2))
+
+    def write_job_info(self, summary: RunSummary, *, user_id: str) -> None:
+        """The run's identity + usage manifest — ``user_id``, ``run_id``, and the
+        ``token_usage`` / ``prover_usage`` summaries — to ``certora/ap_report/job_info.json``.
+        ``user_id`` is passed in so this stays a pure serializer of run state."""
+        payload = {
+            "user_id": user_id,
+            "run_id": summary.run_id,
+            "token_usage": summary.token_usage_summary(),
+            "prover_usage": summary.prover_usage_summary(),
+        }
+        out = self._report_dir() / "job_info.json"
+        out.write_text(json.dumps(payload, indent=2) + "\n")
+        _log.info("autoprove job info: wrote %s", out)

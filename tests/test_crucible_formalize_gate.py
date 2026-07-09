@@ -45,7 +45,6 @@ from composer.spec.source.source_env import build_basic_source_tools, build_sour
 from composer.spec.system_model import SolidityIdentifier
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import llm_factory, standard_connections
-from graphcore.tools.memory import async_memory_tool
 
 from tests.conftest import MockSentenceTransformer, needs_postgres
 from tests.test_autoprove_integration import _MEMORIES_DDL, _RAG_DB, _VECTOR_DBS, _db_url
@@ -226,7 +225,7 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
         full = build_source_tools(basic, model_provider, conns.indexed_store, ("crucible_fmz", "src"), recursion_limit=100)
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
         ctx = WorkflowContext.create(
-            services=lambda ns: async_memory_tool(conns.memory(ns)),
+            services=conns.memory,
             thread_id="crucible_fmz", store=conns.store, recursion_limit=100,
             cache_namespace=None, memory_namespace=None,
         )
@@ -244,7 +243,7 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             "config": {"fixture": _FIXTURE, "slug": _SLUG, "program": _PROGRAM, "fuzz_timeout": 15},
         }))
 
-        run = PipelineRun(ctx, env, source, GenericRustConsoleHandler(set()).make_handler, asyncio.Semaphore(2))
+        run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
         effects = RealEffects(cast(Any, ctx), run, command_timeout_s=1200)
         result = await run.runner(
             TaskInfo("crucible_fmz", "Harness Authoring", phase["formalization"]),

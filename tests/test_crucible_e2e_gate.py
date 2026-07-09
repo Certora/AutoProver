@@ -40,7 +40,6 @@ from composer.spec.source.source_env import build_basic_source_tools, build_sour
 from composer.spec.system_model import SolidityIdentifier
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import llm_factory, standard_connections
-from graphcore.tools.memory import async_memory_tool
 
 from tests.conftest import MockSentenceTransformer, needs_postgres
 from tests.test_autoprove_integration import _MEMORIES_DDL, _RAG_DB, _VECTOR_DBS, _db_url
@@ -119,7 +118,7 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
         full = build_source_tools(basic, model_provider, conns.indexed_store, ("crucible_e2e", "src"), recursion_limit=100)
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
         ctx = WorkflowContext.create(
-            services=lambda ns: async_memory_tool(conns.memory(ns)),
+            services=conns.memory,
             thread_id="crucible_e2e", store=conns.store, recursion_limit=100,
             cache_namespace=None, memory_namespace=None,
         )

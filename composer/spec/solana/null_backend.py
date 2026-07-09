@@ -103,7 +103,7 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
         return ensure_dir(Path(self._project_root) / "certora/solana_null/artifacts")
 
 
-class NullSolanaFormalizer(Formalizer[NullResult, SolanaInstructionInstance]):
+class NullSolanaFormalizer(Formalizer[NullResult]):
     def __init__(self) -> None:
         super().__init__(NullResult, "solana")
 
@@ -130,13 +130,13 @@ class NullSolanaFormalizer(Formalizer[NullResult, SolanaInstructionInstance]):
 
 
 @dataclass
-class NullSolanaPrepared(PreparedSystem[NullResult, SolanaProgramInstance]):
+class NullSolanaPrepared(PreparedSystem[NullResult]):
     form: NullSolanaFormalizer
 
     @override
     async def prepare_formalization(
         self, run: PipelineRun
-    ) -> Formalizer[NullResult, SolanaInstructionInstance]:
+    ) -> Formalizer[NullResult]:
         return self.form
 
 
@@ -147,7 +147,7 @@ class NullSolanaBackend:
 
     artifact_store: NullSolanaArtifactStore
     backend_guidance = SOLANA_NULL_GUIDANCE
-    analysis_spec = SystemAnalysisSpec("solana-analysis")
+    analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
     core_phases = CorePhases(
         {
             "analysis": SolanaPhase.ANALYSIS,
@@ -159,7 +159,7 @@ class NullSolanaBackend:
 
     async def prepare_system(
         self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None]
-    ) -> PreparedSystem[NullResult, SolanaProgramInstance]:
+    ) -> PreparedSystem[NullResult]:
         # Use the Solana ecosystem's locate_main so the backend and ecosystem agree on the
         # target program (imported lazily to avoid an import cycle with pipeline.ecosystem).
         from composer.pipeline.ecosystem import SOLANA

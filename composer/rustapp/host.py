@@ -130,7 +130,7 @@ async def run_rust_pipeline(
     interactive: bool = False,
     prover: ProverHook | None = None,
     feedback: FeedbackHook | None = None,
-) -> CorePipelineResult[RustFormalResult, Any]:
+) -> CorePipelineResult[RustFormalResult]:
     """Build the backend from ``module_name`` and run the shared driver — the Rust
     analogue of ``run_autoprove_pipeline`` / ``run_foundry_pipeline``.
 
@@ -145,10 +145,11 @@ async def run_rust_pipeline(
         module, descriptor, source_input.project_root, prover=prover, feedback=feedback
     )
     run = PipelineRun(
-        ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent)
+        ctx=ctx, source=source_input, _handler_factory=handler_factory,
+        _semaphore=asyncio.Semaphore(max_concurrent), env=env,
     )
     return await run_pipeline(
-        backend, run, ecosystem, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+        backend, run, ecosystem=ecosystem, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
     )
 
 
@@ -162,17 +163,18 @@ async def run_application(
     max_concurrent: int = 4,
     max_bug_rounds: int = 3,
     interactive: bool = False,
-) -> CorePipelineResult[RustFormalResult, Any]:
+) -> CorePipelineResult[RustFormalResult]:
     """Run a pre-built :class:`RustApplication`. The backend is constructed from the
     app's already-synthesized phase enum, so the ``TaskInfo`` phases the driver emits
     are the *same* enum members the frontend's ``phase_labels`` are keyed by — the
     identity the frontend's label lookup relies on."""
     backend = app.make_backend(source_input.project_root)
     run = PipelineRun(
-        ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent)
+        ctx=ctx, source=source_input, _handler_factory=handler_factory,
+        _semaphore=asyncio.Semaphore(max_concurrent), env=env,
     )
     return await run_pipeline(
-        backend, run, app.ecosystem, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
+        backend, run, ecosystem=app.ecosystem, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds
     )
 
 

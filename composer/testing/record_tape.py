@@ -27,10 +27,11 @@ those entries cannot be recovered from the persisted LangGraph checkpoints:
 
 How it works
 ------------
-``create_llm`` / ``create_llm_base`` (``composer.workflow.services``) build a
+Every pipeline model is minted via
+``composer.llm.registry.get_provider_for(...).builder_for(...)``, which builds a
 ``ChatAnthropic`` with a ``callbacks=[UsageCallback()]`` list. ``install_recorder``
-patches ``create_llm_base`` (which ``create_llm`` delegates to, so one patch
-covers every build) to append a :class:`RecordingCallback` to that list. Its
+wraps ``get_provider_for`` so each provider's ``builder_for`` appends a
+:class:`RecordingCallback` to that list — one patch covers every build. Its
 ``on_llm_end`` fires for every generation — agent-loop turns through
 ``bind_tools`` / ``model_copy`` / ``copy`` derivatives (``create_resume_commentary``,
 the prover summarizer) AND the out-of-graph ``analyze_cex_raw`` side-call —
@@ -177,9 +178,10 @@ def install_recorder(name: str, out_path: str | None = None, *, no_thinking: boo
     each response is captured, and arrange for the tape to be written at
     interpreter exit.
 
-    Patches only ``create_llm_base`` — ``create_llm`` delegates to it, so one
-    patch covers every construction path. Must run before the entry path imports
-    ``create_llm`` — ``composer/bind.py`` is that hook.
+    Wraps ``composer.llm.registry.get_provider_for`` so every provider's
+    ``builder_for`` appends the recorder — one patch covers every construction
+    path (tiering + CLI). Must run before the entry path imports
+    ``get_provider_for`` by name — ``composer/bind.py`` is that hook.
 
     ``no_thinking`` (env ``COMPOSER_RECORD_NO_THINKING``) disables thinking on every
     built model (``model_copy(update={"thinking": None})``, the same move
@@ -200,21 +202,36 @@ def install_recorder(name: str, out_path: str | None = None, *, no_thinking: boo
     import composer.spec.agent_index as a_ind
     a_ind._UNSAFE_DISABLE_CACHE = True
 
-    import composer.workflow.services as services
-    orig_base = services.create_llm_base
+    import composer.llm.registry as registry
+    orig_get_provider_for = registry.get_provider_for
 
-    def _build_with_recording(args: Any) -> Any:
-        llm = orig_base(args)
-        if no_thinking:
-            llm = llm.model_copy(update={"thinking": None})
-        # create_llm_base builds the model with `callbacks=[UsageCallback()]` (a
-        # list), so append our recorder in place — no reassignment, no type juggling.
-        assert isinstance(llm.callbacks, list), \
-            "record_tape: expected create_llm_base to build a list of callbacks"
-        llm.callbacks.append(RecordingCallback())
-        return llm
+    def _wrap_provider(mp: Any) -> Any:
+        orig_builder_for = mp.builder_for
 
-    services.create_llm_base = _build_with_recording
+        def builder_for(*, cache_level: Any = None, disable_thinking: bool = False) -> Any:
+            llm = orig_builder_for(cache_level=cache_level, disable_thinking=disable_thinking)
+            if no_thinking:
+                llm = llm.model_copy(update={"thinking": None})
+            # builder_for builds the model with `callbacks=[UsageCallback()]` (a
+            # list), so append our recorder in place — no reassignment.
+            assert isinstance(llm.callbacks, list), \
+                "record_tape: expected builder_for to build a list of callbacks"
+            llm.callbacks.append(RecordingCallback())
+            return llm
+
+        mp.builder_for = builder_for  # type: ignore[method-assign]
+        return mp
+
+    def _recording_get_provider_for(**kwargs: Any) -> Any:
+        result = orig_get_provider_for(**kwargs)
+        if isinstance(result, registry.TieredProviders):
+            _wrap_provider(result.lite)
+            _wrap_provider(result.heavy)
+        else:
+            _wrap_provider(result)
+        return result
+
+    registry.get_provider_for = _recording_get_provider_for
     if no_thinking:
         print("[record_tape] thinking disabled for recording (COMPOSER_RECORD_NO_THINKING)", file=sys.stderr)
 
@@ -265,7 +282,7 @@ import json
 
 from langchain_core.messages import AIMessage, BaseMessage
 
-from composer.testing.harness_tape import HarnessFakeLLM
+from composer.testing.harness_tape import HarnessFakeLLM, install_fake_llm
 
 # task_id -> ordered list of recorded AIMessage responses (pydantic model_dump JSON).
 _TAPE_JSON = r"""
@@ -284,14 +301,12 @@ def get_{name}_llm() -> HarnessFakeLLM:
 
 
 def install_harness_tape() -> HarnessFakeLLM:
-    """Monkeypatch create_llm / create_llm_base so the pipeline receives the fake.
+    """Route the pipeline's models to this tape's fake LLM.
     composer/bind.py calls this when COMPOSER_TEST_TAPE={name} is set."""
     fake = get_{name}_llm()
     import composer.spec.agent_index as a_ind
     a_ind._UNSAFE_DISABLE_CACHE = True
-    import composer.workflow.services as services
-    services.create_llm = lambda args: fake  # type: ignore[assignment]
-    services.create_llm_base = lambda args: fake  # type: ignore[assignment]
+    install_fake_llm(fake)
     return fake
 
 

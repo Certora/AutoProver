@@ -156,7 +156,7 @@ async def run_crucible_pipeline(
     max_concurrent: int = 4,
     max_bug_rounds: int = 3,
     interactive: bool = False,
-) -> CorePipelineResult[RustFormalResult, Any]:
+) -> CorePipelineResult[RustFormalResult]:
     """Run the whole Crucible vertical: the SOLANA ecosystem front half (analysis +
     property extraction) → the Crucible backend (shared fixture via the setup
     session, then per-component test authoring + fuzzing) → report."""
@@ -179,8 +179,11 @@ async def run_crucible_pipeline(
         command_timeout_s=command_timeout_s,
         sandbox=sandbox,
     )
-    run = PipelineRun(ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent))
+    run = PipelineRun(
+        ctx=ctx, source=source_input, _handler_factory=handler_factory,
+        _semaphore=asyncio.Semaphore(max_concurrent), env=env,
+    )
     return await run_pipeline(
-        backend, run, backend.ecosystem,
+        backend, run, ecosystem=backend.ecosystem,
         interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds,
     )
