@@ -15,7 +15,7 @@ import asyncio
 
 import composer.bind as _  # noqa: F401  (side-effecting DI/tape bootstrap; must load first)
 
-from composer.crucible.pipeline import CRUCIBLE_MODULE, run_crucible_pipeline
+from composer.crucible.pipeline import CRUCIBLE_MODULE, build_crucible_env, run_crucible_pipeline
 from composer.diagnostics.timing import RunSummary
 from composer.rustapp.entry import rust_entry_point
 from composer.rustapp.frontend import GenericRustConsoleHandler
@@ -39,7 +39,9 @@ async def _console_crucible() -> int:
     summary = RunSummary()
     app_meta = build_application(CRUCIBLE_MODULE)
     event_kinds = {e.kind for e in app_meta.descriptor.event_kinds}
-    async with rust_entry_point(app_meta, summary, run_pipeline_fn=_run_pipeline_fn) as run:
+    async with rust_entry_point(
+        app_meta, summary, run_pipeline_fn=_run_pipeline_fn, env_builder=build_crucible_env
+    ) as run:
         result = await run(GenericRustConsoleHandler(event_kinds).make_handler)
         print(f"\n{'=' * 60}")
         print(summary.format())

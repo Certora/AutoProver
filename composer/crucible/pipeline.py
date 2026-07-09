@@ -11,6 +11,7 @@ ecosystem front half, the setup/per-component IoC loops) is reused unchanged.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from composer.crucible.harness import CrucibleDep
 from composer.crucible.store import CrucibleArtifactStore
 from composer.io.multi_job import HandlerFactory
 from composer.pipeline.core import CorePipelineResult, PipelineRun, run_pipeline
+from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
 from composer.rustapp.adapter import RustBackend
 from composer.rustapp.host import (
     build_core_phases,
@@ -29,9 +31,42 @@ from composer.rustapp.host import (
 )
 from composer.rustapp.result import RustFormalResult
 from composer.spec.context import SourceCode, WorkflowContext
-from composer.spec.service_host import ServiceHost
+from composer.spec.service_host import ModelProvider, PureServiceHost, ServiceHost
+from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
+
+_log = logging.getLogger(__name__)
 
 CRUCIBLE_MODULE = "crucible_app"
+
+
+def build_crucible_env(
+    *,
+    model_provider: ModelProvider,
+    project_root: str,
+    store: Any,
+    source_question_ns: tuple[str, ...],
+    recursion_limit: int,
+    forbidden_read: str = RUST_FORBIDDEN_READ,
+) -> ServiceHost:
+    """The Crucible author's env: Rust source-navigation tools + the `crucible_kb`
+    RAG search tools (§7.5). Falls back to no RAG (just the static cheat-sheet) if
+    the embedding model / DB isn't available, so a run still works without it."""
+    basic = build_basic_source_tools(root=project_root, forbidden_read=forbidden_read)
+    full = build_source_tools(basic, model_provider, store, source_question_ns, recursion_limit=recursion_limit)
+
+    rag_tools: tuple = ()
+    try:
+        from composer.rag.db import CRUCIBLE_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
+        from composer.rag.models import get_model
+        from composer.tools.crucible_rag import get_tools as crucible_tools
+
+        # Lazy pool — opens on first search; the DB must already be populated.
+        db = PostgreSQLRAGDatabase(CRUCIBLE_DEFAULT_CONNECTION, get_model())
+        rag_tools = tuple(crucible_tools(db))
+    except Exception as e:  # noqa: BLE001 — RAG is optional; the cheat-sheet suffices
+        _log.warning("crucible_kb RAG unavailable (%s); using the static cheat-sheet only", e)
+
+    return PureServiceHost(models=model_provider, rag_tools=rag_tools, sort="existing").bind_source_tools(full)
 
 
 def resolve_crucible_repo(explicit: str | None = None) -> Path:

@@ -11,6 +11,9 @@ DO $$ BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'foundry_rag_user') THEN
         CREATE USER foundry_rag_user WITH PASSWORD 'rag_password';
     END IF;
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'crucible_rag_user') THEN
+        CREATE USER crucible_rag_user WITH PASSWORD 'rag_password';
+    END IF;
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'langgraph_store_user') THEN
         CREATE USER langgraph_store_user WITH PASSWORD 'langgraph_store_password';
     END IF;
@@ -60,6 +63,11 @@ ALTER ROLE extended_rag_user IN DATABASE rag_db SET search_path = extended_rag, 
 CREATE SCHEMA IF NOT EXISTS foundry_rag AUTHORIZATION foundry_rag_user;
 GRANT USAGE ON SCHEMA extensions TO foundry_rag_user;
 ALTER ROLE foundry_rag_user IN DATABASE rag_db SET search_path = foundry_rag, extensions;
+
+-- crucible rag (Solana fuzzing knowledge base)
+CREATE SCHEMA IF NOT EXISTS crucible_rag AUTHORIZATION crucible_rag_user;
+GRANT USAGE ON SCHEMA extensions TO crucible_rag_user;
+ALTER ROLE crucible_rag_user IN DATABASE rag_db SET search_path = crucible_rag, extensions;
 
 
 \c langgraph_store_db
