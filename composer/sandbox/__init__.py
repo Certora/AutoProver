@@ -24,6 +24,7 @@ from composer.sandbox.command import (
     UnsafePath,
     run_local_command,
 )
+from composer.sandbox.config import SandboxConfig
 from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
@@ -35,6 +36,7 @@ from composer.sandbox.policy import (
     get_provider,
     register_provider,
 )
+from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH, rust_build_policy
 
 __all__ = [
     # command runner
@@ -53,4 +55,8 @@ __all__ = [
     "get_provider",
     "register_provider",
     "ensure_available",
+    # config + recipes
+    "SandboxConfig",
+    "rust_build_policy",
+    "DEFAULT_ENV_PASSTHROUGH",
 ]

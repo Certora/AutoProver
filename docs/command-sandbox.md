@@ -359,17 +359,28 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    host (write-outside / `/etc/passwd` / `/proc/<parent>/environ` / inet-socket all denied; workdir
    write, AF_UNIX, and toolchain `exec` allowed); argv mapping golden-tested. Full escape gate is
    step 5.
-3. **Thread `policy` + provider through `run_local_command`** (default provider `none` = unchanged)
-   and build the policy in `RealEffects` / `build_program` from host-resolved toolchain paths;
-   provider chosen by `CommandConfig.sandbox_provider`.
+3. **Thread `policy` + provider through `run_local_command`** — *done*: the runner accepts
+   `provider`/`policy` (default `None` → the `none` passthrough, byte-for-byte today's behavior) and
+   is fail-closed via `ensure_available`. A `SandboxConfig` ([composer/sandbox/config.py](../composer/sandbox/config.py))
+   selects the provider (`$COMPOSER_SANDBOX_PROVIDER`, default `none`) and builds the policy via the
+   `rust_build_policy` recipe ([composer/sandbox/recipes.py](../composer/sandbox/recipes.py) — the
+   workdir and `/dev` nodes rw; discovered rust/cargo/platform-tool and system dirs ro, incl. `/etc`
+   for NSS; env allowlist; network off). Threaded through `RealEffects` and `RustBackend`/`RustFormalizer`
+   ([composer/rustapp/adapter.py](../composer/rustapp/adapter.py)), `build_program`
+   ([composer/spec/solana/build.py](../composer/spec/solana/build.py)), and the Crucible pipeline
+   (which adds the crucible checkout + binary to `extra_ro`). Integration-tested: `run_local_command`
+   under the launcher denies out-of-workdir reads and network while allowing the workdir + toolchain.
+   **The default stays `none`** — flipping Crucible's default to `launcher` happens with the gate
+   (step 5), once the policy is proven complete against the real build, so all existing gates stay
+   green now.
 4. **Offline prep (§5)** — a `cargo fetch` warm step outside the sandbox; sandboxed builds add
    `--offline`.
-5. **The escape-test gate (§10).**
+5. **The escape-test gate (§10)**, which also flips Crucible's default provider to `launcher`.
 
 Each step is behind the seam, so the existing Phase 1–5 gates keep passing throughout (they run the
-`none` provider until step 3 flips Crucible's default to the launcher provider). A later off-the-shelf
-swap (`landrun`/`sandlock`) is *only* a new step-2-style provider — steps 1, 3, 4, 5 and the gate are
-untouched.
+`none` provider until step 5 flips Crucible's default to the launcher provider — deferred so the
+policy is validated against the real build first). A later off-the-shelf swap (`landrun`/`sandlock`)
+is *only* a new step-2-style provider — the seam, policy, and gate are untouched.
 
 ---
 

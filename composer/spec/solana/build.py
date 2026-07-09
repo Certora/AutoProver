@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from composer.sandbox.command import CommandResult, run_local_command
+from composer.sandbox.config import SandboxConfig
 
 _log = logging.getLogger(__name__)
 
@@ -48,17 +49,28 @@ async def build_program(
     anchor_binary: str = "anchor",
     with_idl: bool = False,
     timeout_s: int = DEFAULT_BUILD_TIMEOUT_S,
+    sandbox: SandboxConfig | None = None,
 ) -> BuiltProgram:
     """Compile ``program`` in the workspace at ``project_root`` to
     ``target/deploy/<program>.so``. If ``with_idl``, also try ``anchor idl build``
     (best-effort — not every project has an ``Anchor.toml``; the same-version
     harness path depends on the program crate directly and needs no IDL).
 
+    ``cargo-build-sbf`` runs the user program's ``build.rs`` natively, so it is
+    confined by ``sandbox`` when one is supplied (``docs/command-sandbox.md``);
+    ``None`` runs it unsandboxed (trusted input only).
+
     Raises :class:`BuildError` if the ``.so`` is not produced.
     """
     root = Path(project_root)
+    provider = policy = None
+    if sandbox is not None and sandbox.enabled:
+        provider = sandbox.resolve_provider()
+        policy = sandbox.build_policy(root)
 
-    res = await run_local_command(build_binary, [], {}, workdir=root, timeout_s=timeout_s)
+    res = await run_local_command(
+        build_binary, [], {}, workdir=root, timeout_s=timeout_s, provider=provider, policy=policy
+    )
     so = root / "target" / "deploy" / f"{program}.so"
     if res.exit_code != 0 or not so.is_file():
         raise BuildError("cargo-build-sbf", res)
@@ -67,7 +79,8 @@ async def build_program(
     if with_idl:
         out_rel = f"target/idl/{program}.json"
         idl_res = await run_local_command(
-            anchor_binary, ["idl", "build", "-o", out_rel], {}, workdir=root, timeout_s=timeout_s
+            anchor_binary, ["idl", "build", "-o", out_rel], {}, workdir=root,
+            timeout_s=timeout_s, provider=provider, policy=policy,
         )
         candidate = root / out_rel
         if idl_res.exit_code == 0 and candidate.is_file():

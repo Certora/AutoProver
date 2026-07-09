@@ -35,6 +35,7 @@ from composer.pipeline.core import (
 )
 from composer.pipeline.ecosystem import Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S, run_local_command
+from composer.sandbox.config import SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.loop import Effects, GaveUp as LoopGaveUp, drive_session
 from composer.rustapp.result import RustArtifact, RustFormalResult
@@ -65,6 +66,7 @@ class RealEffects:
         feedback: FeedbackHook | None = None,
         command_sem: asyncio.Semaphore | None = None,
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
+        sandbox: SandboxConfig | None = None,
     ):
         self._ctx = ctx
         self._run = run
@@ -72,6 +74,9 @@ class RealEffects:
         self._feedback = feedback
         self._command_sem = command_sem
         self._command_timeout_s = command_timeout_s
+        # How to confine RunCommand (docs/command-sandbox.md). None → unsandboxed
+        # (the `none` provider) — today's behavior, for trusted-input/EVM paths.
+        self._sandbox = sandbox
         # Loop-scratch cache (within one formalize). Cross-run persistence is the
         # driver's result-level cache, keyed by formalized_type — not this.
         self._scratch: dict[str, Any] = {}
@@ -120,13 +125,20 @@ class RealEffects:
     async def run_command(
         self, program: str, args: list[str], files: dict[str, str]
     ) -> dict:
+        workdir = self._ensure_workdir()
+        provider = policy = None
+        if self._sandbox is not None and self._sandbox.enabled:
+            provider = self._sandbox.resolve_provider()
+            policy = self._sandbox.build_policy(workdir)
         result = await run_local_command(
             program,
             args,
             files,
-            workdir=self._ensure_workdir(),
+            workdir=workdir,
             timeout_s=self._command_timeout_s,
             sem=self._command_sem,
+            provider=provider,
+            policy=policy,
         )
         return result.as_observation()
 
@@ -169,6 +181,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         component_config: dict | None = None,
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
         store: Any = None,
+        sandbox: SandboxConfig | None = None,
     ):
         super().__init__(RustFormalResult, descriptor.backend_tag)
         self._module = module
@@ -179,6 +192,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         self._component_config = component_config or {}
         self._command_timeout_s = command_timeout_s
         self._store = store
+        self._sandbox = sandbox
 
     @override
     async def formalize(
@@ -209,7 +223,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         session = self._module.new_session(session_input)
         effects = RealEffects(
             ctx, run, prover=self._hooks.prover, feedback=self._hooks.feedback,
-            command_timeout_s=self._command_timeout_s,
+            command_timeout_s=self._command_timeout_s, sandbox=self._sandbox,
         )
         result = await drive_session(session, effects)
         if isinstance(result, LoopGaveUp):
@@ -317,7 +331,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, Any]):
                 async def _drive():
                     eff = RealEffects(
                         cast(Any, run.ctx), run, prover=b.prover, feedback=b.feedback,
-                        command_timeout_s=b.command_timeout_s,
+                        command_timeout_s=b.command_timeout_s, sandbox=b.sandbox,
                     )
                     return await drive_session(session, eff)
 
@@ -341,6 +355,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, Any]):
             component_config=component_config,
             command_timeout_s=b.command_timeout_s,
             store=b.artifact_store,
+            sandbox=b.sandbox,
         )
 
 
@@ -363,6 +378,9 @@ class RustBackend:
     # fuzz can be minutes); and the per-component fuzzing budget.
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     fuzz_timeout_s: int = 30
+    # How to confine every RunCommand (docs/command-sandbox.md). None → unsandboxed
+    # (trusted-input only); the Crucible pipeline builds one selecting the provider.
+    sandbox: SandboxConfig | None = None
 
     @property
     def backend_guidance(self) -> str:

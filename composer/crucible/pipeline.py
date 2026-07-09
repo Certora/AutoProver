@@ -30,6 +30,7 @@ from composer.rustapp.host import (
     resolve_ecosystem,
 )
 from composer.rustapp.result import RustFormalResult
+from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost, ServiceHost
 from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
@@ -88,6 +89,7 @@ def build_crucible_backend(
     crucible_repo: Path,
     fuzz_timeout_s: int,
     command_timeout_s: int,
+    sandbox: SandboxConfig | None = None,
     module_name: str = CRUCIBLE_MODULE,
 ) -> RustBackend:
     """Build the Crucible :class:`RustBackend` with the crate store + resolved deps."""
@@ -111,7 +113,23 @@ def build_crucible_backend(
         ecosystem=ecosystem,
         command_timeout_s=command_timeout_s,
         fuzz_timeout_s=fuzz_timeout_s,
+        sandbox=sandbox,
     )
+
+
+def _crucible_sandbox(crucible_repo: Path) -> SandboxConfig:
+    """The command-sandbox config for a Crucible run (``docs/command-sandbox.md``).
+    Provider from ``$COMPOSER_SANDBOX_PROVIDER`` (default ``none`` — unsandboxed,
+    trusted input only, until the escape gate flips it). The Crucible-specific
+    read-only grants — the crucible checkout (path deps) and the ``crucible`` binary
+    — extend the shared Rust toolchain set the launcher already discovers."""
+    import shutil
+
+    crucible_bin = shutil.which("crucible")
+    extra_ro = tuple(
+        p for p in (crucible_repo, Path(crucible_bin).parent if crucible_bin else None) if p is not None
+    )
+    return SandboxConfig.from_env(extra_ro=extra_ro)
 
 
 async def run_crucible_pipeline(
@@ -134,13 +152,20 @@ async def run_crucible_pipeline(
     # and it's the shared Solana build step, not per-component work.
     from composer.spec.solana.build import build_program
 
-    await build_program(source_input.project_root, str(source_input.contract_name), timeout_s=command_timeout_s)
+    repo = resolve_crucible_repo(str(crucible_repo) if crucible_repo else None)
+    sandbox = _crucible_sandbox(repo)  # provider from env; default none (unsandboxed)
+
+    await build_program(
+        source_input.project_root, str(source_input.contract_name),
+        timeout_s=command_timeout_s, sandbox=sandbox,
+    )
 
     backend = build_crucible_backend(
         source_input,
-        crucible_repo=resolve_crucible_repo(str(crucible_repo) if crucible_repo else None),
+        crucible_repo=repo,
         fuzz_timeout_s=fuzz_timeout_s,
         command_timeout_s=command_timeout_s,
+        sandbox=sandbox,
     )
     run = PipelineRun(ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent))
     return await run_pipeline(

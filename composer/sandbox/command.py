@@ -27,6 +27,13 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from composer.sandbox.policy import (
+    NoneProvider,
+    SandboxPolicy,
+    SandboxProvider,
+    ensure_available,
+)
+
 _log = logging.getLogger(__name__)
 
 # Generous default; individual callers (a fuzz run vs a quick dry-run) pass their own.
@@ -79,12 +86,22 @@ async def run_local_command(
     workdir: Path,
     timeout_s: int = DEFAULT_TIMEOUT_S,
     sem: asyncio.Semaphore | None = None,
+    provider: SandboxProvider | None = None,
+    policy: SandboxPolicy | None = None,
 ) -> CommandResult:
     """Write ``files`` into ``workdir``, then run ``program args`` there and capture output.
 
     ``workdir`` persists across calls (a session materializes its crate once and
     runs several commands against it). Concurrency is bounded by ``sem`` when
     given — important because fuzzers are resource-hungry.
+
+    ``provider`` selects the sandbox mechanism (``docs/command-sandbox.md``); with
+    the default (``None`` → the ``none`` passthrough) the command runs exactly as
+    before. A real provider maps ``policy`` → a confined launch and is **fail-closed**
+    (raises :class:`~composer.sandbox.policy.SandboxUnavailable` if it can't confine,
+    rather than running unsandboxed). The untrusted ``files`` are materialized by
+    trusted Python *before* the (possibly sandboxed) command runs; path confinement
+    (``_confined_target``) is unchanged and complements the sandbox.
     """
     workdir.mkdir(parents=True, exist_ok=True)
     for rel, contents in files.items():
@@ -92,17 +109,22 @@ async def run_local_command(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(contents)
 
+    prov: SandboxProvider = provider if provider is not None else NoneProvider()
+    ensure_available(prov)  # fail-closed: raises before running if it can't confine
+    spec = prov.wrap(policy if policy is not None else SandboxPolicy(), program, list(args))
+    child_env = dict(spec.env) if spec.env is not None else None
+
     async def _run() -> CommandResult:
         try:
             proc = await asyncio.create_subprocess_exec(
-                program,
-                *args,
+                *spec.argv,
                 cwd=str(workdir),
+                env=child_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
         except FileNotFoundError:
-            return CommandResult(NOT_FOUND_EXIT, "", f"{program}: not found on PATH")
+            return CommandResult(NOT_FOUND_EXIT, "", f"{spec.argv[0]}: not found on PATH")
         try:
             out_b, err_b = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout_s
