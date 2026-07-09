@@ -694,9 +694,14 @@ safety one.
    Infra-layer hardening (VM-per-run / gVisor / IMDSv2 / least-priv IAM) is orthogonal and
    non-blocking, decided per deployment.
 3. **Fixture authoring difficulty.** `setup()` for real DeFi programs is hard (init order, admin
-   whitelists, account patching — the Harness Guide is a long playbook). Is a single authoring pass
-   enough, or does `prepare_formalization` need its own multi-round refine loop (like the bug-round
-   loop) driven by `--dry-run`/short-explore feedback? Budget for iteration; measure on the gate.
+   whitelists, account patching — the Harness Guide is a long playbook), and the setup session is the
+   observed failure point (the model authoring wrong Anchor module paths). The authoring loop already
+   drives a `--dry-run` refine loop; it was hardened (crucible-app decider): more attempts (4→7),
+   **compiler errors extracted + front-loaded** in the revise prompt (above the raw cargo log), a
+   concise **"PROGRAM API FACTS"** block (crate id, `declare_id`, each instruction's snake→Pascal
+   `instruction::`/`accounts::` names + args + accounts) mined from the analyzed model, and explicit
+   **Anchor path conventions** in the cheat-sheet. Whether that closes the gap needs measuring on the
+   live gate (variance-prone); a further multi-round/self-critique loop is the next lever if not.
 4. **Nondeterminism in verdicts + caching.** A clean fuzz run is "no bug found in N seconds," not a
    stable fact — re-running may differ. How do we cache a `formalize` result keyed by the property
    batch when the *verdict* isn't deterministic? Likely cache the authored harness (deterministic)

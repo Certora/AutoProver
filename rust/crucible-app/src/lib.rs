@@ -96,8 +96,15 @@ Crucible harness API (author a FIXTURE only — no test fns):
             .send().map(|o| o.is_success()).unwrap_or(false)
     }
 
-- Read the program source for exact instruction args, Accounts structs, PDA seeds
-  (binary vs string), and signer requirements — the model below is a summary.
+- Anchor path conventions (use the API FACTS below — do NOT guess these):
+    * `use <program>::*;` brings the crate's generated items into scope. `<program>` is
+      the crate id in the facts, NOT the `#[program] pub mod <name>` module name — the
+      module name does NOT change these crate-root paths.
+    * Instruction args struct: `instruction::<PascalName>` — snake_case `foo_bar` → `instruction::FooBar`.
+    * Accounts struct: `accounts::<PascalName>` — same PascalCase as the instruction.
+    * Program id: the `ID` constant; make a Pubkey via `Pubkey::new_from_array(ID.to_bytes())`.
+- Read the program source (via the tools) to confirm exact field names, PDA seeds
+  (binary vs string), and signer requirements — the API facts + model below are a summary.
 - Output ONLY the fixture module source (imports + struct + #[fuzz_fixture] impl).
   Do NOT write `fn main`, `#[invariant_test]`, or `#[crucible_fuzz]` — those are added later.
 "#;
@@ -106,7 +113,7 @@ Crucible harness API (author a FIXTURE only — no test fns):
 /// via `crucible run … --dry-run`: it must compile and `setup()` must run once.
 const PROBE_FN: &str = "\n\n#[invariant_test]\nfn c_probe(fixture: &mut Fixture) {\n    let _ = fixture;\n}\n";
 
-const SETUP_MAX_ATTEMPTS: u32 = 4;
+const SETUP_MAX_ATTEMPTS: u32 = 7;
 
 #[derive(PartialEq)]
 enum SetupStage {
@@ -133,20 +140,17 @@ impl SetupSession {
         let mut task = format!(
             "Author a Crucible fuzz-harness FIXTURE (only) for the Solana program `{program}`.\n\
              {cheat}\n\n\
-             Analyzed system model (instructions, accounts, PDAs, authorities):\n{model}\n\n\
+             {facts}\n\
+             Full analyzed system model (accounts, PDAs, authorities, requirements):\n{model}\n\n\
              Use the source-exploration tools to read the program's Rust source for exact \
              signatures. Return the complete fixture module source as your final answer.",
             program = self.program,
             cheat = HARNESS_CHEAT_SHEET.replace("<program>", &self.program),
+            facts = api_facts(&self.analyzed, &self.program),
             model = model,
         );
         if let Some(err) = error {
-            task.push_str(&format!(
-                "\n\nThe previous fixture FAILED to build / dry-run. Fix it. Prior fixture:\n\
-                 ```rust\n{prev}\n```\nBuild/dry-run output:\n{err}",
-                prev = self.fixture,
-                err = &err[err.len().saturating_sub(4000)..],
-            ));
+            task.push_str(&revise_suffix(&self.fixture, err));
         }
         serde_json::json!({ "instruction": task })
     }
@@ -179,6 +183,136 @@ fn strip_code_fence(text: &str) -> String {
         return rest.trim_end().trim_end_matches("```").trim_end().to_string();
     }
     t.to_string()
+}
+
+/// Extract just the rustc error diagnostics from a (possibly long) cargo build log so
+/// the revise prompt leads with the actual errors instead of pages of "Compiling …".
+/// Keeps each `error[..]`/`error:` block with its `-->`/`|`/`=` context; drops warnings
+/// and progress. Returns "" if there are no error lines.
+fn compiler_diagnostics(out: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut in_err = false;
+    for line in out.lines() {
+        let t = line.trim_start();
+        if t.starts_with("error[") || t.starts_with("error:") {
+            in_err = true;
+            kept.push(line);
+        } else if in_err {
+            if line.is_empty()
+                || line.starts_with(' ')
+                || t.starts_with("-->")
+                || t.starts_with('|')
+                || t.starts_with('=')
+            {
+                kept.push(line);
+            } else {
+                in_err = false;
+            }
+        }
+    }
+    while kept.last().is_some_and(|l| l.trim().is_empty()) {
+        kept.pop();
+    }
+    let joined = kept.join("\n");
+    // Cap so a pathological error count can't blow up the prompt.
+    joined[..joined.len().min(4000)].to_string()
+}
+
+/// snake_case → PascalCase — Anchor's `instruction`/`accounts` struct naming.
+fn to_pascal(snake: &str) -> String {
+    snake
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// A concise, high-signal "API facts" block mined from the analyzed model so the author
+/// need not dig through the full JSON (or rediscover Anchor names by exploring): the crate
+/// id, declare_id, state types, and each instruction's snake→Pascal name + args + accounts.
+/// Returns "" if the model shape isn't recognized.
+fn api_facts(analyzed: &serde_json::Value, program: &str) -> String {
+    let components = match analyzed.get("components").and_then(|c| c.as_array()) {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let is_prog = |c: &&serde_json::Value| c.get("instructions").is_some_and(|i| i.is_array());
+    let prog = components
+        .iter()
+        .find(|c| {
+            is_prog(c)
+                && (c.get("program_identifier").and_then(|v| v.as_str()) == Some(program)
+                    || c.get("name").and_then(|v| v.as_str()) == Some(program))
+        })
+        .or_else(|| components.iter().find(is_prog));
+    let prog = match prog {
+        Some(p) => p,
+        None => return String::new(),
+    };
+
+    let str_of = |v: Option<&serde_json::Value>| v.and_then(|x| x.as_str()).unwrap_or("?").to_string();
+    let mut out = String::from("PROGRAM API FACTS (use these EXACT names — do not guess):\n");
+    out.push_str(&format!(
+        "  crate id (for `use <id>::*`): {}\n",
+        str_of(prog.get("program_identifier"))
+    ));
+    out.push_str(&format!(
+        "  declare_id / program id: {}\n",
+        prog.get("program_id").and_then(|v| v.as_str()).unwrap_or("(not declared)")
+    ));
+    if let Some(types) = prog.get("account_types").and_then(|v| v.as_array()) {
+        let names: Vec<String> = types.iter().filter_map(|t| t.as_str().map(String::from)).collect();
+        if !names.is_empty() {
+            out.push_str(&format!("  state/account types: {}\n", names.join("; ")));
+        }
+    }
+    out.push_str("  instructions (snake handler → Anchor Pascal structs):\n");
+    if let Some(ixs) = prog.get("instructions").and_then(|v| v.as_array()) {
+        for ix in ixs {
+            let name = str_of(ix.get("name"));
+            let pascal = to_pascal(&name);
+            let args: Vec<String> = ix
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let accts: Vec<String> = ix
+                .get("accounts")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "    - {name} → instruction::{pascal}, accounts::{pascal}; args: [{}]; accounts: [{}]\n",
+                args.join(", "),
+                accts.join(", "),
+            ));
+        }
+    }
+    out
+}
+
+/// The "previous attempt failed, fix it" suffix shared by both authoring loops: lead with
+/// the *extracted* compiler errors, then the prior source, then a trimmed raw-log tail.
+fn revise_suffix(prev_src: &str, raw: &str) -> String {
+    let errors_block = match compiler_diagnostics(raw) {
+        d if d.is_empty() => String::new(),
+        d => format!("COMPILER ERRORS to fix (extracted):\n{d}\n\n"),
+    };
+    let tail = &raw[raw.len().saturating_sub(2500)..];
+    format!(
+        "\n\nThe previous attempt FAILED to build / dry-run. Fix it.\n{errors_block}\
+         Prior source:\n```rust\n{prev_src}\n```\n\nRaw build/dry-run output (tail):\n{tail}"
+    )
 }
 
 impl FormalizeSession for SetupSession {
@@ -252,7 +386,7 @@ Write ONE Crucible test function (no fixture — it already exists as `Fixture`)
 - Return ONLY the annotated test fn. It MUST be named exactly `{feature}`.
 "#;
 
-const PC_MAX_ATTEMPTS: u32 = 4;
+const PC_MAX_ATTEMPTS: u32 = 7;
 
 #[derive(PartialEq)]
 enum PcStage {
@@ -306,12 +440,7 @@ impl PerComponentSession {
             fixture = self.fixture,
         );
         if let Some(err) = error {
-            task.push_str(&format!(
-                "\n\nThe previous test FAILED to build. Fix it. Prior test:\n```rust\n{prev}\n```\n\
-                 Build output:\n{err}",
-                prev = self.test_src,
-                err = &err[err.len().saturating_sub(4000)..],
-            ));
+            task.push_str(&revise_suffix(&self.test_src, err));
         }
         serde_json::json!({ "instruction": task })
     }
