@@ -618,14 +618,19 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    ~21 min) — analyzed 3 instructions, extracted 28 properties, authored the shared fixture, and
    produced per-instruction fuzz verdicts (deposit/withdraw delivered with BAD — the fuzzer found
    counterexamples; initialize gave up cleanly after failing to compile, surfaced as a handled
-   failure), then a report. **Knowledge base — still deferred** (the static cheat-sheet carried phases
-   3–5; RAG wasn't needed): build `crucible_kb` via a `scripts/populate_crucible_rag.sh` (clone the
-   crucible docs + example harnesses → chunk-by-header → embed → ingest into a `ComposerRAGDB`,
-   mirroring `populate_foundry_rag.sh`) and bind its search tools into `env.rag_tools` at the entry
-   point when the cheat-sheet proves insufficient — the same builder is the template for CVLR-Solana's
-   `cvlr_manual`. Remaining polish: a TUI entry, wiring the `--fuzz-timeout`/`--crucible-version` args
-   through, and **verdict triage** (a BAD may be a true bug or an over-strict invariant — §10 Q4). The
-   application still runs on **trusted input only** until Phase 6.
+   failure), then a report. **Knowledge base — built.** `composer/scripts/crucible_ragbuild.py` (a
+   markdown ingester driving the shared `BlockBuilder`; both `add_chunks_batch` + `add_manual_section`)
+   + `scripts/populate_crucible_rag.sh` populate a `crucible_kb` `ComposerRAGDB` (a `crucible_rag_user`
+   schema in `rag_db`, added to `init-db.sql`); `composer/tools/crucible_rag.py` exposes keyword /
+   vector / get-section tools, which `build_crucible_env` binds into `env.rag_tools` (gracefully
+   degrading to the cheat-sheet if the embedder is absent). Populated end-to-end (126 embedded + 126
+   manual sections) with on-target retrieval (e.g. "read on-chain account state in an invariant" →
+   *TestContext / Account Reading* + *Writing-Harnesses / Deserialize On-Chain State*). This is the
+   template for CVLR-Solana's `cvlr_manual`. (Runtime binding needs `sentence-transformers` in the app
+   venv; absent it, `build_crucible_env` falls back to the cheat-sheet, which carried phases 3–5.)
+   Remaining polish: a TUI entry, wiring the `--fuzz-timeout`/`--crucible-version` args through, and
+   **verdict triage** (a BAD may be a true bug or an over-strict invariant — §10 Q4). The application
+   still runs on **trusted input only** until Phase 6.
 6. **Sandbox every `RunCommand` (required — §7.4).** Move all command execution (`cargo build-sbf`,
    `anchor idl`, `crucible run`) behind the sandbox in `RealEffects`: Linux `bwrap` with network-off,
    a clean/secret-free env, a minimal bind-mounted workdir, resource caps + wall-clock kill, and an
