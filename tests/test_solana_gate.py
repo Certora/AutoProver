@@ -21,6 +21,7 @@ from composer.pipeline.core import PipelineRun, run_pipeline
 from composer.pipeline.ecosystem import SOLANA, RUST_FORBIDDEN_READ
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost
+from composer.llm.registry import get_provider_for
 from composer.spec.solana.null_backend import NullSolanaArtifactStore, NullSolanaBackend
 from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
 from composer.spec.system_model import SolidityIdentifier
@@ -81,7 +82,7 @@ async def test_solana_vault_front_half(pg_container: "PostgresContainer", monkey
     args = _model_args()
 
     async with (
-        standard_connections(embedder=DefaultEmbedder(model)) as conns,
+        standard_connections(provider="anthropic", embedder=DefaultEmbedder(model)) as conns,
         async_tool_context(),
     ):
         content = await conns.uploader.get_document(_SCENARIO / "system.md")
@@ -93,9 +94,9 @@ async def test_solana_vault_front_half(pg_container: "PostgresContainer", monkey
             relative_path="programs/vault/src/lib.rs",
             forbidden_read=RUST_FORBIDDEN_READ,
         )
+        _tiered = get_provider_for(tiered=cast(Any, args))
         model_provider = ModelProvider(
-            checkpointer=conns.checkpointer, factory=llm_factory(cast(Any, args)),
-            heavy_model=args.heavy_model, lite_model=args.lite_model,
+            heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
         basic = build_basic_source_tools(root=str(_SCENARIO), forbidden_read=RUST_FORBIDDEN_READ)
         full = build_source_tools(basic, model_provider, conns.indexed_store, ("solana_gate", "src"), recursion_limit=100)

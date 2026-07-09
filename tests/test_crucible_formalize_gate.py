@@ -40,6 +40,7 @@ from composer.rustapp.host import build_phase_enum, load_descriptor, load_module
 from composer.rustapp.loop import GaveUp, RustFormalized, drive_session
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost
+from composer.llm.registry import get_provider_for
 from composer.spec.solana.build import build_program
 from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
 from composer.spec.system_model import SolidityIdentifier
@@ -207,7 +208,7 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
     assert built.so_path.is_file(), built.so_path
 
     async with (
-        standard_connections(embedder=DefaultEmbedder(MockSentenceTransformer())) as conns,
+        standard_connections(provider="anthropic", embedder=DefaultEmbedder(MockSentenceTransformer())) as conns,
         async_tool_context(),
     ):
         content = await conns.uploader.get_document(_SCENARIO / "system.md")
@@ -217,9 +218,9 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             contract_name=SolidityIdentifier(_PROGRAM),
             relative_path=f"programs/{_PROGRAM}/src/lib.rs", forbidden_read=RUST_FORBIDDEN_READ,
         )
+        _tiered = get_provider_for(tiered=cast(Any, args))
         model_provider = ModelProvider(
-            checkpointer=conns.checkpointer, factory=llm_factory(cast(Any, args)),
-            heavy_model=args.heavy_model, lite_model=args.lite_model,
+            heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
         basic = build_basic_source_tools(root=str(_SCENARIO), forbidden_read=RUST_FORBIDDEN_READ)
         full = build_source_tools(basic, model_provider, conns.indexed_store, ("crucible_fmz", "src"), recursion_limit=100)

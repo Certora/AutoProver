@@ -55,6 +55,7 @@ from composer.spec.system_model import SolidityIdentifier
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import llm_factory, standard_connections
+from composer.llm.registry import get_provider_for
 
 # A caller-supplied env builder, for backends that want a custom tool/RAG surface.
 EnvBuilder = Callable[..., ServiceHost]
@@ -192,10 +193,10 @@ async def rust_entry_point(
 
     # argparse Namespace duck-types the ModelConfiguration protocol (the model flags come from
     # ExtendedModelOptions); the built-in entries cast their args the same way.
-    model_fact = llm_factory(cast(Any, args))
+    tiered = get_provider_for(tiered=cast(Any, args))
 
     async with (
-        standard_connections(embedder=DefaultEmbedder(model)) as conns,
+        standard_connections(provider=tiered.provider_kind, embedder=DefaultEmbedder(model)) as conns,
         async_tool_context(),
         thread_logger(
             conns.store,
@@ -225,10 +226,9 @@ async def rust_entry_point(
         )
 
         model_provider = ModelProvider(
+            heavy_model=tiered.heavy,
+            lite_model=tiered.lite,
             checkpointer=conns.checkpointer,
-            factory=model_fact,
-            heavy_model=args.heavy_model,
-            lite_model=args.lite_model,
         )
         source_question_ns = _user_ns("source_agent", "cache", root_key)
 
