@@ -490,9 +490,12 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    least-privilege instance IAM role, IMDSv2 with hop limit 1, egress-restricted security group, and
    (if desired) VM-per-run or a gVisor runtime. Decide per deployment when the tenancy model is
    settled; none of it blocks Phase 6.
-8. **Shared-`Cargo.toml` feature race (not a sandbox issue — crucible backend).** The per-component
-   sessions share one `fuzz/<prog>/Cargo.toml`; concurrent `prepare_component` writes clobber each
-   other's feature, so a `crucible run <prog> c_<slug>` can hit "package does not contain this
-   feature: `c_<slug>`" (seen for `initialize` in the passing e2e — handled/gave-up, but a lost
-   component). Serialize the manifest write around each per-component build, register all features
-   up-front, or give each component its own crate. Tracked with §10 Q1 (unit granularity).
+8. **Shared-`Cargo.toml`/`main.rs` race (crucible backend) — fixed.** The per-component sessions
+   share one `fuzz/<prog>/` crate; concurrent runs raced on both files (the observed
+   "package does not contain this feature: `c_<slug>`" that dropped `initialize`, and a latent
+   `main.rs` clobber). Fixed two ways: `prepare_component` now reserves Cargo features
+   **cumulatively** (the manifest only grows, so no feature is lost), and per-component command runs
+   are **serialized + atomic** (`run_local_command` materializes files and runs as one unit under a
+   `Semaphore(1)` shared by `RustFormalizer`), while the LLM authoring turns still run concurrently.
+   The remaining parallelism win — concurrent *builds/fuzzing* — needs a crate-per-component (§10 Q1);
+   deferred.

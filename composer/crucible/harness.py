@@ -79,6 +79,14 @@ class CrucibleHarness:
     # Mutable: the authoring loop fills it in prepare_formalization (later phase).
     fixture_source: str = ""
     _components: dict[str, str] = field(default_factory=dict)  # feature -> test section
+    # Features declared in Cargo.toml but whose test section isn't folded in yet — a
+    # per-component session reserves its feature (+ probe) before it authors/validates.
+    # Cumulative (only grows) so concurrent per-component `prepare_component`s can't
+    # clobber each other's feature out of the shared manifest.
+    _reserved: set[str] = field(default_factory=set)
+
+    def reserve_features(self, *features: str) -> None:
+        self._reserved.update(features)
 
     @staticmethod
     def feature_for(slug: str) -> str:
@@ -99,7 +107,7 @@ class CrucibleHarness:
         return sorted(self._components)
 
     def render_cargo_toml(self, extra_features: tuple[str, ...] = ()) -> str:
-        feats = sorted(set(self.features) | set(extra_features))
+        feats = sorted(set(self.features) | set(extra_features) | self._reserved)
         features = "\n".join(f"{f} = []" for f in feats) or "# (no components yet)"
         return f"""\
 [package]

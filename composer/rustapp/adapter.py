@@ -201,6 +201,11 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         self._command_timeout_s = command_timeout_s
         self._store = store
         self._sandbox = sandbox
+        # Per-component sessions share one harness crate (fuzz/<prog>/), so their
+        # command runs (which write main.rs/Cargo.toml then build+fuzz) must not
+        # overlap — serialize them here while the LLM authoring turns still run
+        # concurrently. (A crate-per-component would restore build parallelism — §10 Q1.)
+        self._harness_lock = asyncio.Semaphore(1)
 
     @override
     async def formalize(
@@ -232,6 +237,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         effects = RealEffects(
             ctx, run, prover=self._hooks.prover, feedback=self._hooks.feedback,
             command_timeout_s=self._command_timeout_s, sandbox=self._sandbox,
+            command_sem=self._harness_lock,
         )
         result = await drive_session(session, effects)
         if isinstance(result, LoopGaveUp):

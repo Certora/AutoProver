@@ -64,7 +64,8 @@ class CrucibleArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
         """Pre-place ``Cargo.toml`` (with the probe feature) so the setup session can
         write ``src/main.rs`` + dry-run; the decider can't render the host-resolved
         deps itself (§6.1)."""
-        return self.harness.write_manifest(self.fuzz_dir(), (self.PROBE_FEATURE,))
+        self.harness.reserve_features(self.PROBE_FEATURE)
+        return self.harness.write_manifest(self.fuzz_dir())
 
     async def warm_dependencies(self) -> None:
         """Fetch the harness crate's deps into CARGO_HOME with network, *outside* the
@@ -77,10 +78,14 @@ class CrucibleArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
 
     def prepare_component(self, slug: str) -> Path:
         """Pre-place ``Cargo.toml`` declaring this component's feature (plus the probe
-        + any already-registered features) so its per-component session can write
-        ``src/main.rs`` and fuzz ``c_<slug>``."""
-        feature = CrucibleHarness.feature_for(slug)
-        return self.harness.write_manifest(self.fuzz_dir(), (feature, self.PROBE_FEATURE))
+        + every feature reserved so far) so its per-component session can write
+        ``src/main.rs`` and fuzz ``c_<slug>``.
+
+        Features are reserved **cumulatively** (never removed), so a concurrent
+        component's `prepare_component` can't drop this one's feature from the shared
+        manifest — the manifest-race that otherwise loses an instruction."""
+        self.harness.reserve_features(CrucibleHarness.feature_for(slug), self.PROBE_FEATURE)
+        return self.harness.write_manifest(self.fuzz_dir())
 
     @override
     def _artifact_dir(self) -> Path:

@@ -100,21 +100,24 @@ async def run_local_command(
     before. A real provider maps ``policy`` → a confined launch and is **fail-closed**
     (raises :class:`~composer.sandbox.policy.SandboxUnavailable` if it can't confine,
     rather than running unsandboxed). The untrusted ``files`` are materialized by
-    trusted Python *before* the (possibly sandboxed) command runs; path confinement
-    (``_confined_target``) is unchanged and complements the sandbox.
+    trusted Python (path-confined via ``_confined_target``) and then the command runs
+    — as one unit under ``sem`` when given, so that when callers share a workdir the
+    file-write and the run don't interleave (a concurrent caller can't overwrite these
+    files between our write and our run). Path confinement complements the sandbox.
     """
-    workdir.mkdir(parents=True, exist_ok=True)
-    for rel, contents in files.items():
-        target = _confined_target(workdir, rel)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(contents)
-
     prov: SandboxProvider = provider if provider is not None else NoneProvider()
     ensure_available(prov)  # fail-closed: raises before running if it can't confine
     spec = prov.wrap(policy if policy is not None else SandboxPolicy(), program, list(args))
     child_env = dict(spec.env) if spec.env is not None else None
 
     async def _run() -> CommandResult:
+        # Materialize files + launch as one unit so a shared workdir stays consistent
+        # for this command's duration (see `sem`).
+        workdir.mkdir(parents=True, exist_ok=True)
+        for rel, contents in files.items():
+            target = _confined_target(workdir, rel)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(contents)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *spec.argv,
