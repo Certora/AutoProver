@@ -68,13 +68,21 @@ class CrucibleArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
         return self.harness.write_manifest(self.fuzz_dir())
 
     async def warm_dependencies(self) -> None:
-        """Fetch the harness crate's deps into CARGO_HOME with network, *outside* the
-        sandbox, so the confined `crucible run` can build the harness offline
-        (docs/command-sandbox.md §5). Called once after the manifest is placed and
-        only when a sandbox is enabled; best-effort. Requires the manifest to exist."""
+        """Fetch the harness crate's deps with network, *outside* the sandbox, so the
+        confined `crucible run` can build the harness offline (docs/command-sandbox.md
+        §5). Called once after the manifest is placed and only when a sandbox is
+        enabled; best-effort. Requires the manifest to exist.
+
+        Fetches into the **per-run private CARGO_HOME** (`sandbox_cargo_home`) — the
+        same home the sandboxed `crucible run` uses (its workdir is the project root),
+        so the deps are where the offline build will look, and untrusted build code
+        can't write the shared cargo cache (command-sandbox.md §11 item 5)."""
+        from composer.sandbox.recipes import sandbox_cargo_home
         from composer.spec.solana.build import warm_cargo_cache
 
-        await warm_cargo_cache(self.fuzz_dir())
+        await warm_cargo_cache(
+            self.fuzz_dir(), cargo_home=sandbox_cargo_home(self._project_root)
+        )
 
     def prepare_component(self, slug: str) -> Path:
         """Pre-place ``Cargo.toml`` declaring this component's feature (plus the probe

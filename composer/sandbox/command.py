@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -88,6 +89,7 @@ async def run_local_command(
     sem: asyncio.Semaphore | None = None,
     provider: SandboxProvider | None = None,
     policy: SandboxPolicy | None = None,
+    env_overlay: dict[str, str] | None = None,
 ) -> CommandResult:
     """Write ``files`` into ``workdir``, then run ``program args`` there and capture output.
 
@@ -104,11 +106,19 @@ async def run_local_command(
     — as one unit under ``sem`` when given, so that when callers share a workdir the
     file-write and the run don't interleave (a concurrent caller can't overwrite these
     files between our write and our run). Path confinement complements the sandbox.
+
+    ``env_overlay`` sets extra env vars on the child on top of what it would otherwise
+    inherit — used by the *unsandboxed* prep steps (e.g. `cargo fetch` with a per-run
+    ``CARGO_HOME``); the sandboxed path's env is fully governed by the provider/policy.
     """
     prov: SandboxProvider = provider if provider is not None else NoneProvider()
     ensure_available(prov)  # fail-closed: raises before running if it can't confine
     spec = prov.wrap(policy if policy is not None else SandboxPolicy(), program, list(args))
     child_env = dict(spec.env) if spec.env is not None else None
+    if env_overlay:
+        # Overlay onto the effective env (the inherited parent env when the provider
+        # didn't set one — i.e. the `none`/unsandboxed path).
+        child_env = {**(child_env if child_env is not None else os.environ), **env_overlay}
 
     async def _run() -> CommandResult:
         # Materialize files + launch as one unit so a shared workdir stays consistent

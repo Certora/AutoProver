@@ -127,18 +127,21 @@ def _crucible_sandbox(crucible_repo: Path) -> SandboxConfig:
     ``COMPOSER_SANDBOX_PROVIDER=none`` for a trusted-input/dev run without the binary.
 
     The Crucible-specific read-only grants — the crucible checkout (path deps) and the
-    ``crucible`` binary — extend the shared Rust toolchain set the launcher discovers;
-    ``CARGO_HOME`` is granted rw so the offline `cargo build` can extract crate sources
-    (§11 notes a per-run ``CARGO_HOME`` as the tighter follow-up)."""
+    ``crucible`` binary — extend the shared Rust toolchain set the launcher discovers.
+    The offline build's `cargo` writes (crate-source extraction, locks) go to a
+    **private per-run ``CARGO_HOME``** under the workdir (`rust_build_policy` /
+    `sandbox_cargo_home`), so we do NOT grant the shared ``~/.cargo`` read-write — that
+    would let untrusted `build.rs`/proc-macro code poison the cross-run cargo cache
+    (command-sandbox.md §11 item 5). The shared ``~/.cargo`` is still granted read-only
+    (for the `cargo` binary the launcher discovers)."""
     import shutil
 
     crucible_bin = shutil.which("crucible")
     extra_ro = tuple(
         p for p in (crucible_repo, Path(crucible_bin).parent if crucible_bin else None) if p is not None
     )
-    cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
     provider = os.environ.get("COMPOSER_SANDBOX_PROVIDER", "launcher")
-    return SandboxConfig(provider=provider, extra_ro=extra_ro, extra_rw=(cargo_home,))
+    return SandboxConfig(provider=provider, extra_ro=extra_ro)
 
 
 async def run_crucible_pipeline(

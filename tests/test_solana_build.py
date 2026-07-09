@@ -22,20 +22,25 @@ pytestmark = pytest.mark.asyncio
 async def test_warm_cargo_cache_runs_unsandboxed_fetch(tmp_path, monkeypatch):
     seen = {}
 
-    async def fake_run(program, args, files, *, workdir, timeout_s=600, sem=None, provider=None, policy=None):
-        seen.update(program=program, args=args, workdir=Path(workdir), provider=provider)
+    async def fake_run(program, args, files, *, workdir, timeout_s=600, sem=None,
+                       provider=None, policy=None, env_overlay=None):
+        seen.update(program=program, args=args, workdir=Path(workdir),
+                    provider=provider, env_overlay=env_overlay)
         return CommandResult(0, "", "")
 
     monkeypatch.setattr(buildmod, "run_local_command", fake_run)
-    res = await buildmod.warm_cargo_cache(tmp_path)
+    res = await buildmod.warm_cargo_cache(tmp_path, cargo_home=tmp_path / ".sandbox_cargo")
     assert res.exit_code == 0
     assert seen["program"] == "cargo" and seen["args"] == ["fetch"]
     assert seen["workdir"] == tmp_path
     assert seen["provider"] is None  # warming must NOT be sandboxed (it needs network)
+    # fetch targets the private per-run CARGO_HOME (same one the offline build reads)
+    assert seen["env_overlay"] == {"CARGO_HOME": str(tmp_path / ".sandbox_cargo")}
 
 
 async def _fake_build_run_factory(calls):
-    async def fake_run(program, args, files, *, workdir, timeout_s=600, sem=None, provider=None, policy=None):
+    async def fake_run(program, args, files, *, workdir, timeout_s=600, sem=None,
+                       provider=None, policy=None, env_overlay=None):
         calls.append((program, provider is not None))
         so = Path(workdir) / "target" / "deploy" / "vault.so"
         so.parent.mkdir(parents=True, exist_ok=True)

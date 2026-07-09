@@ -15,6 +15,7 @@ was and wasn't granted).
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 from composer.sandbox.policy import SandboxPolicy
@@ -53,6 +54,28 @@ _DEV_NODES: tuple[str, ...] = (
     "/dev/urandom",
     "/dev/tty",
 )
+
+
+def sandbox_cargo_home(workdir: str | Path) -> Path:
+    """The **private, per-run `CARGO_HOME`** for a sandboxed build, under the workdir.
+
+    Why a private cargo home rather than the shared `~/.cargo`:
+
+    An offline `cargo build` doesn't just *read* the cache — it *writes* to `CARGO_HOME`
+    (extracts crate sources into `registry/src`, takes `.package-cache` locks). To let
+    the confined build do that we'd have to grant `CARGO_HOME` read-write. But the same
+    build runs **untrusted `build.rs`/proc-macro code**, so a writable *shared* cargo
+    home is a cross-run attack surface: a malicious build could overwrite an extracted
+    source under `registry/src` and poison a *later* run that compiles that crate (cargo
+    checksums the downloaded `.crate`, but trusts an already-extracted `registry/src`).
+
+    A per-run home under the (already-writable, per-run) workdir removes that: any write
+    the untrusted build makes touches only this run's throwaway cache, never a shared one.
+    The cost is that deps are fetched per run (the warm step downloads into this home);
+    a shared *read-only* index/cache to avoid re-download is a deferred optimization
+    (command-sandbox.md §11 item 5).
+    """
+    return Path(workdir).resolve() / ".sandbox_cargo"
 
 
 def rust_build_policy(
@@ -111,6 +134,19 @@ def rust_build_policy(
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     for var in ("TMPDIR", "TMP", "TEMP"):
         env[var] = str(sandbox_tmp)
+
+    # Point CARGO_HOME at a PRIVATE per-run cargo home under the workdir (see
+    # sandbox_cargo_home for the reasoning). The shared ~/.cargo stays read-only (its
+    # `bin/cargo` is still on PATH; we only redirect where cargo *writes*). Copy the
+    # user's global cargo config in so registry mirrors / build settings still apply.
+    cargo_home = sandbox_cargo_home(wd)
+    cargo_home.mkdir(parents=True, exist_ok=True)
+    shared_cargo = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    for cfg in ("config.toml", "config"):
+        src = shared_cargo / cfg
+        if src.is_file() and not (cargo_home / cfg).exists():
+            shutil.copy(src, cargo_home / cfg)
+    env["CARGO_HOME"] = str(cargo_home)
 
     return SandboxPolicy(
         rw_paths=rw_paths,

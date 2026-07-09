@@ -97,6 +97,10 @@ Common surface, resolved once at sandbox-config time and expressed as Landlock r
   grant the shared `/tmp` (it may hold host/other-run secrets and would defeat the escape test), so a
   per-run temp under the already-writable workdir is redirected in. (A fresh harness build fails at
   the link step — "Cannot create temporary file in /tmp/" — without this; found via the e2e gate.)
+- **A private cargo home** — `<workdir>/.sandbox_cargo`, with `CARGO_HOME` pointed at it (§11 item 5).
+  The offline `cargo build` writes there (source extraction, locks); keeping it per-run means
+  untrusted build code can't poison a *shared* `~/.cargo` (which stays read-only, for the `cargo`
+  binary). The warm step (§5) fetches into this same home.
 
 Everything else — the rest of the bind-mounted project, `/etc`, `/proc/<other-pids>`, `$HOME`, the
 process environment — is **not granted**, therefore inaccessible. Confinement is default-deny.
@@ -476,11 +480,16 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    need cgroup `memory.max` (and thus writable cgroup delegation in the container) sooner?
 4. **Cache warming cost (§5).** Per-run `cargo fetch` adds latency; is a shared, pre-warmed
    read-only registry volume worth it for CI throughput?
-5. **Per-run `CARGO_HOME` (tightening).** The launcher grants the shared `CARGO_HOME` read-write so
-   an offline `cargo build` can extract crate sources — which lets untrusted build code write the
-   shared cache (cross-run poisoning). Tighter: a per-run `CARGO_HOME` under the workdir, warmed by
-   the fetch step, so a write only touches that run's throwaway cache. Decide when moving from
-   trusted-gate input to genuinely untrusted programs.
+5. **Per-run `CARGO_HOME` — done.** An offline `cargo build` *writes* to `CARGO_HOME` (extracts crate
+   sources, takes locks), and that build runs untrusted `build.rs`/proc-macro code — so a writable
+   *shared* `~/.cargo` was a cross-run poisoning surface (overwrite an extracted `registry/src` to
+   hit a later run). Fixed: `rust_build_policy` points `CARGO_HOME` at a **private per-run dir under
+   the workdir** (`sandbox_cargo_home` → `<workdir>/.sandbox_cargo`), the warm step (`warm_cargo_cache`,
+   unsandboxed) fetches *into that same home*, and the shared `~/.cargo` is granted read-only (for the
+   `cargo` binary) — so untrusted writes touch only the run's throwaway cache. Validated: a fresh
+   fetch into an empty private home + a confined offline build succeed. **Remaining cost:** deps are
+   re-fetched per run (no shared writable cache); a shared *read-only* index/cache to avoid the
+   re-download is the deferred optimization.
 6. **Off-the-shelf provider swap (deferred, seam is ready — §4/§6).** `sandlock` (needs kernel
    ≥6.12; unstated license) or `landrun` (+ a seccomp companion for UDP/DNS + rlimits) could replace
    the custom launcher as a new `SandboxProvider` if reviewers prefer an off-the-shelf boundary. Blocked

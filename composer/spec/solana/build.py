@@ -45,6 +45,7 @@ async def warm_cargo_cache(
     manifest_dir: str | Path,
     *,
     cargo_binary: str = "cargo",
+    cargo_home: str | Path | None = None,
     timeout_s: int = DEFAULT_BUILD_TIMEOUT_S,
 ) -> CommandResult:
     """Populate ``CARGO_HOME`` with the deps declared in ``manifest_dir/Cargo.toml``.
@@ -55,9 +56,15 @@ async def warm_cargo_cache(
     executes here — the code-exec build happens confined + offline. Best-effort: a
     fetch failure is logged (the offline build will surface a hard error if a dep is
     genuinely missing), not raised.
+
+    ``cargo_home`` fetches into a specific (per-run, private) ``CARGO_HOME`` — it must
+    be the *same* home the sandboxed build will use, or the offline build won't find
+    the deps. Defaults to the ambient ``CARGO_HOME`` when omitted.
     """
+    overlay = {"CARGO_HOME": str(cargo_home)} if cargo_home is not None else None
     res = await run_local_command(
-        cargo_binary, ["fetch"], {}, workdir=Path(manifest_dir), timeout_s=timeout_s
+        cargo_binary, ["fetch"], {}, workdir=Path(manifest_dir),
+        timeout_s=timeout_s, env_overlay=overlay,
     )
     if res.exit_code != 0:
         _log.warning(
@@ -95,8 +102,9 @@ async def build_program(
     if sandbox is not None and sandbox.enabled:
         provider = sandbox.resolve_provider()
         policy = sandbox.build_policy(root)
-        # Warm the registry with network BEFORE the sandboxed, offline build (§5).
-        await warm_cargo_cache(root, timeout_s=timeout_s)
+        # Warm the registry with network BEFORE the sandboxed, offline build (§5),
+        # into the SAME private CARGO_HOME the sandboxed build will read (the policy's).
+        await warm_cargo_cache(root, cargo_home=policy.env_allowlist.get("CARGO_HOME"), timeout_s=timeout_s)
 
     res = await run_local_command(
         build_binary, [], {}, workdir=root, timeout_s=timeout_s, provider=provider, policy=policy
