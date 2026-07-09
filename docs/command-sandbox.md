@@ -156,8 +156,19 @@ splits cleanly along the code-execution line:
 The harness `Cargo.toml` is **host-owned** (`CrucibleDep.render_deps`, pinned versions, §6.1), so
 its dep graph is fixed and vendorable deterministically. The program-under-test's `Cargo.toml` is
 user-supplied, but `cargo fetch` on it is still exec-free, so the same split holds for the build-sbf
-step. This also closes the build-time supply-chain vector: with `--offline` and a pre-warmed cache,
-a malicious `build.rs` cannot pull a payload at build time.
+step. This also closes the build-time supply-chain vector: with offline + a pre-warmed cache, a
+malicious `build.rs` cannot pull a payload at build time.
+
+**Implementation (step 4).** "Offline inside" is one env var, not per-tool flags: the policy sets
+**`CARGO_NET_OFFLINE=1`** in the child env, which forces *every* cargo invocation offline — including
+the nested `cargo` that `crucible run` spawns to build the harness — so we never thread `--offline`
+through each tool ([recipes.py](../composer/sandbox/recipes.py), `offline=True` default). "Fetch
+outside" is [`warm_cargo_cache`](../composer/spec/solana/build.py) — a `cargo fetch` run *unsandboxed*
+(no provider → network on) before the confined build; `build_program` calls it before the sandboxed
+`cargo build-sbf`. The harness crate has its own deps (libafl, litesvm, …), so it needs its own warm
+at manifest-assembly time; wiring that exact call site (and confirming whether `CARGO_HOME` must be
+granted rw for cargo's build-time source extraction, or pre-extracted during the warm) lands with the
+gate in step 5, where a real offline build proves it. All of this is inert until a sandbox is enabled.
 
 ---
 
@@ -373,8 +384,11 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    **The default stays `none`** — flipping Crucible's default to `launcher` happens with the gate
    (step 5), once the policy is proven complete against the real build, so all existing gates stay
    green now.
-4. **Offline prep (§5)** — a `cargo fetch` warm step outside the sandbox; sandboxed builds add
-   `--offline`.
+4. **Offline prep (§5)** — *done (mechanism)*: `warm_cargo_cache` (a `cargo fetch` run outside the
+   sandbox, network on) warms the registry, and the policy sets `CARGO_NET_OFFLINE=1` so the confined
+   build — and the nested cargo `crucible run` spawns — run offline. Wired into `build_program`; the
+   harness-dir warm call site + the `CARGO_HOME` extraction question are finished under the gate
+   (step 5). Inert until a sandbox is enabled.
 5. **The escape-test gate (§10)**, which also flips Crucible's default provider to `launcher`.
 
 Each step is behind the seam, so the existing Phase 1–5 gates keep passing throughout (they run the

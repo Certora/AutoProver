@@ -61,6 +61,7 @@ def rust_build_policy(
     extra_ro: tuple[Path, ...] = (),
     extra_rw: tuple[Path, ...] = (),
     env_passthrough: tuple[str, ...] = DEFAULT_ENV_PASSTHROUGH,
+    offline: bool = True,
     mem_bytes: int | None = None,
     cpu_seconds: int | None = None,
     nproc: int | None = None,
@@ -71,6 +72,12 @@ def rust_build_policy(
     Grants: ``workdir`` + the device nodes (+ ``extra_rw``) read-write; the Rust
     (``RUSTUP_HOME``/``CARGO_HOME``) and Solana platform-tool directories, the system
     dirs, and ``extra_ro`` read-only. Non-existent paths are dropped.
+
+    With ``offline`` (the default — the sandbox has no network, §5), ``CARGO_NET_OFFLINE=1``
+    is set in the child env. That one var forces *every* cargo invocation offline,
+    including the nested ``cargo`` that ``crucible run`` spawns to build the harness —
+    so the deps must already be warm in ``CARGO_HOME`` (see :func:`warm_cargo_cache`,
+    run *outside* the sandbox first).
     """
     home = Path.home()
     rustup = Path(os.environ.get("RUSTUP_HOME", home / ".rustup"))
@@ -91,6 +98,8 @@ def rust_build_policy(
     rw_paths = (Path(workdir), *dev, *extra_rw)
 
     env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
+    if offline:
+        env["CARGO_NET_OFFLINE"] = "1"
 
     return SandboxPolicy(
         rw_paths=rw_paths,

@@ -80,6 +80,22 @@ def test_rust_build_policy_shape(tmp_path, monkeypatch):
     assert pol.cpu_seconds == 900
 
 
+def test_rust_build_policy_offline_sets_cargo_net_offline(tmp_path):
+    """Default (offline) forces every cargo — incl. the one `crucible run` spawns —
+    offline via CARGO_NET_OFFLINE; opting out drops it."""
+    on = rust_build_policy(tmp_path)
+    assert on.env_allowlist.get("CARGO_NET_OFFLINE") == "1"
+    off = rust_build_policy(tmp_path, offline=False)
+    assert "CARGO_NET_OFFLINE" not in off.env_allowlist
+
+
+def test_config_enabled_policy_is_offline_by_default(tmp_path):
+    pol = SandboxConfig(provider="launcher").build_policy(tmp_path)
+    assert pol.env_allowlist.get("CARGO_NET_OFFLINE") == "1"
+    pol_net = SandboxConfig(provider="launcher", offline=False).build_policy(tmp_path)
+    assert "CARGO_NET_OFFLINE" not in pol_net.env_allowlist
+
+
 def test_rust_build_policy_includes_system_and_dev_when_present():
     pol = rust_build_policy("/tmp")
     if Path("/usr").exists():

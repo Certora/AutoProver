@@ -41,6 +41,34 @@ class BuiltProgram:
     idl_path: Path | None
 
 
+async def warm_cargo_cache(
+    manifest_dir: str | Path,
+    *,
+    cargo_binary: str = "cargo",
+    timeout_s: int = DEFAULT_BUILD_TIMEOUT_S,
+) -> CommandResult:
+    """Populate ``CARGO_HOME`` with the deps declared in ``manifest_dir/Cargo.toml``.
+
+    Run **outside** any sandbox (with network) so a later *sandboxed*,
+    ``CARGO_NET_OFFLINE`` build finds every dep warm (``docs/command-sandbox.md`` §5).
+    ``cargo fetch`` downloads but never runs build scripts, so no untrusted code
+    executes here — the code-exec build happens confined + offline. Best-effort: a
+    fetch failure is logged (the offline build will surface a hard error if a dep is
+    genuinely missing), not raised.
+    """
+    res = await run_local_command(
+        cargo_binary, ["fetch"], {}, workdir=Path(manifest_dir), timeout_s=timeout_s
+    )
+    if res.exit_code != 0:
+        _log.warning(
+            "cargo fetch in %s failed (exit %s); a sandboxed offline build may fail. stderr:\n%s",
+            manifest_dir,
+            res.exit_code,
+            res.stderr[-500:],
+        )
+    return res
+
+
 async def build_program(
     project_root: str | Path,
     program: str,
@@ -67,6 +95,8 @@ async def build_program(
     if sandbox is not None and sandbox.enabled:
         provider = sandbox.resolve_provider()
         policy = sandbox.build_policy(root)
+        # Warm the registry with network BEFORE the sandboxed, offline build (§5).
+        await warm_cargo_cache(root, timeout_s=timeout_s)
 
     res = await run_local_command(
         build_binary, [], {}, workdir=root, timeout_s=timeout_s, provider=provider, policy=policy

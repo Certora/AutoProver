@@ -32,6 +32,7 @@ class SandboxConfig:
     extra_ro: tuple[Path, ...] = ()
     extra_rw: tuple[Path, ...] = ()
     env_passthrough: tuple[str, ...] = DEFAULT_ENV_PASSTHROUGH
+    offline: bool = True  # sandbox has no network → force cargo offline (§5)
     mem_bytes: int | None = None
     cpu_seconds: int | None = None
     nproc: int | None = None
@@ -64,6 +65,7 @@ class SandboxConfig:
             extra_ro=self.extra_ro,
             extra_rw=self.extra_rw,
             env_passthrough=self.env_passthrough,
+            offline=self.offline,
             mem_bytes=self.mem_bytes,
             cpu_seconds=self.cpu_seconds,
             nproc=self.nproc,
