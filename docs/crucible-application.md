@@ -457,15 +457,33 @@ minimum:
 
 **Mechanism — decided direction (built last, in §9 Phase 6; required for done).**
 
-- **Linux (production + CI):** **[bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`)** —
-  unprivileged user/mount/net namespaces, no daemon and no added privilege, so it works *inside* the
-  existing container without weakening it (`--unshare-net`, ro binds, tmpfs, `--die-with-parent`, plus
-  seccomp + rlimits). If a stronger boundary is later warranted for untrusted native code, escalate to
-  a per-run gVisor/Kata workload (e.g. a K8s Job) behind the same seam — explicitly *not* privileged
-  Docker-in-Docker or a mounted `docker.sock`, both of which trade away the outer boundary.
-- **macOS (developer machines only):** `bwrap` does not exist on macOS, so a **separate mechanism is
-  needed** — either Seatbelt (`sandbox-exec` profile) or, more simply, run the Linux `bwrap` path
-  inside a Linux VM/container (Docker Desktop / Colima / Lima). To be chosen when the sandbox is built.
+- **Unprivileged in-kernel self-sandboxing: [Landlock](https://docs.kernel.org/userspace-api/landlock.html)
+  (filesystem) + seccomp (network + `ptrace`) + env allowlist + rlimits.** The command restricts
+  *itself* via a small trusted launcher shim, the way Chrome/OpenSSH/systemd sandbox untrusted work —
+  needing **no namespaces, no capabilities, no custom runtime, and no container changes**. Step 1 of
+  Phase 6 established empirically that the namespace tools (bwrap/nsjail) *cannot* run under the
+  container's default seccomp/AppArmor without either weakening the whole container's LSMs (rejected)
+  or adopting a gVisor/Kata runtime (heavy on our compile+fuzz workload, and its host-kernel
+  protection is an infra concern already covered by the EC2 Nitro hypervisor). Landlock (ABI ≥ the
+  kernel's; we observed 8) grants rw to the workdir and ro+x to the toolchain paths and denies all
+  else — closing host-file reads *and* the same-uid `/proc/<parent>/environ` leak; seccomp denies
+  inet-domain sockets (TCP/UDP/DNS/IMDS) and `ptrace`/`process_vm_readv`; the launcher `execve`s with
+  a scrubbed env. All four guarantees were verified in a **stock** container as a non-root user. Its
+  chief virtue: it is **deployment-independent** — identical on a laptop, self-managed EC2, ECS, EKS,
+  Fargate, and under `runc` or gVisor — so it does not couple this phase to any deployment/tenancy
+  decision. The launcher is a small Rust shim over audited crates (`landlock` + Firecracker's
+  `seccompiler`), and sits behind a **swappable `SandboxProvider` seam**: an off-the-shelf tool
+  (`landrun`, `sandlock`) can replace it later as a new provider mapping the same policy, with no
+  change to the seam or the escape-test gate. Full detail + the validation matrix:
+  [command-sandbox.md §6](./command-sandbox.md).
+- **macOS: not supported (team decision).** Landlock/seccomp are Linux facilities; there is no macOS
+  equivalent planned. If the sandbox cannot be established (non-Linux, or a kernel without Landlock)
+  the run **fails immediately with a prominent message** rather than running untrusted native code
+  unconfined (see [command-sandbox.md §8](./command-sandbox.md)). A Mac developer runs this backend
+  the way AutoProver already runs — inside the Linux container.
+- **Infra hardening is orthogonal (non-blocking).** VM-per-run / gVisor / IMDSv2-hop-limit /
+  least-privilege IAM are deployment-layer defenses that stack *on top* of the in-process boundary;
+  they are decided per deployment once the tenancy model settles, and do not block Phase 6.
 
 The sandbox sits entirely behind the `RunCommand` effect (§7.2): `RealEffects` launches `program`+`args`
 in the sandbox instead of directly, so nothing in the Rust decider, the driver, or the ABI changes when
@@ -632,9 +650,12 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    **verdict triage** (a BAD may be a true bug or an over-strict invariant — §10 Q4). The application
    still runs on **trusted input only** until Phase 6.
 6. **Sandbox every `RunCommand` (required — §7.4).** Move all command execution (`cargo build-sbf`,
-   `anchor idl`, `crucible run`) behind the sandbox in `RealEffects`: Linux `bwrap` with network-off,
-   a clean/secret-free env, a minimal bind-mounted workdir, resource caps + wall-clock kill, and an
-   offline vendored build; pick the macOS dev mechanism (§10 Q2). **Gate:** an *escape test* — a
+   `anchor idl`, `crucible run`) behind the sandbox in `RealEffects`: a trusted launcher shim
+   applying **Landlock (filesystem) + seccomp (network + `ptrace`) + env allowlist + rlimits** —
+   network-off, a clean/secret-free env, a workdir-only writable filesystem, resource caps +
+   wall-clock kill, and an offline vendored build; no container changes required (detailed design +
+   validation matrix: [command-sandbox.md](./command-sandbox.md); non-Linux/no-Landlock → hard
+   fail). **Gate:** an *escape test* — a
    harness whose `setup()` / `build.rs` attempts to read a planted secret env var, open a host file
    outside the workdir, and reach the network (incl. `169.254.169.254`) — and assert every attempt is
    denied while the legitimate `solana_vault` gate (§8) still passes unchanged. Only after this gate is
@@ -661,11 +682,14 @@ trail.)
    [ecosystem-abstraction.md §11 Q1](./ecosystem-abstraction.md); recommend (a) first, with a
    `render_unit` hook if per-unit shape diverges.
 2. **Sandbox specifics (required work — §7.4, §9 Phase 6).** The isolation *requirements* and the
-   Linux mechanism are decided — `bwrap`, network-off, clean env, offline vendored build, behind the
-   `RunCommand` seam — and building it is an in-scope, definition-of-done phase (not deferrable). Two
-   choices remain open within that phase: (a) the **macOS dev mechanism** (`sandbox-exec` vs running
-   the `bwrap` path inside a Linux VM), and (b) whether production eventually needs a **stronger
-   boundary** than `bwrap` (a gVisor/Kata per-run workload) for genuinely untrusted programs.
+   mechanism are decided — **unprivileged Landlock + seccomp self-sandboxing** (filesystem, network,
+   env, rlimits) behind the `RunCommand` seam, needing no container changes — and building it is an
+   in-scope, definition-of-done phase (not deferrable); the detailed design + the step-1 validation
+   matrix is [command-sandbox.md](./command-sandbox.md). macOS is **not supported** (Linux/Landlock
+   only → hard fail; command-sandbox.md §8). Open items within the phase are minor (Landlock ABI
+   negotiation on target AMIs; `AF_UNIX`/`AF_NETLINK` allowance — command-sandbox.md §11).
+   Infra-layer hardening (VM-per-run / gVisor / IMDSv2 / least-priv IAM) is orthogonal and
+   non-blocking, decided per deployment.
 3. **Fixture authoring difficulty.** `setup()` for real DeFi programs is hard (init order, admin
    whitelists, account patching — the Harness Guide is a long playbook). Is a single authoring pass
    enough, or does `prepare_formalization` need its own multi-round refine loop (like the bug-round

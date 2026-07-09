@@ -66,6 +66,8 @@ RUN mkdir -p $HOME/.cache/huggingface \
 # postgresql-client provides `psql` for the entrypoint's setup-db; git is
 # occasionally shelled out to by tooling. No openssh-client / SSH — the
 # Python install pulls from PyPI + the vendored graphcore submodule.
+# (The `RunCommand` sandbox uses in-kernel Landlock + seccomp — no package
+# needed; see docs/command-sandbox.md §6.)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git ca-certificates \
