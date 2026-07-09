@@ -92,10 +92,12 @@ def rust_build_policy(
         home / ".local" / "share" / "solana",
     ]
     ro_candidates += list(extra_ro)
-    ro_paths = tuple(p for p in ro_candidates if p.exists())
+    # Absolute paths only: the launcher opens each relative to *its* cwd (the workdir),
+    # so a relative grant would resolve wrong. resolve() also canonicalizes symlinks.
+    ro_paths = tuple(p.resolve() for p in ro_candidates if p.exists())
 
-    dev = tuple(Path(d) for d in _DEV_NODES if Path(d).exists())
-    rw_paths = (Path(workdir), *dev, *extra_rw)
+    dev = tuple(Path(d).resolve() for d in _DEV_NODES if Path(d).exists())
+    rw_paths = (Path(workdir).resolve(), *dev, *(p.resolve() for p in extra_rw))
 
     env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
     if offline:

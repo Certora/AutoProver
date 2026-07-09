@@ -129,7 +129,12 @@ def _crucible_sandbox(crucible_repo: Path) -> SandboxConfig:
     extra_ro = tuple(
         p for p in (crucible_repo, Path(crucible_bin).parent if crucible_bin else None) if p is not None
     )
-    return SandboxConfig.from_env(extra_ro=extra_ro)
+    # CARGO_HOME rw: offline `cargo build` extracts crate sources into CARGO_HOME/
+    # registry/src, so a fresh (unextracted) cache needs write there. (Tradeoff: the
+    # untrusted build can write the shared cargo cache — §11 notes a per-run CARGO_HOME
+    # as the tighter follow-up.)
+    cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    return SandboxConfig.from_env(extra_ro=extra_ro, extra_rw=(cargo_home,))
 
 
 async def run_crucible_pipeline(

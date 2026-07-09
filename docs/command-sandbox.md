@@ -389,7 +389,19 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    build — and the nested cargo `crucible run` spawns — run offline. Wired into `build_program`; the
    harness-dir warm call site + the `CARGO_HOME` extraction question are finished under the gate
    (step 5). Inert until a sandbox is enabled.
-5. **The escape-test gate (§10)**, which also flips Crucible's default provider to `launcher`.
+5. **The escape-test gate (§10)** — *in progress*. **Part A (escape suite) — done & green**
+   ([tests/test_sandbox_escape.py](../tests/test_sandbox_escape.py)): a `rustc`-compiled malicious
+   program run through the real launcher has every vector *denied* (secret env, `/proc/<ppid>/environ`,
+   host file outside the workdir, external TCP, and `169.254.169.254`), with an unconfined control
+   confirming the leaks would otherwise happen. **Part B build-half — done & green**
+   ([tests/test_crucible_sandbox_gate.py](../tests/test_crucible_sandbox_gate.py)): a real
+   `cargo-build-sbf` of `solana_vault` under the launcher (network off, offline) produces the `.so`
+   — proving the policy grants exactly the toolchain a real sBPF build needs (this caught the
+   relative-policy-path bug — grants must be absolute). **Remaining:** the full LLM vertical (harness
+   build + fuzz under the launcher) — run the existing e2e gate with `COMPOSER_SANDBOX_PROVIDER=launcher`
+   (the pipeline already honors it) — plus the harness-dir warm call site (§5). Only once that is
+   green do we **flip Crucible's default provider to `launcher`**; until then the default stays `none`
+   (trusted input only).
 
 Each step is behind the seam, so the existing Phase 1–5 gates keep passing throughout (they run the
 `none` provider until step 5 flips Crucible's default to the launcher provider — deferred so the
@@ -444,12 +456,17 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    need cgroup `memory.max` (and thus writable cgroup delegation in the container) sooner?
 4. **Cache warming cost (§5).** Per-run `cargo fetch` adds latency; is a shared, pre-warmed
    read-only registry volume worth it for CI throughput?
-5. **Off-the-shelf provider swap (deferred, seam is ready — §4/§6).** `sandlock` (needs kernel
+5. **Per-run `CARGO_HOME` (tightening).** The launcher grants the shared `CARGO_HOME` read-write so
+   an offline `cargo build` can extract crate sources — which lets untrusted build code write the
+   shared cache (cross-run poisoning). Tighter: a per-run `CARGO_HOME` under the workdir, warmed by
+   the fetch step, so a write only touches that run's throwaway cache. Decide when moving from
+   trusted-gate input to genuinely untrusted programs.
+6. **Off-the-shelf provider swap (deferred, seam is ready — §4/§6).** `sandlock` (needs kernel
    ≥6.12; unstated license) or `landrun` (+ a seccomp companion for UDP/DNS + rlimits) could replace
    the custom launcher as a new `SandboxProvider` if reviewers prefer an off-the-shelf boundary. Blocked
    today on the kernel-floor (target AMI ≥6.12?) and license questions; revisit once those resolve.
    The provider seam + the gate-as-conformance-test (§10) make the swap mechanical.
-6. **Infra-layer hardening (orthogonal, non-blocking).** Independent of this in-process boundary,
+7. **Infra-layer hardening (orthogonal, non-blocking).** Independent of this in-process boundary,
    deployments running genuinely untrusted programs should also apply the standard EC2 hardening —
    least-privilege instance IAM role, IMDSv2 with hop limit 1, egress-restricted security group, and
    (if desired) VM-per-run or a gVisor runtime. Decide per deployment when the tenancy model is
