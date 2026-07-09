@@ -91,6 +91,11 @@ Common surface, resolved once at sandbox-config time and expressed as Landlock r
   rules can target individual files, so we grant these specific nodes rather than the whole `/dev`
   tree; either way `mknod` stays blocked (no capability), so no new devices can be created.
 - **Workdir** — the crate tree + `target/` + corpus/output — the primary read-write grant.
+- **A private temp dir** — `<workdir>/.sandbox_tmp`, with `TMPDIR`/`TMP`/`TEMP` pointed at it. The
+  **linker** writes scratch files to `$TMPDIR` (default `/tmp`) during `cargo build`; we do *not*
+  grant the shared `/tmp` (it may hold host/other-run secrets and would defeat the escape test), so a
+  per-run temp under the already-writable workdir is redirected in. (A fresh harness build fails at
+  the link step — "Cannot create temporary file in /tmp/" — without this; found via the e2e gate.)
 
 Everything else — the rest of the bind-mounted project, `/etc`, `/proc/<other-pids>`, `$HOME`, the
 process environment — is **not granted**, therefore inaccessible. Confinement is default-deny.

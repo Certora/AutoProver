@@ -97,11 +97,20 @@ def rust_build_policy(
     ro_paths = tuple(p.resolve() for p in ro_candidates if p.exists())
 
     dev = tuple(Path(d).resolve() for d in _DEV_NODES if Path(d).exists())
-    rw_paths = (Path(workdir).resolve(), *dev, *(p.resolve() for p in extra_rw))
+    wd = Path(workdir).resolve()
+    rw_paths = (wd, *dev, *(p.resolve() for p in extra_rw))
 
     env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
     if offline:
         env["CARGO_NET_OFFLINE"] = "1"
+    # A private temp dir UNDER the (writable) workdir, so tools that need scratch space
+    # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
+    # work without granting the shared /tmp (which may hold host/other-run secrets and
+    # would defeat the escape test). Created here so $TMPDIR points at an existing dir.
+    sandbox_tmp = wd / ".sandbox_tmp"
+    sandbox_tmp.mkdir(parents=True, exist_ok=True)
+    for var in ("TMPDIR", "TMP", "TEMP"):
+        env[var] = str(sandbox_tmp)
 
     return SandboxPolicy(
         rw_paths=rw_paths,
