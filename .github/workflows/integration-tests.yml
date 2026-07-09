@@ -43,6 +43,10 @@ jobs:
           uv pip install solc-select
           uv run solc-select install 0.8.29
           uv run solc-select use 0.8.29
+          # certoraRun resolves Certora-convention names like `solc8.29` as literal
+          # executables; solc-select only ships the `solc` shim, so alias the
+          # artifact binary directly (shim-independent of later `use` calls).
+          sudo ln -s ~/.solc-select/artifacts/solc-0.8.29/solc-0.8.29 /usr/local/bin/solc8.29
 
       - name: async runners
         run: |
@@ -50,7 +54,7 @@ jobs:
 
       - name: run autoprover integration tests
         run: |
-          uv run pytest -n 3 -m 'expensive' tests
+          uv run pytest -n 3 --dist loadgroup -m 'expensive' tests
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
 
