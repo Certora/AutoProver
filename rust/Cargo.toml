@@ -11,7 +11,7 @@
 # real use; `example-app` is kept here so the framework has something to test.
 [workspace]
 resolver = "2"
-members = ["autoprover-sdk", "example-app", "crucible-app"]
+members = ["autoprover-sdk", "example-app", "crucible-app", "run-confined"]
 
 [workspace.package]
 edition = "2021"

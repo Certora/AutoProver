@@ -83,7 +83,11 @@ Common surface, resolved once at sandbox-config time and expressed as Landlock r
 - **The crucible checkout** (`$CRUCIBLE_REPO/crates/…`) — the path deps — read-only.
 - **System runtime** — `/usr`, `/bin`, `/lib`, `/lib64` — read+exec (needed for the toolchain's own
   dynamic linking and subprocesses).
-- **Workdir** — the crate tree + `target/` + corpus/output — the *only* read-write grant.
+- **Device nodes** — `/dev/null`, `/dev/urandom`, `/dev/zero`, `/dev/tty` — read+write. The toolchain
+  opens these constantly (a build *fails* without `/dev/null` — validated during step 2). Landlock
+  rules can target individual files, so we grant these specific nodes rather than the whole `/dev`
+  tree; either way `mknod` stays blocked (no capability), so no new devices can be created.
+- **Workdir** — the crate tree + `target/` + corpus/output — the primary read-write grant.
 
 Everything else — the rest of the bind-mounted project, `/etc`, `/proc/<other-pids>`, `$HOME`, the
 process environment — is **not granted**, therefore inaccessible. Confinement is default-deny.
@@ -334,20 +338,24 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
 
 ## 9. Implementation plan
 
-1. **The `SandboxProvider` seam + `SandboxPolicy`** (new, e.g. `composer/rustapp/sandbox.py`) — the
-   tool-agnostic policy (§7), the `SandboxProvider` protocol (`wrap` → `LaunchSpec`, `available`),
-   and the `none` passthrough provider. Pure, unit-testable with no subprocess. **This is the
-   isolation layer that makes the mechanism swappable** — everything else depends only on this
-   interface, never on a concrete tool.
-2. **The custom launcher provider** — the `LauncherProvider` (maps `SandboxPolicy` → `run-confined`
-   argv) plus the `run-confined` **trusted Rust binary** it targets. `run-confined --rw <workdir> --ro
-   <path>… --allow-env NAME[=VAL]… --rlimit-* … -- <program> <args…>`: sets rlimits, builds the
+1. **The `SandboxProvider` seam + `SandboxPolicy`** — *done* ([composer/rustapp/sandbox.py](../composer/rustapp/sandbox.py)):
+   the tool-agnostic policy (§7), the `SandboxProvider` protocol (`wrap` → `LaunchSpec`, `available`),
+   the `none` passthrough provider, the name registry, and `ensure_available` / `SandboxUnavailable`.
+   Pure, unit-tested. **This is the isolation layer that makes the mechanism swappable** — everything
+   else depends only on this interface, never on a concrete tool.
+2. **The custom launcher provider** — *done*: the `run-confined` **trusted Rust binary**
+   ([rust/run-confined](../rust/run-confined)) + the `LauncherProvider`
+   ([composer/rustapp/sandbox_launcher.py](../composer/rustapp/sandbox_launcher.py)) that maps a
+   `SandboxPolicy` to its argv. `run-confined --ro <path>… --rw <path>… --allow-env NAME[=VAL]…
+   --rlimit-* … [--allow-network] -- <program> <args…>` sets rlimits + `NO_NEW_PRIVS`, builds the
    Landlock ruleset (best-effort ABI negotiation, full FS bit set, deny-by-default + §3 grants) via
    the [`landlock`](https://crates.io/crates/landlock) crate, builds the seccomp filter (deny inet
-   sockets + ptrace/process_vm_*) via [`seccompiler`](https://crates.io/crates/seccompiler), sets
-   `NO_NEW_PRIVS`, applies both, scrubs env to the allowlist, then `execve`s. Golden-test the argv
-   mapping; (in-container) test enforcement. `available()` probes the kernel Landlock ABI →
-   fail-closed (§7).
+   sockets + ptrace/process_vm_*) via [`seccompiler`](https://crates.io/crates/seccompiler), applies
+   both, then `execve`s the command with an env scrubbed to the allowlist. `--probe` reports the
+   kernel Landlock ABI and drives `available()` → fail-closed (§7). Enforcement smoke-tested on the
+   host (write-outside / `/etc/passwd` / `/proc/<parent>/environ` / inet-socket all denied; workdir
+   write, AF_UNIX, and toolchain `exec` allowed); argv mapping golden-tested. Full escape gate is
+   step 5.
 3. **Thread `policy` + provider through `run_local_command`** (default provider `none` = unchanged)
    and build the policy in `RealEffects` / `build_program` from host-resolved toolchain paths;
    provider chosen by `CommandConfig.sandbox_provider`.
