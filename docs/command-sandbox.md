@@ -1,7 +1,10 @@
 # Design — Sandboxing the `RunCommand` effect (Phase 6)
 
-**Status:** design. Detailed design for [crucible-application.md §7.4](./crucible-application.md#L436)
-and [§9 Phase 6](./crucible-application.md#L634) — the *required*, definition-of-done phase.
+**Status:** implemented. Design + record for [crucible-application.md §7.4](./crucible-application.md#L436)
+and [§9 Phase 6](./crucible-application.md#L634) — the *required*, definition-of-done phase. The
+sandbox mechanism is built and validated (§9 steps 1–5 done, gate §10 green); Crucible runs confined
+by default. The one open item is orthogonal to the sandbox — LLM fixture-authoring reliability
+([crucible-application.md §10 Q3](./crucible-application.md#L653)).
 
 **One-line summary.** Every command run through the `RunCommand` effect compiles and/or runs
 LLM-authored *native* code (§7.2). Today that runs with the full ambient environment of the
@@ -381,32 +384,34 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    ([composer/spec/solana/build.py](../composer/spec/solana/build.py)), and the Crucible pipeline
    (which adds the crucible checkout + binary to `extra_ro`). Integration-tested: `run_local_command`
    under the launcher denies out-of-workdir reads and network while allowing the workdir + toolchain.
-   **The default stays `none`** — flipping Crucible's default to `launcher` happens with the gate
-   (step 5), once the policy is proven complete against the real build, so all existing gates stay
-   green now.
-4. **Offline prep (§5)** — *done (mechanism)*: `warm_cargo_cache` (a `cargo fetch` run outside the
-   sandbox, network on) warms the registry, and the policy sets `CARGO_NET_OFFLINE=1` so the confined
-   build — and the nested cargo `crucible run` spawns — run offline. Wired into `build_program`; the
-   harness-dir warm call site + the `CARGO_HOME` extraction question are finished under the gate
-   (step 5). Inert until a sandbox is enabled.
-5. **The escape-test gate (§10)** — *in progress*. **Part A (escape suite) — done & green**
-   ([tests/test_sandbox_escape.py](../tests/test_sandbox_escape.py)): a `rustc`-compiled malicious
-   program run through the real launcher has every vector *denied* (secret env, `/proc/<ppid>/environ`,
-   host file outside the workdir, external TCP, and `169.254.169.254`), with an unconfined control
-   confirming the leaks would otherwise happen. **Part B build-half — done & green**
-   ([tests/test_crucible_sandbox_gate.py](../tests/test_crucible_sandbox_gate.py)): a real
-   `cargo-build-sbf` of `solana_vault` under the launcher (network off, offline) produces the `.so`
-   — proving the policy grants exactly the toolchain a real sBPF build needs (this caught the
-   relative-policy-path bug — grants must be absolute). **Remaining:** the full LLM vertical (harness
-   build + fuzz under the launcher) — run the existing e2e gate with `COMPOSER_SANDBOX_PROVIDER=launcher`
-   (the pipeline already honors it) — plus the harness-dir warm call site (§5). Only once that is
-   green do we **flip Crucible's default provider to `launcher`**; until then the default stays `none`
-   (trusted input only).
+4. **Offline prep (§5)** — *done*: `warm_cargo_cache` (a `cargo fetch` run outside the sandbox,
+   network on) warms the registry, and the policy sets `CARGO_NET_OFFLINE=1` so the confined build —
+   and the nested cargo `crucible run` spawns — run offline. Wired into `build_program`; the
+   harness-dir warm is `CrucibleArtifactStore.warm_dependencies`, called from `prepare_formalization`
+   after the manifest is placed when a sandbox is on. `CARGO_HOME` is granted rw (the crucible policy)
+   so cargo can extract crate sources offline.
+5. **The escape-test gate (§10)** — *done*, and **Crucible's default provider is now `launcher`**
+   (`_crucible_sandbox`; override with `COMPOSER_SANDBOX_PROVIDER=none`). Validated:
+   - **Part A (escape suite) — green** ([tests/test_sandbox_escape.py](../tests/test_sandbox_escape.py)):
+     a `rustc`-compiled malicious program run through the real launcher has every vector *denied*
+     (secret env, `/proc/<ppid>/environ`, host file outside the workdir, external TCP, and
+     `169.254.169.254`), with an unconfined control confirming the leaks would otherwise happen.
+   - **Part B — green**: a real `cargo-build-sbf` of `solana_vault` under the launcher (offline,
+     confined) produces the `.so` ([tests/test_crucible_sandbox_gate.py](../tests/test_crucible_sandbox_gate.py)
+     — this caught the relative-policy-path bug; grants must be absolute), and a real
+     `crucible run --dry-run` under the launcher builds the harness *offline* and runs LiteSVM
+     (`Harness validation passed!`).
+   - **Full LLM vertical**: run under the launcher end-to-end with **zero sandbox denials** across
+     analysis → property extraction → the fixture build (`cargo-build-sbf`, the harness `cargo build`,
+     `crucible run` all confined + offline). The run's *failure* was the LLM authoring a
+     non-compiling vault fixture (Anchor module-path errors) — orthogonal fixture-authoring variance
+     ([crucible-application.md §10 Q3](./crucible-application.md#L653)), not a sandbox issue.
 
-Each step is behind the seam, so the existing Phase 1–5 gates keep passing throughout (they run the
-`none` provider until step 5 flips Crucible's default to the launcher provider — deferred so the
-policy is validated against the real build first). A later off-the-shelf swap (`landrun`/`sandlock`)
-is *only* a new step-2-style provider — the seam, policy, and gate are untouched.
+Each step is behind the seam, so the earlier Phase 1–5 gates keep passing. **Prerequisite of the
+flip:** `run-confined` must be on PATH (built into the Docker image; `cargo build -p run-confined
+--release` in dev) — otherwise Crucible fail-closes (§7/§8). A later off-the-shelf swap
+(`landrun`/`sandlock`) is *only* a new step-2-style provider — the seam, policy, and gate are
+untouched.
 
 ---
 

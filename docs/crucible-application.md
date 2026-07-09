@@ -649,25 +649,28 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    Remaining polish: a TUI entry, wiring the `--fuzz-timeout`/`--crucible-version` args through, and
    **verdict triage** (a BAD may be a true bug or an over-strict invariant — §10 Q4). The application
    still runs on **trusted input only** until Phase 6.
-6. **Sandbox every `RunCommand` (required — §7.4).** Move all command execution (`cargo build-sbf`,
-   `anchor idl`, `crucible run`) behind the sandbox in `RealEffects`: a trusted launcher shim
+6. **Sandbox every `RunCommand` (required — §7.4) — done.** All command execution (`cargo build-sbf`,
+   the harness `cargo build`, `crucible run`) runs behind a trusted launcher shim (`run-confined`)
    applying **Landlock (filesystem) + seccomp (network + `ptrace`) + env allowlist + rlimits** —
-   network-off, a clean/secret-free env, a workdir-only writable filesystem, resource caps +
-   wall-clock kill, and an offline vendored build; no container changes required (detailed design +
-   validation matrix: [command-sandbox.md](./command-sandbox.md); non-Linux/no-Landlock → hard
-   fail). **Gate:** an *escape test* — a
-   harness whose `setup()` / `build.rs` attempts to read a planted secret env var, open a host file
-   outside the workdir, and reach the network (incl. `169.254.169.254`) — and assert every attempt is
-   denied while the legitimate `solana_vault` gate (§8) still passes unchanged. Only after this gate is
-   green may the backend run on untrusted input.
+   network-off, a clean/secret-free env, a workdir-only writable filesystem, offline build; no
+   container changes (full design + validation: [command-sandbox.md](./command-sandbox.md)). Built as
+   a swappable `SandboxProvider` seam ([composer/sandbox/](../composer/sandbox/)); **Crucible's default
+   provider is `launcher`** (fail-closed if `run-confined` is absent; `COMPOSER_SANDBOX_PROVIDER=none`
+   to opt out). **Gate green:** the escape suite denies every vector (planted secret env,
+   `/proc/<parent>/environ`, a host file outside the workdir, external TCP and `169.254.169.254`), a
+   real `cargo-build-sbf` and a real `crucible run --dry-run` of `solana_vault` both succeed confined
+   and offline, and the full vertical runs end-to-end with zero sandbox denials. (One orthogonal
+   caveat: LLM fixture-authoring reliability — §10 Q3 — is a separate follow-up, not a sandbox concern.)
 7. **Polish (optional).** Report nouns (§7.3); coverage surfacing (`--coverage`/LCOV as a report
    attachment); stateful-mode tuning; crash-artifact rendering in the frontend.
 
-**Definition of done.** The task is *not* complete until Phase 6 is green: every command run via the
-`RunCommand` effect is executed inside the sandbox, verified by the escape test. Phases 1–5 may run
-beforehand, but only in a trusted, offline environment on trusted input; the backend must not be
-pointed at an untrusted program until the sandbox is in place. (Phase 7 is genuinely optional and may
-trail.)
+**Definition of done — met.** Phase 6 is green: every command run via the `RunCommand` effect
+(`cargo-build-sbf`, the harness `cargo build`, `crucible run`) executes inside the sandbox by
+default, verified by the escape test + a real confined build/dry-run, with the full vertical showing
+zero sandbox denials. The backend may now be pointed at untrusted programs (on a Linux/Landlock host
+with `run-confined` present; fail-closed otherwise). Remaining work is orthogonal: the optional
+Phase 7 polish, and improving LLM fixture-authoring reliability (§10 Q3) — a quality issue, not a
+safety one.
 
 ---
 

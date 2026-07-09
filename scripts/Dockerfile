@@ -40,6 +40,16 @@ RUN set -eux; \
     ( cd "$target" && /venv/bin/sphinx-build -M singlehtml . tmp ); \
     cp "$target/tmp/singlehtml/index.html" /out/cvl.html
 
+# ---- Stage 1b: build the `run-confined` command-sandbox launcher ----
+# Crucible confines every RunCommand via this small Rust binary (Landlock + seccomp;
+# docs/command-sandbox.md). It must be on PATH in the runtime image or Crucible
+# fail-closes. Built in a throwaway Rust stage; only the binary is copied out.
+FROM --platform=linux/amd64 rust:1-slim AS sandbox-builder
+WORKDIR /build
+COPY rust/ ./rust/
+# Only run-confined (+ its landlock/seccompiler/libc deps) — not the pyo3 members.
+RUN cd rust && cargo build -p run-confined --release
+
 # ---- Stage 2: final runtime image ----
 FROM --platform=linux/amd64 python:3.12-slim AS final
 
@@ -124,6 +134,10 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 
 # Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
 COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
+
+# The command-sandbox launcher, on PATH (/usr/local/bin is in PATH above). Crucible's
+# default provider is `launcher`, so this must be present or Crucible fail-closes.
+COPY --from=sandbox-builder /build/rust/target/release/run-confined /usr/local/bin/run-confined
 
 # Pre-download the sentence-transformers embedding model so first runs are
 # offline-fast. nomic-embed-text-v1.5 ships custom modeling code, hence

@@ -318,6 +318,12 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, Any]):
             wsm = getattr(b.artifact_store, "write_setup_manifest", None)
             if wsm is not None:
                 wsm()
+                # With a sandbox on (network off), warm the harness deps with network
+                # now so the confined `crucible run` can build offline (§5).
+                if b.sandbox is not None and b.sandbox.enabled:
+                    warm = getattr(b.artifact_store, "warm_dependencies", None)
+                    if warm is not None:
+                        await warm()
             setup_input = json.dumps(
                 {
                     "program": str(run.source.contract_name),

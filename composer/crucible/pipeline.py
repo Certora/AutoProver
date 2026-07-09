@@ -119,22 +119,26 @@ def build_crucible_backend(
 
 def _crucible_sandbox(crucible_repo: Path) -> SandboxConfig:
     """The command-sandbox config for a Crucible run (``docs/command-sandbox.md``).
-    Provider from ``$COMPOSER_SANDBOX_PROVIDER`` (default ``none`` — unsandboxed,
-    trusted input only, until the escape gate flips it). The Crucible-specific
-    read-only grants — the crucible checkout (path deps) and the ``crucible`` binary
-    — extend the shared Rust toolchain set the launcher already discovers."""
+
+    **Defaults to the ``launcher`` provider** — Crucible compiles + runs untrusted
+    native code, so every ``RunCommand`` is confined (Landlock + seccomp) by default.
+    Requires the ``run-confined`` binary to be built/on PATH; if it isn't, the run is
+    **fail-closed** (refuses rather than running unsandboxed). Override with
+    ``COMPOSER_SANDBOX_PROVIDER=none`` for a trusted-input/dev run without the binary.
+
+    The Crucible-specific read-only grants — the crucible checkout (path deps) and the
+    ``crucible`` binary — extend the shared Rust toolchain set the launcher discovers;
+    ``CARGO_HOME`` is granted rw so the offline `cargo build` can extract crate sources
+    (§11 notes a per-run ``CARGO_HOME`` as the tighter follow-up)."""
     import shutil
 
     crucible_bin = shutil.which("crucible")
     extra_ro = tuple(
         p for p in (crucible_repo, Path(crucible_bin).parent if crucible_bin else None) if p is not None
     )
-    # CARGO_HOME rw: offline `cargo build` extracts crate sources into CARGO_HOME/
-    # registry/src, so a fresh (unextracted) cache needs write there. (Tradeoff: the
-    # untrusted build can write the shared cargo cache — §11 notes a per-run CARGO_HOME
-    # as the tighter follow-up.)
     cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
-    return SandboxConfig.from_env(extra_ro=extra_ro, extra_rw=(cargo_home,))
+    provider = os.environ.get("COMPOSER_SANDBOX_PROVIDER", "launcher")
+    return SandboxConfig(provider=provider, extra_ro=extra_ro, extra_rw=(cargo_home,))
 
 
 async def run_crucible_pipeline(
