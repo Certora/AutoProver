@@ -140,6 +140,14 @@ class RealEffects:
             provider=provider,
             policy=policy,
         )
+        if result.exit_code != 0:
+            # Surface authoring build/dry-run failures — otherwise they only reach the
+            # decider (in the revise prompt) and are invisible when a session gives up.
+            tail = (result.stderr or result.stdout or "")[-1500:]
+            _log.warning(
+                "RunCommand failed: %s %s (exit %s) in %s\n%s",
+                program, " ".join(args), result.exit_code, workdir, tail,
+            )
         return result.as_observation()
 
     async def cache_get(self, key: str) -> Any | None:

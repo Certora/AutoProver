@@ -109,6 +109,74 @@ Crucible harness API (author a FIXTURE only — no test fns):
   Do NOT write `fn main`, `#[invariant_test]`, or `#[crucible_fuzz]` — those are added later.
 "#;
 
+/// A complete, compiling worked example (a DIFFERENT program — an escrow) so the author
+/// can pattern-match the exact shape: imports, `Rc<Keypair>` accounts, `TestContext`
+/// setup with a funded account + PDA + an init call, and `action_*` methods that build
+/// `instruction::`/`accounts::` structs and `.send()`. Adapt it to the target program's
+/// instructions/accounts/PDA seeds — do NOT copy it verbatim.
+const EXAMPLE_FIXTURE: &str = r#"
+EXAMPLE — a full, compiling fixture for a *different* program (an `escrow`). Study the
+shape, then write the equivalent for THIS program:
+
+```rust
+use crucible_fuzzer::anchor_lang::system_program;
+use crucible_fuzzer::*;
+use solana_keypair::Keypair;
+use solana_pubkey::Pubkey;
+use solana_signer::Signer;
+use std::rc::Rc;
+use escrow::*;                                   // the crate id — NOT the `#[program] mod` name
+
+#[derive(Clone)]
+struct Fixture {                                 // MUST be named `Fixture`
+    ctx: TestContext,
+    program_id: Pubkey,
+    depositor: Rc<Keypair>,
+    vault_pda: Pubkey,
+}
+
+#[fuzz_fixture]
+impl Fixture {
+    pub fn setup() -> Self {
+        let mut ctx = TestContext::new();
+        let program_id = Pubkey::new_from_array(ID.to_bytes());
+        ctx.add_program(&program_id, "../../target/deploy/escrow.so").unwrap();
+
+        let depositor = Rc::new(Keypair::new());
+        ctx.create_account().pubkey(depositor.pubkey())
+            .lamports(10_000_000_000).owner(system_program::ID).create().unwrap();
+
+        let (vault_pda, _) =
+            Pubkey::find_program_address(&[b"vault", depositor.pubkey().as_ref()], &program_id);
+
+        ctx.program(program_id)
+            .call(instruction::Initialize {})     // args struct; `{}` when the ix has no args
+            .accounts(accounts::Initialize {
+                vault: vault_pda,
+                depositor: depositor.pubkey(),
+                system_program: system_program::ID,
+            })
+            .signers(&[&*depositor])
+            .send().unwrap();                     // panic in setup() if init fails
+
+        Self { ctx, program_id, depositor, vault_pda }
+    }
+
+    pub fn action_deposit(&mut self, #[range(1..1_000_000)] amount: u64) -> bool {
+        self.ctx.program(self.program_id)
+            .call(instruction::Deposit { amount })
+            .accounts(accounts::Deposit {
+                vault: self.vault_pda,
+                depositor: self.depositor.pubkey(),
+                system_program: system_program::ID,
+            })
+            .signers(&[&*self.depositor])
+            .send().map(|o| o.is_success()).unwrap_or(false)
+    }
+}
+```
+"#;
+
 /// A `#[invariant_test]` probe appended (by the host) only to validate the fixture
 /// via `crucible run … --dry-run`: it must compile and `setup()` must run once.
 const PROBE_FN: &str = "\n\n#[invariant_test]\nfn c_probe(fixture: &mut Fixture) {\n    let _ = fixture;\n}\n";
@@ -140,12 +208,14 @@ impl SetupSession {
         let mut task = format!(
             "Author a Crucible fuzz-harness FIXTURE (only) for the Solana program `{program}`.\n\
              {cheat}\n\n\
+             {example}\n\n\
              {facts}\n\
              Full analyzed system model (accounts, PDAs, authorities, requirements):\n{model}\n\n\
              Use the source-exploration tools to read the program's Rust source for exact \
              signatures. Return the complete fixture module source as your final answer.",
             program = self.program,
             cheat = HARNESS_CHEAT_SHEET.replace("<program>", &self.program),
+            example = EXAMPLE_FIXTURE,
             facts = api_facts(&self.analyzed, &self.program),
             model = model,
         );
@@ -258,10 +328,17 @@ fn api_facts(analyzed: &serde_json::Value, program: &str) -> String {
 
     let str_of = |v: Option<&serde_json::Value>| v.and_then(|x| x.as_str()).unwrap_or("?").to_string();
     let mut out = String::from("PROGRAM API FACTS (use these EXACT names — do not guess):\n");
-    out.push_str(&format!(
-        "  crate id (for `use <id>::*`): {}\n",
-        str_of(prog.get("program_identifier"))
-    ));
+    // The crate id is the harness's actual Cargo dependency name — the program name
+    // (== CrucibleDep's crate), NOT the analysis's `program_identifier`, which may be the
+    // `#[program] pub mod` name and would mis-resolve `use <id>::*`.
+    out.push_str(&format!("  crate id (for `use <id>::*`): {program}\n"));
+    let analysis_id = str_of(prog.get("program_identifier"));
+    if analysis_id != program && analysis_id != "?" {
+        out.push_str(&format!(
+            "  (note: `#[program] pub mod {analysis_id}` is the module name — it does NOT change \
+             the crate-root paths `{program}::instruction::*` / `{program}::accounts::*`)\n"
+        ));
+    }
     out.push_str(&format!(
         "  declare_id / program id: {}\n",
         prog.get("program_id").and_then(|v| v.as_str()).unwrap_or("(not declared)")
