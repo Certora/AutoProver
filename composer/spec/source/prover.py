@@ -298,8 +298,9 @@ def get_prover_tool(
         spec_stem = state.get("spec_stem")
         conf_dir = (CERTORA_DIR / "confs") if spec_stem is not None else CERTORA_DIR
         lock = spec_locks.setdefault(spec_stem, asyncio.Lock()) if spec_stem is not None else nullcontext()
-        async with lock:
-            with tmp_spec(root=project_root, content=state["curr_spec"], name=spec_stem) as generated:
+
+        async def run_in(run_root: str) -> str | Command:
+            with tmp_spec(root=run_root, content=spec, name=spec_stem) as generated:
                 config = prover_config_overlay(
                     conf, main_contract=main_contract, verify_target=f"{main_contract}:{generated}"
                 )
@@ -310,7 +311,7 @@ def get_prover_tool(
                 summary = get_run_summary()
 
                 with temp_certora_file(
-                    root=project_root,
+                    root=run_root,
                     content=json.dumps(config, indent=2),
                     ext="conf",
                     name=spec_stem,
@@ -319,7 +320,7 @@ def get_prover_tool(
                 ) as config_path:
                     async with sem:
                         result = await run_prover(
-                            Path(project_root),
+                            Path(run_root),
                             [config_path],
                             tool_call_id,
                             prover_opts,
@@ -346,9 +347,10 @@ def get_prover_tool(
                     tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
                 )
 
-        # The author's working copy decides where this run executes; see
-        # ProjectDirectory.
-        async with project_directory(state.get("vfs") or {}) as run_root:
+        # The author's working copy decides where this run executes (in-situ for
+        # an empty VFS, a temp materialization otherwise); the same-stem lock
+        # guards the deterministic spec/conf names within it.
+        async with lock, project_directory(state.get("vfs") or {}) as run_root:
             return await run_in(run_root)
 
     return verify_spec
