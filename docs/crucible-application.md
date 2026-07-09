@@ -659,11 +659,12 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    to opt out). **Gate green:** the escape suite denies every vector (planted secret env,
    `/proc/<parent>/environ`, a host file outside the workdir, external TCP and `169.254.169.254`), a
    real `cargo-build-sbf` and `crucible run --dry-run` of `solana_vault` succeed confined and offline,
-   and **the full LLM e2e passes under the launcher** (`test_crucible_e2e_gate.py`, ~24 min: shared
-   fixture authored, deposit + withdraw delivered with fuzz verdicts) with zero sandbox denials.
-   Getting the vertical green surfaced (and fixed) a policy gap — the linker's `/tmp` scratch, now a
-   private per-run `TMPDIR` under the workdir. (Orthogonal follow-up: a shared-`Cargo.toml` feature
-   race dropped the third instruction — §10 Q1 / command-sandbox.md §11.)
+   and **the full LLM e2e passes under the launcher** (`test_crucible_e2e_gate.py`: shared fixture
+   authored, **all three instructions — initialize / deposit / withdraw — delivered with fuzz
+   verdicts**) with zero sandbox denials. Getting the vertical green surfaced + fixed two bugs: a
+   sandbox policy gap (the linker's `/tmp` scratch → a private per-run `TMPDIR`), and a shared-crate
+   concurrency race that had dropped one instruction (now cumulative Cargo features + serialized
+   atomic per-component builds — command-sandbox.md §11 item 8 / §10 Q1).
 7. **Polish (optional).** Report nouns (§7.3); coverage surfacing (`--coverage`/LCOV as a report
    attachment); stateful-mode tuning; crash-artifact rendering in the frontend.
 

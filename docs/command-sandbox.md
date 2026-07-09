@@ -408,11 +408,12 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
      `crucible run --dry-run` under the launcher builds the harness *offline* and runs LiteSVM
      (`Harness validation passed!`).
    - **Full LLM vertical — green**: the e2e gate (`tests/test_crucible_e2e_gate.py`) passes under the
-     launcher (`COMPOSER_SANDBOX_PROVIDER=launcher`, ~24 min): analysis → 23 properties → shared
-     fixture authored → per-instruction harness build + fuzz, all confined + offline, with **deposit
-     and withdraw delivered with fuzz verdicts** (`BAD` — counterexamples found). Getting here
-     required the `/tmp` fix below; `initialize` gave up on a *separate* shared-`Cargo.toml` feature
-     race (§11).
+     launcher (`COMPOSER_SANDBOX_PROVIDER=launcher`): analysis → 23 properties → shared fixture
+     authored → per-instruction harness build + fuzz, all confined + offline, with **all three
+     instructions (initialize / deposit / withdraw) delivered with fuzz verdicts** (`BAD` —
+     counterexamples found). Getting here required the `/tmp` fix below and the shared-crate
+     concurrency fix (§11 item 8); before the latter, `initialize` was dropped to a `Cargo.toml`
+     feature race.
 
    **Root cause found via the gate:** every fresh harness build initially failed at the *link* step —
    `Cannot create temporary file in /tmp/: Permission denied` (the linker's `$TMPDIR` scratch, which
