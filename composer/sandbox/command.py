@@ -3,20 +3,21 @@
 A single choke point: materialize a set of files into a workdir, run a command
 over them (as a child process, **never** a shell), and capture the result. Both
 the IoC ``RunCommand`` effect (:meth:`composer.rustapp.adapter.RealEffects.run_command`)
-and the Solana build/IDL step route through here, so the sandbox
-(``docs/crucible-application.md`` §7.4, phase 6) will wrap exactly one function.
+and the Solana build/IDL step route through here — and any Python backend may too,
+which is why this lives in :mod:`composer.sandbox` rather than under ``rustapp``.
+The command sandbox (``docs/command-sandbox.md``) wraps exactly this one function.
 
-**Trust boundary** (``docs/crucible-application.md`` §7.2): the *caller* — a
-trusted Rust decider or a trusted Python build step — supplies ``program`` and
-``args``; only file *contents* may derive from LLM output. We enforce two things
-here: the command runs via ``exec`` (argv, no shell), and every written path is
-confined to the workdir (no absolute paths, no ``..`` traversal).
+**Trust boundary** (``docs/command-sandbox.md`` §2): the *caller* — a trusted Rust
+decider or a trusted Python build step — supplies ``program`` and ``args``; only
+file *contents* may derive from LLM output. We enforce two things here: the command
+runs via ``exec`` (argv, no shell), and every written path is confined to the
+workdir (no absolute paths, no ``..`` traversal).
 
 .. note::
-   This does **not** yet isolate the process (network-off, clean env, resource
-   caps). That is ``docs/crucible-application.md`` §7.4 / phase 6, and it will
-   slot in *here* behind the same signature. Until then, run only on trusted
-   input in a trusted environment.
+   This does **not** yet apply the sandbox (network-off, clean env, resource caps):
+   the :mod:`composer.sandbox.policy` seam exists, but wiring a ``SandboxProvider``
+   in *here* — behind the same signature — is the next step (``docs/command-sandbox.md``
+   §9 step 3). Until then, run only on trusted input in a trusted environment.
 """
 
 from __future__ import annotations

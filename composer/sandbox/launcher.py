@@ -4,7 +4,7 @@ Maps a tool-agnostic :class:`SandboxPolicy` to an invocation of the ``run-confin
 trusted Rust binary (``rust/run-confined``), which applies Landlock + seccomp +
 rlimits + a scrubbed env to itself and then ``execve``s the command
 (``docs/command-sandbox.md`` §6). This module is deliberately *separate* from the
-:mod:`composer.rustapp.sandbox` seam: importing it registers the ``"launcher"``
+:mod:`composer.sandbox.policy` seam: importing it registers the ``"launcher"``
 provider, so the seam never imports a concrete mechanism.
 
 ``wrap`` is pure argv construction (unit-testable, no subprocess); ``available``
@@ -19,7 +19,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from composer.rustapp.sandbox import (
+from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
     SandboxPolicy,
@@ -39,7 +39,7 @@ def _resolve_binary() -> str | None:
     on_path = shutil.which(_BIN_NAME)
     if on_path:
         return on_path
-    # Dev fallback: composer/rustapp/sandbox_launcher.py → repo root is parents[2].
+    # Dev fallback: composer/sandbox/launcher.py → repo root is parents[2].
     repo_root = Path(__file__).resolve().parents[2]
     cand = repo_root / "rust" / "target" / "release" / _BIN_NAME
     return str(cand) if cand.is_file() else None
@@ -110,7 +110,7 @@ class LauncherProvider:
         return LaunchSpec(argv=tuple(argv), env=None)
 
 
-# Registering on import keeps the `composer.rustapp.sandbox` seam free of any
+# Registering on import keeps the `composer.sandbox.policy` seam free of any
 # concrete-mechanism import. Consumers (RealEffects, tests) `import` this module to
 # make ``get_provider("launcher")`` resolvable.
 register_provider("launcher", LauncherProvider)

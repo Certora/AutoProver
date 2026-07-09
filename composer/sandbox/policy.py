@@ -14,9 +14,10 @@ module is the **tool-agnostic isolation layer** that makes that confinement
   Landlock+seccomp launcher, or an off-the-shelf tool like ``landrun`` /
   ``sandlock``) lives entirely behind this protocol.
 
-Because :func:`composer.rustapp.command.run_local_command` will depend only on
+Because :func:`composer.sandbox.command.run_local_command` will depend only on
 this seam — never on a concrete tool — a provider can be swapped without touching
-the command runner, ``RealEffects``, or the escape-test gate.
+the command runner, ``RealEffects``, or the escape-test gate. It lives outside
+``rustapp`` so Python-based backends can use it too, not just the Rust-IoC ones.
 
 **Step 1 (this module)** ships the policy, the protocol, and the ``none``
 passthrough provider. The ``run-confined`` launcher provider (Landlock +

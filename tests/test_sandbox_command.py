@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from composer.rustapp.command import (
+from composer.sandbox.command import (
     NOT_FOUND_EXIT,
     UnsafePath,
     run_local_command,

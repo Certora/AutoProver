@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.rustapp.sandbox import (
+from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
     NoneProvider,
@@ -101,7 +101,7 @@ def test_register_provider_roundtrip():
         assert isinstance(get_provider("fake"), _Fake)
     finally:
         # keep the module-level registry clean for other tests
-        from composer.rustapp import sandbox as _s
+        from composer.sandbox import policy as _s
 
         _s._PROVIDERS.pop("fake", None)
 

@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from composer.rustapp.command import CommandResult, run_local_command
+from composer.sandbox.command import CommandResult, run_local_command
 
 _log = logging.getLogger(__name__)
 

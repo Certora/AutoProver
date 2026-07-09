@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from composer.rustapp.sandbox import Availability, LaunchSpec, SandboxPolicy, get_provider
-from composer.rustapp.sandbox_launcher import LauncherProvider, _resolve_binary
+from composer.sandbox.launcher import LauncherProvider, _resolve_binary
+from composer.sandbox.policy import Availability, LaunchSpec, SandboxPolicy, get_provider
 
 _FAKE_BIN = "/opt/run-confined"
 

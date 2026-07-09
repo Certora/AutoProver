@@ -8,7 +8,7 @@ LLM-authored *native* code (§7.2). Today that runs with the full ambient enviro
 AutoProver process. Phase 6 confines each such command — with no network, no inherited secrets, and
 only its own inputs on the filesystem — using **unprivileged, in-process kernel sandboxing
 (Landlock + seccomp)** that needs no container changes, no namespaces, no capabilities, and no
-custom runtime. It is a single wrapper around [`run_local_command`](../composer/rustapp/command.py).
+custom runtime. It is a single wrapper around [`run_local_command`](../composer/sandbox/command.py).
 Done is proven by an escape test.
 
 ---
@@ -101,9 +101,11 @@ process environment — is **not granted**, therefore inaccessible. Confinement 
 ## 4. The seam — one function, unchanged signature
 
 All command execution already funnels through
-[`run_local_command`](../composer/rustapp/command.py) (both the IoC `RunCommand` effect via
+[`run_local_command`](../composer/sandbox/command.py) (both the IoC `RunCommand` effect via
 [`RealEffects.run_command`](../composer/rustapp/adapter.py#L120) and the Solana build step
-[`build_program`](../composer/spec/solana/build.py)). The sandbox wraps exactly this one function.
+[`build_program`](../composer/spec/solana/build.py)). It lives in the backend-agnostic
+[`composer/sandbox`](../composer/sandbox/) package — outside `rustapp` — so Python-based backends can
+run confined commands too, not just the Rust-IoC ones. The sandbox wraps exactly this one function.
 
 **The mechanism sits behind a `SandboxProvider` seam, so it is swappable.** `run_local_command`
 never names a concrete tool. It holds a **tool-agnostic `SandboxPolicy`** (the *intent*: rw paths,
@@ -338,14 +340,15 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
 
 ## 9. Implementation plan
 
-1. **The `SandboxProvider` seam + `SandboxPolicy`** — *done* ([composer/rustapp/sandbox.py](../composer/rustapp/sandbox.py)):
+1. **The `SandboxProvider` seam + `SandboxPolicy`** — *done* ([composer/sandbox/policy.py](../composer/sandbox/policy.py)):
    the tool-agnostic policy (§7), the `SandboxProvider` protocol (`wrap` → `LaunchSpec`, `available`),
    the `none` passthrough provider, the name registry, and `ensure_available` / `SandboxUnavailable`.
    Pure, unit-tested. **This is the isolation layer that makes the mechanism swappable** — everything
-   else depends only on this interface, never on a concrete tool.
+   else depends only on this interface, never on a concrete tool. Lives in the backend-agnostic
+   [`composer/sandbox`](../composer/sandbox/) package (with `run_local_command`), not under `rustapp`.
 2. **The custom launcher provider** — *done*: the `run-confined` **trusted Rust binary**
    ([rust/run-confined](../rust/run-confined)) + the `LauncherProvider`
-   ([composer/rustapp/sandbox_launcher.py](../composer/rustapp/sandbox_launcher.py)) that maps a
+   ([composer/sandbox/launcher.py](../composer/sandbox/launcher.py)) that maps a
    `SandboxPolicy` to its argv. `run-confined --ro <path>… --rw <path>… --allow-env NAME[=VAL]…
    --rlimit-* … [--allow-network] -- <program> <args…>` sets rlimits + `NO_NEW_PRIVS`, builds the
    Landlock ruleset (best-effort ABI negotiation, full FS bit set, deny-by-default + §3 grants) via

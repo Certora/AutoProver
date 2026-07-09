@@ -34,7 +34,7 @@ from composer.pipeline.core import (
     SystemAnalysisSpec,
 )
 from composer.pipeline.ecosystem import Ecosystem
-from composer.rustapp.command import DEFAULT_TIMEOUT_S, run_local_command
+from composer.sandbox.command import DEFAULT_TIMEOUT_S, run_local_command
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.loop import Effects, GaveUp as LoopGaveUp, drive_session
 from composer.rustapp.result import RustArtifact, RustFormalResult

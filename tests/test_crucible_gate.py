@@ -30,7 +30,7 @@ import pytest
 
 from composer.crucible.harness import CrucibleDep
 from composer.crucible.store import CrucibleArtifactStore
-from composer.rustapp.command import run_local_command
+from composer.sandbox.command import run_local_command
 from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.spec.solana.build import build_program
 
