@@ -305,9 +305,22 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="unnamed_return_warning",
-                detect_fn=lambda output: "detected" if self._has_unnamed_return_warning(output) else None,
+                # The flag check must live in detect_fn, not in `enabled`:
+                # `enabled` is evaluated once when this list is built, but the
+                # warning text keeps appearing in the output even after the flag
+                # is set (the flag only stops the warning from failing the run),
+                # so an `enabled`-only check would re-fire this workaround on
+                # every retry. compilation_config is a superset of
+                # updated_config_dict (callers merge the latter in), so it is
+                # the right dict for the live check.
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._has_unnamed_return_warning(output)
+                    and "ignore_solidity_warnings" not in compilation_config
+                    else None
+                ),
                 apply_fn=self._apply_ignore_solidity_warnings_workaround,
-                enabled="ignore_solidity_warnings" not in updated_config_dict,
+                enabled=True,
             ),
             CompilationWorkaround(
                 name="yul_exception_add_optimizer",
@@ -366,6 +379,10 @@ class CompilationWorkaroundManager:
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
 
+        # Last detect result per workaround name, for the no-progress guard in
+        # the loop below.
+        last_detect_results: Dict[str, Any] = {}
+
         output = ""
         while retry_count <= max_retries:
             # Run compilation
@@ -403,28 +420,56 @@ class CompilationWorkaroundManager:
 
                 # Try to detect if this workaround applies
                 detect_result = workaround.detect_fn(output)
-                if detect_result is not None:
-                    # Apply the workaround
-                    self.log(f"Applying {workaround.name} workaround")
-                    updated_config_dict = workaround.apply_fn(
-                        detect_result,
-                        updated_config_dict,
-                        compilation_config,
-                        config_file,
-                        contracts,
-                    )
-                    # If we disabled build_cache in config, also remove from CLI command
-                    if workaround.name == "cached_autofinder_failure" and "--build_cache" in cmd:
-                        cmd.remove("--build_cache")
-                    workaround_applied = True
-                    retry_count += 1
-                    conf_contents = json.dumps(compilation_config, indent=2)
+                if detect_result is None:
+                    continue
+
+                # No-progress guards (same idea as the _harnessed_libs guard in
+                # _detect_missing_library): a workaround that detects the exact
+                # thing it already fixed, or whose application changes nothing,
+                # cannot make progress by firing again — its detection is a
+                # symptom of some other error failing the run. Disable it and
+                # fall through so lower-priority workarounds get a shot at the
+                # real error instead of retrying a no-op until max_retries.
+                if last_detect_results.get(workaround.name) == detect_result:
                     self.log(
-                        f"Retrying compilation after {workaround.name} fix (attempt {retry_count}/{max_retries})\n"
-                        f"  Command: {' '.join(cmd)}\n"
-                        f"  Config ({config_file}):\n{conf_contents}"
+                        f"{workaround.name} detected the same result again after being "
+                        f"applied ({detect_result!r}) — disabling it to break the retry loop",
+                        "WARNING",
                     )
-                    break  # Only apply one workaround per iteration
+                    workaround.enabled = False
+                    continue
+                last_detect_results[workaround.name] = detect_result
+
+                # Apply the workaround
+                self.log(f"Applying {workaround.name} workaround")
+                state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
+                updated_config_dict = workaround.apply_fn(
+                    detect_result,
+                    updated_config_dict,
+                    compilation_config,
+                    config_file,
+                    contracts,
+                )
+                # If we disabled build_cache in config, also remove from CLI command
+                if workaround.name == "cached_autofinder_failure" and "--build_cache" in cmd:
+                    cmd.remove("--build_cache")
+                if self._retry_state(cmd, compilation_config, updated_config_dict) == state_before:
+                    self.log(
+                        f"{workaround.name} was applied but left the conf and command "
+                        f"unchanged — disabling it to break the retry loop",
+                        "WARNING",
+                    )
+                    workaround.enabled = False
+                    continue
+                workaround_applied = True
+                retry_count += 1
+                conf_contents = json.dumps(compilation_config, indent=2)
+                self.log(
+                    f"Retrying compilation after {workaround.name} fix (attempt {retry_count}/{max_retries})\n"
+                    f"  Command: {' '.join(cmd)}\n"
+                    f"  Config ({config_file}):\n{conf_contents}"
+                )
+                break  # Only apply one workaround per iteration
 
             # If no workaround applies, exit immediately (guardrail against infinite loop)
             if not workaround_applied:
@@ -443,6 +488,17 @@ class CompilationWorkaroundManager:
         self.log(output, "ERROR")
         self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
         return False, output, updated_config_dict
+
+    @staticmethod
+    def _retry_state(cmd: List[str], compilation_config: Dict, updated_config_dict: Dict) -> str:
+        """Serialized snapshot of everything a workaround can change to make the
+        next compilation retry behave differently: the command line and both
+        config dicts. Used by the no-progress guard in
+        ``run_compilation_with_workarounds`` — an application that leaves this
+        snapshot identical was a no-op, so retrying would reproduce the same
+        failure verbatim.
+        """
+        return json.dumps([cmd, compilation_config, updated_config_dict], sort_keys=True, default=str)
 
     # =========================================================================
     # Detection methods
