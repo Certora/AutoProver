@@ -33,7 +33,7 @@ Foundry (dead tuning flags, hardcoded toolchain versions) — see §3.
 | Console entry point | `console-foundry` | `console-crucible` | ✅ parity |
 | **TUI entry point** | `tui-foundry` (`FoundryApp`) | `tui-crucible` (`GenericRustApp`) | ✅ parity — *done (2c0f693)* |
 | **Progress telemetry** | emits `forge_test_run` summaries | emits `fuzz_pulse`/`fuzz_finding`/`build_output` (post-hoc, per run) | ✅ parity — *done (2c0f693)* |
-| **Design-doc auto-discovery** | `system_doc` optional → discovery phase | `system_doc` **required** | ❌ **gap** |
+| **Design-doc auto-discovery** | `system_doc` optional → discovery phase | `system_doc` optional → discovery phase | ✅ parity — *done (55a5959)* |
 | Per-component status artifact | `*.status.json` | commentary + property→tests only | ⚠️ minor gap |
 | Build/verify concurrency | `--max-forge-runners` parallel | serialized (`Semaphore(1)`, shared crate) | ⚠️ perf gap |
 | Shared `report.json` + backend labels | ✅ | ✅ (`crucible` labels wired) | ✅ parity |
@@ -98,7 +98,14 @@ Note: HITL/interactive refinement is *not* part of this gap — Foundry's own ha
 raises `NotImplementedError` for HITL (`foundry_app.py:74`), exactly like the Rust
 frontend (`frontend.py:58`). Neither backend services interactive refinement.
 
-### 1.2 Design-doc auto-discovery — **M**
+### 1.2 Design-doc auto-discovery — **DONE (commit 55a5959)**
+
+> **Resolved.** `system_doc` is now optional in the generic rust entry; when omitted,
+> `resolve_design_doc` runs as a visible "Design Doc Discovery" task (a dedicated
+> UI-only descriptor phase), and the doc-dependent construction moved into the runner
+> so a discovered and a supplied doc share the same cache key. Original analysis below.
+
+### ~~1.2 Design-doc auto-discovery — M~~ (superseded)
 
 Foundry (and autoprove) make `system_doc` optional and, when omitted, run a "Design Doc
 Discovery" task via the shared `cli_pipeline` (`composer/pipeline/cli.py:194-218`,
@@ -193,8 +200,7 @@ Independent of Foundry, these are worth closing for a production-quality backend
 ## 5. Suggested prioritization
 
 1. ~~**1.1 emit decider events + `tui-crucible`**~~ — **DONE (2c0f693)**.
-2. **1.2 design-doc discovery** — removes a required argument and matches Foundry/autoprove
-   ergonomics; self-contained.
+2. ~~**1.2 design-doc discovery**~~ — **DONE (55a5959)**.
 3. **§3 inert flags / version table** — either wire `--fuzz-cores`/`--stateful`/
    `--crucible-version` or remove them; fold the version work into the toolchain-versioning
    plan.
