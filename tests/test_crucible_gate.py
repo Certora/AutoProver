@@ -11,8 +11,8 @@ that phase 1 delivers, on the ``solana_vault`` Anchor scenario:
    one iteration).
 
 Marked ``expensive``: it needs the Solana/Anchor toolchain + the ``crucible`` CLI,
-and a local Crucible checkout for the harness's crate deps (``CRUCIBLE_REPO`` env,
-default ``~/src/crucible``). It builds real sBPF + a fuzz harness, so it is slow.
+and a local Crucible checkout for the harness's crate deps (``CRUCIBLE_REPO``).
+It builds real sBPF + a fuzz harness, so it is slow.
 Skips cleanly when any prerequisite is missing. Run with::
 
     CRUCIBLE_REPO=/path/to/crucible \
@@ -42,7 +42,10 @@ _TEST = "invariant_vault"  # crucible test name == the feature gating it
 
 
 def _crucible_repo() -> Path | None:
-    repo = Path(os.environ.get("CRUCIBLE_REPO", str(Path.home() / "src" / "crucible")))
+    raw = os.environ.get("CRUCIBLE_REPO")
+    if not raw:
+        return None
+    repo = Path(raw)
     return repo if (repo / "crates" / "crucible-fuzzer").is_dir() else None
 
 

@@ -7,8 +7,8 @@ validates it with `crucible run … --dry-run`, revising on failure. Pass = the
 session *publishes* a fixture (i.e. a dry-run went green) with no human edits.
 
 Heavy + paid: real LLM + Postgres (testcontainers) + the Solana/Anchor toolchain +
-the `crucible` CLI + a local crucible checkout (`CRUCIBLE_REPO`, default
-`~/src/crucible`). The first harness build compiles litesvm/libafl (minutes); run
+the `crucible` CLI + a local crucible checkout (`CRUCIBLE_REPO`). The first
+harness build compiles litesvm/libafl (minutes); run
 it in the background. Skips cleanly if a prerequisite is missing.
 
     CRUCIBLE_REPO=/path/to/crucible \
@@ -91,7 +91,10 @@ def _model_args() -> object:
 
 
 def _crucible_repo() -> Path | None:
-    repo = Path(os.environ.get("CRUCIBLE_REPO", str(Path.home() / "src" / "crucible")))
+    raw = os.environ.get("CRUCIBLE_REPO")
+    if not raw:
+        return None
+    repo = Path(raw)
     return repo if (repo / "crates" / "crucible-fuzzer").is_dir() else None
 
 

@@ -3,11 +3,9 @@
 //! harnesses and gates them with the local `crucible` CLI. Pairs with the shared
 //! `solana` ecosystem front half (see `docs/crucible-application.md`).
 //!
-//! **Phase 1** (this file today) provides the declarative descriptor and a real
-//! `validate_preconditions` (toolchain + project checks). The authoring loop
-//! (`new_session`) is a deliberate stub — phase 1's gate is the build + IDL +
-//! `crucible run --dry-run` infrastructure, exercised from Python, with no LLM and
-//! no property authoring. Later phases fill in the decider.
+//! Provides the declarative descriptor, toolchain precondition checks, a
+//! program-wide setup session (shared fixture + `action_*`), and per-component
+//! test-authoring sessions that dry-run / fuzz via `Command::RunCommand`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -762,7 +760,7 @@ impl Application for CrucibleApp {
     }
 
     fn fetch_verdicts(&self, _input: VerdictInput) -> BTreeMap<String, Verdict> {
-        // No verdicts until the authoring loop lands.
+        // Self-contained: verdicts are baked into Formalized at publish time.
         BTreeMap::new()
     }
 }

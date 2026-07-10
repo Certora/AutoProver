@@ -5,19 +5,16 @@ over them (as a child process, **never** a shell), and capture the result. Both
 the IoC ``RunCommand`` effect (:meth:`composer.rustapp.adapter.RealEffects.run_command`)
 and the Solana build/IDL step route through here — and any Python backend may too,
 which is why this lives in :mod:`composer.sandbox` rather than under ``rustapp``.
-The command sandbox (``docs/command-sandbox.md``) wraps exactly this one function.
+
+Optional confinement is applied via a :class:`~composer.sandbox.policy.SandboxProvider`
++ :class:`~composer.sandbox.policy.SandboxPolicy` (``docs/command-sandbox.md``):
+``None`` / the ``none`` provider is a passthrough; the ``launcher`` provider wraps
+the argv in ``run-confined`` (Landlock + seccomp) and is fail-closed.
 
 **Trust boundary** (``docs/command-sandbox.md`` §2): the *caller* — a trusted Rust
 decider or a trusted Python build step — supplies ``program`` and ``args``; only
-file *contents* may derive from LLM output. We enforce two things here: the command
-runs via ``exec`` (argv, no shell), and every written path is confined to the
-workdir (no absolute paths, no ``..`` traversal).
-
-.. note::
-   This does **not** yet apply the sandbox (network-off, clean env, resource caps):
-   the :mod:`composer.sandbox.policy` seam exists, but wiring a ``SandboxProvider``
-   in *here* — behind the same signature — is the next step (``docs/command-sandbox.md``
-   §9 step 3). Until then, run only on trusted input in a trusted environment.
+file *contents* may derive from LLM output. We enforce path confinement here
+(no absolute paths, no ``..`` traversal) in addition to whatever the provider does.
 """
 
 from __future__ import annotations

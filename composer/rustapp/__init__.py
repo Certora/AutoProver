@@ -42,10 +42,17 @@ from composer.rustapp.descriptor import (
 )
 from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.rustapp.loop import Effects, GaveUp, drive_session
-from composer.rustapp.adapter import RustBackend, RustFormalizer, RustPreparedSystem
+from composer.rustapp.adapter import (
+    RustBackend,
+    RustFormalizer,
+    RustPreparedSystem,
+    as_report_backend,
+)
 from composer.rustapp.store import RustArtifactStore
 from composer.rustapp.host import (
+    BackendOptions,
     RustApplication,
+    StoreFactory,
     build_application,
     build_backend,
     build_core_phases,
@@ -90,8 +97,11 @@ __all__ = [
     "RustBackend",
     "RustFormalizer",
     "RustPreparedSystem",
+    "as_report_backend",
     "RustArtifactStore",
     "RustApplication",
+    "BackendOptions",
+    "StoreFactory",
     "build_application",
     "build_backend",
     "build_core_phases",

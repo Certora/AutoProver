@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import pathlib
 import sys
 import uuid
@@ -168,7 +167,7 @@ async def rust_entry_point(
 
     # Rust-owned precondition validation (cf. foundry's foundry.toml check).
     declared_args = {d: getattr(args, d) for d in declared_dests}
-    precondition_input = json.dumps(
+    err = app.validate_preconditions(
         {
             "project_root": str(project_root),
             "main_contract": args.main_contract,
@@ -176,7 +175,6 @@ async def rust_entry_point(
             **declared_args,
         }
     )
-    err = app.validate_preconditions(json.loads(precondition_input))
     if err:
         parser.error(err)
 
@@ -214,9 +212,7 @@ async def rust_entry_point(
         if content is None:
             parser.error(f"cannot read {sys_path}")
         # The ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry for EVM).
-        forbidden_read = getattr(
-            app.ecosystem.language, "default_forbidden_read", FS_FORBIDDEN_READ
-        )
+        forbidden_read = app.ecosystem.language.default_forbidden_read
         source_input = SourceCode(
             content=content,
             project_root=str(project_root),

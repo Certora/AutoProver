@@ -6,10 +6,9 @@ into a concrete ``(provider, policy)`` per command via :meth:`resolve_provider` 
 :meth:`build_policy`. Keeping selection here — rather than in :func:`run_local_command`
 — means the runner stays mechanism-agnostic (``docs/command-sandbox.md`` §4/§7).
 
-Default provider is ``"none"`` (passthrough), so wiring a config through changes
-nothing until a backend opts in (``COMPOSER_SANDBOX_PROVIDER=launcher`` or an
-explicit ``provider=``). Flipping the default to ``launcher`` happens with the
-escape-test gate (§9 step 5), once the policy is proven complete.
+The library default provider is ``"none"`` (passthrough). Backends that run
+untrusted native code (Crucible) construct a config with ``provider="launcher"``
+by default; override with ``COMPOSER_SANDBOX_PROVIDER=none`` for trusted-input dev.
 """
 
 from __future__ import annotations

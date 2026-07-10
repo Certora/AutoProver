@@ -4,14 +4,16 @@ Three phase objects mirror the CVL / foundry backends, but each delegates to the
 Rust module:
 
 * :class:`RustBackend`        — ``PipelineBackend`` (guidance, phases, store, ``prepare_system``).
-* :class:`RustPreparedSystem` — builds the formalizer.
+* :class:`RustPreparedSystem` — builds the formalizer (thin; no app-specific setup).
 * :class:`RustFormalizer`     — ``formalize`` drives the Rust decider through the
   IoC loop; ``fetch_verdicts`` / ``finalize`` call the module's sync FFI.
 
+App-specific orchestration (shared fixtures, crate-harness prep, fuzz budgets) lives
+in the application package — e.g. :mod:`composer.crucible.backend` — not here.
+
 ``RealEffects`` binds the loop's effects to live services: ``emit`` via LangGraph's
 stream writer, ``call_llm`` via the run's model, an in-memory scratch cache, and
-injectable ``run_prover`` / ``run_feedback`` hooks (a self-contained Tier-1 Rust
-backend never asks for those; a run-service-backed one is wired per deployment).
+injectable ``run_prover`` / ``run_feedback`` hooks.
 """
 
 from __future__ import annotations
@@ -19,11 +21,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, cast, override
-
-from composer.io.multi_job import TaskInfo
+from typing import Any, Awaitable, Callable, cast, get_args, override
 
 from composer.pipeline.core import (
     CorePhases,
@@ -43,7 +43,7 @@ from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import Outcome, ReportBackend, RuleName
-from composer.spec.system_model import FeatureUnit
+from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import PropertyFormulation
 
 _log = logging.getLogger(__name__)
@@ -52,14 +52,26 @@ _log = logging.getLogger(__name__)
 ProverHook = Callable[[str, Any, "list[str] | None"], Awaitable[dict]]
 FeedbackHook = Callable[[str, Any, Any], Awaitable[dict]]
 
+# Derived from the ReportBackend literal so the two can't drift (single source of truth).
+_REPORT_BACKENDS: frozenset[str] = frozenset(get_args(ReportBackend.__value__))
+
+
+def as_report_backend(tag: str) -> ReportBackend:
+    """Validate a wheel's free-form ``backend_tag`` against the closed report set."""
+    if tag not in _REPORT_BACKENDS:
+        raise ValueError(
+            f"unknown report backend_tag {tag!r}; expected one of {sorted(_REPORT_BACKENDS)}"
+        )
+    return cast(ReportBackend, tag)
+
 
 class RealEffects:
-    """The production :class:`Effects`. One instance per ``formalize`` call (it
-    holds the call's cache scope)."""
+    """The production :class:`Effects`. One instance per ``formalize`` / setup call
+    (it holds that call's cache scope)."""
 
     def __init__(
         self,
-        ctx: WorkflowContext[RustFormalResult],
+        ctx: WorkflowContext[Any],
         run: PipelineRun,
         *,
         prover: ProverHook | None = None,
@@ -75,7 +87,7 @@ class RealEffects:
         self._command_sem = command_sem
         self._command_timeout_s = command_timeout_s
         # How to confine RunCommand (docs/command-sandbox.md). None → unsandboxed
-        # (the `none` provider) — today's behavior, for trusted-input/EVM paths.
+        # (the ``none`` provider) — for trusted-input / EVM paths.
         self._sandbox = sandbox
         # Loop-scratch cache (within one formalize). Cross-run persistence is the
         # driver's result-level cache, keyed by formalized_type — not this.
@@ -84,13 +96,9 @@ class RealEffects:
     async def call_llm(self, messages: Any) -> str:
         """Run one bounded, **tool-enabled** authoring turn and return its final text.
 
-        Unlike a bare ``ainvoke``, this binds the env's tool belt (source navigation
-        + RAG search over the backend's knowledge base) and runs an agent to
-        completion, so the decider's prompt can pull in framework docs / read the
-        program. This is the ``docs/crucible-application.md`` §7.5 framework change —
-        shared by every Rust backend, so a large-corpus backend (CVLR-Solana) reuses
-        it by shipping only a knowledge DB. Must run inside a ``with_handler`` scope
-        (the caller wraps it in ``run.runner``)."""
+        Binds the env's tool belt (source navigation + optional RAG) and runs an
+        agent to completion. Must run inside a ``with_handler`` scope (the caller
+        wraps it in ``run.runner``)."""
         from composer.rustapp._llm_agent import run_llm_agent
 
         return await run_llm_agent(
@@ -116,10 +124,9 @@ class RealEffects:
         return await self._feedback(spec, skipped, rebuttals)
 
     def _ensure_workdir(self) -> Path:
-        # Build-based backends (Crucible) run commands in the project tree — the
-        # generated harness references the program crate + the built `.so` by
-        # relative path, and the artifact store writes into it. Isolation is the
-        # sandbox's job (phase 6, §7.4), which will bind-mount what a command needs.
+        # Build-based backends run commands in the project tree — the generated
+        # harness references the program crate by relative path. Isolation is the
+        # sandbox's job (docs/command-sandbox.md).
         return Path(self._run.source.project_root)
 
     async def run_command(
@@ -188,26 +195,19 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         feedback: FeedbackHook | None = None,
         component_config: dict | None = None,
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
-        store: Any = None,
         sandbox: SandboxConfig | None = None,
+        command_sem: asyncio.Semaphore | None = None,
     ):
-        # ``backend_tag`` is a free-form ``str`` in the wheel contract, but every backend is
-        # in-repo, so at runtime it is always a known ``ReportBackend`` (here: "crucible").
-        super().__init__(RustFormalResult, cast(ReportBackend, descriptor.backend_tag))
+        super().__init__(RustFormalResult, as_report_backend(descriptor.backend_tag))
         self._module = module
         self._descriptor = descriptor
         self._hooks = _RustFormalizerCfg(prover=prover, feedback=feedback)
-        # A base config merged into every per-component session (e.g. the shared
-        # fixture authored by the setup session, the program name, the fuzz budget).
+        # Base config merged into every per-component session (application-specific
+        # keys — fixture, fuzz budget, … — are supplied by the prepared-system layer).
         self._component_config = component_config or {}
         self._command_timeout_s = command_timeout_s
-        self._store = store
         self._sandbox = sandbox
-        # Per-component sessions share one harness crate (fuzz/<prog>/), so their
-        # command runs (which write main.rs/Cargo.toml then build+fuzz) must not
-        # overlap — serialize them here while the LLM authoring turns still run
-        # concurrently. (A crate-per-component would restore build parallelism — §10 Q1.)
-        self._harness_lock = asyncio.Semaphore(1)
+        self._command_sem = command_sem
 
     @override
     async def formalize(
@@ -218,12 +218,6 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         ctx: WorkflowContext[RustFormalResult],
         run: PipelineRun,
     ) -> RustFormalResult | GaveUp:
-        # Pre-place the manifest declaring this component's feature so its session
-        # can write main.rs + fuzz (the decider can't render host-resolved deps).
-        prep = getattr(self._store, "prepare_component", None)
-        if prep is not None:
-            prep(feat.slug)
-
         session_input = json.dumps(
             {
                 "label": label,
@@ -237,9 +231,13 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         )
         session = self._module.new_session(session_input)
         effects = RealEffects(
-            ctx, run, prover=self._hooks.prover, feedback=self._hooks.feedback,
-            command_timeout_s=self._command_timeout_s, sandbox=self._sandbox,
-            command_sem=self._harness_lock,
+            ctx,
+            run,
+            prover=self._hooks.prover,
+            feedback=self._hooks.feedback,
+            command_timeout_s=self._command_timeout_s,
+            sandbox=self._sandbox,
+            command_sem=self._command_sem,
         )
         result = await drive_session(session, effects)
         if isinstance(result, LoopGaveUp):
@@ -262,8 +260,7 @@ class RustFormalizer(Formalizer[RustFormalResult]):
                 unit_file=v.get("unit_file") or formalized.unit_file,
             )
 
-        # Self-contained backend (e.g. Crucible fuzzer): the verdict is known at
-        # formalize time and baked into the result — use it directly, no FFI call.
+        # Self-contained backend: verdicts baked at formalize time — use them directly.
         baked = formalized.result.verdicts
         if baked:
             return {unit: _mk(v) for unit, v in baked.items()}
@@ -282,8 +279,6 @@ class RustFormalizer(Formalizer[RustFormalResult]):
 
     @override
     async def finalize(self, outcomes, run: PipelineRun) -> None:
-        from pathlib import Path
-
         from composer.pipeline.core import Delivered
 
         summary = [
@@ -312,71 +307,25 @@ class RustFormalizer(Formalizer[RustFormalResult]):
 
 @dataclass
 class RustPreparedSystem(PreparedSystem[RustFormalResult]):
+    """Generic prepared system: build a formalizer with the program name in config.
+
+    Applications that need a setup session or store-side prep override
+    :meth:`RustBackend.prepare_system` (see :class:`composer.crucible.backend.CrucibleBackend`).
+    """
+
     backend: "RustBackend"
-    analyzed: Any = None
+    analyzed: BaseApplication | None = None
 
     @override
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult]:
         b = self.backend
-        # Base config threaded into every per-component session.
-        component_config: dict = {
-            "program": str(run.source.contract_name),
-            "fuzz_timeout": b.fuzz_timeout_s,
-        }
-
-        # Author the program-wide shared setup (e.g. the Crucible fixture) once, if
-        # the wheel declares a setup session — reusing the same IoC loop. The result
-        # (fixture source) is set on the store and threaded into per-component config.
-        new_setup = getattr(b.module, "new_setup_session", None)
-        if new_setup is not None and self.analyzed is not None:
-            # Pre-place the harness manifest (deps + probe feature) so the setup
-            # session can write main.rs and dry-run (the decider can't render deps).
-            wsm = getattr(b.artifact_store, "write_setup_manifest", None)
-            if wsm is not None:
-                wsm()
-                # With a sandbox on (network off), warm the harness deps with network
-                # now so the confined `crucible run` can build offline (§5).
-                if b.sandbox is not None and b.sandbox.enabled:
-                    warm = getattr(b.artifact_store, "warm_dependencies", None)
-                    if warm is not None:
-                        await warm()
-            setup_input = json.dumps(
-                {
-                    "program": str(run.source.contract_name),
-                    "analyzed": self.analyzed.model_dump(mode="json"),
-                    "config": {},
-                }
-            )
-            session = new_setup(setup_input)
-            if session is not None:
-
-                async def _drive():
-                    eff = RealEffects(
-                        cast(Any, run.ctx), run, prover=b.prover, feedback=b.feedback,
-                        command_timeout_s=b.command_timeout_s, sandbox=b.sandbox,
-                    )
-                    return await drive_session(session, eff)
-
-                result = await run.runner(
-                    TaskInfo(f"{b.descriptor.name}-setup", "Build Harness", b._core_phases["formalization"]),
-                    _drive,
-                )
-                if isinstance(result, LoopGaveUp):
-                    raise RuntimeError(f"{b.descriptor.name} setup session gave up: {result.reason}")
-                fixture = result.data.get("artifact_text", "")
-                component_config["fixture"] = fixture
-                set_fixture = getattr(b.artifact_store, "set_shared_fixture", None)
-                if set_fixture is not None:
-                    set_fixture(fixture)
-
         return RustFormalizer(
             b.module,
             b.descriptor,
             prover=b.prover,
             feedback=b.feedback,
-            component_config=component_config,
+            component_config={"program": str(run.source.contract_name)},
             command_timeout_s=b.command_timeout_s,
-            store=b.artifact_store,
             sandbox=b.sandbox,
         )
 
@@ -386,7 +335,11 @@ class RustBackend:
     """A :class:`PipelineBackend` backed by a Rust wheel. Structurally satisfies the
     protocol — the driver never imports it. Ecosystem-agnostic: it locates the main
     and marshals units through the resolved ``ecosystem`` + the ``FeatureUnit``
-    protocol, so an ``evm`` and a ``solana`` wheel share this one adapter."""
+    protocol, so an ``evm`` and a ``solana`` wheel share this one adapter.
+
+    Subclass (or replace via ``backend_cls``) when the app needs non-generic
+    formalization prep — e.g. Crucible's shared fixture + harness crate.
+    """
 
     module: Any
     descriptor: AppDescriptor
@@ -396,12 +349,13 @@ class RustBackend:
     ecosystem: Ecosystem[Any, Any, Any]
     prover: ProverHook | None = None
     feedback: FeedbackHook | None = None
-    # Wall-clock ceiling for a single RunCommand effect (a first harness build +
-    # fuzz can be minutes); and the per-component fuzzing budget.
+    # Wall-clock ceiling for a single RunCommand effect (a first harness build can
+    # be minutes). Applications may thread additional session config via their
+    # own prepared-system layer (e.g. Crucible's fuzz budget).
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     fuzz_timeout_s: int = 30
     # How to confine every RunCommand (docs/command-sandbox.md). None → unsandboxed
-    # (trusted-input only); the Crucible pipeline builds one selecting the provider.
+    # (trusted-input only).
     sandbox: SandboxConfig | None = None
 
     @property
@@ -417,10 +371,12 @@ class RustBackend:
         return self._core_phases
 
     async def prepare_system(
-        self, analyzed: Any, run: PipelineRun
+        self, analyzed: BaseApplication, run: PipelineRun
     ) -> PreparedSystem[RustFormalResult]:
         # The ecosystem locates its own Main (EVM contract, Solana program, …).
-        return RustPreparedSystem(self.ecosystem.locate_main(analyzed, run.source), self, analyzed)
+        return RustPreparedSystem(
+            self.ecosystem.locate_main(analyzed, run.source), self, analyzed
+        )
 
     def to_artifact_id(self, c: FeatureUnit) -> RustArtifact:
         return RustArtifact(

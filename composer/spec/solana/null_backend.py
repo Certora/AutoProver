@@ -3,9 +3,11 @@
 It satisfies the full ``PipelineBackend`` contract over the Solana ecosystem's
 ``(SolanaApplication, SolanaProgramInstance, SolanaInstructionInstance)`` triple, but its
 ``formalize`` just echoes the extracted properties into a trivial result and its
-``fetch_verdicts`` returns nothing. It exists so the Solana *front half* (analysis +
-per-instruction property extraction) can be exercised end-to-end without a real verifier
-(the Phase-4 gate), and as the reference a real Solana verification backend is modeled on.
+``fetch_verdicts`` returns nothing.
+
+**Role:** a **test double** for the Solana front half (analysis + property extraction)
+without a real verifier — see ``tests/test_solana_gate.py``. Production Solana
+verification is :mod:`composer.crucible` (Crucible fuzzer backend).
 """
 
 from __future__ import annotations

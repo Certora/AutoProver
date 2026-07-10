@@ -164,7 +164,10 @@ def _model_args() -> object:
 
 
 def _crucible_repo() -> Path | None:
-    repo = Path(os.environ.get("CRUCIBLE_REPO", str(Path.home() / "src" / "crucible")))
+    raw = os.environ.get("CRUCIBLE_REPO")
+    if not raw:
+        return None
+    repo = Path(raw)
     return repo if (repo / "crates" / "crucible-fuzzer").is_dir() else None
 
 

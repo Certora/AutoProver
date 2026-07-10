@@ -34,7 +34,7 @@ class CrucibleArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
     project root without collision.
 
     The shared fixture/actions are set on :attr:`harness` before formalization
-    (produced by the authoring loop in ``prepare_formalization``; a later phase).
+    (produced by :class:`~composer.crucible.backend.CruciblePreparedSystem`).
     """
 
     def __init__(self, project_root: str, *, program: str, dep: CrucibleDep):

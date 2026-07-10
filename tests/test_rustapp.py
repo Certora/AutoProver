@@ -181,8 +181,19 @@ def test_frontend_labels_and_backend_phases_share_one_enum():
     # The correctness invariant: the phases the driver stamps on TaskInfo (from
     # the backend's core_phases) must be the SAME enum members the frontend's
     # phase_labels are keyed by, or label lookup silently misses.
+    from composer.input.files import InMemoryTextFile
+    from composer.spec.context import SourceCode
+    from composer.spec.system_model import SolidityIdentifier
+
     app = host.build_application("echoprover")
-    backend = app.make_backend("/tmp/echo-proj")
+    source = SourceCode(
+        content=InMemoryTextFile(basename="doc.md", string_contents="doc", provider="test"),
+        project_root="/tmp/echo-proj",
+        contract_name=SolidityIdentifier("C"),
+        relative_path="src/C.sol",
+        forbidden_read="",
+    )
+    backend = app.make_backend(source)
     for slot, member in backend.core_phases.items():
         assert member in app.phase_labels, (slot, member)
     # Section order lists every declared phase's label.

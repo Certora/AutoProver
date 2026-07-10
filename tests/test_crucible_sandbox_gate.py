@@ -54,9 +54,12 @@ async def test_solana_vault_builds_under_launcher():
     await build_program(_SCENARIO, "vault", timeout_s=480)
 
     cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    extra_ro: list[Path] = [Path.home() / ".cargo" / "bin"]
+    if (crucible := os.environ.get("CRUCIBLE_REPO")):
+        extra_ro.append(Path(crucible))
     cfg = SandboxConfig(
         provider="launcher",
-        extra_ro=(Path.home() / "src" / "crucible", Path.home() / ".cargo" / "bin"),
+        extra_ro=tuple(extra_ro),
         extra_rw=(cargo_home,),
     )
     built = await build_program(_SCENARIO, "vault", sandbox=cfg, timeout_s=480)

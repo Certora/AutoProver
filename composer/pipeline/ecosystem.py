@@ -207,7 +207,6 @@ def _solana_validate(app: BaseApplication, expected_main: SolidityIdentifier | N
         return None
     errors: list[str] = []
     known_programs: set[str] = set()
-    known_authorities = {a.name for a in app.authorities}
     for prog in app.programs:
         if prog.program_identifier in known_programs:
             errors.append(f"Duplicate program identifier: {prog.program_identifier}")
@@ -223,11 +222,9 @@ def _solana_validate(app: BaseApplication, expected_main: SolidityIdentifier | N
                     f"reduce to the same filename slug {slug!r}; give them more-distinct names."
                 )
             slug_origin[slug] = ins.name
-            for cpi in ins.cpis:
-                if cpi.target_program not in known_programs and cpi.target_program not in known_authorities:
-                    # A CPI may target a well-known external program (SPL Token, System); only
-                    # flag targets that look like they should be a declared program/authority.
-                    pass
+            # CPI targets may be well-known external programs (SPL Token, System, …)
+            # that are not declared in the model; we do not flag those. A future
+            # policy can require known_programs | known_authorities | an allowlist.
     if expected_main is not None and expected_main not in known_programs:
         errors.append(
             f"Expected a program with identifier {expected_main!r}; declared programs: "

@@ -19,9 +19,11 @@ this seam — never on a concrete tool — a provider can be swapped without tou
 the command runner, ``RealEffects``, or the escape-test gate. It lives outside
 ``rustapp`` so Python-based backends can use it too, not just the Rust-IoC ones.
 
-**Step 1 (this module)** ships the policy, the protocol, and the ``none``
-passthrough provider. The ``run-confined`` launcher provider (Landlock +
-``seccompiler``) lands in step 2 as another entry behind :func:`get_provider`.
+This module ships the policy, the protocol, the ``none`` passthrough provider,
+and the provider registry. The ``run-confined`` launcher provider (Landlock +
+seccomp) registers itself under ``"launcher"`` when
+:mod:`composer.sandbox.launcher` is imported (typically via
+:meth:`composer.sandbox.config.SandboxConfig.resolve_provider`).
 
 **Trust boundary** (``docs/command-sandbox.md`` §7.2): the policy and the emitted
 ``LaunchSpec`` are authored by trusted Python — never the LLM, which controls only
@@ -132,8 +134,8 @@ class NoneProvider:
         return LaunchSpec(argv=(program, *args), env=None)
 
 
-# Provider registry. Step 2 registers the ``run-confined`` launcher provider here;
-# step 3 selects among these via ``CommandConfig.sandbox_provider``.
+# Provider registry. The ``launcher`` factory is registered by importing
+# :mod:`composer.sandbox.launcher` (see :meth:`SandboxConfig.resolve_provider`).
 _PROVIDERS: dict[str, Callable[[], SandboxProvider]] = {
     "none": NoneProvider,
 }

@@ -14,7 +14,10 @@ set -euo pipefail
 script_dir="$(realpath "$(dirname "$0")")"
 parent="$(realpath "$script_dir/..")"
 
-CRUCIBLE_REPO="${CRUCIBLE_REPO:-$HOME/src/crucible}"
+if [[ -z "${CRUCIBLE_REPO:-}" ]]; then
+    echo "Error: set CRUCIBLE_REPO to a local crucible clone." >&2
+    exit 1
+fi
 docs_dir="$CRUCIBLE_REPO/docs"
 if [[ ! -d "$docs_dir" ]]; then
     echo "Error: crucible docs not found at '$docs_dir'. Set CRUCIBLE_REPO to a local crucible clone." >&2

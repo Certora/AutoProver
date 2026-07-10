@@ -76,7 +76,7 @@ class CrucibleHarness:
     program: str
     dep: CrucibleDep
     # Shared prelude + #[fuzz_fixture] + action_* — everything but the test fns.
-    # Mutable: the authoring loop fills it in prepare_formalization (later phase).
+    # Mutable: filled by CruciblePreparedSystem after the setup session publishes.
     fixture_source: str = ""
     _components: dict[str, str] = field(default_factory=dict)  # feature -> test section
     # Features declared in Cargo.toml but whose test section isn't folded in yet — a
