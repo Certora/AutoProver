@@ -38,6 +38,7 @@ from composer.spec.solana.model import (
 )
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName
+from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 from composer.spec.util import ensure_dir
 
@@ -115,7 +116,7 @@ class NullSolanaFormalizer(Formalizer[NullResult]):
     async def formalize(
         self,
         label: str,
-        feat: SolanaInstructionInstance,
+        feat: FeatureUnit,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[NullResult],
         run: PipelineRun,

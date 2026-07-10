@@ -24,9 +24,11 @@ import asyncio
 import composer.bind as _  # noqa: F401  (side-effecting DI/tape bootstrap; must load first)
 
 from composer.diagnostics.timing import RunSummary
+from composer.pipeline.core import CorePipelineResult
 from composer.rustapp.entry import EnvBuilder, rust_entry_point
 from composer.rustapp.frontend import GenericRustApp, GenericRustConsoleHandler
 from composer.rustapp.host import build_application
+from composer.rustapp.result import RustFormalResult
 
 
 def _event_kinds(app) -> set[str]:
@@ -43,7 +45,7 @@ async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) 
             header_text=app_meta.header_text,
             event_kinds=_event_kinds(app_meta),
         )
-        result = None
+        result: CorePipelineResult[RustFormalResult] | None = None
 
         async def work():
             nonlocal result

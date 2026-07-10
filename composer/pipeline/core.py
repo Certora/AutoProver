@@ -17,10 +17,9 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Protocol, Any
+from typing import Protocol, Any, cast
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel
 
 from composer.io.multi_job import TaskInfo
 from composer.spec.artifacts import ArtifactStore
@@ -28,7 +27,7 @@ from composer.spec.context import (
     WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode
 )
 from composer.spec.system_model import (
-    SourceApplication, ContractInstance, ContractComponentInstance, AnyApplication, FeatureUnit
+    SourceApplication, ContractComponentInstance, FeatureUnit
 )
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
@@ -88,7 +87,9 @@ class Formalizer[FormT: BackendResult](ABC):
 
 @dataclass
 class PreparedSystem[FormT: BackendResult](ABC):
-    main: ContractInstance
+    # The located "main" unit is ecosystem-specific (EVM ContractInstance, Solana program, …);
+    # only the ecosystem's own ``units()`` consumes it, so the base keeps it untyped.
+    main: Any
 
     @abstractmethod
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT]: ...
@@ -129,7 +130,7 @@ def _component_cache_key(c: FeatureUnit) -> CacheKey[Properties, ComponentGroup]
     return CacheKey(string_hash(c.cache_material()))
 
 
-def _batch_cache_key[FormT: BaseModel](props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, FormT]:
+def _batch_cache_key(props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, Any]:
     return CacheKey(string_hash("|".join(p.model_dump_json() for p in props)))
 
 
@@ -268,7 +269,10 @@ async def _extract_all[P: enum.Enum, H](
                 system_template=ecosystem.property_prompts.system,
                 initial_template=ecosystem.property_prompts.initial),
         )
-        return _Batch(feat, props, feat_ctx) if props else None
+        # The driver is ecosystem-generic (``feat`` is a ``FeatureUnit``), but the shared
+        # batch/outcome types are EVM-shaped (``ContractComponentInstance``). Non-EVM units
+        # duck-type the same protocol, so this cast is safe at runtime.
+        return _Batch(cast(ContractComponentInstance, feat), props, feat_ctx) if props else None
 
     got = await asyncio.gather(*[_one(u) for u in ecosystem.units(main)])
     return [b for b in got if b is not None]
