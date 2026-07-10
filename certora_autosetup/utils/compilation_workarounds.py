@@ -468,9 +468,6 @@ class CompilationWorkaroundManager:
             line = lines[i]
 
             # Pattern 1: Look for "Compiling <PATH> to expose internal function information"
-            # (two substrings on one line + a marker on the next). Not a proven line-wrap
-            # victim like _has_source_not_found; left as-is because the next-line lookahead
-            # and path extraction depend on the raw line structure.
             if "Compiling" in line and "to expose internal function information" in line:
                 parts = line.split("Compiling", 1)
                 if len(parts) > 1:
@@ -657,8 +654,8 @@ class CompilationWorkaroundManager:
     # contract's constructor is not in the compile scope. Matching both lines makes
     # the detector specific enough that no other prover error collides. (Both regexes
     # search the whole output, so a marker split across a solc wrap could be missed —
-    # not observed in the sweep; unlike _has_source_not_found it isn't normalized here
-    # because the \w+/\S+ captures rely on the raw token boundaries.)
+    # unlike _has_source_not_found it isn't normalized here because the \w+/\S+ captures
+    # rely on the raw token boundaries.)
 
     def _detect_missing_library(
         self, output: str, contracts: List[ContractHandle]
