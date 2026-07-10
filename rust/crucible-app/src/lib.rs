@@ -566,9 +566,12 @@ impl PerComponentSession {
         let component = serde_json::to_string_pretty(&self.component)
             .unwrap_or_else(|_| self.component.to_string());
         let mut task = format!(
-            "Author ONE Crucible test function named exactly `{feature}` that checks these \
-             properties of the `{program}` program's instruction:\n{props}\n\n\
-             Instruction / component:\n{component}\n\n\
+            "Author ONE Crucible test function named exactly `{feature}` that checks this \
+             whole-program property of the `{program}` program:\n{props}\n\n\
+             It must hold after ANY sequence of actions the fuzzer drives — prefer an \
+             `#[invariant_test]` that reads on-chain state and asserts the property.\n\n\
+             Program API (instructions you can drive via the fixture's `action_*` methods):\n\
+             {component}\n\n\
              {cheat}\n\n\
              The shared fixture is ALREADY defined (do not redefine it); use `Fixture` and its \
              `action_*` methods. Fixture source for reference:\n```rust\n{fixture}\n```",

@@ -259,7 +259,7 @@ async def _extract_all[P: enum.Enum, H](
 ) -> list[_Batch]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY)
 
-    async def _one(feat: FeatureUnit) -> _Batch | None:
+    async def _extract(feat: FeatureUnit) -> tuple[WorkflowContext[ComponentGroup], list[PropertyFormulation]]:
         feat_ctx = await prop_ctx.child(_component_cache_key(feat), feat.context_tag())
         props = await run.runner(
             TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),
@@ -269,9 +269,25 @@ async def _extract_all[P: enum.Enum, H](
                 system_template=ecosystem.property_prompts.system,
                 initial_template=ecosystem.property_prompts.initial),
         )
-        # The driver is ecosystem-generic (``feat`` is a ``FeatureUnit``), but the shared
-        # batch/outcome types are EVM-shaped (``ContractComponentInstance``). Non-EVM units
-        # duck-type the same protocol, so this cast is safe at runtime.
+        return feat_ctx, props
+
+    # The driver is ecosystem-generic (``feat`` is a ``FeatureUnit``), but the shared
+    # batch/outcome types are EVM-shaped (``ContractComponentInstance``). Non-EVM units
+    # duck-type the same protocol, so the casts below are safe at runtime.
+    if ecosystem.global_extraction:
+        # One whole-program extraction, then one batch per resulting property/invariant —
+        # each gets its own formalize (harness + fuzz run + report row).
+        assert ecosystem.extraction_unit is not None and ecosystem.property_unit is not None
+        _, props = await _extract(ecosystem.extraction_unit(main))
+        batches: list[_Batch] = []
+        for i, prop in enumerate(props):
+            unit = ecosystem.property_unit(main, prop, i)
+            unit_ctx = await prop_ctx.child(_component_cache_key(unit), unit.context_tag())
+            batches.append(_Batch(cast(ContractComponentInstance, unit), [prop], unit_ctx))
+        return batches
+
+    async def _one(feat: FeatureUnit) -> _Batch | None:
+        feat_ctx, props = await _extract(feat)
         return _Batch(cast(ContractComponentInstance, feat), props, feat_ctx) if props else None
 
     got = await asyncio.gather(*[_one(u) for u in ecosystem.units(main)])

@@ -114,10 +114,10 @@ async def test_solana_vault_front_half(pg_container: "PostgresContainer", monkey
         result = await run_pipeline(backend, run, ecosystem=SOLANA, interactive=False, threat_model=None, max_bug_rounds=1)
 
     # Pass: front half ran and extracted properties.
-    print(f"\nSolana gate: {result.n_components} instruction(s), {result.n_properties} properties")
+    print(f"\nSolana gate: {result.n_components} invariant(s), {result.n_properties} properties")
     for o in result.outcomes:
         print(f"\n== {o.feat.display_name} ==")
         for p in o.props:
             print(f"  [{p.sort}] {p.title}: {p.description}")
-    assert result.n_components > 0, "no instructions analyzed"
+    assert result.n_components > 0, "no invariants extracted"
     assert result.n_properties > 0, "no properties extracted"

@@ -1,16 +1,18 @@
 <background>
-You are performing a security review of a single instruction of a Solana program, in the context
-of a larger audit effort.
+You are performing a security review of a Solana program as a whole, to produce **program-level
+invariants** for a coverage-guided fuzzer. The fuzzer drives *random sequences* of the program's
+instructions and checks each property after every action — so the properties you write must hold
+across ANY reachable sequence of actions, not only within a single instruction.
 </background>
 
 <inputs>
-{% include "solana/instruction_context.j2" %}
+{% include "solana/program_context.j2" %}
 </inputs>
 
 {% if prior_properties %}
 <prior_properties>
 You are running iteratively. {{ prior_properties | length }} prior round(s) have already analyzed
-this instruction. Their findings and reasoning are below. The properties listed here MUST NOT be
+this program. Their findings and reasoning are below. The properties listed here MUST NOT be
 re-proposed — including reframings of the same underlying claim as a different sort. Your task this
 round is to surface security properties that prior rounds *missed*.
 
@@ -32,28 +34,33 @@ covered, returning an empty list is the right answer.
 {% endif %}
 
 <task>
-Input: {% if sort != "greenfield" %}the Rust/Anchor implementation of a Solana program{% else %}a design document for a Solana program{% endif %}, and a description of one instruction of it.
-Output: a list of "security properties".
+Input: {% if sort != "greenfield" %}the Rust/Anchor implementation of a Solana program{% else %}a design document for a Solana program{% endif %}, and a description of its instructions.
+Output: a list of whole-program "security properties" a fuzzer can check after every action.
 
 Follow these steps exactly:
 
 ## Step 1
 
-Analyze the provided {% if sort != "greenfield" %}implementation{% else %}design{% endif %} and instruction description and formulate a set of security
-properties that are PLAUSIBLE for this instruction. Each description must be precise and concise.
+Analyze the provided {% if sort != "greenfield" %}implementation{% else %}design{% endif %} and formulate a set of security
+properties that are PLAUSIBLE for this program. Prefer **cross-instruction** properties — ones a
+random sequence of actions could violate (conservation, monotonicity, access control that must hold
+no matter what came before) — over ones local to a single call. Each description must be precise and
+concise, and phrased as something checkable against on-chain state after any action.
 
 Security properties fall into three categories:
 
-1. **Invariants** — representational invariants that should always hold for the program's accounts/state.
+1. **Invariants** — representational invariants that should always hold for the program's accounts/state,
+   across every reachable state.
    Good: "The vault's token balance always equals the sum of all depositors' recorded shares."
    Good: "A config PDA's `admin` field is only ever the key that signed the last `set_admin`."
    Bad: "The accounts should be correct" (overly broad).
 
-2. **Safety properties** — concrete statements about what should not be possible in a correct program.
+2. **Safety properties** — concrete statements about what should not be possible in a correct program,
+   over any action sequence.
    These SHOULD include intended-normal-behavior properties, not only immediately-security-critical ones.
-   Good: "Only the account stored in `vault.authority` (and it must sign) can call `withdraw`."
-   Good: "`initialize` can succeed at most once for a given config PDA."
-   Good: "A `deposit` credits the signer's own share account and no other."
+   Good: "Only the account stored in `vault.authority` (and it must sign) can ever reduce the vault balance."
+   Good: "`initialize` can succeed at most once for a given config PDA, no matter the call order."
+   Good: "No sequence of actions lets a user withdraw more than they have deposited."
    Bad: "A user should not be able to hack the program" (overly broad).
 
 3. **Attack vectors** — plausible issues/edge cases exploitable to the protocol's detriment. You do
@@ -82,7 +89,8 @@ Write a rough-draft list of your properties using the `write_rough_draft` tool.
 
 ## Step 3
 Review your rough draft. For each property, confirm it meets the Step-1 guidelines — a clear
-violation consequence, non-trivial, plausibly verifiable. Drop anything you cannot defend.
+violation consequence, non-trivial, plausibly verifiable as a whole-program invariant. Drop anything
+you cannot defend.
 
 ## Step 4
 Output the results using the result tool.
@@ -101,6 +109,6 @@ Output the results using the result tool.
   </hard_requirement>
   <reminder>
      For attack vectors you need not find evidence the issue exists — only that it is plausible
-     given the instruction and its {% if sort != "greenfield" %}implementation{% else %}design{% endif %}.
+     given the program and its {% if sort != "greenfield" %}implementation{% else %}design{% endif %}.
   </reminder>
 </guidance>

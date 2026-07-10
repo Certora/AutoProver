@@ -23,6 +23,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from composer.spec.system_model import BaseApplication
+from composer.spec.types import PropertyFormulation
 from composer.spec.util import slugify_filename
 
 #: How an account is expected to be supplied to an instruction. Drives the "missing signer /
@@ -136,7 +137,13 @@ class SolanaApplication(BaseApplication[SolanaComponent]):
 
 @dataclass
 class SolanaProgramInstance:
-    """The located target program — the ecosystem's ``Main``."""
+    """The located target program — the ecosystem's ``Main``.
+
+    Also serves as the **whole-program extraction unit** (satisfies
+    ``composer.spec.system_model.FeatureUnit``): under the global extraction strategy
+    (docs/crucible-unit-granularity.md) it is the context the property phase reads to
+    propose whole-program invariants, before those invariants fan out into
+    :class:`SolanaInvariantUnit`\\ s."""
 
     ind: int
     app: SolanaApplication
@@ -144,6 +151,81 @@ class SolanaProgramInstance:
     @property
     def program(self) -> SolanaProgram:
         return self.app.programs[self.ind]
+
+    # -- FeatureUnit protocol (whole-program extraction context) ------------------------
+    @property
+    def display_name(self) -> str:
+        return self.program.name
+
+    @property
+    def slug(self) -> str:
+        return slugify_filename(self.program.name)
+
+    @property
+    def unit_index(self) -> int:
+        return self.ind
+
+    def cache_material(self) -> str:
+        return "|".join([self.app.model_dump_json(), str(self.ind), "program"])
+
+    def context_tag(self) -> dict:
+        return {"program": self.program.model_dump()}
+
+    def feature_json(self) -> dict:
+        return {
+            "program": self.program.name,
+            "instructions": [i.model_dump(mode="json") for i in self.program.instructions],
+        }
+
+
+@dataclass
+class SolanaInvariantUnit:
+    """One whole-program invariant — a ``Unit`` for the global extraction strategy.
+
+    Produced by fanning the invariants out of a single whole-program extraction, so each
+    invariant gets its own harness fn + fuzz run + report row (satisfies
+    ``composer.spec.system_model.FeatureUnit``). The invariant travels in the formalize
+    batch's ``props``; ``feature_json`` carries the whole-program API so the test author
+    can drive any ``action_*`` in the sequence it asserts over."""
+
+    ind: int
+    _program: SolanaProgramInstance
+    invariant: PropertyFormulation
+
+    @property
+    def app(self) -> SolanaApplication:
+        return self._program.app
+
+    @property
+    def program(self) -> SolanaProgram:
+        return self._program.program
+
+    # -- FeatureUnit protocol -----------------------------------------------------------
+    @property
+    def display_name(self) -> str:
+        return self.invariant.title
+
+    @property
+    def slug(self) -> str:
+        return slugify_filename(self.invariant.title)
+
+    @property
+    def unit_index(self) -> int:
+        return self.ind
+
+    def cache_material(self) -> str:
+        return "|".join(
+            [self.app.model_dump_json(), str(self._program.ind), str(self.ind), self.invariant.title]
+        )
+
+    def context_tag(self) -> dict:
+        return {"invariant": self.invariant.model_dump(mode="json"), "program": self.program.name}
+
+    def feature_json(self) -> dict:
+        return {
+            "program": self.program.name,
+            "instructions": [i.model_dump(mode="json") for i in self.program.instructions],
+        }
 
 
 @dataclass

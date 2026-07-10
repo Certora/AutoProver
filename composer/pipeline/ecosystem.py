@@ -34,8 +34,10 @@ from composer.spec.system_model import (
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaInstructionInstance,
+    SolanaInvariantUnit,
     SolanaProgramInstance,
 )
+from composer.spec.types import PropertyFormulation
 from composer.spec.util import FS_FORBIDDEN_READ
 
 LanguageTag = Literal["solidity", "rust"]
@@ -96,6 +98,18 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     units: Callable[[Main], list[Unit]]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
+
+    # -- Extraction strategy (docs/crucible-unit-granularity.md) -------------------------
+    #: When True, the driver runs ONE whole-program property extraction (context =
+    #: ``extraction_unit(main)``) and fans each resulting property out into its own unit
+    #: via ``property_unit`` — one harness + verdict per property. When False (the EVM
+    #: default) it extracts per ``units(main)`` (one batch per component). Solana uses
+    #: global extraction so the fuzzer gets whole-program invariants, one run per invariant.
+    global_extraction: bool = False
+    #: The whole-program context the global extraction reads (only used when global_extraction).
+    extraction_unit: Callable[[Main], FeatureUnit] | None = None
+    #: Build the per-property unit from (main, property, index) (only used when global_extraction).
+    property_unit: Callable[[Main, PropertyFormulation, int], FeatureUnit] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +259,21 @@ def _solana_locate_main(app: SolanaApplication, source: SourceCode) -> SolanaPro
 
 
 def _solana_units(main: SolanaProgramInstance) -> list[SolanaInstructionInstance]:
+    # Per-instruction units — unused under global extraction (kept for a per-instruction
+    # fallback and to satisfy the ecosystem's Unit type).
     return [SolanaInstructionInstance(i, main) for i in range(len(main.program.instructions))]
+
+
+def _solana_extraction_unit(main: SolanaProgramInstance) -> SolanaProgramInstance:
+    # The whole program is the extraction context; SolanaProgramInstance is itself a
+    # FeatureUnit, so the driver reads it directly to propose whole-program invariants.
+    return main
+
+
+def _solana_property_unit(
+    main: SolanaProgramInstance, prop: PropertyFormulation, ind: int
+) -> SolanaInvariantUnit:
+    return SolanaInvariantUnit(ind, main, prop)
 
 
 def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
@@ -266,6 +294,11 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaInstructionIns
     locate_main=_solana_locate_main,
     units=_solana_units,
     analysis_extra_input=_solana_analysis_extra_input,
+    # Fuzzing wants whole-program invariants (one run per invariant), not per-instruction
+    # properties — docs/crucible-unit-granularity.md.
+    global_extraction=True,
+    extraction_unit=_solana_extraction_unit,
+    property_unit=_solana_property_unit,
 )
 
 
