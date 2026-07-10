@@ -19,6 +19,7 @@ database can supply its own env builder via ``env_builder=``.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import pathlib
 import sys
@@ -36,7 +37,7 @@ from composer.input.types import (
     DEFAULT_RECURSION_LIMIT,
     ExtendedModelOptions,
 )
-from composer.io.multi_job import HandlerFactory
+from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
 from composer.io.thread_logging import default_logging_ns, thread_logger
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import CorePipelineResult
@@ -44,8 +45,13 @@ from composer.rag.models import get_model
 from composer.rustapp.descriptor import ArgDefault, ArgSpec
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
-from composer.spec.context import SourceCode, WorkflowContext
+from composer.spec.context import SourceCode, SourceFields, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost, ServiceHost
+from composer.spec.source.design_doc_finder import (
+    DESIGN_DOC_DISCOVERY_TASK_ID,
+    discovery_cache_key,
+    resolve_design_doc,
+)
 from composer.spec.source.source_env import (
     build_basic_source_tools,
     build_source_tools,
@@ -123,6 +129,17 @@ def _add_declared_args(parser: argparse.ArgumentParser, specs: list[ArgSpec]) ->
     return dests
 
 
+def _discovery_phase(app: RustApplication) -> Any:
+    """The phase to tag the design-doc-discovery task with: a descriptor phase keyed
+    ``discover_design_doc`` if the app declares one (a dedicated UI section), else the
+    first ordered phase (so a generic wheel still groups it somewhere sensible)."""
+    ordered = app.descriptor.ordered_phases()
+    key = "discover_design_doc"
+    if any(p.key == key for p in ordered):
+        return app.phase[key]
+    return app.phase[ordered[0].key]
+
+
 @asynccontextmanager
 async def rust_entry_point(
     app: RustApplication,
@@ -146,7 +163,10 @@ async def rust_entry_point(
     )
     parser.add_argument("project_root", help="Project root")
     parser.add_argument("main_contract", help="Main contract as path:ContractName")
-    parser.add_argument("system_doc", help="Path to the design document (text or PDF)")
+    parser.add_argument(
+        "system_doc", nargs="?", default=None,
+        help="Path to the design document (text or PDF); auto-discovered if omitted",
+    )
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
@@ -163,7 +183,6 @@ async def rust_entry_point(
     if not full_path.is_relative_to(project_root):
         parser.error(f"Invalid path: {full_path} not under project root {project_root}")
     relative_path = str(full_path.relative_to(project_root))
-    sys_path = pathlib.Path(args.system_doc)
 
     # Rust-owned precondition validation (cf. foundry's foundry.toml check).
     declared_args = {d: getattr(args, d) for d in declared_dests}
@@ -171,18 +190,16 @@ async def rust_entry_point(
         {
             "project_root": str(project_root),
             "main_contract": args.main_contract,
-            "system_doc": str(sys_path),
+            "system_doc": args.system_doc or "",
             **declared_args,
         }
     )
     if err:
         parser.error(err)
 
+    # The ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry for EVM).
+    forbidden_read = app.ecosystem.language.default_forbidden_read
     model = get_model()
-    root_key = _root_cache_key(str(project_root), sys_path, relative_path, contract_name)
-    cache_root: tuple[str, ...] | None = (
-        _user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
-    )
 
     thread_id = f"{descriptor.name}_{uuid.uuid4().hex[:12]}"
     text_log, events_log = setup_autoprove_logging(str(project_root), thread_id)
@@ -192,6 +209,7 @@ async def rust_entry_point(
     # argparse Namespace duck-types the ModelConfiguration protocol (the model flags come from
     # ExtendedModelOptions); the built-in entries cast their args the same way.
     tiered = get_provider_for(tiered=cast(Any, args))
+    discovery_phase = _discovery_phase(app)
 
     async with (
         standard_connections(provider=tiered.provider_kind, embedder=DefaultEmbedder(model)) as conns,
@@ -201,55 +219,100 @@ async def rust_entry_point(
             {
                 "root_thread_id": thread_id,
                 "workflow": descriptor.name,
-                "cache_root": list(cache_root) if cache_root is not None else None,
                 "memory_ns": args.memory_ns if args.memory_ns is not None else thread_id,
             },
             default_logging_ns(uid=None),
             run_id=summary.run_id,
         ),
     ):
-        content = await conns.uploader.get_document(sys_path)
-        if content is None:
-            parser.error(f"cannot read {sys_path}")
-        # The ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry for EVM).
-        forbidden_read = app.ecosystem.language.default_forbidden_read
-        source_input = SourceCode(
-            content=content,
-            project_root=str(project_root),
-            contract_name=contract_name,
-            relative_path=relative_path,
-            forbidden_read=forbidden_read,
-        )
-
         model_provider = ModelProvider(
             heavy_model=tiered.heavy,
             lite_model=tiered.lite,
             checkpointer=conns.checkpointer,
         )
-        source_question_ns = _user_ns("source_agent", "cache", root_key)
-
-        builder = env_builder or build_neutral_env
-        env = builder(
-            model_provider=model_provider,
+        # The design-doc finder works off the source fields alone; its cache namespace
+        # is doc-independent (keyed by project/contract), so it's built up front.
+        init_source = SourceFields(
             project_root=str(project_root),
-            store=conns.indexed_store,
-            source_question_ns=source_question_ns,
-            recursion_limit=args.recursion_limit,
+            contract_name=contract_name,
+            relative_path=relative_path,
             forbidden_read=forbidden_read,
         )
-
-        ctx = WorkflowContext.create(
-            services=conns.memory,
-            thread_id=thread_id,
-            store=conns.store,
-            recursion_limit=args.recursion_limit,
-            cache_namespace=cache_root,
-            memory_namespace=args.memory_ns,
+        disc_cache_ns: tuple[str, ...] | None = (
+            _user_ns(
+                args.cache_ns, "discovery",
+                discovery_cache_key(str(project_root), relative_path, str(contract_name)),
+            )
+            if args.cache_ns is not None
+            else None
         )
+        disc_ctx = WorkflowContext.create(
+            services=conns.memory, thread_id=thread_id, store=conns.store,
+            recursion_limit=args.recursion_limit, memory_namespace=args.memory_ns,
+            cache_namespace=disc_cache_ns,
+        )
+        semaphore = asyncio.Semaphore(args.max_concurrent)
 
         async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult]:
-            # A backend that needs a bespoke store/pipeline (e.g. Crucible's crate
-            # store) supplies run_pipeline_fn; everything else uses the generic host.
+            # 1. Resolve the design doc: use the supplied path, else discover one as a
+            #    visible task (needs the handler scope, which only exists here).
+            if args.system_doc is not None:
+                sys_path = pathlib.Path(args.system_doc)
+            else:
+                sys_path = await run_task(
+                    factory=handler,
+                    info=TaskInfo(
+                        task_id=DESIGN_DOC_DISCOVERY_TASK_ID,
+                        label="Design Doc Discovery",
+                        phase=discovery_phase,
+                    ),
+                    fn=lambda: resolve_design_doc(
+                        source=init_source, uploader=conns.uploader,
+                        models=model_provider, disc_ctx=disc_ctx,
+                    ),
+                    semaphore=semaphore,
+                )
+
+            content = await conns.uploader.get_document(sys_path)
+            if content is None:
+                raise ValueError(f"cannot read design document: {sys_path}")
+
+            # 2. Doc-dependent construction. The root cache key hashes the doc bytes, so
+            #    a discovered doc and a supplied one produce an identical key.
+            root_key = _root_cache_key(
+                str(project_root), sys_path, relative_path, str(contract_name)
+            )
+            cache_root: tuple[str, ...] | None = (
+                _user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
+            )
+            source_input = SourceCode(
+                content=content,
+                project_root=str(project_root),
+                contract_name=contract_name,
+                relative_path=relative_path,
+                forbidden_read=forbidden_read,
+            )
+            source_question_ns = _user_ns("source_agent", "cache", root_key)
+            builder = env_builder or build_neutral_env
+            env = builder(
+                model_provider=model_provider,
+                project_root=str(project_root),
+                store=conns.indexed_store,
+                source_question_ns=source_question_ns,
+                recursion_limit=args.recursion_limit,
+                forbidden_read=forbidden_read,
+            )
+            ctx = WorkflowContext.create(
+                services=conns.memory,
+                thread_id=thread_id,
+                store=conns.store,
+                recursion_limit=args.recursion_limit,
+                cache_namespace=cache_root,
+                memory_namespace=args.memory_ns,
+            )
+
+            # 3. A backend that needs a bespoke store/pipeline (e.g. Crucible's crate
+            #    store) supplies run_pipeline_fn; everything else uses the generic host.
             if run_pipeline_fn is not None:
                 return await run_pipeline_fn(
                     source_input=source_input, ctx=ctx, handler_factory=handler,
@@ -277,7 +340,7 @@ def build_arg_parser(app: RustApplication) -> argparse.ArgumentParser:
     parser.add_argument("--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT)
     parser.add_argument("project_root")
     parser.add_argument("main_contract")
-    parser.add_argument("system_doc")
+    parser.add_argument("system_doc", nargs="?", default=None)
     parser.add_argument("--max-concurrent", type=int, default=4)
     parser.add_argument("--cache-ns", default=None)
     parser.add_argument("--memory-ns", default=None)

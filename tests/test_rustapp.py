@@ -177,6 +177,22 @@ def test_entry_argparser_has_positionals_and_declared_flags():
     assert args2.echo_tag == "hi"
 
 
+def test_system_doc_is_optional_with_discovery_phase_fallback():
+    from composer.rustapp.entry import _discovery_phase, build_arg_parser
+
+    app = host.build_application("echoprover")
+    parser = build_arg_parser(app)
+
+    # system_doc may be omitted (→ discovery); still parses.
+    ns = parser.parse_args(["/proj", "src/C.sol:C"])
+    assert ns.system_doc is None
+    assert parser.parse_args(["/proj", "src/C.sol:C", "doc.md"]).system_doc == "doc.md"
+
+    # A wheel that declares no discover_design_doc phase falls back to its first phase.
+    first_key = app.descriptor.ordered_phases()[0].key
+    assert _discovery_phase(app) is app.phase[first_key]
+
+
 def test_frontend_labels_and_backend_phases_share_one_enum():
     # The correctness invariant: the phases the driver stamps on TaskInfo (from
     # the backend's core_phases) must be the SAME enum members the frontend's

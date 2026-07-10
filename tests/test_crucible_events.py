@@ -54,6 +54,17 @@ class FakeEffects:
         raise AssertionError("crucible does not use run_feedback")
 
 
+def test_descriptor_declares_design_doc_discovery_phase():
+    """Crucible declares a dedicated UI-only discovery phase (parity with Foundry),
+    which the generic entry tags the discovery task with."""
+    from composer.crucible.pipeline import build_crucible_application
+    from composer.rustapp.entry import _discovery_phase
+
+    app = build_crucible_application()
+    assert app.section_order[0] == "Design Doc Discovery"
+    assert _discovery_phase(app) is app.phase["discover_design_doc"]
+
+
 def _kinds(fx: FakeEffects) -> list[str]:
     return [k for k, _ in fx.events]
 

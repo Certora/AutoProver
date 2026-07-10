@@ -722,12 +722,14 @@ impl Application for CrucibleApp {
             backend_guidance: CRUCIBLE_BACKEND_GUIDANCE.to_string(),
             analysis_key: "crucible-solana-analysis".to_string(),
             phases: vec![
-                PhaseSpec { key: "analysis".into(), label: "System Analysis".into(), order: 0, core_slot: Some(CoreSlot::Analysis) },
-                PhaseSpec { key: "extraction".into(), label: "Property Extraction".into(), order: 1, core_slot: Some(CoreSlot::Extraction) },
+                // UI-only phase: discover the design doc when one isn't supplied (§host).
+                PhaseSpec { key: "discover_design_doc".into(), label: "Design Doc Discovery".into(), order: 0, core_slot: None },
+                PhaseSpec { key: "analysis".into(), label: "System Analysis".into(), order: 1, core_slot: Some(CoreSlot::Analysis) },
+                PhaseSpec { key: "extraction".into(), label: "Property Extraction".into(), order: 2, core_slot: Some(CoreSlot::Extraction) },
                 // UI-only phase: build the program `.so` + IDL + shared fixture (§5.1).
-                PhaseSpec { key: "build_harness".into(), label: "Build Harness".into(), order: 2, core_slot: None },
-                PhaseSpec { key: "formalization".into(), label: "Harness Authoring".into(), order: 3, core_slot: Some(CoreSlot::Formalization) },
-                PhaseSpec { key: "report".into(), label: "Report".into(), order: 4, core_slot: Some(CoreSlot::Report) },
+                PhaseSpec { key: "build_harness".into(), label: "Build Harness".into(), order: 3, core_slot: None },
+                PhaseSpec { key: "formalization".into(), label: "Harness Authoring".into(), order: 4, core_slot: Some(CoreSlot::Formalization) },
+                PhaseSpec { key: "report".into(), label: "Report".into(), order: 5, core_slot: Some(CoreSlot::Report) },
             ],
             args: vec![
                 ArgSpec {
