@@ -133,7 +133,7 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
             fuzz_timeout_s=12, max_concurrent=2, max_bug_rounds=1, interactive=False,
         )
 
-    print(f"\nCrucible E2E: {result.n_components} instruction(s), {result.n_properties} properties")
+    print(f"\nCrucible E2E: {result.n_components} invariant(s), {result.n_properties} properties")
     for o in result.outcomes:
         verdicts = o.result.result.verdicts if isinstance(o.result, Delivered) else "(not delivered)"
         print(f"  == {o.feat.display_name} == delivered={isinstance(o.result, Delivered)} verdicts={verdicts}")
@@ -141,7 +141,7 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
         print("failures:", result.failures)
 
     # The front half ran (instructions analyzed, properties extracted) ...
-    assert result.n_components > 0, "no instructions analyzed"
+    assert result.n_components > 0, "no invariants extracted"
     assert result.n_properties > 0, "no properties extracted"
     # ... and at least one component was formalized into a fuzz-verdicted test.
     delivered = [o for o in result.outcomes if isinstance(o.result, Delivered)]
