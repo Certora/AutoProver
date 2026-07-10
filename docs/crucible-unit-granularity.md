@@ -1,5 +1,11 @@
 # Crucible unit granularity: per-instruction vs whole-program (global) fuzzing scenarios
 
+> **Status: implemented (commit fd51700).** Solana now uses global extraction with
+> per-invariant fuzz units (recommendation §6, steps 1+2 combined). The front-half gate
+> confirms it yields cross-instruction invariants (e.g. "cumulative withdrawn ≤ cumulative
+> deposited across all calls", "rent exemption preserved after ANY instruction"). The rest
+> of this note is the original decision record.
+
 Design note for [crucible-application.md §10 Q1](./crucible-application.md) — "are we
 using the right unit granularity for a fuzzer?" It describes moving Crucible's
 scenario generation from **per-instruction** units to a **whole-program (global)**

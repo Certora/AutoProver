@@ -680,14 +680,15 @@ safety one.
 
 ## 10. Open questions
 
-1. **Unit granularity for a fuzzer.** The `SOLANA` ecosystem's `units` are per-instruction, but a
-   Crucible invariant is inherently *cross-instruction* (checked over a random action sequence). Do
-   we (a) keep per-instruction components, each authoring one test that drives the full sequence but
-   asserts that component's properties, or (b) collapse to a **single whole-program harness** (units
-   → one)? (a) reuses the fan-out/caching and matches Crucible's feature-per-test structure; (b) is
-   more natural for global invariants but discards per-component parallelism. This is exactly
-   [ecosystem-abstraction.md §11 Q1](./ecosystem-abstraction.md); recommend (a) first, with a
-   `render_unit` hook if per-unit shape diverges.
+1. **Unit granularity for a fuzzer.** — **RESOLVED (commit fd51700; see
+   [crucible-unit-granularity.md](./crucible-unit-granularity.md)).** Neither (a) per-instruction
+   nor (b) a single opaque whole-program harness: Solana now uses **global extraction with
+   per-invariant units** — one whole-program property pass proposes cross-instruction invariants,
+   each of which fans out to its own harness fn + fuzz run + report row (via the ecosystem's
+   `global_extraction` / `extraction_unit` / `property_unit` hooks). This matches the fuzzer's
+   whole-program semantics and Foundry's stateful-fuzz model while keeping per-invariant
+   attribution. Original framing retained below for history: the `units` were per-instruction, but
+   a Crucible invariant is inherently *cross-instruction* (checked over a random action sequence).
 2. **Sandbox specifics (required work — §7.4, §9 Phase 6).** The isolation *requirements* and the
    mechanism are decided — **unprivileged Landlock + seccomp self-sandboxing** (filesystem, network,
    env, rlimits) behind the `RunCommand` seam, needing no container changes — and building it is an
