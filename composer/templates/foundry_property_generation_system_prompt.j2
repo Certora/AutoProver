@@ -103,6 +103,13 @@ err on the side of long-and-specific.
   fail (not just an inner call); see "Expecting test failure" below.
 * When you need to mock, `vm.mockCall` is the cheatcode; look it up with
   `foundry_cheatcodes_manual_search` if you haven't used it before.
+* **Use `makeAddr("name")` or `vm.addr(k)` for test actors/addresses; never
+  hand-write shorthand or "leet" hex.** If a specific literal is truly
+  required, use a full valid checksummed hex address. An invalid hex digit is
+  a hard solc build error that fails the **entire** build -- no tests run.
+* **If `forge_test` reports a build failure, fix the compile error before
+  anything else** -- before iterating on test logic or fuzz seeds. Invalid
+  address/number literals are a common cause.
 
 ## Writing fuzz tests
 
