@@ -31,8 +31,8 @@ Foundry (dead tuning flags, hardcoded toolchain versions) — see §3.
 | Capability | Foundry | Crucible | Status |
 |---|---|---|---|
 | Console entry point | `console-foundry` | `console-crucible` | ✅ parity |
-| **TUI entry point** | `tui-foundry` (`FoundryApp`) | **none** (`GenericRustApp` exists, unwired) | ❌ **gap** |
-| **Live progress telemetry** | streams `forge_test_run` into TUI panel | declares `fuzz_pulse`/`fuzz_finding`/`build_output` but **never emits** them | ❌ **gap** |
+| **TUI entry point** | `tui-foundry` (`FoundryApp`) | `tui-crucible` (`GenericRustApp`) | ✅ parity — *done (2c0f693)* |
+| **Progress telemetry** | emits `forge_test_run` summaries | emits `fuzz_pulse`/`fuzz_finding`/`build_output` (post-hoc, per run) | ✅ parity — *done (2c0f693)* |
 | **Design-doc auto-discovery** | `system_doc` optional → discovery phase | `system_doc` **required** | ❌ **gap** |
 | Per-component status artifact | `*.status.json` | commentary + property→tests only | ⚠️ minor gap |
 | Build/verify concurrency | `--max-forge-runners` parallel | serialized (`Semaphore(1)`, shared crate) | ⚠️ perf gap |
@@ -57,7 +57,19 @@ capability that exists only on autoprove/prover).
 
 ## 1. Real Foundry-parity gaps (the work)
 
-### 1.1 TUI frontend + live progress telemetry — **largest gap, L**
+### 1.1 TUI frontend + progress telemetry — **DONE (commit 2c0f693)**
+
+> **Resolved.** The decider now issues `Command::Emit` from the setup and per-component
+> sessions (`fuzz_pulse` before each fuzz run + on a clean hold, `fuzz_finding` on a
+> counterexample, `build_output` on (re)compiles / dry-run outcomes); `RealEffects.emit`
+> was fixed to route out-of-graph via `push_custom_update` (it previously dropped every
+> event through a stale `get_stream_writer()` call); and `tui-crucible` is wired
+> (`GenericRustApp`). Events are **post-hoc per run** (matching Foundry's
+> `forge_test_run` summaries) — true intra-run live streaming would need the
+> `RunCommand` effect to stream subprocess output and is deferred. Original analysis
+> retained below for context.
+
+### ~~1.1 TUI frontend + live progress telemetry — largest gap, L~~ (superseded)
 
 Foundry ships a Textual TUI (`tui-foundry` → `composer/cli/tui_foundry.py`, `FoundryApp`
 in `composer/foundry/foundry_app.py:114`) that streams each `forge test` run's summary
@@ -180,8 +192,7 @@ Independent of Foundry, these are worth closing for a production-quality backend
 
 ## 5. Suggested prioritization
 
-1. **1.1(b) emit decider events** + **1.1(a) `tui-crucible`** — the biggest UX parity gap;
-   (b) also improves the console run (live build/fuzz feedback), so do it first.
+1. ~~**1.1 emit decider events + `tui-crucible`**~~ — **DONE (2c0f693)**.
 2. **1.2 design-doc discovery** — removes a required argument and matches Foundry/autoprove
    ergonomics; self-contained.
 3. **§3 inert flags / version table** — either wire `--fuzz-cores`/`--stateful`/
