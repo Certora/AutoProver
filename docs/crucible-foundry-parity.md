@@ -168,10 +168,10 @@ autoprove/prover path). Listed so they aren't mistaken for work:
 
 Independent of Foundry, these are worth closing for a production-quality backend:
 
-- **Inert tuning flags.** `--fuzz-cores`, `--stateful`, and `--crucible-version` are
-  parsed and validated (`lib.rs:640-664`) but **never threaded to the run** — the fuzz
-  command hardcodes `--mode explore` and passes only `--timeout` (`lib.rs:530-543`). Either
-  wire them or drop them from the descriptor.
+- ~~**Inert tuning flags.**~~ **DONE (266f421)** — `--fuzz-cores`, `--stateful`, and
+  `--crucible-version` were parsed but never threaded to `crucible run`; removed from the
+  descriptor (only `--fuzz-timeout` remains, which is honored). Re-add each with its wiring
+  if/when the fuzz command grows the corresponding knob.
 - **Hardcoded toolchain versions.** anchor 1.0.1 / solana 3.0 / libafl 0.15.1 are pinned
   in `composer/crucible/harness.py:32-43` ("Hardcoded for now"); `--crucible-version` was
   meant to drive a version table (see docs/crucible-toolchain-versioning.md) but is inert.
@@ -201,9 +201,8 @@ Independent of Foundry, these are worth closing for a production-quality backend
 
 1. ~~**1.1 emit decider events + `tui-crucible`**~~ — **DONE (2c0f693)**.
 2. ~~**1.2 design-doc discovery**~~ — **DONE (55a5959)**.
-3. **§3 inert flags / version table** — either wire `--fuzz-cores`/`--stateful`/
-   `--crucible-version` or remove them; fold the version work into the toolchain-versioning
-   plan.
+3. ~~**§3 inert flags**~~ — **DONE (266f421)**, removed. (Version-table work remains,
+   tracked in docs/crucible-toolchain-versioning.md.)
 4. **1.4 crate-per-component** (concurrency) and **1.3 status artifact** — lower priority;
    1.4 is a larger design change tracked separately.
 
