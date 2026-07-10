@@ -169,14 +169,19 @@ class RealEffects:
         self._scratch[key] = value
 
     async def emit(self, event_kind: str, payload: dict) -> None:
-        try:
-            from langgraph.config import get_stream_writer
+        # The decider emits between graph calls (in the IoC loop), where
+        # get_stream_writer() is unavailable — so route the event straight to the
+        # task's EventHandler.handle_event via the with_handler scope. The task id is
+        # the console label; the queue is per-task, so it reaches the right panel.
+        from composer.diagnostics.timing import get_current_task_id
+        from composer.io.context import push_custom_update
 
-            writer = get_stream_writer()
-        except Exception:  # not inside a graph stream scope
-            _log.debug("emit(%s) dropped: no stream writer in scope", event_kind)
-            return
-        writer({"type": event_kind, **payload})
+        delivered = push_custom_update(
+            {"type": event_kind, **payload},
+            thread_id=get_current_task_id() or "rust",
+        )
+        if not delivered:
+            _log.debug("emit(%s) dropped: no handler scope", event_kind)
 
 
 @dataclass

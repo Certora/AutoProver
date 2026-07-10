@@ -7,7 +7,7 @@
 //! program-wide setup session (shared fixture + `action_*`), and per-component
 //! test-authoring sessions that dry-run / fuzz via `Command::RunCommand`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 
 use autoprover_sdk::{
@@ -15,6 +15,50 @@ use autoprover_sdk::{
     FormalizeInput, FormalizeSession, Formalized, Observation, PhaseSpec, Property, SetupInput,
     Verdict, VerdictInput,
 };
+
+/// A tiny queue that lets a session emit fire-and-forget UI events *before* its next
+/// real command. `Command::Emit` yields `Observation::Ack`, so a session drains one
+/// emit per `resume` (ignoring the Acks) ahead of the deferred "real" command. This
+/// is how the setup/per-component loops surface build + fuzzing progress to the
+/// console/TUI (the descriptor's `fuzz_pulse` / `fuzz_finding` / `build_output` kinds).
+#[derive(Default)]
+struct Emitter {
+    queue: VecDeque<Command>,
+    deferred: Option<Command>,
+}
+
+impl Emitter {
+    /// The next pending emit (or the deferred command once the emits drain). Call at
+    /// the top of `resume`; returns `None` when nothing is pending (run the state machine).
+    fn drain(&mut self) -> Option<Command> {
+        if let Some(cmd) = self.queue.pop_front() {
+            return Some(cmd);
+        }
+        self.deferred.take()
+    }
+
+    /// Queue `events` (kind + one-line payload) to emit in order, then run `then`.
+    /// Returns the command to issue right now (the first event, or `then` if none).
+    fn emit_then(&mut self, events: Vec<(&str, serde_json::Value)>, then: Command) -> Command {
+        for (kind, payload) in events {
+            self.queue.push_back(Command::Emit { event_kind: kind.to_string(), payload });
+        }
+        self.deferred = Some(then);
+        self.drain().expect("emit_then always leaves at least the deferred command")
+    }
+}
+
+/// Event builders — the `line` field is what the frontend renders one-line (see
+/// `composer/rustapp/frontend.py:_render_event`); the kind selects the panel.
+fn build_event(line: String) -> (&'static str, serde_json::Value) {
+    ("build_output", serde_json::json!({ "line": line }))
+}
+fn pulse_event(line: String) -> (&'static str, serde_json::Value) {
+    ("fuzz_pulse", serde_json::json!({ "line": line }))
+}
+fn finding_event(line: String) -> (&'static str, serde_json::Value) {
+    ("fuzz_finding", serde_json::json!({ "line": line }))
+}
 
 /// Backend-guidance prose injected into the property-extraction prompt. Crucible is
 /// a fuzzer, so — like Foundry — refutations are valuable but universals can't be
@@ -197,6 +241,7 @@ struct SetupSession {
     fixture: String,
     attempts: u32,
     stage: SetupStage,
+    emit: Emitter,
 }
 
 impl SetupSession {
@@ -392,6 +437,9 @@ fn revise_suffix(prev_src: &str, raw: &str) -> String {
 
 impl FormalizeSession for SetupSession {
     fn resume(&mut self, observation: Observation) -> Command {
+        if let Some(cmd) = self.emit.drain() {
+            return cmd;
+        }
         match self.stage {
             SetupStage::Start => {
                 self.stage = SetupStage::AwaitDraft;
@@ -401,7 +449,12 @@ impl FormalizeSession for SetupSession {
                 if let Observation::LlmReply { text } = observation {
                     self.fixture = strip_code_fence(&text);
                     self.stage = SetupStage::AwaitBuild;
-                    self.validate_command()
+                    let ev = build_event(format!(
+                        "compiling `{}` fixture (crucible --dry-run — can take minutes)…",
+                        self.program
+                    ));
+                    let cmd = self.validate_command();
+                    self.emit.emit_then(vec![ev], cmd)
                 } else {
                     self.stage = SetupStage::Done;
                     Command::GiveUp { reason: "expected an LLM reply while drafting the fixture".into() }
@@ -410,26 +463,37 @@ impl FormalizeSession for SetupSession {
             SetupStage::AwaitBuild => match observation {
                 Observation::CommandResult { exit_code: 0, .. } => {
                     self.stage = SetupStage::Done;
-                    Command::Publish {
+                    let ev = build_event(format!("`{}` fixture dry-run OK", self.program));
+                    let cmd = Command::Publish {
                         result: Formalized::new(
                             self.fixture.clone(),
                             format!("Crucible shared fixture for `{}` (dry-run OK).", self.program),
                         ),
-                    }
+                    };
+                    self.emit.emit_then(vec![ev], cmd)
                 }
                 Observation::CommandResult { stdout, stderr, .. } => {
                     if self.attempts + 1 >= SETUP_MAX_ATTEMPTS {
                         self.stage = SetupStage::Done;
-                        Command::GiveUp {
+                        let ev = build_event(format!(
+                            "fixture dry-run failed after {SETUP_MAX_ATTEMPTS} attempts — giving up"
+                        ));
+                        let cmd = Command::GiveUp {
                             reason: format!(
                                 "fixture did not pass --dry-run after {SETUP_MAX_ATTEMPTS} attempts"
                             ),
-                        }
+                        };
+                        self.emit.emit_then(vec![ev], cmd)
                     } else {
                         self.attempts += 1;
                         self.stage = SetupStage::AwaitDraft;
+                        let ev = build_event(format!(
+                            "fixture dry-run failed (attempt {}/{SETUP_MAX_ATTEMPTS}); revising",
+                            self.attempts
+                        ));
                         let err = format!("{stdout}\n{stderr}");
-                        Command::CallLlm { messages: self.author_prompt(Some(&err)) }
+                        let cmd = Command::CallLlm { messages: self.author_prompt(Some(&err)) };
+                        self.emit.emit_then(vec![ev], cmd)
                     }
                 }
                 _ => {
@@ -482,6 +546,7 @@ struct PerComponentSession {
     test_src: String,
     attempts: u32,
     stage: PcStage,
+    emit: Emitter,
 }
 
 impl PerComponentSession {
@@ -566,6 +631,9 @@ fn is_build_error(out: &str) -> bool {
 
 impl FormalizeSession for PerComponentSession {
     fn resume(&mut self, observation: Observation) -> Command {
+        if let Some(cmd) = self.emit.drain() {
+            return cmd;
+        }
         match self.stage {
             PcStage::Start => {
                 self.stage = PcStage::AwaitDraft;
@@ -575,7 +643,12 @@ impl FormalizeSession for PerComponentSession {
                 if let Observation::LlmReply { text } = observation {
                     self.test_src = strip_code_fence(&text);
                     self.stage = PcStage::AwaitFuzz;
-                    self.fuzz_command()
+                    let ev = pulse_event(format!(
+                        "fuzzing `{}` (explore mode, {}s budget)…",
+                        self.feature, self.fuzz_timeout
+                    ));
+                    let cmd = self.fuzz_command();
+                    self.emit.emit_then(vec![ev], cmd)
                 } else {
                     self.stage = PcStage::Done;
                     Command::GiveUp { reason: "expected an LLM reply while drafting the test".into() }
@@ -587,22 +660,43 @@ impl FormalizeSession for PerComponentSession {
                     if is_build_error(&combined) {
                         if self.attempts + 1 >= PC_MAX_ATTEMPTS {
                             self.stage = PcStage::Done;
-                            Command::GiveUp {
+                            let ev = build_event(format!(
+                                "`{}` did not compile after {PC_MAX_ATTEMPTS} attempts — giving up",
+                                self.feature
+                            ));
+                            let cmd = Command::GiveUp {
                                 reason: format!("test did not compile after {PC_MAX_ATTEMPTS} attempts"),
-                            }
+                            };
+                            self.emit.emit_then(vec![ev], cmd)
                         } else {
                             self.attempts += 1;
+                            let ev = build_event(format!(
+                                "`{}` build failed (attempt {}/{PC_MAX_ATTEMPTS}); revising",
+                                self.feature, self.attempts
+                            ));
                             self.stage = PcStage::AwaitDraft;
-                            Command::CallLlm { messages: self.author_prompt(Some(&combined)) }
+                            let cmd = Command::CallLlm { messages: self.author_prompt(Some(&combined)) };
+                            self.emit.emit_then(vec![ev], cmd)
                         }
                     } else if combined.contains("[FUZZ_FINDING]") {
                         // A crash = the property was refuted (a real counterexample).
                         self.stage = PcStage::Done;
-                        self.publish("BAD", "Crucible refuted the property (fuzzing counterexample)")
+                        let ev = finding_event(format!(
+                            "counterexample found — `{}` refuted",
+                            self.feature
+                        ));
+                        let cmd =
+                            self.publish("BAD", "Crucible refuted the property (fuzzing counterexample)");
+                        self.emit.emit_then(vec![ev], cmd)
                     } else {
                         // Ran to the timeout with no violation = held within the budget.
                         self.stage = PcStage::Done;
-                        self.publish("GOOD", "No violation found within the fuzzing budget")
+                        let ev = pulse_event(format!(
+                            "`{}` held — no counterexample within the {}s budget",
+                            self.feature, self.fuzz_timeout
+                        ));
+                        let cmd = self.publish("GOOD", "No violation found within the fuzzing budget");
+                        self.emit.emit_then(vec![ev], cmd)
                     }
                 }
                 _ => {
@@ -727,6 +821,7 @@ impl Application for CrucibleApp {
             fixture: String::new(),
             attempts: 0,
             stage: SetupStage::Start,
+            emit: Emitter::default(),
         }))
     }
 
@@ -756,6 +851,7 @@ impl Application for CrucibleApp {
             test_src: String::new(),
             attempts: 0,
             stage: PcStage::Start,
+            emit: Emitter::default(),
         })
     }
 
