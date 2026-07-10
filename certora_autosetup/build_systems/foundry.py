@@ -22,6 +22,7 @@ else:
 from certora_autosetup.build_systems.base import BuildSystemConfig
 from certora_autosetup.build_systems.manager import BuildSystemManager
 from certora_autosetup.utils.logger import logger
+from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -176,11 +177,20 @@ class FoundryManager(BuildSystemManager):
             # Resolve paths relative to foundry.toml location
             config = self._resolve_paths(config, config_file.parent)
 
-            # Parse remappings and convert to packages format
-            if config.remappings:
-                config.packages = self._convert_remappings_to_packages(
+            # Build the packages list from the authoritative merged remapping sources
+            # (`forge remappings` + foundry.toml + remappings.txt + package.json) so the
+            # initial conf matches what the reactive source-not-found workaround would
+            # produce. Fall back to parsing foundry.toml's explicit remappings when forge
+            # is unavailable and nothing is found on disk.
+            packages = build_packages_from_remapping_sources(
+                base_dir=config_file.parent, log_fn=self.log
+            )
+            if not packages and config.remappings:
+                packages = self._convert_remappings_to_packages(
                     config.remappings, config_file.parent
                 )
+            if packages:
+                config.packages = packages
 
             self.log(
                 f"Parsed foundry config: solc={config.solc_version}, optimizer={config.optimizer}"

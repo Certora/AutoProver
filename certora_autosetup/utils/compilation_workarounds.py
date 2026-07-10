@@ -16,8 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-import tomllib
-
 from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION, SolcConvention
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 from certora_autosetup.utils.library_harness import (
@@ -27,6 +25,7 @@ from certora_autosetup.utils.library_harness import (
 )
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.paths import user_harness_path, user_harnesses_dir
+from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.solc_version_resolver import (
     extract_pragma_spec,
     resolve_pragma_to_version,
@@ -1206,147 +1205,8 @@ class CompilationWorkaroundManager:
         3. remappings.txt — often partially auto-generated; may drift
         4. package.json — npm-style fallback
         """
-        packages: List[str] = []
-        remapping_key_to_path: Dict[str, str] = {}
-        remapping_key_to_source: Dict[str, str] = {}
-
-        # Try `forge remappings` (highest priority — walks nested foundry.toml files)
-        try:
-            result = subprocess.run(
-                ["forge", "remappings"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            self.log(f"Could not run `forge remappings` ({e}); falling back to local files", "INFO")
-            result = None
-
-        if result is not None and result.returncode == 0:
-            for line in result.stdout.splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                self._merge_remapping_entry(
-                    entry=line,
-                    source_name="`forge remappings`",
-                    packages=packages,
-                    remapping_key_to_path=remapping_key_to_path,
-                    remapping_key_to_source=remapping_key_to_source,
-                    warn_on_mismatch=False,
-                )
-        elif result is not None:
-            self.log(
-                f"`forge remappings` exited with code {result.returncode}; falling back to local files",
-                "WARNING",
-            )
-
-        # Read foundry.toml (next priority — top-level remappings field)
-        foundry_toml_path = Path("foundry.toml")
-        if foundry_toml_path.exists():
-            try:
-                with foundry_toml_path.open("rb") as f:
-                    foundry_data = tomllib.load(f)
-            except tomllib.TOMLDecodeError as e:
-                self.log(f"Failed to parse foundry.toml: {e}", "WARNING")
-                foundry_data = {}
-
-            foundry_remappings: List[str] = []
-            # foundry.toml accepts both top-level `remappings = [...]` and
-            # `[profile.default] remappings = [...]`; merge with top-level winning per
-            # foundry's own semantics.
-            foundry_remappings.extend(
-                foundry_data.get("profile", {}).get("default", {}).get("remappings", []) or []
-            )
-            foundry_remappings.extend(foundry_data.get("remappings", []) or [])
-
-            for entry in foundry_remappings:
-                entry = entry.strip()
-                if not entry or "=" not in entry:
-                    continue
-                self._merge_remapping_entry(
-                    entry=entry,
-                    source_name="foundry.toml",
-                    packages=packages,
-                    remapping_key_to_path=remapping_key_to_path,
-                    remapping_key_to_source=remapping_key_to_source,
-                    warn_on_mismatch=False,
-                )
-
-        # Read remappings.txt
-        remappings_path = Path("remappings.txt")
-        if remappings_path.exists():
-            for line in remappings_path.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                self._merge_remapping_entry(
-                    entry=line,
-                    source_name="remappings.txt",
-                    packages=packages,
-                    remapping_key_to_path=remapping_key_to_path,
-                    remapping_key_to_source=remapping_key_to_source,
-                    warn_on_mismatch=True,
-                )
-
-        # Read package.json and add entries not already in remappings
-        package_json_path = Path("package.json")
-        if package_json_path.exists():
-            package_data = json.loads(package_json_path.read_text())
-            for section in ("dependencies", "devDependencies", "resolutions"):
-                for key in package_data.get(section, {}):
-                    self._merge_remapping_entry(
-                        entry=f"{key}=node_modules/{key}",
-                        source_name="package.json",
-                        packages=packages,
-                        remapping_key_to_path=remapping_key_to_path,
-                        remapping_key_to_source=remapping_key_to_source,
-                        warn_on_mismatch=True,
-                    )
-
-        return packages
-
-    def _merge_remapping_entry(
-        self,
-        *,
-        entry: str,
-        source_name: str,
-        packages: List[str],
-        remapping_key_to_path: Dict[str, str],
-        remapping_key_to_source: Dict[str, str],
-        warn_on_mismatch: bool,
-    ) -> None:
-        """Merge a single `key=path` remapping entry into the running packages list.
-
-        Both sides of the entry get ``rstrip("/")``-normalized before storage, so the
-        merged list is internally consistent regardless of which source emitted the
-        entry. Solc/forge accept the normalized form (`key=path`) as long as key and
-        path agree on trailing slashes, which this guarantees.
-
-        On a key conflict (already populated by an earlier-priority source):
-        - if ``warn_on_mismatch`` and the stored path differs from the new one, log a
-          warning naming the actual earlier source from ``remapping_key_to_source``;
-        - otherwise silently skip.
-
-        Caller is responsible for stripping whitespace and confirming the entry contains
-        an ``=`` before calling.
-        """
-        raw_key, raw_path = entry.split("=", 1)
-        key = raw_key.rstrip("/")
-        path = raw_path.rstrip("/")
-
-        if key in remapping_key_to_path:
-            if warn_on_mismatch and remapping_key_to_path[key] != path:
-                earlier_source = remapping_key_to_source[key]
-                self.log(
-                    f"Package '{key}' has different paths in {earlier_source} "
-                    f"('{remapping_key_to_path[key]}') and {source_name} ('{path}') "
-                    f"— using {earlier_source}",
-                    "WARNING",
-                )
-            return
-
-        packages.append(f"{key}={path}")
-        remapping_key_to_path[key] = path
-        remapping_key_to_source[key] = source_name
+        # The merged-source logic is shared verbatim with the initial-conf path in
+        # ``FoundryManager.parse_config`` so the two never diverge. The reactive path
+        # runs in the project CWD, so base_dir="." reproduces the original behavior
+        # (relative paths emitted unchanged, forge run in CWD).
+        return build_packages_from_remapping_sources(base_dir=Path("."), log_fn=self.log)
