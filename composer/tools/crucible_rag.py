@@ -6,6 +6,7 @@ Mirrors ``composer/tools/foundry_rag.py`` (keyword + vector + get-section over a
 material alongside the static cheat-sheet.
 """
 
+import logging
 from typing import Iterable
 
 from langchain_core.tools import BaseTool
@@ -13,6 +14,17 @@ from pydantic import Field
 
 from composer.rag.db import ComposerRAGDB
 from graphcore.tools.schemas import WithAsyncDependencies
+
+_log = logging.getLogger(__name__)
+
+# A documentation-search tool is an *aid*, not a dependency — the author also has the
+# static cheat-sheet + worked example. So a backend failure (DB down, or an embedding
+# model that chokes on a particular query) must degrade to "no results", never crash
+# the authoring turn / fail the component.
+_UNAVAILABLE = (
+    "(Documentation search is temporarily unavailable; proceed using the cheat-sheet "
+    "and worked example already in your prompt.)"
+)
 
 
 def _header_string(s: list[str]) -> str:
@@ -30,10 +42,14 @@ class CrucibleKeywordSearch(WithAsyncDependencies[str, ComposerRAGDB]):
     limit: int = Field(default=10, description="Maximum number of results.")
 
     async def run(self) -> str:
-        with self.tool_deps() as db:
-            res = await db.search_manual_keywords(self.query, limit=self.limit)
-            hits = [f"{_header_string(r.headers)} [relevance: {r.relevance:.4f}]" for r in res]
-            return "\n".join(hits) if hits else "No results found"
+        try:
+            with self.tool_deps() as db:
+                res = await db.search_manual_keywords(self.query, limit=self.limit)
+        except Exception as e:  # noqa: BLE001 — a search aid must never fail the authoring turn
+            _log.warning("crucible_docs_keyword_search failed (%s); returning no results", e)
+            return _UNAVAILABLE
+        hits = [f"{_header_string(r.headers)} [relevance: {r.relevance:.4f}]" for r in res]
+        return "\n".join(hits) if hits else "No results found"
 
 
 class CrucibleVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
@@ -48,13 +64,19 @@ class CrucibleVectorSearch(WithAsyncDependencies[str, ComposerRAGDB]):
     max_results: int = Field(default=10, description="Maximum results (default 10).")
 
     async def run(self) -> str:
-        with self.tool_deps() as db:
-            res = await db.find_refs(self.query, similarity_cutoff=self.similarity_cutoff, top_k=self.max_results)
-            out = [
-                f"----\nSection: {_header_string(r.headers)}\n\n{r.content}\nSimilarity: {r.similarity:.4f}"
-                for r in res
-            ]
-            return "\n".join(out) if out else "(No results found)"
+        try:
+            with self.tool_deps() as db:
+                res = await db.find_refs(
+                    self.query, similarity_cutoff=self.similarity_cutoff, top_k=self.max_results
+                )
+        except Exception as e:  # noqa: BLE001 — the embedding model can choke on a query; don't crash the turn
+            _log.warning("crucible_docs_search failed (%s); returning no results", e)
+            return _UNAVAILABLE
+        out = [
+            f"----\nSection: {_header_string(r.headers)}\n\n{r.content}\nSimilarity: {r.similarity:.4f}"
+            for r in res
+        ]
+        return "\n".join(out) if out else "(No results found)"
 
 
 class CrucibleSectionGet(WithAsyncDependencies[str, ComposerRAGDB]):
@@ -67,11 +89,15 @@ class CrucibleSectionGet(WithAsyncDependencies[str, ComposerRAGDB]):
     ))
 
     async def run(self) -> str:
-        with self.tool_deps() as db:
-            content = await db.get_manual_section(self.section_names)
-            if content is None:
-                return f"No section found for {' > '.join(self.section_names)!r}"
-            return content
+        try:
+            with self.tool_deps() as db:
+                content = await db.get_manual_section(self.section_names)
+        except Exception as e:  # noqa: BLE001 — a search aid must never fail the authoring turn
+            _log.warning("crucible_docs_get_section failed (%s)", e)
+            return _UNAVAILABLE
+        if content is None:
+            return f"No section found for {' > '.join(self.section_names)!r}"
+        return content
 
 
 def get_tools(db: ComposerRAGDB) -> Iterable[BaseTool]:
