@@ -731,30 +731,14 @@ impl Application for CrucibleApp {
                 PhaseSpec { key: "formalization".into(), label: "Harness Authoring".into(), order: 4, core_slot: Some(CoreSlot::Formalization) },
                 PhaseSpec { key: "report".into(), label: "Report".into(), order: 5, core_slot: Some(CoreSlot::Report) },
             ],
+            // Only `--fuzz-timeout` is wired through to `crucible run`. Other tuning knobs
+            // (parallel cores, stateful mode, a version pin) are deliberately omitted until
+            // they're actually threaded to the fuzz command — an inert flag is worse than none.
             args: vec![
-                ArgSpec {
-                    flag: "--crucible-version".to_string(),
-                    help: "Crucible release tag / git ref to build the harness against (pins the \
-                           litesvm/anchor/solana stack; see docs §6.1).".to_string(),
-                    default: ArgDefault::Str { value: None },
-                    required: false,
-                },
                 ArgSpec {
                     flag: "--fuzz-timeout".to_string(),
                     help: "Per-test fuzzing budget in seconds (`crucible run --timeout`).".to_string(),
                     default: ArgDefault::Int { value: Some(60) },
-                    required: false,
-                },
-                ArgSpec {
-                    flag: "--fuzz-cores".to_string(),
-                    help: "Parallel fuzzer workers per run (`crucible run --cores`).".to_string(),
-                    default: ArgDefault::Int { value: Some(1) },
-                    required: false,
-                },
-                ArgSpec {
-                    flag: "--stateful".to_string(),
-                    help: "Use Crucible stateful mode (single action per iteration, state pool).".to_string(),
-                    default: ArgDefault::Bool { value: false },
                     required: false,
                 },
             ],
