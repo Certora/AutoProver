@@ -79,9 +79,13 @@ class RealEffects:
         command_sem: asyncio.Semaphore | None = None,
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
         sandbox: SandboxConfig | None = None,
+        backend_name: str = "rust",
     ):
         self._ctx = ctx
         self._run = run
+        # The application's name (descriptor.name, e.g. "crucible") — used to label the
+        # authoring-turn task in the console instead of a generic "rust backend".
+        self._name = backend_name
         self._prover = prover
         self._feedback = feedback
         self._command_sem = command_sem
@@ -102,7 +106,8 @@ class RealEffects:
         from composer.rustapp._llm_agent import run_llm_agent
 
         return await run_llm_agent(
-            self._run.env, messages, recursion_limit=self._ctx.recursion_limit
+            self._run.env, messages, recursion_limit=self._ctx.recursion_limit,
+            backend_name=self._name,
         )
 
     async def run_prover(self, spec: str, config: Any, rules: list[str] | None) -> dict:
@@ -238,6 +243,7 @@ class RustFormalizer(Formalizer[RustFormalResult]):
             command_timeout_s=self._command_timeout_s,
             sandbox=self._sandbox,
             command_sem=self._command_sem,
+            backend_name=self._descriptor.name,
         )
         result = await drive_session(session, effects)
         if isinstance(result, LoopGaveUp):

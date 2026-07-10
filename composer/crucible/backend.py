@@ -95,6 +95,7 @@ class CruciblePreparedSystem(PreparedSystem[RustFormalResult]):
                     feedback=b.feedback,
                     command_timeout_s=b.command_timeout_s,
                     sandbox=b.sandbox,
+                    backend_name=b.descriptor.name,
                 )
                 return await drive_session(session, eff)
 

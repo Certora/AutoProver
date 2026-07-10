@@ -35,7 +35,9 @@ class _LlmInput(FlowInput):
     pass
 
 
-async def run_llm_agent(env: Any, messages: Any, *, recursion_limit: int) -> str:
+async def run_llm_agent(
+    env: Any, messages: Any, *, recursion_limit: int, backend_name: str = "rust"
+) -> str:
     """Run one bounded, tool-enabled authoring turn and return its final text.
 
     Binds the env's tool belt (source navigation + RAG search over the backend's
@@ -59,9 +61,9 @@ async def run_llm_agent(env: Any, messages: Any, *, recursion_limit: int) -> str
     res = await run_to_completion(
         graph,
         _LlmInput(input=[]),
-        thread_id=uniq_thread_id("rust-llm"),
+        thread_id=uniq_thread_id(f"{backend_name}-llm"),
         recursion_limit=recursion_limit,
-        description="Rust backend authoring turn",
+        description=f"{backend_name} authoring turn",
     )
     result = res.get("result")
     return result if isinstance(result, str) else json.dumps(result)
