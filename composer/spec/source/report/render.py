@@ -57,6 +57,10 @@ _OUTCOME_LABELS: dict[ReportBackend, dict[Outcome, str]] = {
         Outcome.GOOD: "Successful test", Outcome.BAD: "Failing test", Outcome.ERROR: "Error",
         Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
     },
+    "crucible": {
+        Outcome.GOOD: "No counterexample", Outcome.BAD: "Counterexample", Outcome.ERROR: "Error",
+        Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
+    },
 }
 _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     "prover": {
@@ -65,6 +69,10 @@ _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     },
     "foundry": {
         GroupStatus.GOOD: "All tests passing", GroupStatus.BAD: "Has failing test",
+        GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
+    },
+    "crucible": {
+        GroupStatus.GOOD: "No counterexamples", GroupStatus.BAD: "Has counterexample",
         GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
     },
 }
@@ -88,6 +96,10 @@ _TERMS: dict[ReportBackend, ReportTerms] = {
     "foundry": ReportTerms(
         title="Foundry test report", unit_singular="test", unit_plural="tests",
         unit_cap="Test", outcomes_label="Test outcomes",
+    ),
+    "crucible": ReportTerms(
+        title="Crucible fuzzing report", unit_singular="property", unit_plural="properties",
+        unit_cap="Property", outcomes_label="Property outcomes",
     ),
 }
 

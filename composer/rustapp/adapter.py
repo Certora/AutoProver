@@ -42,7 +42,7 @@ from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
-from composer.spec.source.report.schema import Outcome, RuleName
+from composer.spec.source.report.schema import Outcome, ReportBackend, RuleName
 from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 
@@ -191,7 +191,9 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         store: Any = None,
         sandbox: SandboxConfig | None = None,
     ):
-        super().__init__(RustFormalResult, descriptor.backend_tag)
+        # ``backend_tag`` is a free-form ``str`` in the wheel contract, but every backend is
+        # in-repo, so at runtime it is always a known ``ReportBackend`` (here: "crucible").
+        super().__init__(RustFormalResult, cast(ReportBackend, descriptor.backend_tag))
         self._module = module
         self._descriptor = descriptor
         self._hooks = _RustFormalizerCfg(prover=prover, feedback=feedback)

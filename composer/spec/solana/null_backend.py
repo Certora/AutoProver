@@ -105,7 +105,9 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
 
 class NullSolanaFormalizer(Formalizer[NullResult]):
     def __init__(self) -> None:
-        super().__init__(NullResult, "solana")
+        # Reuses the ``"crucible"`` report backend (the real Solana verifier this null backend
+        # models); its results are all-UNKNOWN, so the label choice is provenance only.
+        super().__init__(NullResult, "crucible")
 
     @override
     async def formalize(
