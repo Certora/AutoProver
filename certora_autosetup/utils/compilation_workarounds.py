@@ -305,14 +305,6 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="unnamed_return_warning",
-                # The flag check must live in detect_fn, not in `enabled`:
-                # `enabled` is evaluated once when this list is built, but the
-                # warning text keeps appearing in the output even after the flag
-                # is set (the flag only stops the warning from failing the run),
-                # so an `enabled`-only check would re-fire this workaround on
-                # every retry. compilation_config is a superset of
-                # updated_config_dict (callers merge the latter in), so it is
-                # the right dict for the live check.
                 detect_fn=lambda output: (
                     "detected"
                     if self._has_unnamed_return_warning(output)
