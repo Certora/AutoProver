@@ -38,6 +38,17 @@ class AbstractMainContractError(Exception):
     abstract (or lacks a constructor) and therefore cannot be verified."""
 
 
+def _normalize_ws(text: str) -> str:
+    """Collapse every run of whitespace (including solc's hard-wrap newlines) to a
+    single space, so multi-substring detectors survive line wrapping.
+
+    solc wraps its diagnostics at a fixed width, splitting phrases across newlines
+    (e.g. ``ParserError: Source\\n"..."`` or ``File\\nnot found``); a raw substring
+    check then misses the error. Same failure mode as the Yul stack-too-deep wrap.
+    """
+    return " ".join(text.split())
+
+
 def _path_from_compiling_line(line: str) -> Optional[str]:
     """Return ``<path>`` from a ``Compiling <path>...`` prover progress line, or
     None if ``line`` isn't one.
@@ -457,6 +468,9 @@ class CompilationWorkaroundManager:
             line = lines[i]
 
             # Pattern 1: Look for "Compiling <PATH> to expose internal function information"
+            # (two substrings on one line + a marker on the next). Not a proven line-wrap
+            # victim like _has_source_not_found; left as-is because the next-line lookahead
+            # and path extraction depend on the raw line structure.
             if "Compiling" in line and "to expose internal function information" in line:
                 parts = line.split("Compiling", 1)
                 if len(parts) > 1:
@@ -613,7 +627,10 @@ class CompilationWorkaroundManager:
         """Detect 'Unsupported solc version ... for solc_via_ir' and return the affected contract name."""
         lines = output.split("\n")
         for i in range(len(lines)):
-            if "Unsupported solc version" in lines[i] and "solc_via_ir" in lines[i]:
+            # Normalize intra-line whitespace so the two markers still match if solc
+            # padded/wrapped within the line; the line index is kept for the lookback.
+            norm_line = _normalize_ws(lines[i])
+            if "Unsupported solc version" in norm_line and "solc_via_ir" in norm_line:
                 file_path = _find_compiling_path_before(lines, i, max_lookback=15)
                 if file_path is not None:
                     contract_name = self._get_contract_name_from_path(file_path, contracts)
@@ -627,14 +644,21 @@ class CompilationWorkaroundManager:
         return "package.json and remappings.txt include duplicated keys in" in output
 
     def _has_source_not_found(self, output: str) -> bool:
-        return 'ParserError: Source "' in output and "File not found" in output
+        # solc hard-wraps this diagnostic, splitting the two markers across newlines
+        # (ion-protocol wraps between `Source` and the quote; angstrom wraps
+        # `File\nnot found`), so normalize whitespace before the substring check.
+        normalized = _normalize_ws(output)
+        return 'ParserError: Source "' in normalized and "File not found" in normalized
 
     def _has_unnamed_return_warning(self, output: str) -> bool:
         return "Unnamed return variable can remain unassigned" in output
 
     # Two-line signature emitted by the Certora wrapper when a library used by a
     # contract's constructor is not in the compile scope. Matching both lines makes
-    # the detector specific enough that no other prover error collides.
+    # the detector specific enough that no other prover error collides. (Both regexes
+    # search the whole output, so a marker split across a solc wrap could be missed —
+    # not observed in the sweep; unlike _has_source_not_found it isn't normalized here
+    # because the \w+/\S+ captures rely on the raw token boundaries.)
 
     def _detect_missing_library(
         self, output: str, contracts: List[ContractHandle]
