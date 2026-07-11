@@ -83,6 +83,7 @@ class SetupProver:
         contract_names=None,
         get_build_system_config_dict=None,
         solc_default_version=DEFAULT_SOLC_VERSION,
+        stop_after_compilation_analysis=False,
     ):
         """Initialize SetupProver with required dependencies."""
         self.log = log
@@ -93,6 +94,7 @@ class SetupProver:
         self.skip_llm = skip_llm
         self.force_llm_regenerate = force_llm_regenerate
         self.stop_after_summaries = stop_after_summaries
+        self.stop_after_compilation_analysis = stop_after_compilation_analysis
         self.verbose = verbose
         self.certora_run_command = certora_run_command
         self.contract_names = contract_names or []
@@ -1540,6 +1542,16 @@ class SetupProver:
         # Store the configuration updates
         self.compilation_config_updates = updated_config_dict
         self.import_patcher_applied = import_patcher_applied
+
+        # Stop here if only the compilation-analysis outcome is wanted (e.g.
+        # large-scale compile sweeps that never reach the prover).
+        if self.stop_after_compilation_analysis:
+            self.log(
+                "🛑 Stopping after compilation analysis as requested "
+                "(--stop-after-compilation-analysis)"
+            )
+            self.log("✅ Compilation analysis completed successfully")
+            sys.exit(0)
 
         # Detect and apply code access patches
         self.code_access_patches_applied = detect_and_apply_code_access_patches(
