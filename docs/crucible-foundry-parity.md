@@ -132,11 +132,17 @@ reads per-component status off disk.
 
 Foundry runs multiple `forge test` processes concurrently, gated by `--max-forge-runners`
 (`composer/foundry/pipeline.py:192-203`). Crucible **serializes** all harness builds/fuzz
-runs via a single `command_sem = Semaphore(1)` (`composer/crucible/backend.py:36`) because
+runs via a single `command_sem = Semaphore(1)` (`composer/crucible/backend.py`) because
 every component shares one harness crate (`fuzz/<program>/`). This is a throughput gap on
-multi-instruction programs. The fix is the already-noted "crate-per-component" follow-up
-(docs/command-sandbox.md §10 Q1); until then Crucible authoring is concurrent but
-builds/fuzzing are serial.
+multi-invariant programs.
+
+**Investigated; deferred (see docs/crucible-unit-granularity.md §7).** The obvious
+"crate-per-component" fix does not work: separate `target/` dirs recompile the heavy deps
+N× (a regression), and a shared `CARGO_TARGET_DIR` collides on Crucible's hardcoded
+`invariant_test` binary name. The only clean path is `crucible run --binary-in` (build
+serially into one crate, fuzz binaries in parallel) — a non-trivial formalize-phase
+redesign whose payoff only materializes at production fuzz budgets (60–300 s), so it's
+deferred until then.
 
 ---
 

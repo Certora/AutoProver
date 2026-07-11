@@ -183,12 +183,40 @@ Staging (each independently shippable):
    authored harness (deterministic) and re-fuzz on demand / record the seed — more
    important now that a single budget covers the whole program.
 
-Interactions to keep in view: this **supersedes** the crate-per-component concurrency
-work (parity gap #4 / command-sandbox.md §10) — with one harness there is no per-unit
-build to parallelize — and it pairs naturally with coverage-as-signal (§10 Q6), since a
-single global run makes total-coverage a coherent quality gate.
+Interactions to keep in view: per-invariant units mean N harnesses build + fuzz
+serially on the shared crate (see §8 on why that's hard to parallelize), and it pairs
+naturally with coverage-as-signal (§10 Q6).
 
-## 7. Open sub-questions for this change
+## 7. Concurrency: why per-invariant fuzzing serializes (and the only clean fix)
+
+With N per-invariant harnesses the build+fuzz runs serialize (a single build semaphore
+in `CrucibleFormalizer`, because they share one crate `fuzz/<program>/`). Making them
+parallel is **harder than it looks**, and the obvious "one crate per invariant" does
+NOT work:
+
+- **Separate `target/` per crate** → every crate recompiles the heavy `litesvm` /
+  `libafl` / `solana` deps from scratch (minutes, ~900 MB each). N× the build work — a
+  net regression, not a win.
+- **Shared `CARGO_TARGET_DIR`** → the deps compile once, BUT Crucible hardcodes the
+  harness binary name (`[[bin]] name = "invariant_test"`, and `find_fuzz_binary` expects
+  it), so every crate compiles to the *same* `…/target/release/invariant_test` — the
+  builds clobber each other and concurrent runs race on the binary. **Unusable.**
+
+The only clean path to parallel fuzzing is **`crucible run --binary-in`**: build each
+invariant's binary *serially* (shared crate/target, cheap incremental, no collision),
+copy it to a per-invariant path, then fuzz all binaries *in parallel* via `--binary-in`.
+That requires splitting build from fuzz and orchestrating it in the Crucible backend
+(not the per-batch decider, which does author→build→fuzz→publish as one unit) — a
+non-trivial formalize-phase redesign.
+
+**Decision: deferred.** The serialized-fuzz cost is small at the e2e's 12 s budget (the
+27-min e2e is dominated by LLM authoring + incremental builds, which this doesn't
+parallelize), and only becomes the bottleneck at **production fuzz budgets** (60–300 s),
+where N × serial fuzzing dominates. Revisit then, as a scoped `--binary-in` project.
+This supersedes the "crate-per-component" framing of parity gap #4 / command-sandbox.md
+§10 — the parallelism lever is fuzz-via-`--binary-in`, not per-component crates.
+
+## 8. Open sub-questions for this change
 - **Per-invariant vs one-unit:** is the extra report granularity of per-invariant units
   worth a second extraction round (invariants first, then fan-out)? Prototype both.
 - **How many invariants** should the model target for a program, and does the fixed
