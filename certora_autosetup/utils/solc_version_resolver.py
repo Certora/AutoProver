@@ -10,6 +10,7 @@ This module provides utilities to:
 
 import json
 import re
+import shutil
 import threading
 import urllib.error
 import urllib.request
@@ -89,6 +90,15 @@ def fetch_available_solc_versions() -> List[str]:
             logger.log(f"Failed to fetch solc versions: {e}. Using fallback list.", "WARNING", "SolcVersionResolver")
             _solc_versions_cache = FALLBACK_VERSIONS
             return FALLBACK_VERSIONS
+
+
+def _solc_binary_installed(version: str) -> bool:
+    """Whether a solc binary providing `version` is on PATH, under either the
+    Certora naming convention ("solc8.35") or solc-select's ("solc-0.8.35")."""
+    names = [f"solc-{version}"]
+    if version.startswith("0."):
+        names.append(f"solc{version[2:]}")
+    return any(shutil.which(name) for name in names)
 
 
 def parse_pragma_constraint(pragma_spec: str) -> Optional[SpecifierSet]:
@@ -246,11 +256,20 @@ def resolve_pragma_to_version(
             )
             return None
 
-        # Select highest matching version
-        highest_version = max(matching_versions, key=Version)
+        # Prefer the highest matching version whose solc binary is actually
+        # installed: the newest release on soliditylang.org may not exist in
+        # the environment yet (nor be supported by the prover toolchain), and
+        # resolving a floating pragma to it breaks every consumer the day a
+        # new solc ships. Fall back to the listed highest when no matching
+        # binary is installed (environments that fetch compilers on demand).
+        installed_versions = [v for v in matching_versions if _solc_binary_installed(v)]
+        pool = installed_versions or matching_versions
+        highest_version = max(pool, key=Version)
 
         logger.log(
-            f"Resolved pragma '{pragma_spec}' to {highest_version} (from {len(matching_versions)} candidates)",
+            f"Resolved pragma '{pragma_spec}' to {highest_version} "
+            f"(from {len(matching_versions)} candidates, "
+            f"{'installed' if installed_versions else 'listed'})",
             "DEBUG",
             "SolcVersionResolver",
         )
