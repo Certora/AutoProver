@@ -85,6 +85,12 @@ class CompilationWorkaround:
     detect_fn: Callable[[str], Any]  # Takes compilation output, returns detection result or None
     apply_fn: Callable[[Any, Dict, Dict, Path, List[ContractHandle]], Dict]
     enabled: bool = True
+    # The workaround invalidates the rest of the output it fired on (e.g. the
+    # whole error is a cached artifact): when it applies, the pass stops there
+    # and recompiles instead of letting other workarounds act on garbage output.
+    exclusive: bool = False
+    # Catch-all: only tried when no other workaround applied in the pass.
+    last_resort: bool = False
 
 
 class CompilationWorkaroundManager:
@@ -211,7 +217,13 @@ class CompilationWorkaroundManager:
     ) -> Tuple[bool, str, Dict]:
         """Run compilation with automatic workarounds for common errors.
 
-        Applies workarounds in priority order:
+        Each failed compilation gets one pass in which EVERY applicable
+        workaround is applied to that output (priority order = application
+        order within the pass) before the single recompile; a pass that leaves
+        the conf and command unchanged ends the loop, since recompiling would
+        reproduce the identical failure.
+
+        Workaround priority order:
         1. Solc not found fallback (versioned binary missing, fall back to plain solc)
         2. Remappings conflict (package.json vs remappings.txt duplicate keys)
         3. Source not found (add packages from `forge remappings`, foundry.toml, remappings.txt, package.json)
@@ -239,6 +251,12 @@ class CompilationWorkaroundManager:
         global_via_ir_enabled = updated_config_dict.get("solc_via_ir", False)
         solc_already_set = "solc" in updated_config_dict
 
+        # Names of the workarounds applied in the current pass over a failed
+        # output. Cleared at the top of each pass; detect lambdas below may
+        # consult it to avoid escalating past a step that was applied on this
+        # same (stale) output.
+        applied_this_pass: Set[str] = set()
+
         # Initialize workarounds list
         workarounds = [
             CompilationWorkaround(
@@ -251,6 +269,9 @@ class CompilationWorkaroundManager:
                 ),
                 apply_fn=self._apply_disable_build_cache,
                 enabled=True,
+                # The cached error hides the real one, so the rest of this
+                # output is untrustworthy — recompile before applying anything else.
+                exclusive=True,
             ),
             CompilationWorkaround(
                 name="solc_not_found_fallback",
@@ -327,25 +348,42 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="yul_exception_stack_too_deep",
+                # This is the escalation step after yul_exception_add_optimizer:
+                # it must only fire on output produced AFTER the optimizer was
+                # tried, not in the same pass that just added it (the live
+                # "solc_optimize in config" check would otherwise see the value
+                # the previous workaround set seconds ago and tear down
+                # via-ir/optimizer/autofinders without ever testing them). The
+                # same goes for the via-ir map writers: a via-ir fix applied
+                # earlier in this pass deserves its own validating recompile
+                # before the teardown may pop the map it was just written to.
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
                     and compilation_config.get("assert_autofinder_success", False)
                     and "solc_optimize" in compilation_config
+                    and applied_this_pass.isdisjoint({
+                        "yul_exception_add_optimizer",
+                        "stack_too_deep_via_ir",
+                        "unsupported_solc_via_ir",
+                    })
                     else None
                 ),
                 apply_fn=self._apply_yul_exception_workaround,
                 enabled=True,
             ),
+            # Must stay ordered after every workaround that writes per-contract
+            # maps (compiler_map, solc_via_ir_map, ...): its apply renames the
+            # consumer's entries in those maps to the harness name, so map
+            # writes for the consumer must happen before it in the pass.
             CompilationWorkaround(
                 name="missing_library_harness",
                 detect_fn=lambda output: self._detect_missing_library(output, contracts),
                 apply_fn=self._apply_missing_library_harness_to_config,
                 enabled=True,
             ),
-            # Catch-all — must stay LAST. Fires only when no more specific workaround
-            # matched the failure output, as a final attempt before setup_prover falls
-            # back to the import-patch pass.
+            # Catch-all: final attempt before setup_prover falls back to the
+            # import-patch pass.
             CompilationWorkaround(
                 name="use_relpaths_for_solc_json",
                 detect_fn=lambda output: (
@@ -355,6 +393,7 @@ class CompilationWorkaroundManager:
                 ),
                 apply_fn=self._apply_use_relpaths_workaround,
                 enabled=True,
+                last_resort=True,
             ),
         ]
 
@@ -370,10 +409,6 @@ class CompilationWorkaroundManager:
         self._mirror_compile_flags(compilation_config, updated_config_dict)
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
-
-        # Last detect result per workaround name, for the no-progress guard in
-        # the loop below.
-        last_detect_results: Dict[str, Any] = {}
 
         output = ""
         while retry_count <= max_retries:
@@ -404,10 +439,18 @@ class CompilationWorkaroundManager:
                     f"verified. Re-run with a concrete implementation as the main contract."
                 )
 
-            # Try to find an applicable workaround
-            workaround_applied = False
+            # One pass over the failed output: apply EVERY applicable workaround
+            # before recompiling — one full certoraRun per pass is expensive, so
+            # a pass fixes as much of this output as it can. detect_fns run
+            # sequentially after earlier applies in the same pass, so detects
+            # gated on conf/manager state (e.g. _remappings_workaround_applied)
+            # see the pass's own effects.
+            applied_this_pass.clear()
+            state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
             for workaround in workarounds:
                 if not workaround.enabled:
+                    continue
+                if workaround.last_resort and applied_this_pass:
                     continue
 
                 # Try to detect if this workaround applies
@@ -415,26 +458,8 @@ class CompilationWorkaroundManager:
                 if detect_result is None:
                     continue
 
-                # No-progress guards (same idea as the _harnessed_libs guard in
-                # _detect_missing_library): a workaround that detects the exact
-                # thing it already fixed, or whose application changes nothing,
-                # cannot make progress by firing again — its detection is a
-                # symptom of some other error failing the run. Disable it and
-                # fall through so lower-priority workarounds get a shot at the
-                # real error instead of retrying a no-op until max_retries.
-                if last_detect_results.get(workaround.name) == detect_result:
-                    self.log(
-                        f"{workaround.name} detected the same result again after being "
-                        f"applied ({detect_result!r}) — disabling it to break the retry loop",
-                        "WARNING",
-                    )
-                    workaround.enabled = False
-                    continue
-                last_detect_results[workaround.name] = detect_result
-
                 # Apply the workaround
                 self.log(f"Applying {workaround.name} workaround")
-                state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
                 updated_config_dict = workaround.apply_fn(
                     detect_result,
                     updated_config_dict,
@@ -445,26 +470,12 @@ class CompilationWorkaroundManager:
                 # If we disabled build_cache in config, also remove from CLI command
                 if workaround.name == "cached_autofinder_failure" and "--build_cache" in cmd:
                     cmd.remove("--build_cache")
-                if self._retry_state(cmd, compilation_config, updated_config_dict) == state_before:
-                    self.log(
-                        f"{workaround.name} was applied but left the conf and command "
-                        f"unchanged — disabling it to break the retry loop",
-                        "WARNING",
-                    )
-                    workaround.enabled = False
-                    continue
-                workaround_applied = True
-                retry_count += 1
-                conf_contents = json.dumps(compilation_config, indent=2)
-                self.log(
-                    f"Retrying compilation after {workaround.name} fix (attempt {retry_count}/{max_retries})\n"
-                    f"  Command: {' '.join(cmd)}\n"
-                    f"  Config ({config_file}):\n{conf_contents}"
-                )
-                break  # Only apply one workaround per iteration
+                applied_this_pass.add(workaround.name)
+                if workaround.exclusive:
+                    break
 
             # If no workaround applies, exit immediately (guardrail against infinite loop)
-            if not workaround_applied:
+            if not applied_this_pass:
                 if retry_count == 0:
                     # First attempt failed - log output for debugging
                     self.log("Compilation failed. Output:", "WARNING")
@@ -473,6 +484,26 @@ class CompilationWorkaroundManager:
                     self.log("Compilation failed with no applicable workaround", "ERROR")
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return False, output, updated_config_dict
+
+            # If the whole pass changed nothing, recompiling would reproduce the
+            # identical failure — stop here instead of burning another certoraRun.
+            if self._retry_state(cmd, compilation_config, updated_config_dict) == state_before:
+                self.log(
+                    f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf "
+                    f"and command are unchanged — retrying would fail identically, giving up",
+                    "ERROR",
+                )
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                return False, output, updated_config_dict
+
+            retry_count += 1
+            conf_contents = json.dumps(compilation_config, indent=2)
+            self.log(
+                f"Retrying compilation after {', '.join(sorted(applied_this_pass))} "
+                f"fix(es) (attempt {retry_count}/{max_retries})\n"
+                f"  Command: {' '.join(cmd)}\n"
+                f"  Config ({config_file}):\n{conf_contents}"
+            )
 
         # Max retries exceeded
         self.log(f"Max retries ({max_retries}) exceeded for workarounds", "ERROR")
@@ -485,10 +516,15 @@ class CompilationWorkaroundManager:
     def _retry_state(cmd: List[str], compilation_config: Dict, updated_config_dict: Dict) -> str:
         """Serialized snapshot of everything a workaround can change to make the
         next compilation retry behave differently: the command line and both
-        config dicts. Used by the no-progress guard in
-        ``run_compilation_with_workarounds`` — an application that leaves this
-        snapshot identical was a no-op, so retrying would reproduce the same
-        failure verbatim.
+        config dicts. Used by the no-progress check in
+        ``run_compilation_with_workarounds`` — a pass that leaves this snapshot
+        identical was a no-op, so retrying would reproduce the same failure
+        verbatim.
+
+        Invariant on apply_fns: any application that makes real progress MUST
+        change the command or one of the two conf dicts. Progress expressed
+        only through side channels (files written to disk, the contracts list,
+        manager attributes) is invisible here and would be misread as no-op.
         """
         return json.dumps([cmd, compilation_config, updated_config_dict], sort_keys=True, default=str)
 
@@ -783,10 +819,16 @@ class CompilationWorkaroundManager:
         updated_config_dict: Dict,
         compilation_config: Dict,
         config_file: Path,
-        _contracts: List[ContractHandle],
+        contracts: List[ContractHandle],
     ) -> Dict:
         """Apply via-ir workaround to config files for a contract with stack-too-deep error."""
         self.log(f"Applying via-ir workaround for contract: {contract_name}")
+        # The yul_exception teardown pops solc_via_ir_map wholesale. Re-seed the
+        # full all-off map before setting one contract: a bare single-entry map
+        # would be uniform and collapse to a GLOBAL solc_via_ir=true at
+        # finalize, re-enabling via-ir for every contract the teardown stripped.
+        if "solc_via_ir_map" not in updated_config_dict:
+            updated_config_dict["solc_via_ir_map"] = {c.contract_name: False for c in contracts}
         self._apply_via_ir_workaround(contract_name, updated_config_dict)
         compilation_config.update(updated_config_dict)
 
@@ -827,7 +869,9 @@ class CompilationWorkaroundManager:
         """Disable via-ir for a contract with an old Solidity version that doesn't support it."""
         self.log(f"Disabling via-ir for contract: {contract_name} (unsupported solc version)")
 
-        updated_config_dict["solc_via_ir_map"][contract_name] = False
+        # setdefault: the map is seeded up front but the yul_exception teardown
+        # pops it wholesale, so it may be gone by the time this fires.
+        updated_config_dict.setdefault("solc_via_ir_map", {})[contract_name] = False
 
         compilation_config.update(updated_config_dict)
         with open(config_file, "w") as f:
@@ -1208,8 +1252,11 @@ class CompilationWorkaroundManager:
 
     def _apply_via_ir_workaround(self, contract_needing_via_ir: str, config_dict: Dict) -> Dict:
         """Add solc_via_ir_map entry for contract that needs via-ir compilation."""
-        # solc_via_ir_map is seeded up front by _seed_compile_maps; just set the
-        # contract that needs via-ir to True.
+        # solc_via_ir_map is seeded up front by _seed_compile_maps and re-seeded
+        # by the calling wrapper if the yul_exception teardown popped it; just
+        # set the contract that needs via-ir to True. Never setdefault({}) here:
+        # a partial single-entry map would collapse to a global scalar at
+        # finalize (see _apply_via_ir_workaround_to_config).
         config_dict["solc_via_ir_map"][contract_needing_via_ir] = True
         self.log(f"Adding via-ir workaround for contract: {contract_needing_via_ir}")
 

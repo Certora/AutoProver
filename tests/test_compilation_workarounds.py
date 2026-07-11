@@ -55,15 +55,17 @@ def test_ignores_unrelated_output(manager: CompilationWorkaroundManager) -> None
 
 
 # =============================================================================
-# Retry-loop no-progress guards
+# Retry-loop behavior: apply-all-per-pass + no-progress exit
 # =============================================================================
 #
-# Each scenario below is a compilation that fails the same way on every retry.
-# Before the guards, a workaround whose detect_fn kept matching the (unchanged)
-# output was re-applied as a no-op until max_retries — observed in the wild as
-# hundreds of consecutive `unnamed_return_warning` applications on a run whose
-# real error was something else entirely. The assertions pin the exact number
-# of certoraRun invocations, so any reintroduced no-op iteration fails the test.
+# Each failed compilation gets one pass applying EVERY applicable workaround
+# before the single recompile, and a pass that changes nothing ends the loop.
+# Before that, one workaround was applied per recompile and a detect_fn that
+# kept matching the (unchanged) output was re-applied as a no-op until
+# max_retries — observed in the wild as hundreds of consecutive
+# `unnamed_return_warning` applications on a run whose real error was something
+# else entirely. The assertions pin the exact number of certoraRun invocations,
+# so any reintroduced no-op recompile fails the test.
 
 
 class _SequencedRun:
@@ -82,12 +84,13 @@ class _SequencedRun:
         return subprocess.CompletedProcess(cmd, returncode=1, stdout=self.outputs.pop(0), stderr="")
 
 
-def _run_loop(manager, monkeypatch, tmp_path, outputs, contracts):
+def _run_loop(manager, monkeypatch, tmp_path, outputs, contracts, extra_config=None):
     fake_run = _SequencedRun(outputs)
     monkeypatch.setattr(
         "certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run
     )
     compilation_config = {"files": [f"{c.source_file}:{c.contract_name}" for c in contracts]}
+    compilation_config.update(extra_config or {})
     success, _, updated = manager.run_compilation_with_workarounds(
         cmd=["certoraRun", "test.conf"],
         config_file=tmp_path / "test.conf",
@@ -144,27 +147,27 @@ def test_unnamed_return_warning_fires_once(manager, monkeypatch, tmp_path) -> No
     assert fake_run.calls == 3
 
 
-def test_repeated_detect_result_disables_workaround(manager, monkeypatch, tmp_path) -> None:
-    # via-ir gets applied for Foo once; when the identical stack-too-deep hit
-    # comes back on the next retry, re-applying is a no-op and the workaround
-    # must be disabled so lower-priority ones get a shot at the real error.
+def test_noop_pass_exits_without_recompile(manager, monkeypatch, tmp_path) -> None:
+    # Run 1: via-ir applies for Foo. Run 2: the identical stack-too-deep hit
+    # fires again, re-applying is a no-op; the catch-all is suppressed because
+    # a specific workaround applied this pass, and the pass changed nothing ->
+    # exit without recompiling.
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, updated, _, fake_run = _run_loop_with_output(
         manager, monkeypatch, tmp_path, PERSISTENT_STACK_TOO_DEEP_OUTPUT, contracts
     )
     assert success is False
-    # The single application is preserved (uniform one-contract map collapses
+    # The first application is preserved (uniform one-contract map collapses
     # back to the scalar on exit).
     assert updated["solc_via_ir"] is True
-    # Run 1: via-ir applies. Run 2: same detect result -> disabled; the
-    # relpaths catch-all applies. Run 3: nothing applies -> loop exits.
-    assert fake_run.calls == 3
+    assert "use_relpaths_for_solc_json" not in updated
+    assert fake_run.calls == 2
 
 
 def test_different_detect_results_keep_workaround_enabled(manager, monkeypatch, tmp_path) -> None:
-    # The repeat guard must key on the detect RESULT, not on the workaround
-    # having fired before: stack-too-deep surfacing for Bar after Foo was
-    # fixed needs its own via-ir application.
+    # A workaround stays available for later passes: stack-too-deep surfacing
+    # for Bar after Foo was fixed needs its own via-ir application on the
+    # next pass.
     contracts = [
         ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
         ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
@@ -185,15 +188,141 @@ def test_different_detect_results_keep_workaround_enabled(manager, monkeypatch, 
     assert "solc_via_ir_map" not in updated
 
 
-def test_noop_apply_disables_workaround(manager, monkeypatch, tmp_path) -> None:
+def test_noop_apply_exits_without_recompile(manager, monkeypatch, tmp_path) -> None:
     # The missing-library consumer isn't in the scene, so apply bails out
-    # leaving conf and command untouched; the no-progress guard must disable
-    # the workaround instead of re-applying the same no-op on every retry.
+    # leaving cmd and conf untouched; the pass applied only no-ops, so
+    # recompiling would reproduce the identical failure -> exit immediately
+    # after the single certoraRun.
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
-    success, _, _, fake_run = _run_loop_with_output(
+    success, _, config, fake_run = _run_loop_with_output(
         manager, monkeypatch, tmp_path, MISSING_LIB_UNKNOWN_CONSUMER_OUTPUT, contracts
     )
     assert success is False
-    # Run 1: missing-library apply no-ops -> disabled in the same pass; the
-    # relpaths catch-all applies. Run 2: nothing applies -> loop exits.
+    assert "use_relpaths_for_solc_json" not in config
+    assert fake_run.calls == 1
+
+
+MULTI_ERROR_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "Warning: Unnamed return variable can remain unassigned. Add an explicit return.\n"
+    "solc8.17 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with --via-ir.\n"
+)
+
+
+def test_multiple_workarounds_apply_in_one_pass(manager, monkeypatch, tmp_path) -> None:
+    # The redesign's signature: one failed output containing two independent
+    # errors gets BOTH workarounds in a single pass and needs only one
+    # recompile (the old one-per-recompile loop needed two).
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, _, fake_run = _run_loop(
+        manager, monkeypatch, tmp_path, [MULTI_ERROR_OUTPUT], contracts
+    )
+    assert success is True
     assert fake_run.calls == 2
+    assert updated["solc_via_ir"] is True
+    assert updated["ignore_solidity_warnings"] is True
+    assert "use_relpaths_for_solc_json" not in updated
+
+
+CACHED_AUTOFINDER_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "Warning: Unnamed return variable can remain unassigned. Add an explicit return.\n"
+    "Failed to create autofinders, failing\n"
+)
+
+
+def test_cached_autofinder_failure_is_exclusive(manager, monkeypatch, tmp_path) -> None:
+    # A cached autofinder failure hides the real error, so the whole output is
+    # untrustworthy: the pass must apply ONLY the cache disable and recompile,
+    # skipping the unnamed-return workaround even though its detect matches.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    fake_run = _SequencedRun([CACHED_AUTOFINDER_OUTPUT])
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run
+    )
+    cmd = ["certoraRun", "test.conf", "--build_cache"]
+    success, _, updated = manager.run_compilation_with_workarounds(
+        cmd=cmd,
+        config_file=tmp_path / "test.conf",
+        compilation_config={"files": ["contracts/Foo.sol:Foo"], "build_cache": True},
+        contracts=contracts,
+        updated_config_dict={},
+    )
+    assert success is True
+    assert fake_run.calls == 2
+    assert updated["build_cache"] is False
+    assert "--build_cache" not in cmd
+    assert "ignore_solidity_warnings" not in updated
+
+
+def test_yul_ladder_escalates_across_passes(manager, monkeypatch, tmp_path) -> None:
+    # The YulException escalation must span two recompiles: pass 1 only adds
+    # the optimizer; only when the exception SURVIVES that recompile does the
+    # last-resort teardown fire. Firing both on the same output would tear
+    # down via-ir/optimizer/autofinders without ever testing the optimizer.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, _, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SINGLE_LINE_YUL_STACK_TOO_DEEP, SINGLE_LINE_YUL_STACK_TOO_DEEP],
+        contracts,
+        extra_config={"assert_autofinder_success": True},
+    )
+    assert success is True
+    assert fake_run.calls == 3
+    assert "solc_optimize" not in updated
+    assert updated["assert_autofinder_success"] is False
+
+
+def test_teardown_spares_same_pass_via_ir_fix(manager, monkeypatch, tmp_path) -> None:
+    # One output carries a plain stack-too-deep for Foo AND a YulException with
+    # the optimizer already present: the pass applies via-ir for Foo, and the
+    # teardown must NOT fire in that same pass — it would pop the map entry
+    # via-ir just wrote before the fix ever got its validating recompile.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    combined = PERSISTENT_STACK_TOO_DEEP_OUTPUT + SINGLE_LINE_YUL_STACK_TOO_DEEP
+    success, updated, config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [combined],
+        contracts,
+        extra_config={"assert_autofinder_success": True, "solc_optimize": "200"},
+    )
+    assert success is True
+    assert fake_run.calls == 2
+    assert updated["solc_via_ir"] is True
+    # Teardown did not run: autofinders and the optimizer are intact.
+    assert config["assert_autofinder_success"] is True
+    assert config["solc_optimize"] == "200"
+
+
+def test_via_ir_after_teardown_stays_per_contract(manager, monkeypatch, tmp_path) -> None:
+    # After the teardown pops solc_via_ir_map, a later via-ir fix must re-seed
+    # the full all-off map before setting its contract. A bare single-entry
+    # map would be uniform and collapse to a GLOBAL solc_via_ir=true at
+    # finalize — re-enabling via-ir for every contract the teardown stripped.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, updated, config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [
+            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 1: add optimizer
+            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 2: teardown (map popped)
+            PERSISTENT_STACK_TOO_DEEP_OUTPUT,  # pass 3: via-ir for Foo only
+        ],
+        contracts,
+        extra_config={"assert_autofinder_success": True},
+    )
+    assert success is True
+    assert fake_run.calls == 4
+    assert updated["solc_via_ir_map"] == {"Foo": True, "Bar": False}
+    assert "solc_via_ir" not in updated
+    assert config["assert_autofinder_success"] is False
+    assert "solc_optimize" not in config
