@@ -103,8 +103,10 @@ async def test_per_component_clean_run_emits_pulse_then_held():
 
     assert not isinstance(result, GaveUp)
     assert RustFormalResult.from_formalized(result.data).verdicts["c_deposit"]["outcome"] == "GOOD"
-    # A "fuzzing…" pulse before the run, then a "held" pulse on the clean result.
-    assert _kinds(fx) == ["fuzz_pulse", "fuzz_pulse"]
+    # A "fuzzing…" pulse before the run, a "held" pulse on the clean result, then the
+    # terminal GOOD verdict (a notice event the frontend surfaces as a callout).
+    assert _kinds(fx) == ["fuzz_pulse", "fuzz_pulse", "verdict"]
+    assert fx.events[-1][1]["outcome"] == "GOOD"
     _assert_all_lines(fx)
 
 
@@ -115,7 +117,9 @@ async def test_per_component_finding_emits_fuzz_finding_and_bad_verdict():
 
     assert not isinstance(result, GaveUp)
     assert RustFormalResult.from_formalized(result.data).verdicts["c_deposit"]["outcome"] == "BAD"
-    assert _kinds(fx) == ["fuzz_pulse", "fuzz_finding"]
+    # pulse(fuzz) → fuzz_finding(counterexample) → the terminal BAD verdict notice.
+    assert _kinds(fx) == ["fuzz_pulse", "fuzz_finding", "verdict"]
+    assert fx.events[-1][1]["outcome"] == "BAD"
     _assert_all_lines(fx)
 
 
@@ -126,8 +130,9 @@ async def test_per_component_build_error_emits_build_output_then_retries():
     result = await drive_session(_per_component_session(), fx)
 
     assert not isinstance(result, GaveUp)
-    # pulse(fuzz) → build_output(revise) → pulse(fuzz again) → pulse(held)
-    assert _kinds(fx) == ["fuzz_pulse", "build_output", "fuzz_pulse", "fuzz_pulse"]
+    # pulse(fuzz) → build_output(revise) → pulse(fuzz again) → pulse(held) → GOOD verdict
+    assert _kinds(fx) == ["fuzz_pulse", "build_output", "fuzz_pulse", "fuzz_pulse", "verdict"]
+    assert fx.events[-1][1]["outcome"] == "GOOD"
     _assert_all_lines(fx)
 
 

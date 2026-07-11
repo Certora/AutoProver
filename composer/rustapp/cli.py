@@ -35,6 +35,10 @@ def _event_kinds(app) -> set[str]:
     return {e.kind for e in app.descriptor.event_kinds}
 
 
+def _notice_kinds(app) -> set[str]:
+    return {e.kind for e in app.descriptor.event_kinds if e.notice}
+
+
 async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) -> int:
     summary = RunSummary()
     app_meta = build_application(module_name)
@@ -44,6 +48,7 @@ async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) 
             section_order=app_meta.section_order,
             header_text=app_meta.header_text,
             event_kinds=_event_kinds(app_meta),
+            notice_kinds=_notice_kinds(app_meta),
         )
         result: CorePipelineResult[RustFormalResult] | None = None
 

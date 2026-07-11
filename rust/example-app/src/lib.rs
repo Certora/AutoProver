@@ -52,6 +52,7 @@ impl EchoSession {
                 property_units: self.property_units(),
                 skipped: Vec::new(),
                 output_link: Some("local://echo/run".to_string()),
+                verdicts: Default::default(),
             },
         }
     }
@@ -161,7 +162,7 @@ impl Application for EchoApp {
                 required: false,
             }],
             rag_db_default: None,
-            event_kinds: vec![EventKind { kind: "solver_line".into(), label: "Solver".into() }],
+            event_kinds: vec![EventKind::log("solver_line", "Solver")],
             artifact_layout: ArtifactLayout {
                 deliverable_dir: "certora/echo".into(),
                 internal_dir: ".certora_internal/echo".into(),

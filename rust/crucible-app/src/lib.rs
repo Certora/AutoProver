@@ -59,6 +59,12 @@ fn pulse_event(line: String) -> (&'static str, serde_json::Value) {
 fn finding_event(line: String) -> (&'static str, serde_json::Value) {
     ("fuzz_finding", serde_json::json!({ "line": line }))
 }
+/// The terminal per-invariant verdict — a `notice` kind, so the frontend surfaces it as
+/// a persistent callout + toast (not a buried log line). `outcome` is the neutral
+/// `Outcome` (GOOD/BAD/…); the frontend picks the glyph and the human wording.
+fn verdict_event(outcome: &str, name: &str, note: String) -> (&'static str, serde_json::Value) {
+    ("verdict", serde_json::json!({ "outcome": outcome, "name": name, "line": note }))
+}
 
 /// Backend-guidance prose injected into the property-extraction prompt. Crucible is
 /// a fuzzer, so — like Foundry — refutations are valuable but universals can't be
@@ -688,9 +694,14 @@ impl FormalizeSession for PerComponentSession {
                             "counterexample found — `{}` refuted",
                             self.feature
                         ));
+                        let verdict = verdict_event(
+                            "BAD",
+                            &self.feature,
+                            "Crucible refuted the property (fuzzing counterexample)".to_string(),
+                        );
                         let cmd =
                             self.publish("BAD", "Crucible refuted the property (fuzzing counterexample)");
-                        self.emit.emit_then(vec![ev], cmd)
+                        self.emit.emit_then(vec![ev, verdict], cmd)
                     } else {
                         // Ran to the timeout with no violation = held within the budget.
                         self.stage = PcStage::Done;
@@ -698,8 +709,13 @@ impl FormalizeSession for PerComponentSession {
                             "`{}` held — no counterexample within the {}s budget",
                             self.feature, self.fuzz_timeout
                         ));
+                        let verdict = verdict_event(
+                            "GOOD",
+                            &self.feature,
+                            format!("No counterexample within the {}s fuzzing budget", self.fuzz_timeout),
+                        );
                         let cmd = self.publish("GOOD", "No violation found within the fuzzing budget");
-                        self.emit.emit_then(vec![ev], cmd)
+                        self.emit.emit_then(vec![ev, verdict], cmd)
                     }
                 }
                 _ => {
@@ -747,9 +763,11 @@ impl Application for CrucibleApp {
             ],
             rag_db_default: Some("crucible_kb".to_string()),
             event_kinds: vec![
-                EventKind { kind: "fuzz_pulse".into(), label: "Fuzzing".into() },
-                EventKind { kind: "fuzz_finding".into(), label: "Finding".into() },
-                EventKind { kind: "build_output".into(), label: "Build".into() },
+                EventKind::log("fuzz_pulse", "Fuzzing"),
+                EventKind::log("fuzz_finding", "Finding"),
+                EventKind::log("build_output", "Build"),
+                // The per-invariant verdict — surfaced as a persistent callout + toast.
+                EventKind::notice("verdict", "Verdict"),
             ],
             // NOTE: the deliverable model (one shared crate vs per-component files) is
             // settled in phase 2 (docs §7.1); these are provisional.

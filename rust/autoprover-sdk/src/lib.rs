@@ -71,10 +71,28 @@ pub struct ArgSpec {
 }
 
 /// A domain event kind the frontend should render (see `Command::Emit`).
+///
+/// A `notice` kind is surfaced as a persistent, always-visible callout (plus a toast)
+/// rather than a line in the collapsible per-task events log — for one-shot important
+/// results such as a per-invariant verdict. Ordinary kinds stream into the log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventKind {
     pub kind: String,
     pub label: String,
+    #[serde(default)]
+    pub notice: bool,
+}
+
+impl EventKind {
+    /// A streaming event kind — rendered as a line in the collapsible events log.
+    pub fn log(kind: impl Into<String>, label: impl Into<String>) -> Self {
+        Self { kind: kind.into(), label: label.into(), notice: false }
+    }
+
+    /// A notice event kind — surfaced as a persistent callout + toast.
+    pub fn notice(kind: impl Into<String>, label: impl Into<String>) -> Self {
+        Self { kind: kind.into(), label: label.into(), notice: true }
+    }
 }
 
 /// On-disk deliverable layout. All paths are project-root-relative.

@@ -163,6 +163,16 @@ class ReportTemplateParams(TypedDict):
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
 
 
+def outcome_label(backend: ReportBackend, outcome: Outcome) -> str:
+    """The human word an auditor reads for an ``Outcome`` under a backend (e.g. a
+    ``crucible`` ``GOOD`` → "No counterexample", a ``prover`` ``GOOD`` → "Verified").
+
+    The report's HTML render is the primary consumer, but the console/TUI verdict
+    rollups reuse this so the same run reads with one vocabulary everywhere — this is
+    the single place the per-backend wording lives."""
+    return _OUTCOME_LABELS[backend][outcome]
+
+
 def _is_url(link: str) -> bool:
     return link.startswith("http://") or link.startswith("https://")
 

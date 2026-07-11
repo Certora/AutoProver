@@ -20,6 +20,7 @@ from composer.crucible.pipeline import (
     build_crucible_env,
     run_crucible_pipeline,
 )
+from composer.crucible.results import format_verdict_lines, summarize_verdicts
 from composer.diagnostics.timing import RunSummary
 from composer.pipeline.core import CorePipelineResult
 from composer.rustapp.entry import rust_entry_point
@@ -65,6 +66,8 @@ async def _console_crucible() -> int:
         print(summary.format())
         print(f"\n  Instructions: {result.n_components}")
         print(f"  Properties:   {result.n_properties}")
+        for line in format_verdict_lines(summarize_verdicts(result)):
+            print(line)
         if result.failures:
             print(f"  Failures:     {len(result.failures)}")
             for f in result.failures:
@@ -77,6 +80,7 @@ async def _tui_crucible() -> int:
     summary = RunSummary()
     app, run_pipeline_fn = _build_app_and_runner()
     event_kinds = {e.kind for e in app.descriptor.event_kinds}
+    notice_kinds = {e.kind for e in app.descriptor.event_kinds if e.notice}
 
     async with rust_entry_point(
         app, summary, run_pipeline_fn=run_pipeline_fn, env_builder=build_crucible_env
@@ -86,6 +90,7 @@ async def _tui_crucible() -> int:
             section_order=app.section_order,
             header_text=app.header_text,
             event_kinds=event_kinds,
+            notice_kinds=notice_kinds,
         )
         result: CorePipelineResult[RustFormalResult] | None = None
 
@@ -97,6 +102,8 @@ async def _tui_crucible() -> int:
                     f"crucible complete: {result.n_components} instructions, "
                     f"{result.n_properties} properties"
                 )
+                if tally := summarize_verdicts(result).tally:
+                    msg += f" — {tally}"
                 if result.failures:
                     msg += f", {len(result.failures)} failures"
                 tui.notify(msg)
@@ -109,6 +116,8 @@ async def _tui_crucible() -> int:
         await tui.run_async()
         print(summary.format())
         if result is not None:
+            for line in format_verdict_lines(summarize_verdicts(result)):
+                print(line)
             for f in result.failures:
                 print(f"  FAILED: {f}")
         return 0

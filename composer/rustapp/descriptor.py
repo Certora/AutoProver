@@ -54,10 +54,16 @@ class ArgSpec(BaseModel):
 
 
 class EventKind(BaseModel):
-    """A domain event kind the frontend should render (see ``Command::Emit``)."""
+    """A domain event kind the frontend should render (see ``Command::Emit``).
+
+    ``notice`` events are surfaced as a persistent, always-visible callout (plus a toast)
+    rather than a line in the collapsible per-task events log — for one-shot important
+    results such as a per-invariant verdict. Defaults to ``False`` so wheels built before
+    the field existed still load."""
 
     kind: str
     label: str
+    notice: bool = False
 
 
 class ArtifactLayout(BaseModel):
