@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, TypedDict, Coroutine, Literal, Annotated
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple, TypedDict, Coroutine, Literal, Annotated
 from pydantic import BaseModel, Field, ValidationError, Discriminator
 
 # Add parent directory to path for imports
@@ -114,6 +114,38 @@ except ImportError:
     sys.exit(1)
 
 from certora_autosetup.parsers.type_analyzer import TypeAnalyzer, TypeCategory
+
+# Curated-summary keys whose materialized content depends on the WHOLE scene, not
+# just the batch that matched them — re-rendered on every scene growth.
+SCENE_SENSITIVE_TEMPLATE_KEYS: FrozenSet[str] = frozenset({"oz_Math_mulDiv"})
+
+
+@dataclass(frozen=True)
+class RoundingDefinition:
+    """One distinct ``enum Rounding`` definition declared in a ``Math`` library
+    present in the scene."""
+
+    source_file: str  # declaring file (empty on legacy JSON without sourceFile)
+    members: FrozenSet[str]
+    seen_by: FrozenSet[str]  # scene contracts whose import closure contains it
+
+
+@dataclass(frozen=True)
+class RoundingVariant:
+    """A directional-summary variant for one Rounding definition in a mixed scene."""
+
+    qualifier: str  # scene contract qualifying the enum in CVL (C.Rounding)
+    up_member: str  # "Up" (OZ v4) or "Ceil" (OZ v5)
+
+
+@dataclass(frozen=True)
+class RoundingClassification:
+    """Scene-wide Math.Rounding classification driving the OZ Math spec rendering."""
+
+    kind: Literal["none", "single", "mixed"]
+    up_member: Optional[str] = None  # single: "Up"/"Ceil"; None = no directional
+    variants: Tuple[RoundingVariant, ...] = ()  # mixed only
+
 
 class CacheStats(TypedDict):
     hits: int
@@ -374,6 +406,15 @@ class SummarySetup:
         # ``_summarized_library_names`` to figure out which libraries have a curated
         # summary attached and therefore should be added to the scene.
         self.matched_functions: Set[str] = set()
+
+        # Every contract name that has entered the verification scene so far
+        # (initial main + additional + call-resolution batches). Drives the
+        # scene-wide Math.Rounding classification: qualifier contracts must be
+        # in the prover scene for `C.Rounding` to resolve. Known gap: library
+        # files added to the conf as extra_libs never pass through
+        # on_contracts_entered_scene, so they can't serve as qualifiers —
+        # acceptable, since the usual qualifiers are the main/harness contracts.
+        self._scene_contracts: Set[str] = set()
 
         # Accumulated import lines for the base aggregator spec. Rewritten (sorted) by
         # ``_rewrite_aggregator`` after every batch of contracts entering the scene, so the
@@ -766,56 +807,201 @@ class SummarySetup:
         self.log(f"Copied {copied} curated summary file(s) to {target_summaries}")
         return target_summaries
 
-    def _find_rounding_enum_value(self, contract_name) -> Optional[str]:
-        """Find the correct Rounding enum value from all_user_defined_types.json.
+    @staticmethod
+    def _enum_member_names(enum_members: List) -> Set[str]:
+        """Member names from an all_user_defined_types.json enum row (members are
+        either dicts with a ``name`` field or bare strings)."""
+        names: Set[str] = set()
+        for member in enum_members:
+            if isinstance(member, dict) and "name" in member:
+                names.add(member["name"])
+            elif isinstance(member, str):
+                names.add(member)
+        return names
 
-        Returns:
-            Either "Up" or "Ceil" depending on what's found in the Rounding enum
+    @staticmethod
+    def _round_up_member(members: FrozenSet[str]) -> Optional[str]:
+        """The member that means "round up" for a Math.Rounding definition:
+        ``Ceil`` in OZ v5 ({Floor, Ceil, Trunc, Expand}), ``Up`` in OZ v4
+        ({Down, Up, Zero}). None if the definition has neither."""
+        if "Ceil" in members:
+            return "Ceil"
+        if "Up" in members:
+            return "Up"
+        return None
+
+    def _classify_scene_rounding(self) -> "RoundingClassification":
+        """Classify the scene's ``Math.Rounding`` situation from
+        ``all_user_defined_types.json``.
+
+        Every scene contract's row set covers the types in its own import closure,
+        so grouping rows by declaring source file yields the DISTINCT ``Rounding``
+        definitions in the scene: one definition -> the plain ``Math.Rounding``
+        spelling works; two or more -> the prover purges the ambiguous name and
+        every reference must be qualified by a contract that imports exactly one
+        definition (``C.Rounding``, certora-cli >= 8.17.1).
         """
+        user_types_file = Path(".certora_internal/all_user_defined_types.json")
+        if not user_types_file.exists():
+            self.log("Warning: all_user_defined_types.json not found", "WARNING")
+            return RoundingClassification(kind="none")
         try:
-            user_types_file = Path(".certora_internal/all_user_defined_types.json")
-            if not user_types_file.exists():
-                self.log("Warning: all_user_defined_types.json not found", "WARNING")
-                return None
-
             with open(user_types_file, "r") as f:
                 user_types = json.load(f)
-
-            # Find the Rounding enum
-            for type_info in user_types:
-                if (
-                    type_info.get("typeCategory") == "UserDefinedEnum"
-                    and type_info.get("typeName") == "Rounding"
-                    and type_info.get("main_contract") == contract_name
-                ):
-                    enum_members = type_info.get("enumMembers", [])
-                    self.log(f"Found Rounding enum with members: {enum_members}")
-
-                    # Extract member names from the objects
-                    member_names = []
-                    for member in enum_members:
-                        if isinstance(member, dict) and "name" in member:
-                            member_names.append(member["name"])
-                        elif isinstance(member, str):
-                            member_names.append(member)
-
-                    # Check for Up or Ceil
-                    if "Ceil" in member_names:
-                        return "Ceil"
-                    elif "Up" in member_names:
-                        return "Up"
-                    else:
-                        self.log(
-                            f"Warning: Rounding enum found but contains neither 'Up' nor 'Ceil'. Members: {member_names}",
-                            "WARNING",
-                        )
-                        return None  # Default fallback
-
-            self.log("Warning: Rounding enum not found in user types", "WARNING")
-            return None
-
         except Exception as e:
             raise Exception(f"Error reading user types file: {e}")
+
+        # Only Rounding enums declared inside a `Math` library count — an unrelated
+        # contract-level `Rounding` enum must not steer the Math summary.
+        rows = [
+            row
+            for row in user_types
+            if row.get("typeCategory") == "UserDefinedEnum"
+            and row.get("typeName") == "Rounding"
+            and row.get("containingContract") == "Math"
+        ]
+        if not rows:
+            self.log("No Math.Rounding enum found in user types", "WARNING")
+            return RoundingClassification(kind="none")
+
+        # Group rows into distinct definitions. sourceFile (declaring file, from
+        # canonicalId) tells two definitions apart even with identical members;
+        # legacy rows without it fall back to the member set.
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            members = self._enum_member_names(row.get("enumMembers", []))
+            key = row.get("sourceFile") or f"members:{','.join(sorted(members))}"
+            group = grouped.setdefault(key, {"source_file": row.get("sourceFile", ""), "members": set(), "seen_by": set()})
+            group["members"] |= members
+            group["seen_by"].add(row.get("main_contract"))
+
+        definitions = [
+            RoundingDefinition(
+                source_file=g["source_file"],
+                members=frozenset(g["members"]),
+                seen_by=frozenset(g["seen_by"] & self._scene_contracts),
+            )
+            for g in grouped.values()
+        ]
+        # The types JSON comes from the project-wide compilation analysis, which
+        # can compile Math copies whose units never enter the prover scene. Only
+        # scene-visible definitions can conflict — counting the others would
+        # misclassify an unambiguous scene as mixed, and the prover REJECTS the
+        # contract-qualified spelling when the plain name is not ambiguous.
+        definitions = [d for d in definitions if d.seen_by]
+        if not definitions:
+            self.log("No Math.Rounding definition visible from the scene", "WARNING")
+            return RoundingClassification(kind="none")
+
+        if len(definitions) == 1:
+            up_member = self._round_up_member(definitions[0].members)
+            if up_member is None:
+                self.log(
+                    f"Warning: Rounding enum found but contains neither 'Up' nor 'Ceil'. "
+                    f"Members: {sorted(definitions[0].members)}",
+                    "WARNING",
+                )
+            self.log(f"Single Math.Rounding definition in scene; round-up member: {up_member}")
+            return RoundingClassification(kind="single", up_member=up_member)
+
+        # Mixed: pick, per definition, a qualifier contract that sees ONLY this
+        # definition (a contract seeing both cannot disambiguate) and is not the
+        # ambiguous library name itself.
+        self.log(
+            f"{len(definitions)} conflicting Math.Rounding definitions in scene — "
+            f"emitting qualified summaries (requires certora-cli >= 8.17.1)"
+        )
+        variants: List[RoundingVariant] = []
+        for definition in sorted(definitions, key=lambda d: (d.source_file, sorted(d.members))):
+            up_member = self._round_up_member(definition.members)
+            others_seen: Set[str] = set()
+            for other in definitions:
+                if other is not definition:
+                    others_seen |= other.seen_by
+            candidates = {c for c in definition.seen_by if c and c not in others_seen and c != "Math"}
+            if up_member is None or not candidates:
+                self.log(
+                    f"Math.Rounding definition {definition.source_file or sorted(definition.members)} "
+                    f"gets no directional summary (round-up member: {up_member}, "
+                    f"qualifier candidates: {sorted(candidates)})",
+                    "WARNING",
+                )
+                continue
+            qualifier = self.main_contract if self.main_contract in candidates else sorted(candidates)[0]
+            variants.append(RoundingVariant(qualifier=qualifier, up_member=up_member))
+        return RoundingClassification(kind="mixed", variants=tuple(variants))
+
+    def _render_oz_math_spec(self, classification: "RoundingClassification") -> str:
+        """Render the OZ Math summary spec for the scene's Rounding classification.
+
+        Generated programmatically rather than from placeholders because the mixed
+        case needs a variable number of directional summaries with scene-dependent
+        qualifiers.
+        """
+        header = 'import "../Math.spec";\n'
+
+        if classification.kind != "mixed":
+            lines = [
+                header,
+                "methods {",
+                "    function Math.mulDiv(uint256 x, uint256 y, uint256 denominator) internal returns (uint256) => mulDivDownSummary(x,y,denominator);",
+            ]
+            if classification.up_member is not None:
+                lines.append(
+                    "    function Math.mulDiv(uint256 x, uint256 y, uint256 denominator, Math.Rounding rounding) internal returns (uint256) => mulDivDirectionalSummary(x, y, denominator, rounding);"
+                )
+            lines += [
+                "    function Math.average(uint256 a, uint256 b) internal returns (uint256) => averageSummary(a,b);",
+                "    function Math.sqrt(uint256 x) internal returns (uint256) => sqrtSummaryDown(x);",
+                "}",
+            ]
+            if classification.up_member is not None:
+                lines += [
+                    "",
+                    "function mulDivDirectionalSummary(uint256 x, uint256 y, uint256 denominator, Math.Rounding rounding) returns uint256 {",
+                    "    // OZ v<5 used `Up`, v>=5 uses `Ceil`.",
+                    f"    if (rounding == Math.Rounding.{classification.up_member}) {{",
+                    "        return mulDivUpSummary(x, y, denominator);",
+                    "    } else {",
+                    "        return mulDivDownSummary(x, y, denominator);",
+                    "    }",
+                    "}",
+                ]
+            return "\n".join(lines) + "\n"
+
+        # Mixed: `Math` (receiver and type qualifier alike) is ambiguous and purged
+        # by the prover, so every entry uses a wildcard receiver, and each Rounding
+        # definition is referenced through its qualifier contract. The unqualified
+        # helpers are faithful (exact floor/ceil semantics), so wildcard matching
+        # any same-signature internal function is sound.
+        lines = [
+            header,
+            "// The scene contains conflicting `Math.Rounding` definitions (e.g. OZ v4 and",
+            "// v5), so the names `Math` / `Math.Rounding` are ambiguous and unavailable in",
+            "// CVL. Wildcard receivers + per-definition qualifier contracts are used",
+            "// instead (requires certora-cli >= 8.17.1).",
+            "methods {",
+            "    function _.mulDiv(uint256 x, uint256 y, uint256 denominator) internal => mulDivDownSummary(x,y,denominator) expect (uint256);",
+            "    function _.average(uint256 a, uint256 b) internal => averageSummary(a,b) expect (uint256);",
+            "    function _.sqrt(uint256 x) internal => sqrtSummaryDown(x) expect (uint256);",
+        ]
+        for variant in classification.variants:
+            lines.append(
+                f"    function _.mulDiv(uint256 x, uint256 y, uint256 denominator, {variant.qualifier}.Rounding rounding) internal => mulDivDirectionalSummary_{variant.qualifier}(x, y, denominator, rounding) expect (uint256);"
+            )
+        lines.append("}")
+        for variant in classification.variants:
+            lines += [
+                "",
+                f"function mulDivDirectionalSummary_{variant.qualifier}(uint256 x, uint256 y, uint256 denominator, {variant.qualifier}.Rounding rounding) returns uint256 {{",
+                f"    if (rounding == {variant.qualifier}.Rounding.{variant.up_member}) {{",
+                "        return mulDivUpSummary(x, y, denominator);",
+                "    } else {",
+                "        return mulDivDownSummary(x, y, denominator);",
+                "    }",
+                "}",
+            ]
+        return "\n".join(lines) + "\n"
 
     def process_template_in_place(
         self,
@@ -823,48 +1009,14 @@ class SummarySetup:
         template_result_file: Path,
         contract_name: str,
     ) -> None:
-        """Substitute ``$CONTRACT_NAME$`` (and OZ_Math's rounding placeholders) in the
-        bundled template at ``template_file`` and write the result to
-        ``template_result_file``."""
-        # Read template content
+        """Substitute ``$CONTRACT_NAME$`` in the bundled template at
+        ``template_file`` and write the result to ``template_result_file``.
+
+        ``OZ_Math.template.spec`` is not handled here — ``_materialize_template``
+        routes it to ``_render_oz_math_spec``."""
         template_content = template_file.read_text()
-
-        # Replace placeholders
         processed_content = template_content.replace("$CONTRACT_NAME$", contract_name)
-
-        # Special handling for OZ_Math.template.spec
-        if template_file.name == "OZ_Math.template.spec":
-            rounding_value = self._find_rounding_enum_value(contract_name)
-            if rounding_value is None:
-                processed_content = processed_content.replace(
-                    "$COMMENT_IF_NO_ROUNDING$", "//"
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_BLOCK_START_IF_NO_ROUNDING$", "/*"
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_BLOCK_END_IF_NO_ROUNDING$", "*/"
-                )
-            else:
-                processed_content = processed_content.replace(
-                    "$UINT_ROUND_UP$", rounding_value
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_IF_NO_ROUNDING$", ""
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_BLOCK_START_IF_NO_ROUNDING$", ""
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_BLOCK_END_IF_NO_ROUNDING$", ""
-                )
-            self.log(
-                f"Processed OZ_Math template with Rounding value: {rounding_value}"
-            )
-
-        # Create output file
-        output_file = template_result_file
-        output_file.write_text(processed_content)
+        template_result_file.write_text(processed_content)
 
         self.log(
             f"Processed template {template_file.name} with contract name: {contract_name}"
@@ -907,7 +1059,15 @@ class SummarySetup:
         dst = self.user_summaries_dir / versioned_rel_under
         dst.parent.mkdir(parents=True, exist_ok=True)
 
-        self.process_template_in_place(src, dst, main_contract)
+        if rel_under_summaries.name == "OZ_Math.template.spec":
+            # Rendered programmatically: the emitted spec depends on the scene-wide
+            # Rounding classification (single vs conflicting definitions), which
+            # placeholders cannot express. The on-disk template is only an import
+            # stub that keeps Math.spec in the copy closure.
+            dst.write_text(self._render_oz_math_spec(self._classify_scene_rounding()))
+            self.log(f"Rendered OZ_Math summary spec to {dst}")
+        else:
+            self.process_template_in_place(src, dst, main_contract)
 
         return str(SUMMARIES_SUBDIR / versioned_rel_under)
 
@@ -2433,6 +2593,7 @@ Method signature: {method_signature}
         contract_names = list(dict.fromkeys(contract_names))  # de-dup, preserve order
         if not contract_names:
             return
+        self._scene_contracts.update(contract_names)
 
         # TODO(precision): matching and LLM analysis below are scoped to each contract's whole
         # compilation unit, not to the methods actually reachable from the main contract. A contract
@@ -2451,13 +2612,18 @@ Method signature: {method_signature}
             matched, tuples = self.match_summaries_from_all_methods(name)
             curated_keys |= matched
             per_contract_skip[name] = tuples
-        if curated_keys:
+        # A later batch can flip the scene-wide Rounding classification (e.g.
+        # single -> mixed) without re-matching oz_Math_mulDiv itself, so
+        # scene-sensitive templates are re-materialized whenever they have ever
+        # matched (materialization is idempotent, aggregator imports dedup).
+        rerender_keys = curated_keys | (self.matched_functions & SCENE_SENSITIVE_TEMPLATE_KEYS)
+        if rerender_keys:
             # Publish for downstream consumers (autosetup's library-scene filter) and for
             # prune_emitted_specs's curated-over-LLM dedup precedence.
             self.matched_functions |= curated_keys
-            self.copy_summaries_folder(curated_keys)
+            self.copy_summaries_folder(rerender_keys)
             registered = self._add_aggregator_imports(
-                self.curated_summary_import_path(key, main_contract) for key in curated_keys
+                self.curated_summary_import_path(key, main_contract) for key in rerender_keys
             )
             if registered:
                 self.log(f"Aggregator: registered curated specs {registered}")

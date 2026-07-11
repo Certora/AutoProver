@@ -908,6 +908,14 @@ class SetupProver:
 
                                 # Add to collection if we found a valid type
                                 if type_name and qualified_name:
+                                    # canonicalId is "path/File.sol|Qualified.Name"; the
+                                    # path side identifies the declaring FILE, which is
+                                    # what tells two same-named type definitions apart
+                                    # (e.g. OZ v4 and v5 Math.Rounding in one scene).
+                                    canonical_id = type_info.get("canonicalId", "")
+                                    source_file = (
+                                        canonical_id.split("|", 1)[0] if "|" in canonical_id else ""
+                                    )
                                     user_type_info = {
                                         "typeName": type_name,
                                         "qualifiedName": qualified_name,
@@ -917,6 +925,7 @@ class SetupProver:
                                             "containingContract"
                                         ),
                                         "main_contract": contract.get("name"),
+                                        "sourceFile": source_file,
                                     }
 
                                     # Add enum members for UserDefinedEnum
