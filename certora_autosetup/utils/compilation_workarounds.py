@@ -620,8 +620,13 @@ class CompilationWorkaroundManager:
         error reads "...Stack too\ndeep."). Match across arbitrary whitespace
         (DOTALL + ``\\s+`` between words) so the wrap does not hide the error;
         otherwise the via-ir / optimizer workarounds never trigger.
+
+        Some solc emissions never contain the "Stack too deep" phrase at all —
+        e.g. "YulException: Variable _7 is 1 too deep in the stack [ ... ]
+        memoryguard was present." — so also match the "too deep in(side) the
+        stack" wording (the semantics, not one spelling).
         """
-        pattern = r"YulException:.*?Stack\s+too\s+deep"
+        pattern = r"YulException:.*?(?:Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack)"
         return bool(re.search(pattern, output, re.IGNORECASE | re.DOTALL))
 
     def _detect_compiler_version_mismatch(

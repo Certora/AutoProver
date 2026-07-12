@@ -27,6 +27,21 @@ SINGLE_LINE_YUL_STACK_TOO_DEEP = (
     "YulException: Variable x is 2 slot(s) too deep. Stack too deep. Try --via-ir.\n"
 )
 
+# Verbatim solc 0.8.34 via-ir emission: no "Stack too deep" phrase anywhere —
+# the error ends with "memoryguard was present." Missing this wording left the
+# yul escalation ladder (optimizer, then teardown) untried on a real project.
+MEMORYGUARD_YUL_STACK_TOO_DEEP = (
+    "Compiling contracts/facets/IntentFacet.sol...\n"
+    "\n"
+    "solc8.34 had an error:\n"
+    "YulException: Variable _7 is 1 too deep in the stack [ RET _7 expr_2992_address \n"
+    "_6 var_maker var_salt var_expiry var_originalOrderAmount var_feeRecipient \n"
+    "var_proratedBorrowFee var_fillAmount var_termRepoTokenFillAmount var_offerRate \n"
+    "expr var_servicer_2952_address var_taker expr_2995_address \n"
+    "expr_2995_functionSelector ]\n"
+    "memoryguard was present.\n"
+)
+
 UNRELATED_OUTPUT = (
     "Compiling certora/harnesses/Foo.sol...\n"
     "Warning: Unused local variable.\n"
@@ -48,6 +63,12 @@ def test_detects_wrapped_yul_stack_too_deep(manager: CompilationWorkaroundManage
 
 def test_detects_single_line_yul_stack_too_deep(manager: CompilationWorkaroundManager) -> None:
     assert manager._detect_yul_exception_stack_too_deep(SINGLE_LINE_YUL_STACK_TOO_DEEP) is True
+
+
+def test_detects_memoryguard_wording_without_stack_too_deep_phrase(
+    manager: CompilationWorkaroundManager,
+) -> None:
+    assert manager._detect_yul_exception_stack_too_deep(MEMORYGUARD_YUL_STACK_TOO_DEEP) is True
 
 
 def test_ignores_unrelated_output(manager: CompilationWorkaroundManager) -> None:
