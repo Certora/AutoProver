@@ -34,7 +34,9 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List
     3. remappings.txt — often partially auto-generated; may drift
     4. package.json — npm-style fallback
     """
-    packages: List[str] = []
+    # Data collection: key -> resolved path (first source to set a key wins) and key -> source
+    # (for the mismatch warning). The packages list is formatted once at the end, preserving this
+    # insertion order (= the priority order above).
     remapping_key_to_path: Dict[str, str] = {}
     remapping_key_to_source: Dict[str, str] = {}
 
@@ -60,7 +62,6 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List
             _merge_remapping_entry(
                 entry=line,
                 source_name="`forge remappings`",
-                packages=packages,
                 remapping_key_to_path=remapping_key_to_path,
                 remapping_key_to_source=remapping_key_to_source,
                 warn_on_mismatch=False,
@@ -99,7 +100,6 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List
             _merge_remapping_entry(
                 entry=entry,
                 source_name="foundry.toml",
-                packages=packages,
                 remapping_key_to_path=remapping_key_to_path,
                 remapping_key_to_source=remapping_key_to_source,
                 warn_on_mismatch=False,
@@ -117,7 +117,6 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List
             _merge_remapping_entry(
                 entry=line,
                 source_name="remappings.txt",
-                packages=packages,
                 remapping_key_to_path=remapping_key_to_path,
                 remapping_key_to_source=remapping_key_to_source,
                 warn_on_mismatch=True,
@@ -128,13 +127,16 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List
     # Read package.json and add entries not already in remappings
     package_json_path = base_dir / "package.json"
     if package_json_path.exists():
-        package_data = json.loads(package_json_path.read_text())
+        try:
+            package_data = json.loads(package_json_path.read_text())
+        except json.JSONDecodeError as e:
+            log_fn(f"Failed to parse package.json: {e}", "WARNING")
+            package_data = {}
         for section in ("dependencies", "devDependencies", "resolutions"):
             for key in package_data.get(section, {}):
                 _merge_remapping_entry(
                     entry=f"{key}=node_modules/{key}",
                     source_name="package.json",
-                    packages=packages,
                     remapping_key_to_path=remapping_key_to_path,
                     remapping_key_to_source=remapping_key_to_source,
                     warn_on_mismatch=True,
@@ -142,45 +144,42 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List
                     log_fn=log_fn,
                 )
 
-    return packages
+    return [f"{key}={path}" for key, path in remapping_key_to_path.items()]
 
 
 def _merge_remapping_entry(
     *,
     entry: str,
     source_name: str,
-    packages: List[str],
     remapping_key_to_path: Dict[str, str],
     remapping_key_to_source: Dict[str, str],
     warn_on_mismatch: bool,
     base_dir: Path,
     log_fn: LogFn,
 ) -> None:
-    """Merge a single `key=path` remapping entry into the running packages list.
+    """Record a single `key=path` remapping entry into the running key->path/source maps.
 
-    Both sides of the entry get ``rstrip("/")``-normalized before storage, so the
-    merged list is internally consistent regardless of which source emitted the
-    entry. Solc/forge accept the normalized form (`key=path`) as long as key and
-    path agree on trailing slashes, which this guarantees. Distinct keys (e.g.
-    ``@openzeppelin/contracts`` vs ``@openzeppelin/contracts-upgradeable``) stay
-    separate entries; solc resolves imports by longest-prefix so the more specific
-    key wins — provided it is present, which is exactly why forge remappings is the
-    authoritative source.
+    Both sides of the entry are whitespace-stripped and ``rstrip("/")``-normalized before
+    storage, so the merged list is internally consistent regardless of which source emitted the
+    entry (and tolerant of ``@oz/ = lib/oz/``-style spacing). Solc/forge accept the normalized
+    form (`key=path`) as long as key and path agree on trailing slashes, which this guarantees.
+    Distinct keys (e.g. ``@openzeppelin/contracts`` vs ``@openzeppelin/contracts-upgradeable``)
+    stay separate entries; solc resolves imports by longest-prefix so the more specific key wins
+    — provided it is present, which is exactly why forge remappings is the authoritative source.
 
-    Relative target paths are resolved to absolute against ``base_dir`` so the
-    packages list is valid even when the process CWD differs from the project dir.
+    Relative target paths are resolved to absolute against ``base_dir`` so the packages list is
+    valid even when the process CWD differs from the project dir.
 
     On a key conflict (already populated by an earlier-priority source):
-    - if ``warn_on_mismatch`` and the stored path differs from the new one, log a
-      warning naming the actual earlier source from ``remapping_key_to_source``;
+    - if ``warn_on_mismatch`` and the stored path differs from the new one, log a warning naming
+      the actual earlier source from ``remapping_key_to_source``;
     - otherwise silently skip.
 
-    Caller is responsible for stripping whitespace and confirming the entry contains
-    an ``=`` before calling.
+    Caller is responsible for confirming the entry contains an ``=`` before calling.
     """
     raw_key, raw_path = entry.split("=", 1)
-    key = raw_key.rstrip("/")
-    path = raw_path.rstrip("/")
+    key = raw_key.strip().rstrip("/")
+    path = raw_path.strip().rstrip("/")
 
     if not Path(path).is_absolute():
         path = str(base_dir / path)
@@ -196,6 +195,5 @@ def _merge_remapping_entry(
             )
         return
 
-    packages.append(f"{key}={path}")
     remapping_key_to_path[key] = path
     remapping_key_to_source[key] = source_name
