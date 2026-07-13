@@ -2,8 +2,8 @@
 
 Regression guard for the bug where `FoundryManager.parse_config` built the conf's
 `packages` list only from foundry.toml's explicit `remappings` key, dropping
-remappings.txt (ion-protocol) and forge's auto-inferred lib/* remappings (angstrom),
-which made certoraRun die with `ParserError: Source "..." not found`.
+remappings.txt entries and forge's auto-inferred lib/* remappings, which made
+certoraRun die with `ParserError: Source "..." not found`.
 
 `forge` is not available in CI, so `forge remappings` is monkeypatched here: the
 absent-forge cases exercise the file-reading fallback (foundry.toml + remappings.txt +
@@ -81,7 +81,8 @@ def test_forge_remappings_take_priority_over_foundry_toml(tmp_path: Path, monkey
 def test_distinct_prefix_keys_both_kept(tmp_path: Path, monkeypatch) -> None:
     # `@openzeppelin/contracts` must NOT swallow `@openzeppelin/contracts-upgradeable`:
     # both distinct keys are kept so solc resolves imports by longest prefix. This is
-    # why keeping rstrip("/") is safe once the complete list is emitted (royco-day case).
+    # why keeping rstrip("/") is safe once the complete list is emitted — a shorter key
+    # must not shadow a more-specific longer one.
     _no_forge(monkeypatch)
     (tmp_path / "remappings.txt").write_text(
         "@openzeppelin/contracts/=lib/oz/contracts/\n"

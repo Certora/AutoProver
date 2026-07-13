@@ -54,19 +54,19 @@ def test_ignores_unrelated_output(manager: CompilationWorkaroundManager) -> None
 
 # Verbatim-shaped certoraRun output for the "Source ... not found" ParserError. solc
 # hard-wraps the diagnostic, so the two markers ('ParserError: Source "' and
-# "File not found") land on separate lines and defeat a raw substring check. These are
-# the ion-protocol / angstrom cases that must be detected so the source-not-found
-# packages workaround fires.
+# "File not found") land on separate lines and defeat a raw substring check. Both wrap
+# positions observed in real runs must be detected so the source-not-found packages
+# workaround fires.
 
-# ion-protocol: wraps between `Source` and the opening quote.
-ION_WRAPPED_SOURCE_NOT_FOUND = (
+# Wrap between `Source` and the opening quote.
+WRAPPED_SOURCE_NOT_FOUND_SPLIT_AT_QUOTE = (
     "Compiling 41 files with Solc 0.8.21\n"
     "ParserError: Source\n"
     '"@openzeppelin/contracts/token/ERC20/IERC20.sol" not found: File not found.\n'
 )
 
-# angstrom: wraps `File` / `not found`.
-ANGSTROM_WRAPPED_SOURCE_NOT_FOUND = (
+# Wrap between `File` and `not found`.
+WRAPPED_SOURCE_NOT_FOUND_SPLIT_AT_FILE = (
     'ParserError: Source "solady/utils/FixedPointMathLib.sol" not found: File\n'
     "not found.\n"
 )
@@ -74,14 +74,14 @@ ANGSTROM_WRAPPED_SOURCE_NOT_FOUND = (
 SINGLE_LINE_SOURCE_NOT_FOUND = 'ParserError: Source "src/Foo.sol" not found: File not found.\n'
 
 
-def test_detects_ion_wrapped_source_not_found(manager: CompilationWorkaroundManager) -> None:
+def test_detects_source_not_found_split_at_quote(manager: CompilationWorkaroundManager) -> None:
     # Regression: the raw `'ParserError: Source "' in output` check fails here because
     # the output has a newline where the literal has a space.
-    assert manager._has_source_not_found(ION_WRAPPED_SOURCE_NOT_FOUND) is True
+    assert manager._has_source_not_found(WRAPPED_SOURCE_NOT_FOUND_SPLIT_AT_QUOTE) is True
 
 
-def test_detects_angstrom_wrapped_source_not_found(manager: CompilationWorkaroundManager) -> None:
-    assert manager._has_source_not_found(ANGSTROM_WRAPPED_SOURCE_NOT_FOUND) is True
+def test_detects_source_not_found_split_at_file(manager: CompilationWorkaroundManager) -> None:
+    assert manager._has_source_not_found(WRAPPED_SOURCE_NOT_FOUND_SPLIT_AT_FILE) is True
 
 
 def test_detects_single_line_source_not_found(manager: CompilationWorkaroundManager) -> None:
