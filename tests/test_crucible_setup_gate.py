@@ -34,12 +34,11 @@ from composer.crucible.harness import CrucibleDep
 from composer.crucible.store import CrucibleArtifactStore
 from composer.io.multi_job import TaskInfo
 from composer.kb.knowledge_base import DefaultEmbedder
-from composer.pipeline.core import PipelineRun
+from composer.pipeline.core import GaveUp, PipelineRun
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
-from composer.rustapp.adapter import RealEffects
+from composer.rustapp.adapter import author_and_compile, make_emitter
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.rustapp.host import build_phase_enum, load_descriptor, load_module
-from composer.rustapp.loop import GaveUp, RustFormalized, drive_session
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost
 from composer.llm.registry import get_provider_for
@@ -177,21 +176,27 @@ async def test_crucible_fixture_authoring(pg_container: "PostgresContainer", mon
         descriptor = load_descriptor(module)
         phase = build_phase_enum(descriptor)
 
-        session = module.new_setup_session(json.dumps({"program": _PROGRAM, "analyzed": _ANALYZED}))
-        assert session is not None, "crucible_app declares no setup session"
-
+        # The setup artifact: author the fixture, then `compile` (crucible --dry-run) it.
+        # Unsandboxed here (the gate trusts its inputs), so run_confined=None.
+        setup_input = {
+            "kind": "setup", "program": _PROGRAM,
+            "component": _ANALYZED, "props": [], "context": {},
+        }
+        sandbox_dict = {"run_confined": None, "timeout_s": 1200}
         run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
-        effects = RealEffects(cast(Any, ctx), run, command_timeout_s=1200)
 
         result = await run.runner(
             TaskInfo("crucible_setup", "Build Harness", phase["build_harness"]),
-            lambda: drive_session(session, effects, max_steps=60),
+            lambda: author_and_compile(
+                module, setup_input, env=env, sandbox_dict=sandbox_dict,
+                workdir=Path(_SCENARIO), recursion_limit=100, backend_name="crucible",
+                emit=make_emitter(),
+            ),
         )
 
     if isinstance(result, GaveUp):
         pytest.fail(f"fixture authoring gave up: {result.reason}")
-    assert isinstance(result, RustFormalized)
-    fixture = result.data.get("artifact_text", "")
+    fixture = result
     print("\n===== authored fixture =====\n" + fixture)
     # It published, so a --dry-run went green. Sanity-check the shape.
     assert "struct Fixture" in fixture, "fixture must define `struct Fixture`"

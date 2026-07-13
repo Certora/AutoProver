@@ -103,11 +103,13 @@ class CrucibleArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
 
     @override
     def write_artifact(self, i: RustArtifact, artifact: RustFormalResult) -> Path:
-        """Fold this component's test section into the crate and re-render it, then
-        write the component's metadata under ``certora/crucible/``. Returns the
-        crate's ``main.rs`` (project-relative) — the component's "deliverable"."""
-        feature = CrucibleHarness.feature_for(i.slug)
-        self.harness.add_component(feature, artifact.artifact_text)
+        """Fold this component's test section into the crate (keyed by the feature the wheel
+        actually validated — its ``property_units`` entry, ``c_<slug>``) and re-render it, then
+        write the component's metadata under ``certora/crucible/``. Returns the crate's
+        ``main.rs`` (project-relative) — the component's "deliverable"."""
+        for _title, units in artifact.property_units():
+            for feature in units:
+                self.harness.add_component(feature, artifact.artifact_text)
         main = self.harness.write(self.fuzz_dir())
 
         # Metadata bundle (shared base helpers), under certora/crucible/properties/.

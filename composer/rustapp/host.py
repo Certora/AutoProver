@@ -142,8 +142,6 @@ def build_backend(
         _core_phases=core,
         artifact_store=sf(source, descriptor),
         ecosystem=resolve_ecosystem(descriptor),
-        prover=opts.prover,
-        feedback=opts.feedback,
         command_timeout_s=opts.command_timeout_s,
         fuzz_timeout_s=opts.fuzz_timeout_s,
         sandbox=opts.sandbox,

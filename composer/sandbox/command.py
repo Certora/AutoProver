@@ -1,10 +1,14 @@
 """The local-command runner behind the ``RunCommand`` effect.
 
 A single choke point: materialize a set of files into a workdir, run a command
-over them (as a child process, **never** a shell), and capture the result. Both
-the IoC ``RunCommand`` effect (:meth:`composer.rustapp.adapter.RealEffects.run_command`)
-and the Solana build/IDL step route through here — and any Python backend may too,
-which is why this lives in :mod:`composer.sandbox` rather than under ``rustapp``.
+over them (as a child process, **never** a shell), and capture the result. The
+trusted Python build steps (the Solana sBPF build / IDL step) route through here.
+
+(A Rust backend's own ``compile``/``validate`` toolchain runs no longer go through
+this: they spawn the ``run-confined`` launcher directly from the wheel via
+``autoprover_sdk::run_confined`` — see ``docs/rust-backend-api.md``. This runner and the
+launcher share the same :mod:`composer.sandbox.policy` seam, which is why it lives in
+:mod:`composer.sandbox` rather than under ``rustapp``.)
 
 Optional confinement is applied via a :class:`~composer.sandbox.policy.SandboxProvider`
 + :class:`~composer.sandbox.policy.SandboxPolicy` (``docs/command-sandbox.md``):

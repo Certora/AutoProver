@@ -1,19 +1,21 @@
-"""Adapter: wrap a Rust wheel as a :class:`PipelineBackend`.
+"""Adapter: wrap a Rust wheel (a :class:`~autoprover_sdk.Backend`) as a
+:class:`~composer.pipeline.core.PipelineBackend`.
 
-Three phase objects mirror the CVL / foundry backends, but each delegates to the
-Rust module:
+The Rust wheel is a **passive service** (``docs/rust-backend-api.md``): Python owns the
+author→compile→judge→validate loop and every LLM turn, and calls the wheel's pure callouts
+(``descriptor`` / ``units`` / ``author_prompt`` / ``judge_prompt`` / ``finalize``) plus the two
+blocking ones (``compile`` / ``validate``) that run the toolchain via ``run-confined``. There is
+no IoC ``resume`` loop and no ``Effects`` protocol.
+
+Three phase objects mirror the CVL / foundry backends:
 
 * :class:`RustBackend`        — ``PipelineBackend`` (guidance, phases, store, ``prepare_system``).
 * :class:`RustPreparedSystem` — builds the formalizer (thin; no app-specific setup).
-* :class:`RustFormalizer`     — ``formalize`` drives the Rust decider through the
-  IoC loop; ``fetch_verdicts`` / ``finalize`` call the module's sync FFI.
+* :class:`RustFormalizer`     — ``formalize`` runs the loop; ``fetch_verdicts`` reads the verdicts
+  ``validate`` baked into the result.
 
-App-specific orchestration (shared fixtures, crate-harness prep, fuzz budgets) lives
-in the application package — e.g. :mod:`composer.crucible.backend` — not here.
-
-``RealEffects`` binds the loop's effects to live services: ``emit`` via LangGraph's
-stream writer, ``call_llm`` via the run's model, an in-memory scratch cache, and
-injectable ``run_prover`` / ``run_feedback`` hooks.
+App-specific orchestration (a shared setup artifact, crate prep) lives in the application package
+— e.g. :mod:`composer.crucible.backend`.
 """
 
 from __future__ import annotations
@@ -34,10 +36,9 @@ from composer.pipeline.core import (
     SystemAnalysisSpec,
 )
 from composer.pipeline.ecosystem import Ecosystem
-from composer.sandbox.command import DEFAULT_TIMEOUT_S, run_local_command
+from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor
-from composer.rustapp.loop import Effects, GaveUp as LoopGaveUp, drive_session
 from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
@@ -45,12 +46,12 @@ from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import Outcome, ReportBackend, RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import PropertyFormulation
+from composer.spec.util import slugify_filename
 
 _log = logging.getLogger(__name__)
 
-# A run_prover / run_feedback hook: async, backend-shaped JSON in and out.
-ProverHook = Callable[[str, Any, "list[str] | None"], Awaitable[dict]]
-FeedbackHook = Callable[[str, Any, Any], Awaitable[dict]]
+# Author→compile revise budget (was the Rust sessions' SETUP/PC_MAX_ATTEMPTS).
+DEFAULT_MAX_ATTEMPTS = 7
 
 # Derived from the ReportBackend literal so the two can't drift (single source of truth).
 _REPORT_BACKENDS: frozenset[str] = frozenset(get_args(ReportBackend.__value__))
@@ -65,159 +66,174 @@ def as_report_backend(tag: str) -> ReportBackend:
     return cast(ReportBackend, tag)
 
 
-class RealEffects:
-    """The production :class:`Effects`. One instance per ``formalize`` / setup call
-    (it holds that call's cache scope)."""
+# ---------------------------------------------------------------------------
+# Shared loop helpers (used by RustFormalizer.formalize and app setup artifacts).
+# ---------------------------------------------------------------------------
 
-    def __init__(
-        self,
-        ctx: WorkflowContext[Any],
-        run: PipelineRun,
-        *,
-        prover: ProverHook | None = None,
-        feedback: FeedbackHook | None = None,
-        command_sem: asyncio.Semaphore | None = None,
-        command_timeout_s: int = DEFAULT_TIMEOUT_S,
-        sandbox: SandboxConfig | None = None,
-        backend_name: str = "rust",
-    ):
-        self._ctx = ctx
-        self._run = run
-        # The application's name (descriptor.name, e.g. "crucible") — used to label the
-        # authoring-turn task in the console instead of a generic "rust backend".
-        self._name = backend_name
-        self._prover = prover
-        self._feedback = feedback
-        self._command_sem = command_sem
-        self._command_timeout_s = command_timeout_s
-        # How to confine RunCommand (docs/command-sandbox.md). None → unsandboxed
-        # (the ``none`` provider) — for trusted-input / EVM paths.
-        self._sandbox = sandbox
-        # Loop-scratch cache (within one formalize). Cross-run persistence is the
-        # driver's result-level cache, keyed by formalized_type — not this.
-        self._scratch: dict[str, Any] = {}
+def make_emitter() -> Callable[[str, dict], None]:
+    """A ``emit(kind, payload)`` that streams a domain event to the current task's panel.
+    Routes out-of-graph (the loop isn't inside a LangGraph run) via ``push_custom_update``,
+    keyed by the active ``run_task`` id — the same routing the old ``RealEffects.emit`` used."""
+    from composer.diagnostics.timing import get_current_task_id
+    from composer.io.context import push_custom_update
 
-    async def call_llm(self, messages: Any) -> str:
-        """Run one bounded, **tool-enabled** authoring turn and return its final text.
+    def emit(kind: str, payload: dict) -> None:
+        push_custom_update({"type": kind, **payload}, thread_id=get_current_task_id() or "rust")
 
-        Binds the env's tool belt (source navigation + optional RAG) and runs an
-        agent to completion. Must run inside a ``with_handler`` scope (the caller
-        wraps it in ``run.runner``)."""
-        from composer.rustapp._llm_agent import run_llm_agent
+    return emit
 
-        return await run_llm_agent(
-            self._run.env, messages, recursion_limit=self._ctx.recursion_limit,
-            backend_name=self._name,
+
+def _strip_fence(text: str) -> str:
+    """Strip a leading/trailing ``​```lang`` code fence if the model wrapped its answer
+    (the authored artifact is written verbatim into a source file, so a fence would break it)."""
+    t = text.strip()
+    if t.startswith("```"):
+        first_nl = t.find("\n")
+        body = t[first_nl + 1 :] if first_nl != -1 else t
+        return body.removesuffix("```").rstrip().removesuffix("```").rstrip()
+    return t
+
+
+def unique_slugs(props: list[PropertyFormulation]) -> list[str]:
+    """One unique kebab slug per property (basis for its unit/feature name). Titles are unique
+    at extraction; a slug collision (punctuation/casing) gets a numeric suffix."""
+    slugs: list[str] = []
+    seen: dict[str, int] = {}
+    for p in props:
+        base = slugify_filename(p.title) or "inv"
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        slugs.append(base if n == 0 else f"{base}_{n}")
+    return slugs
+
+
+def _first_line(s: str) -> str:
+    return next((ln for ln in s.splitlines() if ln.strip()), "").strip()
+
+
+def _parse_judge(review: str) -> tuple[bool, str]:
+    """Interpret a judge reply as (accept, feedback). Accepts a JSON ``{accept, feedback}`` or a
+    plain reply led by ``ACCEPT`` / ``REJECT``. (No backend enables the judge today.)"""
+    try:
+        obj = json.loads(review)
+        if isinstance(obj, dict):
+            return bool(obj.get("accept")), str(obj.get("feedback", ""))
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return (not review.strip().upper().startswith("REJECT")), review
+
+
+async def author_and_compile(
+    module: Any,
+    input_dict: dict,
+    *,
+    env: Any,
+    sandbox_dict: dict,
+    workdir: Path,
+    recursion_limit: int,
+    backend_name: str,
+    emit: Callable[[str, dict], None],
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    command_sem: asyncio.Semaphore | None = None,
+) -> str | GaveUp:
+    """Author `input_dict.kind`'s spec with the LLM, then gate it with the backend's ``compile``
+    (retry on failure) and optional ``judge``. Returns the compiled spec text, or :class:`GaveUp`.
+    Shared by the component loop and app setup artifacts (e.g. Crucible's fixture)."""
+    from composer.rustapp._llm_agent import run_llm_agent
+
+    input_json = json.dumps(input_dict)
+    sandbox_json = json.dumps(sandbox_dict)
+    failure: dict | None = None
+    for _ in range(max_attempts):
+        prompt = json.loads(
+            module.author_prompt(input_json, json.dumps(failure) if failure is not None else None)
         )
-
-    async def run_prover(self, spec: str, config: Any, rules: list[str] | None) -> dict:
-        if self._prover is None:
-            raise NotImplementedError(
-                "This Rust backend requested a `run_prover` effect but no prover hook "
-                "was supplied to RealEffects. Either make the Rust backend self-contained "
-                "(do verification inside Rust, no RunProver command) or pass `prover=` when "
-                "constructing the RustFormalizer."
-            )
-        return await self._prover(spec, config, rules)
-
-    async def run_feedback(self, spec: str, skipped: Any, rebuttals: Any) -> dict:
-        if self._feedback is None:
-            raise NotImplementedError(
-                "This Rust backend requested a `run_feedback` effect but no feedback hook "
-                "was supplied to RealEffects."
-            )
-        return await self._feedback(spec, skipped, rebuttals)
-
-    def _ensure_workdir(self) -> Path:
-        # Build-based backends run commands in the project tree — the generated
-        # harness references the program crate by relative path. Isolation is the
-        # sandbox's job (docs/command-sandbox.md).
-        return Path(self._run.source.project_root)
-
-    async def run_command(
-        self, program: str, args: list[str], files: dict[str, str]
-    ) -> dict:
-        workdir = self._ensure_workdir()
-        provider = policy = None
-        if self._sandbox is not None and self._sandbox.enabled:
-            provider = self._sandbox.resolve_provider()
-            policy = self._sandbox.build_policy(workdir)
-        result = await run_local_command(
-            program,
-            args,
-            files,
-            workdir=workdir,
-            timeout_s=self._command_timeout_s,
-            sem=self._command_sem,
-            provider=provider,
-            policy=policy,
+        reply = await run_llm_agent(
+            env, prompt, recursion_limit=recursion_limit, backend_name=backend_name
         )
-        if result.exit_code != 0:
-            # Surface authoring build/dry-run failures — otherwise they only reach the
-            # decider (in the revise prompt) and are invisible when a session gives up.
-            tail = (result.stderr or result.stdout or "")[-1500:]
-            _log.warning(
-                "RunCommand failed: %s %s (exit %s) in %s\n%s",
-                program, " ".join(args), result.exit_code, workdir, tail,
+        spec = _strip_fence(reply)
+
+        result = json.loads(
+            await _run_blocking(
+                lambda: module.compile(input_json, spec, str(workdir), sandbox_json), command_sem
             )
-        return result.as_observation()
-
-    async def cache_get(self, key: str) -> Any | None:
-        return self._scratch.get(key)
-
-    async def cache_put(self, key: str, value: Any) -> None:
-        self._scratch[key] = value
-
-    async def emit(self, event_kind: str, payload: dict) -> None:
-        # The decider emits between graph calls (in the IoC loop), where
-        # get_stream_writer() is unavailable — so route the event straight to the
-        # task's EventHandler.handle_event via the with_handler scope. The task id is
-        # the console label; the queue is per-task, so it reaches the right panel.
-        from composer.diagnostics.timing import get_current_task_id
-        from composer.io.context import push_custom_update
-
-        delivered = push_custom_update(
-            {"type": event_kind, **payload},
-            thread_id=get_current_task_id() or "rust",
         )
-        if not delivered:
-            _log.debug("emit(%s) dropped: no handler scope", event_kind)
+        if result.get("status") != "ok":
+            errors = result.get("errors", "")
+            failure = {"draft": spec, "errors": errors}
+            emit("build_output", {"line": _first_line(errors) or "build failed; revising"})
+            continue
+
+        jp = module.judge_prompt(input_json, spec)
+        if jp:
+            review = await run_llm_agent(
+                env, json.loads(jp), recursion_limit=recursion_limit, backend_name=backend_name
+            )
+            ok, feedback = _parse_judge(review)
+            if not ok:
+                failure = {"draft": spec, "errors": feedback}
+                continue
+        return spec
+    return GaveUp(reason=f"{backend_name}: did not pass compile/judge in {max_attempts} attempts")
 
 
-@dataclass
-class _RustFormalizerCfg:
-    prover: ProverHook | None = None
-    feedback: FeedbackHook | None = None
+async def _run_blocking(thunk: Callable[[], str], sem: asyncio.Semaphore | None) -> str:
+    """Run a blocking wheel call (``compile``/``validate`` — they spawn ``run-confined`` and
+    release the GIL) off the event loop, serialized by ``sem`` when the backend shares one
+    workdir/crate across concurrent units."""
+    if sem is not None:
+        async with sem:
+            return await asyncio.to_thread(thunk)
+    return await asyncio.to_thread(thunk)
 
+
+# ---------------------------------------------------------------------------
+# The formalizer.
+# ---------------------------------------------------------------------------
 
 class RustFormalizer(Formalizer[RustFormalResult]):
-    """Drives the Rust decider. ``formalize`` builds a session from the marshalled
-    unit + properties and runs the IoC loop; ``fetch_verdicts`` / ``finalize``
-    are off-thread sync FFI calls. Ecosystem-agnostic: the unit is any
-    :class:`FeatureUnit` and is marshalled via ``feature_json()``."""
+    """Drives a Rust :class:`~autoprover_sdk.Backend` through the author→compile→judge→validate
+    loop. Ecosystem-agnostic: the unit is any :class:`FeatureUnit`, marshalled via
+    ``feature_json()``."""
 
     def __init__(
         self,
         module: Any,
         descriptor: AppDescriptor,
         *,
-        prover: ProverHook | None = None,
-        feedback: FeedbackHook | None = None,
-        component_config: dict | None = None,
-        command_timeout_s: int = DEFAULT_TIMEOUT_S,
         sandbox: SandboxConfig | None = None,
+        command_timeout_s: int = DEFAULT_TIMEOUT_S,
+        fuzz_timeout_s: int = 30,
         command_sem: asyncio.Semaphore | None = None,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     ):
         super().__init__(RustFormalResult, as_report_backend(descriptor.backend_tag))
         self._module = module
         self._descriptor = descriptor
-        self._hooks = _RustFormalizerCfg(prover=prover, feedback=feedback)
-        # Base config merged into every per-component session (application-specific
-        # keys — fixture, fuzz budget, … — are supplied by the prepared-system layer).
-        self._component_config = component_config or {}
-        self._command_timeout_s = command_timeout_s
         self._sandbox = sandbox
+        self._command_timeout_s = command_timeout_s
+        self._fuzz_timeout_s = fuzz_timeout_s
         self._command_sem = command_sem
+        self._max_attempts = max_attempts
+
+    # -- hooks an application backend overrides ----------------------------
+
+    def _context(self, run: PipelineRun) -> dict:
+        """The ``AuthorInput.context`` blob for a component (backend dependencies).
+        Base: just the program. Crucible adds the shared fixture + fuzz budget."""
+        return {"program": str(run.source.contract_name)}
+
+    def _before_formalize(self, feat: FeatureUnit, slugs: list[str]) -> None:
+        """Place any crate scaffolding before compile/validate. Base: nothing.
+        Crucible reserves each unit's Cargo feature."""
+        return None
+
+    def _sandbox_spec(self, workdir: Path) -> dict:
+        if self._sandbox is None or not self._sandbox.enabled:
+            return {"run_confined": None, "timeout_s": self._command_timeout_s}
+        return self._sandbox.backend_spec(workdir, timeout_s=self._command_timeout_s)
+
+    # -- the loop ----------------------------------------------------------
 
     @override
     async def formalize(
@@ -228,32 +244,55 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         ctx: WorkflowContext[RustFormalResult],
         run: PipelineRun,
     ) -> RustFormalResult | GaveUp:
-        session_input = json.dumps(
-            {
-                "label": label,
-                "component": feat.feature_json(),
-                "props": [
-                    {"title": p.title, "sort": p.sort, "description": p.description}
-                    for p in props
-                ],
-                "config": {**self._component_config, "slug": feat.slug},
-            }
+        workdir = Path(run.source.project_root)
+        slugs = unique_slugs(props)
+        self._before_formalize(feat, slugs)
+
+        input_dict = {
+            "kind": "component",
+            "program": str(run.source.contract_name),
+            "component": feat.feature_json(),
+            "props": [
+                {"title": p.title, "sort": p.sort, "description": p.description, "slug": s}
+                for p, s in zip(props, slugs)
+            ],
+            "context": self._context(run),
+        }
+        input_json = json.dumps(input_dict)
+        sandbox_dict = self._sandbox_spec(workdir)
+        sandbox_json = json.dumps(sandbox_dict)
+        emit = make_emitter()
+
+        spec = await author_and_compile(
+            self._module, input_dict, env=run.env, sandbox_dict=sandbox_dict, workdir=workdir,
+            recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name,
+            emit=emit, max_attempts=self._max_attempts, command_sem=self._command_sem,
         )
-        session = self._module.new_session(session_input)
-        effects = RealEffects(
-            ctx,
-            run,
-            prover=self._hooks.prover,
-            feedback=self._hooks.feedback,
-            command_timeout_s=self._command_timeout_s,
-            sandbox=self._sandbox,
-            command_sem=self._command_sem,
-            backend_name=self._descriptor.name,
-        )
-        result = await drive_session(session, effects)
-        if isinstance(result, LoopGaveUp):
-            return GaveUp(reason=result.reason)
-        return RustFormalResult.from_formalized(result.data)
+        if isinstance(spec, GaveUp):
+            return spec
+
+        # Validate each unit (per-unit; host owns scheduling) and bake its verdict.
+        units = json.loads(self._module.units(input_json))
+        verdicts: dict[str, dict] = {}
+        property_units: list[tuple[str, list[str]]] = []
+        for u in units:
+            unit = u["unit"]
+            verdict = json.loads(
+                await _run_blocking(
+                    lambda unit=unit: self._module.validate(
+                        input_json, spec, unit, str(workdir), sandbox_json
+                    ),
+                    self._command_sem,
+                )
+            )
+            verdicts[unit] = verdict
+            property_units.append((u["property"], [unit]))
+            emit(
+                "verdict",
+                {"outcome": verdict.get("outcome"), "name": u["property"],
+                 "line": f'{u["property"]}: {verdict.get("outcome")}'},
+            )
+        return RustFormalResult(artifact_text=spec, units=property_units, verdicts=verdicts)
 
     @override
     async def fetch_verdicts(
@@ -262,31 +301,15 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         formalized = inp.formalized
         if formalized is None:
             return {}
-
-        def _mk(v: dict) -> Verdict:
-            return Verdict(
+        return {
+            unit: Verdict(
                 outcome=Outcome(v["outcome"]),
                 line=v.get("line"),
                 duration_seconds=v.get("duration_seconds"),
                 unit_file=v.get("unit_file") or formalized.unit_file,
             )
-
-        # Self-contained backend: verdicts baked at formalize time — use them directly.
-        baked = formalized.result.verdicts
-        if baked:
-            return {unit: _mk(v) for unit, v in baked.items()}
-
-        # Otherwise defer to the wheel (a run-service-backed backend).
-        payload = json.dumps(
-            {
-                "name": inp.name,
-                "unit_file": formalized.unit_file,
-                "run_link": formalized.run_link,
-                "property_units": formalized.result.property_units(),
-            }
-        )
-        raw = json.loads(await asyncio.to_thread(self._module.fetch_verdicts, payload))
-        return {unit: _mk(v) for unit, v in raw.items()}
+            for unit, v in formalized.result.verdicts.items()
+        }
 
     @override
     async def finalize(self, outcomes, run: PipelineRun) -> None:
@@ -296,12 +319,8 @@ class RustFormalizer(Formalizer[RustFormalResult]):
             {
                 "name": o.feat.display_name,
                 "delivered": isinstance(o.result, Delivered),
-                "unit_file": (
-                    o.result.unit_file if isinstance(o.result, Delivered) else None
-                ),
-                "run_link": (
-                    o.result.run_link if isinstance(o.result, Delivered) else None
-                ),
+                "unit_file": o.result.unit_file if isinstance(o.result, Delivered) else None,
+                "run_link": o.result.run_link if isinstance(o.result, Delivered) else None,
             }
             for o in outcomes
         ]
@@ -318,11 +337,8 @@ class RustFormalizer(Formalizer[RustFormalResult]):
 
 @dataclass
 class RustPreparedSystem(PreparedSystem[RustFormalResult]):
-    """Generic prepared system: build a formalizer with the program name in config.
-
-    Applications that need a setup session or store-side prep override
-    :meth:`RustBackend.prepare_system` (see :class:`composer.crucible.backend.CrucibleBackend`).
-    """
+    """Generic prepared system: build a formalizer. Applications that need a setup artifact or
+    crate prep override :meth:`RustBackend.prepare_system` (see :mod:`composer.crucible.backend`)."""
 
     backend: "RustBackend"
     analyzed: BaseApplication | None = None
@@ -333,24 +349,20 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult]):
         return RustFormalizer(
             b.module,
             b.descriptor,
-            prover=b.prover,
-            feedback=b.feedback,
-            component_config={"program": str(run.source.contract_name)},
-            command_timeout_s=b.command_timeout_s,
             sandbox=b.sandbox,
+            command_timeout_s=b.command_timeout_s,
+            fuzz_timeout_s=b.fuzz_timeout_s,
         )
 
 
 @dataclass
 class RustBackend:
-    """A :class:`PipelineBackend` backed by a Rust wheel. Structurally satisfies the
-    protocol — the driver never imports it. Ecosystem-agnostic: it locates the main
-    and marshals units through the resolved ``ecosystem`` + the ``FeatureUnit``
-    protocol, so an ``evm`` and a ``solana`` wheel share this one adapter.
+    """A :class:`PipelineBackend` backed by a Rust wheel. Structurally satisfies the protocol —
+    the driver never imports it. Ecosystem-agnostic: it locates the main and marshals units
+    through the resolved ``ecosystem`` + the ``FeatureUnit`` protocol.
 
-    Subclass (or replace via ``backend_cls``) when the app needs non-generic
-    formalization prep — e.g. Crucible's shared fixture + harness crate.
-    """
+    Subclass (or replace via ``backend_cls``) when the app needs non-generic prep — e.g.
+    Crucible's shared fixture + harness crate."""
 
     module: Any
     descriptor: AppDescriptor
@@ -358,15 +370,10 @@ class RustBackend:
     _core_phases: CorePhases
     artifact_store: ArtifactStore[Any, RustFormalResult]
     ecosystem: Ecosystem[Any, Any, Any]
-    prover: ProverHook | None = None
-    feedback: FeedbackHook | None = None
-    # Wall-clock ceiling for a single RunCommand effect (a first harness build can
-    # be minutes). Applications may thread additional session config via their
-    # own prepared-system layer (e.g. Crucible's fuzz budget).
+    # Wall-clock ceiling for a single compile/validate (a first harness build can be minutes).
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     fuzz_timeout_s: int = 30
-    # How to confine every RunCommand (docs/command-sandbox.md). None → unsandboxed
-    # (trusted-input only).
+    # How to confine every toolchain run (docs/command-sandbox.md). None → unsandboxed.
     sandbox: SandboxConfig | None = None
 
     @property
@@ -384,7 +391,6 @@ class RustBackend:
     async def prepare_system(
         self, analyzed: BaseApplication, run: PipelineRun
     ) -> PreparedSystem[RustFormalResult]:
-        # The ecosystem locates its own Main (EVM contract, Solana program, …).
         return RustPreparedSystem(
             self.ecosystem.locate_main(analyzed, run.source), self, analyzed
         )
@@ -395,3 +401,8 @@ class RustBackend:
             self.descriptor.artifact_layout.artifact_prefix,
             self.descriptor.artifact_layout.artifact_extension,
         )
+
+
+# Retained for callers that referenced the hook types (now unused by the loop).
+ProverHook = Callable[[str, Any, "list[str] | None"], Awaitable[dict]]
+FeedbackHook = Callable[[str, Any, Any], Awaitable[dict]]

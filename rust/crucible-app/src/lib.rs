@@ -1,71 +1,22 @@
 //! The **Crucible** application — AutoProver's Solana verification backend, which
-//! authors [Crucible](https://github.com/asymmetric-research/crucible) fuzz
-//! harnesses and gates them with the local `crucible` CLI. Pairs with the shared
-//! `solana` ecosystem front half (see `docs/crucible-application.md`).
+//! authors [Crucible](https://github.com/asymmetric-research/crucible) fuzz harnesses
+//! and gates them with the local `crucible` CLI. Pairs with the shared `solana`
+//! ecosystem front half (see `docs/crucible-application.md`).
 //!
-//! Provides the declarative descriptor, toolchain precondition checks, a
-//! program-wide setup session (shared fixture + `action_*`), and per-component
-//! test-authoring sessions that dry-run / fuzz via `Command::RunCommand`.
+//! A passive [`Backend`] (`docs/rust-backend-api.md`): it supplies the descriptor,
+//! toolchain precondition checks, the per-invariant `units`, the authoring prompts
+//! (fixture + tests), and the two gating callouts — `compile` (a `crucible … --dry-run`
+//! build) and `validate` (one `crucible … --mode explore` fuzz run per unit) — which run
+//! the toolchain through the shared `run_confined` launcher. Python owns the loop.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use autoprover_sdk::{
-    AppDescriptor, ArgDefault, ArgSpec, Application, ArtifactLayout, Command, CoreSlot, EventKind,
-    FormalizeInput, FormalizeSession, Formalized, Observation, PhaseSpec, Property, SetupInput,
-    Verdict, VerdictInput,
+    run_confined, AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, AuthorInput, Backend,
+    CommandOutput, CompileResult, CoreSlot, EventKind, Failure, PhaseSpec, Prompt, Sandbox, Unit,
+    Verdict,
 };
-
-/// A tiny queue that lets a session emit fire-and-forget UI events *before* its next
-/// real command. `Command::Emit` yields `Observation::Ack`, so a session drains one
-/// emit per `resume` (ignoring the Acks) ahead of the deferred "real" command. This
-/// is how the setup/per-component loops surface build + fuzzing progress to the
-/// console/TUI (the descriptor's `fuzz_pulse` / `fuzz_finding` / `build_output` kinds).
-#[derive(Default)]
-struct Emitter {
-    queue: VecDeque<Command>,
-    deferred: Option<Command>,
-}
-
-impl Emitter {
-    /// The next pending emit (or the deferred command once the emits drain). Call at
-    /// the top of `resume`; returns `None` when nothing is pending (run the state machine).
-    fn drain(&mut self) -> Option<Command> {
-        if let Some(cmd) = self.queue.pop_front() {
-            return Some(cmd);
-        }
-        self.deferred.take()
-    }
-
-    /// Queue `events` (kind + one-line payload) to emit in order, then run `then`.
-    /// Returns the command to issue right now (the first event, or `then` if none).
-    fn emit_then(&mut self, events: Vec<(&str, serde_json::Value)>, then: Command) -> Command {
-        for (kind, payload) in events {
-            self.queue.push_back(Command::Emit { event_kind: kind.to_string(), payload });
-        }
-        self.deferred = Some(then);
-        self.drain().expect("emit_then always leaves at least the deferred command")
-    }
-}
-
-/// Event builders — the `line` field is what the frontend renders one-line (see
-/// `composer/rustapp/frontend.py:_render_event`); the kind selects the panel.
-fn build_event(line: String) -> (&'static str, serde_json::Value) {
-    ("build_output", serde_json::json!({ "line": line }))
-}
-fn pulse_event(line: String) -> (&'static str, serde_json::Value) {
-    ("fuzz_pulse", serde_json::json!({ "line": line }))
-}
-fn finding_event(line: String) -> (&'static str, serde_json::Value) {
-    ("fuzz_finding", serde_json::json!({ "line": line }))
-}
-/// The terminal per-invariant verdict — a `notice` kind, so the frontend surfaces it as
-/// a persistent callout + toast (not a buried log line). `outcome` is the neutral
-/// `Outcome` (GOOD/BAD/…); the frontend picks the glyph and the human wording.
-fn verdict_event(outcome: &str, name: &str, note: String) -> (&'static str, serde_json::Value) {
-    ("verdict", serde_json::json!({ "outcome": outcome, "name": name, "line": note }))
-}
-
 /// Backend-guidance prose injected into the property-extraction prompt. Crucible is
 /// a fuzzer, so — like Foundry — refutations are valuable but universals can't be
 /// *proven*; a handful of property kinds are a poor fit for sampling.
@@ -94,20 +45,6 @@ fn on_path(bin: &str) -> bool {
     };
     std::env::split_paths(&path).any(|dir| dir.join(bin).is_file())
 }
-
-/// A session that immediately gives up with a fixed reason (e.g. malformed input).
-struct GiveUpNow(String);
-
-impl FormalizeSession for GiveUpNow {
-    fn resume(&mut self, _observation: Observation) -> Command {
-        Command::GiveUp { reason: self.0.clone() }
-    }
-}
-
-// ===========================================================================
-// Setup session: author the shared fixture + actions once (docs §5.2).
-// ===========================================================================
-
 /// Concise Crucible harness API reference injected into the authoring prompt (the
 /// §7.5 static cheat-sheet; RAG over a `crucible_kb` is layered on at packaging).
 const HARNESS_CHEAT_SHEET: &str = r#"
@@ -228,82 +165,6 @@ impl Fixture {
 /// A `#[invariant_test]` probe appended (by the host) only to validate the fixture
 /// via `crucible run … --dry-run`: it must compile and `setup()` must run once.
 const PROBE_FN: &str = "\n\n#[invariant_test]\nfn c_probe(fixture: &mut Fixture) {\n    let _ = fixture;\n}\n";
-
-const SETUP_MAX_ATTEMPTS: u32 = 7;
-
-#[derive(PartialEq)]
-enum SetupStage {
-    Start,
-    AwaitDraft,
-    AwaitBuild,
-    Done,
-}
-
-/// The fixture-authoring decider: draft (CallLlm) → validate (RunCommand dry-run)
-/// → revise on failure → publish the fixture source, or give up.
-struct SetupSession {
-    program: String,
-    analyzed: serde_json::Value,
-    fixture: String,
-    attempts: u32,
-    stage: SetupStage,
-    emit: Emitter,
-}
-
-impl SetupSession {
-    fn author_prompt(&self, error: Option<&str>) -> serde_json::Value {
-        let model = serde_json::to_string_pretty(&self.analyzed)
-            .unwrap_or_else(|_| self.analyzed.to_string());
-        let mut task = format!(
-            "Author a Crucible fuzz-harness FIXTURE (only) for the Solana program `{program}`.\n\
-             {cheat}\n\n\
-             {example}\n\n\
-             {facts}\n\
-             Full analyzed system model (accounts, PDAs, authorities, requirements):\n{model}\n\n\
-             Use the source-exploration tools to read the program's Rust source for exact \
-             signatures. Return the complete fixture module source as your final answer.",
-            program = self.program,
-            cheat = HARNESS_CHEAT_SHEET.replace("<program>", &self.program),
-            example = EXAMPLE_FIXTURE,
-            facts = api_facts(&self.analyzed, &self.program),
-            model = model,
-        );
-        if let Some(err) = error {
-            task.push_str(&revise_suffix(&self.fixture, err));
-        }
-        serde_json::json!({ "instruction": task })
-    }
-
-    fn validate_command(&self) -> Command {
-        let mut main_rs = self.fixture.clone();
-        main_rs.push_str(PROBE_FN);
-        let mut files = BTreeMap::new();
-        files.insert(format!("fuzz/{}/src/main.rs", self.program), main_rs);
-        Command::RunCommand {
-            program: "crucible".to_string(),
-            args: vec![
-                "run".into(),
-                self.program.clone(),
-                "c_probe".into(),
-                "--release".into(),
-                "--dry-run".into(),
-            ],
-            files,
-        }
-    }
-}
-
-/// Strip a leading/trailing ```rust code fence if the model wrapped its answer.
-fn strip_code_fence(text: &str) -> String {
-    let t = text.trim();
-    if let Some(rest) = t.strip_prefix("```") {
-        // drop an optional language tag on the first line, and the trailing fence
-        let rest = rest.splitn(2, '\n').nth(1).unwrap_or(rest);
-        return rest.trim_end().trim_end_matches("```").trim_end().to_string();
-    }
-    t.to_string()
-}
-
 /// Extract just the rustc error diagnostics from a (possibly long) cargo build log so
 /// the revise prompt leads with the actual errors instead of pages of "Compiling …".
 /// Keeps each `error[..]`/`error:` block with its `-->`/`|`/`=` context; drops warnings
@@ -440,82 +301,6 @@ fn revise_suffix(prev_src: &str, raw: &str) -> String {
          Prior source:\n```rust\n{prev_src}\n```\n\nRaw build/dry-run output (tail):\n{tail}"
     )
 }
-
-impl FormalizeSession for SetupSession {
-    fn resume(&mut self, observation: Observation) -> Command {
-        if let Some(cmd) = self.emit.drain() {
-            return cmd;
-        }
-        match self.stage {
-            SetupStage::Start => {
-                self.stage = SetupStage::AwaitDraft;
-                Command::CallLlm { messages: self.author_prompt(None) }
-            }
-            SetupStage::AwaitDraft => {
-                if let Observation::LlmReply { text } = observation {
-                    self.fixture = strip_code_fence(&text);
-                    self.stage = SetupStage::AwaitBuild;
-                    let ev = build_event(format!(
-                        "compiling `{}` fixture (crucible --dry-run — can take minutes)…",
-                        self.program
-                    ));
-                    let cmd = self.validate_command();
-                    self.emit.emit_then(vec![ev], cmd)
-                } else {
-                    self.stage = SetupStage::Done;
-                    Command::GiveUp { reason: "expected an LLM reply while drafting the fixture".into() }
-                }
-            }
-            SetupStage::AwaitBuild => match observation {
-                Observation::CommandResult { exit_code: 0, .. } => {
-                    self.stage = SetupStage::Done;
-                    let ev = build_event(format!("`{}` fixture dry-run OK", self.program));
-                    let cmd = Command::Publish {
-                        result: Formalized::new(
-                            self.fixture.clone(),
-                            format!("Crucible shared fixture for `{}` (dry-run OK).", self.program),
-                        ),
-                    };
-                    self.emit.emit_then(vec![ev], cmd)
-                }
-                Observation::CommandResult { stdout, stderr, .. } => {
-                    if self.attempts + 1 >= SETUP_MAX_ATTEMPTS {
-                        self.stage = SetupStage::Done;
-                        let ev = build_event(format!(
-                            "fixture dry-run failed after {SETUP_MAX_ATTEMPTS} attempts — giving up"
-                        ));
-                        let cmd = Command::GiveUp {
-                            reason: format!(
-                                "fixture did not pass --dry-run after {SETUP_MAX_ATTEMPTS} attempts"
-                            ),
-                        };
-                        self.emit.emit_then(vec![ev], cmd)
-                    } else {
-                        self.attempts += 1;
-                        self.stage = SetupStage::AwaitDraft;
-                        let ev = build_event(format!(
-                            "fixture dry-run failed (attempt {}/{SETUP_MAX_ATTEMPTS}); revising",
-                            self.attempts
-                        ));
-                        let err = format!("{stdout}\n{stderr}");
-                        let cmd = Command::CallLlm { messages: self.author_prompt(Some(&err)) };
-                        self.emit.emit_then(vec![ev], cmd)
-                    }
-                }
-                _ => {
-                    self.stage = SetupStage::Done;
-                    Command::GiveUp { reason: "expected a command result after dry-run".into() }
-                }
-            },
-            SetupStage::Done => Command::GiveUp { reason: "setup session already finished".into() },
-        }
-    }
-}
-
-// ===========================================================================
-// Per-component session: author one test, fuzz it, verdict (docs §5.3–5.4).
-// ===========================================================================
-
 const TEST_CHEAT_SHEET: &str = r#"
 Write ONE Crucible test function (no fixture — it already exists as `Fixture`):
 
@@ -530,207 +315,50 @@ Write ONE Crucible test function (no fixture — it already exists as `Fixture`)
   instructions yourself unless necessary.
 - Return ONLY the annotated test fn. It MUST be named exactly `{feature}`.
 "#;
-
-const PC_MAX_ATTEMPTS: u32 = 7;
-
-#[derive(PartialEq)]
-enum PcStage {
-    Start,
-    AwaitDraft,
-    AwaitFuzz,
-    Done,
-}
-
-/// Author one component's test, fuzz it, and bake in the verdict.
-struct PerComponentSession {
-    program: String,
-    feature: String, // == the test fn name (macro self-gates), c_<slug>
-    fixture: String,
-    component: serde_json::Value,
-    props: Vec<Property>,
-    fuzz_timeout: u64,
-    test_src: String,
-    attempts: u32,
-    stage: PcStage,
-    emit: Emitter,
-}
-
-impl PerComponentSession {
-    fn property_units(&self) -> Vec<(String, Vec<String>)> {
-        self.props
-            .iter()
-            .map(|p| (p.title.clone(), vec![self.feature.clone()]))
-            .collect()
-    }
-
-    fn author_prompt(&self, error: Option<&str>) -> serde_json::Value {
-        let props: Vec<String> = self
-            .props
-            .iter()
-            .map(|p| format!("- [{}] {}: {}", p.sort, p.title, p.description))
-            .collect();
-        let component = serde_json::to_string_pretty(&self.component)
-            .unwrap_or_else(|_| self.component.to_string());
-        let mut task = format!(
-            "Author ONE Crucible test function named exactly `{feature}` that checks this \
-             whole-program property of the `{program}` program:\n{props}\n\n\
-             It must hold after ANY sequence of actions the fuzzer drives — prefer an \
-             `#[invariant_test]` that reads on-chain state and asserts the property.\n\n\
-             Program API (instructions you can drive via the fixture's `action_*` methods):\n\
-             {component}\n\n\
-             {cheat}\n\n\
-             The shared fixture is ALREADY defined (do not redefine it); use `Fixture` and its \
-             `action_*` methods. Fixture source for reference:\n```rust\n{fixture}\n```",
-            feature = self.feature,
-            program = self.program,
-            props = props.join("\n"),
-            component = component,
-            cheat = TEST_CHEAT_SHEET.replace("{feature}", &self.feature),
-            fixture = self.fixture,
-        );
-        if let Some(err) = error {
-            task.push_str(&revise_suffix(&self.test_src, err));
-        }
-        serde_json::json!({ "instruction": task })
-    }
-
-    fn fuzz_command(&self) -> Command {
-        let mut main_rs = self.fixture.clone();
-        main_rs.push('\n');
-        main_rs.push('\n');
-        main_rs.push_str(&self.test_src);
-        let mut files = BTreeMap::new();
-        files.insert(format!("fuzz/{}/src/main.rs", self.program), main_rs);
-        Command::RunCommand {
-            program: "crucible".to_string(),
-            args: vec![
-                "run".into(),
-                self.program.clone(),
-                self.feature.clone(),
-                "--release".into(),
-                "--mode".into(),
-                "explore".into(),
-                "--timeout".into(),
-                self.fuzz_timeout.to_string(),
-            ],
-            files,
-        }
-    }
-
-    fn publish(&self, outcome: &str, note: &str) -> Command {
-        let mut verdicts = BTreeMap::new();
-        verdicts.insert(self.feature.clone(), Verdict::with_outcome(outcome));
-        Command::Publish {
-            result: Formalized {
-                commentary: format!("{note} ({} propert(ies)).", self.props.len()),
-                artifact_text: self.test_src.clone(),
-                property_units: self.property_units(),
-                skipped: Vec::new(),
-                output_link: None,
-                verdicts,
-            },
-        }
-    }
-}
-
 /// Did the build fail (as opposed to the harness building and fuzzing)?
 fn is_build_error(out: &str) -> bool {
     out.contains("could not compile") || out.contains("error[") || out.contains("Build failed")
 }
 
-impl FormalizeSession for PerComponentSession {
-    fn resume(&mut self, observation: Observation) -> Command {
-        if let Some(cmd) = self.emit.drain() {
-            return cmd;
-        }
-        match self.stage {
-            PcStage::Start => {
-                self.stage = PcStage::AwaitDraft;
-                Command::CallLlm { messages: self.author_prompt(None) }
-            }
-            PcStage::AwaitDraft => {
-                if let Observation::LlmReply { text } = observation {
-                    self.test_src = strip_code_fence(&text);
-                    self.stage = PcStage::AwaitFuzz;
-                    let ev = pulse_event(format!(
-                        "fuzzing `{}` (explore mode, {}s budget)…",
-                        self.feature, self.fuzz_timeout
-                    ));
-                    let cmd = self.fuzz_command();
-                    self.emit.emit_then(vec![ev], cmd)
-                } else {
-                    self.stage = PcStage::Done;
-                    Command::GiveUp { reason: "expected an LLM reply while drafting the test".into() }
-                }
-            }
-            PcStage::AwaitFuzz => match observation {
-                Observation::CommandResult { stdout, stderr, .. } => {
-                    let combined = format!("{stdout}\n{stderr}");
-                    if is_build_error(&combined) {
-                        if self.attempts + 1 >= PC_MAX_ATTEMPTS {
-                            self.stage = PcStage::Done;
-                            let ev = build_event(format!(
-                                "`{}` did not compile after {PC_MAX_ATTEMPTS} attempts — giving up",
-                                self.feature
-                            ));
-                            let cmd = Command::GiveUp {
-                                reason: format!("test did not compile after {PC_MAX_ATTEMPTS} attempts"),
-                            };
-                            self.emit.emit_then(vec![ev], cmd)
-                        } else {
-                            self.attempts += 1;
-                            let ev = build_event(format!(
-                                "`{}` build failed (attempt {}/{PC_MAX_ATTEMPTS}); revising",
-                                self.feature, self.attempts
-                            ));
-                            self.stage = PcStage::AwaitDraft;
-                            let cmd = Command::CallLlm { messages: self.author_prompt(Some(&combined)) };
-                            self.emit.emit_then(vec![ev], cmd)
-                        }
-                    } else if combined.contains("[FUZZ_FINDING]") {
-                        // A crash = the property was refuted (a real counterexample).
-                        self.stage = PcStage::Done;
-                        let ev = finding_event(format!(
-                            "counterexample found — `{}` refuted",
-                            self.feature
-                        ));
-                        let verdict = verdict_event(
-                            "BAD",
-                            &self.feature,
-                            "Crucible refuted the property (fuzzing counterexample)".to_string(),
-                        );
-                        let cmd =
-                            self.publish("BAD", "Crucible refuted the property (fuzzing counterexample)");
-                        self.emit.emit_then(vec![ev, verdict], cmd)
-                    } else {
-                        // Ran to the timeout with no violation = held within the budget.
-                        self.stage = PcStage::Done;
-                        let ev = pulse_event(format!(
-                            "`{}` held — no counterexample within the {}s budget",
-                            self.feature, self.fuzz_timeout
-                        ));
-                        let verdict = verdict_event(
-                            "GOOD",
-                            &self.feature,
-                            format!("No counterexample within the {}s fuzzing budget", self.fuzz_timeout),
-                        );
-                        let cmd = self.publish("GOOD", "No violation found within the fuzzing budget");
-                        self.emit.emit_then(vec![ev, verdict], cmd)
-                    }
-                }
-                _ => {
-                    self.stage = PcStage::Done;
-                    Command::GiveUp { reason: "expected a command result after fuzzing".into() }
-                }
-            },
-            PcStage::Done => Command::GiveUp { reason: "session already finished".into() },
-        }
+// ===========================================================================
+// Backend glue: small pure helpers shared by the callouts.
+// ===========================================================================
+
+/// The single harness source file the crate builds, keyed by its crate-relative path.
+fn one_file(program: &str, main_rs: String) -> BTreeMap<String, String> {
+    let mut files = BTreeMap::new();
+    files.insert(format!("fuzz/{program}/src/main.rs"), main_rs);
+    files
+}
+
+/// A string field from the input's `context` blob (e.g. the shared fixture source).
+fn ctx_str(input: &AuthorInput, key: &str) -> String {
+    input.context.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string()
+}
+
+/// A u64 field from the input's `context` blob, with a default.
+fn ctx_u64(input: &AuthorInput, key: &str, default: u64) -> u64 {
+    input.context.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
+}
+
+/// The compiler errors to hand back to the model — extracted diagnostics, else a raw tail.
+fn build_errors(out: &CommandOutput) -> String {
+    let combined = format!("{}\n{}", out.stdout, out.stderr);
+    let d = compiler_diagnostics(&combined);
+    if d.is_empty() {
+        combined[combined.len().saturating_sub(2000)..].to_string()
+    } else {
+        d
     }
 }
 
+// ===========================================================================
+// The backend.
+// ===========================================================================
+
 struct CrucibleApp;
 
-impl Application for CrucibleApp {
+impl Backend for CrucibleApp {
     fn descriptor(&self) -> AppDescriptor {
         AppDescriptor {
             name: "crucible".to_string(),
@@ -821,50 +449,162 @@ impl Application for CrucibleApp {
         }
     }
 
-    fn new_setup_session(&self, input: SetupInput) -> Option<Box<dyn FormalizeSession>> {
-        Some(Box::new(SetupSession {
-            program: input.program,
-            analyzed: input.analyzed,
-            fixture: String::new(),
-            attempts: 0,
-            stage: SetupStage::Start,
-            emit: Emitter::default(),
-        }))
+    fn units(&self, input: &AuthorInput) -> Vec<Unit> {
+        // The setup fixture has no report units; a component has one per property.
+        if input.kind == "setup" {
+            return Vec::new();
+        }
+        input
+            .props
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let slug = if p.slug.is_empty() { format!("inv{i}") } else { p.slug.clone() };
+                Unit { property: p.title.clone(), unit: format!("c_{slug}") }
+            })
+            .collect()
     }
 
-    fn new_session(&self, input: FormalizeInput) -> Box<dyn FormalizeSession> {
-        let cfg = &input.config;
-        let s = |k: &str| cfg.get(k).and_then(|v| v.as_str()).map(str::to_string);
-
-        // The shared fixture + the component's slug are threaded in via `config` by
-        // the host (from the setup session / the artifact store's slug).
-        let (Some(fixture), Some(slug)) = (s("fixture"), s("slug")) else {
-            return Box::new(GiveUpNow(
-                "crucible new_session requires config.fixture and config.slug".into(),
-            ));
+    fn author_prompt(&self, input: &AuthorInput, failure: Option<&Failure>) -> Prompt {
+        let program = &input.program;
+        let instruction = if input.kind == "setup" {
+            // Author the shared fixture from the analyzed model (carried in `component`).
+            let analyzed = &input.component;
+            let model =
+                serde_json::to_string_pretty(analyzed).unwrap_or_else(|_| analyzed.to_string());
+            let mut task = format!(
+                "Author a Crucible fuzz-harness FIXTURE (only) for the Solana program `{program}`.\n\
+                 {cheat}\n\n{example}\n\n{facts}\n\
+                 Full analyzed system model (accounts, PDAs, authorities, requirements):\n{model}\n\n\
+                 Use the source-exploration tools to read the program's Rust source for exact \
+                 signatures. Return the complete fixture module source as your final answer.",
+                cheat = HARNESS_CHEAT_SHEET.replace("<program>", program),
+                example = EXAMPLE_FIXTURE,
+                facts = api_facts(analyzed, program),
+                model = model,
+            );
+            if let Some(f) = failure {
+                task.push_str(&revise_suffix(&f.draft, &f.errors));
+            }
+            task
+        } else {
+            // Author one #[invariant_test]/#[crucible_fuzz] fn per unit, against the fixture.
+            let listed: Vec<String> = self
+                .units(input)
+                .into_iter()
+                .zip(input.props.iter())
+                .map(|(u, p)| format!("- fn `{}` — [{}] {}: {}", u.unit, p.sort, p.title, p.description))
+                .collect();
+            let component = serde_json::to_string_pretty(&input.component)
+                .unwrap_or_else(|_| input.component.to_string());
+            let fixture = ctx_str(input, "fixture");
+            let mut task = format!(
+                "Author {n} Crucible test function(s) for the `{program}` program — ONE per \
+                 property below. Each function MUST be named EXACTLY as shown (the name is its \
+                 fuzz-target selector) and check its property:\n{listed}\n\n\
+                 Each must hold after ANY sequence of actions the fuzzer drives — prefer an \
+                 `#[invariant_test]` that reads on-chain state and asserts the property.\n\n\
+                 Program API (drive instructions via the fixture's `action_*` methods):\n{component}\n\n\
+                 {cheat}\n\n\
+                 The shared fixture is ALREADY defined (do not redefine it); use `Fixture` and its \
+                 `action_*` methods. Fixture source for reference:\n```rust\n{fixture}\n```",
+                n = listed.len(),
+                listed = listed.join("\n"),
+                component = component,
+                cheat = TEST_CHEAT_SHEET,
+            );
+            if let Some(f) = failure {
+                task.push_str(&revise_suffix(&f.draft, &f.errors));
+            }
+            task
         };
-        let program = s("program")
-            .or_else(|| input.component.get("program").and_then(|v| v.as_str()).map(str::to_string))
-            .unwrap_or_default();
-        let fuzz_timeout = cfg.get("fuzz_timeout").and_then(|v| v.as_u64()).unwrap_or(30);
-
-        Box::new(PerComponentSession {
-            program,
-            feature: format!("c_{slug}"),
-            fixture,
-            component: input.component,
-            props: input.props,
-            fuzz_timeout,
-            test_src: String::new(),
-            attempts: 0,
-            stage: PcStage::Start,
-            emit: Emitter::default(),
-        })
+        Prompt { system: None, instruction }
     }
 
-    fn fetch_verdicts(&self, _input: VerdictInput) -> BTreeMap<String, Verdict> {
-        // Self-contained: verdicts are baked into Formalized at publish time.
-        BTreeMap::new()
+    fn compile(
+        &self,
+        input: &AuthorInput,
+        spec: &str,
+        workdir: &Path,
+        sandbox: &Sandbox,
+    ) -> CompileResult {
+        let program = &input.program;
+        // Setup: dry-run the fixture behind a probe test. Component: fixture + the authored
+        // tests, dry-run behind the first unit's feature (all fns compile regardless of which
+        // feature gates `main`, so one build proves the whole harness compiles).
+        let (main_rs, feature) = if input.kind == "setup" {
+            (format!("{spec}{PROBE_FN}"), "c_probe".to_string())
+        } else {
+            let fixture = ctx_str(input, "fixture");
+            let feature = self
+                .units(input)
+                .into_iter()
+                .next()
+                .map(|u| u.unit)
+                .unwrap_or_else(|| "c_probe".to_string());
+            (format!("{fixture}\n\n{spec}"), feature)
+        };
+        let files = one_file(program, main_rs);
+        let args = vec![
+            "run".to_string(),
+            program.clone(),
+            feature,
+            "--release".to_string(),
+            "--dry-run".to_string(),
+        ];
+        match run_confined(sandbox, "crucible", &args, &files, workdir) {
+            Ok(out)
+                if out.exit_code == 0
+                    && !is_build_error(&format!("{}\n{}", out.stdout, out.stderr)) =>
+            {
+                CompileResult::Ok
+            }
+            Ok(out) => CompileResult::Failed { errors: build_errors(&out) },
+            Err(e) => CompileResult::Failed { errors: e },
+        }
+    }
+
+    fn validate(
+        &self,
+        input: &AuthorInput,
+        spec: &str,
+        unit: &str,
+        workdir: &Path,
+        sandbox: &Sandbox,
+    ) -> Verdict {
+        let program = &input.program;
+        let fixture = ctx_str(input, "fixture");
+        let timeout = ctx_u64(input, "fuzz_timeout", 30);
+        let files = one_file(program, format!("{fixture}\n\n{spec}"));
+        let args = vec![
+            "run".to_string(),
+            program.clone(),
+            unit.to_string(),
+            "--release".to_string(),
+            "--mode".to_string(),
+            "explore".to_string(),
+            "--timeout".to_string(),
+            timeout.to_string(),
+        ];
+        match run_confined(sandbox, "crucible", &args, &files, workdir) {
+            Ok(out) => {
+                let combined = format!("{}\n{}", out.stdout, out.stderr);
+                if is_build_error(&combined) {
+                    Verdict::with_outcome("ERROR")
+                } else if combined.contains("[FUZZ_FINDING]") {
+                    // A crash = the property was refuted (a real counterexample).
+                    Verdict::with_outcome("BAD")
+                } else {
+                    // Ran to the timeout with no violation = held within the budget.
+                    Verdict::with_outcome("GOOD")
+                }
+            }
+            Err(e) => {
+                let mut v = Verdict::with_outcome("ERROR");
+                v.unit_file = Some(e);
+                v
+            }
+        }
     }
 }
 

@@ -1,61 +1,66 @@
 """Crucible-specific formalization prep — lives *here*, not in the generic adapter.
 
-Owns:
+Owns the shared-fixture **setup artifact** (authored + dry-run-compiled once, via the same
+author→compile loop the components use), harness-crate store prep (manifest placement, offline
+cargo warm, fixture install), and per-invariant Cargo-feature reservation on the shared crate.
 
-* the shared-fixture setup session (``new_setup_session`` IoC loop);
-* harness-crate store prep (manifest placement, offline cargo warm, fixture install);
-* per-component feature reservation + command serialization (one shared crate).
-
-The generic :class:`~composer.rustapp.adapter.RustFormalizer` only drives a session;
-:class:`CrucibleFormalizer` adds the crate-store side effects around it.
+The generic :class:`~composer.rustapp.adapter.RustFormalizer` runs the author→compile→validate
+loop; :class:`CrucibleFormalizer` adds the crate-store side effects (fixture context + feature
+reservation), and serializes the toolchain runs against the one shared crate.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import override
 
 from composer.crucible.store import CrucibleArtifactStore
 from composer.io.multi_job import TaskInfo
 from composer.pipeline.core import Formalizer, GaveUp, PipelineRun, PreparedSystem
-from composer.rustapp.adapter import RealEffects, RustBackend, RustFormalizer
-from composer.rustapp.loop import GaveUp as LoopGaveUp, drive_session
+from composer.rustapp.adapter import (
+    RustBackend,
+    RustFormalizer,
+    author_and_compile,
+    make_emitter,
+)
 from composer.rustapp.result import RustFormalResult
-from composer.spec.context import WorkflowContext
 from composer.spec.system_model import BaseApplication, FeatureUnit
-from composer.spec.types import PropertyFormulation
 
 
 class CrucibleFormalizer(RustFormalizer):
-    """Like :class:`RustFormalizer`, but pre-places the component's Cargo feature
-    and serializes command runs against the shared harness crate."""
+    """Like :class:`RustFormalizer`, but threads the shared fixture into each component's
+    context, reserves each invariant's Cargo feature on the shared crate, and serializes the
+    toolchain runs (one crate / target dir)."""
 
-    def __init__(self, store: CrucibleArtifactStore, **kwargs):
-        # Shared harness: concurrent sessions must not interleave main.rs writes /
-        # builds. LLM authoring turns still run concurrently (sem only wraps RunCommand).
-        super().__init__(**kwargs, command_sem=asyncio.Semaphore(1))
+    def __init__(self, module, descriptor, *, store: CrucibleArtifactStore, fixture: str, **kw):
+        # Shared harness crate: compile/validate builds serialize on one target dir.
+        super().__init__(module, descriptor, command_sem=asyncio.Semaphore(1), **kw)
         self._store = store
+        self._fixture = fixture
 
     @override
-    async def formalize(
-        self,
-        label: str,
-        feat: FeatureUnit,
-        props: list[PropertyFormulation],
-        ctx: WorkflowContext[RustFormalResult],
-        run: PipelineRun,
-    ) -> RustFormalResult | GaveUp:
-        # Pre-place Cargo.toml declaring this component's feature so the session can
-        # write main.rs + fuzz (the decider can't render host-resolved deps).
-        self._store.prepare_component(feat.slug)
-        return await super().formalize(label, feat, props, ctx, run)
+    def _context(self, run: PipelineRun) -> dict:
+        # The decider's compile/validate need the shared fixture + the fuzz budget.
+        return {
+            "program": str(run.source.contract_name),
+            "fixture": self._fixture,
+            "fuzz_timeout": self._fuzz_timeout_s,
+        }
+
+    @override
+    def _before_formalize(self, feat: FeatureUnit, slugs: list[str]) -> None:
+        # Pre-place Cargo.toml declaring each invariant's feature (cumulative) so the
+        # decider can write main.rs + build/fuzz each `c_<slug>`.
+        for slug in slugs:
+            self._store.prepare_component(slug)
 
 
 @dataclass
 class CruciblePreparedSystem(PreparedSystem[RustFormalResult]):
-    """Authors the shared fixture once, then returns a :class:`CrucibleFormalizer`."""
+    """Authors the shared fixture once (a ``kind="setup"`` artifact), then returns a
+    :class:`CrucibleFormalizer` carrying it."""
 
     backend: "CrucibleBackend"
     analyzed: BaseApplication
@@ -64,72 +69,58 @@ class CruciblePreparedSystem(PreparedSystem[RustFormalResult]):
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult]:
         b = self.backend
         store = b.crucible_store
-        component_config: dict = {
-            "program": str(run.source.contract_name),
-            "fuzz_timeout": b.fuzz_timeout_s,
-        }
-
-        # Pre-place the harness manifest (deps + probe feature) so the setup session
-        # can write main.rs and dry-run (the decider can't render host-resolved deps).
+        # Pre-place the harness manifest (deps + probe feature) so the setup artifact can write
+        # main.rs and dry-run; with a sandbox on, warm harness deps with network now so the
+        # confined build runs offline (docs/command-sandbox.md §5).
         store.write_setup_manifest()
-        # With a sandbox on (network off), warm harness deps with network now so the
-        # confined `crucible run` can build offline (docs/command-sandbox.md §5).
         if b.sandbox is not None and b.sandbox.enabled:
             await store.warm_dependencies()
 
-        setup_input = json.dumps(
-            {
-                "program": str(run.source.contract_name),
-                "analyzed": self.analyzed.model_dump(mode="json"),
-                "config": {},
-            }
+        workdir = Path(run.source.project_root)
+        sandbox_dict = (
+            b.sandbox.backend_spec(workdir, timeout_s=b.command_timeout_s)
+            if (b.sandbox is not None and b.sandbox.enabled)
+            else {"run_confined": None, "timeout_s": b.command_timeout_s}
         )
-        session = b.module.new_setup_session(setup_input)
-        if session is not None:
-
-            async def _drive():
-                eff = RealEffects(
-                    run.ctx,
-                    run,
-                    prover=b.prover,
-                    feedback=b.feedback,
-                    command_timeout_s=b.command_timeout_s,
-                    sandbox=b.sandbox,
-                    backend_name=b.descriptor.name,
-                )
-                return await drive_session(session, eff)
-
-            result = await run.runner(
-                TaskInfo(
-                    f"{b.descriptor.name}-setup",
-                    "Build Harness",
-                    b._core_phases["formalization"],
-                ),
-                _drive,
-            )
-            if isinstance(result, LoopGaveUp):
-                raise RuntimeError(
-                    f"{b.descriptor.name} setup session gave up: {result.reason}"
-                )
-            fixture = result.data.get("artifact_text", "")
-            component_config["fixture"] = fixture
-            store.set_shared_fixture(fixture)
+        setup_input = {
+            "kind": "setup",
+            "program": str(run.source.contract_name),
+            "component": self.analyzed.model_dump(mode="json"),
+            "props": [],
+            "context": {},
+        }
+        emit = make_emitter()
+        fixture = await run.runner(
+            TaskInfo(f"{b.descriptor.name}-setup", "Build Harness", b._core_phases["formalization"]),
+            lambda: author_and_compile(
+                b.module,
+                setup_input,
+                env=run.env,
+                sandbox_dict=sandbox_dict,
+                workdir=workdir,
+                recursion_limit=run.ctx.recursion_limit,
+                backend_name=b.descriptor.name,
+                emit=emit,
+            ),
+        )
+        if isinstance(fixture, GaveUp):
+            raise RuntimeError(f"{b.descriptor.name} setup gave up: {fixture.reason}")
+        store.set_shared_fixture(fixture)
 
         return CrucibleFormalizer(
-            store,
-            module=b.module,
-            descriptor=b.descriptor,
-            prover=b.prover,
-            feedback=b.feedback,
-            component_config=component_config,
-            command_timeout_s=b.command_timeout_s,
+            b.module,
+            b.descriptor,
+            store=store,
+            fixture=fixture,
             sandbox=b.sandbox,
+            command_timeout_s=b.command_timeout_s,
+            fuzz_timeout_s=b.fuzz_timeout_s,
         )
 
 
 @dataclass
 class CrucibleBackend(RustBackend):
-    """Rust backend that runs Crucible's setup + crate-harness formalization path."""
+    """Rust backend that runs Crucible's setup fixture + shared-crate harness path."""
 
     @property
     def crucible_store(self) -> CrucibleArtifactStore:

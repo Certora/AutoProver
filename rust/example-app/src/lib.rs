@@ -1,142 +1,21 @@
-//! The "echo prover" — a minimal but complete demonstration of a Rust-based
-//! AutoProver application built on `autoprover-sdk`.
-//!
-//! It is intentionally not a real verifier: its authoring loop drafts a "spec"
-//! from an LLM turn, caches it, "runs a prover", and publishes — exercising
-//! every [`Command`] variant (`Emit`, `CacheGet`, `CallLlm`, `CachePut`,
-//! `RunProver`, `Publish`, `GiveUp`) so the Python host and the FFI round-trip
-//! can be tested end to end without any real service. A production backend keeps
-//! this exact shape and swaps the decisions for real ones.
+//! The "echo prover" — a minimal, self-contained demonstration of a Rust-based
+//! AutoProver [`Backend`] on `autoprover-sdk`. It is intentionally not a real
+//! verifier: it authors a "spec" from an LLM turn, treats compilation as a no-op,
+//! and validates every unit as GOOD — enough to exercise the Python host + FFI
+//! round-trip (descriptor, units, author_prompt, compile, validate) without any real
+//! toolchain. A production backend keeps this exact shape and swaps the callouts for
+//! real ones (see `docs/rust-backend-api.md`).
 
-use std::collections::BTreeMap;
+use std::path::Path;
 
 use autoprover_sdk::{
-    AppDescriptor, Application, ArtifactLayout, Command, CoreSlot, EventKind, FormalizeInput,
-    FormalizeSession, Formalized, Observation, PhaseSpec, Property, Verdict, VerdictInput,
+    AppDescriptor, ArtifactLayout, AuthorInput, Backend, CompileResult, CoreSlot, EventKind,
+    Failure, PhaseSpec, Prompt, Sandbox, Unit, Verdict,
 };
 
-/// Where the echo session is in its little authoring loop. The stage is what
-/// disambiguates otherwise-identical observations (two different `Ack`s).
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Stage {
-    Start,
-    Emitted,
-    Cache,
-    Llm,
-    DraftStored,
-    Prove,
-    Done,
-}
-
-struct EchoSession {
-    props: Vec<Property>,
-    spec: Option<String>,
-    stage: Stage,
-}
-
-impl EchoSession {
-    /// property title → the unit name that "demonstrates" it.
-    fn property_units(&self) -> Vec<(String, Vec<String>)> {
-        self.props
-            .iter()
-            .map(|p| (p.title.clone(), vec![format!("rule_{}", p.title)]))
-            .collect()
-    }
-
-    fn publish(&self) -> Command {
-        let spec = self.spec.clone().unwrap_or_default();
-        Command::Publish {
-            result: Formalized {
-                commentary: format!("Echo-formalized {} propert(ies).", self.props.len()),
-                artifact_text: spec,
-                property_units: self.property_units(),
-                skipped: Vec::new(),
-                output_link: Some("local://echo/run".to_string()),
-                verdicts: Default::default(),
-            },
-        }
-    }
-}
-
-impl FormalizeSession for EchoSession {
-    fn resume(&mut self, observation: Observation) -> Command {
-        match self.stage {
-            Stage::Start => {
-                // Announce ourselves on the task panel, then look for a cached draft.
-                self.stage = Stage::Emitted;
-                Command::Emit {
-                    event_kind: "solver_line".to_string(),
-                    payload: serde_json::json!({ "line": "echo: starting formalization" }),
-                }
-            }
-            Stage::Emitted => {
-                // Ack of the Emit.
-                self.stage = Stage::Cache;
-                Command::CacheGet { key: "echo_draft".to_string() }
-            }
-            Stage::Cache => {
-                if let Observation::Cached { value: Some(v) } = &observation {
-                    if let Some(s) = v.as_str() {
-                        // Cache hit: skip the LLM, go straight to proving.
-                        self.spec = Some(s.to_string());
-                        self.stage = Stage::Prove;
-                        return Command::RunProver {
-                            spec: s.to_string(),
-                            config: serde_json::Value::Null,
-                            rules: None,
-                        };
-                    }
-                }
-                // Cache miss: ask the LLM to draft a spec.
-                self.stage = Stage::Llm;
-                let titles: Vec<&str> = self.props.iter().map(|p| p.title.as_str()).collect();
-                Command::CallLlm {
-                    messages: serde_json::json!({
-                        "instruction": "Author a spec for these properties.",
-                        "properties": titles,
-                    }),
-                }
-            }
-            Stage::Llm => {
-                if let Observation::LlmReply { text } = observation {
-                    self.spec = Some(text.clone());
-                    self.stage = Stage::DraftStored;
-                    Command::CachePut {
-                        key: "echo_draft".to_string(),
-                        value: serde_json::Value::String(text),
-                    }
-                } else {
-                    self.stage = Stage::Done;
-                    Command::GiveUp { reason: "expected an LLM reply".to_string() }
-                }
-            }
-            Stage::DraftStored => {
-                // Ack of the CachePut.
-                self.stage = Stage::Prove;
-                Command::RunProver {
-                    spec: self.spec.clone().unwrap_or_default(),
-                    config: serde_json::Value::Null,
-                    rules: None,
-                }
-            }
-            Stage::Prove => {
-                self.stage = Stage::Done;
-                if let Observation::ProverResult { data } = observation {
-                    if data.get("verified").and_then(|v| v.as_bool()).unwrap_or(false) {
-                        return self.publish();
-                    }
-                }
-                Command::GiveUp { reason: "prover did not verify the spec".to_string() }
-            }
-            Stage::Done => Command::GiveUp { reason: "session already finished".to_string() },
-        }
-    }
-}
-
-/// The application singleton.
 struct EchoApp;
 
-impl Application for EchoApp {
+impl Backend for EchoApp {
     fn descriptor(&self) -> AppDescriptor {
         AppDescriptor {
             name: "echoprover".to_string(),
@@ -175,24 +54,51 @@ impl Application for EchoApp {
         }
     }
 
-    fn new_session(&self, input: FormalizeInput) -> Box<dyn FormalizeSession> {
-        Box::new(EchoSession { props: input.props, spec: None, stage: Stage::Start })
+    fn units(&self, input: &AuthorInput) -> Vec<Unit> {
+        input
+            .props
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let slug = if p.slug.is_empty() { format!("p{i}") } else { p.slug.clone() };
+                Unit { property: p.title.clone(), unit: format!("rule_{slug}") }
+            })
+            .collect()
     }
 
-    fn fetch_verdicts(&self, input: VerdictInput) -> BTreeMap<String, Verdict> {
-        // The echo backend is self-contained: every demonstrated unit "passes".
-        let mut out = BTreeMap::new();
-        for (_title, units) in &input.property_units {
-            for unit in units {
-                out.insert(unit.clone(), Verdict::good());
-            }
+    fn author_prompt(&self, input: &AuthorInput, failure: Option<&Failure>) -> Prompt {
+        let titles: Vec<&str> = input.props.iter().map(|p| p.title.as_str()).collect();
+        let mut instruction = format!(
+            "Author a spec with a rule per property: {}. Return the spec source only.",
+            titles.join(", ")
+        );
+        if let Some(f) = failure {
+            instruction.push_str(&format!("\n\nThe previous attempt was rejected: {}", f.errors));
         }
-        out
+        Prompt { system: None, instruction }
     }
 
-    fn finalize(&self, _outcomes: &serde_json::Value) -> BTreeMap<String, String> {
-        // No run-level artifact for the demo.
-        BTreeMap::new()
+    fn compile(
+        &self,
+        _input: &AuthorInput,
+        _spec: &str,
+        _workdir: &Path,
+        _sandbox: &Sandbox,
+    ) -> CompileResult {
+        // The demo accepts any well-formed spec — no build gate.
+        CompileResult::Ok
+    }
+
+    fn validate(
+        &self,
+        _input: &AuthorInput,
+        _spec: &str,
+        _unit: &str,
+        _workdir: &Path,
+        _sandbox: &Sandbox,
+    ) -> Verdict {
+        // Self-contained: every demonstrated unit "passes".
+        Verdict::with_outcome("GOOD")
     }
 }
 

@@ -1,14 +1,13 @@
-"""Unit tests for the ``RunCommand`` effect and the shared local-command runner.
+"""Unit tests for the shared local-command runner (``run_local_command``).
 
-These need neither a Rust wheel nor Postgres/LLM: a tiny fake session drives the
-IoC loop (``drive_session``), and ``run_local_command`` shells out to trivial
-system binaries. They cover the effect round-trip, path confinement, and the
-error/timeout paths.
+Needs neither a Rust wheel nor Postgres/LLM: ``run_local_command`` shells out to
+trivial system binaries. Covers file materialization, path confinement, and the
+error/timeout paths. (It still backs the trusted Python build steps — e.g. the sBPF
+build; the Rust backend's own toolchain runs now go through ``run-confined`` in the
+wheel, see ``docs/rust-backend-api.md``.)
 """
 
 from __future__ import annotations
-
-import json
 
 import pytest
 
@@ -17,58 +16,15 @@ from composer.sandbox.command import (
     UnsafePath,
     run_local_command,
 )
-from composer.rustapp.loop import RustFormalized, drive_session
-
-
-class _RunThenPublish:
-    """A minimal decider: ``start`` → one ``RunCommand`` (writing a couple of
-    files, running ``printf``), then ``command_result`` → ``publish`` echoing the
-    observed stdout/exit into the result. Anything else → ``give_up``."""
-
-    def resume(self, observation_json: str) -> str:
-        obs = json.loads(observation_json)
-        kind = obs["kind"]
-        if kind == "start":
-            return json.dumps(
-                {
-                    "kind": "run_command",
-                    "program": "printf",
-                    "args": ["%s", "hello"],
-                    "files": {"note.txt": "hi", "sub/deep.txt": "deep"},
-                }
-            )
-        if kind == "command_result":
-            return json.dumps(
-                {
-                    "kind": "publish",
-                    "result": {
-                        "artifact_text": obs["stdout"],
-                        "commentary": f"exit={obs['exit_code']}",
-                    },
-                }
-            )
-        return json.dumps({"kind": "give_up", "reason": f"unexpected {kind}"})
-
-
-class _CmdEffects:
-    """Effects that only implement ``run_command`` (all the fake session uses),
-    delegating to the real :func:`run_local_command` against ``workdir``."""
-
-    def __init__(self, workdir):
-        self._workdir = workdir
-
-    async def run_command(self, program, args, files):
-        res = await run_local_command(program, args, files, workdir=self._workdir)
-        return res.as_observation()
 
 
 @pytest.mark.asyncio
-async def test_run_command_effect_roundtrip(tmp_path):
-    result = await drive_session(_RunThenPublish(), _CmdEffects(tmp_path))
-    assert isinstance(result, RustFormalized)
-    # stdout from `printf %s hello` flowed back to the decider and into the result.
-    assert result.data["artifact_text"] == "hello"
-    assert result.data["commentary"] == "exit=0"
+async def test_run_local_command_materializes_files_and_captures_output(tmp_path):
+    res = await run_local_command(
+        "printf", ["%s", "hello"], {"note.txt": "hi", "sub/deep.txt": "deep"}, workdir=tmp_path
+    )
+    assert res.exit_code == 0
+    assert res.stdout == "hello"
     # files (incl. a nested path) were materialized into the workdir.
     assert (tmp_path / "note.txt").read_text() == "hi"
     assert (tmp_path / "sub" / "deep.txt").read_text() == "deep"

@@ -3,18 +3,20 @@
 //! The library a Rust-based AutoProver application imports. It defines the seam
 //! between a Rust backend and the generic Python pipeline
 //! (`composer/pipeline/core.py`), realized over a **synchronous, JSON** FFI
-//! boundary — the inversion-of-control ("Tier 2") design from
-//! `docs/rust-formalization-backends.md` and `docs/rust-applications.md`.
+//! boundary — the service-shaped design in `docs/rust-backend-api.md`.
 //!
-//! Python owns the asyncio event loop and every effect (LLM calls, the prover,
-//! the feedback judge, the cache, event streaming). Rust is a *pure decider*:
-//! [`FormalizeSession::resume`] takes an [`Observation`] (the result of the last
-//! effect) and returns the next [`Command`] (the effect to perform, or a
-//! terminal `Publish` / `GiveUp`). There is no `async` and no `pyo3-async`
-//! bridge on the Rust side.
+//! The backend is a **passive service**, not a driver: the Python pipeline owns the
+//! author→compile→judge→validate loop and every LLM turn, and calls the backend's
+//! callouts. Most are pure ([`Backend::descriptor`], [`Backend::units`],
+//! [`Backend::author_prompt`], [`Backend::judge_prompt`], [`Backend::finalize`]). The
+//! two gating callouts ([`Backend::compile`], [`Backend::validate`]) run the toolchain
+//! directly — each spawns the `run-confined` launcher via [`run_confined`] — and BLOCK;
+//! the host calls them off the event loop (`asyncio.to_thread`) while the wheel releases
+//! the GIL. There is no `async`/`pyo3-async` bridge and no `Command`/`Observation` resume
+//! protocol on the Rust side.
 //!
-//! An application implements [`Application`] (+ one or more [`FormalizeSession`]s)
-//! and calls [`export_app!`] to emit the PyO3 module the Python host loads.
+//! An application implements [`Backend`] and calls [`export_app!`] to emit the PyO3
+//! module the Python host loads.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -142,180 +144,74 @@ fn default_ecosystem() -> String {
 }
 
 // ===========================================================================
-// Formalize I/O — the data crossing at `formalize` time.
+// The service API — the data crossing the FFI. The backend is PASSIVE: the Python
+// pipeline drives the author→compile→judge→validate loop and calls these callouts;
+// nothing here holds state across calls (see docs/rust-backend-api.md).
 // ===========================================================================
 
-/// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`).
+/// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), plus a
+/// host-assigned unique `slug` used to name its unit/artifact (Crucible: `c_<slug>`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Property {
     pub title: String,
     /// One of "attack_vector" | "safety_property" | "invariant".
     pub sort: String,
     pub description: String,
+    #[serde(default)]
+    pub slug: String,
 }
 
-/// The input handed to [`Application::new_session`]. `component` and `config`
-/// are opaque JSON (a component's `model_dump()` and the backend's config
-/// blob); apps deserialize the parts they need.
+/// The input to the authoring/gating callouts for one artifact. `kind` selects what is being
+/// authored ("setup" fixture vs "component" tests); `context` carries backend dependencies
+/// (e.g. the shared fixture source a component builds on). `component`/`context` are opaque
+/// JSON the backend interprets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FormalizeInput {
-    pub label: String,
+pub struct AuthorInput {
+    pub kind: String,
+    pub program: String,
+    #[serde(default)]
     pub component: serde_json::Value,
+    #[serde(default)]
     pub props: Vec<Property>,
     #[serde(default)]
-    pub config: serde_json::Value,
+    pub context: serde_json::Value,
 }
 
-/// The input handed to [`Application::new_setup_session`] — the *program-wide*
-/// setup authored once, before per-component formalization (e.g. a Crucible
-/// fixture + actions). `analyzed` is the ecosystem's system model as JSON (e.g. a
-/// `SolanaApplication`); `program` is the target program's identifier.
+/// An authoring instruction (+ optional backend-defined system prompt) for one LLM turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetupInput {
-    pub program: String,
-    pub analyzed: serde_json::Value,
-    #[serde(default)]
-    pub config: serde_json::Value,
+pub struct Prompt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    pub instruction: String,
 }
 
-/// A property the author declined to formalize (mirrors `SkippedProperty`).
+/// Why a draft was rejected — the failing `draft` plus the compiler errors / judge feedback
+/// — fed into the next `author_prompt` as revise context. `draft` is carried because each
+/// authoring turn is fresh (no LLM-side memory of the prior attempt).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Skipped {
-    pub property_title: String,
-    pub reason: String,
+pub struct Failure {
+    #[serde(default)]
+    pub draft: String,
+    pub errors: String,
 }
 
-/// A successful formalization — the payload of [`Command::Publish`]. The Python
-/// side validates this into `RustFormalResult`, which satisfies both
-/// `FormalResult` and `ReportableResult` and is what the cache/report/store key
-/// off.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Formalized {
-    pub commentary: String,
-    /// The bytes written to the artifact file (`FormalResult.artifact_text`).
-    pub artifact_text: String,
-    /// property title → the unit names (rules / tests) that demonstrate it.
-    #[serde(default)]
-    pub property_units: Vec<(String, Vec<String>)>,
-    #[serde(default)]
-    pub skipped: Vec<Skipped>,
-    /// The verification-run link, or `None` for backends with no run service.
-    #[serde(default)]
-    pub output_link: Option<String>,
-    /// Per-unit verdicts baked in at formalize time, for a **self-contained**
-    /// backend whose pass/fail is known when the artifact is produced (e.g. a
-    /// fuzzer: crash = BAD, clean run to budget = GOOD). Keyed by unit name (the
-    /// test/rule). When non-empty the host uses these directly and does not call
-    /// `fetch_verdicts`; a run-service-backed backend leaves this empty and answers
-    /// through `fetch_verdicts` instead.
-    #[serde(default)]
-    pub verdicts: BTreeMap<String, Verdict>,
-}
-
-impl Formalized {
-    /// Convenience: a result with just artifact text + commentary.
-    pub fn new(artifact_text: impl Into<String>, commentary: impl Into<String>) -> Self {
-        Formalized {
-            commentary: commentary.into(),
-            artifact_text: artifact_text.into(),
-            ..Default::default()
-        }
-    }
-}
-
-// ===========================================================================
-// The inversion-of-control protocol: Observation (Py → Rust) / Command (Rust → Py)
-// ===========================================================================
-
-/// What Python hands back to [`FormalizeSession::resume`] after performing the
-/// effect the previous [`Command`] requested.
+/// The outcome of `compile`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Observation {
-    /// The initial tick that starts a session.
-    Start,
-    /// An LLM turn's reply text.
-    LlmReply { text: String },
-    /// The prover/verifier result (backend-shaped JSON).
-    ProverResult { data: serde_json::Value },
-    /// The feedback judge's result (backend-shaped JSON).
-    FeedbackResult { data: serde_json::Value },
-    /// The value read from the cache (`None` on miss).
-    Cached { value: Option<serde_json::Value> },
-    /// The result of a `RunCommand` effect: the process's exit code and captured
-    /// streams. Python has already materialized the requested files, run the
-    /// command (no shell), and captured its output.
-    CommandResult {
-        exit_code: i32,
-        stdout: String,
-        stderr: String,
-    },
-    /// Acknowledgement of a fire-and-forget effect (`CachePut`, `Emit`).
-    Ack,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CompileResult {
+    Ok,
+    Failed { errors: String },
 }
 
-/// What Rust asks Python to do next. Terminal variants (`Publish`/`GiveUp`) end
-/// the loop; all others yield an [`Observation`] on the next `resume`.
+/// One report row / fuzz target: a property title and its backend-specific unit name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Command {
-    /// Perform an LLM turn with the given messages/prompt payload.
-    CallLlm { messages: serde_json::Value },
-    /// Run the verifier over `spec` (optionally restricted to `rules`).
-    RunProver {
-        spec: String,
-        #[serde(default)]
-        config: serde_json::Value,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        rules: Option<Vec<String>>,
-    },
-    /// General effect: materialize `files` (workdir-relative path → contents) into
-    /// this session's workdir, then run `program` with `args` there — as a child
-    /// process, never through a shell. Yields [`Observation::CommandResult`].
-    ///
-    /// The **command line is authored by this decider**, not the LLM: `program`
-    /// and `args` come from the backend's own compiled logic; only file *contents*
-    /// may derive from LLM output (see `docs/crucible-application.md` §7.2). Python
-    /// enforces exec-not-shell + workdir path-confinement, and (once built) runs it
-    /// inside the sandbox (§7.4). Any backend that gates artifacts with a local CLI
-    /// (Crucible, `cargo build-sbf`, `anchor idl`, …) uses this rather than the
-    /// prover-specific `RunProver`.
-    RunCommand {
-        program: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        files: BTreeMap<String, String>,
-    },
-    /// Run the feedback judge.
-    RunFeedback {
-        spec: String,
-        #[serde(default)]
-        skipped: serde_json::Value,
-        #[serde(default)]
-        rebuttals: serde_json::Value,
-    },
-    /// Read a cache key (yields `Observation::Cached`).
-    CacheGet { key: String },
-    /// Write a cache key (yields `Observation::Ack`).
-    CachePut { key: String, value: serde_json::Value },
-    /// Stream a domain event to this task's panel (yields `Observation::Ack`).
-    Emit {
-        event_kind: String,
-        payload: serde_json::Value,
-    },
-    /// Terminal: formalization succeeded.
-    Publish { result: Formalized },
-    /// Terminal: the author declined this component.
-    GiveUp { reason: String },
+pub struct Unit {
+    pub property: String,
+    pub unit: String,
 }
 
-// ===========================================================================
-// Verdicts — the report's per-unit outcomes.
-// ===========================================================================
-
-/// A per-unit outcome (mirrors `composer…report.collect.Verdict`). `outcome` is
-/// one of GOOD | BAD | ERROR | TIMEOUT | UNKNOWN.
+/// A per-unit outcome (mirrors `composer…report.collect.Verdict`). `outcome` is one of
+/// GOOD | BAD | ERROR | TIMEOUT | UNKNOWN.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Verdict {
     pub outcome: String,
@@ -328,73 +224,256 @@ pub struct Verdict {
 }
 
 impl Verdict {
-    pub fn good() -> Self {
-        Verdict { outcome: "GOOD".into(), line: None, duration_seconds: None, unit_file: None }
-    }
     pub fn with_outcome(outcome: impl Into<String>) -> Self {
         Verdict { outcome: outcome.into(), line: None, duration_seconds: None, unit_file: None }
     }
 }
 
-/// The input to [`Application::fetch_verdicts`] — the report's view of one
-/// formalized component.
+// ===========================================================================
+// Sandbox — the confinement policy (Python-authored) + the shared launcher helper.
+// ===========================================================================
+
+/// Resource caps (rlimits); `None` = unset.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Rlimits {
+    #[serde(default)]
+    pub mem_bytes: Option<u64>,
+    #[serde(default)]
+    pub cpu_seconds: Option<u64>,
+    #[serde(default)]
+    pub nproc: Option<u64>,
+    #[serde(default)]
+    pub fsize_bytes: Option<u64>,
+}
+
+/// The confinement policy for a command, authored by Python (`SandboxConfig`/`SandboxPolicy`)
+/// and passed to `compile`/`validate`. `run_confined = None` runs the command directly (the
+/// trusted / `none` path). The backend never invents policy — it only assembles this into a
+/// `run-confined` argv (see [`run_confined`]); the mapping mirrors
+/// `composer/sandbox/launcher.py::LauncherProvider.wrap`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Sandbox {
+    #[serde(default)]
+    pub run_confined: Option<String>,
+    #[serde(default)]
+    pub rw: Vec<String>,
+    #[serde(default)]
+    pub ro: Vec<String>,
+    #[serde(default)]
+    pub allow_env: Vec<String>, // "NAME=VALUE"
+    #[serde(default)]
+    pub network: bool,
+    #[serde(default)]
+    pub rlimits: Rlimits,
+    #[serde(default = "default_timeout")]
+    pub timeout_s: u64,
+}
+
+fn default_timeout() -> u64 {
+    600
+}
+
+/// The captured result of a (confined) command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VerdictInput {
-    pub name: String,
-    pub unit_file: String,
-    #[serde(default)]
-    pub run_link: Option<String>,
-    #[serde(default)]
-    pub property_units: Vec<(String, Vec<String>)>,
+pub struct CommandOutput {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
 }
 
-// ===========================================================================
-// The traits an application implements.
-// ===========================================================================
+/// Exit code synthesized when the program isn't found (mirrors shells' 127).
+const NOT_FOUND_EXIT: i32 = 127;
 
-/// A pure decider for one component's formalization. Holds whatever loop state
-/// the app needs (draft spec, validation digests, turn budget, …) and advances
-/// one effect per `resume`. Never blocks, never awaits.
+/// Reject absolute paths / `..` traversal (mirrors `composer.sandbox.command._confined_target`).
+fn confined_join(workdir: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, String> {
+    use std::path::{Component, Path};
+    let p = Path::new(rel);
+    if p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(format!("unsafe file path {rel:?}: absolute or traverses outside the workdir"));
+    }
+    Ok(workdir.join(p))
+}
+
+/// Materialize `files` into `workdir` (path-confined), then run `program args` there confined
+/// by `run-confined` per `sandbox` (or directly, when `sandbox.run_confined` is `None`). Blocks
+/// on the child; **call from within `Python::allow_threads`**. Enforces `sandbox.timeout_s`.
 ///
-/// `Send + Sync` because PyO3 wraps the session in a `#[pyclass]`, which must be
-/// `Sync` — a state machine over plain owned data satisfies this without effort;
-/// just avoid non-`Sync` interior mutability.
-pub trait FormalizeSession: Send + Sync {
-    /// Given the result of the previous effect, decide the next [`Command`].
-    fn resume(&mut self, observation: Observation) -> Command;
+/// The **command line (`program`/`args`) is authored by the trusted backend**; only file
+/// *contents* may derive from the LLM (`docs/command-sandbox.md` §2). `run-confined` confines
+/// *itself* (Landlock+seccomp+rlimits+env scrub) and `execve`s the tool.
+pub fn run_confined(
+    sandbox: &Sandbox,
+    program: &str,
+    args: &[String],
+    files: &BTreeMap<String, String>,
+    workdir: &std::path::Path,
+) -> Result<CommandOutput, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    // 1. Materialize untrusted files (contents may be LLM-derived; the command line is not).
+    std::fs::create_dir_all(workdir).map_err(|e| e.to_string())?;
+    for (rel, contents) in files {
+        let target = confined_join(workdir, rel)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&target, contents).map_err(|e| e.to_string())?;
+    }
+
+    // 2. Build argv: `run-confined <policy flags> -- program args`, or `program args` direct.
+    let mut cmd = match &sandbox.run_confined {
+        Some(bin) => {
+            let mut c = Command::new(bin);
+            for p in &sandbox.ro {
+                c.arg("--ro").arg(p);
+            }
+            for p in &sandbox.rw {
+                c.arg("--rw").arg(p);
+            }
+            for e in &sandbox.allow_env {
+                c.arg("--allow-env").arg(e);
+            }
+            if sandbox.network {
+                c.arg("--allow-network");
+            }
+            if let Some(v) = sandbox.rlimits.mem_bytes {
+                c.arg("--rlimit-as").arg(v.to_string());
+            }
+            if let Some(v) = sandbox.rlimits.cpu_seconds {
+                c.arg("--rlimit-cpu").arg(v.to_string());
+            }
+            if let Some(v) = sandbox.rlimits.nproc {
+                c.arg("--rlimit-nproc").arg(v.to_string());
+            }
+            if let Some(v) = sandbox.rlimits.fsize_bytes {
+                c.arg("--rlimit-fsize").arg(v.to_string());
+            }
+            c.arg("--").arg(program).args(args);
+            c
+        }
+        None => {
+            let mut c = Command::new(program);
+            c.args(args);
+            c
+        }
+    };
+    cmd.current_dir(workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // 3. Spawn + capture with a timeout. Reader threads avoid a pipe-buffer deadlock.
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CommandOutput {
+                exit_code: NOT_FOUND_EXIT,
+                stdout: String::new(),
+                stderr: format!("{}: not found", sandbox.run_confined.as_deref().unwrap_or(program)),
+            })
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut out = child.stdout.take().expect("piped stdout");
+    let mut err = child.stderr.take().expect("piped stderr");
+    let t_out = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        let _ = out.read_to_end(&mut s);
+        s
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        let _ = err.read_to_end(&mut s);
+        s
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(sandbox.timeout_s.max(1));
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(st) => break Some(st),
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    timed_out = true;
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
+    let stdout = String::from_utf8_lossy(&t_out.join().unwrap_or_default()).into_owned();
+    let stderr = String::from_utf8_lossy(&t_err.join().unwrap_or_default()).into_owned();
+    if timed_out {
+        return Ok(CommandOutput {
+            exit_code: -1,
+            stdout,
+            stderr: format!("{stderr}\ncommand timed out after {}s", sandbox.timeout_s),
+        });
+    }
+    Ok(CommandOutput {
+        exit_code: status.and_then(|s| s.code()).unwrap_or(-1),
+        stdout,
+        stderr,
+    })
 }
 
-/// A Rust AutoProver application/backend. One instance per wheel; construct it
-/// in [`export_app!`].
-pub trait Application: Send + Sync + 'static {
+// ===========================================================================
+// The trait an application implements.
+// ===========================================================================
+
+/// A Rust AutoProver backend — a **passive service** the Python pipeline drives. One instance
+/// per wheel; construct it in [`export_app!`]. Metadata/authoring callouts are pure; `compile`
+/// and `validate` run the toolchain (via [`run_confined`]) and BLOCK — the host calls them off
+/// the event loop (`asyncio.to_thread`) while the wheel releases the GIL.
+pub trait Backend: Send + Sync + 'static {
     /// The declaration the Python host reads at load time.
     fn descriptor(&self) -> AppDescriptor;
 
-    /// Validate application-specific preconditions before any service opens
-    /// (cf. foundry's `foundry.toml` check). `Err(msg)` aborts the run.
+    /// Validate application-specific preconditions before any service opens. `Err(msg)` aborts.
     fn validate_preconditions(&self, _args: &serde_json::Value) -> Result<(), String> {
         Ok(())
     }
 
-    /// Author program-wide shared setup once, before per-component formalization
-    /// (e.g. a Crucible fixture + `action_*`), as an IoC decider driven through the
-    /// same effect loop. `None` (the default) means the backend has no shared setup
-    /// phase. The published `Formalized.artifact_text` is the setup source, which
-    /// the host hands to the artifact store (e.g. as the harness fixture).
-    fn new_setup_session(&self, _input: SetupInput) -> Option<Box<dyn FormalizeSession>> {
+    /// The units this input formalizes — one per property — each a property title and its
+    /// unit name (Crucible: `c_<slug>`). Pure and pre-authoring: the prompt requires exactly
+    /// these fn names, the host validates each, and it is the report's property→unit map.
+    fn units(&self, input: &AuthorInput) -> Vec<Unit>;
+
+    /// The instruction (+ optional system prompt) to author `input.kind`'s spec, covering all
+    /// its units. `failure = Some(..)` on a re-author after a compile failure / judge rejection.
+    fn author_prompt(&self, input: &AuthorInput, failure: Option<&Failure>) -> Prompt;
+
+    /// Optional LLM review of a compiled spec, before validation. `None` (the default) skips
+    /// judging — the compiler + checker are the judges.
+    fn judge_prompt(&self, _input: &AuthorInput, _spec: &str) -> Option<Prompt> {
         None
     }
 
-    /// Begin formalizing one component's property batch.
-    fn new_session(&self, input: FormalizeInput) -> Box<dyn FormalizeSession>;
+    /// Compile/typecheck the whole spec once (all units share one build). BLOCKING.
+    fn compile(
+        &self,
+        input: &AuthorInput,
+        spec: &str,
+        workdir: &std::path::Path,
+        sandbox: &Sandbox,
+    ) -> CompileResult;
 
-    /// Per-unit verdicts for the report. A self-contained backend computes these
-    /// directly; one backed by a run service surfaces them through Python
-    /// effects instead and can return `{}` here.
-    fn fetch_verdicts(&self, input: VerdictInput) -> BTreeMap<String, Verdict>;
+    /// Validate ONE unit against the compiled spec and bake its verdict. Per-unit so the host
+    /// owns enumeration/scheduling. BLOCKING.
+    fn validate(
+        &self,
+        input: &AuthorInput,
+        spec: &str,
+        unit: &str,
+        workdir: &std::path::Path,
+        sandbox: &Sandbox,
+    ) -> Verdict;
 
-    /// Optional run-level artifacts from the full outcome set, as
-    /// `{project_relative_path: file_contents}`. Default: none.
+    /// Optional run-level artifacts from the full outcome set, as `{relpath: contents}`.
     fn finalize(&self, _outcomes: &serde_json::Value) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
@@ -402,82 +481,99 @@ pub trait Application: Send + Sync + 'static {
 
 // ===========================================================================
 // FFI helpers — the sync, JSON-string boundary. `export_app!` wraps these in
-// #[pyfunction]s; they are also directly unit-testable without Python.
+// #[pyfunction]s (compile/validate release the GIL); also unit-testable without Python.
 // ===========================================================================
 
-fn err_json(context: &str, e: impl std::fmt::Display) -> String {
-    serde_json::json!({ "kind": "give_up", "reason": format!("{context}: {e}") }).to_string()
+fn parse<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Result<T, String> {
+    serde_json::from_str(json).map_err(|e| format!("invalid {what} JSON: {e}"))
 }
 
 /// `descriptor() -> str` (JSON).
-pub fn ffi_descriptor(app: &dyn Application) -> String {
-    // The descriptor is app-authored and small; a serialization failure is a bug.
-    serde_json::to_string(&app.descriptor())
+pub fn ffi_descriptor(b: &dyn Backend) -> String {
+    serde_json::to_string(&b.descriptor())
         .unwrap_or_else(|e| format!("{{\"error\":\"descriptor serialize: {e}\"}}"))
 }
 
 /// `validate_preconditions(args_json) -> str | None` (None = ok).
-pub fn ffi_validate(app: &dyn Application, args_json: &str) -> Option<String> {
-    let args: serde_json::Value = match serde_json::from_str(args_json) {
+pub fn ffi_validate_preconditions(b: &dyn Backend, args_json: &str) -> Option<String> {
+    let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
+    b.validate_preconditions(&args).err()
+}
+
+/// `units(input_json) -> str` (JSON `[Unit]`).
+pub fn ffi_units(b: &dyn Backend, input_json: &str) -> String {
+    match parse::<AuthorInput>(input_json, "AuthorInput") {
+        Ok(input) => serde_json::to_string(&b.units(&input)).unwrap_or_else(|_| "[]".into()),
+        Err(_) => "[]".into(),
+    }
+}
+
+/// `author_prompt(input_json, failure_json | None) -> str` (JSON `Prompt`).
+pub fn ffi_author_prompt(b: &dyn Backend, input_json: &str, failure_json: Option<&str>) -> String {
+    let input: AuthorInput = match parse(input_json, "AuthorInput") {
         Ok(v) => v,
-        Err(e) => return Some(format!("invalid args JSON: {e}")),
+        Err(e) => {
+            return serde_json::to_string(&Prompt { system: None, instruction: format!("ERROR: {e}") })
+                .unwrap_or_default()
+        }
     };
-    app.validate_preconditions(&args).err()
+    let failure: Option<Failure> = failure_json.and_then(|s| serde_json::from_str(s).ok());
+    let prompt = b.author_prompt(&input, failure.as_ref());
+    serde_json::to_string(&prompt).unwrap_or_default()
 }
 
-/// A session that immediately gives up — used when `FormalizeInput` fails to parse.
-struct FailSession(String);
-impl FormalizeSession for FailSession {
-    fn resume(&mut self, _observation: Observation) -> Command {
-        Command::GiveUp { reason: self.0.clone() }
-    }
+/// `judge_prompt(input_json, spec) -> str | None` (None = skip judging).
+pub fn ffi_judge_prompt(b: &dyn Backend, input_json: &str, spec: &str) -> Option<String> {
+    let input: AuthorInput = parse(input_json, "AuthorInput").ok()?;
+    b.judge_prompt(&input, spec)
+        .map(|p| serde_json::to_string(&p).unwrap_or_default())
 }
 
-/// `new_session(input_json) -> Session`.
-pub fn ffi_new_session(app: &dyn Application, input_json: &str) -> Box<dyn FormalizeSession> {
-    match serde_json::from_str::<FormalizeInput>(input_json) {
-        Ok(input) => app.new_session(input),
-        Err(e) => Box::new(FailSession(format!("invalid FormalizeInput JSON: {e}"))),
-    }
-}
-
-/// `new_setup_session(input_json) -> Session | None`. `None` if the app declares no
-/// setup phase; a give-up session if the input fails to parse (so the host sees a
-/// clean `GiveUp` rather than a silent skip).
-pub fn ffi_new_setup_session(
-    app: &dyn Application,
+/// `compile(input_json, spec, workdir, sandbox_json) -> str` (JSON `CompileResult`). BLOCKING.
+pub fn ffi_compile(
+    b: &dyn Backend,
     input_json: &str,
-) -> Option<Box<dyn FormalizeSession>> {
-    match serde_json::from_str::<SetupInput>(input_json) {
-        Ok(input) => app.new_setup_session(input),
-        Err(e) => Some(Box::new(FailSession(format!("invalid SetupInput JSON: {e}")))),
-    }
-}
-
-/// `session.resume(observation_json) -> command_json`.
-pub fn ffi_resume(session: &mut dyn FormalizeSession, observation_json: &str) -> String {
-    let obs: Observation = match serde_json::from_str(observation_json) {
-        Ok(o) => o,
-        Err(e) => return err_json("invalid Observation JSON", e),
-    };
-    let cmd = session.resume(obs);
-    serde_json::to_string(&cmd).unwrap_or_else(|e| err_json("command serialize", e))
-}
-
-/// `fetch_verdicts(input_json) -> str` (JSON `{unit_name: Verdict}`).
-pub fn ffi_fetch_verdicts(app: &dyn Application, input_json: &str) -> String {
-    let input: VerdictInput = match serde_json::from_str(input_json) {
+    spec: &str,
+    workdir: &str,
+    sandbox_json: &str,
+) -> String {
+    let input: AuthorInput = match parse(input_json, "AuthorInput") {
         Ok(v) => v,
-        Err(_) => return "{}".to_string(),
+        Err(e) => return serde_json::to_string(&CompileResult::Failed { errors: e }).unwrap_or_default(),
     };
-    let verdicts = app.fetch_verdicts(input);
-    serde_json::to_string(&verdicts).unwrap_or_else(|_| "{}".to_string())
+    let sandbox: Sandbox = parse(sandbox_json, "Sandbox").unwrap_or_default();
+    let r = b.compile(&input, spec, std::path::Path::new(workdir), &sandbox);
+    serde_json::to_string(&r).unwrap_or_else(|e| {
+        serde_json::to_string(&CompileResult::Failed { errors: e.to_string() }).unwrap_or_default()
+    })
+}
+
+/// `validate(input_json, spec, unit, workdir, sandbox_json) -> str` (JSON `Verdict`). BLOCKING.
+pub fn ffi_validate(
+    b: &dyn Backend,
+    input_json: &str,
+    spec: &str,
+    unit: &str,
+    workdir: &str,
+    sandbox_json: &str,
+) -> String {
+    let sandbox: Sandbox = parse(sandbox_json, "Sandbox").unwrap_or_default();
+    let verdict = match parse::<AuthorInput>(input_json, "AuthorInput") {
+        Ok(input) => b.validate(&input, spec, unit, std::path::Path::new(workdir), &sandbox),
+        Err(e) => Verdict {
+            outcome: "ERROR".into(),
+            line: None,
+            duration_seconds: None,
+            unit_file: Some(e),
+        },
+    };
+    serde_json::to_string(&verdict).unwrap_or_default()
 }
 
 /// `finalize(outcomes_json) -> str | None` (JSON `{relpath: contents}`, or None).
-pub fn ffi_finalize(app: &dyn Application, outcomes_json: &str) -> Option<String> {
+pub fn ffi_finalize(b: &dyn Backend, outcomes_json: &str) -> Option<String> {
     let outcomes: serde_json::Value = serde_json::from_str(outcomes_json).ok()?;
-    let files = app.finalize(&outcomes);
+    let files = b.finalize(&outcomes);
     if files.is_empty() {
         None
     } else {
@@ -489,38 +585,24 @@ pub fn ffi_finalize(app: &dyn Application, outcomes_json: &str) -> Option<String
 // The export macro.
 // ===========================================================================
 
-/// Emit the PyO3 module the Python host loads. Invoke it once in an application
-/// crate (a `cdylib` depending on `autoprover-sdk` and `pyo3`):
+/// Emit the PyO3 module the Python host loads. Invoke it once in an application crate
+/// (a `cdylib` depending on `autoprover-sdk` and `pyo3`):
 ///
 /// ```ignore
 /// autoprover_sdk::export_app!(my_app, MyApp::new());
 /// ```
 ///
-/// `module_ident` MUST match the wheel's module name (`[tool.maturin] module-name`
-/// / the `lib.name`). The expansion defines the `RustSession` class plus the
-/// `descriptor` / `validate_preconditions` / `new_session` / `fetch_verdicts` /
-/// `finalize` functions the host expects, all delegating to the `ffi_*` helpers.
+/// `module_ident` MUST match the wheel's module name. The expansion defines the pure callouts
+/// (`descriptor`/`validate_preconditions`/`units`/`author_prompt`/`judge_prompt`/`finalize`) and
+/// the two BLOCKING ones (`compile`/`validate`, which release the GIL while `run-confined` runs),
+/// all delegating to the `ffi_*` helpers.
 #[macro_export]
 macro_rules! export_app {
     ($module:ident, $ctor:expr) => {
-        fn __autoprover_app() -> &'static dyn $crate::Application {
-            static APP: ::std::sync::OnceLock<::std::boxed::Box<dyn $crate::Application>> =
+        fn __autoprover_app() -> &'static dyn $crate::Backend {
+            static APP: ::std::sync::OnceLock<::std::boxed::Box<dyn $crate::Backend>> =
                 ::std::sync::OnceLock::new();
             &**APP.get_or_init(|| ::std::boxed::Box::new($ctor))
-        }
-
-        /// A live formalization decider held across `resume` calls.
-        #[$crate::pyo3::pyclass]
-        struct RustSession {
-            inner: ::std::boxed::Box<dyn $crate::FormalizeSession>,
-        }
-
-        #[$crate::pyo3::pymethods]
-        impl RustSession {
-            /// Feed the last effect's Observation (JSON); get the next Command (JSON).
-            fn resume(&mut self, observation: ::std::string::String) -> ::std::string::String {
-                $crate::ffi_resume(self.inner.as_mut(), &observation)
-            }
         }
 
         #[$crate::pyo3::pyfunction]
@@ -532,27 +614,64 @@ macro_rules! export_app {
         fn validate_preconditions(
             args_json: ::std::string::String,
         ) -> ::std::option::Option<::std::string::String> {
-            $crate::ffi_validate(__autoprover_app(), &args_json)
+            $crate::ffi_validate_preconditions(__autoprover_app(), &args_json)
         }
 
         #[$crate::pyo3::pyfunction]
-        fn new_session(input_json: ::std::string::String) -> RustSession {
-            RustSession {
-                inner: $crate::ffi_new_session(__autoprover_app(), &input_json),
-            }
+        fn units(input_json: ::std::string::String) -> ::std::string::String {
+            $crate::ffi_units(__autoprover_app(), &input_json)
         }
 
         #[$crate::pyo3::pyfunction]
-        fn new_setup_session(
+        #[pyo3(signature = (input_json, failure_json=None))]
+        fn author_prompt(
             input_json: ::std::string::String,
-        ) -> ::std::option::Option<RustSession> {
-            $crate::ffi_new_setup_session(__autoprover_app(), &input_json)
-                .map(|inner| RustSession { inner })
+            failure_json: ::std::option::Option<::std::string::String>,
+        ) -> ::std::string::String {
+            $crate::ffi_author_prompt(__autoprover_app(), &input_json, failure_json.as_deref())
         }
 
         #[$crate::pyo3::pyfunction]
-        fn fetch_verdicts(input_json: ::std::string::String) -> ::std::string::String {
-            $crate::ffi_fetch_verdicts(__autoprover_app(), &input_json)
+        fn judge_prompt(
+            input_json: ::std::string::String,
+            spec: ::std::string::String,
+        ) -> ::std::option::Option<::std::string::String> {
+            $crate::ffi_judge_prompt(__autoprover_app(), &input_json, &spec)
+        }
+
+        #[$crate::pyo3::pyfunction]
+        fn compile(
+            py: $crate::pyo3::Python<'_>,
+            input_json: ::std::string::String,
+            spec: ::std::string::String,
+            workdir: ::std::string::String,
+            sandbox_json: ::std::string::String,
+        ) -> ::std::string::String {
+            // Release the GIL for the (minutes-long) build — no async runtime needed.
+            py.allow_threads(move || {
+                $crate::ffi_compile(__autoprover_app(), &input_json, &spec, &workdir, &sandbox_json)
+            })
+        }
+
+        #[$crate::pyo3::pyfunction]
+        fn validate(
+            py: $crate::pyo3::Python<'_>,
+            input_json: ::std::string::String,
+            spec: ::std::string::String,
+            unit: ::std::string::String,
+            workdir: ::std::string::String,
+            sandbox_json: ::std::string::String,
+        ) -> ::std::string::String {
+            py.allow_threads(move || {
+                $crate::ffi_validate(
+                    __autoprover_app(),
+                    &input_json,
+                    &spec,
+                    &unit,
+                    &workdir,
+                    &sandbox_json,
+                )
+            })
         }
 
         #[$crate::pyo3::pyfunction]
@@ -569,11 +688,12 @@ macro_rules! export_app {
             use $crate::pyo3::types::PyModuleMethods as _;
             m.add_function($crate::pyo3::wrap_pyfunction!(descriptor, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(validate_preconditions, m)?)?;
-            m.add_function($crate::pyo3::wrap_pyfunction!(new_session, m)?)?;
-            m.add_function($crate::pyo3::wrap_pyfunction!(new_setup_session, m)?)?;
-            m.add_function($crate::pyo3::wrap_pyfunction!(fetch_verdicts, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(units, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(author_prompt, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(judge_prompt, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(compile, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(validate, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(finalize, m)?)?;
-            m.add_class::<RustSession>()?;
             ::std::result::Result::Ok(())
         }
     };

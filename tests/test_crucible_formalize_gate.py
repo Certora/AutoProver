@@ -32,12 +32,11 @@ from composer.crucible.harness import CrucibleDep
 from composer.crucible.store import CrucibleArtifactStore
 from composer.io.multi_job import TaskInfo
 from composer.kb.knowledge_base import DefaultEmbedder
-from composer.pipeline.core import PipelineRun
+from composer.pipeline.core import GaveUp, PipelineRun
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
-from composer.rustapp.adapter import RealEffects
+from composer.rustapp.adapter import author_and_compile, make_emitter
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.rustapp.host import build_phase_enum, load_descriptor, load_module
-from composer.rustapp.loop import GaveUp, RustFormalized, drive_session
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost
 from composer.llm.registry import get_provider_for
@@ -242,28 +241,38 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
 
         module = load_module("crucible_app")
         phase = build_phase_enum(load_descriptor(module))
-        session = module.new_session(json.dumps({
-            "label": "deposit", "component": _COMPONENT, "props": _PROPS,
-            "config": {"fixture": _FIXTURE, "slug": _SLUG, "program": _PROGRAM, "fuzz_timeout": 15},
-        }))
+
+        # The component artifact: author the test(s), `compile` (dry-run), then `validate`
+        # the unit (fuzz). Unsandboxed here (trusted inputs), so run_confined=None.
+        input_dict = {
+            "kind": "component", "program": _PROGRAM, "component": _COMPONENT, "props": _PROPS,
+            "context": {"fixture": _FIXTURE, "fuzz_timeout": 15},
+        }
+        input_json = json.dumps(input_dict)
+        sandbox_dict = {"run_confined": None, "timeout_s": 1200}
+        sandbox_json = json.dumps(sandbox_dict)
 
         run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
-        effects = RealEffects(cast(Any, ctx), run, command_timeout_s=1200)
-        result = await run.runner(
+        test_src = await run.runner(
             TaskInfo("crucible_fmz", "Harness Authoring", phase["formalization"]),
-            lambda: drive_session(session, effects, max_steps=60),
+            lambda: author_and_compile(
+                module, input_dict, env=env, sandbox_dict=sandbox_dict,
+                workdir=Path(_SCENARIO), recursion_limit=100, backend_name="crucible",
+                emit=make_emitter(),
+            ),
+        )
+        if isinstance(test_src, GaveUp):
+            pytest.fail(f"per-component authoring gave up: {test_src.reason}")
+
+        units = json.loads(module.units(input_json))
+        verdict = json.loads(
+            await asyncio.to_thread(module.validate, input_json, test_src, _FEATURE, str(_SCENARIO), sandbox_json)
         )
 
-    if isinstance(result, GaveUp):
-        pytest.fail(f"per-component formalize gave up: {result.reason}")
-    assert isinstance(result, RustFormalized)
-    test_src = result.data.get("artifact_text", "")
-    verdicts = result.data.get("verdicts", {})
     print("\n===== authored test =====\n" + test_src)
-    print("verdicts:", verdicts)
+    print("units:", units, "verdict:", verdict)
     # A compiling test that fuzzed to the timeout on the clean vault → GOOD.
     assert "#[invariant_test]" in test_src or "#[crucible_fuzz]" in test_src
-    assert verdicts.get(_FEATURE, {}).get("outcome") == "GOOD", verdicts
+    assert verdict.get("outcome") == "GOOD", verdict
     # property → this test's unit is recorded for the report.
-    units = dict(result.data.get("property_units", []))
-    assert _FEATURE in units.get(_PROPS[0]["title"], [])
+    assert units == [{"property": _PROPS[0]["title"], "unit": _FEATURE}]

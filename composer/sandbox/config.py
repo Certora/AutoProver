@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from composer.sandbox.policy import SandboxPolicy, SandboxProvider, get_provider
+from composer.sandbox.policy import SandboxPolicy, SandboxProvider, ensure_available, get_provider
 from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH, rust_build_policy
 
 _ENV_VAR = "COMPOSER_SANDBOX_PROVIDER"
@@ -70,3 +70,31 @@ class SandboxConfig:
             nproc=self.nproc,
             fsize_bytes=self.fsize_bytes,
         )
+
+    def backend_spec(self, workdir: str | Path, *, timeout_s: int) -> dict:
+        """The ``Sandbox`` JSON a Rust backend's ``compile``/``validate`` consume to build
+        their own ``run-confined`` launch (`autoprover_sdk::Sandbox`). Python keeps ownership
+        of the confinement *intent* (this policy); the backend only assembles it into an argv.
+
+        For a real provider this resolves the ``run-confined`` path and is **fail-closed**
+        (``ensure_available`` raises if the launcher can't confine here). The ``none`` provider
+        yields ``run_confined=None`` — the backend runs the command directly (trusted input)."""
+        if not self.enabled:
+            return {"run_confined": None, "timeout_s": timeout_s}
+        provider = self.resolve_provider()
+        ensure_available(provider)  # fail-closed: raise before any untrusted code runs
+        policy = self.build_policy(workdir)
+        return {
+            "run_confined": getattr(provider, "binary", None),
+            "ro": [str(p) for p in policy.ro_paths],
+            "rw": [str(p) for p in policy.rw_paths],
+            "allow_env": [f"{k}={v}" for k, v in policy.env_allowlist.items()],
+            "network": policy.network,
+            "rlimits": {
+                "mem_bytes": policy.mem_bytes,
+                "cpu_seconds": policy.cpu_seconds,
+                "nproc": policy.nproc,
+                "fsize_bytes": policy.fsize_bytes,
+            },
+            "timeout_s": timeout_s,
+        }

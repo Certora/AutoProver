@@ -1,19 +1,19 @@
 """End-to-end tests for the Rust application/backend framework (composer.rustapp).
 
-These drive the *real* Rust decider (the ``echoprover`` demo wheel built from
-``rust/example-app``) through the inversion-of-control loop, plus the descriptor
-synthesis and result round-trip. They need the ``echoprover`` wheel importable
-(``maturin develop`` in ``rust/example-app``); tests skip cleanly otherwise.
+These drive the ``echoprover`` demo wheel (built from ``rust/example-app``) as a
+:class:`~autoprover_sdk.Backend`: the pure callouts (``descriptor`` / ``units`` /
+``author_prompt`` / ``compile`` / ``validate``) plus the descriptor synthesis and the
+host wiring. They need the ``echoprover`` wheel importable (``maturin develop`` in
+``rust/example-app``); tests skip cleanly otherwise.
 
-No Postgres / LLM is required: the loop's effects are supplied by a fake, which
-is the whole point of the IoC design — the async I/O lives in Python and can be
-stubbed.
+No Postgres / LLM is required — the callouts are pure (echoprover's ``compile`` is a
+no-op and ``validate`` returns GOOD), which is the point of the passive-service design:
+the loop lives in Python and the wheel just answers questions.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import pytest
 
@@ -23,56 +23,22 @@ echoprover = pytest.importorskip(
 )
 
 from composer.rustapp.descriptor import AppDescriptor, CoreSlot
-from composer.rustapp.loop import Effects, GaveUp, drive_session
 from composer.rustapp.result import RustFormalResult
 
 
-SESSION_INPUT = json.dumps(
-    {
-        "label": "Counter (2 properties)",
-        "component": {"name": "Counter"},
-        "props": [
-            {"title": "increment_increases", "sort": "safety_property", "description": "x"},
-            {"title": "never_overflows", "sort": "invariant", "description": "y"},
-        ],
-        "config": {},
-    }
-)
-
-
-class FakeEffects:
-    """Records the effect trace and returns canned observations. ``verified``
-    controls the prover result; ``cached`` seeds a cache hit."""
-
-    def __init__(self, *, verified: bool = True, cached: dict[str, Any] | None = None):
-        self.verified = verified
-        self.store: dict[str, Any] = dict(cached or {})
-        self.trace: list[str] = []
-        self.events: list[tuple[str, dict]] = []
-
-    async def call_llm(self, messages: Any) -> str:
-        self.trace.append("call_llm")
-        return "spec { rule increment_increases; rule never_overflows; }"
-
-    async def run_prover(self, spec: str, config: Any, rules: list[str] | None) -> dict:
-        self.trace.append("run_prover")
-        return {"verified": self.verified}
-
-    async def run_feedback(self, spec: str, skipped: Any, rebuttals: Any) -> dict:
-        self.trace.append("run_feedback")
-        return {"good": True}
-
-    async def cache_get(self, key: str) -> Any | None:
-        self.trace.append("cache_get")
-        return self.store.get(key)
-
-    async def cache_put(self, key: str, value: Any) -> None:
-        self.trace.append("cache_put")
-        self.store[key] = value
-
-    async def emit(self, event_kind: str, payload: dict) -> None:
-        self.trace.append("emit")
-        self.events.append((event_kind, payload))
+def _component_input(*titles: str) -> str:
+    return json.dumps(
+        {
+            "kind": "component",
+            "program": "Counter",
+            "component": {"name": "Counter"},
+            "props": [
+                {"title": t, "sort": "invariant", "description": "x", "slug": t.replace(" ", "_")}
+                for t in titles
+            ],
+            "context": {},
+        }
+    )
 
 
 def test_descriptor_parses_and_maps_core_phases():
@@ -86,42 +52,31 @@ def test_descriptor_parses_and_maps_core_phases():
     assert keys == ["analysis", "extraction", "solving", "formalization", "report"]
 
 
-@pytest.mark.asyncio
-async def test_loop_publishes_on_verified():
-    session = echoprover.new_session(SESSION_INPUT)
-    fx = FakeEffects(verified=True)
-    result = await drive_session(session, fx)
-
-    assert not isinstance(result, GaveUp)
-    res = RustFormalResult.from_formalized(result.data)
-    assert res.property_units() == [
-        ("increment_increases", ["rule_increment_increases"]),
-        ("never_overflows", ["rule_never_overflows"]),
+def test_units_are_one_per_property():
+    units = json.loads(echoprover.units(_component_input("increment_increases", "never_overflows")))
+    assert units == [
+        {"property": "increment_increases", "unit": "rule_increment_increases"},
+        {"property": "never_overflows", "unit": "rule_never_overflows"},
     ]
-    assert res.output_link == "local://echo/run"
-    # Full effect trace: emit → cache miss → llm → cache put → prover.
-    assert fx.trace == ["emit", "cache_get", "call_llm", "cache_put", "run_prover"]
-    assert fx.events == [("solver_line", {"line": "echo: starting formalization"})]
 
 
-@pytest.mark.asyncio
-async def test_loop_gives_up_when_not_verified():
-    session = echoprover.new_session(SESSION_INPUT)
-    fx = FakeEffects(verified=False)
-    result = await drive_session(session, fx)
-    assert isinstance(result, GaveUp)
-    assert "did not verify" in result.reason
+def test_author_prompt_lists_the_properties():
+    prompt = json.loads(echoprover.author_prompt(_component_input("increment_increases"), None))
+    assert "increment_increases" in prompt["instruction"]
+    assert prompt.get("system") is None
 
 
-@pytest.mark.asyncio
-async def test_loop_uses_cache_hit_and_skips_llm():
-    session = echoprover.new_session(SESSION_INPUT)
-    fx = FakeEffects(verified=True, cached={"echo_draft": "cached spec text"})
-    result = await drive_session(session, fx)
-    assert not isinstance(result, GaveUp)
-    # On a cache hit the loop must skip the LLM and go straight to the prover.
-    assert "call_llm" not in fx.trace
-    assert fx.trace == ["emit", "cache_get", "run_prover"]
+def test_compile_is_a_noop_ok():
+    # The demo accepts any well-formed spec — compile is a no-op gate.
+    r = json.loads(echoprover.compile(_component_input("p"), "spec", "/tmp", json.dumps({"run_confined": None})))
+    assert r == {"status": "ok"}
+
+
+def test_validate_is_good():
+    v = json.loads(
+        echoprover.validate(_component_input("p"), "spec", "rule_p", "/tmp", json.dumps({"run_confined": None}))
+    )
+    assert v["outcome"] == "GOOD"
 
 
 def test_result_round_trips_through_cache_serialization():
@@ -139,12 +94,6 @@ def test_result_round_trips_through_cache_serialization():
     assert reloaded.property_units() == [("p", ["rule_p"])]
     assert reloaded.artifact_text == "spec"
     assert reloaded.skipped[0].property_title == "q"
-
-
-def test_effects_protocol_is_satisfied_by_fake():
-    # Structural sanity: FakeEffects satisfies the Effects protocol.
-    fx: Effects = FakeEffects()
-    assert fx is not None
 
 
 # ---------------------------------------------------------------------------
@@ -274,8 +223,6 @@ def test_resolve_ecosystem_rejects_unregistered_chain():
 
 def test_descriptor_ecosystem_defaults_to_evm_when_absent():
     # Wheels built before the field existed omit it; the mirror defaults to evm.
-    import json
-
     raw = json.loads(echoprover.descriptor())
     del raw["ecosystem"]
     desc = AppDescriptor.model_validate(raw)

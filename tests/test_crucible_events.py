@@ -1,16 +1,13 @@
-"""Unit tests for the Crucible decider's UI event emission (no toolchain / LLM).
+"""Unit tests for the Crucible backend's pure callouts + the event routing (no toolchain / LLM).
 
-Drives the real `crucible_app` setup / per-component sessions through `drive_session`
-with a fake `Effects` that returns canned command results, and asserts the sessions
-emit the declared `build_output` / `fuzz_pulse` / `fuzz_finding` events (each carrying
-a rendered `line`). This is the decider half of the telemetry parity work; the
-Python routing to `handle_event` is covered separately.
+The Rust wheel is now a passive service (docs/rust-backend-api.md): these exercise the pure
+callouts (`units` / `author_prompt` / `judge_prompt`) directly, and — separately — the
+out-of-graph `push_custom_update` routing the Python loop's `emit` relies on.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import pytest
 
@@ -19,44 +16,29 @@ crucible_app = pytest.importorskip(
     reason="crucible_app wheel not built (uv run maturin develop -m rust/crucible-app/Cargo.toml)",
 )
 
-from composer.rustapp.loop import GaveUp, drive_session  # noqa: E402
-from composer.rustapp.result import RustFormalResult  # noqa: E402
+
+def _component_input(*slugs: str) -> str:
+    return json.dumps(
+        {
+            "kind": "component",
+            "program": "vault",
+            "component": {"name": "vault", "program": "vault"},
+            "props": [
+                {"title": f"p {s}", "sort": "invariant", "description": "d", "slug": s}
+                for s in slugs
+            ],
+            "context": {"fixture": "struct Fixture {}", "fuzz_timeout": 5},
+        }
+    )
 
 
-class FakeEffects:
-    """Returns canned `run_command` results (one per call, in order) and a fixed
-    LLM reply; records every emitted event."""
-
-    def __init__(self, command_results: list[dict], *, llm_reply: str = "fn c_x() {}"):
-        self._results = list(command_results)
-        self._llm_reply = llm_reply
-        self.events: list[tuple[str, dict]] = []
-
-    async def call_llm(self, messages: Any) -> str:
-        return self._llm_reply
-
-    async def run_command(self, program: str, args: list[str], files: dict[str, str]) -> dict:
-        return self._results.pop(0)
-
-    async def emit(self, event_kind: str, payload: dict) -> None:
-        self.events.append((event_kind, payload))
-
-    async def cache_get(self, key: str) -> Any | None:
-        return None
-
-    async def cache_put(self, key: str, value: Any) -> None:
-        pass
-
-    async def run_prover(self, spec: str, config: Any, rules: list[str] | None) -> dict:
-        raise AssertionError("crucible does not use run_prover")
-
-    async def run_feedback(self, spec: str, skipped: Any, rebuttals: Any) -> dict:
-        raise AssertionError("crucible does not use run_feedback")
+def _setup_input() -> str:
+    return json.dumps(
+        {"kind": "setup", "program": "vault", "component": {"programs": []}, "props": [], "context": {}}
+    )
 
 
 def test_descriptor_declares_design_doc_discovery_phase():
-    """Crucible declares a dedicated UI-only discovery phase (parity with Foundry),
-    which the generic entry tags the discovery task with."""
     from composer.crucible.pipeline import build_crucible_application
     from composer.rustapp.entry import _discovery_phase
 
@@ -65,75 +47,44 @@ def test_descriptor_declares_design_doc_discovery_phase():
     assert _discovery_phase(app) is app.phase["discover_design_doc"]
 
 
-def _kinds(fx: FakeEffects) -> list[str]:
-    return [k for k, _ in fx.events]
+def test_units_are_one_c_slug_per_property():
+    units = json.loads(crucible_app.units(_component_input("solvency", "conservation")))
+    assert units == [
+        {"property": "p solvency", "unit": "c_solvency"},
+        {"property": "p conservation", "unit": "c_conservation"},
+    ]
 
 
-def _per_component_session(program: str = "vault", slug: str = "deposit"):
-    return crucible_app.new_session(
-        json.dumps(
-            {
-                "label": f"{slug} (1 property)",
-                "component": {"name": slug, "program": program},
-                "props": [{"title": "p1", "sort": "invariant", "description": "d"}],
-                "config": {
-                    "fixture": "struct Fixture {}",
-                    "slug": slug,
-                    "program": program,
-                    "fuzz_timeout": 5,
-                },
-            }
-        )
-    )
+def test_setup_has_no_units():
+    assert json.loads(crucible_app.units(_setup_input())) == []
 
 
-def _ok(stdout: str = "fuzzing done", exit_code: int = 0) -> dict:
-    return {"exit_code": exit_code, "stdout": stdout, "stderr": ""}
+def test_component_author_prompt_lists_each_units_fn_name():
+    prompt = json.loads(crucible_app.author_prompt(_component_input("solvency"), None))
+    assert prompt.get("system") is None
+    # Lists the required fn name + frames the whole-program invariant authoring task.
+    assert "c_solvency" in prompt["instruction"]
+    assert "test function" in prompt["instruction"]
 
 
-def _assert_all_lines(fx: FakeEffects) -> None:
-    for _, payload in fx.events:
-        assert isinstance(payload.get("line"), str) and payload["line"], payload
+def test_setup_author_prompt_asks_for_a_fixture():
+    prompt = json.loads(crucible_app.author_prompt(_setup_input(), None))
+    assert "FIXTURE" in prompt["instruction"]
 
 
-@pytest.mark.asyncio
-async def test_per_component_clean_run_emits_pulse_then_held():
-    fx = FakeEffects([_ok("ran to timeout, no crash")])
-    result = await drive_session(_per_component_session(), fx)
-
-    assert not isinstance(result, GaveUp)
-    assert RustFormalResult.from_formalized(result.data).verdicts["c_deposit"]["outcome"] == "GOOD"
-    # A "fuzzing…" pulse before the run, a "held" pulse on the clean result, then the
-    # terminal GOOD verdict (a notice event the frontend surfaces as a callout).
-    assert _kinds(fx) == ["fuzz_pulse", "fuzz_pulse", "verdict"]
-    assert fx.events[-1][1]["outcome"] == "GOOD"
-    _assert_all_lines(fx)
+def test_author_prompt_failure_appends_revise_context():
+    failure = json.dumps({"draft": "fn c_x() {}", "errors": "error[E0425]: cannot find value"})
+    prompt = json.loads(crucible_app.author_prompt(_component_input("x"), failure))
+    assert "FAILED" in prompt["instruction"] and "E0425" in prompt["instruction"]
 
 
-@pytest.mark.asyncio
-async def test_per_component_finding_emits_fuzz_finding_and_bad_verdict():
-    fx = FakeEffects([_ok("boom\n[FUZZ_FINDING] assertion failed")])
-    result = await drive_session(_per_component_session(), fx)
-
-    assert not isinstance(result, GaveUp)
-    assert RustFormalResult.from_formalized(result.data).verdicts["c_deposit"]["outcome"] == "BAD"
-    # pulse(fuzz) → fuzz_finding(counterexample) → the terminal BAD verdict notice.
-    assert _kinds(fx) == ["fuzz_pulse", "fuzz_finding", "verdict"]
-    assert fx.events[-1][1]["outcome"] == "BAD"
-    _assert_all_lines(fx)
+def test_judge_prompt_is_none_by_default():
+    assert crucible_app.judge_prompt(_component_input("x"), "spec") is None
 
 
-@pytest.mark.asyncio
-async def test_per_component_build_error_emits_build_output_then_retries():
-    # First fuzz build fails to compile, second run is clean → GOOD.
-    fx = FakeEffects([_ok("error[E0425]: cannot find value"), _ok("clean")])
-    result = await drive_session(_per_component_session(), fx)
-
-    assert not isinstance(result, GaveUp)
-    # pulse(fuzz) → build_output(revise) → pulse(fuzz again) → pulse(held) → GOOD verdict
-    assert _kinds(fx) == ["fuzz_pulse", "build_output", "fuzz_pulse", "fuzz_pulse", "verdict"]
-    assert fx.events[-1][1]["outcome"] == "GOOD"
-    _assert_all_lines(fx)
+# ---------------------------------------------------------------------------
+# The out-of-graph emit routing the Python loop's `emit` relies on.
+# ---------------------------------------------------------------------------
 
 
 class _RecordingEventHandler:
@@ -157,20 +108,17 @@ class _NullIO:
 
 @pytest.mark.asyncio
 async def test_push_custom_update_reaches_handle_event_outside_a_graph():
-    """The out-of-graph routing RealEffects.emit relies on: a CustomUpdate pushed
-    to the with_handler scope reaches EventHandler.handle_event (not the no-op
-    progress channel)."""
     from composer.io.context import push_custom_update, with_handler
 
     rec = _RecordingEventHandler()
     async with with_handler(_NullIO(), rec):
         delivered = push_custom_update(
-            {"type": "fuzz_pulse", "line": "fuzzing `c_deposit`"}, thread_id="formalize-0"
+            {"type": "verdict", "outcome": "GOOD", "name": "solvency"}, thread_id="formalize-0"
         )
         assert delivered is True
     assert rec.events, "custom update never reached handle_event"
     payload, path = rec.events[0]
-    assert payload == {"type": "fuzz_pulse", "line": "fuzzing `c_deposit`"}
+    assert payload["type"] == "verdict" and payload["outcome"] == "GOOD"
     assert path == ["formalize-0"]
 
 
@@ -178,18 +126,3 @@ def test_push_custom_update_without_scope_is_dropped_not_raised():
     from composer.io.context import push_custom_update
 
     assert push_custom_update({"type": "x"}, thread_id="t") is False
-
-
-@pytest.mark.asyncio
-async def test_setup_session_emits_build_output():
-    session = crucible_app.new_setup_session(
-        json.dumps({"program": "vault", "analyzed": {"programs": []}, "config": {}})
-    )
-    assert session is not None
-    fx = FakeEffects([_ok("dry-run ok")])
-    result = await drive_session(session, fx)
-
-    assert not isinstance(result, GaveUp)
-    # A "compiling…" build_output before the dry-run, then a "dry-run OK" one.
-    assert _kinds(fx) == ["build_output", "build_output"]
-    _assert_all_lines(fx)
