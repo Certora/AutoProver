@@ -240,13 +240,14 @@ class CompilationWorkaroundManager:
         3. Source not found (add packages from `forge remappings`, foundry.toml, remappings.txt, package.json)
         4. Compiler version mismatch (blocks all compilation)
         5. Stack-too-deep errors (via-ir workaround)
-        6. Unsupported solc version for via-ir (disable via-ir for old compiler versions)
-        7. Cancun opcode errors (mcopy/tload/tstore — set EVM version to cancun)
-        8. Unnamed return variable warning (ignore_solidity_warnings)
-        9. YulException stack-too-deep with via-ir (try adding optimizer first)
-        10. YulException stack-too-deep persists (disable autofinders, keep compile settings)
-        11. Missing dependency library (generate harness with dummy usage so solc emits the lib)
-        12. Catch-all: use_relpaths_for_solc_json (last resort before import-patch fallback)
+        6. Feature only available on the via-ir pipeline (enable via-ir out of necessity)
+        7. Unsupported solc version for via-ir (disable via-ir for old compiler versions)
+        8. Cancun opcode errors (mcopy/tload/tstore — set EVM version to cancun)
+        9. Unnamed return variable warning (ignore_solidity_warnings)
+        10. YulException stack-too-deep with via-ir (try adding optimizer first)
+        11. YulException stack-too-deep persists (disable autofinders, keep compile settings)
+        12. Missing dependency library (generate harness with dummy usage so solc emits the lib)
+        13. Catch-all: use_relpaths_for_solc_json (last resort before import-patch fallback)
 
         Args:
             cmd: Command to execute
@@ -320,6 +321,12 @@ class CompilationWorkaroundManager:
             CompilationWorkaround(
                 name="stack_too_deep_via_ir",
                 detect_fn=lambda output: self._detect_stack_too_deep_errors(output, contracts),
+                apply_fn=self._apply_via_ir_workaround_to_config,
+                enabled=not global_via_ir_enabled,
+            ),
+            CompilationWorkaround(
+                name="via_ir_required_feature",
+                detect_fn=lambda output: self._detect_via_ir_required(output, contracts),
                 apply_fn=self._apply_via_ir_workaround_to_config,
                 enabled=not global_via_ir_enabled,
             ),
@@ -623,6 +630,43 @@ class CompilationWorkaroundManager:
                                 return contract_name
                     break
         return None
+
+    def _detect_via_ir_required(
+        self, output: str, contracts: List[ContractHandle]
+    ) -> Optional[str]:
+        """Detect a solc feature that exists only on the via-ir pipeline and return
+        the affected contract name.
+
+        Contracts start on plain settings and gain via-ir strictly out of
+        necessity; this is the necessity signal for non-stack reasons, e.g.
+        "UnimplementedFeatureError: Require with a custom error is only
+        available using the via-ir pipeline." Matching is whitespace-normalized
+        per compiled unit, since solc hard-wraps the phrase.
+        """
+        marker = "only available using the via-ir pipeline"
+        current_path: Optional[str] = None
+        segment: List[str] = []
+
+        def segment_hit() -> Optional[str]:
+            if current_path and marker in _normalize_ws("\n".join(segment)):
+                return self._get_contract_name_from_path(current_path, contracts)
+            return None
+
+        for line in output.split("\n"):
+            path = _path_from_compiling_line(line)
+            if path is not None and "to expose internal function information" not in line:
+                hit = segment_hit()
+                if hit:
+                    self.log(f"Detected via-ir-only feature for {hit} (path: {current_path})")
+                    return hit
+                current_path = path
+                segment = []
+            else:
+                segment.append(line)
+        hit = segment_hit()
+        if hit:
+            self.log(f"Detected via-ir-only feature for {hit} (path: {current_path})")
+        return hit
 
     def _detect_yul_exception_stack_too_deep(self, output: str) -> bool:
         """Detect YulException with stack too deep error.
@@ -933,10 +977,11 @@ class CompilationWorkaroundManager:
 
         Succeeding WITH autofinders is the goal — the earlier rungs (via-ir,
         then the optimizer) exist to make them compile. Only once those were
-        tried does this give them up, and it gives up ONLY them: via-ir and
-        the optimizer stay, since the project's own build config (or the main
-        compile) may require them — stripping a foundry-mandated via-ir has
-        broken sources that don't compile on the legacy pipeline at all.
+        tried does this give them up, and it gives up ONLY them: contracts
+        start on plain settings and gain via-ir/optimizer strictly out of
+        compilation necessity, so removing those here would just reintroduce
+        the errors they were added to fix (e.g. sources that don't compile on
+        the legacy pipeline at all).
         """
         self.log(
             "YulException persists with via-ir + optimizer — disabling autofinders "

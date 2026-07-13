@@ -314,6 +314,35 @@ def test_yul_ladder_escalates_across_passes(manager, monkeypatch, tmp_path) -> N
     assert updated["assert_autofinder_success"] is False
 
 
+# Verbatim-shaped solc output for a feature that exists only on the via-ir
+# pipeline (observed with `require(cond, CustomError())` on solc 0.8.26). The
+# phrase is hard-wrapped by solc, so detection must be whitespace-normalized.
+VIA_IR_REQUIRED_OUTPUT = (
+    "Compiling src/Airlock.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: Require with a custom error is only available using \n"
+    "the via-ir pipeline.\n"
+)
+
+
+def test_detects_via_ir_required_feature(manager) -> None:
+    contracts = [ContractHandle(contract_name="Airlock", source_file="src/Airlock.sol")]
+    assert manager._detect_via_ir_required(VIA_IR_REQUIRED_OUTPUT, contracts) == "Airlock"
+    assert manager._detect_via_ir_required(UNRELATED_OUTPUT, contracts) is None
+
+
+def test_via_ir_added_out_of_necessity(manager, monkeypatch, tmp_path) -> None:
+    # Contracts start on plain settings; a via-ir-only feature error is the
+    # necessity signal that adds via-ir for the affected contract.
+    contracts = [ContractHandle(contract_name="Airlock", source_file="src/Airlock.sol")]
+    success, updated, _, fake_run = _run_loop(
+        manager, monkeypatch, tmp_path, [VIA_IR_REQUIRED_OUTPUT], contracts
+    )
+    assert success is True
+    assert fake_run.calls == 2
+    assert updated["solc_via_ir"] is True
+
+
 def test_yul_last_resort_keeps_compile_settings(manager, monkeypatch, tmp_path) -> None:
     # One output carries a plain stack-too-deep for Foo AND a YulException with
     # the optimizer already present (e.g. supplied by the project's foundry
