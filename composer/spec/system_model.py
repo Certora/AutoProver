@@ -214,7 +214,7 @@ class ContractComponentInstance:
         return self._contract.contract
     
     @property
-    def ommer_contract(self) -> list[ExplicitContract]:
+    def ommer_contracts(self) -> list[ExplicitContract]:
         return self._contract.sibling_contracts
 
     @property
