@@ -141,6 +141,19 @@ def test_parse_config_reads_foundry_toml_when_forge_absent(tmp_path: Path, monke
     assert config.packages and any(p.split("=", 1)[0] == "@oz" for p in config.packages)
 
 
+def test_non_default_profile_remappings_read_when_forge_absent(tmp_path: Path, monkeypatch) -> None:
+    # forge absent: the foundry.toml fallback reads the requested profile's remappings.
+    _no_forge(monkeypatch)
+    (tmp_path / "foundry.toml").write_text(
+        '[profile.default]\nremappings = ["@oz/=lib/default-oz/"]\n'
+        '[profile.ci]\nremappings = ["@oz/=lib/ci-oz/"]\n'
+    )
+
+    packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None, profile="ci")
+
+    assert _path_of(packages, "@oz") == str(tmp_path / "lib/ci-oz")
+
+
 def test_forge_run_with_foundry_profile_env(tmp_path: Path, monkeypatch) -> None:
     # The requested profile is passed to forge via FOUNDRY_PROFILE.
     captured: dict = {}

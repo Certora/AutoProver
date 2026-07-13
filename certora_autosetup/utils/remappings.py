@@ -25,8 +25,8 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile
     All sources are read relative to ``base_dir`` (the Foundry project dir), and ``forge remappings``
     is run with ``cwd=base_dir``, so the result is correct even when the process CWD differs from the
     project dir (nested/walked-up ``foundry.toml``). ``profile`` is passed to forge via
-    ``FOUNDRY_PROFILE`` so a non-default profile's remappings are honored; the local-file fallback
-    (used when forge is unavailable) reads the default profile's remappings.
+    ``FOUNDRY_PROFILE`` and selects the ``[profile.<profile>]`` remappings read from foundry.toml
+    when forge is unavailable, so a non-default profile's remappings are honored.
 
     Priority on key conflict (highest wins, with a warning on path mismatch):
     1. ``forge remappings`` — recursively walks nested foundry.toml files (e.g. lib/*/foundry.toml)
@@ -89,11 +89,11 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile
             foundry_data = {}
 
         foundry_remappings: List[str] = []
-        # foundry.toml keeps remappings under `[profile.default]` and/or top-level (top-level keys
-        # belong to the default profile). forge honors the active profile via FOUNDRY_PROFILE above;
-        # this best-effort fallback reads the default profile's remappings plus any top-level ones.
+        # foundry.toml keeps remappings under `[profile.<name>]` (top-level keys belong to the
+        # default profile). Read the requested profile's remappings plus any top-level ones
+        # (profiles.get(profile) is the default section when profile is "default").
         profiles = foundry_data.get("profile", {})
-        foundry_remappings.extend(profiles.get("default", {}).get("remappings", []) or [])
+        foundry_remappings.extend(profiles.get(profile, {}).get("remappings", []) or [])
         foundry_remappings.extend(foundry_data.get("remappings", []) or [])
 
         for entry in foundry_remappings:
