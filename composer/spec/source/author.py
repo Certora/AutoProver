@@ -31,7 +31,7 @@ from pathlib import Path
 from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
 from composer.spec.service_host import ServiceHost, Sort
 from composer.workflow.services import CacheLevel
-
+from composer.pipeline.ptypes import GaveUp
 
 from langgraph.types import Command
 from graphcore.graph import Builder
@@ -650,7 +650,7 @@ async def batch_cvl_generation(
     # crash after edits but before any draft still restores the fork.
     restored_history: list[str] = []
     restored_vfs: dict[str, str] = {}
-    resume_note: list[str] = []
+    resume_note: list[str | dict] = []
     if editing is not None:
         prior = await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_get(_LastAttemptEdits)
         if prior is not None and prior.version_history:
