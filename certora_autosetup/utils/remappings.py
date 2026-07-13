@@ -89,12 +89,11 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile
             foundry_data = {}
 
         foundry_remappings: List[str] = []
-        # foundry.toml keeps remappings under `[profile.default]` and/or top-level (top-level
-        # keys belong to the default profile). The requested profile is honored by forge above
-        # via FOUNDRY_PROFILE; this best-effort fallback reads the default set.
-        foundry_remappings.extend(
-            foundry_data.get("profile", {}).get("default", {}).get("remappings", []) or []
-        )
+        # foundry.toml keeps remappings under `[profile.default]` and/or top-level (top-level keys
+        # belong to the default profile). forge honors the active profile via FOUNDRY_PROFILE above;
+        # this best-effort fallback reads the default profile's remappings plus any top-level ones.
+        profiles = foundry_data.get("profile", {})
+        foundry_remappings.extend(profiles.get("default", {}).get("remappings", []) or [])
         foundry_remappings.extend(foundry_data.get("remappings", []) or [])
 
         for entry in foundry_remappings:
