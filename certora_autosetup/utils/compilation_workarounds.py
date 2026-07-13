@@ -245,7 +245,7 @@ class CompilationWorkaroundManager:
         8. Cancun opcode errors (mcopy/tload/tstore — set EVM version to cancun)
         9. Unnamed return variable warning (ignore_solidity_warnings)
         10. YulException stack-too-deep with via-ir (try adding optimizer first)
-        11. YulException stack-too-deep persists (disable autofinders, keep compile settings)
+        11. YulException stack-too-deep persists (stop asserting autofinder success)
         12. Missing dependency library (generate harness with dummy usage so solc emits the lib)
         13. Catch-all: use_relpaths_for_solc_json (last resort before import-patch fallback)
 
@@ -370,8 +370,8 @@ class CompilationWorkaroundManager:
                 # it must only fire on output produced AFTER the optimizer was
                 # tried, not in the same pass that just added it (the live
                 # "solc_optimize in config" check would otherwise see the value
-                # the previous workaround set seconds ago and give up on
-                # autofinders without ever testing the optimizer).
+                # the previous workaround set seconds ago and stop asserting
+                # autofinder success without ever testing the optimizer).
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
@@ -682,10 +682,9 @@ class CompilationWorkaroundManager:
         memoryguard was present." — so also match the "too deep in(side) the
         stack" wording (the semantics, not one spelling).
 
-        Autofinder-generation failures ARE matched on purpose: the prover
-        falls back to the original file, silently losing that file's internal
-        summaries, and this ladder (optimizer, then disabling autofinders) is
-        the reaction to exactly that.
+        Autofinder-generation failures ARE matched on purpose: they cost the
+        file its internal summaries, and this ladder (optimizer, then relaxing
+        the autofinder assertion) is the reaction to exactly that.
         """
         pattern = r"YulException:.*?(?:Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack)"
         return bool(re.search(pattern, output, re.IGNORECASE | re.DOTALL))
@@ -973,19 +972,17 @@ class CompilationWorkaroundManager:
         config_file: Path,
         _contracts: List[ContractHandle],
     ) -> Dict:
-        """Last resort: disable autofinders, keeping the compile settings.
+        """Last resort: stop asserting autofinder success.
 
-        Succeeding WITH autofinders is the goal — the earlier rungs (via-ir,
-        then the optimizer) exist to make them compile. Only once those were
-        tried does this give them up, and it gives up ONLY them: contracts
-        start on plain settings and gain via-ir/optimizer strictly out of
-        compilation necessity, so removing those here would just reintroduce
-        the errors they were added to fix (e.g. sources that don't compile on
-        the legacy pipeline at all).
+        Autofinders are still generated per file — files whose instrumentation
+        compiles keep their internal summaries, and files where it fails fall
+        back to the un-instrumented source. Compile settings are untouched:
+        contracts gain via-ir/optimizer strictly out of compilation necessity,
+        so removing them here would reintroduce the errors they fix.
         """
         self.log(
-            "YulException persists with via-ir + optimizer — disabling autofinders "
-            "(compile settings kept)",
+            "YulException persists with via-ir + optimizer — no longer asserting "
+            "autofinder success (failing files fall back un-instrumented)",
             "WARNING",
         )
 

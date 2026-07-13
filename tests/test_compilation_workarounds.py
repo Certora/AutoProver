@@ -44,7 +44,7 @@ MEMORYGUARD_YUL_STACK_TOO_DEEP = (
 
 # Verbatim autofinder-generation failure. The prover falls back to the original
 # file, silently losing that file's internal summaries — so the yul ladder MUST
-# react to it (optimizer, then disabling autofinders), while never touching the
+# react to it (optimizer, then relaxing the autofinder assertion), while never touching the
 # compile settings the project itself requires.
 AUTOFINDER_YUL_STACK_TOO_DEEP = (
     "Compiling src/initializers/LockableUniswapV3Initializer.sol to expose internal function information and local variables...\n"
@@ -297,8 +297,8 @@ def test_cached_autofinder_failure_is_exclusive(manager, monkeypatch, tmp_path) 
 def test_yul_ladder_escalates_across_passes(manager, monkeypatch, tmp_path) -> None:
     # The YulException escalation must span two recompiles: pass 1 only adds
     # the optimizer (trying to succeed WITH autofinders); only when the
-    # exception SURVIVES that recompile does the last resort give autofinders
-    # up — keeping the compile settings.
+    # exception SURVIVES that recompile does the last resort stop asserting
+    # autofinder success — keeping the compile settings.
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, updated, config, fake_run = _run_loop(
         manager,
@@ -346,8 +346,8 @@ def test_via_ir_added_out_of_necessity(manager, monkeypatch, tmp_path) -> None:
 def test_yul_last_resort_keeps_compile_settings(manager, monkeypatch, tmp_path) -> None:
     # One output carries a plain stack-too-deep for Foo AND a YulException with
     # the optimizer already present (e.g. supplied by the project's foundry
-    # config): the pass applies via-ir for Foo and disables autofinders, but
-    # via-ir and the optimizer must survive — the source itself may not compile
+    # config): the pass applies via-ir for Foo and relaxes the autofinder
+    # assertion, but via-ir and the optimizer must survive — the source itself may not compile
     # without them (seen in the wild: "Require with a custom error is only
     # available using the via-ir pipeline").
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
@@ -381,7 +381,7 @@ def test_via_ir_after_yul_last_resort_stays_per_contract(manager, monkeypatch, t
         tmp_path,
         [
             SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 1: add optimizer
-            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 2: last resort (autofinders off)
+            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 2: last resort (assertion relaxed)
             PERSISTENT_STACK_TOO_DEEP_OUTPUT,  # pass 3: via-ir for Foo only
         ],
         contracts,
