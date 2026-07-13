@@ -131,22 +131,35 @@ def qna_factory() -> Callable[[], QnATransformer]:
 # =========================================================================
 
 import pathlib
+import shutil
 
 @dataclass
 class ScenarioProvider:
     _test_roots: pathlib.Path
+    _work_dir: pathlib.Path
 
     def by_name(self, nm: str) -> pathlib.Path:
-        d = self._test_roots / nm
-        assert d.is_dir(), f"{nm} is not a valid scenario name"
-        return d
-            
+        """Return a private copy of the scenario, made under this test's tmp dir.
+
+        The pipeline runs in-place — it materializes fixed-name spec/conf files
+        and dumps artifacts into the scenario directory — so tests sharing the
+        checked-in directory race under xdist and pollute the working tree.
+        """
+        src = self._test_roots / nm
+        assert src.is_dir(), f"{nm} is not a valid scenario name"
+        dst = self._work_dir / nm
+        shutil.copytree(
+            src,
+            dst,
+            ignore=shutil.ignore_patterns(".certora_internal", ".CertoraProverLiteReports", "emv-*"),
+        )
+        return dst
 
 
 @pytest.fixture
-def scenario_provider() -> ScenarioProvider:
+def scenario_provider(tmp_path: pathlib.Path) -> ScenarioProvider:
     scenario_dir = pathlib.Path(__file__).parent.parent / "test_scenarios"
-    return ScenarioProvider(scenario_dir)
+    return ScenarioProvider(scenario_dir, tmp_path)
 
 def _db_url(pg: "PostgresContainer", database: str) -> str:
     return (

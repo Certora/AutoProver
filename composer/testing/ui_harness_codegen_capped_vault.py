@@ -644,8 +644,8 @@ def install_harness_tape(with_delay: bool = True) -> HarnessFakeLLM:
 # ---------------------------------------------------------------------------
 
 _HUMAN_RESPONSES = [
-    "ACCEPTED — commit the guarded depositRaisesBalance fix to the master spec.",
-    "ACCEPTED — R1 (deposits always succeed) contradicts the enforced cap (R2); relax R1.",
+    "ACCEPTED",
+    "ACCEPTED",
 ]
 
 

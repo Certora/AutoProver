@@ -28,16 +28,7 @@ from composer.testing.ui_harness_autoprove_Counter import install_harness_tape
 
 from tests.conftest import needs_postgres, MockSentenceTransformer
 
-# All tests here run in-place against the shared ``autoprove_counter`` scenario
-# directory, and ``verify_spec`` materializes fixed-name spec/conf files there
-# (see ``temp_certora_file``'s serialize-same-name-use contract) — so under
-# xdist they must all land on one worker.
-pytestmark = [
-    pytest.mark.expensive,
-    needs_postgres,
-    pytest.mark.asyncio,
-    pytest.mark.xdist_group("autoprove_counter"),
-]
+pytestmark = [pytest.mark.expensive, needs_postgres, pytest.mark.asyncio]
 
 _SCENARIO_NAME = "autoprove_counter"
 
