@@ -16,22 +16,29 @@ from the non-source spec modules).
 """
 
 import argparse
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, AsyncIterator, Awaitable, Callable, Protocol, cast
 
+from composer.core.user import get_uid
 from composer.diagnostics.timing import RunSummary
 from composer.input.parsing import Arg, add_protocol_args
 from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions
 from composer.io.multi_job import HandlerFactory
+from composer.io.thread_logging import RunDataLogger
 from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
+from composer.spec.context import SourceFields
 from composer.spec.util import FS_FORBIDDEN_READ
 
+from composer.foundry.artifacts import FoundryArtifactStore
 from composer.foundry.env import build_foundry_env
 from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, backend
 )
-from composer.pipeline.cli import cli_pipeline, user_ns
+from composer.pipeline.cli import cli_pipeline, user_ns, AtExit
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +86,29 @@ type FoundryRunner = Callable[
 ]
 
 
+def _usage_exit_logger(summary: RunSummary) -> AtExit:
+    """The ``cli_pipeline`` teardown hook that persists this run's LLM usage — the
+    foundry counterpart to the autoprove flow's ``exit_logger``.
+
+    Logs the ``token_usage`` summary into the run's data_ns and always dumps the
+    ``job_info.json`` run manifest (identity + token usage) next to the foundry
+    ``report.json`` (``certora/foundry/reports/``) — on success or crash — so a foundry
+    job's cost is on disk even when the pipeline never produced a report. Each step is
+    guarded so a teardown failure can't mask the pipeline's own outcome."""
+    async def exit_logger(run: SourceFields, logger: RunDataLogger) -> None:
+        try:
+            await logger("token_usage", summary.token_usage_summary())
+        except Exception:
+            _log.exception("failed to log foundry usage to run data")
+        try:
+            FoundryArtifactStore(run.project_root).write_job_info(
+                summary, user_id=get_uid()
+            )
+        except Exception:
+            _log.exception("failed to dump foundry job info")
+    return exit_logger
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Foundry-test author for a property-extraction pipeline",
@@ -120,7 +150,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                   summary=summary,
                   task_handler=fact,
                   design_doc_phase=cast(FoundryPhase, FoundryPhase.DISCOVER_DESIGN_DOC),
-                  at_exit=None,
+                  at_exit=_usage_exit_logger(summary),
                   workflow="foundry"
             ) as (staged, cont),
             PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as foundry_rag_db,
