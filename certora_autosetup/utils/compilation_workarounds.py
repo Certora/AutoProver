@@ -644,9 +644,27 @@ class CompilationWorkaroundManager:
         e.g. "YulException: Variable _7 is 1 too deep in the stack [ ... ]
         memoryguard was present." — so also match the "too deep in(side) the
         stack" wording (the semantics, not one spelling).
+
+        YulExceptions raised while GENERATING AUTOFINDERS are ignored: those
+        are non-fatal (the prover logs "Encountered an exception generating
+        autofinder" and falls back to the original file), and reacting to them
+        tears down via-ir/optimizer settings the actual compilation may
+        require. The autofinder context is identified by its marker sharing
+        the "had an error:" line that precedes the exception.
         """
-        pattern = r"YulException:.*?(?:Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack)"
-        return bool(re.search(pattern, output, re.IGNORECASE | re.DOTALL))
+        pattern = re.compile(
+            r"YulException:.*?(?:Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(output):
+            head = output[: match.start()]
+            marker_pos = head.rfind("had an error:")
+            if marker_pos == -1:
+                return True
+            line_start = head.rfind("\n", 0, marker_pos) + 1
+            if "Encountered an exception generating autofinder" not in head[line_start:marker_pos]:
+                return True
+        return False
 
     def _detect_compiler_version_mismatch(
         self, output: str, contracts: List[ContractHandle]

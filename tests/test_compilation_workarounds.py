@@ -42,6 +42,19 @@ MEMORYGUARD_YUL_STACK_TOO_DEEP = (
     "memoryguard was present.\n"
 )
 
+# Verbatim autofinder-generation failure: NON-FATAL (the prover falls back to
+# the original file), so the yul detector must NOT fire on it — reacting tears
+# down via-ir/optimizer that the real compilation may require. Observed on a
+# real project: the teardown stripped foundry's via_ir and the source then
+# failed with "Require with a custom error is only available using the via-ir
+# pipeline".
+AUTOFINDER_YUL_STACK_TOO_DEEP = (
+    "Compiling src/initializers/LockableUniswapV3Initializer.sol to expose internal function information and local variables...\n"
+    "Encountered an exception generating autofinder .certora_internal/26_07_13/.certora_sources/src/initializers/LockableUniswapV3Initializer.sol (solc8.26 had an error:\n"
+    "YulException: Variable _8 is 1 too deep in the stack [ expr_327_component_1 _8 RET _mpos var_asset var_numeraire expr_327_component var_totalTokensOnBondingCurve _2 _4 _1 _3 expr_1 expr_2 expr _1 expr_327_component_1 expr_327_component ]\n"
+    "memoryguard was present.\n"
+)
+
 UNRELATED_OUTPUT = (
     "Compiling certora/harnesses/Foo.sol...\n"
     "Warning: Unused local variable.\n"
@@ -73,6 +86,18 @@ def test_detects_memoryguard_wording_without_stack_too_deep_phrase(
 
 def test_ignores_unrelated_output(manager: CompilationWorkaroundManager) -> None:
     assert manager._detect_yul_exception_stack_too_deep(UNRELATED_OUTPUT) is False
+
+
+def test_ignores_autofinder_yul_stack_too_deep(manager: CompilationWorkaroundManager) -> None:
+    # Non-fatal autofinder-generation failures must not trigger the yul ladder.
+    assert manager._detect_yul_exception_stack_too_deep(AUTOFINDER_YUL_STACK_TOO_DEEP) is False
+
+
+def test_detects_fatal_yul_next_to_autofinder_yul(manager: CompilationWorkaroundManager) -> None:
+    # A genuine fatal YulException elsewhere in the same output still fires.
+    assert manager._detect_yul_exception_stack_too_deep(
+        AUTOFINDER_YUL_STACK_TOO_DEEP + "\n" + MEMORYGUARD_YUL_STACK_TOO_DEEP
+    ) is True
 
 
 # =============================================================================
