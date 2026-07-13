@@ -23,10 +23,11 @@ from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
 from composer.diagnostics.timing import RunSummary
-from composer.spec.source.autoprove_common import autoprove_executor, AutoProveArgs
+from composer.spec.source.autoprove_common import autoprove_executor, AutoProveArgs, AutoProvePhase
 from composer.spec.source.autosetup import SetupSuccess
 from composer.ui.autoprove_console import AutoProveConsoleHandler
 from composer.testing.ui_harness_autoprove_Counter import install_harness_tape
+from composer.pipeline.ptypes import CorePhases, SystemAnalysisSpec
 
 if TYPE_CHECKING:
     from testcontainers.postgres import PostgresContainer
@@ -195,13 +196,13 @@ def _install_mocks(pg_container: "PostgresContainer", monkeypatch) -> None:
     # patch of registry.get_provider_for doesn't reach that binding — rebind it here.
     import composer.llm.registry as registry
     monkeypatch.setattr(
-        "composer.spec.source.autoprove_common.get_provider_for", registry.get_provider_for
+        "composer.pipeline.cli.get_provider_for", registry.get_provider_for
     )
     # Swap the real sentence-transformer for the deterministic mock: no model
     # download, and nothing in this run depends on real embeddings (index cache
     # disabled by the tape, RAG DB empty).
     monkeypatch.setattr(
-        "composer.spec.source.autoprove_common.get_model", MockSentenceTransformer
+        "composer.pipeline.cli.get_model", MockSentenceTransformer
     )
     # AutoSetup runs an LLM in a subprocess we can't tape — swap the phase for a
     # canned Counter SetupSuccess. Patch the name the pipeline imported, not the
@@ -253,9 +254,33 @@ async def test_autoprove_dumps_job_info_when_pipeline_crashes(
 
     async def _boom(*_args, **_kwargs):
         raise RuntimeError("pipeline exploded")
+    
+    class _Crasher:
+        backend_guidance = "empty"
+
+        core_phases = CorePhases(
+            analysis=AutoProvePhase.COMPONENT_ANALYSIS,
+            extraction=AutoProvePhase.BUG_ANALYSIS,
+            report=AutoProvePhase.REPORT,
+            formalization=AutoProvePhase.CVL_GEN
+        )
+
+        analysis_spec = SystemAnalysisSpec(
+            analysis_key="foo",
+            properties_key="bar"
+        )
+
+        def __init__(self, store, _ignored):
+            self.artiface_store = store
+            
+        
+        async def prepare_system(
+            self, *args, **kwargs
+        ):
+            raise RuntimeError("pipeline exploded")
 
     monkeypatch.setattr(
-        "composer.spec.source.autoprove_common.run_autoprove_pipeline", _boom
+        "composer.spec.source.autoprove_common.ProverBackend", _Crasher
     )
 
     summary = RunSummary()
