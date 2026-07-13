@@ -459,8 +459,12 @@ class CompilationWorkaroundManager:
             applied_this_pass.clear()
             state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
 
-            def apply_workaround(workaround: CompilationWorkaround, detect_result: Any) -> None:
+            def try_workaround(workaround: CompilationWorkaround) -> bool:
+                """Detect and, on a hit, apply — returns whether it applied."""
                 nonlocal updated_config_dict
+                detect_result = workaround.detect_fn(output)
+                if detect_result is None:
+                    return False
                 self.log(f"Applying {workaround.name} workaround")
                 updated_config_dict = workaround.apply_fn(
                     detect_result,
@@ -473,25 +477,21 @@ class CompilationWorkaroundManager:
                 if workaround.name == "cached_autofinder_failure" and "--build_cache" in cmd:
                     cmd.remove("--build_cache")
                 applied_this_pass.add(workaround.name)
+                return True
 
             # Exclusive workarounds go first, regardless of list position: they
             # invalidate the whole output, so when one applies the pass ends
             # there and nothing else may act on it.
             for workaround in workarounds:
-                if workaround.exclusive and workaround.enabled:
-                    detect_result = workaround.detect_fn(output)
-                    if detect_result is not None:
-                        apply_workaround(workaround, detect_result)
-                        break
+                if workaround.exclusive and workaround.enabled and try_workaround(workaround):
+                    break
             if not applied_this_pass:
                 for workaround in workarounds:
                     if not workaround.enabled or workaround.exclusive:
                         continue
                     if workaround.last_resort and applied_this_pass:
                         continue
-                    detect_result = workaround.detect_fn(output)
-                    if detect_result is not None:
-                        apply_workaround(workaround, detect_result)
+                    try_workaround(workaround)
 
             # If no workaround applies, exit immediately (guardrail against infinite loop)
             if not applied_this_pass:

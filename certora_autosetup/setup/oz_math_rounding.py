@@ -80,8 +80,7 @@ def _round_up_member(members: FrozenSet[str]) -> Optional[str]:
 def _load_math_rounding_rows(log: LogFn) -> List[Dict]:
     """Rounding-enum rows declared inside a ``Math`` library, from the
     compiled-scene type inventory. Any read failure degrades to an empty list
-    (=> "none" classification, no directional summary) rather than aborting
-    the whole setup."""
+    (=> "none" classification, no directional summary)."""
     if not PATH_ALL_USER_DEFINED_TYPES_JSON.exists():
         log(f"{PATH_ALL_USER_DEFINED_TYPES_JSON} not found", "WARNING")
         return []
