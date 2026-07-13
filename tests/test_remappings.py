@@ -127,9 +127,9 @@ def test_parse_config_populates_packages_from_remappings_txt(tmp_path: Path, mon
     assert "@openzeppelin/contracts" in keys
 
 
-def test_parse_config_falls_back_when_no_sources(tmp_path: Path, monkeypatch) -> None:
-    # forge absent and no remappings.txt/package.json: parse_config falls back to the
-    # foundry.toml remappings it already parsed.
+def test_parse_config_reads_foundry_toml_when_forge_absent(tmp_path: Path, monkeypatch) -> None:
+    # forge absent and no remappings.txt/package.json: the builder still reads the
+    # foundry.toml remappings directly.
     _no_forge(monkeypatch)
     foundry_toml = tmp_path / "foundry.toml"
     foundry_toml.write_text('[profile.default]\nremappings = ["@oz/=lib/oz/"]\n')
@@ -138,3 +138,30 @@ def test_parse_config_falls_back_when_no_sources(tmp_path: Path, monkeypatch) ->
     config = manager.parse_config(foundry_toml)
 
     assert config.packages and any(p.split("=", 1)[0] == "@oz" for p in config.packages)
+
+
+def test_non_default_profile_remappings_win(tmp_path: Path, monkeypatch) -> None:
+    # A non-default profile's remappings must override the default profile's.
+    _no_forge(monkeypatch)
+    (tmp_path / "foundry.toml").write_text(
+        '[profile.default]\nremappings = ["@oz/=lib/default-oz/"]\n'
+        '[profile.ci]\nremappings = ["@oz/=lib/ci-oz/"]\n'
+    )
+
+    packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None, profile="ci")
+
+    assert _path_of(packages, "@oz") == str(tmp_path / "lib/ci-oz")
+
+
+def test_forge_run_with_foundry_profile_env(tmp_path: Path, monkeypatch) -> None:
+    # The requested profile is passed to forge via FOUNDRY_PROFILE.
+    captured: dict = {}
+
+    def fake_run(*_args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(args=["forge", "remappings"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(remappings_mod.subprocess, "run", fake_run)
+    build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None, profile="ci")
+
+    assert captured["env"]["FOUNDRY_PROFILE"] == "ci"

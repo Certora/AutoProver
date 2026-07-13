@@ -8,6 +8,7 @@ found``. This module is the single source of truth both call.
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Callable, Dict, List
@@ -18,12 +19,14 @@ import tomllib
 LogFn = Callable[[str, str], None]
 
 
-def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List[str]:
+def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile: str = "default") -> List[str]:
     """Build a merged packages list from forge remappings, foundry.toml, remappings.txt, package.json.
 
     All sources are read relative to ``base_dir`` (the Foundry project dir), and ``forge remappings``
     is run with ``cwd=base_dir``, so the result is correct even when the process CWD differs from the
-    project dir (nested/walked-up ``foundry.toml``).
+    project dir (nested/walked-up ``foundry.toml``). ``profile`` selects the Foundry profile: it is
+    passed to forge via ``FOUNDRY_PROFILE`` and picks the matching ``[profile.<profile>]`` remappings
+    from foundry.toml, so a non-default profile's remappings are honored.
 
     Priority on key conflict (highest wins, with a warning on path mismatch):
     1. ``forge remappings`` — recursively walks nested foundry.toml files (e.g. lib/*/foundry.toml)
@@ -49,6 +52,7 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List
             check=False,
             timeout=30,
             cwd=str(base_dir),
+            env={**os.environ, "FOUNDRY_PROFILE": profile},
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         log_fn(f"Could not run `forge remappings` ({e}); falling back to local files", "INFO")
@@ -85,12 +89,13 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn) -> List
             foundry_data = {}
 
         foundry_remappings: List[str] = []
-        # foundry.toml accepts both top-level `remappings = [...]` and
-        # `[profile.default] remappings = [...]`; merge with top-level winning per
-        # foundry's own semantics.
-        foundry_remappings.extend(
-            foundry_data.get("profile", {}).get("default", {}).get("remappings", []) or []
-        )
+        # foundry.toml keeps remappings under `[profile.<name>]` (top-level keys belong to the
+        # default profile). Add the requested profile first so it wins over default under the
+        # first-writer-wins dedup, then default, then any top-level `remappings = [...]`.
+        profiles = foundry_data.get("profile", {})
+        if profile != "default":
+            foundry_remappings.extend(profiles.get(profile, {}).get("remappings", []) or [])
+        foundry_remappings.extend(profiles.get("default", {}).get("remappings", []) or [])
         foundry_remappings.extend(foundry_data.get("remappings", []) or [])
 
         for entry in foundry_remappings:

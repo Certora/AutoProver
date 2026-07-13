@@ -1226,8 +1226,6 @@ class CompilationWorkaroundManager:
         3. remappings.txt — often partially auto-generated; may drift
         4. package.json — npm-style fallback
         """
-        # The merged-source logic is shared verbatim with the initial-conf path in
-        # ``FoundryManager.parse_config`` so the two never diverge. The reactive path
-        # runs in the project CWD, so base_dir="." reproduces the original behavior
-        # (relative paths emitted unchanged, forge run in CWD).
+        # The reactive path runs in the project CWD, so base_dir="." emits relative paths
+        # unchanged and runs forge in CWD.
         return build_packages_from_remapping_sources(base_dir=Path("."), log_fn=self.log)

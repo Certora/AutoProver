@@ -177,18 +177,11 @@ class FoundryManager(BuildSystemManager):
             # Resolve paths relative to foundry.toml location
             config = self._resolve_paths(config, config_file.parent)
 
-            # Build the packages list from the authoritative merged remapping sources
-            # (`forge remappings` + foundry.toml + remappings.txt + package.json) so the
-            # initial conf matches what the reactive source-not-found workaround would
-            # produce. Fall back to parsing foundry.toml's explicit remappings when forge
-            # is unavailable and nothing is found on disk.
+            # Build the packages list from forge remappings + foundry.toml + remappings.txt
+            # + package.json for the resolved profile.
             packages = build_packages_from_remapping_sources(
-                base_dir=config_file.parent, log_fn=self.log
+                base_dir=config_file.parent, log_fn=self.log, profile=profile
             )
-            if not packages and config.remappings:
-                packages = self._convert_remappings_to_packages(
-                    config.remappings, config_file.parent
-                )
             if packages:
                 config.packages = packages
 
@@ -309,42 +302,6 @@ class FoundryManager(BuildSystemManager):
             config.libs = resolved_libs
 
         return config
-
-    def _convert_remappings_to_packages(
-        self, remappings: List[str], foundry_dir: Path
-    ) -> List[str]:
-        """
-        Convert foundry remappings to Certora packages format.
-
-        Based on Brain's parse_packages and parse_remappings_from_foundry functions.
-        """
-        packages = []
-
-        for remapping in remappings:
-            try:
-                # Parse remapping format: "@openzeppelin/=lib/openzeppelin-contracts/"
-                if "=" in remapping:
-                    alias, path = remapping.split("=", 1)
-                    alias = alias.strip()
-                    path = path.strip()
-
-                    # Resolve relative paths
-                    if not Path(path).is_absolute():
-                        path = str(foundry_dir / path)
-
-                    # Convert to Certora package format
-                    # if alias.startswith("@"):
-                    #     # NPM-style package: @openzeppelin/contracts=lib/openzeppelin-contracts
-                    #     package_name = alias[1:]  # Remove @
-                    #     packages.append(f"{package_name}={path}")
-                    # else:
-                    #     # Simple alias: contracts=src/contracts
-                    packages.append(f"{alias}={path}")
-
-            except Exception as e:
-                self.log(f"Failed to parse remapping '{remapping}': {e}", "WARNING")
-
-        return packages
 
     def get_available_profiles(self, foundry_file: Path) -> List[str]:
         """Get list of available profiles in foundry.toml."""
