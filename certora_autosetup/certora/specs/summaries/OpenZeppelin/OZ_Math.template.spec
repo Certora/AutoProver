@@ -1,7 +1,5 @@
-// Stub: the OZ Math summary spec is rendered programmatically by
-// SummarySetup._render_oz_math_spec (setup_summaries.py) because its content
-// depends on the scene-wide Math.Rounding classification — the enum members
-// differ between OZ v4 (Down/Up/Zero) and v5 (Floor/Ceil/Trunc/Expand), and a
-// scene mixing both needs per-definition qualified variants. This file only
-// keeps Math.spec in the summaries copy closure via the import below.
+// Anchor for the OpenZeppelin Math summaries: keeps ../Math.spec bundled with
+// the summaries tree. The OZ_Math-<Main>.spec that the aggregator imports is
+// produced per project scene, since the Math.Rounding enum differs across OZ
+// major versions and a scene can even contain conflicting definitions.
 import "../Math.spec";

@@ -158,6 +158,19 @@ def _ast_extraction(blanked_source: str) -> Optional[dict]:
     return _parse_ast_payload(result.stdout, result.returncode, result.stderr)
 
 
+def extract_cvl_ast(source: str) -> Optional[dict]:
+    """Parse CVL source text via the standalone CVL parser and return the full
+    payload, or ``None`` on a hard syntax error.
+
+    Import lines are blanked first (preserving line numbering, so the AST
+    ``range`` values still index the original text) since standalone
+    syntax-check rejects them. Jar-missing / no-JSON failures raise, matching
+    the rest of this module."""
+    lines = source.splitlines(keepends=True)
+    blanked = "".join("\n" if _IMPORT_LINE_RE.match(line) else line for line in lines)
+    return _ast_extraction(blanked)
+
+
 def parse_methods_entries(spec_path: Path, log: Optional[LogFn] = None) -> List[MethodEntry]:
     """Parse a spec's ``methods{}`` block into internal-method entries via the CVL parser.
 
@@ -165,9 +178,7 @@ def parse_methods_entries(spec_path: Path, log: Optional[LogFn] = None) -> List[
     returned — wildcard (``_``) and external entries are out of scope and left untouched.
     Returns ``[]`` if the spec has no parseable AST (logged as a warning).
     """
-    lines = spec_path.read_text().splitlines(keepends=True)
-    blanked = "".join("\n" if _IMPORT_LINE_RE.match(line) else line for line in lines)
-    payload = _ast_extraction(blanked)
+    payload = extract_cvl_ast(spec_path.read_text())
     if payload is None:
         if log:
             log(f"summary_resolver: could not parse {spec_path.name}; leaving it to the typechecker", "WARNING")

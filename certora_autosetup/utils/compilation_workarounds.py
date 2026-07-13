@@ -85,9 +85,10 @@ class CompilationWorkaround:
     detect_fn: Callable[[str], Any]  # Takes compilation output, returns detection result or None
     apply_fn: Callable[[Any, Dict, Dict, Path, List[ContractHandle]], Dict]
     enabled: bool = True
-    # The workaround invalidates the rest of the output it fired on (e.g. the
-    # whole error is a cached artifact): when it applies, the pass stops there
-    # and recompiles instead of letting other workarounds act on garbage output.
+    # The workaround invalidates the whole output it fired on (e.g. the error
+    # is a cached artifact): evaluated BEFORE all other workarounds regardless
+    # of list position; when it applies, the pass ends immediately and
+    # recompiles instead of letting anything act on garbage output.
     exclusive: bool = False
     # Catch-all: only tried when no other workaround applied in the pass.
     last_resort: bool = False
@@ -447,18 +448,9 @@ class CompilationWorkaroundManager:
             # see the pass's own effects.
             applied_this_pass.clear()
             state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
-            for workaround in workarounds:
-                if not workaround.enabled:
-                    continue
-                if workaround.last_resort and applied_this_pass:
-                    continue
 
-                # Try to detect if this workaround applies
-                detect_result = workaround.detect_fn(output)
-                if detect_result is None:
-                    continue
-
-                # Apply the workaround
+            def apply_workaround(workaround: CompilationWorkaround, detect_result: Any) -> None:
+                nonlocal updated_config_dict
                 self.log(f"Applying {workaround.name} workaround")
                 updated_config_dict = workaround.apply_fn(
                     detect_result,
@@ -471,8 +463,25 @@ class CompilationWorkaroundManager:
                 if workaround.name == "cached_autofinder_failure" and "--build_cache" in cmd:
                     cmd.remove("--build_cache")
                 applied_this_pass.add(workaround.name)
-                if workaround.exclusive:
-                    break
+
+            # Exclusive workarounds go first, regardless of list position: they
+            # invalidate the whole output, so when one applies the pass ends
+            # there and nothing else may act on it.
+            for workaround in workarounds:
+                if workaround.exclusive and workaround.enabled:
+                    detect_result = workaround.detect_fn(output)
+                    if detect_result is not None:
+                        apply_workaround(workaround, detect_result)
+                        break
+            if not applied_this_pass:
+                for workaround in workarounds:
+                    if not workaround.enabled or workaround.exclusive:
+                        continue
+                    if workaround.last_resort and applied_this_pass:
+                        continue
+                    detect_result = workaround.detect_fn(output)
+                    if detect_result is not None:
+                        apply_workaround(workaround, detect_result)
 
             # If no workaround applies, exit immediately (guardrail against infinite loop)
             if not applied_this_pass:

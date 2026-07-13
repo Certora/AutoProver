@@ -1,29 +1,19 @@
 """Unit tests for Rounding-error parsing and the requalification fix in the typechecker loop."""
 
 import json
-from pathlib import Path
 
 import pytest
 
+import certora_autosetup.typechecker_loop as tl
 from certora_autosetup.typechecker_loop import TypecheckerLoop
+from certora_autosetup.utils.constants import PATH_ALL_USER_DEFINED_TYPES_JSON
 
-# Pre-8.17.1 error text (unqualified name not resolvable at all).
-OLD_ROUNDING_ERROR = (
-    'CRITICAL: [main] ERROR ALWAYS - Error in spec file (OZ_Math-Vault.spec:12:21): '
-    'could not type expression "Math.Rounding.Ceil", message: In enum constant '
-    "Math.Rounding.Ceil, Math.Rounding is not a valid enum type"
-)
-
-# certora-cli >= 8.17.1: conflicting same-name definitions purge the type and the
-# error suggests importing-contract qualifiers.
+# The ambiguous-Rounding error (conflicting same-name definitions purge the
+# type; the error suggests importing-contract qualifiers) has two variants:
 AMBIGUOUS_ENUM_CONSTANT_ERROR = (
     "CRITICAL: [main] ERROR ALWAYS - Error in spec file (OZ_Math-HarnessV5.spec:12:21): "
     'could not type expression "Math.Rounding.Ceil", message: In enum constant '
     "Math.Rounding.Ceil, Type Math.Rounding is not a valid type. "
-    "Did you mean `HarnessV4.Rounding`, or `HarnessV5.Rounding`?"
-)
-AMBIGUOUS_PARAM_TYPE_ERROR = (
-    "Error in spec file (OZ_Math-HarnessV5.spec:5:5): Type Math.Rounding is not a valid type. "
     "Did you mean `HarnessV4.Rounding`, or `HarnessV5.Rounding`?"
 )
 # The methods{} entry position uses a DIFFERENT text: no "Type " prefix and
@@ -57,19 +47,6 @@ def loop(tmp_path, monkeypatch) -> TypecheckerLoop:
 # ---------------------------------------------------------------------------
 
 
-def test_parse_old_rounding_error(loop) -> None:
-    matches = loop._parse_typechecker_errors(OLD_ROUNDING_ERROR)
-    assert ("OZ_Math-Vault.spec", "12", "ROUNDING_ERROR", "Math.Rounding") in matches
-
-
-def test_parse_old_rounding_error_any_qualifier(loop) -> None:
-    # The pre-8.17.1 pattern must not be anchored on the literal `Math.` — a
-    # qualified spelling hitting an old CLI produces the same error family.
-    text = OLD_ROUNDING_ERROR.replace("Math.Rounding", "HarnessV5.Rounding")
-    matches = loop._parse_typechecker_errors(text)
-    assert any(m[2] == "ROUNDING_ERROR" for m in matches)
-
-
 def test_parse_ambiguous_enum_constant_error(loop) -> None:
     matches = loop._parse_typechecker_errors(AMBIGUOUS_ENUM_CONSTANT_ERROR)
     assert (
@@ -78,24 +55,12 @@ def test_parse_ambiguous_enum_constant_error(loop) -> None:
         "ROUNDING_AMBIGUOUS",
         "Math|HarnessV4,HarnessV5",
     ) in matches
-    # The ambiguous line must not ALSO be classified as the old blind-fix error.
-    assert not any(m[2] == "ROUNDING_ERROR" for m in matches)
-
-
-def test_parse_ambiguous_param_type_error(loop) -> None:
-    matches = loop._parse_typechecker_errors(AMBIGUOUS_PARAM_TYPE_ERROR)
-    assert (
-        "OZ_Math-HarnessV5.spec",
-        "5",
-        "ROUNDING_AMBIGUOUS",
-        "Math|HarnessV4,HarnessV5",
-    ) in matches
 
 
 def test_parse_ambiguous_methods_entry_error(loop) -> None:
-    # Regression: the methods-entry variant ("is not a valid EVM type", no
-    # "Type " prefix) must be parsed too, or the 4-arg entry keeps its bad
-    # qualifier forever and the loop cannot converge.
+    # The methods-entry variant ("is not a valid EVM type", no "Type " prefix)
+    # must be parsed too, or the 4-arg entry keeps its bad qualifier forever
+    # and the loop cannot converge.
     matches = loop._parse_typechecker_errors(AMBIGUOUS_METHODS_ENTRY_ERROR)
     assert (
         "OZ_Math-HarnessV5.spec",
@@ -146,17 +111,30 @@ function mulDivDirectionalSummary(uint256 x, uint256 y, uint256 denominator, Mat
 }
 """
 
+# The directional function block above spans 0-based lines 9..16 — what the
+# CVL AST reports for it (ast["subs"][0].range). Canned so the cheap suite
+# never shells out to the jar (no JDK in cheap CI).
+CANNED_AST = {"ast": {"subs": [
+    {"declarationId": "mulDivDirectionalSummary",
+     "range": {"start": {"line": 9, "charByteOffset": 0},
+               "end": {"line": 16, "charByteOffset": 1}}},
+]}}
+
+
+@pytest.fixture
+def canned_ast(monkeypatch):
+    monkeypatch.setattr(tl, "extract_cvl_ast", lambda source: CANNED_AST)
+
 
 def _write_scene_types() -> None:
-    internal = Path(".certora_internal")
-    internal.mkdir(exist_ok=True)
+    PATH_ALL_USER_DEFINED_TYPES_JSON.parent.mkdir(exist_ok=True)
     rows = [
         {
             "typeName": "Rounding",
             "typeCategory": "UserDefinedEnum",
             "containingContract": "Math",
             "main_contract": "HarnessV4",
-            "sourceFile": "lib/oz-v4/Math.sol",
+            "canonicalId": "lib/oz-v4/Math.sol|Math.Rounding",
             "enumMembers": [{"name": m} for m in ("Down", "Up", "Zero")],
         },
         {
@@ -164,22 +142,14 @@ def _write_scene_types() -> None:
             "typeCategory": "UserDefinedEnum",
             "containingContract": "Math",
             "main_contract": "HarnessV5",
-            "sourceFile": "lib/oz-v5/Math.sol",
+            "canonicalId": "lib/oz-v5/Math.sol|Math.Rounding",
             "enumMembers": [{"name": m} for m in ("Floor", "Ceil", "Trunc", "Expand")],
         },
     ]
-    (internal / "all_user_defined_types.json").write_text(json.dumps(rows))
+    PATH_ALL_USER_DEFINED_TYPES_JSON.write_text(json.dumps(rows))
 
 
-def _run_requalify(loop, tmp_path, errors):
-    spec = tmp_path / "OZ_Math-HarnessV5.spec"
-    spec.write_text(SPEC_BEFORE)
-    callback = loop._create_rounding_requalify_callback(errors, keep_intermediate=False)
-    callback(spec, lambda s: s, lambda s: s)
-    return spec.read_text()
-
-
-def test_requalify_by_member(loop, tmp_path) -> None:
+def test_requalify_by_member(loop, tmp_path, canned_ast) -> None:
     _write_scene_types()
     # Line 12 holds Math.Rounding.Ceil; line 5 and 10 hold the param types.
     errors = [
@@ -187,7 +157,11 @@ def test_requalify_by_member(loop, tmp_path) -> None:
         ("5", "ROUNDING_AMBIGUOUS", "Math|HarnessV4,HarnessV5"),
         ("10", "ROUNDING_AMBIGUOUS", "Math|HarnessV4,HarnessV5"),
     ]
-    fixed = _run_requalify(loop, tmp_path, errors)
+    spec = tmp_path / "OZ_Math-HarnessV5.spec"
+    spec.write_text(SPEC_BEFORE)
+    callback = loop._create_rounding_requalify_callback(errors, keep_intermediate=False)
+    callback(spec, lambda s: s, lambda s: s)
+    fixed = spec.read_text()
     # Ceil pins the qualifier to HarnessV5 (only its Rounding has Ceil), and the
     # member-less param-type lines follow that spec-wide choice.
     assert "rounding == HarnessV5.Rounding.Ceil" in fixed
@@ -197,47 +171,11 @@ def test_requalify_by_member(loop, tmp_path) -> None:
     assert "Math.Rounding" not in fixed
 
 
-def test_requalify_falls_back_to_disable_without_member_info(loop, tmp_path) -> None:
-    # No member appears in any error line's text (only param-type positions) and
-    # the referenced member is unknown -> no unique choice -> reported lines are
-    # disabled, nothing else touched.
-    _write_scene_types()
-    errors = [("5", "ROUNDING_AMBIGUOUS", "Math|HarnessV4,HarnessV5")]
-    spec = tmp_path / "OZ_Math-HarnessV5.spec"
-    spec.write_text(SPEC_BEFORE)
-    callback = loop._create_rounding_requalify_callback(errors, keep_intermediate=False)
-    callback(spec, lambda s: s, lambda s: s)
-    fixed = spec.read_text()
-    lines = fixed.splitlines()
-    assert lines[4].startswith("// AUTO-DISABLED (Math.Rounding error):")
-    # Only the reported line (plus no block, since line 5 is a methods entry).
-    assert sum("AUTO-DISABLED" in l for l in lines) == 1
-
-
-def test_requalify_member_in_no_suggestion_disables_block(loop, tmp_path) -> None:
-    # The member on the error line exists in NO suggested qualifier's enum ->
-    # fallback disables the line; a line inside the directional function takes
-    # the whole block with it (half-commented CVL would not parse).
-    _write_scene_types()
-    spec_text = SPEC_BEFORE.replace("Math.Rounding.Ceil", "Math.Rounding.Nearest")
-    spec = tmp_path / "OZ_Math-HarnessV5.spec"
-    spec.write_text(spec_text)
-    errors = [("12", "ROUNDING_AMBIGUOUS", "Math|HarnessV4,HarnessV5")]
-    callback = loop._create_rounding_requalify_callback(errors, keep_intermediate=False)
-    callback(spec, lambda s: s, lambda s: s)
-    lines = spec.read_text().splitlines()
-    disabled = [i for i, l in enumerate(lines) if "AUTO-DISABLED" in l]
-    # The whole mulDivDirectionalSummary block (0-indexed 9-16), minus index 10
-    # which was already a comment line and needs no disabling.
-    assert disabled == [9, 11, 12, 13, 14, 15, 16]
-
-
-def test_requalify_reverse_direction_to_plain_math(loop, tmp_path) -> None:
+def test_requalify_reverse_direction_to_plain_math(loop, tmp_path, canned_ast) -> None:
     # A qualified spec landing in a scene where the plain name is unambiguous
     # gets healed back to Math.Rounding via the suggestion.
-    internal = Path(".certora_internal")
-    internal.mkdir(exist_ok=True)
-    (internal / "all_user_defined_types.json").write_text(
+    PATH_ALL_USER_DEFINED_TYPES_JSON.parent.mkdir(exist_ok=True)
+    PATH_ALL_USER_DEFINED_TYPES_JSON.write_text(
         json.dumps(
             [
                 {
@@ -245,7 +183,7 @@ def test_requalify_reverse_direction_to_plain_math(loop, tmp_path) -> None:
                     "typeCategory": "UserDefinedEnum",
                     "containingContract": "Math",
                     "main_contract": "Math",
-                    "sourceFile": "lib/oz-v5/Math.sol",
+                    "canonicalId": "lib/oz-v5/Math.sol|Math.Rounding",
                     "enumMembers": [{"name": m} for m in ("Floor", "Ceil", "Trunc", "Expand")],
                 }
             ]
@@ -266,38 +204,57 @@ def test_requalify_reverse_direction_to_plain_math(loop, tmp_path) -> None:
     assert "AUTO-DISABLED" not in fixed
 
 
-def test_block_expansion_covers_any_function_name(loop, tmp_path) -> None:
-    # Regression: the block expansion must not be tied to the
-    # mulDivDirectionalSummary name — OZ_MathUpgradeable.spec's helper is named
-    # mathUpgradeableMulDivDirectionalSummary, and commenting only the reported
-    # line inside it would leave unparsable CVL.
-    spec_text = SPEC_BEFORE.replace(
-        "mulDivDirectionalSummary", "mathUpgradeableMulDivDirectionalSummary"
-    )
-    spec = tmp_path / "OZ_MathUpgradeable.spec"
-    spec.write_text(spec_text)
-    errors = [("OZ_MathUpgradeable.spec", "12", "ROUNDING_ERROR", "Math.Rounding")]
-    updates = loop.generate_updates_to_specs_from_errors(errors)
-    updates["OZ_MathUpgradeable"](spec, lambda s: s, lambda s: s)
-    lines = spec.read_text().splitlines()
-    disabled = [i for i, l in enumerate(lines) if "AUTO-DISABLED" in l]
-    # Whole function block (0-indexed 9-16; 10 was already a comment line but
-    # the old-error fix path prefixes indiscriminately, matching prior behavior).
-    assert set(disabled) >= {9, 11, 12, 13, 14, 15, 16}
-    # Nothing outside the block was touched.
-    assert min(disabled) >= 9 and max(disabled) <= 16
-
-
-def test_old_fix_comments_reported_lines_not_hardcoded_range(loop, tmp_path) -> None:
-    # Regression: the pre-rework fix commented hardcoded line indices [4, 9..16]
-    # regardless of the reported errors. It must now target reported lines only
-    # (expanding to the enclosing directional block).
+def test_requalify_falls_back_to_disable_without_member_info(loop, tmp_path, canned_ast) -> None:
+    # No member appears in any error line's text (only param-type positions) and
+    # the referenced member is unknown -> no unique choice -> reported lines are
+    # disabled, nothing else touched.
+    _write_scene_types()
+    errors = [("5", "ROUNDING_AMBIGUOUS", "Math|HarnessV4,HarnessV5")]
     spec = tmp_path / "OZ_Math-HarnessV5.spec"
     spec.write_text(SPEC_BEFORE)
-    errors = [("OZ_Math-HarnessV5.spec", "5", "ROUNDING_ERROR", "Math.Rounding")]
-    updates = loop.generate_updates_to_specs_from_errors(errors)
-    assert "OZ_Math-HarnessV5" in updates
-    updates["OZ_Math-HarnessV5"](spec, lambda s: s, lambda s: s)
-    lines = spec.read_text().splitlines()
+    callback = loop._create_rounding_requalify_callback(errors, keep_intermediate=False)
+    callback(spec, lambda s: s, lambda s: s)
+    fixed = spec.read_text()
+    lines = fixed.splitlines()
     assert lines[4].startswith("// AUTO-DISABLED (Math.Rounding error):")
-    assert sum("AUTO-DISABLED" in l for l in lines) == 1  # not the old lines 10-17 sweep
+    # Only the reported line (a methods entry is outside every function block).
+    assert sum("AUTO-DISABLED" in l for l in lines) == 1
+
+
+def test_requalify_member_in_no_suggestion_disables_block(loop, tmp_path, canned_ast) -> None:
+    # The member on the error line exists in NO suggested qualifier's enum ->
+    # fallback disables the line; a line inside a CVL function takes the whole
+    # AST-reported block with it (half-commented CVL would not parse).
+    _write_scene_types()
+    spec_text = SPEC_BEFORE.replace("Math.Rounding.Ceil", "Math.Rounding.Nearest")
+    spec = tmp_path / "OZ_Math-HarnessV5.spec"
+    spec.write_text(spec_text)
+    errors = [("12", "ROUNDING_AMBIGUOUS", "Math|HarnessV4,HarnessV5")]
+    callback = loop._create_rounding_requalify_callback(errors, keep_intermediate=False)
+    callback(spec, lambda s: s, lambda s: s)
+    lines = spec.read_text().splitlines()
+    disabled = [i for i, l in enumerate(lines) if "AUTO-DISABLED" in l]
+    # The whole function block per the AST range (0-based 9..16), minus index 10
+    # which was already a comment line and needs no disabling.
+    assert disabled == [9, 11, 12, 13, 14, 15, 16]
+
+
+def test_block_expansion_uses_ast_ranges(loop, monkeypatch) -> None:
+    # The expansion is driven purely by ast["subs"] ranges — an arbitrarily
+    # named function (e.g. OZ_MathUpgradeable's helper) is covered because the
+    # AST reports its span, with no name-pattern involved.
+    monkeypatch.setattr(
+        tl, "extract_cvl_ast",
+        lambda source: {"ast": {"subs": [
+            {"declarationId": "mathUpgradeableMulDivDirectionalSummary",
+             "range": {"start": {"line": 3, "charByteOffset": 0},
+                       "end": {"line": 8, "charByteOffset": 1}}},
+        ]}},
+    )
+    lines = ["l\n"] * 12
+    assert TypecheckerLoop._expand_to_function_blocks(lines, {5}) == {3, 4, 5, 6, 7, 8}
+    # Reported lines outside every function stay alone.
+    assert TypecheckerLoop._expand_to_function_blocks(lines, {1}) == {1}
+    # Nothing reported -> the parser is never consulted.
+    monkeypatch.setattr(tl, "extract_cvl_ast", lambda source: pytest.fail("must not parse"))
+    assert TypecheckerLoop._expand_to_function_blocks(lines, set()) == set()

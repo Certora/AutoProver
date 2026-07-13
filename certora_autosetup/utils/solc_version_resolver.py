@@ -207,7 +207,9 @@ def resolve_pragma_to_version(
 
     If `preferred_version` is supplied and satisfies the pragma, it is returned
     unchanged. Otherwise fetches available versions from soliditylang.org and
-    selects the highest version matching the constraint.
+    selects the highest matching version whose solc binary is INSTALLED
+    (Certora or solc-select naming), falling back to the highest listed release
+    when no matching binary is on PATH.
 
     Args:
         pragma_spec: Pragma version specification (e.g., "0.8.26", "^0.8.0", ">=0.8.0 <0.8.6")
@@ -220,7 +222,7 @@ def resolve_pragma_to_version(
 
     Examples:
         "0.8.26"           -> "0.8.26"
-        "^0.8.0"           -> "0.8.33" (highest 0.8.x)
+        "^0.8.0"           -> "0.8.35" (highest 0.8.x with an installed binary)
         ">=0.8.0 <0.8.6"   -> "0.8.5"  (highest below 0.8.6)
     """
     try:

@@ -37,7 +37,9 @@ from certora_autosetup.utils.llm_util import ledger_component
 from certora_autosetup.utils.constants import (
     DEFAULT_SOLC_VERSION,
     DIR_CERTORA_INTERNAL,
+    FILE_ALL_USER_DEFINED_TYPES_JSON,
     FILE_BUILD_ASTS,
+    PATH_ALL_USER_DEFINED_TYPES_JSON,
     SolcConvention,
     SUMMARIES_SUBDIR,
 )
@@ -910,14 +912,6 @@ class SetupProver:
 
                                 # Add to collection if we found a valid type
                                 if type_name and qualified_name:
-                                    # canonicalId is "path/File.sol|Qualified.Name"; the
-                                    # path side identifies the declaring FILE, which is
-                                    # what tells two same-named type definitions apart
-                                    # (e.g. OZ v4 and v5 Math.Rounding in one scene).
-                                    canonical_id = type_info.get("canonicalId", "")
-                                    source_file = (
-                                        canonical_id.split("|", 1)[0] if "|" in canonical_id else ""
-                                    )
                                     user_type_info = {
                                         "typeName": type_name,
                                         "qualifiedName": qualified_name,
@@ -927,7 +921,7 @@ class SetupProver:
                                             "containingContract"
                                         ),
                                         "main_contract": contract.get("name"),
-                                        "sourceFile": source_file,
+                                        "canonicalId": type_info.get("canonicalId", ""),
                                     }
 
                                     # Add enum members for UserDefinedEnum
@@ -939,7 +933,7 @@ class SetupProver:
                                     all_user_defined_types.append(user_type_info)
 
         # Write user-defined types to JSON file
-        types_output_path = Path(".certora_internal/all_user_defined_types.json")
+        types_output_path = PATH_ALL_USER_DEFINED_TYPES_JSON
         types_output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(types_output_path, "w") as f:
@@ -948,7 +942,7 @@ class SetupProver:
         # Also persist to the cache prefix for debuggability (visible on S3 in SaaS).
         # Compute-only intermediate: NOT part of cache validation/restore.
         atomic_write_json_fsspec(
-            cache_path(DIR_CERTORA_INTERNAL, "all_user_defined_types.json"), all_user_defined_types
+            cache_path(DIR_CERTORA_INTERNAL, FILE_ALL_USER_DEFINED_TYPES_JSON), all_user_defined_types
         )
 
         return len(all_user_defined_types)
@@ -1581,7 +1575,7 @@ class SetupProver:
             if all_methods.exists():
                 self.log(f"📄 all_methods.json: {all_methods}")
 
-            all_types = self.certora_dir / "all_user_defined_types.json"
+            all_types = self.certora_dir / FILE_ALL_USER_DEFINED_TYPES_JSON
             if all_types.exists():
                 self.log(f"📄 all_user_defined_types.json: {all_types}")
 
