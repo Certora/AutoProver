@@ -17,7 +17,6 @@ from rich.text import Text
 
 from composer.ui.tool_display import ToolDisplayConfig, ToolDisplay, CommonTools, suppress_ack
 from composer.io.event_handler import EventHandler, NullEventHandler
-from composer.ui.ide_bridge import IDEBridge
 from composer.ui.multi_job_app import (
     MultiJobApp, MultiJobTaskHandler, TaskInfo,
 )
@@ -120,7 +119,6 @@ class NatspecPipelineApp(MultiJobApp[Phase, NatspecTaskHandler]):
 
     def __init__(
         self,
-        ide: IDEBridge | None = None,
         *,
         output_root: pathlib.Path | None = None,
     ):
@@ -128,7 +126,6 @@ class NatspecPipelineApp(MultiJobApp[Phase, NatspecTaskHandler]):
             phase_labels=PHASE_LABELS,
             section_order=_SECTION_ORDER,
             header_text="NatSpec Pipeline | ESC: summary | q: quit (when done)",
-            ide=ide,
         )
         self._output_root = output_root
 

@@ -12,14 +12,12 @@ from textual.validation import Validator
 
 from rich.text import Text
 
-from composer.ui.ide_bridge import IDEBridge
-from composer.ui.ide_content import IDEContentMixin
 from composer.ui.log_screen import LogViewerMixin
 from composer.ui.tool_display import ToolDisplayConfig
 from composer.ui.message_renderer import MessageRenderer, TokenStats, dot, KNOWN_NODES
 
 
-class BaseRichConsoleApp[H, P](LogViewerMixin, IDEContentMixin, App):
+class BaseRichConsoleApp[H, P](LogViewerMixin, App):
     """Base Textual TUI for workflow IO, parameterized by human interaction (H) and progress (P) types."""
 
     CSS = """
@@ -43,7 +41,6 @@ class BaseRichConsoleApp[H, P](LogViewerMixin, IDEContentMixin, App):
         self,
         tool_config: ToolDisplayConfig,
         show_checkpoints: bool = False,
-        ide: IDEBridge | None = None,
     ):
         super().__init__()
         self._init_log_viewer()
@@ -60,7 +57,6 @@ class BaseRichConsoleApp[H, P](LogViewerMixin, IDEContentMixin, App):
         self._checkpoint_id = "—"
         self._work_fn: Callable[[], Coroutine[None, None, None]] | None = None
         self._show_checkpoints = show_checkpoints
-        self._init_ide_content(ide)
 
     def compose(self) -> ComposeResult:
         yield Static("Session: — | Checkpoint: —", id="status-bar")
