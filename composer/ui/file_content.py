@@ -8,16 +8,12 @@ Used by both ``BaseRichConsoleApp`` (codegen) and ``PipelineApp``
 (natspec pipeline).
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from textual.widgets import Static
 
 from rich.markup import escape
 from rich.text import Text
-
-from composer.ui.ide_bridge import IDEBridge
 
 if TYPE_CHECKING:
     from textual.app import App
@@ -26,7 +22,7 @@ else:
     _Base = object
 
 
-class IDEContentMixin(_Base):
+class FileContentMixin(_Base):
     """Mixin for Textual Apps with IDE bridge content viewing.
 
     Call ``_init_ide_content(ide)`` from your ``__init__``.
@@ -34,12 +30,10 @@ class IDEContentMixin(_Base):
     Requires: host class inherits ``textual.app.App``.
     """
 
-    _ide: IDEBridge | None
     _content_snapshots: dict[int, tuple[str, str, str]]
     _next_snap_id: int
 
-    def _init_ide_content(self, ide: IDEBridge | None) -> None:
-        self._ide = ide
+    def _init_file_content(self) -> None:
         self._content_snapshots = {}
         self._next_snap_id = 0
 
@@ -85,12 +79,8 @@ class IDEContentMixin(_Base):
         if snap is None:
             return
         label, content, filename = snap
-        lang = self._guess_lang(filename)
 
-        if self._ide is not None:
-            self.run_worker(self._ide_show_file(content, filename, lang), thread=False)
-        else:
-            self._show_content_fallback(snap_id, label, content, filename)
+        self._show_content_fallback(snap_id, label, content, filename)
 
     def _show_content_fallback(
         self, snap_id: int, label: str, content: str, filename: str
@@ -109,10 +99,3 @@ class IDEContentMixin(_Base):
         elif filename.endswith(".spec"):
             return "javascript"  # CVL ~ JS for syntax highlighting
         return None
-
-    async def _ide_show_file(self, content: str, path: str, lang: str | None) -> None:
-        try:
-            assert self._ide is not None
-            await self._ide.show_file(content, path, lang=lang)
-        except Exception as exc:
-            self.notify(f"Failed to open {path}: {exc}", severity="warning")
