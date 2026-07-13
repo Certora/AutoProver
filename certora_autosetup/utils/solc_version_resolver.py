@@ -20,7 +20,10 @@ from typing import List, Optional
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-from certora_autosetup.utils.config_manager import certora_format_to_raw_version
+from certora_autosetup.utils.config_manager import (
+    certora_format_to_raw_version,
+    convert_solc_version_to_certora_format,
+)
 from certora_autosetup.utils.logger import logger
 
 # Minimum solc version that supports viaIR (introduced as settings.viaIR in 0.7.5, stabilized in 0.8.13)
@@ -93,12 +96,16 @@ def fetch_available_solc_versions() -> List[str]:
 
 
 def _solc_binary_installed(version: str) -> bool:
-    """Whether a solc binary providing `version` is on PATH, under either the
-    Certora naming convention ("solc8.35") or solc-select's ("solc-0.8.35")."""
-    names = [f"solc-{version}"]
-    if version.startswith("0."):
-        names.append(f"solc{version[2:]}")
-    return any(shutil.which(name) for name in names)
+    """Whether a solc binary providing ``version`` is on PATH.
+
+    ``version`` is a raw semantic version string exactly as listed by
+    ``fetch_available_solc_versions`` (e.g. "0.8.35"). Both installed-binary
+    naming conventions are probed: Certora's ("solc8.35", via the shared
+    converter) and solc-select's ("solc-0.8.35")."""
+    return any(
+        shutil.which(name)
+        for name in (convert_solc_version_to_certora_format(version), f"solc-{version}")
+    )
 
 
 def parse_pragma_constraint(pragma_spec: str) -> Optional[SpecifierSet]:
