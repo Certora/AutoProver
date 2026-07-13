@@ -42,12 +42,10 @@ MEMORYGUARD_YUL_STACK_TOO_DEEP = (
     "memoryguard was present.\n"
 )
 
-# Verbatim autofinder-generation failure: NON-FATAL (the prover falls back to
-# the original file), so the yul detector must NOT fire on it — reacting tears
-# down via-ir/optimizer that the real compilation may require. Observed on a
-# real project: the teardown stripped foundry's via_ir and the source then
-# failed with "Require with a custom error is only available using the via-ir
-# pipeline".
+# Verbatim autofinder-generation failure. The prover falls back to the original
+# file, silently losing that file's internal summaries — so the yul ladder MUST
+# react to it (optimizer, then disabling autofinders), while never touching the
+# compile settings the project itself requires.
 AUTOFINDER_YUL_STACK_TOO_DEEP = (
     "Compiling src/initializers/LockableUniswapV3Initializer.sol to expose internal function information and local variables...\n"
     "Encountered an exception generating autofinder .certora_internal/26_07_13/.certora_sources/src/initializers/LockableUniswapV3Initializer.sol (solc8.26 had an error:\n"
@@ -88,16 +86,10 @@ def test_ignores_unrelated_output(manager: CompilationWorkaroundManager) -> None
     assert manager._detect_yul_exception_stack_too_deep(UNRELATED_OUTPUT) is False
 
 
-def test_ignores_autofinder_yul_stack_too_deep(manager: CompilationWorkaroundManager) -> None:
-    # Non-fatal autofinder-generation failures must not trigger the yul ladder.
-    assert manager._detect_yul_exception_stack_too_deep(AUTOFINDER_YUL_STACK_TOO_DEEP) is False
-
-
-def test_detects_fatal_yul_next_to_autofinder_yul(manager: CompilationWorkaroundManager) -> None:
-    # A genuine fatal YulException elsewhere in the same output still fires.
-    assert manager._detect_yul_exception_stack_too_deep(
-        AUTOFINDER_YUL_STACK_TOO_DEEP + "\n" + MEMORYGUARD_YUL_STACK_TOO_DEEP
-    ) is True
+def test_detects_autofinder_yul_stack_too_deep(manager: CompilationWorkaroundManager) -> None:
+    # Autofinder-generation failures silently drop the file's internal
+    # summaries — the ladder must react to them like any other yul error.
+    assert manager._detect_yul_exception_stack_too_deep(AUTOFINDER_YUL_STACK_TOO_DEEP) is True
 
 
 # =============================================================================
@@ -304,11 +296,11 @@ def test_cached_autofinder_failure_is_exclusive(manager, monkeypatch, tmp_path) 
 
 def test_yul_ladder_escalates_across_passes(manager, monkeypatch, tmp_path) -> None:
     # The YulException escalation must span two recompiles: pass 1 only adds
-    # the optimizer; only when the exception SURVIVES that recompile does the
-    # last-resort teardown fire. Firing both on the same output would tear
-    # down via-ir/optimizer/autofinders without ever testing the optimizer.
+    # the optimizer (trying to succeed WITH autofinders); only when the
+    # exception SURVIVES that recompile does the last resort give autofinders
+    # up — keeping the compile settings.
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
-    success, updated, _, fake_run = _run_loop(
+    success, updated, config, fake_run = _run_loop(
         manager,
         monkeypatch,
         tmp_path,
@@ -318,15 +310,17 @@ def test_yul_ladder_escalates_across_passes(manager, monkeypatch, tmp_path) -> N
     )
     assert success is True
     assert fake_run.calls == 3
-    assert "solc_optimize" not in updated
+    assert config["solc_optimize"] == "200"
     assert updated["assert_autofinder_success"] is False
 
 
-def test_teardown_spares_same_pass_via_ir_fix(manager, monkeypatch, tmp_path) -> None:
+def test_yul_last_resort_keeps_compile_settings(manager, monkeypatch, tmp_path) -> None:
     # One output carries a plain stack-too-deep for Foo AND a YulException with
-    # the optimizer already present: the pass applies via-ir for Foo, and the
-    # teardown must NOT fire in that same pass — it would pop the map entry
-    # via-ir just wrote before the fix ever got its validating recompile.
+    # the optimizer already present (e.g. supplied by the project's foundry
+    # config): the pass applies via-ir for Foo and disables autofinders, but
+    # via-ir and the optimizer must survive — the source itself may not compile
+    # without them (seen in the wild: "Require with a custom error is only
+    # available using the via-ir pipeline").
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     combined = PERSISTENT_STACK_TOO_DEEP_OUTPUT + SINGLE_LINE_YUL_STACK_TOO_DEEP
     success, updated, config, fake_run = _run_loop(
@@ -340,16 +334,14 @@ def test_teardown_spares_same_pass_via_ir_fix(manager, monkeypatch, tmp_path) ->
     assert success is True
     assert fake_run.calls == 2
     assert updated["solc_via_ir"] is True
-    # Teardown did not run: autofinders and the optimizer are intact.
-    assert config["assert_autofinder_success"] is True
+    assert config["assert_autofinder_success"] is False
     assert config["solc_optimize"] == "200"
 
 
-def test_via_ir_after_teardown_stays_per_contract(manager, monkeypatch, tmp_path) -> None:
-    # After the teardown pops solc_via_ir_map, a later via-ir fix must re-seed
-    # the full all-off map before setting its contract. A bare single-entry
-    # map would be uniform and collapse to a GLOBAL solc_via_ir=true at
-    # finalize — re-enabling via-ir for every contract the teardown stripped.
+def test_via_ir_after_yul_last_resort_stays_per_contract(manager, monkeypatch, tmp_path) -> None:
+    # The last resort leaves the seeded via-ir map in place, so a later
+    # per-contract via-ir fix stays per-contract (a partial map collapsing to
+    # a global solc_via_ir=true would re-enable via-ir scene-wide).
     contracts = [
         ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
         ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
@@ -360,7 +352,7 @@ def test_via_ir_after_teardown_stays_per_contract(manager, monkeypatch, tmp_path
         tmp_path,
         [
             SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 1: add optimizer
-            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 2: teardown (map popped)
+            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 2: last resort (autofinders off)
             PERSISTENT_STACK_TOO_DEEP_OUTPUT,  # pass 3: via-ir for Foo only
         ],
         contracts,
@@ -371,7 +363,7 @@ def test_via_ir_after_teardown_stays_per_contract(manager, monkeypatch, tmp_path
     assert updated["solc_via_ir_map"] == {"Foo": True, "Bar": False}
     assert "solc_via_ir" not in updated
     assert config["assert_autofinder_success"] is False
-    assert "solc_optimize" not in config
+    assert config["solc_optimize"] == "200"
 
 # Verbatim-shaped certoraRun output for the "Source ... not found" ParserError. solc
 # hard-wraps the diagnostic, so the two markers ('ParserError: Source "' and

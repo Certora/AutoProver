@@ -244,7 +244,7 @@ class CompilationWorkaroundManager:
         7. Cancun opcode errors (mcopy/tload/tstore — set EVM version to cancun)
         8. Unnamed return variable warning (ignore_solidity_warnings)
         9. YulException stack-too-deep with via-ir (try adding optimizer first)
-        10. YulException stack-too-deep persists (remove via-ir + optimizer, disable autofinders)
+        10. YulException stack-too-deep persists (disable autofinders, keep compile settings)
         11. Missing dependency library (generate harness with dummy usage so solc emits the lib)
         12. Catch-all: use_relpaths_for_solc_json (last resort before import-patch fallback)
 
@@ -363,21 +363,14 @@ class CompilationWorkaroundManager:
                 # it must only fire on output produced AFTER the optimizer was
                 # tried, not in the same pass that just added it (the live
                 # "solc_optimize in config" check would otherwise see the value
-                # the previous workaround set seconds ago and tear down
-                # via-ir/optimizer/autofinders without ever testing them). The
-                # same goes for the via-ir map writers: a via-ir fix applied
-                # earlier in this pass deserves its own validating recompile
-                # before the teardown may pop the map it was just written to.
+                # the previous workaround set seconds ago and give up on
+                # autofinders without ever testing the optimizer).
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
                     and compilation_config.get("assert_autofinder_success", False)
                     and "solc_optimize" in compilation_config
-                    and applied_this_pass.isdisjoint({
-                        "yul_exception_add_optimizer",
-                        "stack_too_deep_via_ir",
-                        "unsupported_solc_via_ir",
-                    })
+                    and "yul_exception_add_optimizer" not in applied_this_pass
                     else None
                 ),
                 apply_fn=self._apply_yul_exception_workaround,
@@ -645,26 +638,13 @@ class CompilationWorkaroundManager:
         memoryguard was present." — so also match the "too deep in(side) the
         stack" wording (the semantics, not one spelling).
 
-        YulExceptions raised while GENERATING AUTOFINDERS are ignored: those
-        are non-fatal (the prover logs "Encountered an exception generating
-        autofinder" and falls back to the original file), and reacting to them
-        tears down via-ir/optimizer settings the actual compilation may
-        require. The autofinder context is identified by its marker sharing
-        the "had an error:" line that precedes the exception.
+        Autofinder-generation failures ARE matched on purpose: the prover
+        falls back to the original file, silently losing that file's internal
+        summaries, and this ladder (optimizer, then disabling autofinders) is
+        the reaction to exactly that.
         """
-        pattern = re.compile(
-            r"YulException:.*?(?:Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack)",
-            re.IGNORECASE | re.DOTALL,
-        )
-        for match in pattern.finditer(output):
-            head = output[: match.start()]
-            marker_pos = head.rfind("had an error:")
-            if marker_pos == -1:
-                return True
-            line_start = head.rfind("\n", 0, marker_pos) + 1
-            if "Encountered an exception generating autofinder" not in head[line_start:marker_pos]:
-                return True
-        return False
+        pattern = r"YulException:.*?(?:Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack)"
+        return bool(re.search(pattern, output, re.IGNORECASE | re.DOTALL))
 
     def _detect_compiler_version_mismatch(
         self, output: str, contracts: List[ContractHandle]
@@ -871,16 +851,10 @@ class CompilationWorkaroundManager:
         updated_config_dict: Dict,
         compilation_config: Dict,
         config_file: Path,
-        contracts: List[ContractHandle],
+        _contracts: List[ContractHandle],
     ) -> Dict:
         """Apply via-ir workaround to config files for a contract with stack-too-deep error."""
         self.log(f"Applying via-ir workaround for contract: {contract_name}")
-        # The yul_exception teardown pops solc_via_ir_map wholesale. Re-seed the
-        # full all-off map before setting one contract: a bare single-entry map
-        # would be uniform and collapse to a GLOBAL solc_via_ir=true at
-        # finalize, re-enabling via-ir for every contract the teardown stripped.
-        if "solc_via_ir_map" not in updated_config_dict:
-            updated_config_dict["solc_via_ir_map"] = {c.contract_name: False for c in contracts}
         self._apply_via_ir_workaround(contract_name, updated_config_dict)
         compilation_config.update(updated_config_dict)
 
@@ -921,9 +895,7 @@ class CompilationWorkaroundManager:
         """Disable via-ir for a contract with an old Solidity version that doesn't support it."""
         self.log(f"Disabling via-ir for contract: {contract_name} (unsupported solc version)")
 
-        # setdefault: the map is seeded up front but the yul_exception teardown
-        # pops it wholesale, so it may be gone by the time this fires.
-        updated_config_dict.setdefault("solc_via_ir_map", {})[contract_name] = False
+        updated_config_dict["solc_via_ir_map"][contract_name] = False
 
         compilation_config.update(updated_config_dict)
         with open(config_file, "w") as f:
@@ -957,19 +929,21 @@ class CompilationWorkaroundManager:
         config_file: Path,
         _contracts: List[ContractHandle],
     ) -> Dict:
-        """Last resort: remove via-ir and optimizer, disable autofinders, compile clean."""
-        self.log("YulException persists with via-ir + optimizer — reverting to clean compilation without autofinders", "WARNING")
+        """Last resort: disable autofinders, keeping the compile settings.
 
-        # Remove via-ir
-        for key in ("solc_via_ir", "solc_via_ir_map"):
-            compilation_config.pop(key, None)
-            updated_config_dict.pop(key, None)
+        Succeeding WITH autofinders is the goal — the earlier rungs (via-ir,
+        then the optimizer) exist to make them compile. Only once those were
+        tried does this give them up, and it gives up ONLY them: via-ir and
+        the optimizer stay, since the project's own build config (or the main
+        compile) may require them — stripping a foundry-mandated via-ir has
+        broken sources that don't compile on the legacy pipeline at all.
+        """
+        self.log(
+            "YulException persists with via-ir + optimizer — disabling autofinders "
+            "(compile settings kept)",
+            "WARNING",
+        )
 
-        # Remove optimizer
-        compilation_config.pop("solc_optimize", None)
-        updated_config_dict.pop("solc_optimize", None)
-
-        # Disable autofinders
         compilation_config["assert_autofinder_success"] = False
         updated_config_dict["assert_autofinder_success"] = False
 
@@ -1304,11 +1278,8 @@ class CompilationWorkaroundManager:
 
     def _apply_via_ir_workaround(self, contract_needing_via_ir: str, config_dict: Dict) -> Dict:
         """Add solc_via_ir_map entry for contract that needs via-ir compilation."""
-        # solc_via_ir_map is seeded up front by _seed_compile_maps and re-seeded
-        # by the calling wrapper if the yul_exception teardown popped it; just
-        # set the contract that needs via-ir to True. Never setdefault({}) here:
-        # a partial single-entry map would collapse to a global scalar at
-        # finalize (see _apply_via_ir_workaround_to_config).
+        # solc_via_ir_map is seeded up front by _seed_compile_maps; just set the
+        # contract that needs via-ir to True.
         config_dict["solc_via_ir_map"][contract_needing_via_ir] = True
         self.log(f"Adding via-ir workaround for contract: {contract_needing_via_ir}")
 
