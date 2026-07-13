@@ -11,6 +11,7 @@ domain objects into ``stem``s and call these primitives.
 """
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TypedDict, Unpack
@@ -21,6 +22,8 @@ from composer.spec.types import PropertyFormulation
 from composer.spec.util import ensure_dir
 from .types import ArtifactIdentifier, FormalResult
 from composer.spec.source.report.schema import AutoProverReport
+
+_log = logging.getLogger(__name__)
 
 
 class StoreConfiguration(TypedDict):
@@ -120,3 +123,22 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         (ensure_dir(self._internal_dir()) / "token_usage.json").write_text(
             json.dumps(payload, indent=2)
         )
+
+    def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
+        """The manifest body shared by every workflow: the tenant ``user_id``, the run's
+        ``run_id``, and the accumulated LLM ``token_usage``. Subclasses extend it with
+        any backend-specific usage they track."""
+        return {
+            "user_id": user_id,
+            "run_id": summary.run_id,
+            "token_usage": summary.token_usage_summary(),
+        }
+
+    def write_job_info(self, summary: RunSummary, *, user_id: str) -> None:
+        """The run's identity + usage manifest → ``{report}/job_info.json``, next to
+        ``report.json``. ``user_id`` is passed in so this stays a pure serializer of run
+        state; the body is :meth:`_job_info_payload`, which subclasses extend."""
+        payload = self._job_info_payload(summary, user_id=user_id)
+        out = self._report_dir() / "job_info.json"
+        out.write_text(json.dumps(payload, indent=2) + "\n")
+        _log.info("job info: wrote %s", out)
