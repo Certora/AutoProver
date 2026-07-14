@@ -269,39 +269,41 @@ async def _extract_all[P: enum.Enum, H](
 ) -> list[_Batch[FeatureUnit]]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY)
 
-    async def _extract(feat: FeatureUnit) -> tuple[WorkflowContext[ComponentGroup], list[PropertyFormulation]]:
-        feat_ctx = await prop_ctx.child(_component_cache_key(feat), feat.context_tag())
+    async def _unit_ctx(unit: FeatureUnit) -> WorkflowContext[ComponentGroup]:
+        return await prop_ctx.child(_component_cache_key(unit), unit.context_tag())
+
+    async def _extract(unit: FeatureUnit) -> tuple[WorkflowContext[ComponentGroup], list[PropertyFormulation]]:
+        ctx = await _unit_ctx(unit)
         props = await run.runner(
-            TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),
+            TaskInfo(extract_task_id(unit.unit_index), unit.display_name, phase),
             lambda conv: run_property_inference(
-                feat_ctx, run.env, feat, refinement=conv if interactive else None,
+                ctx, run.env, unit, refinement=conv if interactive else None,
                 threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance,
                 system_template=ecosystem.property_prompts.system,
                 initial_template=ecosystem.property_prompts.initial),
         )
-        return feat_ctx, props
+        return ctx, props
 
-    # Extraction is unit-agnostic: it yields batches over the ``FeatureUnit`` protocol (the
-    # ecosystem is Unit-erased here — see run_pipeline). The paired backend's concrete unit type
-    # ``U`` is reunited with these batches by the single widening cast in run_pipeline.
+    # Both strategies reduce to a list of (unit, properties, unit-context) triples; the ecosystem
+    # differs only in the *fan direction*. Global extraction infers once over the whole program
+    # and fans each property into its own unit (one prop per batch); per-component infers per unit
+    # (concurrently) and keeps that unit's properties grouped. The ``_Batch`` build below is shared.
+    # (Extraction is unit-agnostic — over the ``FeatureUnit`` protocol; run_pipeline's single cast
+    # reunites the batches with the paired backend's concrete unit type ``U``.)
+    triples: list[tuple[FeatureUnit, list[PropertyFormulation], WorkflowContext[ComponentGroup]]]
     if ecosystem.global_extraction:
-        # One whole-program extraction, then one batch per resulting property/invariant —
-        # each gets its own formalize (harness + fuzz run + report row).
         assert ecosystem.extraction_unit is not None and ecosystem.property_unit is not None
         _, props = await _extract(ecosystem.extraction_unit(main))
-        batches: list[_Batch[FeatureUnit]] = []
+        triples = []
         for i, prop in enumerate(props):
             unit = ecosystem.property_unit(main, prop, i)
-            unit_ctx = await prop_ctx.child(_component_cache_key(unit), unit.context_tag())
-            batches.append(_Batch(unit, [prop], unit_ctx))
-        return batches
+            triples.append((unit, [prop], await _unit_ctx(unit)))
+    else:
+        units = ecosystem.units(main)
+        extracted = await asyncio.gather(*[_extract(u) for u in units])
+        triples = [(u, props, ctx) for u, (ctx, props) in zip(units, extracted) if props]
 
-    async def _one(feat: FeatureUnit) -> _Batch[FeatureUnit] | None:
-        feat_ctx, props = await _extract(feat)
-        return _Batch(feat, props, feat_ctx) if props else None
-
-    got = await asyncio.gather(*[_one(u) for u in ecosystem.units(main)])
-    return [b for b in got if b is not None]
+    return [_Batch(unit, props, ctx) for unit, props, ctx in triples]
 
 
 def _tally[FormT: BackendResult, U: FeatureUnit](
