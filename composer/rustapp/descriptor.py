@@ -26,6 +26,28 @@ class CoreSlot(str, enum.Enum):
     REPORT = "report"
 
 
+class DeliverableMode(str, enum.Enum):
+    """How the source deliverable is written (mirrors the Rust ``DeliverableMode``).
+
+    ``per_component`` (default): the generic store writes one ``{prefix}_{slug}.{ext}`` file per
+    component. ``callout``: the store writes no per-component source; the wheel's ``finalize``
+    renders the whole deliverable (e.g. Crucible's one shared crate)."""
+
+    PER_COMPONENT = "per_component"
+    CALLOUT = "callout"
+
+
+class SetupSpec(BaseModel):
+    """A shared setup artifact authored once before per-component formalization (Crucible's
+    shared fixture). The host runs the author→compile loop for a ``kind="setup"`` input under
+    ``phase_key`` and threads the compiled spec into each component's context under
+    ``context_key``. Mirrors the Rust ``SetupSpec``."""
+
+    phase_key: str
+    label: str
+    context_key: str
+
+
 class PhaseSpec(BaseModel):
     """One task-grouping phase; ``key`` becomes the synthesized enum member name."""
 
@@ -93,6 +115,19 @@ class AppDescriptor(BaseModel):
     rag_db_default: str | None = None
     event_kinds: list[EventKind] = Field(default_factory=list)
     artifact_layout: ArtifactLayout
+    #: Optional shared-setup step run before per-component formalization (see :class:`SetupSpec`).
+    setup: SetupSpec | None = None
+    #: How the source deliverable is written (see :class:`DeliverableMode`).
+    deliverable_mode: DeliverableMode = DeliverableMode.PER_COMPONENT
+    #: Serialize the blocking toolchain callouts on one semaphore — set when the app shares a
+    #: single build dir / target across units.
+    serialize_toolchain: bool = False
+    #: Default to the fail-closed ``launcher`` sandbox provider (still overridable by
+    #: ``COMPOSER_SANDBOX_PROVIDER``). Set by any wheel that runs untrusted native toolchains.
+    confine_by_default: bool = False
+    #: Human noun for one formalized unit in the console/TUI summary ("instruction" for
+    #: Crucible). ``None`` → "component".
+    component_noun: str | None = None
 
     def ordered_phases(self) -> list[PhaseSpec]:
         return sorted(self.phases, key=lambda p: (p.order, p.key))

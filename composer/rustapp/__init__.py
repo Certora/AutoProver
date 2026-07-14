@@ -39,8 +39,10 @@ from composer.rustapp.descriptor import (
     ArgSpec,
     ArtifactLayout,
     CoreSlot,
+    DeliverableMode,
     EventKind,
     PhaseSpec,
+    SetupSpec,
 )
 from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.rustapp.adapter import (
@@ -91,8 +93,10 @@ __all__ = [
     "ArgSpec",
     "ArtifactLayout",
     "CoreSlot",
+    "DeliverableMode",
     "EventKind",
     "PhaseSpec",
+    "SetupSpec",
     "RustArtifact",
     "RustFormalResult",
     "RustBackend",

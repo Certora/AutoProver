@@ -113,6 +113,32 @@ pub struct ArtifactLayout {
     pub property_suffix: String,
 }
 
+/// A shared "setup" artifact authored once, before per-component formalization (Crucible's
+/// shared fixture). When a descriptor carries one, the host runs the author→compile loop for a
+/// `kind="setup"` [`AuthorInput`] under `phase_key`, then threads the compiled spec into every
+/// component's `AuthorInput.context` under `context_key`. Absent → no setup step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupSpec {
+    /// The descriptor phase key the setup task is grouped under (a UI-only phase).
+    pub phase_key: String,
+    /// The task label shown in the frontend.
+    pub label: String,
+    /// The `AuthorInput.context` key the compiled setup spec is injected under for components.
+    pub context_key: String,
+}
+
+/// How the source deliverable is written to disk. `PerComponent` (the default): the generic
+/// store writes one `{prefix}_{slug}.{ext}` file per component from its `artifact_text`.
+/// `Callout`: the store writes no per-component source; the wheel's `finalize` renders the whole
+/// deliverable (e.g. Crucible's one shared crate assembled from all sections + the fixture).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverableMode {
+    #[default]
+    PerComponent,
+    Callout,
+}
+
 /// The complete declaration the Python host reads once at load time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppDescriptor {
@@ -137,6 +163,24 @@ pub struct AppDescriptor {
     #[serde(default)]
     pub event_kinds: Vec<EventKind>,
     pub artifact_layout: ArtifactLayout,
+    /// Optional shared-setup step run before per-component formalization (see [`SetupSpec`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<SetupSpec>,
+    /// How the source deliverable is written (see [`DeliverableMode`]).
+    #[serde(default)]
+    pub deliverable_mode: DeliverableMode,
+    /// Serialize the blocking toolchain callouts (`prepare_workspace`/`compile`/`validate`) on
+    /// one semaphore — set when the app shares a single build dir / target across units.
+    #[serde(default)]
+    pub serialize_toolchain: bool,
+    /// Default to the fail-closed `launcher` sandbox provider (still overridable by
+    /// `COMPOSER_SANDBOX_PROVIDER`). Set by any wheel that runs untrusted native toolchains.
+    #[serde(default)]
+    pub confine_by_default: bool,
+    /// Human noun for one formalized unit in the console/TUI summary ("instruction" for
+    /// Crucible). Defaults to "component".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_noun: Option<String>,
 }
 
 fn default_ecosystem() -> String {
@@ -208,6 +252,42 @@ pub enum CompileResult {
 pub struct Unit {
     pub property: String,
     pub unit: String,
+}
+
+/// A pure plan for preparing the workspace before formalization (Crucible: place the harness
+/// `Cargo.toml`, warm its deps, build the program `.so`). The wheel *declares* the plan; the
+/// **host executes it with the shared toolchain helpers**, so the standard network posture holds
+/// without the wheel touching a command line: dependency fetches run *unconfined* (network, no
+/// untrusted code), and the code-executing build runs *confined + offline*
+/// (`docs/command-sandbox.md` §5). This keeps warming out of confinement — the codebase never
+/// gives a confined process network — while still letting a pure-Rust app own its layout.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkspacePrep {
+    /// Files to write under the workdir (path-confined) before warming — e.g. the harness
+    /// `Cargo.toml` (whose deps only the wheel knows). Contents only; no command line.
+    #[serde(default)]
+    pub files: BTreeMap<String, String>,
+    /// Project-relative manifest dirs to `cargo fetch` (unconfined, network) so a later
+    /// confined + offline build finds every dep warm in the private `CARGO_HOME`.
+    #[serde(default)]
+    pub warm_dirs: Vec<String>,
+    /// If set, build this program to its platform binary before formalization, via the host's
+    /// shared build capability (Solana: `cargo-build-sbf` → `target/deploy/<program>.so`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_program: Option<String>,
+}
+
+/// Extra sandbox grants a wheel needs unioned into the host-authored policy (Crucible: the
+/// crucible checkout + the `crucible` binary dir as read-only). Pure data — the wheel declares
+/// grants, Python decides the policy; the wheel never invents confinement.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SandboxGrants {
+    /// Extra read-only paths.
+    #[serde(default)]
+    pub extra_ro: Vec<String>,
+    /// Extra `NAME=VALUE` env entries to pass through confinement.
+    #[serde(default)]
+    pub extra_env: Vec<String>,
 }
 
 /// The result of `validate` — the fused build+check for one unit. Either the harness failed
@@ -487,7 +567,24 @@ pub trait Backend: Send + Sync + 'static {
         sandbox: &Sandbox,
     ) -> ValidateOutcome;
 
+    /// Extra sandbox grants to union into the host's policy (see [`SandboxGrants`]). Pure; called
+    /// once before any confined step. Default: no extra grants.
+    fn sandbox_grants(&self, _args: &serde_json::Value) -> SandboxGrants {
+        SandboxGrants::default()
+    }
+
+    /// Declare the pre-formalization workspace prep (see [`WorkspacePrep`]). Pure — the host
+    /// executes the returned plan with the shared warm/build helpers, so the network posture
+    /// stays Python-owned. Default: nothing to prepare.
+    fn workspace_prep(&self, _input: &AuthorInput) -> WorkspacePrep {
+        WorkspacePrep::default()
+    }
+
     /// Optional run-level artifacts from the full outcome set, as `{relpath: contents}`.
+    ///
+    /// Under [`DeliverableMode::Callout`] this renders the whole source deliverable (Crucible's
+    /// one crate); the host enriches the outcome set with each component's `artifact_text` /
+    /// `property_units` and the `setup` result so the wheel has everything the deliverable needs.
     fn finalize(&self, _outcomes: &serde_json::Value) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
@@ -579,6 +676,20 @@ pub fn ffi_validate(
         },
     };
     serde_json::to_string(&outcome).unwrap_or_default()
+}
+
+/// `sandbox_grants(args_json) -> str` (JSON `SandboxGrants`).
+pub fn ffi_sandbox_grants(b: &dyn Backend, args_json: &str) -> String {
+    let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
+    serde_json::to_string(&b.sandbox_grants(&args)).unwrap_or_else(|_| "{}".into())
+}
+
+/// `workspace_prep(input_json) -> str` (JSON `WorkspacePrep`). Pure.
+pub fn ffi_workspace_prep(b: &dyn Backend, input_json: &str) -> String {
+    match parse::<AuthorInput>(input_json, "AuthorInput") {
+        Ok(input) => serde_json::to_string(&b.workspace_prep(&input)).unwrap_or_else(|_| "{}".into()),
+        Err(_) => "{}".into(),
+    }
 }
 
 /// `finalize(outcomes_json) -> str | None` (JSON `{relpath: contents}`, or None).
@@ -686,6 +797,16 @@ macro_rules! export_app {
         }
 
         #[$crate::pyo3::pyfunction]
+        fn sandbox_grants(args_json: ::std::string::String) -> ::std::string::String {
+            $crate::ffi_sandbox_grants(__autoprover_app(), &args_json)
+        }
+
+        #[$crate::pyo3::pyfunction]
+        fn workspace_prep(input_json: ::std::string::String) -> ::std::string::String {
+            $crate::ffi_workspace_prep(__autoprover_app(), &input_json)
+        }
+
+        #[$crate::pyo3::pyfunction]
         fn finalize(
             outcomes_json: ::std::string::String,
         ) -> ::std::option::Option<::std::string::String> {
@@ -704,6 +825,8 @@ macro_rules! export_app {
             m.add_function($crate::pyo3::wrap_pyfunction!(judge_prompt, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(compile, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(validate, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(sandbox_grants, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(workspace_prep, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(finalize, m)?)?;
             ::std::result::Result::Ok(())
         }
