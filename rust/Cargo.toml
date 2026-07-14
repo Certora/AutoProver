@@ -1,0 +1,21 @@
+# Cargo workspace for AutoProver's Rust components.
+#
+# In this PR the workspace contains a single member:
+#
+# * `run-confined` — the trusted command-sandbox launcher (Landlock filesystem +
+#   seccomp network/ptrace + rlimits + scrubbed env, then `execve`). The first
+#   `SandboxProvider` for the `RunCommand` effect — see docs/command-sandbox.md.
+#
+# Later PRs re-add the Rust *application framework* crates to `members`:
+# `autoprover-sdk` (the ABI + `export_app!` macro) and `example-app` (its
+# round-trip test wheel), then the `crucible-app` wheel. Those crates depend on
+# the shared `[workspace.dependencies]` (serde / pyo3); `run-confined` does not,
+# so this trimmed workspace declares none.
+[workspace]
+resolver = "2"
+members = ["run-confined"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
