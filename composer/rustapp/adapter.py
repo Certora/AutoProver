@@ -503,7 +503,11 @@ class RustFormalizer(Formalizer[RustFormalResult]):
                 entry["artifact_text"] = res.result.artifact_text
                 entry["property_units"] = res.result.property_units()
             components.append(entry)
-        payload = {"components": components, "setup": self._setup_result}
+        payload = {
+            "program": str(run.source.contract_name),
+            "components": components,
+            "setup": self._setup_result,
+        }
         raw = await asyncio.to_thread(self._module.finalize, json.dumps(payload))
         if not raw:
             return

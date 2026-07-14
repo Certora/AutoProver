@@ -10,13 +10,99 @@
 //! the toolchain through the shared `run_confined` launcher. Python owns the loop.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use autoprover_sdk::{
     run_confined, AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, AuthorInput, Backend,
-    CommandOutput, CompileResult, CoreSlot, EventKind, Failure, PhaseSpec, Prompt, Sandbox, Unit,
-    ValidateOutcome, Verdict,
+    CommandOutput, CompileResult, CoreSlot, DeliverableMode, EventKind, Failure, PhaseSpec, Prompt,
+    Sandbox, SandboxGrants, SetupSpec, Unit, ValidateOutcome, Verdict, WorkspacePrep,
 };
+
+// The crucible/solana/anchor stack a harness pins (docs/crucible-application.md §6.1). Hardcoded
+// for now to the combination the installed toolchain matches (was Python's `CrucibleHarness`).
+const ANCHOR_VERSION: &str = "1.0.1";
+const SOLANA_VERSION: &str = "3.0";
+const LIBAFL_VERSION: &str = "0.15.1";
+
+/// The crucible checkout that resolves the harness crate's path deps (`$CRUCIBLE_REPO`). Read
+/// here so crate rendering is fully wheel-owned; `validate_preconditions` guarantees it is set.
+fn crucible_repo() -> Option<PathBuf> {
+    std::env::var("CRUCIBLE_REPO").ok().map(PathBuf::from)
+}
+
+/// The `[dependencies]` block for the harness crate — the pinned crucible/solana/anchor stack
+/// plus the program-under-test as a path dep (was `CrucibleDep::render_deps`).
+fn crucible_deps(program: &str, repo: &Path) -> String {
+    let crates = repo.join("crates");
+    format!(
+        "crucible-fuzzer = {{ path = \"{cf}\" }}\n\
+         crucible-test-context = {{ path = \"{ctc}\" }}\n\
+         anchor-lang = \"{ANCHOR_VERSION}\"\n\
+         arbitrary = {{ version = \"1\", features = [\"derive\"] }}\n\
+         ctrlc = \"3.4\"\n\
+         libafl = {{ version = \"{LIBAFL_VERSION}\", features = [\"std\", \"cli\", \"prelude\"] }}\n\
+         libafl_bolts = {{ version = \"{LIBAFL_VERSION}\", features = [\"std\"] }}\n\
+         {program} = {{ path = \"../../programs/{program}\", features = [\"no-entrypoint\"] }}\n\
+         solana-keypair = \"{SOLANA_VERSION}\"\n\
+         solana-pubkey = \"{SOLANA_VERSION}\"\n\
+         solana-signer = \"{SOLANA_VERSION}\"",
+        cf = crates.join("crucible-fuzzer").display(),
+        ctc = crates.join("crucible-test-context").display(),
+    )
+}
+
+/// The harness `Cargo.toml`: one `[[bin]]` (`invariant_test`) selected by a per-component Cargo
+/// feature. `features` are inert (`f = []`) — Crucible's macro self-gates `main()` by fn name ==
+/// feature — so a build only needs the feature it selects declared (was `CrucibleHarness`).
+fn render_cargo_toml(program: &str, repo: &Path, features: &[String]) -> String {
+    let feats = if features.is_empty() {
+        "# (no components yet)".to_string()
+    } else {
+        features.iter().map(|f| format!("{f} = []")).collect::<Vec<_>>().join("\n")
+    };
+    format!(
+        "[package]\n\
+         name = \"{program}_fuzz\"\n\
+         version = \"0.1.0\"\n\
+         edition = \"2021\"\n\
+         \n\
+         [workspace]\n\
+         \n\
+         [dependencies]\n\
+         {deps}\n\
+         \n\
+         [[bin]]\n\
+         name = \"invariant_test\"\n\
+         path = \"src/main.rs\"\n\
+         \n\
+         [features]\n\
+         {feats}\n",
+        deps = crucible_deps(program, repo),
+    )
+}
+
+/// The crate's on-disk files for a confined build: `src/main.rs` plus a `Cargo.toml` declaring
+/// exactly `features` (materialized per run — with `serialize_toolchain` there is no concurrent
+/// writer, so no shared-manifest race and no cumulative feature reservation).
+fn crate_files(program: &str, main_rs: String, features: &[String]) -> BTreeMap<String, String> {
+    let mut files = BTreeMap::new();
+    files.insert(format!("fuzz/{program}/src/main.rs"), main_rs);
+    if let Some(repo) = crucible_repo() {
+        files.insert(
+            format!("fuzz/{program}/Cargo.toml"),
+            render_cargo_toml(program, &repo, features),
+        );
+    }
+    files
+}
+
+/// The directory of `bin` on `$PATH` (for a read-only sandbox grant), if found.
+fn which_dir(bin: &str) -> Option<String> {
+    let path = std::env::var("PATH").ok()?;
+    std::env::split_paths(&path)
+        .find(|dir| dir.join(bin).is_file())
+        .map(|dir| dir.display().to_string())
+}
 /// Backend-guidance prose injected into the property-extraction prompt. Crucible is
 /// a fuzzer, so — like Foundry — refutations are valuable but universals can't be
 /// *proven*; a handful of property kinds are a poor fit for sampling.
@@ -324,13 +410,6 @@ fn is_build_error(out: &str) -> bool {
 // Backend glue: small pure helpers shared by the callouts.
 // ===========================================================================
 
-/// The single harness source file the crate builds, keyed by its crate-relative path.
-fn one_file(program: &str, main_rs: String) -> BTreeMap<String, String> {
-    let mut files = BTreeMap::new();
-    files.insert(format!("fuzz/{program}/src/main.rs"), main_rs);
-    files
-}
-
 /// A string field from the input's `context` blob (e.g. the shared fixture source).
 fn ctx_str(input: &AuthorInput, key: &str) -> String {
     input.context.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string()
@@ -397,17 +476,31 @@ impl Backend for CrucibleApp {
                 // The per-invariant verdict — surfaced as a persistent callout + toast.
                 EventKind::notice("verdict", "Verdict"),
             ],
-            // NOTE: the deliverable model (one shared crate vs per-component files) is
-            // settled in phase 2 (docs §7.1); these are provisional.
+            // Metadata (properties.json / commentary / property→tests map) lands under
+            // `certora/crucible/` — the split Foundry uses — while the crate deliverable is the
+            // one file under `fuzz/<program>/` (deliverable_primary + the finalize render).
             artifact_layout: ArtifactLayout {
-                deliverable_dir: "fuzz".into(),
+                deliverable_dir: "certora/crucible".into(),
                 internal_dir: ".certora_internal/crucible".into(),
                 report_dir: "certora/crucible/reports".into(),
                 artifact_dir: "certora/crucible/harnesses".into(),
                 artifact_prefix: "harness".into(),
                 artifact_extension: "rs".into(),
                 property_suffix: "property_tests".into(),
+                deliverable_primary: Some("fuzz/{program}/src/main.rs".into()),
             },
+            // A shared fixture authored once (the setup step), one crate assembled by finalize
+            // (callout), all toolchain runs serialized on the one crate/target, confined by
+            // default (untrusted native builds), and "instruction" as the unit noun.
+            setup: Some(SetupSpec {
+                phase_key: "build_harness".into(),
+                label: "Build Harness".into(),
+                context_key: "fixture".into(),
+            }),
+            deliverable_mode: DeliverableMode::Callout,
+            serialize_toolchain: true,
+            confine_by_default: true,
+            component_noun: Some("instruction".into()),
         }
     }
 
@@ -440,6 +533,21 @@ impl Backend for CrucibleApp {
             }
         } else {
             problems.push("no project_root in args".to_string());
+        }
+
+        // The crucible checkout resolves the harness crate's path deps (§6.1). Was
+        // `resolve_crucible_repo` in Python; now the wheel owns it (it renders the deps).
+        match std::env::var("CRUCIBLE_REPO") {
+            Ok(repo) if Path::new(&repo).join("crates/crucible-fuzzer").is_dir() => {}
+            Ok(repo) => problems.push(format!(
+                "$CRUCIBLE_REPO={repo} has no crates/crucible-fuzzer — set it to a local crucible \
+                 clone (the harness deps resolve against it)."
+            )),
+            Err(_) => problems.push(
+                "$CRUCIBLE_REPO is not set — point it at a local crucible clone (must contain \
+                 crates/crucible-fuzzer); the harness crate's path deps resolve against it."
+                    .to_string(),
+            ),
         }
 
         if problems.is_empty() {
@@ -544,7 +652,7 @@ impl Backend for CrucibleApp {
                 .unwrap_or_else(|| "c_probe".to_string());
             (format!("{fixture}\n\n{spec}"), feature)
         };
-        let files = one_file(program, main_rs);
+        let files = crate_files(program, main_rs, std::slice::from_ref(&feature));
         let args = vec![
             "run".to_string(),
             program.clone(),
@@ -575,7 +683,7 @@ impl Backend for CrucibleApp {
         let program = &input.program;
         let fixture = ctx_str(input, "fixture");
         let timeout = ctx_u64(input, "fuzz_timeout", 30);
-        let files = one_file(program, format!("{fixture}\n\n{spec}"));
+        let files = crate_files(program, format!("{fixture}\n\n{spec}"), std::slice::from_ref(&unit.to_string()));
         let args = vec![
             "run".to_string(),
             program.clone(),
@@ -611,6 +719,88 @@ impl Backend for CrucibleApp {
                 ValidateOutcome::Verdict { verdict: v }
             }
         }
+    }
+
+    fn sandbox_grants(&self, _args: &serde_json::Value) -> SandboxGrants {
+        // Read-only grants beyond the launcher's discovered Rust toolchain: the crucible checkout
+        // (path deps) and the `crucible` binary's dir. Was Python's `crucible_sandbox` extra_ro.
+        let mut extra_ro = Vec::new();
+        if let Ok(repo) = std::env::var("CRUCIBLE_REPO") {
+            extra_ro.push(repo);
+        }
+        if let Some(dir) = which_dir("crucible") {
+            extra_ro.push(dir);
+        }
+        SandboxGrants { extra_ro, extra_env: Vec::new() }
+    }
+
+    fn workspace_prep(&self, input: &AuthorInput) -> WorkspacePrep {
+        // Place a deps-only harness manifest (probe feature) so warming has a manifest and the
+        // setup dry-run can select a feature; per-run builds overwrite it with their own feature.
+        // Then warm the harness crate's deps and build the program `.so` (the host runs both with
+        // the shared helpers — fetch unconfined, build confined+offline).
+        let program = &input.program;
+        let mut files = BTreeMap::new();
+        if let Some(repo) = crucible_repo() {
+            files.insert(
+                format!("fuzz/{program}/Cargo.toml"),
+                render_cargo_toml(program, &repo, std::slice::from_ref(&"c_probe".to_string())),
+            );
+        }
+        WorkspacePrep {
+            files,
+            warm_dirs: vec![format!("fuzz/{program}")],
+            build_program: Some(program.clone()),
+        }
+    }
+
+    fn finalize(&self, outcomes: &serde_json::Value) -> BTreeMap<String, String> {
+        // Assemble the one deliverable crate: the shared fixture + every delivered invariant's
+        // test section, keyed by its feature (was Python's `CrucibleHarness`/`CrucibleArtifactStore`).
+        let program = outcomes.get("program").and_then(|v| v.as_str()).unwrap_or_default();
+        let fixture = outcomes.get("setup").and_then(|v| v.as_str()).unwrap_or_default();
+
+        // feature -> test section (BTreeMap keeps a stable, sorted crate — matches the old store).
+        let mut sections: BTreeMap<String, String> = BTreeMap::new();
+        if let Some(comps) = outcomes.get("components").and_then(|v| v.as_array()) {
+            for c in comps {
+                if !c.get("delivered").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    continue;
+                }
+                let text = c.get("artifact_text").and_then(|v| v.as_str()).unwrap_or_default();
+                // property_units: [[title, [feature, ...]], ...]
+                if let Some(pu) = c.get("property_units").and_then(|v| v.as_array()) {
+                    for entry in pu {
+                        if let Some(units) = entry.get(1).and_then(|v| v.as_array()) {
+                            for u in units.iter().filter_map(|v| v.as_str()) {
+                                sections.insert(u.to_string(), text.trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if program.is_empty() || sections.is_empty() {
+            return BTreeMap::new();
+        }
+
+        let features: Vec<String> = sections.keys().cloned().collect();
+        let body = features.iter().map(|f| sections[f].clone()).collect::<Vec<_>>().join("\n\n");
+        let main_rs = format!(
+            "{}\n\n{}{}",
+            fixture.trim_end(),
+            body,
+            if body.is_empty() { "" } else { "\n" }
+        );
+        let mut files = BTreeMap::new();
+        files.insert(format!("fuzz/{program}/src/main.rs"), main_rs);
+        if let Some(repo) = crucible_repo() {
+            files.insert(
+                format!("fuzz/{program}/Cargo.toml"),
+                render_cargo_toml(program, &repo, &features),
+            );
+        }
+        files
     }
 }
 
