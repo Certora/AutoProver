@@ -28,7 +28,7 @@ from composer.pipeline.core import (
     run_pipeline,
 )
 from composer.pipeline.ecosystem import ECOSYSTEMS, Ecosystem
-from composer.rustapp.adapter import FeedbackHook, ProverHook, RustBackend
+from composer.rustapp.adapter import RustBackend
 from composer.rustapp.descriptor import AppDescriptor, CoreSlot
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.store import RustArtifactStore
@@ -50,8 +50,6 @@ class BackendOptions:
     application but before :func:`run_application`, keeping one phase enum.
     """
 
-    prover: ProverHook | None = None
-    feedback: FeedbackHook | None = None
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     fuzz_timeout_s: int = 30
     sandbox: SandboxConfig | None = None
@@ -156,8 +154,6 @@ async def run_rust_pipeline(
     max_concurrent: int = 4,
     max_bug_rounds: int = 3,
     interactive: bool = False,
-    prover: ProverHook | None = None,
-    feedback: FeedbackHook | None = None,
 ) -> CorePipelineResult[RustFormalResult]:
     """Build the backend from ``module_name`` and run the shared driver — the Rust
     analogue of ``run_autoprove_pipeline`` / ``run_foundry_pipeline``.
@@ -166,7 +162,7 @@ async def run_rust_pipeline(
     entry for headless callers whose handler ignores phases; for a TUI/console
     frontend, build a :class:`RustApplication` once and use :func:`run_application`
     so the frontend's labels and the backend's phases share one enum object."""
-    app = build_application(module_name, prover=prover, feedback=feedback)
+    app = build_application(module_name)
     return await run_application(
         app,
         source_input,
@@ -260,8 +256,6 @@ def build_application(
     *,
     store_factory: StoreFactory | None = None,
     backend_cls: type[RustBackend] = RustBackend,
-    prover: ProverHook | None = None,
-    feedback: FeedbackHook | None = None,
     command_timeout_s: int = DEFAULT_TIMEOUT_S,
     fuzz_timeout_s: int = 30,
     sandbox: SandboxConfig | None = None,
@@ -290,8 +284,6 @@ def build_application(
         phase_labels=phase_labels,
         section_order=section_order,
         options=BackendOptions(
-            prover=prover,
-            feedback=feedback,
             command_timeout_s=command_timeout_s,
             fuzz_timeout_s=fuzz_timeout_s,
             sandbox=sandbox,

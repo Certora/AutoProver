@@ -23,7 +23,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, cast, get_args, override
+from typing import Any, Callable, cast, get_args, override
 
 from composer.pipeline.core import (
     CorePhases,
@@ -439,8 +439,3 @@ class RustBackend:
             self.descriptor.artifact_layout.artifact_prefix,
             self.descriptor.artifact_layout.artifact_extension,
         )
-
-
-# Retained for callers that referenced the hook types (now unused by the loop).
-ProverHook = Callable[[str, Any, "list[str] | None"], Awaitable[dict]]
-FeedbackHook = Callable[[str, Any, Any], Awaitable[dict]]
