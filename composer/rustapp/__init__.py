@@ -1,4 +1,11 @@
-"""Host for Rust-based AutoProver applications (PyO3).
+"""Host for AutoProver applications whose backend is *implemented* in Rust (PyO3).
+
+"Rust" here is the **backend implementation** language — the wheel is compiled Rust — and it is
+orthogonal to the ecosystem, i.e. the language of the *code being analyzed*: a Rust-implemented
+backend may analyze Solidity (``echoprover`` selects ecosystem ``evm``) or Rust (Crucible selects
+``solana``). The analyzed-source language rides on the ecosystem (see
+``composer.pipeline.ecosystem.Language``); this host never assumes it from the fact that the
+backend is a Rust wheel — it reads it from ``app.ecosystem.language``.
 
 This package is the Python side of the seam described in
 ``docs/rust-backend-api.md``. A Rust application is a wheel built with

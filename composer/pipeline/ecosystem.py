@@ -4,8 +4,10 @@ blockchain/source domain (see ``docs/ecosystem-abstraction.md``).
 An **ecosystem** bundles everything the shared analysis + property-extraction steps need
 that is domain-specific: the system-model type they produce, the analysis/property prompt
 templates, connectivity validation, the main-unit locator, and the per-unit enumeration.
-It factors into a **language** facet (source-level conventions, shared across chains that
-use the same language) and the **chain** facet (the platform model + prompts).
+It factors into a **language** facet (the conventions for reading the *analyzed* program's
+source — Solidity, Rust — shared across chains that use the same language) and the **chain**
+facet (the platform model + prompts). The language here is that of the *code under analysis*,
+not the language the AutoProver backend is implemented in (see :class:`Language`).
 
 Phase 1 introduces the seam and captures today's behavior as ``EVM = SOLIDITY ⊕ evm`` —
 a *move*, not a rewrite: the existing `SourceApplication`, prompt templates,
@@ -52,10 +54,19 @@ class PromptPair:
 
 @dataclass(frozen=True)
 class Language:
-    """Source-language facet — shared by every chain that uses this language (e.g. the
-    ``rust`` facet is shared by Solana and Soroban). Its members are captured here for the
-    seam; consumers (the entry point's ``forbidden_read``, the ``code_explorer`` prompt) are
-    rewired to read from it in a later phase, when a non-Solidity language first needs them."""
+    """The language of the **code being analyzed** — a facet of the ecosystem, shared by every
+    chain whose programs are written in it (e.g. the ``rust`` facet is shared by Solana and
+    Soroban). It drives how the shared front half *reads* the target's source (fs-exclusion
+    pattern, code-explorer prompt, failure modes).
+
+    This is emphatically **not** the language the AutoProver backend is *implemented* in: a
+    backend implemented as a Rust wheel (:mod:`composer.rustapp`) may analyze Solidity
+    (``echoprover`` → EVM) or Rust (Crucible → Solana). The implementation language is not
+    associated with the ecosystem; only the analyzed-source language is.
+
+    Its members are captured here for the seam; consumers (the entry point's ``forbidden_read``,
+    the ``code_explorer`` prompt) are rewired to read from it in a later phase, when a
+    non-Solidity analyzed language first needs them."""
 
     name: LanguageTag
     default_forbidden_read: str
