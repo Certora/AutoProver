@@ -60,8 +60,8 @@ Crucible needs. Each maps to a seam in §3–§5.
 | 3 | Context injection | [backend.py](../composer/crucible/backend.py) `CrucibleFormalizer._context` | Thread the fixture + `fuzz_timeout` into each component's `AuthorInput.context` | §3.3 generic context |
 | 4 | Crate scaffolding | `_before_formalize` → `store.prepare_component` | Pre-place `Cargo.toml` with cumulative feature declarations before each unit builds | §4 (subsumed by prep + per-run manifest) |
 | 5 | Toolchain serialization | `CrucibleFormalizer(command_sem=Semaphore(1))` | Serialize compile/validate (one shared crate / target dir) | §3.4 descriptor flag |
-| 6 | Dependency warming | [store.py](../composer/crucible/store.py) `warm_dependencies` + `write_setup_manifest` | Network `cargo fetch` **outside** the sandbox into the private `CARGO_HOME`, so the confined build runs offline | §4 prepare_workspace |
-| 7 | Program `.so` pre-build | [pipeline.py](../composer/crucible/pipeline.py) `run_crucible_pipeline` → `build_program` | `cargo-build-sbf` / `anchor build` before the pipeline; the harness loads the `.so` | §4 prepare_workspace |
+| 6 | Dependency warming | [store.py](../composer/crucible/store.py) `warm_dependencies` + `write_setup_manifest` | Network `cargo fetch` **outside** the sandbox into the private `CARGO_HOME`, so the confined build runs offline | §4 workspace_prep |
+| 7 | Program `.so` pre-build | [pipeline.py](../composer/crucible/pipeline.py) `run_crucible_pipeline` → `build_program` | `cargo-build-sbf` / `anchor build` before the pipeline; the harness loads the `.so` | §4 workspace_prep |
 | 8 | RAG env | [pipeline.py](../composer/crucible/pipeline.py) `build_crucible_env` | Wire the `crucible_kb` RAG search tools onto the author env | §5.1 descriptor-driven env |
 | 9 | Repo resolution + sandbox grants + default provider | [pipeline.py](../composer/crucible/pipeline.py) `resolve_crucible_repo`, `crucible_sandbox` | Resolve `$CRUCIBLE_REPO`; grant it + the `crucible` binary as sandbox `extra_ro`; default to the `launcher` provider | §5.2 grants callout + descriptor flag |
 | 10 | CLI entry points + verdict summary | [cli.py](../composer/crucible/cli.py), [results.py](../composer/crucible/results.py) | `console-crucible` / `tui-crucible`; print a per-invariant verdict tally | §5.3 generic summary |
@@ -164,31 +164,42 @@ generic formalizer constructs the `Semaphore(1)` itself and threads it into `_ru
 
 ---
 
-## 4. Workspace preparation — one privileged, wheel-authored callout
+## 4. Workspace preparation — a pure plan the host executes
 
 Items **4, 6, 7** (Cargo manifest placement, dependency warming, the `.so` pre-build) are all
-the same shape: a **toolchain step that must run before formalization**, some of it needing
-**network** (warm/build) that the confined fuzz sandbox denies. Today they're three ad-hoc
-Python steps (`write_setup_manifest`, `warm_dependencies`, `build_program`).
+the same shape: a **toolchain step that must run before formalization**, part of it needing
+**network** (the dependency fetches). Today they're three ad-hoc Python steps
+(`write_setup_manifest`, `warm_dependencies`, `build_program`).
 
-**Proposal.** One new **blocking** callout, peer to `compile`/`validate`:
+**Design constraint discovered in the code.** The command sandbox *never* gives a confined
+process network access — `rust_build_policy` hardcodes `network=False`, and the only network
+step, `warm_cargo_cache`, runs **unconfined** ([command-sandbox.md](./command-sandbox.md) §5).
+So a "prep sandbox with `network: true`" (an earlier draft of this section) would be a brand-new
+security capability — a confined process with a socket — which the codebase deliberately avoids.
+The right seam therefore does **not** hand the wheel a confined-with-network policy.
+
+**Proposal.** One new **pure** callout that returns a *plan*, executed by the **host** with the
+existing shared helpers:
 
 ```rust
-fn prepare_workspace(&self, input: &AuthorInput, workdir: &Path, sandbox: &Sandbox)
-    -> PrepareResult { /* Ok | Failed { errors } */ }
+fn workspace_prep(&self, input: &AuthorInput) -> WorkspacePrep {
+    // { files: {relpath: contents},    // e.g. the harness Cargo.toml (deps only the wheel knows)
+    //   warm_dirs: [String],           // dirs to `cargo fetch` (unconfined, network)
+    //   build_program: Option<String>  // build this program to its platform binary }
+}
 ```
 
-- Runs once at the top of `prepare_formalization`, off the event loop
-  (`asyncio.to_thread`, GIL released) like `compile`/`validate`.
-- The wheel implements it by calling `run_confined` directly — **same trust model**: the wheel
-  assembles the argv (`cargo-build-sbf …`, `anchor build`, `cargo fetch`), Python authors the
-  `Sandbox` policy. `crucible_app` writes the initial deps-only `Cargo.toml` (via the `files`
-  map), warms deps, and builds the `.so`.
-- **The host passes a distinct prep `Sandbox`** with `network: true` and the broader `rw` the
-  build needs (`target/`, the private `CARGO_HOME`) — vs. the formalization `Sandbox`
-  (`network: false`). Both are authored by Python's `SandboxConfig`; the wheel still cannot
-  invent policy. This actually **tightens** security: warming moves from *unconfined* today
-  (`warm_cargo_cache` runs outside the sandbox) to *confined-with-network*.
+- The host writes `files` (path-confined via `confined_join`), runs `warm_cargo_cache` on each
+  `warm_dirs` (**unconfined, network** — a fetch runs no untrusted code), and, if
+  `build_program` is set, calls the shared `build_program` capability (which itself warms the
+  *program* crate then builds it **confined + offline**).
+- **Posture unchanged and Python-owned end to end**: fetches unconfined, code-executing builds
+  confined+offline. The wheel touches no command line — it contributes only file *contents* and
+  declarative intent (which dirs, which program). Strictly within the existing trust model; no
+  new capability.
+- `build_program` is the shared Solana build capability
+  ([solana/build.py](../composer/spec/solana/build.py)); the generic host invokes it lazily when
+  the plan requests it (shared ecosystem capability, not app-specific Python).
 
 **Bonus simplification — the cumulative-feature manifest race disappears (item 4).** The reason
 `prepare_component` reserves features *cumulatively* on a shared on-disk `Cargo.toml` is that
@@ -197,7 +208,7 @@ concurrent per-component sessions each rewrite it and could drop each other's fe
 `Cargo.toml` (deps + exactly the one feature this build needs — features are inert `f = []`
 entries that don't affect dep resolution) in the **`files` map of each `compile`/`validate` run**.
 No shared-manifest mutation across runs ⇒ no race ⇒ no `reserve_features` / `_reserved` /
-`prepare_component` machinery at all. `prepare_workspace` writes only the deps-only manifest that
+`prepare_component` machinery at all. The `workspace_prep` plan places only the deps-only manifest that
 warming needs. This is the last thing keeping the `CrucibleArtifactStore` alive; with it gone,
 §3.1's generic `callout` store fully suffices.
 
@@ -272,7 +283,7 @@ After §3–§5:
   (A thin `crucible_launch.py` = `def console_crucible(): return console_main("crucible_app")`
   keeps the bare `console-crucible` command with no positional module arg. This is the *only*
   Python left, and it's shared-shaped — echoprover has the identical shim.)
-- **The wheel (`rust/crucible-app`)** grows: `prepare_workspace`, `sandbox_grants`, a richer
+- **The wheel (`rust/crucible-app`)** grows: `workspace_prep`, `sandbox_grants`, a richer
   `finalize` (crate rendering, absorbing `CrucibleHarness`/`CrucibleDep`), the repo precondition,
   and a descriptor carrying `setup`, `deliverable_mode: "callout"`, `serialize_toolchain: true`,
   `confine_by_default: true`, `component_noun: "instruction"`. It reads `$CRUCIBLE_REPO` itself.
@@ -292,14 +303,14 @@ byte-identical deliverable + report to today, at parity runtime (the e2e Vault g
 | Seam | New capability | Who controls argv | Who authors policy | Net |
 |---|---|---|---|---|
 | §3.1 finalize deliverable | writes files under project root | — (host writes, path-confined via `confined_join`) | n/a | same as today's store |
-| §4 prepare_workspace | runs `cargo`/`anchor`/`crucible` w/ **network** | **wheel** (trusted), as today | **Python** `SandboxConfig` | *tightens* (warm was unconfined) |
+| §4 workspace_prep | warm dirs + build a program | — (host runs the shared `warm_cargo_cache` / `build_program`; wheel supplies only file *contents* + which dirs/program) | **Python** `SandboxConfig` | **identical** to today (fetch unconfined, build confined+offline) |
 | §5.2 sandbox_grants | adds `extra_ro`/`extra_env` | n/a (data) | Python unions into its policy | same grants, now wheel-declared |
 
-No seam gives the *LLM* argv control, and no seam lets the *wheel* invent a sandbox policy — the
-wheel only assembles argv into a policy Python hands it, precisely as `compile`/`validate` do
-today ([rust-backend-api.md](./rust-backend-api.md) §7). The one behavioral change (warming
-confined-with-network instead of unconfined) is a strict improvement and the main thing to
-validate in the e2e.
+No seam gives the *LLM* argv control, and no seam lets the *wheel* invent a sandbox policy. §4 is
+a *pure declaration* — the host runs the same shared warm/build helpers it does today, so the
+network posture (fetch unconfined, code-executing build confined + offline) is byte-for-byte the
+current behavior. Nothing here weakens or "tightens" confinement; it only moves *who declares the
+plan* into the wheel.
 
 ---
 
@@ -315,11 +326,11 @@ confine_by_default: bool,          // default false  (§5.2)
 component_noun: Option<String>,    // default "component"  (§5.3)
 ```
 
-**New callouts on the `Backend` trait:**
+**New callouts on the `Backend` trait (both pure):**
 
 ```rust
-fn prepare_workspace(&self, input, workdir, sandbox) -> PrepareResult { Ok }   // default no-op (§4)
-fn sandbox_grants(&self, args: &serde_json::Value) -> SandboxGrants { default }  // §5.2
+fn workspace_prep(&self, input) -> WorkspacePrep { default }   // { files, warm_dirs, build_program }  (§4)
+fn sandbox_grants(&self, args: &serde_json::Value) -> SandboxGrants { default }  // { extra_ro, extra_env }  (§5.2)
 // finalize's input gains artifact_text / property_units / setup (§3.1) — signature unchanged.
 ```
 
@@ -331,19 +342,20 @@ backward-compatible extension of the passive-backend API, not a new protocol.
 ## 9. Work breakdown
 
 1. **Descriptor + defaults** — add the five fields to `AppDescriptor` (Rust + pydantic mirror),
-   all defaulted; `prepare_workspace` / `sandbox_grants` trait methods with no-op defaults.
+   all defaulted; `workspace_prep` / `sandbox_grants` pure trait methods with no-op defaults.
    *No behavior change; echoprover + Crucible-via-Python still run.*
 2. **Generic host honors them** — setup step, context injection, `serialize_toolchain`,
-   `callout` deliverable via enriched `finalize`, RAG-from-descriptor, `confine_by_default` +
-   grants union, generic verdict summary. Land behind the descriptor gates so echoprover is
-   unaffected.
+   `callout` deliverable via enriched `finalize`, `workspace_prep` execution (write files → warm
+   → build), RAG-from-descriptor, `confine_by_default` + grants union, generic verdict summary.
+   Land behind the descriptor gates so echoprover is unaffected.
 3. **Port `crucible_app`** — move `CrucibleHarness`/`CrucibleDep` rendering into `finalize`;
-   implement `prepare_workspace` (manifest + warm + `.so` build) and `sandbox_grants`; add the
-   repo precondition; set the descriptor flags; materialize `Cargo.toml` per confined run.
+   implement `workspace_prep` (harness `Cargo.toml` + warm dirs + program build) and
+   `sandbox_grants`; add the repo precondition; set the descriptor flags; materialize `Cargo.toml`
+   per confined run.
 4. **Delete `composer/crucible/`** and repoint the console scripts. Update the gate tests
    (`test_crucible_*`) to drive the wheel through the generic host.
 5. **e2e parity** — run the Vault gate; confirm 16 GOOD at ~parity runtime and byte-identical
-   deliverable, with warming now confined-with-network.
+   deliverable + report. (Posture is unchanged, so no new confinement risk to validate.)
 
 Steps 1–2 are the reusable investment (they benefit *every* future Rust app); 3–5 are the
 Crucible port that proves the seam.
@@ -356,15 +368,16 @@ Crucible port that proves the seam.
    surface minimal but overloads one method with "side-effect artifacts" and "the primary
    deliverable." A separate `render_deliverables(results) -> {relpath: contents}` is clearer at
    the cost of one more callout. *Leaning: reuse `finalize`, revisit if a second app wants both.*
-2. **Warming confined-with-network.** Does `crucible`'s dependency graph fetch cleanly under
-   Landlock+seccomp with `--allow-network` (proc-macros, build scripts, git deps)? If some step
-   genuinely needs to run unconfined, we keep a narrow, **wheel-declared, Python-policed**
-   escape rather than silently dropping confinement. Must be validated in step 5.
+2. **Where the Solana build capability lives.** `workspace_prep`'s `build_program` routes to the
+   shared `composer.spec.solana.build.build_program` — so the generic host gains one lazy import
+   of an ecosystem-specific helper. Acceptable (it's shared, not app-specific, and gated on the
+   plan), but the cleaner long-term home is a `build` capability on the `Ecosystem` itself.
+   *Leaning: lazy import now; promote to the ecosystem seam if a second ecosystem needs it.*
 3. **Per-run `Cargo.toml` materialization vs. a stable on-disk crate.** Materializing the
    manifest per confined run (§4) is what removes the feature-race, but it means the on-disk
    crate between runs is whatever the last run wrote. Since the *authoritative* crate is produced
    at `finalize`, this is fine — but if any tooling expects a stable mid-run crate dir, we'd keep
-   a single `prepare_workspace`-written manifest with all features (reintroducing a mild coupling).
+   a single `workspace_prep`-placed manifest with all features (reintroducing a mild coupling).
 4. **`--module`-style generic command vs. per-app shims.** Whether `console-crucible` is a 2-line
    shim (`console_main("crucible_app")`) or the generic `console_main` takes the module as its
    first positional. Shims keep the familiar command names; the generic form is one entry for all
