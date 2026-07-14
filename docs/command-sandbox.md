@@ -337,7 +337,7 @@ are unchanged). `RealEffects` builds the policy from a host-resolved config (too
 discovered like `resolve_crucible_repo` already does), and `build_program` uses the same.
 
 **Fail-closed.** Before running under a real sandbox provider, `provider.available()` is checked
-(for the launcher: kernel Landlock ABI present). If it isn't — or the provider cannot apply its
+(for the launcher: Landlock is present *and* actually enforcing). If it isn't — or the provider cannot apply its
 confinement — the command **refuses to run** rather than silently executing unconfined. The failure
 is a **prominent, actionable message** naming the reason ("the command sandbox requires a
 Landlock-capable kernel (Linux ≥5.13); this backend cannot run without it — see
@@ -378,8 +378,9 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    Landlock ruleset (best-effort ABI negotiation, full FS bit set, deny-by-default + §3 grants) via
    the [`landlock`](https://crates.io/crates/landlock) crate, builds the seccomp filter (deny inet
    sockets + ptrace/process_vm_*) via [`seccompiler`](https://crates.io/crates/seccompiler), applies
-   both, then `execve`s the command with an env scrubbed to the allowlist. `--probe` reports the
-   kernel Landlock ABI and drives `available()` → fail-closed (§7). Enforcement smoke-tested on the
+   both, then `execve`s the command with an env scrubbed to the allowlist. `--probe` builds a
+   best-effort ruleset and reports whether Landlock actually *enforces* (not the numeric ABI, which
+   the crate hides), driving `available()` → fail-closed (§7). Enforcement smoke-tested on the
    host (write-outside / `/etc/passwd` / `/proc/<parent>/environ` / inet-socket all denied; workdir
    write, AF_UNIX, and toolchain `exec` allowed); argv mapping golden-tested. Full escape gate is
    step 5.
