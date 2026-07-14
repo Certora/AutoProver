@@ -21,8 +21,6 @@ file *contents* may derive from LLM output. We enforce path confinement here
 (no absolute paths, no ``..`` traversal) in addition to whatever the provider does.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import os

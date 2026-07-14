@@ -8,8 +8,6 @@ or the Textual TUI (``tui-crucible``).
 ``import composer.bind`` runs first (import-time DI / test-tape bootstrap).
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Awaitable, Callable
 

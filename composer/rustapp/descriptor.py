@@ -6,8 +6,6 @@ to synthesize the phase enum, argparse, frontend and artifact store. Keep the
 field names in lockstep with ``rust/autoprover-sdk/src/lib.rs``.
 """
 
-from __future__ import annotations
-
 import enum
 from typing import Literal
 

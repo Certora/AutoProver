@@ -10,8 +10,6 @@ without a real verifier — see ``tests/test_solana_gate.py``. Production Solana
 verification is :mod:`composer.crucible` (Crucible fuzzer backend).
 """
 
-from __future__ import annotations
-
 import enum
 import json
 from dataclasses import dataclass

@@ -7,8 +7,6 @@ registry resolves/rejects names, and the fail-closed check fires only when a
 provider reports itself unavailable.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

@@ -14,8 +14,6 @@ store) pass ``store_factory`` / ``backend_cls``; the **same** phase enum is shar
 by the frontend and the pipeline.
 """
 
-from __future__ import annotations
-
 import asyncio
 import enum
 import importlib

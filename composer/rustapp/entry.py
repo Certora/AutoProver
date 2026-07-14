@@ -16,8 +16,6 @@ The env built here is *neutral*: the standard source-navigation toolset
 database can supply its own env builder via ``env_builder=``.
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import hashlib

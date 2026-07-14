@@ -3,8 +3,6 @@ down, or the embedding model choking on a query, as seen with nomic-embed on cer
 inputs) returns "no results", never crashing the authoring turn / failing a component.
 """
 
-from __future__ import annotations
-
 import asyncio
 
 from composer.tools.crucible_rag import (

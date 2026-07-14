@@ -6,8 +6,6 @@ Uses the generic rust-app host (:func:`~composer.rustapp.host.build_application`
 is the shared sBPF ``build_program`` before the pipeline starts.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from pathlib import Path

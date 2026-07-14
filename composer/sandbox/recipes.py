@@ -12,8 +12,6 @@ with different toolchain layouts (and the escape-test gate can prove exactly wha
 was and wasn't granted).
 """
 
-from __future__ import annotations
-
 import os
 import shutil
 from pathlib import Path

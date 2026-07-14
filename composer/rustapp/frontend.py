@@ -13,8 +13,6 @@ No per-application Python subclass is needed — the same generic handler render
 any Rust app's events (see ``docs/rust-applications.md`` §4.4).
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Set as AbstractSet
 from typing import Any, override

@@ -14,8 +14,6 @@ instance satisfying the ecosystem-agnostic ``FeatureUnit`` protocol so the share
 cache keys / task ids / labels work unchanged.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Literal

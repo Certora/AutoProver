@@ -6,8 +6,6 @@ read-write, discoverable toolchain dirs read-only, and a scrubbed env with the
 network off.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from composer.sandbox.config import SandboxConfig

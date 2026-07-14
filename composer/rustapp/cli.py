@@ -17,8 +17,6 @@ A Rust application ships a two-line CLI:
 as the built-in ``main()``s require.
 """
 
-from __future__ import annotations
-
 import asyncio
 
 import composer.bind as _  # noqa: F401  (side-effecting DI/tape bootstrap; must load first)

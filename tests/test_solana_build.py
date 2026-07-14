@@ -6,8 +6,6 @@ and the actual build is then handed the provider (so it runs confined + offline)
 Uses fakes — no real cargo/toolchain.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

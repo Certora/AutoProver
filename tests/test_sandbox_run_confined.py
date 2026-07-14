@@ -7,8 +7,6 @@ the kernel supports Landlock (so CI without the Rust build stays green); the ful
 escape gate on the real Crucible build is step 5.
 """
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 

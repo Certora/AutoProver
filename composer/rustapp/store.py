@@ -7,8 +7,6 @@ the artifact bytes from ``result.artifact_text``. All this subclass supplies is
 the on-disk layout, taken from the descriptor's :class:`ArtifactLayout`.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import override
 

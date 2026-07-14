@@ -6,8 +6,6 @@ applies (no language/domain leak — the trigger for this was the old prompt har
 "Rust-based").
 """
 
-from __future__ import annotations
-
 from composer.rustapp._llm_agent import _DEFAULT_SYS_PROMPT, _split_prompt
 
 

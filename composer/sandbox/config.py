@@ -11,8 +11,6 @@ untrusted native code (Crucible) construct a config with ``provider="launcher"``
 by default; override with ``COMPOSER_SANDBOX_PROVIDER=none`` for trusted-input dev.
 """
 
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass
 from pathlib import Path

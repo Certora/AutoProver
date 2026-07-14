@@ -14,8 +14,6 @@ members. The driver defaults to ``EVM``, so existing applications are unchanged.
 Soroban chains and the prompt-fragment split land in later phases.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 

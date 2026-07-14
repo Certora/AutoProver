@@ -15,8 +15,6 @@ it in the background. Skips cleanly if a prerequisite is missing.
       .venv/bin/python -m pytest tests/test_crucible_setup_gate.py -m expensive -q -s
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import os

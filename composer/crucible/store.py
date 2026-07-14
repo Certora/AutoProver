@@ -10,8 +10,6 @@ re-renders it, while the shared base still writes ``properties.json`` /
 the split Foundry uses (``.t.sol`` in ``test/``, metadata under ``certora/foundry/``).
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import override
 

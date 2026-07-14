@@ -19,8 +19,6 @@ Skips cleanly when any prerequisite is missing. Run with::
       .venv/bin/python -m pytest tests/test_crucible_gate.py -m expensive -q -s
 """
 
-from __future__ import annotations
-
 import json
 import os
 import shutil

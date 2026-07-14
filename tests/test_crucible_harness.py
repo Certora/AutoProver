@@ -6,8 +6,6 @@ feature out of the shared `Cargo.toml` (the concurrency bug that dropped an
 instruction: `package does not contain this feature: c_<slug>`).
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from composer.crucible.harness import CrucibleDep, CrucibleHarness

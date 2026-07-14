@@ -23,8 +23,6 @@ The dependency stack is pinned to the combination the installed toolchain matche
 a version table (§6.1) replaces the hardcoding later.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from pathlib import Path
 

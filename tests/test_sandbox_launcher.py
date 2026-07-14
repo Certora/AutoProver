@@ -6,8 +6,6 @@ binary when it has been built (``cargo build -p run-confined --release``) and sk
 otherwise, so the suite stays green on a machine without the Rust build.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

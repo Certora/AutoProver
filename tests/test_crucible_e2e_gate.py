@@ -15,8 +15,6 @@ instruction. Same prerequisites as the other crucible gates (toolchain, `crucibl
       .venv/bin/python -m pytest tests/test_crucible_e2e_gate.py -m expensive -q -s
 """
 
-from __future__ import annotations
-
 import asyncio
 import os
 import shutil

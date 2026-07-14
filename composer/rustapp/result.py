@@ -10,8 +10,6 @@ validates them into this model. It satisfies both ``FormalResult``
 structurally.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field

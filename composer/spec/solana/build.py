@@ -8,8 +8,6 @@ source first). Both route through the same :func:`run_local_command` choke point
 the ``RunCommand`` effect uses, so phase-6 sandboxing (§7.4) wraps one path.
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass
 from pathlib import Path

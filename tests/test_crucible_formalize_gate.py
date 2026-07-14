@@ -13,8 +13,6 @@ per-component loop. Heavy + paid; same prerequisites as the other crucible gates
       .venv/bin/python -m pytest tests/test_crucible_formalize_gate.py -m expensive -q -s
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import os

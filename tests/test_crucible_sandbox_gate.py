@@ -21,8 +21,6 @@ needed:
 Prereqs: `cargo-build-sbf` + `crucible` on PATH, a built `run-confined`, `CRUCIBLE_REPO`.
 """
 
-from __future__ import annotations
-
 import os
 import shutil
 from pathlib import Path

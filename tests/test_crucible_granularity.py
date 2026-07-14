@@ -6,8 +6,6 @@ Covers the three pieces of the granularity change without the toolchain/LLM:
 - the driver branch that turns one whole-program extraction into one batch per invariant.
 """
 
-from __future__ import annotations
-
 import types
 
 import pytest

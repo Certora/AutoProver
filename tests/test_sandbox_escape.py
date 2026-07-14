@@ -14,8 +14,6 @@ needed to compile). Skipped unless `rustc` and a working launcher are present. T
 expensive Part B in `tests/test_crucible_sandbox_gate.py`.
 """
 
-from __future__ import annotations
-
 import asyncio
 import os
 import shutil

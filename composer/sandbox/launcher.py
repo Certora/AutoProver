@@ -12,8 +12,6 @@ shells out to ``run-confined --probe`` once to confirm the kernel supports Landl
 (fail-closed otherwise).
 """
 
-from __future__ import annotations
-
 import os
 import shutil
 import subprocess
