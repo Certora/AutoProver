@@ -121,16 +121,12 @@ class ProverArtifactStore(ArtifactStore[SpecIdentity, GeneratedCVL]):
         out_dir = ensure_dir(self._internal_dir())
         (out_dir / "components_to_prover_runs.json").write_text(json.dumps(runs, indent=2))
 
-    def write_job_info(self, summary: RunSummary, *, user_id: str) -> None:
-        """The run's identity + usage manifest — ``user_id``, ``run_id``, and the
-        ``token_usage`` / ``prover_usage`` summaries — to ``certora/ap_report/job_info.json``.
-        ``user_id`` is passed in so this stays a pure serializer of run state."""
-        payload = {
-            "user_id": user_id,
-            "run_id": summary.run_id,
-            "token_usage": summary.token_usage_summary(),
+    @override
+    def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
+        """Extends the shared manifest body with the prover-reported runtime: the
+        autoprove ``job_info.json`` also records ``prover_usage`` (summed prover
+        start-to-end time), alongside the base identity + ``token_usage``."""
+        return {
+            **super()._job_info_payload(summary, user_id=user_id),
             "prover_usage": summary.prover_usage_summary(),
         }
-        out = self._report_dir() / "job_info.json"
-        out.write_text(json.dumps(payload, indent=2) + "\n")
-        _log.info("autoprove job info: wrote %s", out)
