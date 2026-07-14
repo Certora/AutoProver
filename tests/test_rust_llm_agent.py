@@ -1,12 +1,12 @@
 """The tool-enabled authoring turn's prompt handling (no wheel / LLM needed).
 
-The decider owns the prompt: its ``call_llm`` payload carries the ``instruction`` and
-may define its own ``system`` prompt; otherwise a neutral, backend-agnostic default
+The backend owns the prompt: its author/judge prompt payload carries the ``instruction``
+and may define its own ``system`` prompt; otherwise a neutral, backend-agnostic default
 applies (no language/domain leak — the trigger for this was the old prompt hardcoding
-"Rust-based").
+"Rust-based"). Lives in ``composer.rustapp.adapter`` (merged from the former ``_llm_agent``).
 """
 
-from composer.rustapp._llm_agent import _DEFAULT_SYS_PROMPT, _split_prompt
+from composer.rustapp.adapter import _DEFAULT_SYS_PROMPT, _split_prompt
 
 
 def test_bare_string_is_the_instruction_with_default_system():

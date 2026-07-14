@@ -23,7 +23,10 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, cast, get_args, override
+from typing import Any, Callable, NotRequired, cast, get_args, override
+
+from graphcore.graph import FlowInput
+from langgraph.graph import MessagesState
 
 from composer.pipeline.core import (
     CorePhases,
@@ -41,10 +44,11 @@ from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.source.report.schema import Outcome, ReportBackend, RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import PropertyFormulation
-from composer.spec.util import slugify_filename
+from composer.spec.util import slugify_filename, uniq_thread_id
 
 _log = logging.getLogger(__name__)
 
@@ -62,6 +66,82 @@ def as_report_backend(tag: str) -> ReportBackend:
             f"unknown report backend_tag {tag!r}; expected one of {sorted(_REPORT_BACKENDS)}"
         )
     return cast(ReportBackend, tag)
+
+
+# ---------------------------------------------------------------------------
+# The LLM authoring turn — the Rust backend's binding of the shared agent primitive
+# (bind_standard / run_to_completion), the peer of composer/foundry/author.py. Python
+# runs this; the backend only supplies the prompt (its author_prompt/judge_prompt
+# callouts). It is the "author" step of the author→compile→judge→validate loop.
+# ---------------------------------------------------------------------------
+
+# Neutral fallback system prompt. The backend's prompt payload carries the task-specific
+# `instruction` and MAY carry its own `system` prompt; when it doesn't, this applies. It
+# conveys only the tool-using-agent + result-tool contract — no domain/language specifics
+# (those belong in the backend's prompt).
+_DEFAULT_SYS_PROMPT = (
+    "You are an authoring agent. Use the available tools to explore the target "
+    "program's source and any reference material, then produce the requested artifact. "
+    "When done, call the `result` tool with your complete final answer as a single "
+    "string — the artifact source only, with no surrounding prose or code fences."
+)
+
+
+def _split_prompt(messages: Any) -> tuple[str | None, str]:
+    """Split a backend prompt payload into ``(system, instruction)``.
+
+    The payload is a bare instruction string, or a dict carrying ``instruction`` and
+    (optionally) a backend-defined ``system`` prompt. ``system`` is ``None`` when the
+    backend doesn't supply one (the caller falls back to :data:`_DEFAULT_SYS_PROMPT`)."""
+    if isinstance(messages, dict):
+        return messages.get("system"), messages.get("instruction") or json.dumps(messages)
+    return None, messages
+
+
+# NOTE: `bind_standard` introspects this state class's ``__annotations__`` at runtime to
+# unwrap ``result: NotRequired[T]`` — so the annotation must stay a real object, not a
+# string. This is a concrete reason the repo bans ``from __future__ import annotations``
+# (see CLAUDE.md); stringized annotations would break the unwrap here.
+class _LlmState(MessagesState):
+    result: NotRequired[str]
+
+
+class _LlmInput(FlowInput):
+    pass
+
+
+async def run_llm_agent(
+    env: Any, messages: Any, *, recursion_limit: int, backend_name: str = "rust"
+) -> str:
+    """Run one bounded, tool-enabled authoring turn and return its final text.
+
+    Binds the env's tool belt (source navigation + RAG search over the backend's
+    knowledge base) and a result tool, and runs an agent to completion — so the
+    prompt can pull in framework docs / read the program. Must run inside a
+    ``with_handler`` scope (the caller wraps it in ``run.runner``)."""
+    tools = list(getattr(env, "all_tools", None) or env.rag_tools)
+    system, instruction = _split_prompt(messages)
+    graph = (
+        bind_standard(
+            env.builder_heavy(),
+            _LlmState,
+            doc="Your complete final answer as a single string (e.g. the authored source file).",
+        )
+        .with_input(_LlmInput)
+        .with_sys_prompt(system or _DEFAULT_SYS_PROMPT)
+        .with_initial_prompt(instruction)
+        .with_tools(tools)
+        .compile_async()
+    )
+    res = await run_to_completion(
+        graph,
+        _LlmInput(input=[]),
+        thread_id=uniq_thread_id(f"{backend_name}-llm"),
+        recursion_limit=recursion_limit,
+        description=f"{backend_name} authoring turn",
+    )
+    result = res.get("result")
+    return result if isinstance(result, str) else json.dumps(result)
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +206,6 @@ async def _author_turn(
 ) -> str:
     """One authoring turn: render the backend's prompt (with any prior failure as revise
     context), run the tool-enabled LLM agent, and strip a code fence off the result."""
-    from composer.rustapp._llm_agent import run_llm_agent
-
     prompt = json.loads(
         module.author_prompt(input_json, json.dumps(failure) if failure is not None else None)
     )
@@ -140,8 +218,6 @@ async def _judge_turn(
 ) -> tuple[bool, str]:
     """Optional LLM review of a spec: ``(accept, feedback)``. ``(True, "")`` when the backend
     declares no judge (``judge_prompt`` → ``None``, the default)."""
-    from composer.rustapp._llm_agent import run_llm_agent
-
     jp = module.judge_prompt(input_json, spec)
     if not jp:
         return True, ""
