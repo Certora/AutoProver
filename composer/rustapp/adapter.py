@@ -21,13 +21,14 @@ App-specific orchestration (a shared setup artifact, crate prep) lives in the ap
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, NotRequired, cast, get_args, override
 
 from graphcore.graph import FlowInput
 from langgraph.graph import MessagesState
 
+from composer.io.multi_job import TaskInfo
 from composer.pipeline.core import (
     CorePhases,
     Formalizer,
@@ -280,6 +281,59 @@ async def _run_blocking(thunk: Callable[[], str], sem: asyncio.Semaphore | None)
     return await asyncio.to_thread(thunk)
 
 
+def _confined_target(root: Path, rel: str) -> Path:
+    """Join a wheel-supplied relative path under ``root``, rejecting absolute paths / ``..``
+    traversal — mirrors the Rust ``confined_join`` so host-written deliverable/prep files stay
+    inside the project (the wheel is trusted, but defense-in-depth is cheap)."""
+    p = Path(rel)
+    if p.is_absolute() or ".." in p.parts:
+        raise ValueError(f"unsafe file path {rel!r}: absolute or traverses outside the workdir")
+    return root / p
+
+
+async def run_workspace_prep(
+    module: Any,
+    input_dict: dict,
+    *,
+    workdir: Path,
+    sandbox: SandboxConfig | None,
+    command_timeout_s: int,
+) -> None:
+    """Execute the wheel's pure ``workspace_prep`` plan (``docs/rust-pure-app.md`` §4): write the
+    declared files (path-confined), then — only when a sandbox is enabled, so a later
+    confined+offline build finds its deps warm — ``cargo fetch`` each ``warm_dirs`` and build the
+    named program via the shared Solana build capability.
+
+    Network stays Python-owned and the posture is unchanged: fetches run *unconfined* (a fetch
+    executes no untrusted code), the code-executing build runs *confined + offline*
+    (``build_program`` handles both). The wheel supplies only file contents + which dirs/program —
+    never a command line."""
+    plan = json.loads(module.workspace_prep(json.dumps(input_dict)))
+    for rel, contents in (plan.get("files") or {}).items():
+        target = _confined_target(workdir, rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(contents)
+
+    warm_dirs = plan.get("warm_dirs") or []
+    build_prog = plan.get("build_program")
+    if not warm_dirs and not build_prog:
+        return
+
+    from composer.spec.solana.build import build_program, warm_cargo_cache
+
+    if warm_dirs and sandbox is not None and sandbox.enabled:
+        # Warm into the SAME private CARGO_HOME the confined offline build will read.
+        from composer.sandbox.recipes import sandbox_cargo_home
+
+        cargo_home = sandbox_cargo_home(str(workdir))
+        for d in warm_dirs:
+            await warm_cargo_cache(
+                _confined_target(workdir, d), cargo_home=cargo_home, timeout_s=command_timeout_s
+            )
+    if build_prog:
+        await build_program(str(workdir), build_prog, timeout_s=command_timeout_s, sandbox=sandbox)
+
+
 # ---------------------------------------------------------------------------
 # The formalizer.
 # ---------------------------------------------------------------------------
@@ -299,6 +353,8 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         fuzz_timeout_s: int = 30,
         command_sem: asyncio.Semaphore | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        context_extra: dict | None = None,
+        setup_result: str | None = None,
     ):
         super().__init__(RustFormalResult, as_report_backend(descriptor.backend_tag))
         self._module = module
@@ -308,17 +364,23 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         self._fuzz_timeout_s = fuzz_timeout_s
         self._command_sem = command_sem
         self._max_attempts = max_attempts
+        # Injected into every component's ``AuthorInput.context`` (declared-arg values + the
+        # compiled setup artifact under its ``context_key``); the prepared system assembles it.
+        self._context_extra = context_extra or {}
+        # The compiled setup spec (Crucible's fixture), forwarded to ``finalize`` so a
+        # callout-mode wheel can render the whole deliverable.
+        self._setup_result = setup_result
 
-    # -- hooks an application backend overrides ----------------------------
+    # -- hooks an application backend may override -------------------------
 
     def _context(self, run: PipelineRun) -> dict:
-        """The ``AuthorInput.context`` blob for a component (backend dependencies).
-        Base: just the program. Crucible adds the shared fixture + fuzz budget."""
-        return {"program": str(run.source.contract_name)}
+        """The ``AuthorInput.context`` blob for a component. The program plus whatever the
+        prepared system injected (declared args + the setup artifact under its context key)."""
+        return {"program": str(run.source.contract_name), **self._context_extra}
 
     def _before_formalize(self, feat: FeatureUnit, slugs: list[str]) -> None:
-        """Place any crate scaffolding before compile/validate. Base: nothing.
-        Crucible reserves each unit's Cargo feature."""
+        """Place any crate scaffolding before compile/validate. Base: nothing (the wheel
+        materializes its crate per confined run via the ``files`` map)."""
         return None
 
     def _sandbox_spec(self, workdir: Path) -> dict:
@@ -429,30 +491,38 @@ class RustFormalizer(Formalizer[RustFormalResult]):
     async def finalize(self, outcomes, run: PipelineRun) -> None:
         from composer.pipeline.core import Delivered
 
-        summary = [
-            {
-                "name": o.feat.display_name,
-                "delivered": isinstance(o.result, Delivered),
-                "unit_file": o.result.unit_file if isinstance(o.result, Delivered) else None,
-                "run_link": o.result.run_link if isinstance(o.result, Delivered) else None,
-            }
-            for o in outcomes
-        ]
-        raw = await asyncio.to_thread(self._module.finalize, json.dumps(summary))
+        components = []
+        for o in outcomes:
+            res = o.result
+            entry: dict = {"name": o.feat.display_name, "delivered": isinstance(res, Delivered)}
+            if isinstance(res, Delivered):
+                # A callout-mode wheel renders the whole deliverable from these (Crucible: folds
+                # each section into the shared crate, keyed by its property_units feature).
+                entry["unit_file"] = res.unit_file
+                entry["run_link"] = res.run_link
+                entry["artifact_text"] = res.result.artifact_text
+                entry["property_units"] = res.result.property_units()
+            components.append(entry)
+        payload = {"components": components, "setup": self._setup_result}
+        raw = await asyncio.to_thread(self._module.finalize, json.dumps(payload))
         if not raw:
             return
         files: dict[str, str] = json.loads(raw)
         root = Path(run.source.project_root)
         for rel, contents in files.items():
-            target = root / rel
+            target = _confined_target(root, rel)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(contents)
 
 
 @dataclass
 class RustPreparedSystem(PreparedSystem[RustFormalResult]):
-    """Generic prepared system: build a formalizer. Applications that need a setup artifact or
-    crate prep override :meth:`RustBackend.prepare_system` (see :mod:`composer.crucible.backend`)."""
+    """Generic prepared system, descriptor-driven: run the wheel's workspace prep, author the
+    optional shared ``setup`` artifact, and build a formalizer carrying the injected context.
+
+    Fully expresses what Crucible used to need a subclass for (``docs/rust-pure-app.md``): the
+    shared fixture, the harness warm + ``.so`` build, per-run serialization, and the
+    context-thread of the fixture + declared args."""
 
     backend: "RustBackend"
     analyzed: BaseApplication | None = None
@@ -460,12 +530,54 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult]):
     @override
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult]:
         b = self.backend
+        descriptor = b.descriptor
+        workdir = Path(run.source.project_root)
+        program = str(run.source.contract_name)
+        # One shared crate / target dir → serialize the toolchain runs (declared by the wheel).
+        command_sem = asyncio.Semaphore(1) if descriptor.serialize_toolchain else None
+
+        analyzed_json = self.analyzed.model_dump(mode="json") if self.analyzed is not None else {}
+        prep_input = {
+            "kind": "setup", "program": program, "component": analyzed_json,
+            "props": [], "context": {},
+        }
+
+        # 1. Workspace prep: write the wheel's manifest, warm deps, build the program.
+        await run_workspace_prep(
+            b.module, prep_input, workdir=workdir,
+            sandbox=b.sandbox, command_timeout_s=b.command_timeout_s,
+        )
+
+        # 2. Every component's context = declared args + (optionally) the compiled setup artifact.
+        context_extra: dict = dict(b.declared_args)
+        setup_result: str | None = None
+        if descriptor.setup is not None:
+            sandbox_dict = (
+                b.sandbox.backend_spec(workdir, timeout_s=b.command_timeout_s)
+                if (b.sandbox is not None and b.sandbox.enabled)
+                else {"run_confined": None, "timeout_s": b.command_timeout_s}
+            )
+            emit = make_emitter()
+            fixture = await run.runner(
+                TaskInfo(
+                    f"{descriptor.name}-setup", descriptor.setup.label,
+                    cast(Any, b._phase)[descriptor.setup.phase_key],
+                ),
+                lambda: author_and_compile(
+                    b.module, prep_input, env=run.env, sandbox_dict=sandbox_dict,
+                    workdir=workdir, recursion_limit=run.ctx.recursion_limit,
+                    backend_name=descriptor.name, emit=emit, command_sem=command_sem,
+                ),
+            )
+            if isinstance(fixture, GaveUp):
+                raise RuntimeError(f"{descriptor.name} setup gave up: {fixture.reason}")
+            setup_result = fixture
+            context_extra[descriptor.setup.context_key] = fixture
+
         return RustFormalizer(
-            b.module,
-            b.descriptor,
-            sandbox=b.sandbox,
-            command_timeout_s=b.command_timeout_s,
-            fuzz_timeout_s=b.fuzz_timeout_s,
+            b.module, b.descriptor, sandbox=b.sandbox,
+            command_timeout_s=b.command_timeout_s, fuzz_timeout_s=b.fuzz_timeout_s,
+            command_sem=command_sem, context_extra=context_extra, setup_result=setup_result,
         )
 
 
@@ -489,6 +601,9 @@ class RustBackend:
     fuzz_timeout_s: int = 30
     # How to confine every toolchain run (docs/command-sandbox.md). None → unsandboxed.
     sandbox: SandboxConfig | None = None
+    # Parsed values of the descriptor's declared CLI args, injected into every component's
+    # ``AuthorInput.context`` (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
+    declared_args: dict[str, Any] = field(default_factory=dict)
 
     @property
     def backend_guidance(self) -> str:

@@ -19,6 +19,8 @@ database can supply its own env builder via ``env_builder=``.
 import argparse
 import asyncio
 import hashlib
+import json
+import os
 import pathlib
 import sys
 import uuid
@@ -43,6 +45,7 @@ from composer.rag.models import get_model
 from composer.rustapp.descriptor import ArgDefault, ArgSpec
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
+from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceCode, SourceFields, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost, ServiceHost
 from composer.spec.source.design_doc_finder import (
@@ -87,6 +90,54 @@ def build_neutral_env(
     )
     return PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(
         full
+    )
+
+
+def _default_env_builder(rag_db: str | None) -> EnvBuilder:
+    """The env builder for a wheel that declares no custom ``env_builder``: neutral (source tools
+    only) when the descriptor sets no ``rag_db_default``, otherwise the same source tools plus the
+    declared corpus's RAG search tools (replaces the old per-app ``build_crucible_env``)."""
+    if not rag_db:
+        return build_neutral_env
+
+    def builder(
+        *,
+        model_provider: ModelProvider,
+        project_root: str,
+        store: BaseStore,
+        source_question_ns: tuple[str, ...],
+        recursion_limit: int,
+        forbidden_read: str = FS_FORBIDDEN_READ,
+    ) -> ServiceHost:
+        from composer.tools.rag_env import build_rag_tools
+
+        basic = build_basic_source_tools(root=project_root, forbidden_read=forbidden_read)
+        full = build_source_tools(
+            basic, model_provider, store, source_question_ns, recursion_limit=recursion_limit
+        )
+        return PureServiceHost(
+            models=model_provider, rag_tools=build_rag_tools(rag_db), sort="existing"
+        ).bind_source_tools(full)
+
+    return builder
+
+
+def _build_confinement(app: RustApplication, args: dict) -> SandboxConfig:
+    """The default command-sandbox config for a wheel that sets ``confine_by_default`` — the
+    fail-closed ``launcher`` provider (overridable by ``COMPOSER_SANDBOX_PROVIDER``), with the
+    wheel's ``sandbox_grants`` (extra read-only paths / env names) unioned in. Python owns the
+    policy; the wheel only *declares* the grants (``docs/rust-pure-app.md`` §5.2)."""
+    from composer.sandbox.config import SandboxConfig
+    from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH
+
+    grants = json.loads(app.module.sandbox_grants(json.dumps(args)))
+    extra_ro = tuple(pathlib.Path(p) for p in grants.get("extra_ro", []))
+    extra_env = tuple(grants.get("extra_env", []))
+    provider = os.environ.get("COMPOSER_SANDBOX_PROVIDER", "launcher")
+    return SandboxConfig(
+        provider=provider,
+        extra_ro=extra_ro,
+        env_passthrough=DEFAULT_ENV_PASSTHROUGH + extra_env,
     )
 
 
@@ -291,7 +342,10 @@ async def rust_entry_point(
                 forbidden_read=forbidden_read,
             )
             source_question_ns = _user_ns("source_agent", "cache", root_key)
-            builder = env_builder or build_neutral_env
+            # Descriptor-driven env: neutral, or (if the wheel declares a RAG corpus) the same
+            # source tools plus that corpus's search tools. A wheel can still force its own via
+            # ``env_builder=``.
+            builder = env_builder or _default_env_builder(app.descriptor.rag_db_default)
             env = builder(
                 model_provider=model_provider,
                 project_root=str(project_root),
@@ -308,6 +362,21 @@ async def rust_entry_point(
                 cache_namespace=cache_root,
                 memory_namespace=args.memory_ns,
             )
+
+            # Thread the declared CLI args into the backend (→ every component's context) and,
+            # if the wheel asks to be confined by default, build the launcher policy with its
+            # declared sandbox grants. Both are inert for a wheel that declares neither.
+            app.options.declared_args = declared_args
+            if app.options.sandbox is None and app.descriptor.confine_by_default:
+                app.options.sandbox = _build_confinement(
+                    app,
+                    {
+                        "project_root": str(project_root),
+                        "main_contract": args.main_contract,
+                        "system_doc": args.system_doc or "",
+                        **declared_args,
+                    },
+                )
 
             # 3. A backend that needs a bespoke store/pipeline (e.g. Crucible's crate
             #    store) supplies run_pipeline_fn; everything else uses the generic host.

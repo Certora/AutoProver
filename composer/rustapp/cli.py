@@ -23,10 +23,12 @@ import composer.bind as _  # noqa: F401  (side-effecting DI/tape bootstrap; must
 
 from composer.diagnostics.timing import RunSummary
 from composer.pipeline.core import CorePipelineResult
+from composer.rustapp.adapter import as_report_backend
 from composer.rustapp.entry import EnvBuilder, rust_entry_point
 from composer.rustapp.frontend import GenericRustApp, GenericRustConsoleHandler
 from composer.rustapp.host import build_application
 from composer.rustapp.result import RustFormalResult
+from composer.rustapp.results import format_verdict_lines, summarize_verdicts
 
 
 def _event_kinds(app) -> set[str]:
@@ -35,6 +37,19 @@ def _event_kinds(app) -> set[str]:
 
 def _notice_kinds(app) -> set[str]:
     return {e.kind for e in app.descriptor.event_kinds if e.notice}
+
+
+def _component_label(app) -> str:
+    """The counts-block noun for one formalized unit ("Components" / "Instructions")."""
+    return (app.descriptor.component_noun or "component").capitalize() + "s"
+
+
+def _verdict_lines(app, result: CorePipelineResult[RustFormalResult]) -> list[str]:
+    """Per-unit verdict tally + listing when the results carry verdicts; empty otherwise
+    (a run-service backend, or a wheel that bakes none)."""
+    return format_verdict_lines(
+        summarize_verdicts(result, as_report_backend(app.descriptor.backend_tag))
+    )
 
 
 async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) -> int:
@@ -54,10 +69,15 @@ async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) 
             nonlocal result
             try:
                 result = await pipeline(tui.make_handler)
+                noun = (app_meta.descriptor.component_noun or "component")
                 msg = (
-                    f"{app_meta.name} complete: {result.n_components} components, "
+                    f"{app_meta.name} complete: {result.n_components} {noun}s, "
                     f"{result.n_properties} properties"
                 )
+                if tally := summarize_verdicts(
+                    result, as_report_backend(app_meta.descriptor.backend_tag)
+                ).tally:
+                    msg += f" — {tally}"
                 if result.failures:
                     msg += f", {len(result.failures)} failures"
                 tui.notify(msg)
@@ -70,6 +90,8 @@ async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) 
         await tui.run_async()
         print(summary.format())
         if result is not None:
+            for line in _verdict_lines(app_meta, result):
+                print(line)
             for f in result.failures:
                 print(f"  FAILED: {f}")
         return 0
@@ -82,8 +104,10 @@ async def _console_main(module_name: str, *, env_builder: EnvBuilder | None = No
         result = await run(GenericRustConsoleHandler(_event_kinds(app_meta)).make_handler)
         print(f"\n{'=' * 60}")
         print(summary.format())
-        print(f"\n  Components: {result.n_components}")
+        print(f"\n  {_component_label(app_meta)}: {result.n_components}")
         print(f"  Properties: {result.n_properties}")
+        for line in _verdict_lines(app_meta, result):
+            print(line)
         if result.failures:
             print(f"  Failures:   {len(result.failures)}")
             for f in result.failures:

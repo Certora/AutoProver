@@ -53,6 +53,9 @@ class BackendOptions:
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     fuzz_timeout_s: int = 30
     sandbox: SandboxConfig | None = None
+    #: Parsed values of the descriptor's declared CLI args, threaded into the backend and
+    #: injected into every component's ``AuthorInput.context``. Set by the entry point.
+    declared_args: dict[str, Any] = field(default_factory=dict)
 
 
 def load_module(module_name: str) -> Any:
@@ -108,7 +111,12 @@ def build_core_phases(
 
 
 def _default_store(source: SourceCode, descriptor: AppDescriptor) -> RustArtifactStore:
-    return RustArtifactStore(source.project_root, descriptor.artifact_layout)
+    return RustArtifactStore(
+        source.project_root,
+        descriptor.artifact_layout,
+        deliverable_mode=descriptor.deliverable_mode,
+        program=str(source.contract_name),
+    )
 
 
 def build_backend(
@@ -141,6 +149,7 @@ def build_backend(
         command_timeout_s=opts.command_timeout_s,
         fuzz_timeout_s=opts.fuzz_timeout_s,
         sandbox=opts.sandbox,
+        declared_args=opts.declared_args,
     )
 
 

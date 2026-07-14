@@ -96,6 +96,10 @@ class ArtifactLayout(BaseModel):
     artifact_prefix: str
     artifact_extension: str
     property_suffix: str
+    #: Under ``callout`` deliverable mode, the project-relative primary deliverable path,
+    #: ``{program}``-templated (Crucible: ``fuzz/{program}/src/main.rs``). Used only as each
+    #: component's report link; ``None`` in ``per_component`` mode.
+    deliverable_primary: str | None = None
 
 
 class AppDescriptor(BaseModel):

@@ -111,6 +111,11 @@ pub struct ArtifactLayout {
     pub artifact_extension: String,
     /// The store's term for the property→units map file suffix (`property_rules`, `property_tests`).
     pub property_suffix: String,
+    /// Under `DeliverableMode::Callout`, the project-relative path of the primary deliverable
+    /// file, `{program}`-templated (Crucible: `fuzz/{program}/src/main.rs`). Used only as each
+    /// component's report link — the actual files come from `finalize`. Ignored `PerComponent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deliverable_primary: Option<String>,
 }
 
 /// A shared "setup" artifact authored once, before per-component formalization (Crucible's

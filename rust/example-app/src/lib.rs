@@ -50,7 +50,15 @@ impl Backend for EchoApp {
                 artifact_prefix: "echospec".into(),
                 artifact_extension: "espec".into(),
                 property_suffix: "property_rules".into(),
+                deliverable_primary: None,
             },
+            // A simple per-component wheel: no shared setup, one file per component, no toolchain
+            // confinement/serialization (its compile/validate are pure). All defaults.
+            setup: None,
+            deliverable_mode: autoprover_sdk::DeliverableMode::PerComponent,
+            serialize_toolchain: false,
+            confine_by_default: false,
+            component_noun: None,
         }
     }
 
