@@ -222,7 +222,7 @@ async def test_crucible_phase1_build_and_dry_run():
     )
 
 
-# --- Phase 2: the deliverable model (CrucibleArtifactStore assembles the crate) ---
+# --- Phase 2: the deliverable model (wheel finalize assembles the crate) ---
 
 # The shared fixture is the phase-1 harness minus its test fn (the store composes
 # fixture + per-component test sections).

@@ -11,9 +11,9 @@ real sBPF build needs, and that the offline build resolves against the warm cach
 LLM.
 
 The FULL vertical (shared fixture + per-instruction harness build + fuzz, all confined)
-is the existing e2e gate run with the launcher enabled — `run_crucible_pipeline` already
-honors `$COMPOSER_SANDBOX_PROVIDER` via `_crucible_sandbox`, so no separate test is
-needed:
+is the existing e2e gate run with the launcher enabled — the generic host builds the
+launcher policy from the wheel's `confine_by_default` + `sandbox_grants` and honors
+`$COMPOSER_SANDBOX_PROVIDER`, so no separate test is needed:
 
     CRUCIBLE_REPO=/path/to/crucible COMPOSER_SANDBOX_PROVIDER=launcher \
       .venv/bin/python -m pytest tests/test_crucible_e2e_gate.py -m expensive -q -s

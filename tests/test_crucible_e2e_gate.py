@@ -1,9 +1,9 @@
 """Phase-5 gate: the WHOLE Crucible vertical, with a REAL model.
 
-Runs `run_crucible_pipeline` on the `solana_vault` scenario — the SOLANA ecosystem
-front half (analysis → property extraction) → the Crucible backend (shared fixture
-via the setup session, then per-component test authoring + fuzzing) → report — as a
-single pipeline, exactly as `console-crucible` would. Pass = it analyzes the program
+Runs the whole vertical via the generic host (`build_application` + `run_application`) on
+the `solana_vault` scenario — the SOLANA ecosystem front half (analysis → property
+extraction) → the crucible_app wheel (shared fixture via the setup step, then per-component
+test authoring + fuzzing) → report — exactly as `console-crucible` would. Pass = it analyzes the program
 into instructions, extracts properties, and produces per-component fuzz verdicts
 with no human edits.
 
