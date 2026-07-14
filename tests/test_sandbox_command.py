@@ -7,8 +7,6 @@ build; the Rust backend's own toolchain runs now go through ``run-confined`` in 
 wheel, see ``docs/rust-backend-api.md``.)
 """
 
-from __future__ import annotations
-
 import pytest
 
 from composer.sandbox.command import (

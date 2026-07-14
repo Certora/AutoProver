@@ -18,8 +18,6 @@ App-specific orchestration (a shared setup artifact, crate prep) lives in the ap
 — e.g. :mod:`composer.crucible.backend`.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

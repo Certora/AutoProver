@@ -11,8 +11,6 @@ no-op and ``validate`` returns GOOD), which is the point of the passive-service 
 the loop lives in Python and the wheel just answers questions.
 """
 
-from __future__ import annotations
-
 import json
 
 import pytest

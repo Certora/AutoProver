@@ -14,8 +14,6 @@ the report's own crucible outcome labels (``render.outcome_label``) so the wordi
 matches the HTML report ("No counterexample" / "Counterexample").
 """
 
-from __future__ import annotations
-
 from collections import Counter
 from dataclasses import dataclass
 

@@ -5,8 +5,6 @@ callouts (`units` / `author_prompt` / `judge_prompt`) directly, and — separate
 out-of-graph `push_custom_update` routing the Python loop's `emit` relies on.
 """
 
-from __future__ import annotations
-
 import json
 
 import pytest

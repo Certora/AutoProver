@@ -7,8 +7,6 @@ counts block: a tally line in the report's crucible vocabulary ("No counterexamp
 ``failures``), and nothing at all when no invariant was delivered.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, cast
 

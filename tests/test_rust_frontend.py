@@ -6,8 +6,6 @@ events log — while ordinary kinds still stream to the log and undeclared kinds
 ignored. The notice headline carries an outcome glyph (✓/✗) when the payload has one.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any, cast
 

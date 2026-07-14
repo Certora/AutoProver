@@ -9,8 +9,6 @@ loop; :class:`CrucibleFormalizer` adds the crate-store side effects (fixture con
 reservation), and serializes the toolchain runs against the one shared crate.
 """
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
