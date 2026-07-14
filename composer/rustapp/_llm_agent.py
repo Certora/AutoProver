@@ -1,10 +1,9 @@
 """The tool-enabled agent turn behind the Rust backend's ``call_llm`` effect.
 
-Deliberately **without** ``from __future__ import annotations``: ``bind_standard``
-introspects the state class's ``__annotations__`` to unwrap ``result: NotRequired[T]``,
-and a stringized annotation (which the future-import would produce) can't be
-unwrapped — pydantic then chokes on the raw ``NotRequired[str]``. Keeping this in
-its own eager-annotations module sidesteps that.
+Note: ``bind_standard`` introspects the state class's ``__annotations__`` at runtime to
+unwrap ``result: NotRequired[T]``, so the annotations here must stay real objects, not
+strings — one concrete reason the repo bans ``from __future__ import annotations`` (see
+``CLAUDE.md``): stringized annotations would break that introspection.
 """
 
 import json
