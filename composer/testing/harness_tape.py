@@ -1,4 +1,4 @@
-from typing import Any, Callable, Sequence, override, cast
+from typing import Any, Callable, Iterator, Sequence, override, cast
 import random
 import asyncio
 
@@ -148,6 +148,22 @@ class _DummyUploader:
         )
 
 
+# The currently-installed tape state for this process. The seam patches below are
+# installed once per process as stable dispatcher functions that read these slots
+# at call time; re-installing a tape (a later test in the same xdist worker) only
+# swaps the slot. Rebinding the module attributes per install instead would strand
+# any module that imported a patched name by value under the earlier test's tape.
+_active_fake: Any = None
+_active_responses: Iterator[str] | None = None
+_llm_seams_patched = False
+_prompt_seam_patched = False
+
+
+def _current_fake() -> Any:
+    assert _active_fake is not None, "no harness tape installed"
+    return _active_fake
+
+
 def install_fake_llm(fake: Any) -> None:
     """Route every LLM-construction path in the pipeline to ``fake``.
 
@@ -159,11 +175,17 @@ def install_fake_llm(fake: Any) -> None:
     and short-circuits ``get_provider_for`` before it tries to ``_lookup`` a fake
     model name.
 
-    Patches the ``registry`` / ``services`` source bindings, so it must run BEFORE
-    the entry path imports ``get_provider_for`` by name (``composer/bind.py`` is
-    that hook). Eager-import callers (the integration test) additionally rebind
-    their own ``get_provider_for`` reference to the patched one.
+    The first install in a process must run BEFORE the entry path imports
+    ``get_provider_for`` by name (``composer/bind.py`` is that hook). Eager-import
+    callers (the integration tests) additionally rebind their own
+    ``get_provider_for`` reference to the patched one. Later installs just swap
+    the active fake.
     """
+    global _active_fake, _llm_seams_patched
+    _active_fake = fake
+    if _llm_seams_patched:
+        return
+
     import composer.llm.registry as registry
     import composer.workflow.services as services
 
@@ -171,7 +193,7 @@ def install_fake_llm(fake: Any) -> None:
         provider : ProviderKind = "anthropic"
 
         def builder_for(self, *, cache_level: Any = None, disable_thinking: bool = False) -> Any:
-            return fake
+            return _current_fake()
 
     fp = _FakeProvider()
 
@@ -184,8 +206,9 @@ def install_fake_llm(fake: Any) -> None:
 
     registry.get_provider_for = _fake_get_provider_for
     registry.uploader_for = lambda _provider: _DummyUploader()
-    services.create_llm = lambda args: fake
-    services.create_llm_base = lambda args: fake
+    services.create_llm = lambda args: _current_fake()
+    services.create_llm_base = lambda args: _current_fake()
+    _llm_seams_patched = True
 
 
 def install_fake_responses(responses: list[str]) -> None:
@@ -201,17 +224,21 @@ def install_fake_responses(responses: list[str]) -> None:
     Covers only the console HITL path; the autoprove interactive-refinement
     conversation uses a different input path and is not handled here.
     """
-    import composer.ui.prompt as prompt_mod
+    global _active_responses, _prompt_seam_patched
+    _active_responses = iter(responses)
+    if _prompt_seam_patched:
+        return
 
-    served = iter(responses)
+    import composer.ui.prompt as prompt_mod
 
     def _fake_prompt_input(
         prompt_str: str,
         debug_thunk: Callable[[], None],
         filter: Callable[[str], str | None] | None = None,
     ) -> str:
+        assert _active_responses is not None, "no response tape installed"
         try:
-            resp = next(served)
+            resp = next(_active_responses)
         except StopIteration:
             raise RuntimeError(
                 f"response tape exhausted — no scripted reply for HITL prompt: {prompt_str!r}"
@@ -225,3 +252,4 @@ def install_fake_responses(responses: list[str]) -> None:
     prompt_mod.prompt_input = _fake_prompt_input
     import composer.ui.console as console_mod
     console_mod.prompt_input = _fake_prompt_input
+    _prompt_seam_patched = True
