@@ -40,10 +40,6 @@ const EXIT_SANDBOX_UNAVAILABLE: i32 = 3;
 /// The confined `execve` itself failed (e.g. program not found on PATH).
 const EXIT_EXEC_FAILED: i32 = 127;
 
-/// `landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` returns the
-/// kernel's supported ABI version, or fails if Landlock is unavailable.
-const LANDLOCK_CREATE_RULESET_VERSION: libc::c_ulong = 1;
-
 #[derive(Default)]
 struct Config {
     rw_paths: Vec<PathBuf>,
@@ -90,26 +86,31 @@ fn main() {
     die(EXIT_EXEC_FAILED, &format!("exec {:?} failed: {err}", cfg.program));
 }
 
-/// `--probe`: report whether the kernel supports Landlock. Exit 0 + print the ABI
-/// if so; exit `EXIT_SANDBOX_UNAVAILABLE` otherwise. Drives Python's fail-closed
-/// `available()` check without restricting this (throwaway) process.
+/// `--probe`: report whether the kernel supports Landlock. Exit 0 + print the
+/// enforcement status if so; exit `EXIT_SANDBOX_UNAVAILABLE` otherwise. Drives
+/// Python's fail-closed `available()` check.
+///
+/// We probe through the crate's public API rather than the raw
+/// `landlock_create_ruleset` syscall — the crate deliberately hides the numeric
+/// ABI, and this reuses the exact BestEffort negotiation `apply_landlock` does.
+/// It restricts *this* process as a side effect, which is harmless: `--probe` is
+/// a throwaway process that exits immediately after reporting.
 fn probe() -> ! {
-    let abi = unsafe {
-        libc::syscall(
-            libc::SYS_landlock_create_ruleset,
-            std::ptr::null::<libc::c_void>(),
-            0usize,
-            LANDLOCK_CREATE_RULESET_VERSION,
-        )
-    };
-    if abi > 0 {
-        println!("landlock abi {abi}");
-        std::process::exit(0);
+    let status = Ruleset::default()
+        .set_compatibility(CompatLevel::BestEffort)
+        .handle_access(AccessFs::from_all(ABI::V5))
+        .and_then(|r| r.create())
+        .and_then(|r| r.restrict_self());
+    match status {
+        Ok(s) if !matches!(s.ruleset, RulesetStatus::NotEnforced) => {
+            println!("landlock {:?}", s.ruleset);
+            std::process::exit(0);
+        }
+        _ => die(
+            EXIT_SANDBOX_UNAVAILABLE,
+            "kernel does not support Landlock (need Linux >= 5.13); refusing to run unconfined",
+        ),
     }
-    die(
-        EXIT_SANDBOX_UNAVAILABLE,
-        "kernel does not support Landlock (need Linux >= 5.13); refusing to run unconfined",
-    );
 }
 
 fn parse(argv: &[String]) -> Result<Config, String> {
