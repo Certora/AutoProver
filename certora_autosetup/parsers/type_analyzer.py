@@ -12,6 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from certora_autosetup.utils.constants import FILE_ALL_METHODS_JSON, FILE_ALL_USER_DEFINED_TYPES_JSON
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import TypeDescKind, parse_type_desc_kind
 
@@ -191,8 +192,8 @@ class TypeAnalyzer:
         self.methods: List[MethodInfo] = []
 
         # JSON file paths
-        self.methods_json = self.certora_internal / "all_methods.json"
-        self.types_json = self.certora_internal / "all_user_defined_types.json"
+        self.methods_json = self.certora_internal / FILE_ALL_METHODS_JSON
+        self.types_json = self.certora_internal / FILE_ALL_USER_DEFINED_TYPES_JSON
 
     def parse_all(self) -> bool:
         """Load and parse all type information from pre-generated JSON files.

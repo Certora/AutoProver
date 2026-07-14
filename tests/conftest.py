@@ -3,7 +3,14 @@ Shared fixtures for composer tool infrastructure tests.
 """
 
 
+import os
 import uuid
+
+# certora_autosetup.setup.setup_summaries hard-exits at IMPORT time when
+# ANTHROPIC_API_KEY is absent, which would crash test collection for any test
+# module importing it. The autosetup tests never call the LLM (skip-llm paths),
+# so a placeholder satisfies the check without masking a real key.
+os.environ.setdefault("ANTHROPIC_API_KEY", "dummy-key-for-tests")
 from typing import Any, AsyncIterator, Iterator, Callable, Iterable, TYPE_CHECKING, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field

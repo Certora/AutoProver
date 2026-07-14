@@ -37,7 +37,9 @@ from certora_autosetup.utils.llm_util import ledger_component
 from certora_autosetup.utils.constants import (
     DEFAULT_SOLC_VERSION,
     DIR_CERTORA_INTERNAL,
+    FILE_ALL_USER_DEFINED_TYPES_JSON,
     FILE_BUILD_ASTS,
+    PATH_ALL_USER_DEFINED_TYPES_JSON,
     SolcConvention,
     SUMMARIES_SUBDIR,
 )
@@ -83,6 +85,7 @@ class SetupProver:
         contract_names=None,
         get_build_system_config_dict=None,
         solc_default_version=DEFAULT_SOLC_VERSION,
+        stop_after_compilation_analysis=False,
     ):
         """Initialize SetupProver with required dependencies."""
         self.log = log
@@ -93,6 +96,7 @@ class SetupProver:
         self.skip_llm = skip_llm
         self.force_llm_regenerate = force_llm_regenerate
         self.stop_after_summaries = stop_after_summaries
+        self.stop_after_compilation_analysis = stop_after_compilation_analysis
         self.verbose = verbose
         self.certora_run_command = certora_run_command
         self.contract_names = contract_names or []
@@ -917,6 +921,7 @@ class SetupProver:
                                             "containingContract"
                                         ),
                                         "main_contract": contract.get("name"),
+                                        "canonicalId": type_info.get("canonicalId", ""),
                                     }
 
                                     # Add enum members for UserDefinedEnum
@@ -928,7 +933,7 @@ class SetupProver:
                                     all_user_defined_types.append(user_type_info)
 
         # Write user-defined types to JSON file
-        types_output_path = Path(".certora_internal/all_user_defined_types.json")
+        types_output_path = PATH_ALL_USER_DEFINED_TYPES_JSON
         types_output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(types_output_path, "w") as f:
@@ -937,7 +942,7 @@ class SetupProver:
         # Also persist to the cache prefix for debuggability (visible on S3 in SaaS).
         # Compute-only intermediate: NOT part of cache validation/restore.
         atomic_write_json_fsspec(
-            cache_path(DIR_CERTORA_INTERNAL, "all_user_defined_types.json"), all_user_defined_types
+            cache_path(DIR_CERTORA_INTERNAL, FILE_ALL_USER_DEFINED_TYPES_JSON), all_user_defined_types
         )
 
         return len(all_user_defined_types)
@@ -1532,6 +1537,16 @@ class SetupProver:
         self.compilation_config_updates = updated_config_dict
         self.import_patcher_applied = import_patcher_applied
 
+        # Stop here if only the compilation-analysis outcome is wanted (e.g.
+        # large-scale compile sweeps that never reach the prover).
+        if self.stop_after_compilation_analysis:
+            self.log(
+                "🛑 Stopping after compilation analysis as requested "
+                "(--stop-after-compilation-analysis)"
+            )
+            self.log("✅ Compilation analysis completed successfully")
+            sys.exit(0)
+
         # Detect and apply code access patches
         self.code_access_patches_applied = detect_and_apply_code_access_patches(
             self.log, self.getASTPath(), self.getASTParentGraphPath(), self.scope
@@ -1560,7 +1575,7 @@ class SetupProver:
             if all_methods.exists():
                 self.log(f"📄 all_methods.json: {all_methods}")
 
-            all_types = self.certora_dir / "all_user_defined_types.json"
+            all_types = self.certora_dir / FILE_ALL_USER_DEFINED_TYPES_JSON
             if all_types.exists():
                 self.log(f"📄 all_user_defined_types.json: {all_types}")
 

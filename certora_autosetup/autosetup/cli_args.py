@@ -249,6 +249,13 @@ Default Behavior: By default, all configurations must be successfully submitted.
     )
 
     parser.add_argument(
+        '--stop-after-compilation-analysis',
+        action='store_true',
+        help='Stop right after the compilation-analysis phase succeeds '
+             '(for compile-only sweeps that never reach the prover)'
+    )
+
+    parser.add_argument(
         "--composer-setup",
         type=str,
         default=None

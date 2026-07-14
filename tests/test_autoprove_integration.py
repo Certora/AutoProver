@@ -20,10 +20,11 @@ from typing import cast
 import pytest
 
 from composer.diagnostics.timing import RunSummary
-from composer.spec.source.autoprove_common import autoprove_executor, AutoProveArgs
+from composer.spec.source.autoprove_common import autoprove_executor, AutoProveArgs, AutoProvePhase
 from composer.spec.source.autosetup import SetupSuccess
 from composer.ui.autoprove_console import AutoProveConsoleHandler
 from composer.testing.ui_harness_autoprove_Counter import install_harness_tape
+from composer.pipeline.ptypes import CorePhases, SystemAnalysisSpec
 
 
 from tests.conftest import needs_postgres, MockSentenceTransformer
@@ -169,9 +170,33 @@ async def test_autoprove_dumps_job_info_when_pipeline_crashes(scenario_provider,
 
     async def _boom(*_args, **_kwargs):
         raise RuntimeError("pipeline exploded")
+    
+    class _Crasher:
+        backend_guidance = "empty"
+
+        core_phases = CorePhases(
+            analysis=AutoProvePhase.COMPONENT_ANALYSIS,
+            extraction=AutoProvePhase.BUG_ANALYSIS,
+            report=AutoProvePhase.REPORT,
+            formalization=AutoProvePhase.CVL_GEN
+        )
+
+        analysis_spec = SystemAnalysisSpec(
+            analysis_key="foo",
+            properties_key="bar"
+        )
+
+        def __init__(self, store, _ignored):
+            self.artiface_store = store
+            
+        
+        async def prepare_system(
+            self, *args, **kwargs
+        ):
+            raise RuntimeError("pipeline exploded")
 
     monkeypatch.setattr(
-        "composer.pipeline.cli.run_pipeline", _boom
+        "composer.spec.source.autoprove_common.ProverBackend", _Crasher
     )
 
     summary = RunSummary()
