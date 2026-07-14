@@ -207,9 +207,10 @@ class ForgeTestTool(
             # linker error. No tests ran, and any previously recorded test
             # names no longer describe a runnable buffer — clear them.
             msg = (
-                f"{_build_failure_hint(stderr)}\n\n"
+                "The project failed to BUILD -- no tests ran. Fix the compile "
+                "error before iterating on test logic or fuzz seeds.\n\n"
                 f"forge test did not produce parseable JSON "
-                f"(exit {returncode}) -- the project failed to build.\n\n"
+                f"(exit {returncode}).\n\n"
                 f"stderr:\n{stderr}\n\nstdout:\n{stdout}"
                 f"{seed_footer}"
             )
@@ -357,27 +358,6 @@ class _ForgeSuiteResult(BaseModel):
 
 
 _FORGE_REPORT = TypeAdapter(dict[str, _ForgeSuiteResult])
-
-
-def _build_failure_hint(stderr: str) -> str:
-    """Lead-in guidance for a build failure (forge produced no parseable JSON).
-
-    General by default: a compile error means no tests ran, so the compile error
-    is what to fix first. When solc reports a lexical error on a malformed
-    number/hex literal, add a light nudge toward the Foundry address idioms --
-    keyed off solc's own error code, not by re-parsing the generated source.
-    """
-    lead = (
-        "The project failed to BUILD -- no tests ran. Fix the compile error "
-        "before iterating on test logic or fuzz seeds."
-    )
-    if "(8936)" in stderr:  # solc lexical error on a malformed number/hex literal
-        lead += (
-            " This looks like an invalid Solidity literal (e.g. a malformed hex "
-            'address). Use `makeAddr("name")` / `vm.addr(k)` for test actors, or '
-            "a full valid hex address."
-        )
-    return lead
 
 
 def _parse_forge_json(stdout: str) -> list[_TestResult] | None:

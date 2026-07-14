@@ -2,10 +2,8 @@
 
 When the LLM-authored draft fails to compile, ``forge test`` exits non-zero and
 prints no JSON, so ``_parse_forge_json`` returns ``None`` and the runner surfaces
-the raw solc output. ``_build_failure_hint`` prepends a lead-in that steers the
-agent to fix the compile error first (a whole campaign dies on one bad literal),
-with a light nudge toward the Foundry address idioms when solc flags an invalid
-literal.
+the raw solc output, led by a nudge to fix the compile error first (a whole
+campaign dies on one compile error).
 """
 
 import asyncio
@@ -16,29 +14,8 @@ from composer.foundry import runner as runner_mod
 from composer.foundry.runner import (
     ForgeTestDeps,
     ForgeTestTool,
-    _build_failure_hint,
     _parse_forge_json,
 )
-
-
-def test_build_failure_hint_is_general_by_default() -> None:
-    # Any build failure gets the "fix the compile error first" lead.
-    for stderr in ("", "Error (7576): Undeclared identifier.", "some linker error"):
-        hint = _build_failure_hint(stderr)
-        assert "failed to BUILD" in hint
-        assert "Fix the compile error" in hint
-        # No address-idiom nudge unless solc reports the literal lexical error.
-        assert "makeAddr" not in hint
-
-
-def test_build_failure_hint_adds_address_nudge_on_lexical_literal_error() -> None:
-    # solc error 8936 is the lexical error on a malformed number/hex literal.
-    hint = _build_failure_hint(
-        "Error (8936): Identifier-start is not allowed at end of a number."
-    )
-    assert "failed to BUILD" in hint  # still leads with the general guidance
-    assert "makeAddr" in hint
-    assert "vm.addr" in hint
 
 
 def test_parse_forge_json_returns_none_on_non_json() -> None:
@@ -74,14 +51,14 @@ def _min_state(curr_test: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_forge_test_build_failure_leads_with_hint(tmp_path, monkeypatch) -> None:
-    """A compile failure returns the hint, keeps the raw solc output, and clears
-    the recorded test names (no runnable buffer anymore)."""
+    """A compile failure returns the fix-the-build-first lead, keeps the raw solc
+    output, and clears the recorded test names (no runnable buffer anymore)."""
 
     class _FakeProc:
         returncode = 1
 
         async def communicate(self) -> tuple[bytes, bytes]:
-            # Non-JSON stdout => _parse_forge_json returns None; solc 8936 on stderr.
+            # Non-JSON stdout => _parse_forge_json returns None; solc error on stderr.
             return (b"", b"Error (8936): Identifier-start is not allowed at end of a number.\n")
 
     async def _fake_exec(*_args, **_kwargs) -> _FakeProc:
@@ -109,6 +86,5 @@ async def test_forge_test_build_failure_leads_with_hint(tmp_path, monkeypatch) -
     assert not isinstance(result, str)  # build-failure branch returns a Command
     content = result.update["messages"][-1].content
     assert content.startswith("The project failed to BUILD")
-    assert "makeAddr" in content            # 8936 => address-idiom nudge
     assert "Error (8936)" in content        # raw solc output still surfaced
     assert result.update["last_test_names"] == []
