@@ -76,15 +76,15 @@ GLOBAL_PROVER_TIMEOUT_ENV = "AUTOPROVER_GLOBAL_PROVER_TIMEOUT"
 
 
 def _resolved_global_prover_timeout() -> int:
-    """Global prover timeout in seconds: ``DEFAULT_GLOBAL_TIMEOUT``, or the value of
-    ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` when that env var is set, clamped to
-    ``[1, DEFAULT_GLOBAL_TIMEOUT]``. A non-integer env value is ignored with a warning."""
+    """Global prover timeout in seconds: ``DEFAULT_GLOBAL_TIMEOUT``, or the integer value of
+    ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` when that env var is set. A non-integer env value is
+    ignored with a warning."""
     default = int(DEFAULT_GLOBAL_TIMEOUT)
     raw = os.environ.get(GLOBAL_PROVER_TIMEOUT_ENV)
     if raw is None:
         return default
     try:
-        return max(1, min(int(raw), default))
+        return int(raw)
     except ValueError:
         _logger.warning("Ignoring non-integer %s=%r", GLOBAL_PROVER_TIMEOUT_ENV, raw)
         return default
