@@ -123,6 +123,34 @@ def _parse_judge(review: str) -> tuple[bool, str]:
     return (not review.strip().upper().startswith("REJECT")), review
 
 
+async def _author_turn(
+    module: Any, input_json: str, failure: dict | None, *, env: Any, recursion_limit: int, backend_name: str
+) -> str:
+    """One authoring turn: render the backend's prompt (with any prior failure as revise
+    context), run the tool-enabled LLM agent, and strip a code fence off the result."""
+    from composer.rustapp._llm_agent import run_llm_agent
+
+    prompt = json.loads(
+        module.author_prompt(input_json, json.dumps(failure) if failure is not None else None)
+    )
+    reply = await run_llm_agent(env, prompt, recursion_limit=recursion_limit, backend_name=backend_name)
+    return _strip_fence(reply)
+
+
+async def _judge_turn(
+    module: Any, input_json: str, spec: str, *, env: Any, recursion_limit: int, backend_name: str
+) -> tuple[bool, str]:
+    """Optional LLM review of a spec: ``(accept, feedback)``. ``(True, "")`` when the backend
+    declares no judge (``judge_prompt`` → ``None``, the default)."""
+    from composer.rustapp._llm_agent import run_llm_agent
+
+    jp = module.judge_prompt(input_json, spec)
+    if not jp:
+        return True, ""
+    review = await run_llm_agent(env, json.loads(jp), recursion_limit=recursion_limit, backend_name=backend_name)
+    return _parse_judge(review)
+
+
 async def author_and_compile(
     module: Any,
     input_dict: dict,
@@ -136,23 +164,18 @@ async def author_and_compile(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     command_sem: asyncio.Semaphore | None = None,
 ) -> str | GaveUp:
-    """Author `input_dict.kind`'s spec with the LLM, then gate it with the backend's ``compile``
-    (retry on failure) and optional ``judge``. Returns the compiled spec text, or :class:`GaveUp`.
-    Shared by the component loop and app setup artifacts (e.g. Crucible's fixture)."""
-    from composer.rustapp._llm_agent import run_llm_agent
-
+    """Author an artifact's spec, gate it with the backend's ``compile`` (retry on failure) and
+    optional ``judge``. Returns the compiled spec text, or :class:`GaveUp`. Used for artifacts
+    that have no fuzz units to validate — e.g. Crucible's shared setup fixture (a compile-only
+    gate). The component path fuses the build gate into ``validate`` instead (see
+    :meth:`RustFormalizer.formalize`)."""
     input_json = json.dumps(input_dict)
     sandbox_json = json.dumps(sandbox_dict)
     failure: dict | None = None
     for _ in range(max_attempts):
-        prompt = json.loads(
-            module.author_prompt(input_json, json.dumps(failure) if failure is not None else None)
+        spec = await _author_turn(
+            module, input_json, failure, env=env, recursion_limit=recursion_limit, backend_name=backend_name
         )
-        reply = await run_llm_agent(
-            env, prompt, recursion_limit=recursion_limit, backend_name=backend_name
-        )
-        spec = _strip_fence(reply)
-
         result = json.loads(
             await _run_blocking(
                 lambda: module.compile(input_json, spec, str(workdir), sandbox_json), command_sem
@@ -163,16 +186,12 @@ async def author_and_compile(
             failure = {"draft": spec, "errors": errors}
             emit("build_output", {"line": _first_line(errors) or "build failed; revising"})
             continue
-
-        jp = module.judge_prompt(input_json, spec)
-        if jp:
-            review = await run_llm_agent(
-                env, json.loads(jp), recursion_limit=recursion_limit, backend_name=backend_name
-            )
-            ok, feedback = _parse_judge(review)
-            if not ok:
-                failure = {"draft": spec, "errors": feedback}
-                continue
+        ok, feedback = await _judge_turn(
+            module, input_json, spec, env=env, recursion_limit=recursion_limit, backend_name=backend_name
+        )
+        if not ok:
+            failure = {"draft": spec, "errors": feedback}
+            continue
         return spec
     return GaveUp(reason=f"{backend_name}: did not pass compile/judge in {max_attempts} attempts")
 
@@ -262,37 +281,58 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         sandbox_dict = self._sandbox_spec(workdir)
         sandbox_json = json.dumps(sandbox_dict)
         emit = make_emitter()
-
-        spec = await author_and_compile(
-            self._module, input_dict, env=run.env, sandbox_dict=sandbox_dict, workdir=workdir,
-            recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name,
-            emit=emit, max_attempts=self._max_attempts, command_sem=self._command_sem,
-        )
-        if isinstance(spec, GaveUp):
-            return spec
-
-        # Validate each unit (per-unit; host owns scheduling) and bake its verdict.
         units = json.loads(self._module.units(input_json))
-        verdicts: dict[str, dict] = {}
-        property_units: list[tuple[str, list[str]]] = []
-        for u in units:
-            unit = u["unit"]
-            verdict = json.loads(
-                await _run_blocking(
-                    lambda unit=unit: self._module.validate(
-                        input_json, spec, unit, str(workdir), sandbox_json
-                    ),
-                    self._command_sem,
+
+        # Fused author → judge → validate loop: validate's build IS the compile gate (no
+        # separate dry-run per component — that ~2×'d the e2e). The units share one build, so
+        # a BuildFailed from any unit re-authors the whole spec.
+        failure: dict | None = None
+        for _ in range(self._max_attempts):
+            spec = await _author_turn(
+                self._module, input_json, failure, env=run.env,
+                recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name,
+            )
+            ok, feedback = await _judge_turn(
+                self._module, input_json, spec, env=run.env,
+                recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name,
+            )
+            if not ok:
+                failure = {"draft": spec, "errors": feedback}
+                continue
+
+            verdicts: dict[str, dict] = {}
+            property_units: list[tuple[str, list[str]]] = []
+            build_failed: str | None = None
+            for u in units:
+                unit = u["unit"]
+                res = json.loads(
+                    await _run_blocking(
+                        lambda unit=unit, spec=spec: self._module.validate(
+                            input_json, spec, unit, str(workdir), sandbox_json
+                        ),
+                        self._command_sem,
+                    )
                 )
-            )
-            verdicts[unit] = verdict
-            property_units.append((u["property"], [unit]))
-            emit(
-                "verdict",
-                {"outcome": verdict.get("outcome"), "name": u["property"],
-                 "line": f'{u["property"]}: {verdict.get("outcome")}'},
-            )
-        return RustFormalResult(artifact_text=spec, units=property_units, verdicts=verdicts)
+                if res.get("kind") == "build_failed":
+                    build_failed = res.get("errors", "")
+                    break
+                verdict = res["verdict"]
+                verdicts[unit] = verdict
+                property_units.append((u["property"], [unit]))
+                emit(
+                    "verdict",
+                    {"outcome": verdict.get("outcome"), "name": u["property"],
+                     "line": f'{u["property"]}: {verdict.get("outcome")}'},
+                )
+            if build_failed is not None:
+                failure = {"draft": spec, "errors": build_failed}
+                emit("build_output", {"line": _first_line(build_failed) or "build failed; revising"})
+                continue
+            return RustFormalResult(artifact_text=spec, units=property_units, verdicts=verdicts)
+
+        return GaveUp(
+            reason=f"{self._descriptor.name}: did not compile/pass judge in {self._max_attempts} attempts"
+        )
 
     @override
     async def fetch_verdicts(

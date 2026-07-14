@@ -15,7 +15,7 @@ use std::path::Path;
 use autoprover_sdk::{
     run_confined, AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, AuthorInput, Backend,
     CommandOutput, CompileResult, CoreSlot, EventKind, Failure, PhaseSpec, Prompt, Sandbox, Unit,
-    Verdict,
+    ValidateOutcome, Verdict,
 };
 /// Backend-guidance prose injected into the property-extraction prompt. Crucible is
 /// a fuzzer, so — like Foundry — refutations are valuable but universals can't be
@@ -571,7 +571,7 @@ impl Backend for CrucibleApp {
         unit: &str,
         workdir: &Path,
         sandbox: &Sandbox,
-    ) -> Verdict {
+    ) -> ValidateOutcome {
         let program = &input.program;
         let fixture = ctx_str(input, "fixture");
         let timeout = ctx_u64(input, "fuzz_timeout", 30);
@@ -586,23 +586,29 @@ impl Backend for CrucibleApp {
             "--timeout".to_string(),
             timeout.to_string(),
         ];
+        let verdict = |o: &str| ValidateOutcome::Verdict { verdict: Verdict::with_outcome(o) };
         match run_confined(sandbox, "crucible", &args, &files, workdir) {
             Ok(out) => {
                 let combined = format!("{}\n{}", out.stdout, out.stderr);
-                if is_build_error(&combined) {
-                    Verdict::with_outcome("ERROR")
-                } else if combined.contains("[FUZZ_FINDING]") {
-                    // A crash = the property was refuted (a real counterexample).
-                    Verdict::with_outcome("BAD")
+                // Order matters: a fuzz finding and a clean run both mean the harness BUILT, so
+                // classify those first — only a *non-zero* exit with build markers is a real
+                // build failure. This keeps `error[...]`-looking runtime/log text in a clean
+                // (exit 0) fuzz run from being misread as a build failure.
+                if combined.contains("[FUZZ_FINDING]") {
+                    verdict("BAD") // a crash = the property was refuted (a counterexample)
+                } else if out.exit_code == 0 {
+                    verdict("GOOD") // ran to the budget with no violation = held
+                } else if is_build_error(&combined) {
+                    // Shared build; re-author the whole spec (docs/rust-backend-api.md).
+                    ValidateOutcome::BuildFailed { errors: build_errors(&out) }
                 } else {
-                    // Ran to the timeout with no violation = held within the budget.
-                    Verdict::with_outcome("GOOD")
+                    verdict("ERROR")
                 }
             }
             Err(e) => {
                 let mut v = Verdict::with_outcome("ERROR");
                 v.unit_file = Some(e);
-                v
+                ValidateOutcome::Verdict { verdict: v }
             }
         }
     }

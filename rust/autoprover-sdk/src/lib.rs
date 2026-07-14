@@ -210,6 +210,18 @@ pub struct Unit {
     pub unit: String,
 }
 
+/// The result of `validate` — the fused build+check for one unit. Either the harness failed
+/// to BUILD (so the whole spec must be re-authored — the build is shared across units), or it
+/// built and produced a per-unit `Verdict`. Fusing the build gate into `validate` (rather than a
+/// separate `compile` dry-run per unit) is the component path's efficiency win — one toolchain
+/// run per unit, as the old loop did (docs/rust-backend-api.md; e2e was ~2× without it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ValidateOutcome {
+    BuildFailed { errors: String },
+    Verdict { verdict: Verdict },
+}
+
 /// A per-unit outcome (mirrors `composer…report.collect.Verdict`). `outcome` is one of
 /// GOOD | BAD | ERROR | TIMEOUT | UNKNOWN.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -462,7 +474,9 @@ pub trait Backend: Send + Sync + 'static {
         sandbox: &Sandbox,
     ) -> CompileResult;
 
-    /// Validate ONE unit against the compiled spec and bake its verdict. Per-unit so the host
+    /// Build + check ONE unit against the spec (the fused build gate — no separate compile for
+    /// components). Returns [`ValidateOutcome::BuildFailed`] to trigger a re-author of the whole
+    /// spec (the build is shared across units), or a per-unit [`Verdict`]. Per-unit so the host
     /// owns enumeration/scheduling. BLOCKING.
     fn validate(
         &self,
@@ -471,7 +485,7 @@ pub trait Backend: Send + Sync + 'static {
         unit: &str,
         workdir: &std::path::Path,
         sandbox: &Sandbox,
-    ) -> Verdict;
+    ) -> ValidateOutcome;
 
     /// Optional run-level artifacts from the full outcome set, as `{relpath: contents}`.
     fn finalize(&self, _outcomes: &serde_json::Value) -> BTreeMap<String, String> {
@@ -548,7 +562,7 @@ pub fn ffi_compile(
     })
 }
 
-/// `validate(input_json, spec, unit, workdir, sandbox_json) -> str` (JSON `Verdict`). BLOCKING.
+/// `validate(input_json, spec, unit, workdir, sandbox_json) -> str` (JSON `ValidateOutcome`). BLOCKING.
 pub fn ffi_validate(
     b: &dyn Backend,
     input_json: &str,
@@ -558,16 +572,13 @@ pub fn ffi_validate(
     sandbox_json: &str,
 ) -> String {
     let sandbox: Sandbox = parse(sandbox_json, "Sandbox").unwrap_or_default();
-    let verdict = match parse::<AuthorInput>(input_json, "AuthorInput") {
+    let outcome = match parse::<AuthorInput>(input_json, "AuthorInput") {
         Ok(input) => b.validate(&input, spec, unit, std::path::Path::new(workdir), &sandbox),
-        Err(e) => Verdict {
-            outcome: "ERROR".into(),
-            line: None,
-            duration_seconds: None,
-            unit_file: Some(e),
+        Err(e) => ValidateOutcome::Verdict {
+            verdict: Verdict { outcome: "ERROR".into(), line: None, duration_seconds: None, unit_file: Some(e) },
         },
     };
-    serde_json::to_string(&verdict).unwrap_or_default()
+    serde_json::to_string(&outcome).unwrap_or_default()
 }
 
 /// `finalize(outcomes_json) -> str | None` (JSON `{relpath: contents}`, or None).

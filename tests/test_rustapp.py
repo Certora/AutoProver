@@ -72,11 +72,12 @@ def test_compile_is_a_noop_ok():
     assert r == {"status": "ok"}
 
 
-def test_validate_is_good():
-    v = json.loads(
+def test_validate_returns_a_good_verdict():
+    res = json.loads(
         echoprover.validate(_component_input("p"), "spec", "rule_p", "/tmp", json.dumps({"run_confined": None}))
     )
-    assert v["outcome"] == "GOOD"
+    # ValidateOutcome: the demo always builds, so a verdict (not build_failed).
+    assert res == {"kind": "verdict", "verdict": {"outcome": "GOOD"}}
 
 
 def test_result_round_trips_through_cache_serialization():
