@@ -46,12 +46,12 @@ StoreFactory = Callable[[SourceCode, AppDescriptor], ArtifactStore[Any, RustForm
 class BackendOptions:
     """Mutable run options closed over by :meth:`RustApplication.make_backend`.
 
-    The CLI can adjust these (e.g. ``--fuzz-timeout``) after building the
-    application but before :func:`run_application`, keeping one phase enum.
+    The CLI can adjust these (e.g. the sandbox) after building the application but
+    before :func:`run_application`, keeping one phase enum. Backend tuning knobs like a
+    fuzz budget travel as descriptor-declared args in :attr:`declared_args`.
     """
 
     command_timeout_s: int = DEFAULT_TIMEOUT_S
-    fuzz_timeout_s: int = 30
     sandbox: SandboxConfig | None = None
     #: Parsed values of the descriptor's declared CLI args, threaded into the backend and
     #: injected into every component's ``AuthorInput.context``. Set by the entry point.
@@ -147,7 +147,6 @@ def build_backend(
         artifact_store=sf(source, descriptor),
         ecosystem=resolve_ecosystem(descriptor),
         command_timeout_s=opts.command_timeout_s,
-        fuzz_timeout_s=opts.fuzz_timeout_s,
         sandbox=opts.sandbox,
         declared_args=opts.declared_args,
     )
@@ -266,7 +265,6 @@ def build_application(
     store_factory: StoreFactory | None = None,
     backend_cls: type[RustBackend] = RustBackend,
     command_timeout_s: int = DEFAULT_TIMEOUT_S,
-    fuzz_timeout_s: int = 30,
     sandbox: SandboxConfig | None = None,
 ) -> RustApplication:
     """Load a Rust wheel and synthesize a :class:`RustApplication`.
@@ -294,7 +292,6 @@ def build_application(
         section_order=section_order,
         options=BackendOptions(
             command_timeout_s=command_timeout_s,
-            fuzz_timeout_s=fuzz_timeout_s,
             sandbox=sandbox,
         ),
         store_factory=store_factory or _default_store,

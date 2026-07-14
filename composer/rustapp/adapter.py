@@ -352,7 +352,6 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         *,
         sandbox: SandboxConfig | None = None,
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
-        fuzz_timeout_s: int = 30,
         command_sem: asyncio.Semaphore | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         context_extra: dict | None = None,
@@ -363,7 +362,6 @@ class RustFormalizer(Formalizer[RustFormalResult]):
         self._descriptor = descriptor
         self._sandbox = sandbox
         self._command_timeout_s = command_timeout_s
-        self._fuzz_timeout_s = fuzz_timeout_s
         self._command_sem = command_sem
         self._max_attempts = max_attempts
         # Injected into every component's ``AuthorInput.context`` (declared-arg values + the
@@ -582,7 +580,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult]):
 
         return RustFormalizer(
             b.module, b.descriptor, sandbox=b.sandbox,
-            command_timeout_s=b.command_timeout_s, fuzz_timeout_s=b.fuzz_timeout_s,
+            command_timeout_s=b.command_timeout_s,
             command_sem=command_sem, context_extra=context_extra, setup_result=setup_result,
         )
 
@@ -604,7 +602,6 @@ class RustBackend:
     ecosystem: Ecosystem[Any, Any, Any]
     # Wall-clock ceiling for a single compile/validate (a first harness build can be minutes).
     command_timeout_s: int = DEFAULT_TIMEOUT_S
-    fuzz_timeout_s: int = 30
     # How to confine every toolchain run (docs/command-sandbox.md). None → unsandboxed.
     sandbox: SandboxConfig | None = None
     # Parsed values of the descriptor's declared CLI args, injected into every component's
