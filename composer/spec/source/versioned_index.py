@@ -63,7 +63,10 @@ class VersionedAgentIndex(AgentIndexBase):
     def _versioned_key(
         cls, question: str, version: str
     ) -> str:
-        return string_hash(f"{question}|{version}")[18:]
+        # ``string_hash`` already returns a 16-char digest; do NOT slice it
+        # further (a leftover ``[18:]`` sliced it to the empty string, so every
+        # versioned entry collided at key "").
+        return string_hash(f"{question}|{version}")
 
     async def asearch_versioned(
         self, question: str, version_list: list[str]
@@ -73,7 +76,7 @@ class VersionedAgentIndex(AgentIndexBase):
 
         key_v = self._versioned_key(question, version_list[-1])
         
-        res = self._store.get(self._target_ns, key_v)
+        res = await self._store.aget(self._target_ns, key_v)
         if res is not None:
             to_ret : KeyedAgentResult = {
                 "ref_string": key_v,
@@ -93,9 +96,13 @@ class VersionedAgentIndex(AgentIndexBase):
             if res.key in seen:
                 continue
             if "version_key" not in res.value:
+                known_migration = await self.migration_for(res.key, None, version_list[-1])
+                stale = True
+                if known_migration is not None:
+                    stale = known_migration["status"] == "stale"
                 # v0, base case
                 context.append({
-                    "stale": True,
+                    "stale": stale,
                     **cast(AgentResult, res.value),
                     "ref_string": res.key,
                     "score": cast(float, res.score)

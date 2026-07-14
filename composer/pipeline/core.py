@@ -134,7 +134,7 @@ def _component_cache_key(c: ContractComponentInstance) -> CacheKey[Properties, C
     return CacheKey(string_hash("|".join([c.app.model_dump_json(), str(c.ind), str(c._contract.ind)])))
 
 
-def _batch_cache_key[FormT: BaseModel](props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, FormT]:
+def _batch_cache_key[FormT: BaseModel](props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, FormT]: # pyright: ignore[reportInvalidTypeVarUse]
     return CacheKey(string_hash("|".join(p.model_dump_json() for p in props)))
 
 

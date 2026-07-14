@@ -186,7 +186,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
         )
 
         invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None = None
-        if invariants.inv:
+        if invariants.inv and False:
             inv_props = [
                 PropertyFormulation(title=inv.name, description=inv.description, sort="invariant")
                 for inv in invariants.inv

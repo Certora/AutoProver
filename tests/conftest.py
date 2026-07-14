@@ -24,7 +24,7 @@ from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
 import composer.diagnostics.timing as timing_mod
 from composer.prover.core import ProverOptions, ProverReport
-from composer.spec.source.prover import get_prover_tool, LLM
+from composer.spec.source.prover import get_prover_tool, in_situ_project, LLM
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -222,7 +222,7 @@ def certora_prover(
         prover_opts=ProverOptions(),
         llm=fake_llm,
         main_contract="Dummy",
-        project_root=str(tmp_path),
+        project_directory=in_situ_project(str(tmp_path)),
     )
 
     def bind_tool(l: Iterable[ProverToolResponse]) -> BaseTool:
