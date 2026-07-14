@@ -104,7 +104,7 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
         return ensure_dir(Path(self._project_root) / "certora/solana_null/artifacts")
 
 
-class NullSolanaFormalizer(Formalizer[NullResult]):
+class NullSolanaFormalizer(Formalizer[NullResult, FeatureUnit]):
     def __init__(self) -> None:
         # Reuses the ``"crucible"`` report backend (the real Solana verifier this null backend
         # models); its results are all-UNKNOWN, so the label choice is provenance only.
@@ -133,13 +133,13 @@ class NullSolanaFormalizer(Formalizer[NullResult]):
 
 
 @dataclass
-class NullSolanaPrepared(PreparedSystem[NullResult]):
+class NullSolanaPrepared(PreparedSystem[NullResult, FeatureUnit]):
     form: NullSolanaFormalizer
 
     @override
     async def prepare_formalization(
         self, run: PipelineRun
-    ) -> Formalizer[NullResult]:
+    ) -> Formalizer[NullResult, FeatureUnit]:
         return self.form
 
 
@@ -162,12 +162,12 @@ class NullSolanaBackend:
 
     async def prepare_system(
         self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None]
-    ) -> PreparedSystem[NullResult]:
+    ) -> PreparedSystem[NullResult, FeatureUnit]:
         # Use the Solana ecosystem's locate_main so the backend and ecosystem agree on the
         # target program (imported lazily to avoid an import cycle with pipeline.ecosystem).
         from composer.pipeline.ecosystem import SOLANA
 
         return NullSolanaPrepared(SOLANA.locate_main(analyzed, run.source), NullSolanaFormalizer())
 
-    def to_artifact_id(self, c: SolanaInstructionInstance) -> NullArtifact:
+    def to_artifact_id(self, c: FeatureUnit) -> NullArtifact:
         return NullArtifact(c.slug)

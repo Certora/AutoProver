@@ -340,7 +340,7 @@ async def run_workspace_prep(
 # The formalizer.
 # ---------------------------------------------------------------------------
 
-class RustFormalizer(Formalizer[RustFormalResult]):
+class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     """Drives a Rust :class:`~autoprover_sdk.Backend` through the author→compile→judge→validate
     loop. Ecosystem-agnostic: the unit is any :class:`FeatureUnit`, marshalled via
     ``feature_json()``."""
@@ -520,7 +520,7 @@ class RustFormalizer(Formalizer[RustFormalResult]):
 
 
 @dataclass
-class RustPreparedSystem(PreparedSystem[RustFormalResult]):
+class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit]):
     """Generic prepared system, descriptor-driven: run the wheel's workspace prep, author the
     optional shared ``setup`` artifact, and build a formalizer carrying the injected context.
 
@@ -532,7 +532,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult]):
     analyzed: BaseApplication | None = None
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult]:
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult, FeatureUnit]:
         b = self.backend
         descriptor = b.descriptor
         workdir = Path(run.source.project_root)
@@ -622,7 +622,7 @@ class RustBackend:
 
     async def prepare_system(
         self, analyzed: BaseApplication, run: PipelineRun
-    ) -> PreparedSystem[RustFormalResult]:
+    ) -> PreparedSystem[RustFormalResult, FeatureUnit]:
         return RustPreparedSystem(
             self.ecosystem.locate_main(analyzed, run.source), self, analyzed
         )

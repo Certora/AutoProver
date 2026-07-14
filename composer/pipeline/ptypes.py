@@ -13,7 +13,7 @@ from composer.spec.context import (
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
-    ContractComponentInstance
+    FeatureUnit,
 )
 from composer.spec.types import PropertyFormulation, FormalResult
 from composer.spec.source.report.collect import ReportableResult
@@ -71,8 +71,12 @@ class SystemAnalysisSpec:
 
 
 @dataclass
-class BackendJob:
-    feat: ContractComponentInstance
+class BackendJob[U: FeatureUnit]:
+    # ``U`` is the *formalized unit* type the paired backend consumes (EVM's
+    # ``ContractComponentInstance``, Solana's invariant unit, …) — see ``FeatureUnit``. The shared
+    # driver is generic over it; a backend narrows it to its concrete unit and reads its members
+    # without casts.
+    feat: U
     props: list[PropertyFormulation]
 
 @dataclass(frozen=True)
@@ -94,14 +98,16 @@ class Delivered[FormT: BackendResult]:
         return self.result.output_link
 
 @dataclass
-class ComponentOutcome[FormT: BackendResult](BackendJob):
+class ComponentOutcome[FormT: BackendResult, U: FeatureUnit](BackendJob[U]):
     result: Delivered[FormT] | GaveUp | BaseException
 
 @dataclass
 class CorePipelineResult[FormT: BackendResult]:
+    # The result rollup is unit-agnostic — it only reads ``feat.display_name`` (a ``FeatureUnit``
+    # member) — so it stays mono in the unit type and widens the outcomes to the protocol.
     n_components: int
     n_properties: int
-    outcomes: list[ComponentOutcome[FormT]]
+    outcomes: list[ComponentOutcome[FormT, FeatureUnit]]
     failures: list[str]
 
 __all__ = [

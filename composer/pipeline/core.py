@@ -27,7 +27,7 @@ from composer.spec.context import (
     WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode
 )
 from composer.spec.system_model import (
-    SourceApplication, ContractComponentInstance, FeatureUnit
+    SourceApplication, FeatureUnit
 )
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
@@ -52,18 +52,22 @@ COMMON_SYSTEM_CACHE_KEY = "system-analysis"
 _log = logging.getLogger(__name__)
 
 @dataclass
-class Formalizer[FormT: BackendResult](ABC):
+class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     """Immutable, fully constructed by prepare_formalization. Carries the prover's
     config/resources/prover_tool/invariant-results (or nothing, for foundry) as constructor
-    state — never set post-hoc. `FormT: ReportableResult` is what makes the report a core step."""
+    state — never set post-hoc. `FormT: ReportableResult` is what makes the report a core step.
+
+    Generic over ``U``, the *formalized unit* type it consumes (EVM's ``ContractComponentInstance``,
+    a Rust backend's ``FeatureUnit``): the backend works with its concrete unit — reading its
+    members without casts — while the driver stays unit-agnostic."""
     formalized_type: type[FormT]
     backend_tag: ReportBackend
-    
+
     @abstractmethod
     async def formalize(
         self,
         label: str,
-        feat: ContractComponentInstance,
+        feat: U,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[FormT],
         run: PipelineRun
@@ -80,22 +84,22 @@ class Formalizer[FormT: BackendResult](ABC):
         off-thread. Foundry: read straight off inp.formalized.result."""
         ...
 
-    async def finalize(self, outcomes: list[ComponentOutcome[FormT]], run: PipelineRun) -> None:
+    async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
         components_to_prover_runs.json). Default: none."""
         return None
 
 @dataclass
-class PreparedSystem[FormT: BackendResult](ABC):
+class PreparedSystem[FormT: BackendResult, U: FeatureUnit](ABC):
     # The located "main" unit is ecosystem-specific (EVM ContractInstance, Solana program, …);
     # only the ecosystem's own ``units()`` consumes it, so the base keeps it untyped.
     main: Any
 
     @abstractmethod
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT]: ...
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT, U]: ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -111,9 +115,9 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     async def prepare_system(
         self, analyzed: SourceApplication,
         run: PipelineRun[P, H]
-    ) -> PreparedSystem[FormT]: ...
+    ) -> PreparedSystem[FormT, U]: ...
 
-    def to_artifact_id(self, c: ContractComponentInstance) -> A: ...
+    def to_artifact_id(self, c: U) -> A: ...
 
 
 # ---- shared helpers (the de-duplicated cache keys + batch) -------------------
@@ -121,7 +125,7 @@ PROPERTIES_KEY = CacheKey[None, Properties]("properties")
 
 
 @dataclass
-class _Batch(BackendJob):
+class _Batch[U: FeatureUnit](BackendJob[U]):
     feat_ctx: WorkflowContext[ComponentGroup]
 
 def _component_cache_key(c: FeatureUnit) -> CacheKey[Properties, ComponentGroup]:
@@ -142,14 +146,14 @@ def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](
-    backend: PipelineBackend[P, FormT, H, A],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit](
+    backend: PipelineBackend[P, FormT, H, A, U],
     run: PipelineRun[P, H],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
-    ecosystem: Ecosystem = EVM,
+    ecosystem: Ecosystem[Any, Any, Any] = EVM,
 ) -> CorePipelineResult[FormT]:
     # ``ecosystem`` supplies the domain-specific front half; it defaults to ``EVM``, which
     # reproduces the previous hardcoded Solidity behavior exactly, so EVM callers (and cli.py)
@@ -181,15 +185,21 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
     formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
 
-    batches = await _extract_all(prepared.main, backend.backend_guidance, run,
-                                phases["extraction"], interactive, threat_model, max_bug_rounds,
-                                ecosystem)
+    # Extraction yields ``FeatureUnit`` batches (the ecosystem is invariant in its unit type and
+    # callers pass a concrete chain, so it can't be tied to the backend's ``U`` at the signature).
+    # The paired backend guarantees these units are its ``U``; widen once, here, honestly.
+    batches: list[_Batch[U]] = cast(
+        "list[_Batch[U]]",
+        await _extract_all(
+            prepared.main, backend.backend_guidance, run,
+            phases["extraction"], interactive, threat_model, max_bug_rounds, ecosystem),
+    )
     formalizer = await formalizer_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
 
     # 4. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
-    async def _run(batch: _Batch) -> ComponentOutcome[FormT]:
+    async def _run(batch: _Batch[U]) -> ComponentOutcome[FormT, U]:
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
         child : WorkflowContext[FormT] = await batch.feat_ctx.child(
@@ -255,8 +265,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 async def _extract_all[P: enum.Enum, H](
     main: Any, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
-    ecosystem: Ecosystem,
-) -> list[_Batch]:
+    ecosystem: Ecosystem[Any, Any, Any],
+) -> list[_Batch[FeatureUnit]]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY)
 
     async def _extract(feat: FeatureUnit) -> tuple[WorkflowContext[ComponentGroup], list[PropertyFormulation]]:
@@ -271,34 +281,40 @@ async def _extract_all[P: enum.Enum, H](
         )
         return feat_ctx, props
 
-    # The driver is ecosystem-generic (``feat`` is a ``FeatureUnit``), but the shared
-    # batch/outcome types are EVM-shaped (``ContractComponentInstance``). Non-EVM units
-    # duck-type the same protocol, so the casts below are safe at runtime.
+    # Extraction is unit-agnostic: it yields batches over the ``FeatureUnit`` protocol (the
+    # ecosystem is Unit-erased here — see run_pipeline). The paired backend's concrete unit type
+    # ``U`` is reunited with these batches by the single widening cast in run_pipeline.
     if ecosystem.global_extraction:
         # One whole-program extraction, then one batch per resulting property/invariant —
         # each gets its own formalize (harness + fuzz run + report row).
         assert ecosystem.extraction_unit is not None and ecosystem.property_unit is not None
         _, props = await _extract(ecosystem.extraction_unit(main))
-        batches: list[_Batch] = []
+        batches: list[_Batch[FeatureUnit]] = []
         for i, prop in enumerate(props):
             unit = ecosystem.property_unit(main, prop, i)
             unit_ctx = await prop_ctx.child(_component_cache_key(unit), unit.context_tag())
-            batches.append(_Batch(cast(ContractComponentInstance, unit), [prop], unit_ctx))
+            batches.append(_Batch(unit, [prop], unit_ctx))
         return batches
 
-    async def _one(feat: FeatureUnit) -> _Batch | None:
+    async def _one(feat: FeatureUnit) -> _Batch[FeatureUnit] | None:
         feat_ctx, props = await _extract(feat)
-        return _Batch(cast(ContractComponentInstance, feat), props, feat_ctx) if props else None
+        return _Batch(feat, props, feat_ctx) if props else None
 
     got = await asyncio.gather(*[_one(u) for u in ecosystem.units(main)])
     return [b for b in got if b is not None]
 
 
-def _tally[FormT: BackendResult](outcomes: list[ComponentOutcome[FormT]]) -> CorePipelineResult[FormT]:
+def _tally[FormT: BackendResult, U: FeatureUnit](
+    outcomes: list[ComponentOutcome[FormT, U]]
+) -> CorePipelineResult[FormT]:
     failures: list[str] = []
     for o in outcomes:
         if isinstance(o.result, BaseException):
             failures.append(f"{o.feat.display_name}: {o.result}")
         elif isinstance(o.result, GaveUp):
             failures.append(f"{o.feat.display_name}: GAVE_UP: {o.result.reason}")
-    return CorePipelineResult(len(outcomes), sum(len(o.props) for o in outcomes), outcomes, failures)
+    # The rollup is unit-agnostic; widen the concrete-unit outcomes to the protocol for storage.
+    return CorePipelineResult(
+        len(outcomes), sum(len(o.props) for o in outcomes),
+        cast(list[ComponentOutcome[FormT, FeatureUnit]], outcomes), failures,
+    )
