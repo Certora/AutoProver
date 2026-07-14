@@ -46,7 +46,7 @@ jobs:
           # certoraRun resolves Certora-convention names like `solc8.29` as literal
           # executables; solc-select only ships the `solc` shim, so alias the
           # artifact binary directly (shim-independent of later `use` calls).
-          sudo ln -s ~/.solc-select/artifacts/solc-0.8.29/solc-0.8.29 /usr/local/bin/solc8.29
+          sudo ln -s ~/.solc-select/artifacts/solc-0.8.29/solc-0.8.29 /usr/bin/solc8.29
 
       - name: async runners
         run: |
