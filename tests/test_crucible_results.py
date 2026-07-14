@@ -1,16 +1,16 @@
-"""The console/TUI verdict rollup (``composer.crucible.results``) — no wheel / LLM.
+"""The generic console/TUI verdict rollup (``composer.rustapp.results``) — no wheel / LLM.
 
-A completed Crucible run bakes a per-invariant ``Outcome`` into each delivered result
-(``RustFormalResult.verdicts``). These tests pin how that rollup renders in the console
-counts block: a tally line in the report's crucible vocabulary ("No counterexample" /
-"Counterexample") plus a per-invariant listing, give-ups excluded (they live in
-``failures``), and nothing at all when no invariant was delivered.
+A completed Rust-backend run bakes a per-unit ``Outcome`` into each delivered result
+(``RustFormalResult.verdicts``). These tests pin how that rollup renders in the console counts
+block for the ``crucible`` backend tag: a tally line in the report's crucible vocabulary ("No
+counterexample" / "Counterexample") plus a per-unit listing, give-ups excluded (they live in
+``failures``), and nothing at all when no unit was delivered.
 """
 
 from pathlib import Path
 from typing import Any, cast
 
-from composer.crucible.results import (
+from composer.rustapp.results import (
     format_verdict_lines,
     summarize_verdicts,
 )
@@ -50,7 +50,7 @@ def test_tally_uses_crucible_labels_and_counts():
         _delivered("solvency", "BAD"),
         _delivered("bounds", "GOOD"),
     )
-    summary = summarize_verdicts(result)
+    summary = summarize_verdicts(result, "crucible")
     assert summary.counts == {Outcome.GOOD: 2, Outcome.BAD: 1}
     # GOOD is listed before BAD (display order), with the crucible wording.
     assert summary.tally == "2 No counterexample, 1 Counterexample"
@@ -58,7 +58,7 @@ def test_tally_uses_crucible_labels_and_counts():
 
 def test_lines_have_tally_then_per_invariant_listing():
     result = _result(_delivered("solvency", "BAD"), _delivered("bounds", "GOOD"))
-    lines = format_verdict_lines(summarize_verdicts(result))
+    lines = format_verdict_lines(summarize_verdicts(result, "crucible"))
     # The tally is outcome-ordered (GOOD before BAD); the listing keeps pipeline order.
     assert lines[0] == "  Verdicts:     1 No counterexample, 1 Counterexample"
     assert lines[1] == "    ✗ solvency — Counterexample"
@@ -68,17 +68,17 @@ def test_lines_have_tally_then_per_invariant_listing():
 def test_gave_up_invariants_are_excluded():
     # Give-ups are surfaced in `failures`, not as verdicts.
     result = _result(_delivered("bounds", "GOOD"), _gave_up("solvency"))
-    summary = summarize_verdicts(result)
+    summary = summarize_verdicts(result, "crucible")
     assert [v.name for v in summary.verdicts] == ["bounds"]
 
 
 def test_no_delivered_verdicts_renders_nothing():
-    assert format_verdict_lines(summarize_verdicts(_result(_gave_up("x")))) == []
-    assert format_verdict_lines(summarize_verdicts(_result())) == []
+    assert format_verdict_lines(summarize_verdicts(_result(_gave_up("x")), "crucible")) == []
+    assert format_verdict_lines(summarize_verdicts(_result(), "crucible")) == []
 
 
 def test_delivered_without_baked_verdict_is_unknown():
     res = RustFormalResult(verdicts={})
     outcome = ComponentOutcome(_feat("x"), [], Delivered(res, Path("fuzz/x.rs")))
-    summary = summarize_verdicts(_result(outcome))
+    summary = summarize_verdicts(_result(outcome), "crucible")
     assert summary.counts == {Outcome.UNKNOWN: 1}

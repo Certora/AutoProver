@@ -26,10 +26,11 @@ from pathlib import Path
 
 import pytest
 
-from composer.crucible.harness import CrucibleDep
-from composer.crucible.store import CrucibleArtifactStore
 from composer.sandbox.command import run_local_command
+from composer.rustapp.descriptor import DeliverableMode
+from composer.rustapp.host import load_descriptor, load_module
 from composer.rustapp.result import RustArtifact, RustFormalResult
+from composer.rustapp.store import RustArtifactStore
 from composer.spec.solana.build import build_program
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
@@ -255,17 +256,15 @@ async def test_crucible_phase2_store_assembles_crate():
     evm_sentinel.parent.mkdir(parents=True, exist_ok=True)
     evm_sentinel.write_text("// pretend EVM output\n")
 
-    # Build the store and give it the shared fixture (in the real pipeline this comes
-    # from the authoring loop in prepare_formalization; here it is hand-authored).
-    dep = CrucibleDep(
-        crucible_repo=crucible_repo,
-        program_crate=_PROGRAM,
-        program_rel=f"../../programs/{_PROGRAM}",
+    # The deliverable is now split (docs/rust-pure-app.md): the generic callout-mode store
+    # writes the per-component metadata + returns the crate report link; the wheel's `finalize`
+    # renders the one crate (fixture + sections) from the full result set. Drive both, exactly
+    # as the pipeline does.
+    module = load_module("crucible_app")
+    layout = load_descriptor(module).artifact_layout
+    store = RustArtifactStore(
+        str(_SCENARIO), layout, deliverable_mode=DeliverableMode.CALLOUT, program=_PROGRAM
     )
-    store = CrucibleArtifactStore(str(_SCENARIO), program=_PROGRAM, dep=dep)
-    store.harness.fixture_source = _FIXTURE_SRC
-
-    # One component written through the store, exactly as the driver would.
     comp = RustArtifact("deposit", "harness", "rs")
     result = RustFormalResult(
         commentary="The recorded vault balance never exceeds the authority's initial funds.",
@@ -273,7 +272,28 @@ async def test_crucible_phase2_store_assembles_crate():
         units=[("balance bounded by initial funds", ["c_deposit"])],
     )
     store.write_properties(comp, [])
-    main_rel = store.write_artifact(comp, result)
+    main_rel = store.write_artifact(comp, result)  # metadata + the crate report link
+    assert str(main_rel) == f"fuzz/{_PROGRAM}/src/main.rs"
+
+    # finalize renders the crate (fixture + the delivered section, features from property_units).
+    payload = json.dumps(
+        {
+            "program": _PROGRAM,
+            "setup": _FIXTURE_SRC,
+            "components": [
+                {
+                    "name": "deposit",
+                    "delivered": True,
+                    "artifact_text": _DEPOSIT_SECTION,
+                    "property_units": [["balance bounded by initial funds", ["c_deposit"]]],
+                }
+            ],
+        }
+    )
+    for rel, contents in json.loads(module.finalize(payload)).items():
+        target = _SCENARIO / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(contents)
 
     # Deliverable crate under fuzz/<program>/ ...
     assert (_SCENARIO / main_rel).is_file()

@@ -37,10 +37,10 @@ def _setup_input() -> str:
 
 
 def test_descriptor_declares_design_doc_discovery_phase():
-    from composer.crucible.pipeline import build_crucible_application
     from composer.rustapp.entry import _discovery_phase
+    from composer.rustapp.host import build_application
 
-    app = build_crucible_application()
+    app = build_application("crucible_app")
     assert app.section_order[0] == "Design Doc Discovery"
     assert _discovery_phase(app) is app.phase["discover_design_doc"]
 

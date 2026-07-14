@@ -1,53 +1,78 @@
-"""Unit tests for the Crucible harness manifest assembly — the feature-race fix.
+"""Unit tests for the crucible wheel's crate rendering (was Python's `CrucibleHarness`).
 
-Pure/fast (no build): pins that per-component `prepare_component` reserves Cargo
-features **cumulatively**, so a later component can't clobber an earlier one's
-feature out of the shared `Cargo.toml` (the concurrency bug that dropped an
-instruction: `package does not contain this feature: c_<slug>`).
+Pure/fast (no build, no LLM): the wheel now owns crate assembly (`docs/rust-pure-app.md`).
+`workspace_prep` places a deps-only manifest for warming, and `finalize` renders the whole crate
+(shared fixture + one feature-gated test section per delivered invariant) from the outcome set.
+These pin that rendering — including that the manifest declares each invariant's feature, which
+replaces the old cumulative-feature-reservation dance (per-run manifests remove the race
+entirely, so there is no shared manifest to clobber).
 """
 
-from pathlib import Path
+import json
 
-from composer.crucible.harness import CrucibleDep, CrucibleHarness
-from composer.crucible.store import CrucibleArtifactStore
+import pytest
+
+crucible_app = pytest.importorskip(
+    "crucible_app",
+    reason="crucible_app wheel not built (maturin build -m rust/crucible-app/Cargo.toml)",
+)
 
 
-def _store(tmp_path: Path) -> CrucibleArtifactStore:
-    dep = CrucibleDep(
-        crucible_repo=Path("/nonexistent/crucible"),  # only used to render dep paths as strings
-        program_crate="vault",
-        program_rel="../../programs/vault",
+@pytest.fixture(autouse=True)
+def _crucible_repo(monkeypatch):
+    # Crate rendering only needs the checkout path as a *string* for the path-deps; a real dir
+    # isn't required to exercise the manifest/main.rs assembly.
+    monkeypatch.setenv("CRUCIBLE_REPO", "/nonexistent/crucible")
+
+
+def _finalize(*sections: tuple[str, str]) -> dict[str, str]:
+    """Render the crate for delivered invariants, each ``(feature, test_src)``."""
+    payload = {
+        "program": "vault",
+        "setup": "// FIXTURE\nstruct Fixture {}",
+        "components": [
+            {
+                "name": feat,
+                "delivered": True,
+                "artifact_text": src,
+                "property_units": [[f"p {feat}", [feat]]],
+            }
+            for feat, src in sections
+        ],
+    }
+    return json.loads(crucible_app.finalize(json.dumps(payload)))
+
+
+def test_workspace_prep_places_deps_only_manifest_and_warm_plan():
+    plan = json.loads(
+        crucible_app.workspace_prep(
+            json.dumps({"kind": "setup", "program": "vault", "component": {}, "props": [], "context": {}})
+        )
     )
-    return CrucibleArtifactStore(str(tmp_path), program="vault", dep=dep)
+    assert plan["warm_dirs"] == ["fuzz/vault"]
+    assert plan["build_program"] == "vault"
+    cargo = plan["files"]["fuzz/vault/Cargo.toml"]
+    assert 'name = "vault_fuzz"' in cargo
+    assert "c_probe = []" in cargo  # a feature to select for the setup dry-run
+    # The pinned crucible/solana stack + the program path dep (was CrucibleDep).
+    assert 'vault = { path = "../../programs/vault", features = ["no-entrypoint"] }' in cargo
 
 
-def test_prepare_component_features_are_cumulative(tmp_path):
-    store = _store(tmp_path)
-    store.write_setup_manifest()  # reserves c_probe
-    store.prepare_component("initialize")  # reserves c_initialize
-    store.prepare_component("deposit")  # reserves c_deposit — must NOT drop c_initialize
-    store.prepare_component("withdraw")
-
-    cargo = (store.fuzz_dir() / "Cargo.toml").read_text()
-    for feat in ("c_probe", "c_initialize", "c_deposit", "c_withdraw"):
-        assert f"{feat} = []" in cargo, f"{feat} missing from manifest:\n{cargo}"
-
-
-def test_reserved_features_render_even_without_test_sections(tmp_path):
-    """reserve_features shows up in Cargo.toml before any `add_component` (test fold-in)."""
-    h = CrucibleHarness(program="vault", dep=_store(tmp_path).harness.dep)
-    h.reserve_features("c_probe", "c_deposit")
-    cargo = h.render_cargo_toml()
-    assert "c_probe = []" in cargo and "c_deposit = []" in cargo
-    # main.rs body is still empty (no sections folded in yet)
-    assert h.render_main_rs().strip() == ""
+def test_finalize_renders_fixture_plus_each_section_and_features():
+    files = _finalize(
+        ("c_deposit", "#[invariant_test]\nfn c_deposit(f: &mut Fixture) {}"),
+        ("c_withdraw", "#[invariant_test]\nfn c_withdraw(f: &mut Fixture) {}"),
+    )
+    main_rs = files["fuzz/vault/src/main.rs"]
+    # Fixture first, then every section (verbatim; the macro self-gates by fn name).
+    assert main_rs.startswith("// FIXTURE")
+    assert "fn c_deposit" in main_rs and "fn c_withdraw" in main_rs
+    # Both features are declared in the manifest (sorted, stable).
+    cargo = files["fuzz/vault/Cargo.toml"]
+    assert "c_deposit = []" in cargo and "c_withdraw = []" in cargo
 
 
-def test_add_component_and_reserved_features_union(tmp_path):
-    h = CrucibleHarness(program="vault", dep=_store(tmp_path).harness.dep)
-    h.reserve_features("c_deposit")
-    h.add_component("c_withdraw", "#[invariant_test]\nfn c_withdraw(f: &mut Fixture) {}")
-    cargo = h.render_cargo_toml()
-    # both the reserved-only and the folded-in feature appear
-    assert "c_deposit = []" in cargo
-    assert "c_withdraw = []" in cargo
+def test_finalize_skips_undelivered_and_is_empty_without_sections():
+    # No delivered components → nothing to assemble; finalize returns None (the host skips it).
+    raw = crucible_app.finalize(json.dumps({"program": "vault", "setup": "// F", "components": []}))
+    assert raw is None

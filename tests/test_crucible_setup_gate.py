@@ -28,8 +28,6 @@ import pytest
 from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
-from composer.crucible.harness import CrucibleDep
-from composer.crucible.store import CrucibleArtifactStore
 from composer.io.multi_job import TaskInfo
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import GaveUp, PipelineRun
@@ -165,11 +163,8 @@ async def test_crucible_fixture_authoring(pg_container: "PostgresContainer", mon
             cache_namespace=None, memory_namespace=None,
         )
 
-        # Pre-place the harness manifest (deps + probe feature); the decider writes main.rs.
-        dep = CrucibleDep(crucible_repo=crucible_repo, program_crate=_PROGRAM, program_rel=f"../../programs/{_PROGRAM}")
-        store = CrucibleArtifactStore(str(_SCENARIO), program=_PROGRAM, dep=dep)
-        store.write_setup_manifest()
-
+        # No manifest pre-placement needed: `compile` materializes the harness crate
+        # (Cargo.toml + main.rs) itself per run (docs/rust-pure-app.md §4).
         module = load_module("crucible_app")
         descriptor = load_descriptor(module)
         phase = build_phase_enum(descriptor)

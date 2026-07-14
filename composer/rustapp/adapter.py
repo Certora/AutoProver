@@ -14,8 +14,10 @@ Three phase objects mirror the CVL / foundry backends:
 * :class:`RustFormalizer`     — ``formalize`` runs the loop; ``fetch_verdicts`` reads the verdicts
   ``validate`` baked into the result.
 
-App-specific orchestration (a shared setup artifact, crate prep) lives in the application package
-— e.g. :mod:`composer.crucible.backend`.
+App-specific orchestration (a shared setup artifact, workspace prep, crate assembly) is
+descriptor-driven here — no per-application Python package (``docs/rust-pure-app.md``): the wheel
+declares ``setup`` / ``workspace_prep`` / ``deliverable_mode=callout`` / ``finalize`` and the
+generic :class:`RustPreparedSystem` runs them.
 """
 
 import asyncio

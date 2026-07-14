@@ -16,6 +16,7 @@ instruction. Same prerequisites as the other crucible gates (toolchain, `crucibl
 """
 
 import asyncio
+import json
 import os
 import shutil
 from pathlib import Path
@@ -27,11 +28,12 @@ import pytest
 from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
-from composer.crucible.pipeline import run_crucible_pipeline
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import Delivered
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
 from composer.rustapp.frontend import GenericRustConsoleHandler
+from composer.rustapp.host import build_application, run_application
+from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost
 from composer.llm.registry import get_provider_for
@@ -126,9 +128,21 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
         )
 
         handler = GenericRustConsoleHandler({"fuzz_pulse", "fuzz_finding", "build_output"})
-        result = await run_crucible_pipeline(
-            source, ctx, handler.make_handler, env,
-            fuzz_timeout_s=12, max_concurrent=2, max_bug_rounds=1, interactive=False,
+
+        # The whole vertical via the generic host — `console-crucible` drives exactly this (the
+        # wheel's workspace_prep builds the .so + warms deps; setup authors the fixture; per-unit
+        # validate fuzzes). Mirror what the entry point does: thread the fuzz budget in as a
+        # declared arg and build the launcher policy from the wheel's sandbox grants.
+        app = build_application("crucible_app", command_timeout_s=1800)
+        app.options.declared_args = {"fuzz_timeout": 12}
+        grants = json.loads(app.module.sandbox_grants("{}"))
+        app.options.sandbox = SandboxConfig(
+            provider=os.environ.get("COMPOSER_SANDBOX_PROVIDER", "launcher"),
+            extra_ro=tuple(Path(p) for p in grants.get("extra_ro", [])),
+        )
+        result = await run_application(
+            app, source, ctx, handler.make_handler, env,
+            max_concurrent=2, max_bug_rounds=1, interactive=False,
         )
 
     print(f"\nCrucible E2E: {result.n_components} invariant(s), {result.n_properties} properties")
