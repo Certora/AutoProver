@@ -17,7 +17,9 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Protocol, TypedDict, NotRequired
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
@@ -32,7 +34,7 @@ from composer.spec.system_model import (
 )
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
-from composer.spec.prop_inference import run_property_inference
+from composer.spec.prop_inference import run_property_inference, AnyPropertyGenerationInput
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
@@ -43,6 +45,8 @@ from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_I
 from .ptypes import (
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp, PipelineRun, SystemAnalysisSpec
 )
+from .plugin_api import PrePropertyInference
+from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
 
 COMMON_SYSTEM_CACHE_KEY = "system-analysis"
 
@@ -130,8 +134,14 @@ def main_instance(app: AnyApplication, source: SourceCode) -> ContractInstance:
 class _Batch(BackendJob):
     feat_ctx: WorkflowContext[ComponentGroup]
 
-def _component_cache_key(c: ContractComponentInstance) -> CacheKey[Properties, ComponentGroup]:
-    return CacheKey(string_hash("|".join([c.app.model_dump_json(), str(c.ind), str(c._contract.ind)])))
+def _component_digest(c: ContractComponentInstance) -> str:
+    return string_hash("|".join([c.app.model_dump_json(), str(c.ind), str(c._contract.ind)]))
+
+def _component_cache_key(c: ContractComponentInstance, plugin_digest: str | None) -> CacheKey[Properties, ComponentGroup]:
+    raw_digest = _component_digest(c)
+    if plugin_digest is not None:
+        raw_digest += f"-{plugin_digest}"
+    return CacheKey(raw_digest)
 
 
 def _batch_cache_key[FormT: BaseModel](props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, FormT]:
@@ -145,10 +155,24 @@ def extract_task_id(idx: int) -> str:
 def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
-# ---- the driver --------------------------------------------------------------
 async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](
     backend: PipelineBackend[P, FormT, H, A],
     run: PipelineRun[P, H],
+    *,
+    interactive: bool = False,
+    threat_model: Document | None = None,
+    max_bug_rounds: int = 3,
+) -> CorePipelineResult[FormT]:
+    async with load_plugins(run) as plugins:
+        return await run_pipeline_inner(
+            backend, run, plugins, interactive=interactive, threat_model=threat_model, max_bug_rounds=max_bug_rounds
+        )
+
+# ---- the driver --------------------------------------------------------------
+async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](
+    backend: PipelineBackend[P, FormT, H, A],
+    run: PipelineRun[P, H],
+    plugin_manager: PluginManager,
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
@@ -172,7 +196,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     )
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
-
+    
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
     prepared = await backend.prepare_system(analyzed, run)
 
@@ -180,8 +204,19 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
     formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
 
-    batches = await _extract_all(prepared.main, backend.backend_guidance, run,
-                                phases["extraction"], interactive, threat_model, max_bug_rounds)
+    batches = await _extract_all(
+        prepared.main,
+        backend.backend_guidance,
+        run,
+        phases["extraction"],
+        interactive,
+        threat_model,
+        max_bug_rounds,
+        plugin_manager.bind_phase(
+            backend.core_phases.get("extraction_plugin") or backend.core_phases["extraction"],
+            "Property Extraction"
+        )
+    )
     formalizer = await formalizer_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
@@ -250,22 +285,49 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     return _tally(outcomes)
 
+def _pre_property_cache_key(feat: ContractComponentInstance, plugin: str) -> CacheKey[Properties, PrePropertyInference]:
+    key = f"{_component_digest(feat)}-{string_hash(plugin)}-pre"
+    return CacheKey(key)
+
 async def _extract_all[P: enum.Enum, H](
     main: ContractInstance, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
+    plugins: PluginPhaseManager[P]
 ) -> list[_Batch]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY)
 
     async def _one(idx: int) -> _Batch | None:
         feat = ContractComponentInstance(_contract=main, ind=idx)
-        feat_ctx = await prop_ctx.child(_component_cache_key(feat),
-                                        {"component": feat.component.model_dump()})
+        async def run_plugin(runner: PluginPhaseRunner[P]) -> AnyPropertyGenerationInput | None:
+            p = runner.plugin_id
+            ctxt = await prop_ctx.child(_pre_property_cache_key(feat, p), {
+                "plugin-name": p
+            })
+            run_ctxt = runner.bind(ctxt)
+            return await runner.plugin.property_inference_input_hook(
+                feat, run_ctxt
+            )
+
+        pre_process = await asyncio.gather(*[
+            run_plugin(plug_runner) for plug_runner in plugins.runners(
+                sub_phase_id="pre-inference", sub_phase_label="Property Pre-Inference"
+            )
+        ])
+
+        feat_ctx = await prop_ctx.child(_component_cache_key(feat, plugins.plugin_digest),
+                                {"component": feat.component.model_dump(), "plugins": plugins.plugin_manifest})
+
         props = await run.runner(
             TaskInfo(extract_task_id(idx), feat.component.name, phase),
             lambda conv: run_property_inference(
                 feat_ctx, run.env, feat, refinement=conv if interactive else None,
-                threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance),
+                threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance,
+                extra_input=[ t for t in pre_process if t ]
+            ),
         )
+        if not props:
+            return None
+
         return _Batch(feat, props, feat_ctx) if props else None
 
     got = await asyncio.gather(*[_one(i) for i in range(len(main.contract.components))])

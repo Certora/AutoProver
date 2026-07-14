@@ -39,7 +39,7 @@ from composer.spec.context import (
     Contract
 )
 from composer.spec.util import string_hash
-from composer.spec.prop_inference import run_property_inference
+from composer.spec.prop_inference import run_property_inference, CacheablePropertyGenerationInput
 from composer.spec.types import PropertyFormulation
 from composer.spec.natspec.interface_gen import generate_interface, DESCRIPTION as INTERFACE_GEN_DESC
 from composer.spec.natspec.stub_gen import generate_stub
@@ -235,8 +235,13 @@ async def analyze_single_contract(
                 feat_ctx, services.env, feat,
                 refinement=conv if interactive else None,
                 extra_input=[
-                    "For reference, the system document describing the entire application is as follows.",
-                    system_doc.content.to_dict(),
+                    CacheablePropertyGenerationInput(
+                        "certora:system-doc", "generic", "always", system_doc.content.to_digest(), lambda cache: [
+                            "For reference, the system document describing the entire application is as follows.",
+                            system_doc.content.to_dict(cache)
+                        ]
+                    )
+                    
                 ],
                 max_rounds=services.max_bug_rounds,
             ),
