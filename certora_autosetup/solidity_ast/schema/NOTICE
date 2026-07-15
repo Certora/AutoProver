@@ -1,0 +1,17 @@
+schema.json is vendored from the OpenZeppelin `solidity-ast` npm package.
+
+  Package:  solidity-ast
+  Version:  0.4.62
+  Source:   https://unpkg.com/solidity-ast@0.4.62/schema.json
+  Project:  https://github.com/OpenZeppelin/solidity-ast
+  License:  MIT (Copyright (c) 2020 OpenZeppelin) — see the project repository
+            for the full license text.
+
+It is a JSON Schema (draft-06) of the Solidity compiler's compact JSON AST,
+unioning solc versions >= 0.6: fields added in later solc releases are optional,
+fields whose value can be null are anyOf-nullable.
+
+To refresh: pick an explicit version and run
+  curl -sL https://unpkg.com/solidity-ast@<version>/schema.json -o schema.json
+then update this NOTICE and re-run tests/solidity_ast/ (the conformance test
+will point at any model fields that need to follow).
