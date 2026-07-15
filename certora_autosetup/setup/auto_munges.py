@@ -10,8 +10,11 @@ import re
 import traceback
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Callable, Dict, Iterator, List, Tuple
 
+from pydantic import ValidationError
+
+from certora_autosetup.solidity_ast import AstDump, MemberAccess, SourceAst, find_all, parse_src
 from certora_autosetup.utils.scope import Scope
 
 CODE_ACCESS_PATCH_FILE = ".certora_internal/code_access_patches.json"
@@ -212,6 +215,22 @@ def _load_ast_parent_graph(graph_path: Path) -> Dict[str, Dict[str, Dict[str, st
         return {}
 
 
+def _iter_member_accesses(source: SourceAst) -> Iterator[MemberAccess]:
+    """MemberAccess nodes of one source: from the typed tree when it parsed, and by
+    validating individual raw flat-map nodes when it did not (so a solc surprise
+    elsewhere in the file cannot hide a .code access). Vyper sources yield nothing.
+    """
+    if source.root is not None:
+        yield from find_all(source.root, MemberAccess)
+    elif source.raw_kind == "parse_failed":
+        for node in source.raw.values():
+            if isinstance(node, dict) and node.get("nodeType") == "MemberAccess":
+                try:
+                    yield MemberAccess.model_validate(node)
+                except ValidationError:
+                    continue
+
+
 def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Path, scope: Scope) -> None:
     """
     Detect .code accesses in the AST and create patches to rewrite them as loadCode(pointer) calls.
@@ -229,8 +248,7 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
             log_func("Warning: .asts.json file not found, skipping code access munging", "WARNING")
             return
 
-        with open(ast_path, 'r') as f:
-            asts_data = json.load(f)
+        dump = AstDump.load(ast_path)
 
         # Load parent graph for efficient parent lookups
         parent_graph = _load_ast_parent_graph(ast_graph_path)
@@ -239,12 +257,12 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
         patches = []
 
         # Structure: dict[relative_path: dict[absolute_path: dict[node_id: node_data]]]
-        for relative_path, path_data in asts_data.items():
+        for relative_path, file_asts in dump.files.items():
             # Skip files not in scope
             if not scope.is_file_in_scope(Path(relative_path)):
                 continue
 
-            for absolute_path, nodes in path_data.items():
+            for absolute_path, source in file_asts.sources.items():
                 # Convert absolute path to relative for scope checking
                 # The scope object works with paths relative to project_root
                 try:
@@ -263,14 +281,10 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
                 if not scope.is_file_in_scope(rel_path_for_scope):
                     continue
 
-                # Iterate through all nodes (they're already flattened)
-                for _, node in nodes.items():
-                    if not isinstance(node, dict):
-                        continue
-
-                    # Check if this is a MemberAccess node with memberName="code"
-                    if node.get('nodeType') == 'MemberAccess' and node.get('memberName') == 'code':
-                        node_id = str(node.get('id'))
+                # Find MemberAccess nodes with memberName="code" in this source
+                for node in _iter_member_accesses(source):
+                    if node.memberName == 'code':
+                        node_id = str(node.id)
 
                         # Check if this .code access is used as expression in another node using parent graph
                         # If the parent graph exists, use it for O(1) lookup
@@ -279,7 +293,8 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
                             parent_id = parent_map.get(node_id)
 
                             if parent_id:
-                                parent_node = nodes.get(parent_id, {})
+                                # The raw flat map covers parsed and unparsed sources alike
+                                parent_node = source.raw.get(parent_id, {})
                                 parent_type = parent_node.get('nodeType')
 
                                 # Skip if parent is MemberAccess (like .code.length) or FunctionCall (like x.code())
@@ -288,7 +303,7 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
                         else:
                             # Fallback: check manually if graph not available
                             is_chained = False
-                            for _, other_node in nodes.items():
+                            for other_node in source.raw.values():
                                 if not isinstance(other_node, dict):
                                     continue
 
@@ -302,31 +317,25 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
                             if is_chained:
                                 continue  # Skip this .code access, it's part of a chain or function call
 
-                        # Extract source location: "offset:length:file_id"
-                        src = node.get('src', '')
-                        if not src:
+                        # Extract source location: "offset:length:file_id" (byte offsets)
+                        if not node.src:
                             continue
 
-                        parts = src.split(':')
-                        if len(parts) != 3:
+                        try:
+                            offset, length, _ = node.src_location
+                        except ValueError:
                             continue
 
-                        offset = int(parts[0])
-                        length = int(parts[1])
-                        # file_id = int(parts[2])  # Not needed since we already know the file from absolute_path
-
-                        # Get the expression being accessed (e.g., "pointer" from "pointer.code")
-                        expression = node.get('expression', {})
-                        expr_src = expression.get('src', '')
+                        # Get the expression being accessed (e.g., "pointer" from "pointer.code");
+                        # an UnknownNode expression has src="" and is skipped below
+                        expr_src = node.expression.src
                         if not expr_src:
                             continue
 
-                        expr_parts = expr_src.split(':')
-                        if len(expr_parts) != 3:
+                        try:
+                            expr_offset, expr_length, _ = parse_src(expr_src)
+                        except ValueError:
                             continue
-
-                        expr_offset = int(expr_parts[0])
-                        expr_length = int(expr_parts[1])
 
                         # Read the original expression from the source file
                         try:

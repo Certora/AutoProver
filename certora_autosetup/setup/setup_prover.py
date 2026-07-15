@@ -15,8 +15,9 @@ import shutil
 import subprocess
 import sys
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set, Tuple
 
 if TYPE_CHECKING:
     from certora_autosetup.setup.setup_summaries import SummarySetup
@@ -29,6 +30,7 @@ from certora_autosetup.setup.auto_munges import detect_and_apply_code_access_pat
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.setup.signature_types import ContractInfo
 from certora_autosetup.setup.solidity_utils import extract_definitions_from_solidity
+from certora_autosetup.solidity_ast import AstDump, ContractDefinition, build_parent_graph_json, find_all
 from packaging.version import Version
 from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
@@ -51,6 +53,52 @@ from certora_autosetup.utils.paths import (
 )
 from certora_autosetup.utils.solc_version_resolver import VIA_IR_MIN_VERSION
 from certora_autosetup.utils.types import ContractHandle, ContractKind, TypeParseMode, parse_type_descriptor
+
+@dataclass(frozen=True)
+class _ContractDeclView:
+    """Uniform view of a ContractDefinition for declaration/inheritance scans, whether
+    it came from the typed AST or from the raw fallback of an unparsable source."""
+
+    source_path: str
+    node_id: Optional[int]
+    name: str
+    abstract: bool
+    contract_kind: str
+    linearized_base_ids: List[int]
+
+
+def _iter_contract_declarations(dump: AstDump) -> Iterator[_ContractDeclView]:
+    """Every contract declaration in an AST dump.
+
+    Sources whose typed parse failed are scanned via their raw flat map so a solc
+    surprise cannot hide contracts from setup; Vyper sources contribute nothing
+    (they have no ContractDefinition nodes).
+    """
+    for _, source in dump.iter_sources():
+        if source.root is not None:
+            for contract in find_all(source.root, ContractDefinition):
+                yield _ContractDeclView(
+                    source_path=source.source_path,
+                    node_id=contract.id,
+                    name=contract.name,
+                    abstract=contract.abstract,
+                    contract_kind=contract.contractKind,
+                    linearized_base_ids=list(contract.linearizedBaseContracts),
+                )
+        elif source.raw_kind == "parse_failed":
+            for node in source.raw.values():
+                if isinstance(node, dict) and node.get("nodeType") == "ContractDefinition":
+                    yield _ContractDeclView(
+                        source_path=source.source_path,
+                        node_id=node.get("id"),
+                        name=node.get("name") or "",
+                        abstract=bool(node.get("abstract", False)),
+                        contract_kind=node.get("contractKind", "contract"),
+                        linearized_base_ids=[
+                            i for i in node.get("linearizedBaseContracts", []) if isinstance(i, int)
+                        ],
+                    )
+
 
 class CompilationAnalysisError(Exception):
     """Raised when compilation analysis fails."""
@@ -721,18 +769,11 @@ class SetupProver:
         ast_path = self._build_dir / FILE_BUILD_ASTS if self._build_dir else None
         if not ast_path or not ast_path.exists():
             return {}
-        with open(ast_path, "r", encoding="utf-8") as f:
-            asts = json.load(f)
-        for abs_path_dict in asts.values():
-            for abs_path, nodes in abs_path_dict.items():
-                rel = self.scope.get_relative_path(Path(abs_path))
-                for node in nodes.values():
-                    if (
-                        node.get("nodeType") == "ContractDefinition"
-                        and node.get("contractKind") != "interface"
-                        and node.get("name")
-                    ):
-                        contracts_by_file.setdefault(rel, set()).add(node["name"])
+        dump = AstDump.load(ast_path)
+        for decl in _iter_contract_declarations(dump):
+            if decl.contract_kind != "interface" and decl.name:
+                rel = self.scope.get_relative_path(Path(decl.source_path))
+                contracts_by_file.setdefault(rel, set()).add(decl.name)
         return contracts_by_file
 
     def _sole_contract_declared_in(self, original_file: str) -> str:
@@ -1140,46 +1181,34 @@ class SetupProver:
             return inheritance_info, abstract_contracts
 
         try:
-            with open(ast_file_path, "r", encoding="utf-8") as f:
-                asts = json.load(f)
+            dump = AstDump.load(ast_file_path)
 
             self.log(f"Extracting inheritance info from {ast_file_path}")
 
+            declarations = list(_iter_contract_declarations(dump))
+
             # Extract inheritance info from AST structure
             # Build ID to contract name mapping once
-            id_to_name = {}
-            for file_path, abs_path_dict in asts.items():
-                for abs_path, nodes in abs_path_dict.items():
-                    for node_id, node in nodes.items():
-                        if node.get("nodeType") == "ContractDefinition":
-                            contract_id = node.get("id")
-                            contract_name = node.get("name")
-                            if contract_id and contract_name:
-                                id_to_name[contract_id] = contract_name
+            id_to_name = {
+                decl.node_id: decl.name for decl in declarations if decl.node_id and decl.name
+            }
 
             # Now process contracts and resolve inheritance using the pre-built mapping
-            for file_path, abs_path_dict in asts.items():
-                for abs_path, nodes in abs_path_dict.items():
-                    for node_id, node in nodes.items():
-                        # Look for contract definitions to get linearizedBaseContracts
-                        if node.get("nodeType") == "ContractDefinition":
-                            contract_name = node.get("name")
-                            if contract_name:
-                                # Check if abstract or interface
-                                is_abstract = node.get("abstract", False)
-                                contract_kind = node.get("contractKind", "contract")
+            for decl in declarations:
+                if not decl.name:
+                    continue
+                # Check if abstract or interface
+                if decl.abstract or decl.contract_kind == "interface":
+                    abstract_contracts.add(decl.name)
+                    self.log(f"Identified {'abstract' if decl.abstract else 'interface'}: {decl.name}", "DEBUG")
 
-                                if is_abstract or contract_kind == "interface":
-                                    abstract_contracts.add(contract_name)
-                                    self.log(f"Identified {'abstract' if is_abstract else 'interface'}: {contract_name}", "DEBUG")
-
-                                # Get linearized base contracts (includes self + all inherited contracts)
-                                linearized = node.get("linearizedBaseContracts", [])
-                                if len(linearized) > 1:  # More than just self
-                                    # Convert IDs to contract names using pre-built mapping
-                                    base_contracts = [id_to_name[contract_id] for contract_id in linearized[1:] if contract_id in id_to_name]
-                                    if base_contracts:
-                                        inheritance_info[contract_name] = base_contracts
+                # Get linearized base contracts (includes self + all inherited contracts)
+                linearized = decl.linearized_base_ids
+                if len(linearized) > 1:  # More than just self
+                    # Convert IDs to contract names using pre-built mapping
+                    base_contracts = [id_to_name[contract_id] for contract_id in linearized[1:] if contract_id in id_to_name]
+                    if base_contracts:
+                        inheritance_info[decl.name] = base_contracts
 
             self.log(f"Extracted inheritance for {len(inheritance_info)} contracts", "DEBUG")
             self.log(f"Found {len(abstract_contracts)} abstract/interface contracts to skip", "INFO")
@@ -1306,7 +1335,7 @@ class SetupProver:
             ast_path: Path to the .asts.json file
 
         Output:
-            Writes to .certora_internal/.ast_graph.json with structure:
+            Writes to .certora_internal/all_ast_parent_graph.json with structure:
             {
                 "relative_path": {
                     "absolute_path": {
@@ -1321,25 +1350,8 @@ class SetupProver:
             with open(ast_path, 'r') as f:
                 asts_data = json.load(f)
 
-            # Build parent graph: node_id -> parent_node_id
-            parent_graph = {}
-
-            # Structure: dict[relative_path: dict[absolute_path: dict[node_id: node_data]]]
-            for relative_path, path_data in asts_data.items():
-                parent_graph[relative_path] = {}
-
-                for absolute_path, nodes in path_data.items():
-                    parent_graph[relative_path][absolute_path] = {}
-
-                    # For each node, find all child node IDs and map them to this parent
-                    for node_id, node in nodes.items():
-                        if not isinstance(node, dict):
-                            continue
-
-                        # Find all child node IDs referenced in this node
-                        child_ids = self._extract_child_node_ids(node)
-                        for child_id in child_ids:
-                            parent_graph[relative_path][absolute_path][str(child_id)] = str(node_id)
+            # Build parent graph: node_id -> parent_node_id (byte-compatible legacy format)
+            parent_graph = build_parent_graph_json(asts_data)
 
             # Write parent graph to JSON
             graph_path = self.getASTParentGraphPath()
@@ -1351,30 +1363,6 @@ class SetupProver:
         except Exception as e:
             self.log(f"Warning: Failed to generate AST parent graph: {e}", "WARNING")
             self.log(f"Traceback: {traceback.format_exc()}", "WARNING")
-
-    def _extract_child_node_ids(self, node: Any) -> List[int]:
-        """
-        Extract all child node IDs from an AST node.
-
-        Args:
-            node: AST node (dict or other type)
-
-        Returns:
-            List of child node IDs
-        """
-        child_ids = []
-
-        if isinstance(node, dict):
-            for key, value in node.items():
-                # Look for 'id' fields in nested structures
-                if isinstance(value, dict) and 'id' in value:
-                    child_ids.append(value['id'])
-                elif isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, dict) and 'id' in item:
-                            child_ids.append(item['id'])
-
-        return child_ids
 
     def getASTPath(self) -> Path:
         return Path(".certora_internal/all_asts.json")
