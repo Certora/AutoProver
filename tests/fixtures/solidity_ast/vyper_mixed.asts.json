@@ -1,0 +1,1251 @@
+{
+  "counter.sol": {
+    "counter.sol": {
+      "1": {
+        "id": 1,
+        "literals": [
+          "solidity",
+          "^",
+          "0.8",
+          ".19"
+        ],
+        "nodeType": "PragmaDirective",
+        "src": "32:24:0"
+      },
+      "2": {
+        "id": 2,
+        "name": "uint256",
+        "nodeType": "ElementaryTypeName",
+        "src": "81:7:0",
+        "typeDescriptions": {
+          "typeIdentifier": "t_uint256",
+          "typeString": "uint256"
+        },
+        "certora_contract_name": "Counter"
+      },
+      "3": {
+        "constant": false,
+        "functionSelector": "06661abd",
+        "id": 3,
+        "mutability": "mutable",
+        "name": "count",
+        "nameLocation": "96:5:0",
+        "nodeType": "VariableDeclaration",
+        "scope": 16,
+        "src": "81:20:0",
+        "stateVariable": true,
+        "storageLocation": "default",
+        "typeDescriptions": {
+          "typeIdentifier": "t_uint256",
+          "typeString": "uint256"
+        },
+        "typeName": {
+          "id": 2,
+          "name": "uint256",
+          "nodeType": "ElementaryTypeName",
+          "src": "81:7:0",
+          "typeDescriptions": {
+            "typeIdentifier": "t_uint256",
+            "typeString": "uint256"
+          },
+          "certora_contract_name": "Counter"
+        },
+        "visibility": "public",
+        "certora_contract_name": "Counter"
+      },
+      "4": {
+        "id": 4,
+        "nodeType": "ParameterList",
+        "parameters": [],
+        "src": "126:2:0",
+        "certora_contract_name": "Counter"
+      },
+      "5": {
+        "id": 5,
+        "name": "uint256",
+        "nodeType": "ElementaryTypeName",
+        "src": "145:7:0",
+        "typeDescriptions": {
+          "typeIdentifier": "t_uint256",
+          "typeString": "uint256"
+        },
+        "certora_contract_name": "Counter"
+      },
+      "6": {
+        "constant": false,
+        "id": 6,
+        "mutability": "mutable",
+        "name": "",
+        "nameLocation": "-1:-1:-1",
+        "nodeType": "VariableDeclaration",
+        "scope": 15,
+        "src": "145:7:0",
+        "stateVariable": false,
+        "storageLocation": "default",
+        "typeDescriptions": {
+          "typeIdentifier": "t_uint256",
+          "typeString": "uint256"
+        },
+        "typeName": {
+          "id": 5,
+          "name": "uint256",
+          "nodeType": "ElementaryTypeName",
+          "src": "145:7:0",
+          "typeDescriptions": {
+            "typeIdentifier": "t_uint256",
+            "typeString": "uint256"
+          },
+          "certora_contract_name": "Counter"
+        },
+        "visibility": "internal",
+        "certora_contract_name": "Counter"
+      },
+      "7": {
+        "id": 7,
+        "nodeType": "ParameterList",
+        "parameters": [
+          {
+            "constant": false,
+            "id": 6,
+            "mutability": "mutable",
+            "name": "",
+            "nameLocation": "-1:-1:-1",
+            "nodeType": "VariableDeclaration",
+            "scope": 15,
+            "src": "145:7:0",
+            "stateVariable": false,
+            "storageLocation": "default",
+            "typeDescriptions": {
+              "typeIdentifier": "t_uint256",
+              "typeString": "uint256"
+            },
+            "typeName": {
+              "id": 5,
+              "name": "uint256",
+              "nodeType": "ElementaryTypeName",
+              "src": "145:7:0",
+              "typeDescriptions": {
+                "typeIdentifier": "t_uint256",
+                "typeString": "uint256"
+              },
+              "certora_contract_name": "Counter"
+            },
+            "visibility": "internal",
+            "certora_contract_name": "Counter"
+          }
+        ],
+        "src": "144:9:0",
+        "certora_contract_name": "Counter"
+      },
+      "8": {
+        "id": 8,
+        "name": "count",
+        "nodeType": "Identifier",
+        "overloadedDeclarations": [],
+        "referencedDeclaration": 3,
+        "src": "164:5:0",
+        "typeDescriptions": {
+          "typeIdentifier": "t_uint256",
+          "typeString": "uint256"
+        },
+        "certora_contract_name": "Counter"
+      },
+      "9": {
+        "hexValue": "31",
+        "id": 9,
+        "isConstant": false,
+        "isLValue": false,
+        "isPure": true,
+        "kind": "number",
+        "lValueRequested": false,
+        "nodeType": "Literal",
+        "src": "173:1:0",
+        "typeDescriptions": {
+          "typeIdentifier": "t_rational_1_by_1",
+          "typeString": "int_const 1"
+        },
+        "value": "1",
+        "certora_contract_name": "Counter"
+      },
+      "10": {
+        "id": 10,
+        "isConstant": false,
+        "isLValue": false,
+        "isPure": false,
+        "lValueRequested": false,
+        "leftHandSide": {
+          "id": 8,
+          "name": "count",
+          "nodeType": "Identifier",
+          "overloadedDeclarations": [],
+          "referencedDeclaration": 3,
+          "src": "164:5:0",
+          "typeDescriptions": {
+            "typeIdentifier": "t_uint256",
+            "typeString": "uint256"
+          },
+          "certora_contract_name": "Counter"
+        },
+        "nodeType": "Assignment",
+        "operator": "+=",
+        "rightHandSide": {
+          "hexValue": "31",
+          "id": 9,
+          "isConstant": false,
+          "isLValue": false,
+          "isPure": true,
+          "kind": "number",
+          "lValueRequested": false,
+          "nodeType": "Literal",
+          "src": "173:1:0",
+          "typeDescriptions": {
+            "typeIdentifier": "t_rational_1_by_1",
+            "typeString": "int_const 1"
+          },
+          "value": "1",
+          "certora_contract_name": "Counter"
+        },
+        "src": "164:10:0",
+        "typeDescriptions": {
+          "typeIdentifier": "t_uint256",
+          "typeString": "uint256"
+        },
+        "certora_contract_name": "Counter"
+      },
+      "11": {
+        "expression": {
+          "id": 10,
+          "isConstant": false,
+          "isLValue": false,
+          "isPure": false,
+          "lValueRequested": false,
+          "leftHandSide": {
+            "id": 8,
+            "name": "count",
+            "nodeType": "Identifier",
+            "overloadedDeclarations": [],
+            "referencedDeclaration": 3,
+            "src": "164:5:0",
+            "typeDescriptions": {
+              "typeIdentifier": "t_uint256",
+              "typeString": "uint256"
+            },
+            "certora_contract_name": "Counter"
+          },
+          "nodeType": "Assignment",
+          "operator": "+=",
+          "rightHandSide": {
+            "hexValue": "31",
+            "id": 9,
+            "isConstant": false,
+            "isLValue": false,
+            "isPure": true,
+            "kind": "number",
+            "lValueRequested": false,
+            "nodeType": "Literal",
+            "src": "173:1:0",
+            "typeDescriptions": {
+              "typeIdentifier": "t_rational_1_by_1",
+              "typeString": "int_const 1"
+            },
+            "value": "1",
+            "certora_contract_name": "Counter"
+          },
+          "src": "164:10:0",
+          "typeDescriptions": {
+            "typeIdentifier": "t_uint256",
+            "typeString": "uint256"
+          },
+          "certora_contract_name": "Counter"
+        },
+        "id": 11,
+        "nodeType": "ExpressionStatement",
+        "src": "164:10:0",
+        "certora_contract_name": "Counter"
+      },
+      "12": {
+        "id": 12,
+        "name": "count",
+        "nodeType": "Identifier",
+        "overloadedDeclarations": [],
+        "referencedDeclaration": 3,
+        "src": "191:5:0",
+        "typeDescriptions": {
+          "typeIdentifier": "t_uint256",
+          "typeString": "uint256"
+        },
+        "certora_contract_name": "Counter"
+      },
+      "13": {
+        "expression": {
+          "id": 12,
+          "name": "count",
+          "nodeType": "Identifier",
+          "overloadedDeclarations": [],
+          "referencedDeclaration": 3,
+          "src": "191:5:0",
+          "typeDescriptions": {
+            "typeIdentifier": "t_uint256",
+            "typeString": "uint256"
+          },
+          "certora_contract_name": "Counter"
+        },
+        "functionReturnParameters": 7,
+        "id": 13,
+        "nodeType": "Return",
+        "src": "184:12:0",
+        "certora_contract_name": "Counter"
+      },
+      "14": {
+        "id": 14,
+        "nodeType": "Block",
+        "src": "154:49:0",
+        "statements": [
+          {
+            "expression": {
+              "id": 10,
+              "isConstant": false,
+              "isLValue": false,
+              "isPure": false,
+              "lValueRequested": false,
+              "leftHandSide": {
+                "id": 8,
+                "name": "count",
+                "nodeType": "Identifier",
+                "overloadedDeclarations": [],
+                "referencedDeclaration": 3,
+                "src": "164:5:0",
+                "typeDescriptions": {
+                  "typeIdentifier": "t_uint256",
+                  "typeString": "uint256"
+                },
+                "certora_contract_name": "Counter"
+              },
+              "nodeType": "Assignment",
+              "operator": "+=",
+              "rightHandSide": {
+                "hexValue": "31",
+                "id": 9,
+                "isConstant": false,
+                "isLValue": false,
+                "isPure": true,
+                "kind": "number",
+                "lValueRequested": false,
+                "nodeType": "Literal",
+                "src": "173:1:0",
+                "typeDescriptions": {
+                  "typeIdentifier": "t_rational_1_by_1",
+                  "typeString": "int_const 1"
+                },
+                "value": "1",
+                "certora_contract_name": "Counter"
+              },
+              "src": "164:10:0",
+              "typeDescriptions": {
+                "typeIdentifier": "t_uint256",
+                "typeString": "uint256"
+              },
+              "certora_contract_name": "Counter"
+            },
+            "id": 11,
+            "nodeType": "ExpressionStatement",
+            "src": "164:10:0",
+            "certora_contract_name": "Counter"
+          },
+          {
+            "expression": {
+              "id": 12,
+              "name": "count",
+              "nodeType": "Identifier",
+              "overloadedDeclarations": [],
+              "referencedDeclaration": 3,
+              "src": "191:5:0",
+              "typeDescriptions": {
+                "typeIdentifier": "t_uint256",
+                "typeString": "uint256"
+              },
+              "certora_contract_name": "Counter"
+            },
+            "functionReturnParameters": 7,
+            "id": 13,
+            "nodeType": "Return",
+            "src": "184:12:0",
+            "certora_contract_name": "Counter"
+          }
+        ],
+        "certora_contract_name": "Counter"
+      },
+      "15": {
+        "body": {
+          "id": 14,
+          "nodeType": "Block",
+          "src": "154:49:0",
+          "statements": [
+            {
+              "expression": {
+                "id": 10,
+                "isConstant": false,
+                "isLValue": false,
+                "isPure": false,
+                "lValueRequested": false,
+                "leftHandSide": {
+                  "id": 8,
+                  "name": "count",
+                  "nodeType": "Identifier",
+                  "overloadedDeclarations": [],
+                  "referencedDeclaration": 3,
+                  "src": "164:5:0",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_uint256",
+                    "typeString": "uint256"
+                  },
+                  "certora_contract_name": "Counter"
+                },
+                "nodeType": "Assignment",
+                "operator": "+=",
+                "rightHandSide": {
+                  "hexValue": "31",
+                  "id": 9,
+                  "isConstant": false,
+                  "isLValue": false,
+                  "isPure": true,
+                  "kind": "number",
+                  "lValueRequested": false,
+                  "nodeType": "Literal",
+                  "src": "173:1:0",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_rational_1_by_1",
+                    "typeString": "int_const 1"
+                  },
+                  "value": "1",
+                  "certora_contract_name": "Counter"
+                },
+                "src": "164:10:0",
+                "typeDescriptions": {
+                  "typeIdentifier": "t_uint256",
+                  "typeString": "uint256"
+                },
+                "certora_contract_name": "Counter"
+              },
+              "id": 11,
+              "nodeType": "ExpressionStatement",
+              "src": "164:10:0",
+              "certora_contract_name": "Counter"
+            },
+            {
+              "expression": {
+                "id": 12,
+                "name": "count",
+                "nodeType": "Identifier",
+                "overloadedDeclarations": [],
+                "referencedDeclaration": 3,
+                "src": "191:5:0",
+                "typeDescriptions": {
+                  "typeIdentifier": "t_uint256",
+                  "typeString": "uint256"
+                },
+                "certora_contract_name": "Counter"
+              },
+              "functionReturnParameters": 7,
+              "id": 13,
+              "nodeType": "Return",
+              "src": "184:12:0",
+              "certora_contract_name": "Counter"
+            }
+          ],
+          "certora_contract_name": "Counter"
+        },
+        "functionSelector": "d09de08a",
+        "id": 15,
+        "implemented": true,
+        "kind": "function",
+        "modifiers": [],
+        "name": "increment",
+        "nameLocation": "117:9:0",
+        "nodeType": "FunctionDefinition",
+        "parameters": {
+          "id": 4,
+          "nodeType": "ParameterList",
+          "parameters": [],
+          "src": "126:2:0",
+          "certora_contract_name": "Counter"
+        },
+        "returnParameters": {
+          "id": 7,
+          "nodeType": "ParameterList",
+          "parameters": [
+            {
+              "constant": false,
+              "id": 6,
+              "mutability": "mutable",
+              "name": "",
+              "nameLocation": "-1:-1:-1",
+              "nodeType": "VariableDeclaration",
+              "scope": 15,
+              "src": "145:7:0",
+              "stateVariable": false,
+              "storageLocation": "default",
+              "typeDescriptions": {
+                "typeIdentifier": "t_uint256",
+                "typeString": "uint256"
+              },
+              "typeName": {
+                "id": 5,
+                "name": "uint256",
+                "nodeType": "ElementaryTypeName",
+                "src": "145:7:0",
+                "typeDescriptions": {
+                  "typeIdentifier": "t_uint256",
+                  "typeString": "uint256"
+                },
+                "certora_contract_name": "Counter"
+              },
+              "visibility": "internal",
+              "certora_contract_name": "Counter"
+            }
+          ],
+          "src": "144:9:0",
+          "certora_contract_name": "Counter"
+        },
+        "scope": 16,
+        "src": "108:95:0",
+        "stateMutability": "nonpayable",
+        "virtual": false,
+        "visibility": "public",
+        "certora_contract_name": "Counter"
+      },
+      "16": {
+        "abstract": false,
+        "baseContracts": [],
+        "canonicalName": "Counter",
+        "contractDependencies": [],
+        "contractKind": "contract",
+        "fullyImplemented": true,
+        "id": 16,
+        "linearizedBaseContracts": [
+          16
+        ],
+        "name": "Counter",
+        "nameLocation": "67:7:0",
+        "nodeType": "ContractDefinition",
+        "nodes": [
+          {
+            "constant": false,
+            "functionSelector": "06661abd",
+            "id": 3,
+            "mutability": "mutable",
+            "name": "count",
+            "nameLocation": "96:5:0",
+            "nodeType": "VariableDeclaration",
+            "scope": 16,
+            "src": "81:20:0",
+            "stateVariable": true,
+            "storageLocation": "default",
+            "typeDescriptions": {
+              "typeIdentifier": "t_uint256",
+              "typeString": "uint256"
+            },
+            "typeName": {
+              "id": 2,
+              "name": "uint256",
+              "nodeType": "ElementaryTypeName",
+              "src": "81:7:0",
+              "typeDescriptions": {
+                "typeIdentifier": "t_uint256",
+                "typeString": "uint256"
+              },
+              "certora_contract_name": "Counter"
+            },
+            "visibility": "public",
+            "certora_contract_name": "Counter"
+          },
+          {
+            "body": {
+              "id": 14,
+              "nodeType": "Block",
+              "src": "154:49:0",
+              "statements": [
+                {
+                  "expression": {
+                    "id": 10,
+                    "isConstant": false,
+                    "isLValue": false,
+                    "isPure": false,
+                    "lValueRequested": false,
+                    "leftHandSide": {
+                      "id": 8,
+                      "name": "count",
+                      "nodeType": "Identifier",
+                      "overloadedDeclarations": [],
+                      "referencedDeclaration": 3,
+                      "src": "164:5:0",
+                      "typeDescriptions": {
+                        "typeIdentifier": "t_uint256",
+                        "typeString": "uint256"
+                      },
+                      "certora_contract_name": "Counter"
+                    },
+                    "nodeType": "Assignment",
+                    "operator": "+=",
+                    "rightHandSide": {
+                      "hexValue": "31",
+                      "id": 9,
+                      "isConstant": false,
+                      "isLValue": false,
+                      "isPure": true,
+                      "kind": "number",
+                      "lValueRequested": false,
+                      "nodeType": "Literal",
+                      "src": "173:1:0",
+                      "typeDescriptions": {
+                        "typeIdentifier": "t_rational_1_by_1",
+                        "typeString": "int_const 1"
+                      },
+                      "value": "1",
+                      "certora_contract_name": "Counter"
+                    },
+                    "src": "164:10:0",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_uint256",
+                      "typeString": "uint256"
+                    },
+                    "certora_contract_name": "Counter"
+                  },
+                  "id": 11,
+                  "nodeType": "ExpressionStatement",
+                  "src": "164:10:0",
+                  "certora_contract_name": "Counter"
+                },
+                {
+                  "expression": {
+                    "id": 12,
+                    "name": "count",
+                    "nodeType": "Identifier",
+                    "overloadedDeclarations": [],
+                    "referencedDeclaration": 3,
+                    "src": "191:5:0",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_uint256",
+                      "typeString": "uint256"
+                    },
+                    "certora_contract_name": "Counter"
+                  },
+                  "functionReturnParameters": 7,
+                  "id": 13,
+                  "nodeType": "Return",
+                  "src": "184:12:0",
+                  "certora_contract_name": "Counter"
+                }
+              ],
+              "certora_contract_name": "Counter"
+            },
+            "functionSelector": "d09de08a",
+            "id": 15,
+            "implemented": true,
+            "kind": "function",
+            "modifiers": [],
+            "name": "increment",
+            "nameLocation": "117:9:0",
+            "nodeType": "FunctionDefinition",
+            "parameters": {
+              "id": 4,
+              "nodeType": "ParameterList",
+              "parameters": [],
+              "src": "126:2:0",
+              "certora_contract_name": "Counter"
+            },
+            "returnParameters": {
+              "id": 7,
+              "nodeType": "ParameterList",
+              "parameters": [
+                {
+                  "constant": false,
+                  "id": 6,
+                  "mutability": "mutable",
+                  "name": "",
+                  "nameLocation": "-1:-1:-1",
+                  "nodeType": "VariableDeclaration",
+                  "scope": 15,
+                  "src": "145:7:0",
+                  "stateVariable": false,
+                  "storageLocation": "default",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_uint256",
+                    "typeString": "uint256"
+                  },
+                  "typeName": {
+                    "id": 5,
+                    "name": "uint256",
+                    "nodeType": "ElementaryTypeName",
+                    "src": "145:7:0",
+                    "typeDescriptions": {
+                      "typeIdentifier": "t_uint256",
+                      "typeString": "uint256"
+                    },
+                    "certora_contract_name": "Counter"
+                  },
+                  "visibility": "internal",
+                  "certora_contract_name": "Counter"
+                }
+              ],
+              "src": "144:9:0",
+              "certora_contract_name": "Counter"
+            },
+            "scope": 16,
+            "src": "108:95:0",
+            "stateMutability": "nonpayable",
+            "virtual": false,
+            "visibility": "public",
+            "certora_contract_name": "Counter"
+          }
+        ],
+        "scope": 17,
+        "src": "58:147:0",
+        "usedErrors": [],
+        "usedEvents": []
+      },
+      "17": {
+        "absolutePath": "counter.sol",
+        "exportedSymbols": {
+          "Counter": [
+            16
+          ]
+        },
+        "id": 17,
+        "license": "MIT",
+        "nodeType": "SourceUnit",
+        "nodes": [
+          {
+            "id": 1,
+            "literals": [
+              "solidity",
+              "^",
+              "0.8",
+              ".19"
+            ],
+            "nodeType": "PragmaDirective",
+            "src": "32:24:0"
+          },
+          {
+            "abstract": false,
+            "baseContracts": [],
+            "canonicalName": "Counter",
+            "contractDependencies": [],
+            "contractKind": "contract",
+            "fullyImplemented": true,
+            "id": 16,
+            "linearizedBaseContracts": [
+              16
+            ],
+            "name": "Counter",
+            "nameLocation": "67:7:0",
+            "nodeType": "ContractDefinition",
+            "nodes": [
+              {
+                "constant": false,
+                "functionSelector": "06661abd",
+                "id": 3,
+                "mutability": "mutable",
+                "name": "count",
+                "nameLocation": "96:5:0",
+                "nodeType": "VariableDeclaration",
+                "scope": 16,
+                "src": "81:20:0",
+                "stateVariable": true,
+                "storageLocation": "default",
+                "typeDescriptions": {
+                  "typeIdentifier": "t_uint256",
+                  "typeString": "uint256"
+                },
+                "typeName": {
+                  "id": 2,
+                  "name": "uint256",
+                  "nodeType": "ElementaryTypeName",
+                  "src": "81:7:0",
+                  "typeDescriptions": {
+                    "typeIdentifier": "t_uint256",
+                    "typeString": "uint256"
+                  },
+                  "certora_contract_name": "Counter"
+                },
+                "visibility": "public",
+                "certora_contract_name": "Counter"
+              },
+              {
+                "body": {
+                  "id": 14,
+                  "nodeType": "Block",
+                  "src": "154:49:0",
+                  "statements": [
+                    {
+                      "expression": {
+                        "id": 10,
+                        "isConstant": false,
+                        "isLValue": false,
+                        "isPure": false,
+                        "lValueRequested": false,
+                        "leftHandSide": {
+                          "id": 8,
+                          "name": "count",
+                          "nodeType": "Identifier",
+                          "overloadedDeclarations": [],
+                          "referencedDeclaration": 3,
+                          "src": "164:5:0",
+                          "typeDescriptions": {
+                            "typeIdentifier": "t_uint256",
+                            "typeString": "uint256"
+                          },
+                          "certora_contract_name": "Counter"
+                        },
+                        "nodeType": "Assignment",
+                        "operator": "+=",
+                        "rightHandSide": {
+                          "hexValue": "31",
+                          "id": 9,
+                          "isConstant": false,
+                          "isLValue": false,
+                          "isPure": true,
+                          "kind": "number",
+                          "lValueRequested": false,
+                          "nodeType": "Literal",
+                          "src": "173:1:0",
+                          "typeDescriptions": {
+                            "typeIdentifier": "t_rational_1_by_1",
+                            "typeString": "int_const 1"
+                          },
+                          "value": "1",
+                          "certora_contract_name": "Counter"
+                        },
+                        "src": "164:10:0",
+                        "typeDescriptions": {
+                          "typeIdentifier": "t_uint256",
+                          "typeString": "uint256"
+                        },
+                        "certora_contract_name": "Counter"
+                      },
+                      "id": 11,
+                      "nodeType": "ExpressionStatement",
+                      "src": "164:10:0",
+                      "certora_contract_name": "Counter"
+                    },
+                    {
+                      "expression": {
+                        "id": 12,
+                        "name": "count",
+                        "nodeType": "Identifier",
+                        "overloadedDeclarations": [],
+                        "referencedDeclaration": 3,
+                        "src": "191:5:0",
+                        "typeDescriptions": {
+                          "typeIdentifier": "t_uint256",
+                          "typeString": "uint256"
+                        },
+                        "certora_contract_name": "Counter"
+                      },
+                      "functionReturnParameters": 7,
+                      "id": 13,
+                      "nodeType": "Return",
+                      "src": "184:12:0",
+                      "certora_contract_name": "Counter"
+                    }
+                  ],
+                  "certora_contract_name": "Counter"
+                },
+                "functionSelector": "d09de08a",
+                "id": 15,
+                "implemented": true,
+                "kind": "function",
+                "modifiers": [],
+                "name": "increment",
+                "nameLocation": "117:9:0",
+                "nodeType": "FunctionDefinition",
+                "parameters": {
+                  "id": 4,
+                  "nodeType": "ParameterList",
+                  "parameters": [],
+                  "src": "126:2:0",
+                  "certora_contract_name": "Counter"
+                },
+                "returnParameters": {
+                  "id": 7,
+                  "nodeType": "ParameterList",
+                  "parameters": [
+                    {
+                      "constant": false,
+                      "id": 6,
+                      "mutability": "mutable",
+                      "name": "",
+                      "nameLocation": "-1:-1:-1",
+                      "nodeType": "VariableDeclaration",
+                      "scope": 15,
+                      "src": "145:7:0",
+                      "stateVariable": false,
+                      "storageLocation": "default",
+                      "typeDescriptions": {
+                        "typeIdentifier": "t_uint256",
+                        "typeString": "uint256"
+                      },
+                      "typeName": {
+                        "id": 5,
+                        "name": "uint256",
+                        "nodeType": "ElementaryTypeName",
+                        "src": "145:7:0",
+                        "typeDescriptions": {
+                          "typeIdentifier": "t_uint256",
+                          "typeString": "uint256"
+                        },
+                        "certora_contract_name": "Counter"
+                      },
+                      "visibility": "internal",
+                      "certora_contract_name": "Counter"
+                    }
+                  ],
+                  "src": "144:9:0",
+                  "certora_contract_name": "Counter"
+                },
+                "scope": 16,
+                "src": "108:95:0",
+                "stateMutability": "nonpayable",
+                "virtual": false,
+                "visibility": "public",
+                "certora_contract_name": "Counter"
+              }
+            ],
+            "scope": 17,
+            "src": "58:147:0",
+            "usedErrors": [],
+            "usedEvents": []
+          }
+        ],
+        "src": "32:174:0"
+      }
+    },
+    "counter.vy": {
+      "0": {
+        "ast_type": "Module",
+        "node_id": 0,
+        "src": "0:113:0",
+        "name": "counter.vy",
+        "path": "counter.vy",
+        "doc_string": null,
+        "body": [
+          {
+            "ast_type": "VariableDecl",
+            "node_id": 1,
+            "src": "0:22:0",
+            "target": {
+              "ast_type": "Name",
+              "node_id": 2,
+              "src": "0:5:0",
+              "id": "count"
+            },
+            "annotation": {
+              "ast_type": "Name",
+              "node_id": 3,
+              "src": "14:7:0",
+              "id": "uint256"
+            },
+            "is_public": true,
+            "is_constant": false,
+            "is_immutable": false,
+            "value": null
+          },
+          {
+            "ast_type": "FunctionDef",
+            "node_id": 4,
+            "src": "24:89:0",
+            "name": "increment",
+            "args": {
+              "ast_type": "arguments",
+              "node_id": 5,
+              "src": "48:0:0",
+              "args": [],
+              "defaults": []
+            },
+            "returns": {
+              "ast_type": "Name",
+              "node_id": 6,
+              "src": "54:7:0",
+              "id": "uint256"
+            },
+            "decorator_list": [
+              {
+                "ast_type": "Name",
+                "node_id": 7,
+                "src": "25:8:0",
+                "id": "external"
+              }
+            ],
+            "doc_string": null,
+            "body": [
+              {
+                "ast_type": "AugAssign",
+                "node_id": 8,
+                "src": "67:15:0",
+                "target": {
+                  "ast_type": "Attribute",
+                  "node_id": 9,
+                  "src": "67:10:0",
+                  "attr": "count",
+                  "value": {
+                    "ast_type": "Name",
+                    "node_id": 10,
+                    "src": "67:4:0",
+                    "id": "self"
+                  }
+                },
+                "op": {
+                  "ast_type": "Add",
+                  "node_id": 11,
+                  "src": "67:15:0"
+                },
+                "value": {
+                  "ast_type": "Int",
+                  "node_id": 12,
+                  "src": "81:1:0",
+                  "value": 1
+                }
+              },
+              {
+                "ast_type": "Return",
+                "node_id": 13,
+                "src": "87:24:0",
+                "value": {
+                  "ast_type": "Attribute",
+                  "node_id": 14,
+                  "src": "94:10:0",
+                  "attr": "count",
+                  "value": {
+                    "ast_type": "Name",
+                    "node_id": 15,
+                    "src": "94:4:0",
+                    "id": "self"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "1": {
+        "ast_type": "VariableDecl",
+        "node_id": 1,
+        "src": "0:22:0",
+        "target": {
+          "ast_type": "Name",
+          "node_id": 2,
+          "src": "0:5:0",
+          "id": "count"
+        },
+        "annotation": {
+          "ast_type": "Name",
+          "node_id": 3,
+          "src": "14:7:0",
+          "id": "uint256"
+        },
+        "is_public": true,
+        "is_constant": false,
+        "is_immutable": false,
+        "value": null
+      },
+      "2": {
+        "ast_type": "Name",
+        "node_id": 2,
+        "src": "0:5:0",
+        "id": "count"
+      },
+      "3": {
+        "ast_type": "Name",
+        "node_id": 3,
+        "src": "14:7:0",
+        "id": "uint256"
+      },
+      "4": {
+        "ast_type": "FunctionDef",
+        "node_id": 4,
+        "src": "24:89:0",
+        "name": "increment",
+        "args": {
+          "ast_type": "arguments",
+          "node_id": 5,
+          "src": "48:0:0",
+          "args": [],
+          "defaults": []
+        },
+        "returns": {
+          "ast_type": "Name",
+          "node_id": 6,
+          "src": "54:7:0",
+          "id": "uint256"
+        },
+        "decorator_list": [
+          {
+            "ast_type": "Name",
+            "node_id": 7,
+            "src": "25:8:0",
+            "id": "external"
+          }
+        ],
+        "doc_string": null,
+        "body": [
+          {
+            "ast_type": "AugAssign",
+            "node_id": 8,
+            "src": "67:15:0",
+            "target": {
+              "ast_type": "Attribute",
+              "node_id": 9,
+              "src": "67:10:0",
+              "attr": "count",
+              "value": {
+                "ast_type": "Name",
+                "node_id": 10,
+                "src": "67:4:0",
+                "id": "self"
+              }
+            },
+            "op": {
+              "ast_type": "Add",
+              "node_id": 11,
+              "src": "67:15:0"
+            },
+            "value": {
+              "ast_type": "Int",
+              "node_id": 12,
+              "src": "81:1:0",
+              "value": 1
+            }
+          },
+          {
+            "ast_type": "Return",
+            "node_id": 13,
+            "src": "87:24:0",
+            "value": {
+              "ast_type": "Attribute",
+              "node_id": 14,
+              "src": "94:10:0",
+              "attr": "count",
+              "value": {
+                "ast_type": "Name",
+                "node_id": 15,
+                "src": "94:4:0",
+                "id": "self"
+              }
+            }
+          }
+        ]
+      },
+      "5": {
+        "ast_type": "arguments",
+        "node_id": 5,
+        "src": "48:0:0",
+        "args": [],
+        "defaults": []
+      },
+      "6": {
+        "ast_type": "Name",
+        "node_id": 6,
+        "src": "54:7:0",
+        "id": "uint256"
+      },
+      "7": {
+        "ast_type": "Name",
+        "node_id": 7,
+        "src": "25:8:0",
+        "id": "external"
+      },
+      "8": {
+        "ast_type": "AugAssign",
+        "node_id": 8,
+        "src": "67:15:0",
+        "target": {
+          "ast_type": "Attribute",
+          "node_id": 9,
+          "src": "67:10:0",
+          "attr": "count",
+          "value": {
+            "ast_type": "Name",
+            "node_id": 10,
+            "src": "67:4:0",
+            "id": "self"
+          }
+        },
+        "op": {
+          "ast_type": "Add",
+          "node_id": 11,
+          "src": "67:15:0"
+        },
+        "value": {
+          "ast_type": "Int",
+          "node_id": 12,
+          "src": "81:1:0",
+          "value": 1
+        }
+      },
+      "9": {
+        "ast_type": "Attribute",
+        "node_id": 9,
+        "src": "67:10:0",
+        "attr": "count",
+        "value": {
+          "ast_type": "Name",
+          "node_id": 10,
+          "src": "67:4:0",
+          "id": "self"
+        }
+      },
+      "10": {
+        "ast_type": "Name",
+        "node_id": 10,
+        "src": "67:4:0",
+        "id": "self"
+      },
+      "11": {
+        "ast_type": "Add",
+        "node_id": 11,
+        "src": "67:15:0"
+      },
+      "12": {
+        "ast_type": "Int",
+        "node_id": 12,
+        "src": "81:1:0",
+        "value": 1
+      },
+      "13": {
+        "ast_type": "Return",
+        "node_id": 13,
+        "src": "87:24:0",
+        "value": {
+          "ast_type": "Attribute",
+          "node_id": 14,
+          "src": "94:10:0",
+          "attr": "count",
+          "value": {
+            "ast_type": "Name",
+            "node_id": 15,
+            "src": "94:4:0",
+            "id": "self"
+          }
+        }
+      },
+      "14": {
+        "ast_type": "Attribute",
+        "node_id": 14,
+        "src": "94:10:0",
+        "attr": "count",
+        "value": {
+          "ast_type": "Name",
+          "node_id": 15,
+          "src": "94:4:0",
+          "id": "self"
+        }
+      },
+      "15": {
+        "ast_type": "Name",
+        "node_id": 15,
+        "src": "94:4:0",
+        "id": "self"
+      }
+    }
+  }
+}

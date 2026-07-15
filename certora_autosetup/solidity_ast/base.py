@@ -27,7 +27,7 @@ Transcription conventions (uniform across all node modules):
 
 from __future__ import annotations
 
-from typing import Literal, NamedTuple
+from typing import Callable, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict
 
@@ -89,6 +89,42 @@ class YulNode(AstNode):
     """
 
     nativeSrc: str | None = None
+
+
+class UnknownNode(AstNode):
+    """Fallback member of every node union: a node whose ``nodeType`` this model set
+    does not know (newer solc than the vendored schema, or an exotic construct).
+
+    All its fields land in ``model_extra`` and its children stay raw dicts; typed
+    queries skip it, so an unknown node degrades gracefully instead of failing the
+    whole source file.
+    """
+
+    nodeType: str
+    id: int | None = None
+    # Lenient: synthesized nodes may lack src; "" fails any src-offset use downstream
+    # the same way a missing node would.
+    src: str = ""
+
+
+UNKNOWN_TAG = "__unknown__"
+
+
+def tag_by_node_type(known: frozenset[str]) -> Callable[[object], str]:
+    """Discriminator function for a node union: returns the ``nodeType`` tag when it is
+    one of ``known``, else ``UNKNOWN_TAG`` (routing to the union's UnknownNode member).
+    Handles both dicts (validation) and model instances (serialization).
+    """
+
+    def tag(value: object) -> str:
+        node_type = (
+            value.get("nodeType")
+            if isinstance(value, dict)
+            else getattr(value, "nodeType", None)
+        )
+        return node_type if isinstance(node_type, str) and node_type in known else UNKNOWN_TAG
+
+    return tag
 
 
 class TypeDescriptions(BaseModel):
