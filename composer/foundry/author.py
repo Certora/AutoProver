@@ -38,15 +38,15 @@ from graphcore.tools.schemas import (
     WithAsyncDependencies, WithAsyncImplementation, WithImplementation,
     WithInjectedId, WithInjectedState,
 )
-
-from composer.spec.context import CVLGeneration, CVLJudge, WorkflowContext
+from composer.pipeline.core import GaveUp
+from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
 from composer.spec.cvl_generation import (
     PropertyFeedbackProtocol, RebuttalBase, SkippedProperty,
 )
 from composer.spec.feedback import PropertyFeedback
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance
 from composer.spec.tool_env import BasicAgentTools
 from composer.spec.service_host import ServiceHost
@@ -92,10 +92,14 @@ class GeneratedFoundryTest(BaseModel):
         """Property title -> the foundry test names that demonstrate it (the report's
         `ReportableResult` adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.tests) for m in self.property_tests]
+    
+    @property
+    def artifact_text(self) -> str:
+        return self.test_source
 
-
-class GaveUp(BaseModel):
-    reason: str
+    @property
+    def output_link(self) -> str | None:
+        return None  # foundry has no external run service
 
 
 type BatchFoundryResult = GeneratedFoundryTest | GaveUp
@@ -386,7 +390,7 @@ class FeedbackTool(
 
 
 def _build_feedback_thunk(
-    judge_ctx: WorkflowContext[CVLJudge],
+    judge_ctx: WorkflowContext[FoundryJudge],
     env: ServiceHost,
     props: list[PropertyFormulation],
     component: ContractComponentInstance | None,
@@ -623,7 +627,7 @@ _FoundryPropertyGenTemplate = TypedTemplate[FoundryPropertyGenParams](
 
 
 async def batch_foundry_test_generation(
-    ctx: WorkflowContext[CVLGeneration],
+    ctx: WorkflowContext[FoundryGeneration],
     *,
     project_root: str,
     contract_name: str,
@@ -653,10 +657,8 @@ async def batch_foundry_test_generation(
     * ``contract_name`` / ``component`` / ``props`` are bound into the
       initial prompt (``foundry_property_generation_prompt.j2``).
 
-    Reuses ``CVLGeneration`` as the cache marker for the workflow context
-    purely because that's what the surrounding ``WorkflowContext`` API
-    expects; the cache namespacing should differ between CVL and foundry
-    runs at the caller level.
+    ``ctx`` is marked ``FoundryGeneration`` so its cache namespace stays
+    distinct from a co-located CVL run's.
     """
     forge_test_tool = get_forge_test_tool(
         project_root, forge_binary=forge_binary, timeout_s=forge_timeout_s, forge_sem=forge_sem

@@ -40,7 +40,7 @@ from composer.spec.context import (
 )
 from composer.spec.util import string_hash
 from composer.spec.prop_inference import run_property_inference
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.natspec.interface_gen import generate_interface, DESCRIPTION as INTERFACE_GEN_DESC
 from composer.spec.natspec.stub_gen import generate_stub
 from composer.spec.natspec.models import InterfaceDeclModel, StubDeclarationModel

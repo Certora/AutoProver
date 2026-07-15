@@ -17,7 +17,8 @@ from composer.spec.cvl_generation import (
     GeneratedCVL, PropertyRuleMapping
 )
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
+from composer.pipeline.core import GaveUp
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
 from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
 from langgraph.graph import MessagesState
@@ -26,6 +27,7 @@ from pathlib import Path
 from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import CacheLevel
+
 
 from langgraph.types import Command
 from composer.spec.feedback import property_feedback_judge, FeedbackTemplate
@@ -44,9 +46,6 @@ class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):
 
 class SourceCVLGenerationState(SourceCVLGenerationExtra, MessagesState):
     result: NotRequired[str]
-
-class GaveUp(BaseModel):
-    reason: str
 
 type BatchGeneratedCVLResult = GeneratedCVL | GaveUp
 
@@ -343,10 +342,13 @@ async def batch_cvl_generation(
     description: str,
     source: SourceCode,
     spec_dir: Path,
+    spec_stem: str,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
     # directory, so resource imports are expressed relative to *spec_dir*.
+    # *spec_stem* is the basename it is persisted under; the prover materializes its
+    # transient spec/conf under the same stem so on-disk names match the dump.
     resource_views: list[ResourceView] = [
         {
             "description": r.description,
@@ -401,6 +403,7 @@ async def batch_cvl_generation(
         in_state=SourceCVLGenerationInput(
             curr_spec=None,
             config=init_config,
+            spec_stem=spec_stem,
             input=[],
             required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
             rule_skips={},

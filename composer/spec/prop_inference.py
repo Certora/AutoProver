@@ -20,7 +20,7 @@ from graphcore.tools.schemas import WithImplementation
 from composer.input.files import Document
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.service_host import Sort, ServiceHost

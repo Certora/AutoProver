@@ -15,11 +15,13 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@d427b0f5f039c84c9b170d184d35c352339ddcda",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@8b9d320316a2cfbfa775da0a961501539a4124f0",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
     "langgraph-checkpoint-postgres>=3.0",
+    "langchain-openai>=1.0",
+    "openai>=2.0",
     "numpy>=2.4",
     "prompt-toolkit>=3.0",
     "psycopg[binary]>=3.2",
@@ -45,6 +47,7 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "isodate>=0.6.0",
     "fsspec>=2023.1.0",
+    "ijson>=3.2.0",
 ]
 
 [project.optional-dependencies]
@@ -58,9 +61,9 @@ s3 = ["s3fs>=2023.1.0"]
 # exactly one extra must be selected at install time (enforced via the
 # [tool.uv] conflicts block below). Each extra is named after the package it
 # pulls.
-certora-cli = ["certora-cli>=8.16.1"]
-certora-cli-beta = ["certora-cli-beta>=8.16.1"]
-certora-cli-beta-mirror = ["certora-cli-beta-mirror>=8.16.1"]
+certora-cli = ["certora-cli>=8.17.1"]
+certora-cli-beta = ["certora-cli-beta>=8.17.1"]
+certora-cli-beta-mirror = ["certora-cli-beta-mirror>=8.17.1"]
 # Back-compat alias: `prover` == stable channel.
 prover = ["ai-composer[certora-cli]"]
 

@@ -11,14 +11,14 @@ Replay with the SAME CLI flags used to record:
     COMPOSER_TEST_TAPE=autoprove_Answer console-autoprove <project> <Contract.sol:Contract> \
         <system.md> --max-bug-rounds 1 [--interactive]
 
-Lanes captured: system-analysis=4, harness=4, bug-0-Answer=3, invariants=9, cvl-0-Answer=7
+Lanes captured: system-analysis=4, harness=4, extract-0=3, invariants=9, formalize-0=7
 """
 
 import json
 
 from langchain_core.messages import AIMessage, BaseMessage
 
-from composer.testing.harness_tape import HarnessFakeLLM
+from composer.testing.harness_tape import HarnessFakeLLM, install_fake_llm
 
 # task_id -> ordered list of recorded AIMessage responses (pydantic model_dump JSON).
 _TAPE_JSON = r"""
@@ -252,7 +252,7 @@ _TAPE_JSON = r"""
       "invalid_tool_calls": []
     }
   ],
-  "bug-0-Answer": [
+  "extract-0": [
     {
       "content": [
         "\n\nI'll start by examining the implementation of the Answer contract.",
@@ -565,7 +565,7 @@ _TAPE_JSON = r"""
       "invalid_tool_calls": []
     }
   ],
-  "cvl-0-Answer": [
+  "formalize-0": [
     {
       "content": [
         "Writing the component spec for the sole property.",
@@ -793,14 +793,12 @@ def get_autoprove_Answer_llm() -> HarnessFakeLLM:
 
 
 def install_harness_tape() -> HarnessFakeLLM:
-    """Monkeypatch create_llm / create_llm_base so the pipeline receives the fake.
+    """Route the pipeline's models to the Answer tape's fake LLM.
     composer/bind.py calls this when COMPOSER_TEST_TAPE=autoprove_Answer is set."""
     fake = get_autoprove_Answer_llm()
     import composer.spec.agent_index as a_ind
     a_ind._UNSAFE_DISABLE_CACHE = True
-    import composer.workflow.services as services
-    services.create_llm = lambda args: fake
-    services.create_llm_base = lambda args: fake
+    install_fake_llm(fake)
     return fake
 
 

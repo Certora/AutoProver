@@ -157,7 +157,8 @@ class RunSummary:
 
     def token_usage_summary(self) -> dict[str, object]:
         """Serializable run-total / per-model / per-phase token breakdown — the
-        body of ``token_usage.json`` and of the ``token_usage`` run tag."""
+        ``token_usage`` field of ``ap_report/job_info.json`` and of the ``token_usage``
+        run tag."""
         return {
             "totals": self.total_tokens().as_dict(),
             "by_model": {model: t.as_dict() for model, t in self.token_usage_by_model.items()},
@@ -173,10 +174,11 @@ class RunSummary:
         }
 
     def prover_usage_summary(self) -> dict[str, object]:
-        """Serializable run-total / per-phase prover-reported runtime — the body of
-        ``prover_usage.json`` and of the ``prover_usage`` run tag. Runtime is the
-        prover's own start-to-end time (statsdata ``run_id.start_to_end_time``),
-        summed across every prover run (cloud and local alike), in milliseconds."""
+        """Serializable run-total / per-phase prover-reported runtime — the
+        ``prover_usage`` field of ``ap_report/job_info.json`` and of the ``prover_usage``
+        run tag. Runtime is the prover's own start-to-end time (statsdata
+        ``run_id.start_to_end_time``), summed across every prover run (cloud and local
+        alike), in milliseconds."""
         return {
             "total_ms": self.prover_reported_ms_total,
             "by_phase": [
@@ -191,12 +193,6 @@ class RunSummary:
         if (task_id := task_id or get_current_task_id()) is None:
             return
         self._latest_link_by_task[task_id] = link
-
-    def get_latest_link(self, task_id: str | None = None) -> str | None:
-        """Return the most recent prover link; defaults to the active task. None if none."""
-        if (task_id := task_id or get_current_task_id()) is None:
-            return None
-        return self._latest_link_by_task.get(task_id)
 
     def total_wall_s(self) -> float:
         return time.perf_counter() - self.started_at_mono

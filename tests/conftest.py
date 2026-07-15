@@ -3,7 +3,14 @@ Shared fixtures for composer tool infrastructure tests.
 """
 
 
+import os
 import uuid
+
+# certora_autosetup.setup.setup_summaries hard-exits at IMPORT time when
+# ANTHROPIC_API_KEY is absent, which would crash test collection for any test
+# module importing it. The autosetup tests never call the LLM (skip-llm paths),
+# so a placeholder satisfies the check without masking a real key.
+os.environ.setdefault("ANTHROPIC_API_KEY", "dummy-key-for-tests")
 from typing import Any, AsyncIterator, Iterator, Callable, Iterable, TYPE_CHECKING, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -22,6 +29,7 @@ from psycopg.connection_async import AsyncConnection
 from psycopg.sql import SQL, Identifier
 from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
+import composer.diagnostics.timing as timing_mod
 from composer.prover.core import ProverOptions, ProverReport
 from composer.spec.source.prover import get_prover_tool, LLM
 
@@ -40,6 +48,16 @@ needs_postgres = pytest.mark.skipif(
     not _HAS_TESTCONTAINERS,
     reason="testcontainers[postgres] not installed",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_run_summary():
+    """Keep the run-summary context var from leaking between tests."""
+    tok = timing_mod._run_summary.set(None)
+    try:
+        yield
+    finally:
+        timing_mod._run_summary.reset(tok)
 
 
 # =========================================================================

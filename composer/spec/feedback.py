@@ -13,7 +13,7 @@ from graphcore.graph import FlowInput
 from composer.spec.context import (
     WorkflowContext, CVLJudge
 )
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.cvl.tools import get_cvl
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools

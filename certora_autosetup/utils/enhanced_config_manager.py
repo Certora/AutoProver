@@ -75,6 +75,11 @@ class ProverJobSpec(Generic[ContextT]):
     context: Optional[ContextT] = None
     msg: Optional[str] = None  # Message for --msg argument
 
+    def __post_init__(self) -> None:
+        # When no msg is given, default it to "<Contract>: <conf_name>".
+        if self.msg is None:
+            self.msg = self.build_job_msg(self.contract_name, self.config_file.path)
+
     def get_cache_key(self, config_manager: "ConfigManager") -> str:
         """
         Generate cache key from config + all referenced files + extra_args.
@@ -100,20 +105,24 @@ class ProverJobSpec(Generic[ContextT]):
         return cache_key
 
     @staticmethod
-    def build_job_msg(orchestration_timestamp: str, contract_name: str, conf_file: Path) -> str:
+    def build_job_msg(contract_name: str, conf_file: Path, suffix: Optional[str] = None) -> str:
         """Build the msg string for a prover job.
 
-        Format: "Certora <timestamp> <ContractName>: <conf_name>"
+        Format: "<ContractName>: <conf_name>" (with " <suffix>" appended if provided).
 
         Args:
-            orchestration_timestamp: Timestamp string from orchestration start
             contract_name: Name of the contract being verified
             conf_file: Path to the configuration file
+            suffix: Optional trailing text to disambiguate jobs that reuse the same
+                conf (e.g. an iteration marker); the caller decides its content
 
         Returns:
-            Formatted message string or None if no timestamp
+            Formatted message string
         """
-        return f"Certora {orchestration_timestamp} {contract_name}: {conf_file.stem}"
+        msg = f"{contract_name}: {conf_file.stem}"
+        if suffix:
+            msg += f" {suffix}"
+        return msg
 
 
 class ConfigManager:

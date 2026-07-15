@@ -137,7 +137,6 @@ class ConfRunner:
                     contract_name=contract_name,
                     phase=f"{tool_name}-{config_name}",
                     extra_args=self.config.extra_args,
-                    msg=ProverJobSpec.build_job_msg(self.orchestration_timestamp, contract_name, config_file),
                 )
                 job_specs.append(job_spec)
                 self.log(

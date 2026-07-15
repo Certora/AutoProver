@@ -1,10 +1,11 @@
 from graphcore.graph import WithToolCallId
 from pydantic import BaseModel, Field
-from typing import Annotated, cast, Literal, TypedDict, Protocol, ClassVar, Any, Callable, overload
+from typing import Annotated, Protocol, ClassVar, Any, Callable, overload
 
 from langchain_core.tools import tool, InjectedToolCallId, BaseTool
 from langgraph.runtime import get_runtime
 from composer.rag.db import ComposerRAGDB
+from composer.rag.types import ManualRef
 from dataclasses import Field as DField
 from composer.ui.tool_display import tool_display_of, CommonTools
 
@@ -14,22 +15,6 @@ class RAGDBContext(Protocol):
     @property
     def rag_db(self) -> ComposerRAGDB:
         ...
-
-class SearchResultText(TypedDict):
-    """
-    Encoding of text search result from: https://docs.anthropic.com/en/api/messages#body-messages-content-content-content-text
-    """
-    type: Literal["text"]
-    text: str
-
-class SearchResultSchema(TypedDict):
-    """
-    Encoding of the search result tool result from: https://docs.anthropic.com/en/api/messages#body-messages-content-content-content
-    """
-    type: Literal["search_result"]
-    title: str
-    source: str
-    content: list[SearchResultText]
 
 class CVLManualSearchSchema(WithToolCallId):
     """
@@ -50,8 +35,21 @@ class CVLManualSearchSchema(WithToolCallId):
         Field(default=[], description="A list of manual sections to search. "
               "If specified, at least one section heading must match at least one of the values provided here")
 
+def _format_results(refs: list[ManualRef]) -> str:
+    """Render CVL search hits as a plain pretty-printed string."""
+    if not refs:
+        return "No matching sections found."
+    blocks: list[str] = []
+    for t in refs:
+        title = " / ".join(t.headers)
+        blocks.append(
+            f"## {title}\n\n{t.content}\n\n— similarity: {t.similarity:.4f}"
+        )
+    return "\n\n---\n\n".join(blocks)
+
+
 def _cvl_manual_search_factory(
-    db_provider: Callable[[], ComposerRAGDB]
+    db_provider: Callable[[], ComposerRAGDB],
 ) -> BaseTool:
     @tool_display_of(CommonTools.cvl_manual)
     @tool("cvl_manual_search", args_schema=CVLManualSearchSchema)
@@ -61,22 +59,18 @@ def _cvl_manual_search_factory(
         similarity_cutoff: float = 0.5,
         max_results: int = 10,
         manual_section: list[str] = []
-    ) -> str | list[dict]:
+    ) -> str:
         """Search the CVL manual database for relevant documentation."""
         rag_db = db_provider()
 
         try:
-            to_ret: list[SearchResultSchema] = []
-            for t in await rag_db.find_refs(query=question, similarity_cutoff=similarity_cutoff, top_k=max_results, manual_section=manual_section):
-                to_ret.append({
-                    "type": "search_result",
-                    "source": "CVL Manual",
-                    "title": " / ".join(t.headers),
-                    "content": [
-                        {"type": "text", "text": t.content + f"\n (Similarity: {t.similarity})"}
-                    ]
-                })
-            return cast(list[dict], to_ret)
+            refs = await rag_db.find_refs(
+                query=question,
+                similarity_cutoff=similarity_cutoff,
+                top_k=max_results,
+                manual_section=manual_section,
+            )
+            return _format_results(refs)
         except Exception as e:
             return f"Failed to search CVL manual: {str(e)}"
     return _cvl_manual_search
@@ -155,13 +149,17 @@ def _get_provider(ctxt: type[RAGDBContext] | ComposerRAGDB) -> Callable[[], Comp
     else:
         return lambda: get_runtime(ctxt).context.rag_db
 
-def cvl_manual_search(ctxt: type[RAGDBContext] | ComposerRAGDB) -> BaseTool:
+def cvl_manual_search(
+    ctxt: type[RAGDBContext] | ComposerRAGDB,
+) -> BaseTool:
     return _cvl_manual_search_factory(_get_provider(ctxt))
 
-def cvl_manual_tools(ctxt: type[RAGDBContext] | ComposerRAGDB) -> list[BaseTool]:
-    provider = _get_provider(ctxt)
+def cvl_manual_tools(
+    ctxt: type[RAGDBContext] | ComposerRAGDB,
+) -> list[BaseTool]:
+    db_provider = _get_provider(ctxt)
     return [
-        _cvl_manual_search_factory(provider),
-        _cvl_keyword_search_factory(provider),
-        _cvl_get_section_factory(provider),
+        _cvl_manual_search_factory(db_provider),
+        _cvl_keyword_search_factory(db_provider),
+        _cvl_get_section_factory(db_provider),
     ]

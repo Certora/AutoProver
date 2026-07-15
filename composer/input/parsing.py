@@ -135,7 +135,7 @@ def fresh_workflow_argument_parser() -> TypedArgumentParser[CommandLineArgs]:
     return cast(TypedArgumentParser[CommandLineArgs], parser)
 
 
-async def upload_input(args: UploadPaths) -> InputData:
+async def upload_input(uploader: FileUploader, args: UploadPaths) -> InputData:
     """Turn the CLI's spec / interface / system-doc paths into an ``InputData``.
 
     Spec and interface are unconditionally uploaded to the Files API as text
@@ -143,7 +143,6 @@ async def upload_input(args: UploadPaths) -> InputData:
     the system doc goes through ``get_document`` so a PDF is uploaded while a
     text design doc stays inline.
     """
-    uploader = await FileUploader.fresh()
     spec = await uploader.upload_text_file_if_needed(args.spec_file)
     intf = await uploader.upload_text_file_if_needed(args.interface_file)
     system_doc = await uploader.get_document(args.system_doc)

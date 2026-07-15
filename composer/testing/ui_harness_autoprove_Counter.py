@@ -2,8 +2,8 @@
 Fake-LLM end-to-end UI harness for ``tui_autoprove.py`` (auto-prove
 multi-agent pipeline).
 
-Substitutes the real ``ChatAnthropic`` built by
-``composer.workflow.services.create_llm`` / ``create_llm_base`` with a
+Substitutes the real ``ChatAnthropic`` built via
+``composer.llm.registry.get_provider_for(...).builder_for(...)`` with a
 ``FakeMessagesListChatModel`` preloaded with a hand-authored tape of
 responses. Every other part of the pipeline runs normally — ``AutoProveApp``
 TUI, real tool execution (solc, Typechecker.jar, certoraTypeCheck.py,
@@ -25,7 +25,7 @@ post-bug-analysis *refinement conversation* is a different mechanism: it
 runs through a ``RichConsoleConversationClient`` outside the Textual
 screen and consumes plain-text human input from stdin. **Run the pipeline
 with ``--interactive``** to exercise it — the refinement conversation's four
-tape entries live in the ``bug-0-Increment`` lane, after the property-extraction
+tape entries live in the ``extract-0`` lane, after the property-extraction
 entries. Routing is per-lane now, so skipping ``--interactive`` just leaves
 those entries unconsumed rather than corrupting another phase. Every
 expected human reply is embedded as a ``[TAPE EXPECTATION: respond ...]``
@@ -48,29 +48,31 @@ so their responses live in the parent's lane.
                       so it has no lane
     ── after harness creation, these lanes run concurrently ──
     invariants       : get_invariant_formulation (+ invariant_feedback ×3)
-    bug-0-Increment  : run_property_inference (+ refinement when --interactive)
+    extract-0        : run_property_inference (+ refinement when --interactive)
     ── staged CVL join, after the concurrent branch completes ──
     invariant-cvl    : batch_cvl_generation, component=None
                         (+ cvl_research, code_explorer, feedback ×2, CEX ×1)
-    cvl-0-Increment  : batch_cvl_generation, component=<one>
+    formalize-0      : batch_cvl_generation, component=<one>
                         (+ feedback ×1, CEX ×1 — surfaces the real
                         ``incrementOther`` implementation bug)
     ── final, best-effort report phase ──
     report           : build_report → call_grouping_llm (one structured-output
                         call partitioning the formalized properties into groups)
 
-    Per-component lanes are ``{bug,cvl}-{component index}-{slugified_name}``;
-    here the Counter's sole component is "Increment".
+    Per-component lanes are ``extract-{component index}`` / ``formalize-{component
+    index}`` (from ``pipeline.core``); the Counter has a single component, index 0.
 """
 
 from typing import Any
 import uuid
 
-from composer.testing.harness_tape import HarnessFakeLLM
+from composer.testing.harness_tape import HarnessFakeLLM, install_fake_llm
 from composer.spec.source.task_ids import (
+    DESIGN_DOC_DISCOVERY_TASK_ID,
     SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, INVARIANTS_TASK_ID,
-    INVARIANT_CVL_TASK_ID, REPORT_TASK_ID, bug_analysis_task_id, cvl_gen_task_id,
+    INVARIANT_CVL_TASK_ID, REPORT_TASK_ID,
 )
+from composer.pipeline.core import extract_task_id, formalize_task_id
 
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.messages.tool import ToolCall
@@ -1382,17 +1384,42 @@ _REPORT_TAPE: list[BaseMessage] = [
 ]
 
 
+# Design-doc discovery lane. Only consumed when the run omits the design doc
+# (system_doc=None); the finder lists the project, reads the design doc, and selects
+# it. Counter's design doc is ``system.md`` at the scenario root. A single flat lane:
+# bare fs tools, no nested code_explorer.
+_DESIGN_DOC_TAPE: list[BaseMessage] = [
+    _ai(
+        "Inventorying the project to locate a design document.",
+        _tc("list_files"),
+    ),
+    _ai(
+        "Reading the most likely design document.",
+        _tc("get_file", path="system.md"),
+    ),
+    _ai(
+        "system.md specifies Counter's intended behavior. Selecting it.",
+        _tc(
+            "result",
+            selected_path="system.md",
+            reason="Describes the Counter's intended behavior and invariants.",
+        ),
+    ),
+]
+
+
 # The tape, as a per-phase lane map keyed by run_task task_id. HarnessFakeLLM
 # serves each LLM call from its lane's cursor, so the scripted responses stay
 # correct even though the pipeline runs phases concurrently. The Counter
 # scenario has one component, "Increment".
 _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
+    DESIGN_DOC_DISCOVERY_TASK_ID: _DESIGN_DOC_TAPE,
     SYSTEM_ANALYSIS_TASK_ID: _SYSTEM_ANALYSIS_TAPE,
     HARNESS_TASK_ID: _HARNESS_TAPE,
     INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
     INVARIANT_CVL_TASK_ID: _INVARIANT_CVL_TAPE,
-    bug_analysis_task_id(0, "Increment"): _BUG_TAPE,
-    cvl_gen_task_id(0, "Increment"): _CVL_TAPE,
+    extract_task_id(0): _BUG_TAPE,
+    formalize_task_id(0): _CVL_TAPE,
     REPORT_TASK_ID: _REPORT_TAPE,
 }
 
@@ -1402,7 +1429,7 @@ _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
 # ---------------------------------------------------------------------------
 #
 # The CEX analyzer's response is inlined at its position within the
-# invariant-cvl / cvl-0-Increment lane (see the ``CEX.1`` entry after Q13's verify_spec).
+# invariant-cvl / formalize-0 lane (see the ``CEX.1`` entry after Q13's verify_spec).
 # There is no side-channel tape — each call is routed to its phase's lane by
 # ``run_task`` task_id, and within a lane responses are consumed in order.
 
@@ -1417,35 +1444,20 @@ def get_autoprove_Counter_llm(with_delay: bool = True) -> HarnessFakeLLM:
 
 
 def install_harness_tape(with_delay: bool = True) -> HarnessFakeLLM:
-    """Monkey-patch ``composer.workflow.services.create_llm`` and
-    ``create_llm_base`` so the real autoprove pipeline receives the fake.
+    """Route the autoprove pipeline's models to the Counter tape's fake LLM.
 
-    Call this BEFORE importing ``tui_autoprove`` — the entry path
-    (``composer.cli.tui_autoprove`` → ``composer.spec.source.autoprove_common``)
-    imports ``create_llm`` at module load time, so the local binding is
-    captured the first time the module is imported. Calling
-    ``install_autoprove_tape()`` after that import would be a no-op at
-    the real call site.
+    Call this BEFORE importing the entry path — ``get_provider_for`` is imported
+    by name in ``composer.spec.source.autoprove_common`` at module load, so the
+    patch (``install_fake_llm``) must land first (``composer/bind.py`` is that
+    hook). One fake instance backs every tier, so all lanes share one set of
+    cursors, keeping the per-lane tape deterministic regardless of heavy/lite.
 
-    Returns the fake instance so the caller can inspect ``.i`` /
-    ``.responses`` for debugging.
+    Returns the fake so the caller can inspect lane state for debugging.
     """
     fake = get_autoprove_Counter_llm(with_delay)
     import composer.spec.agent_index as a_ind
     a_ind._UNSAFE_DISABLE_CACHE = True
-
-    import composer.workflow.services as services
-
-    services.create_llm = lambda args: fake
-    services.create_llm_base = lambda args: fake
-    # The ServiceHost path mints models via ``llm_factory(args)`` (then calls
-    # the returned factory per tier), bypassing ``create_llm`` entirely. Patch
-    # that seam too. The returned factory closes over the single ``fake``, so
-    # every tier shares one instance — i.e. one set of lane cursors — which is
-    # what keeps the per-lane tape deterministic regardless of heavy/lite.
-    services.llm_factory = lambda args: (
-        lambda model_name, *, cache_level=None, disable_thinking=False: fake
-    )
+    install_fake_llm(fake)
     return fake
 
 

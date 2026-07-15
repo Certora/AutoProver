@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from graphcore.graph import FlowInput
 
 from composer.core.state import merge_validation
-from composer.spec.context import CacheKey, CVLGeneration, CVLJudge
+from composer.spec.context import CacheKey, FoundryGeneration, FoundryJudge
 from composer.spec.cvl_generation import SkippedProperty, _merge_skips
 
 
@@ -39,10 +39,8 @@ FORGE_TEST_VALIDATION_KEY = "forge_test"
 FEEDBACK = "feedback"
 
 # WorkflowContext child key for the feedback judge (derives its memory
-# namespace and thread ids). The phantom markers are the CVL-named ones
-# because that's the vocabulary WorkflowContext speaks today; the key is
-# foundry's own.
-FOUNDRY_JUDGE_KEY = CacheKey[CVLGeneration, CVLJudge]("judge")
+# namespace and thread ids).
+FOUNDRY_JUDGE_KEY = CacheKey[FoundryGeneration, FoundryJudge]("judge")
 
 class FoundryTestExtra(TypedDict):
     curr_test: str | None

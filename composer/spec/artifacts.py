@@ -3,25 +3,35 @@
 Each workflow's ``ArtifactStore`` owns its own deliverable layout so the path
 conventions live in one place rather than smeared across the pipeline. This base
 hosts what is *identical* across workflows — the analysis-phase
-``properties.json``, the ``{property title: [demonstrating names]}`` map,
-``commentary.md``, and the run's ``token_usage.json`` — keyed off a per-component
-``stem`` plus two abstract directories. The workflow-specific bundles (CVL
-``.spec``/``.conf`` for the prover, ``.t.sol`` metadata for foundry) live in the
-subclasses, which translate their domain objects into ``stem``s and call these
-primitives.
+``properties.json``, the ``{property title: [demonstrating names]}`` map, and
+``commentary.md`` — keyed off a per-component ``stem`` plus two abstract
+directories. The workflow-specific bundles (CVL ``.spec``/``.conf`` for the prover,
+``.t.sol`` metadata for foundry) live in the subclasses, which translate their
+domain objects into ``stem``s and call these primitives.
 """
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TypedDict, Unpack
 
 from composer.diagnostics.timing import RunSummary
-from composer.spec.gen_types import PROPERTIES_SUBDIR
-from composer.spec.prop import PropertyFormulation
+from composer.spec.gen_types import PROPERTIES_SUBDIR, under_project
+from composer.spec.types import PropertyFormulation
 from composer.spec.util import ensure_dir
+from .types import ArtifactIdentifier, FormalResult
+from composer.spec.source.report.schema import AutoProverReport
+
+_log = logging.getLogger(__name__)
 
 
-class ArtifactStore(ABC):
+class StoreConfiguration(TypedDict):
+    internal_dir: Path | str
+    deliverable_dir: Path | str
+    report_dir : Path | str
+
+class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
     """Persists a pipeline's outputs under a single project root.
 
     Holds only the run-constant project root, so it is cheap to construct ad hoc
@@ -29,16 +39,45 @@ class ArtifactStore(ABC):
     directories and add their format-specific bundles.
     """
 
-    def __init__(self, project_root: str):
+    def __init__(
+        self,
+        project_root: str | Path,
+        property_suffix: str,
+        **store_config: Unpack[StoreConfiguration]
+    ):
         self._project_root = project_root
+        self._property_suffix = property_suffix
 
-    @abstractmethod
+        self.store_conf = store_config
+
+    def write_properties(self, i: I, props: list[PropertyFormulation]):
+        self._write_properties(i.stem, props)
+
+    def write_artifact(self, i: I, artifact: FormT) -> Path:
+        target_dir = ensure_dir(self._artifact_dir())
+        target_path = (target_dir / i.artifact_file)
+        target_path.write_text(artifact.artifact_text)
+        self._write_commentary(i.stem, artifact.commentary)
+        self._write_property_map(
+            i.stem, self._property_suffix,
+            {k: v for (k,v) in artifact.property_units()},
+        )
+        return target_path.relative_to(self._project_root)
+
     def _deliverable_dir(self) -> Path:
         """Absolute base dir (under the project root) for human-facing deliverables."""
+        return ensure_dir(under_project(self._project_root, self.store_conf["deliverable_dir"]))
+
+    def _internal_dir(self) -> Path:
+        return ensure_dir(under_project(self._project_root, self.store_conf["internal_dir"]))
+    
+    def _report_dir(self) -> Path:
+        return ensure_dir(under_project(self._project_root, self.store_conf["report_dir"]))
 
     @abstractmethod
-    def _internal_dir(self) -> Path:
-        """Absolute base dir (under the project root) for run diagnostics."""
+    def _artifact_dir(self) -> Path:
+        "absolute base dir for verification artifacts (tests, spec files)"
+        ...
 
     def _properties_dir(self) -> Path:
         return ensure_dir(self._deliverable_dir() / PROPERTIES_SUBDIR)
@@ -65,6 +104,12 @@ class ArtifactStore(ABC):
             json.dumps(mapping, indent=2)
         )
 
+    def write_report(self, report: AutoProverReport):
+        report_dir = self._report_dir()
+        out = report_dir / "report.json"
+        out.write_text(report.model_dump_json(indent=2) + "\n")
+
+
     # -- shared run-level ---------------------------------------------------
 
     def write_token_usage(self, summary: RunSummary) -> None:
@@ -79,14 +124,21 @@ class ArtifactStore(ABC):
             json.dumps(payload, indent=2)
         )
 
-    def write_prover_usage(self, summary: RunSummary) -> None:
-        """The run's accumulated prover-reported runtime → ``{internal}/prover_usage.json``.
+    def _job_info_payload(self, summary: RunSummary, *, user_id: str) -> dict[str, object]:
+        """The manifest body shared by every workflow: the tenant ``user_id``, the run's
+        ``run_id``, and the accumulated LLM ``token_usage``. Subclasses extend it with
+        any backend-specific usage they track."""
+        return {
+            "user_id": user_id,
+            "run_id": summary.run_id,
+            "token_usage": summary.token_usage_summary(),
+        }
 
-        Prover-reported run time (statsdata.json ``run_id.start_to_end_time`` — the engine's
-        own start-to-end wall time, not composer's client-side ``elapsed``), in milliseconds
-        with a derived ``minutes`` ``total`` and a ``by_phase`` breakdown. Summed across every
-        prover run in the pipeline (cloud and local alike)."""
-        payload = {"run_id": summary.run_id, **summary.prover_usage_summary()}
-        (ensure_dir(self._internal_dir()) / "prover_usage.json").write_text(
-            json.dumps(payload, indent=2)
-        )
+    def write_job_info(self, summary: RunSummary, *, user_id: str) -> None:
+        """The run's identity + usage manifest → ``{report}/job_info.json``, next to
+        ``report.json``. ``user_id`` is passed in so this stays a pure serializer of run
+        state; the body is :meth:`_job_info_payload`, which subclasses extend."""
+        payload = self._job_info_payload(summary, user_id=user_id)
+        out = self._report_dir() / "job_info.json"
+        out.write_text(json.dumps(payload, indent=2) + "\n")
+        _log.info("job info: wrote %s", out)

@@ -31,6 +31,7 @@ from typing import AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
 import json
 import logging
+import os
 
 
 from langchain_core.messages import AnyMessage, HumanMessage
@@ -38,6 +39,7 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.graph import MessagesState
 
 from graphcore.graph import LLM
+from graphcore.utils import ainvoke
 
 from prover_output_utility import cloud_server_for_env
 
@@ -51,7 +53,7 @@ from composer.prover.prover_protocol import ProverResult
 _logger = logging.getLogger(__name__)
 
 
-DEFAULT_GLOBAL_TIMEOUT: float = 1200.0
+DEFAULT_GLOBAL_TIMEOUT: float = 7200.0
 
 
 @dataclass
@@ -70,13 +72,31 @@ class ProverOptions:
         return float(self.extra_args[idx + 1])
 
 
+GLOBAL_PROVER_TIMEOUT_ENV = "AUTOPROVER_GLOBAL_PROVER_TIMEOUT"
+
+
+def _resolved_global_prover_timeout() -> int:
+    """Global prover timeout in seconds: ``DEFAULT_GLOBAL_TIMEOUT``, or the integer value of
+    ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT`` when that env var is set. A non-integer env value is
+    ignored with a warning."""
+    default = int(DEFAULT_GLOBAL_TIMEOUT)
+    raw = os.environ.get(GLOBAL_PROVER_TIMEOUT_ENV)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning("Ignoring non-integer %s=%r", GLOBAL_PROVER_TIMEOUT_ENV, raw)
+        return default
+
+
 def make_prover_options(*, cloud: bool) -> ProverOptions:
-    """Build prover options. Cloud runs get a default global timeout and the
+    """Build prover options. Cloud runs get a global prover timeout and the
     certoraRun ``--server`` resolved from the deployment env."""
     extras: list[str] = []
     if cloud:
         extras = [
-            "--global_timeout", str(int(DEFAULT_GLOBAL_TIMEOUT)),
+            "--global_timeout", str(_resolved_global_prover_timeout()),
             "--server", cloud_server_for_env()
         ]
     return ProverOptions(extra_args=extras)
@@ -350,7 +370,7 @@ PROVER REPORT:
     # max_tokens budget on reasoning, leaving nothing for actual text output.
     if isinstance(llm, BaseChatModel):
         llm = llm.model_copy(update={"thinking": None})
-    res = await llm.ainvoke(fresh_messages)
+    res = await ainvoke(llm, fresh_messages)
     return res.text
 
 async def run_prover_inner(

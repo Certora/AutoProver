@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Protocol
 import logging
 import uuid
 from dataclasses import dataclass
@@ -8,15 +8,20 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from langgraph.store.base import BaseStore
-from langgraph.types import Checkpointer
 
 from graphcore.graph import Builder
-from graphcore.tools.memory import async_memory_tool
 from graphcore.tools.vfs import VFSState, VFSAccessor
 
-from composer.input.types import WorkflowOptions, InputData, ResumeFSData, ResumeIdData, ResumeInput, TextNativeFS
-from composer.input.files import Document, TextDocument, Uploadable, TextUploadable
+from composer.input.types import (
+    WorkflowOptions, InputData, ResumeFSData, ResumeIdData, ResumeInput, TextNativeFS,
+    ModelOptionsBase
+)
+from composer.input.files import (
+    Document, Uploadable, TextUploadable, TextDocument
+)
+
+from composer.llm.provider import ModelProvider
+
 from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools
 from composer.workflow.factories import get_vfs_tools, get_memory_ns
 from composer.workflow.services import standard_connections, IndexedConnections
@@ -55,24 +60,10 @@ from composer.workflow.summarization import SummaryGeneration
 _KB_NS = ("cvl",)
 
 
-@dataclass
-class _CodegenResearchContext:
-    """Satisfies ResearchContext protocol for the CVL research sub-agent."""
-    _store: BaseStore
-    _kb_ns: tuple[str, ...]
-    _checkpointer: Checkpointer
-    _thread_prefix: str
-
-    def kb_tools(self, read_only: bool) -> list[BaseTool]:
-        return make_kb_tools(self._store, self._kb_ns, read_only)
-
-    @property
-    def checkpointer(self) -> Checkpointer:
-        return self._checkpointer
-
-    def uniq_thread_id(self) -> str:
-        return f"{self._thread_prefix}-{uuid.uuid4().hex[:16]}"
-
+class _ExecutorOptions(WorkflowOptions, ModelOptionsBase, Protocol):
+    """Combined runtime options consumed by the executor: workflow
+    config + model identification. Callers already pass dataclasses
+    that satisfy both protocols."""
 
 def get_reference_input(input_data: InputData, debug_prompt: Optional[str]) -> str:
     return load_jinja_template(
@@ -196,9 +187,9 @@ def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflo
 
 async def execute_ai_composer_workflow(
     handler: CodeGenIOHandler,
-    llm: BaseChatModel,
+    llm: ModelProvider,
     input: InputData | ResumeFSData | ResumeIdData,
-    workflow_options: WorkflowOptions,
+    workflow_options: _ExecutorOptions,
     memory_namespace: str | None = None,
     resume_work_key: str | None = None,
 ) -> WorkflowResult:
@@ -213,7 +204,7 @@ async def execute_ai_composer_workflow(
     # instantiating once avoids double-loading the same nomic-embed model.
     model = get_rag_model()
     async with (
-        standard_connections(embedder=DefaultEmbedder(model)) as conn,
+        standard_connections(provider=llm.provider, embedder=DefaultEmbedder(model)) as conn,
         rag_context(workflow_options.rag_db, model) as rag_db,
     ):
         return await _run_codegen(
@@ -223,7 +214,7 @@ async def execute_ai_composer_workflow(
 
 async def _run_codegen(
     handler: CodeGenIOHandler,
-    llm: BaseChatModel,
+    llm: ModelProvider,
     input: InputData | ResumeFSData | ResumeIdData,
     workflow_options: WorkflowOptions,
     conn: IndexedConnections,
@@ -292,7 +283,7 @@ async def _run_codegen(
             interface_doc = conn.uploader.text_document_from(intf_src)
             spec_doc = conn.uploader.text_document_from(spec_src)
 
-    req_mem_tool = async_memory_tool(conn.memory(get_memory_ns(mem_root, "natreq")))
+    req_mem_tool = conn.memory(get_memory_ns(mem_root, "natreq"))
 
     reqs_list = await codegen_store.requirements(thread_id)
     if reqs_list is None and not workflow_options.skip_reqs:
@@ -300,7 +291,7 @@ async def _run_codegen(
         extraction = await get_requirements(
             handler,
             workflow_options,
-            llm,
+            llm.builder_for(),
             system_doc_doc,
             spec_doc,
             req_mem_tool,
@@ -315,7 +306,7 @@ async def _run_codegen(
         judge_tool = get_judge_tool(
             reqs=reqs_list,
             mem_tool=req_mem_tool,
-            unbound=llm,
+            unbound=llm.builder_for(),
             vfs_tools=get_vfs_tools(
                 fs_layer=fs_layer, immutable=True
             )[0]
@@ -323,10 +314,10 @@ async def _run_codegen(
         extra_tools.append(judge_tool)
         extra_tools.append(requirements_relaxation)
 
-    memory = async_memory_tool(conn.memory(get_memory_ns(mem_root, "composer")))
+    memory = conn.memory(get_memory_ns(mem_root, "composer"))
     extra_tools.append(memory)
 
-    research_tool, cvl_builder = _cvl_knowledge_setup(llm, rag_db, conn, workflow_options.recursion_limit)
+    research_tool, cvl_builder = _cvl_knowledge_setup(llm.builder_for(), rag_db, conn, workflow_options.recursion_limit)
     extra_tools.append(research_tool)
 
     # VFS tooling: the mutable layer (its materializer is shared into the
@@ -349,7 +340,7 @@ async def _run_codegen(
         report_store,
         immut_vfs_tools,
         materializer,
-        async_memory_tool(conn.memory(get_memory_ns(mem_root, "cex-remediation"))),
+        conn.memory(get_memory_ns(mem_root, "cex-remediation")),
         workflow_options.recursion_limit,
     )
     extra_tools.extend(cex_remediation_tools)
@@ -361,7 +352,7 @@ async def _run_codegen(
     )
 
     crypto_tools = _codegen_author_tools(cex_handler, prover_opts, rag_db, vfs_tooling)
-    workflow_builder = _codegen_builder(llm, crypto_tools)
+    workflow_builder = _codegen_builder(llm.builder_for(), crypto_tools)
 
     workflow_graph = workflow_builder.with_tools(extra_tools).with_sys_prompt_template(
         "system_prompt.j2"
@@ -401,7 +392,7 @@ async def _run_codegen(
                 flow_input["working_spec"] = snapshot["working_spec"]
 
     try:
-        import grandalf
+        import grandalf #type: ignore
         layout = workflow_exec.get_graph().draw_ascii()
         logger.debug(f"\n{layout}")
     except ModuleNotFoundError:
@@ -429,7 +420,7 @@ async def _run_codegen(
         if result is None:
             return WorkflowFailure()
 
-        res_commentary = await create_resume_commentary(final_state, llm=llm)
+        res_commentary = await create_resume_commentary(final_state, llm=llm.builder_for())
         await audit_store.register_complete(
             thread_id, materializer.iterate(final_state), res_commentary.interface_path, res_commentary.commentary
         )

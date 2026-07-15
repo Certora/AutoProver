@@ -10,7 +10,7 @@ co-located autoprove run shares the project without clobbering its outputs.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, override
 
 from pydantic import BaseModel, Field
 
@@ -22,7 +22,7 @@ from composer.spec.cvl_generation import SkippedProperty
 from composer.spec.gen_types import (
     FOUNDRY_DELIVERABLE_DIR, FOUNDRY_INTERNAL_DIR, under_project,
 )
-from composer.spec.prop import PropertyFormulation
+from composer.spec.types import PropertyFormulation
 from composer.spec.source.report.schema import AutoProverReport
 from composer.spec.util import ensure_dir
 
@@ -39,7 +39,7 @@ class FoundryTestArtifact:
         return f"composer_{self.base}"
 
     @property
-    def test_filename(self) -> str:
+    def artifact_file(self) -> str:
         return f"{self.stem}.t.sol"
 
 
@@ -76,35 +76,32 @@ class ComponentTestStatus(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class FoundryArtifactStore(ArtifactStore):
+class FoundryArtifactStore(ArtifactStore[FoundryTestArtifact, GeneratedFoundryTest]):
     """Persists the foundry pipeline's metadata under ``certora/foundry/`` (plus
     ``.certora_internal/foundry/`` diagnostics) and materializes the ``.t.sol``
     tests into the foundry project's own test dir."""
 
-    def _deliverable_dir(self) -> Path:
-        return under_project(self._project_root, FOUNDRY_DELIVERABLE_DIR)
+    def __init__(self, project_root: str):
+        super().__init__(
+            project_root,
+            "property_tests",
+            deliverable_dir=FOUNDRY_DELIVERABLE_DIR,
+            internal_dir=FOUNDRY_INTERNAL_DIR,
+            report_dir=FOUNDRY_DELIVERABLE_DIR / "reports"
+        )
 
-    def _internal_dir(self) -> Path:
-        return under_project(self._project_root, FOUNDRY_INTERNAL_DIR)
-
-    def _test_dir(self) -> Path:
+    @override
+    def _artifact_dir(self) -> Path:
         """The foundry project's own test dir (``foundry.toml``'s
         ``[profile.default] test``, defaulting to ``test``) — where forge expects
         the generated ``.t.sol`` files, so they can't live under ``certora/``."""
         return ensure_dir(Path(self._project_root) / infer_test_dir(self._project_root))
 
-    # -- per-component ------------------------------------------------------
-
-    def write_analysis_properties(
-        self, artifact: FoundryTestArtifact, props: list[PropertyFormulation],
-    ) -> None:
-        """The analysis-phase properties for this component, accompanying its test."""
-        self._write_properties(artifact.stem, props)
-
-    def write_generated_test(
+    @override
+    def write_artifact(
         self,
-        artifact: FoundryTestArtifact,
-        result: GeneratedFoundryTest,
+        i: FoundryTestArtifact,
+        artifact: GeneratedFoundryTest,
     ) -> Path:
         """Materialize a generated test: write the ``.t.sol`` into the foundry
         project's test dir, plus its metadata bundle under ``certora/foundry/`` —
@@ -112,42 +109,18 @@ class FoundryArtifactStore(ArtifactStore):
         map), and ``{stem}.status.json`` (each test's pass / expected-failure
         status and any declared skips). Returns the absolute path of the written
         ``.t.sol``."""
-        test_path = self._test_dir() / artifact.test_filename
-        test_path.write_text(result.test_source)
+        test_path = super().write_artifact(i, artifact)
 
-        self._write_commentary(artifact.stem, result.commentary)
-        self._write_property_map(
-            artifact.stem, "property_tests",
-            {m.property_title: m.tests for m in result.property_tests},
-        )
         tests: list[PassedTest | ExpectedFailureTest] = []
-        for name in result.ran_tests:
-            reason = result.expected_failures.get(name) or ""
+        
+        for name in artifact.ran_tests:
+            reason = artifact.expected_failures.get(name) or ""
             if reason:
                 tests.append(ExpectedFailureTest(name=name, reason=reason))
             else:
                 tests.append(PassedTest(name=name))
-        status = ComponentTestStatus(tests=tests, skipped=result.skipped)
-        (self._properties_dir() / f"{artifact.stem}.status.json").write_text(
+        status = ComponentTestStatus(tests=tests, skipped=artifact.skipped)
+        (self._properties_dir() / f"{i.stem}.status.json").write_text(
             status.model_dump_json(indent=2)
         )
         return test_path
-
-    # -- run-level ----------------------------------------------------------
-
-    def write_report(self, report: AutoProverReport) -> None:
-        """The property-keyed run report to ``certora/foundry/report.json`` (render to HTML on
-        demand with ``autoprove-report-render``). Per-component detail lives in the ``properties/``
-        files written above."""
-        out = ensure_dir(self._deliverable_dir()) / "report.json"
-        out.write_text(report.model_dump_json(indent=2) + "\n")
-
-
-class FoundrySourceCode(SourceCode):
-    """``SourceCode`` that exposes the foundry artifact store. Construct this in the
-    foundry entry point; analysis / property-inference passes keep taking plain
-    ``SourceCode``."""
-
-    @property
-    def artifact_store(self) -> FoundryArtifactStore:
-        return FoundryArtifactStore(self.project_root)
