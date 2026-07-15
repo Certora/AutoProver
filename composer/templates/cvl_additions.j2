@@ -25,4 +25,16 @@ where necessary.
 <advice>
 Reverting behavior is reasoned about by using the `@withrevert` annotation and examining the value of the `lastReverted` flag.
 </advice>
+<advice>
+Multi-call properties can compare executions from a common starting state using storage snapshots: `storage init = lastStorage;`
+snapshots the current blockchain state (and non-persistent ghosts), and `f(e, args) at init;` runs `f` starting from that snapshot
+instead of the current state. The standard additivity idiom: run `g(x); g(y);` sequentially from a snapshot, then run `g(x + y) at init;`
+from the *same* snapshot, and compare the resulting end states (e.g., final balances or shares).
+</advice>
+<advice>
+For implication-shaped assertions (`assert A => B;`), consider a companion witness rule containing `satisfy A;`. A `satisfy`
+statement checks that at least one execution reaches it with the condition true — a single witness execution suffices. This
+guards against vacuously-true implications whose antecedent `A` can never actually hold. List the witness rule in the
+`property_rules` mapping under the same property as the implication rule it guards, so it is retained in the final report.
+</advice>
 </cvl_advice>
