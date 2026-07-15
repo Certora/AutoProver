@@ -234,14 +234,28 @@ pub struct Prompt {
     pub instruction: String,
 }
 
+/// Whether a draft was rejected by the toolchain or by the optional LLM judge — so a
+/// re-author can frame the retry correctly (a judge rejection is NOT a build failure: the
+/// draft compiled). Defaults to `Compile` for backends/hosts that predate the field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureKind {
+    #[default]
+    Compile,
+    Judge,
+}
+
 /// Why a draft was rejected — the failing `draft` plus the compiler errors / judge feedback
 /// — fed into the next `author_prompt` as revise context. `draft` is carried because each
-/// authoring turn is fresh (no LLM-side memory of the prior attempt).
+/// authoring turn is fresh (no LLM-side memory of the prior attempt). `kind` says which gate
+/// rejected it so the revise prompt can distinguish compiler errors from review feedback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Failure {
     #[serde(default)]
     pub draft: String,
     pub errors: String,
+    #[serde(default)]
+    pub kind: FailureKind,
 }
 
 /// The outcome of `compile`.

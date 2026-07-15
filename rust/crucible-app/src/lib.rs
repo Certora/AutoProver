@@ -14,8 +14,9 @@ use std::path::{Path, PathBuf};
 
 use autoprover_sdk::{
     run_confined, AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, AuthorInput, Backend,
-    CommandOutput, CompileResult, CoreSlot, DeliverableMode, EventKind, Failure, PhaseSpec, Prompt,
-    Sandbox, SandboxGrants, SetupSpec, Unit, ValidateOutcome, Verdict, WorkspacePrep,
+    CommandOutput, CompileResult, CoreSlot, DeliverableMode, EventKind, Failure, FailureKind,
+    PhaseSpec, Prompt, Sandbox, SandboxGrants, SetupSpec, Unit, ValidateOutcome, Verdict,
+    WorkspacePrep,
 };
 
 // The crucible/solana/anchor stack a harness pins (docs/crucible-application.md §6.1). Hardcoded
@@ -387,6 +388,26 @@ fn revise_suffix(prev_src: &str, raw: &str) -> String {
          Prior source:\n```rust\n{prev_src}\n```\n\nRaw build/dry-run output (tail):\n{tail}"
     )
 }
+
+/// The "previous attempt was rejected by the reviewer" suffix. Unlike `revise_suffix`, the
+/// draft *compiled* — so frame it as review feedback to address, not compiler errors to fix
+/// (otherwise the author thrashes hunting for build errors that do not exist).
+fn judge_revise_suffix(prev_src: &str, feedback: &str) -> String {
+    format!(
+        "\n\nYour previous suite COMPILED but a security reviewer REJECTED it — this is NOT a \
+         build error. Revise the tests to address the review feedback below (each point names a \
+         criterion and a concrete fix):\n{feedback}\n\n\
+         Prior source:\n```rust\n{prev_src}\n```"
+    )
+}
+
+/// Dispatch the re-author suffix on which gate rejected the prior attempt.
+fn revise_for(f: &Failure) -> String {
+    match f.kind {
+        FailureKind::Judge => judge_revise_suffix(&f.draft, &f.errors),
+        FailureKind::Compile => revise_suffix(&f.draft, &f.errors),
+    }
+}
 const TEST_CHEAT_SHEET: &str = r#"
 Write ONE Crucible test function (no fixture — it already exists as `Fixture`):
 
@@ -397,10 +418,155 @@ Write ONE Crucible test function (no fixture — it already exists as `Fixture`)
 - Assert against ON-CHAIN state, not local mirrors:
     let acct = fixture.ctx.read_anchor_account::<SomeState>(&fixture.some_pda).unwrap();
     fuzz_assert_le!(acct.balance, cap, "message");   // fuzz_assert_{eq,ne,lt,le,gt,ge}
+- Read RAW lamports / data / owner (bypassing Anchor deserialization) via
+  `read_account` / `get_account`, which return `Result<Account>` — unwrap/`?` FIRST,
+  THEN the field (there is NO `get_account_lamports`, and `Result` has no `.lamports`):
+    let lamports = fixture.ctx.read_account(&fixture.some_pda).unwrap().lamports;
+  Existence check: `fixture.ctx.account_exists(&fixture.some_pda)` (returns bool).
+- TRANSACTION FEE — do NOT assert an EXACT lamport delta on a signer. The fee payer (the
+  FIRST signer of the `action_*`'s `.send()`, e.g. the `depositor`/`authority`) is debited the
+  tx fee (~5000 lamports/signature) ON TOP OF whatever lamports the instruction moves, so
+  `depositor_before - amount == depositor_after` is WRONG (off by the fee). Assert exact deltas
+  on NON-signer accounts (e.g. the vault PDA, which only receives the transfer); for a signer,
+  subtract the fee or assert a bound (`<=`) instead of `==`.
 - Drive state via the fixture's existing `action_*` methods; do not re-`send()`
   instructions yourself unless necessary.
 - Return ONLY the annotated test fn. It MUST be named exactly `{feature}`.
 "#;
+
+/// Reviewer persona for the optional `judge_prompt` turn — the Crucible peer of Foundry's
+/// `foundry_property_judge_system_prompt.j2`. The source-exploration / RAG / memory tools are
+/// injected by the host, so this only sets the stance.
+const CRUCIBLE_JUDGE_SYSTEM: &str = "\
+You are a senior Solana security engineer reviewing a colleague's Crucible fuzz-test suite, \
+written to demonstrate a set of security properties of a Solana program. A Crucible test is an \
+experiment the fuzzer drives: it calls the fixture's `action_*` methods in arbitrary sequences \
+and, after each, runs the `#[invariant_test]`/`#[crucible_fuzz]` assertions. Judge whether a GREEN \
+campaign is real evidence for each property — i.e. under which program implementations this suite \
+would actually FAIL. Use the source-exploration tools to read the program's Rust source and the \
+fixture before asserting anything about behavior; record durable findings with the memory tool.";
+
+/// The judge's evaluation criteria — modeled on Foundry's `foundry_feedback_prompt.j2` but
+/// retargeted to Crucible/LiteSVM fuzzing: the load-bearing axis is *reachability* (can the
+/// fuzzer, through the fixture's `action_*` methods, drive a state where the property could
+/// fail?) rather than Solidity cheatcode fidelity. Inserted verbatim, so it holds the literal
+/// JSON of the output contract (no format-string escaping).
+const CRUCIBLE_JUDGE_GUIDANCE: &str = r#"Read the test functions AND the program source (via the
+tools); several criteria require comparing the tests' claims against what the program actually
+does. Then evaluate against the criteria below. The examples show the SHAPE of each defect; they
+are not exhaustive — a defect matching a criterion is in scope even if it resembles no example.
+
+## Criterion 1 — Vacuous / tautological assertions
+Flag assertions that hold regardless of the program's behavior:
+- bounds guaranteed by the type or by arithmetic (`fuzz_assert_ge!(x, 0)` on a `u64`; a bound a
+  checked subtraction already guarantees);
+- asserting a value the test/fixture itself just wrote, via a path that bypasses the logic under
+  test (seed an account field, then read the same field back);
+- degenerate operands: solvency (`assets >= liabilities`) where liabilities are zero all campaign;
+  "unauthorized caller is rejected" where no one was ever authorized; a preservation invariant
+  that only ever runs in the initial state (holds by init, not by preservation).
+An assertion is tautological IFF it holds under every program implementation.
+
+## Criterion 2 — Claim / assertion gap
+For each test, compare (a) the property it claims (name, comments) against (b) the strongest fact
+its assertions actually establish. Flag any test where (b) is materially weaker. Typical shapes:
+- asserting an upstream precursor while the claimed consequence lives only in comments (assert a
+  field was stored, when the property is that an unauthorized withdraw is *rejected*; assert an
+  authority was rotated, when the property is that the old authority's calls now fail);
+- comments narrate an attack the executable test never drives;
+- the property specifies a sequence/interleaving (a stale read, a specific instruction order) but
+  the test never constructs it through the `action_*` sequence.
+Prose proves nothing; a test's evidentiary value is exactly its assertions on on-chain state.
+
+## Criterion 3 — Reachability: can the fuzzer reach a state where the property could FAIL?
+This is the load-bearing criterion for a fuzzing backend — an invariant is only as strong as the
+states the campaign can drive it into. Audit the fixture + the `action_*` set the property leans on:
+- **Missing actions**: no `action_*` exists for the instruction(s) the property is about, so the
+  campaign never drives the relevant transition and the invariant is only ever checked over states
+  that trivially satisfy it.
+- **Collapsed input domains**: `#[range(lo..hi)]` narrowed to near-constants, a range that excludes
+  the violating region, or a fuzzed arg that influences no assertion.
+- **Actions that never succeed**: an `action_*` whose `.send()` fails on most inputs (wrong
+  accounts / signers / funding) returns `false` and leaves state near-initial — a green invariant
+  over states never reached is evidence of nothing.
+- **Degenerate fixtures**: a single actor/account for a multi-party property; zero balances or
+  empty state; identity-element params (a fee of 0, a rate of 1) that cannot distinguish a correct
+  program from a plausible wrong one.
+Precondition seeding is fine; substituting for the enforced logic is not (see C4).
+
+## Criterion 4 — Real execution vs bypassed logic
+Crucible runs the real program `.so` in LiteSVM, so fidelity is usually high — but check the
+fixture/test does not bypass the logic under test:
+- seeding an account's state directly (`create_account` / raw data) instead of driving the
+  program's instruction, when the property is about that instruction *computing or enforcing* that
+  state (injecting state the subject must compute assumes the conclusion; injecting state it merely
+  consumes is legitimate setup);
+- reads must go through `read_anchor_account::<State>(&pda)` against the PDA the program actually
+  writes — not a local Rust mirror the test maintains alongside the chain.
+
+## Criterion 5 — Oracle independence
+Flag tests whose expected value is the program's own logic fed back to itself (the same formula
+transcribed into the test; the same derivation/hash the program uses). Prefer anchors knowable
+without the implementation: conservation identities (sum of balances constant), boundary values,
+round-trips, monotonicity between concrete states, input/output pairs computed offline.
+
+## Criterion 6 — Pass/fail directionality (especially attack-vector properties)
+For each test ask: if the property regressed tomorrow, would this test FAIL?
+- Attack-vector properties ("the exploit cannot occur"): a campaign that stays GREEN while the
+  attack succeeds has inverted semantics. A green suite must never certify a live vulnerability. If
+  the author genuinely found the attack possible, the correct artifact is an explicit finding plus
+  a test marked as a known-vulnerability demonstration — never a silently-passing test.
+- "Must be rejected" checks: confirm the action fails FOR THE RIGHT REASON. On Solana an
+  instruction can fail for reasons unrelated to the property (missing signer, unfunded account,
+  wrong PDA, arithmetic overflow in setup). Assert the specific failure — a custom program error,
+  or that the guarded on-chain state is unchanged — and confirm a CONTROL action SUCCEEDS when the
+  guarded condition is absent. `action_*` returning `false` is not, by itself, evidence the
+  program's own check rejected the call.
+
+## Criterion 7 — Fuzz / invariant mechanics
+- Right macro for the property: `#[invariant_test]` runs after EACH action (preservation
+  invariants — conservation, solvency, monotonic state); `#[crucible_fuzz]` runs one random op
+  (a per-instruction property). Flag a single-shot `#[crucible_fuzz]` used for what is really a
+  preservation invariant, or vice-versa.
+- Assertions must read committed on-chain state via `read_anchor_account`; PDAs/addresses must
+  match what the program writes.
+- Real-execution costs (a false-oracle trap): under LiteSVM the transaction fee payer — the
+  FIRST signer of an `action_*`'s `.send()` — is debited the tx fee (~5000 lamports/signature)
+  on top of any lamports the instruction moves, and accounts owe rent-exemption. An EXACT
+  lamport-delta assertion on a signer/fee-payer that ignores the fee (e.g.
+  `depositor_before - amount == depositor_after`) is a false oracle: it FAILS on a correct
+  program. Flag it — exact-delta assertions belong on non-signer accounts (the receiving PDA),
+  or must subtract the fee / assert a bound.
+- Ties back to C3: confirm the reachable state space actually includes the property's danger
+  region under the available `action_*` sequences.
+
+## Criterion 8 — Coverage and redundancy
+- Every listed property must have a correctly-named test fn. A property "addressed" only by tests
+  failing C1–C3 is NOT covered — say so explicitly and reject.
+- Evaluate any declared skip critically: Crucible can drive real instructions, arbitrary account
+  state, multiple signers, and fuzz — few properties of on-chain logic are genuinely untestable.
+  Sketch the test you believe possible before accepting a skip.
+- Flag redundant tests (different names, same fact about the same state); note any property left
+  uncovered as a result.
+
+Discard low-value feedback: style/naming/organization; compute-unit or performance quibbles;
+"brittleness" (tests are tied to the implementation they verify); the exact bounds/magnitudes
+chosen unless they make a test degenerate under C3; demands for tests beyond the listed properties.
+The goal is to rule OUT low-quality tests, not to demonstrate thoroughness by volume — a short list
+of load-bearing defects, each tied to a criterion and a concrete fix, beats an exhaustive
+enumeration.
+
+Do NOT assert Crucible / LiteSVM / Anchor semantics you have not verified (from memory or the
+docs). Before claiming a test is wrong about the program's behavior, read the relevant source and
+cite what it does. Never contradict prior-round feedback unless you are ~95% certain it was in error.
+
+Output contract: use tools and reason as needed, but your FINAL message MUST be a single JSON
+object and NOTHING else:
+  {"accept": true,  "feedback": ""}
+  {"accept": false, "feedback": "<load-bearing defects — each tied to a criterion and a concrete fix>"}
+Reject (set accept:false) if any listed property is uncovered, or is covered only by tests failing
+Criteria 1–3."#;
+
 /// Did the build fail (as opposed to the harness building and fuzzing)?
 fn is_build_error(out: &str) -> bool {
     out.contains("could not compile") || out.contains("error[") || out.contains("Build failed")
@@ -473,6 +639,8 @@ impl Backend for CrucibleApp {
                 EventKind::log("fuzz_pulse", "Fuzzing"),
                 EventKind::log("fuzz_finding", "Finding"),
                 EventKind::log("build_output", "Build"),
+                // The reviewer (judge) turn's accept/reject on a compiled test suite.
+                EventKind::log("judge", "Review"),
                 // The per-invariant verdict — surfaced as a persistent callout + toast.
                 EventKind::notice("verdict", "Verdict"),
             ],
@@ -592,7 +760,7 @@ impl Backend for CrucibleApp {
                 model = model,
             );
             if let Some(f) = failure {
-                task.push_str(&revise_suffix(&f.draft, &f.errors));
+                task.push_str(&revise_for(f));
             }
             task
         } else {
@@ -622,11 +790,45 @@ impl Backend for CrucibleApp {
                 cheat = TEST_CHEAT_SHEET,
             );
             if let Some(f) = failure {
-                task.push_str(&revise_suffix(&f.draft, &f.errors));
+                task.push_str(&revise_for(f));
             }
             task
         };
         Prompt { system: None, instruction }
+    }
+
+    fn judge_prompt(&self, input: &AuthorInput, spec: &str) -> Option<Prompt> {
+        // The shared fixture is scaffolding, not test evidence — the compile/dry-run gate
+        // already vets it, and there is no property to judge it against. Judge only the
+        // per-component test suites (the peer of Foundry's feedback judge).
+        if input.kind == "setup" {
+            return None;
+        }
+        let program = &input.program;
+        let listed: Vec<String> = self
+            .units(input)
+            .into_iter()
+            .zip(input.props.iter())
+            .map(|(u, p)| format!("- fn `{}` — [{}] {}: {}", u.unit, p.sort, p.title, p.description))
+            .collect();
+        let component = serde_json::to_string_pretty(&input.component)
+            .unwrap_or_else(|_| input.component.to_string());
+        let fixture = ctx_str(input, "fixture");
+        let instruction = format!(
+            "Evaluate the Crucible fuzz-test suite below for the Solana program `{program}`. \
+             Decide, per property, whether a PASSING fuzz campaign is real evidence — not merely \
+             that the tests compile (the build gate already ensures that).\n\n\
+             Properties this suite must demonstrate (one test fn each, named EXACTLY as shown):\n\
+             {listed}\n\n\
+             Program API (instructions / accounts / state — driven via the fixture's `action_*` \
+             methods):\n{component}\n\n\
+             The shared fixture the tests build on (already compiled — do not re-review it, but \
+             use it to judge what states the `action_*` methods can reach):\n```rust\n{fixture}\n```\n\n\
+             Test suite under review:\n```rust\n{spec}\n```\n\n{guidance}",
+            listed = listed.join("\n"),
+            guidance = CRUCIBLE_JUDGE_GUIDANCE,
+        );
+        Some(Prompt { system: Some(CRUCIBLE_JUDGE_SYSTEM.to_string()), instruction })
     }
 
     fn compile(

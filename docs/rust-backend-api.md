@@ -201,11 +201,15 @@ above. Two readable `await`s over backend callouts; no state machine.
 - `units(input)` → one `Unit{ property: title, unit: "c_<slug>" }` per invariant (the current
   `_unique_slugs` mapping, moved into the backend). `kind="setup"` ⇒ `[]`.
 - `author_prompt(input, failure)` → `kind="setup"` ⇒ the fixture prompt; `kind="component"` ⇒
-  the all-invariants prompt (listing the `units`' fn names); `failure` ⇒ append the prior draft
-  and its errors (today's `revise_suffix`). These are the current `resume` prompt bodies,
-  lifted out as pure functions.
-- `judge_prompt` → not overridden (the default `None`): the compiler and fuzzer are the judges.
-  A future "do these tests actually assert the properties?" review just returns `Some`.
+  the all-invariants prompt (listing the `units`' fn names); `failure` ⇒ append revise context,
+  dispatched on `failure.kind`: a `Compile` failure appends the prior draft + compiler errors
+  (`revise_suffix`), a `Judge` rejection appends the prior draft + review feedback framed as
+  *not* a build error (`judge_revise_suffix`).
+- `judge_prompt` → overridden for `kind="component"` (skipped for the fixture): a reviewer turn
+  modeled on Foundry's feedback judge, retargeted to fuzzing — the load-bearing question is
+  reachability (can the fuzzer drive a state where the invariant could fail?). Emits the
+  `{accept, feedback}` JSON the host's `_parse_judge` reads; a rejection re-authors the suite
+  with the feedback (as a `Judge`-kind `Failure`).
 - `compile(input, spec, workdir, sandbox)` → `run_confined(sandbox, "crucible", ["run", program,
   probe, "--release", "--dry-run"], files={"fuzz/<program>/src/main.rs": fixture+spec}, workdir)`;
   `Failed{errors: tail}` if `is_build_error(out)` or nonzero exit, else `Ok`.

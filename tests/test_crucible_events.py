@@ -76,8 +76,36 @@ def test_author_prompt_failure_appends_revise_context():
     assert "FAILED" in prompt["instruction"] and "E0425" in prompt["instruction"]
 
 
-def test_judge_prompt_is_none_by_default():
-    assert crucible_app.judge_prompt(_component_input("x"), "spec") is None
+def test_component_judge_prompt_reviews_the_suite():
+    spec = "#[invariant_test]\nfn c_x(fixture: &mut Fixture) {}"
+    raw = crucible_app.judge_prompt(_component_input("x"), spec)
+    assert raw is not None
+    prompt = json.loads(raw)
+    # A reviewer persona + the criteria-based task, listing the unit under review and the
+    # accept/reject JSON contract the host's _parse_judge consumes.
+    assert "Solana security engineer" in prompt["system"]
+    ins = prompt["instruction"]
+    assert "c_x" in ins
+    assert "Criterion 3 — Reachability" in ins
+    assert '{"accept": false' in ins
+    assert spec in ins
+
+
+def test_setup_has_no_judge_prompt():
+    # The shared fixture is scaffolding, not test evidence — nothing to judge.
+    assert crucible_app.judge_prompt(_setup_input(), "spec") is None
+
+
+def test_author_prompt_judge_failure_uses_review_framing():
+    # A judge rejection is NOT a build failure (the draft compiled): the revise prompt must
+    # frame it as review feedback, not compiler errors to fix.
+    failure = json.dumps(
+        {"draft": "fn c_x() {}", "errors": "REJECTED: c_x fails Criterion 3", "kind": "judge"}
+    )
+    ins = json.loads(crucible_app.author_prompt(_component_input("x"), failure))["instruction"]
+    assert "reviewer REJECTED" in ins
+    assert "FAILED to build" not in ins
+    assert "Criterion 3" in ins
 
 
 # ---------------------------------------------------------------------------

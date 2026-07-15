@@ -114,9 +114,11 @@ class _LlmInput(FlowInput):
 
 
 async def run_llm_agent(
-    env: Any, messages: Any, *, recursion_limit: int, backend_name: str = "rust"
+    env: Any, messages: Any, *, recursion_limit: int, backend_name: str = "rust",
+    turn_label: str = "authoring",
 ) -> str:
-    """Run one bounded, tool-enabled authoring turn and return its final text.
+    """Run one bounded, tool-enabled turn and return its final text. ``turn_label``
+    names the turn's role ("authoring" / "judge") for the UI/log panel.
 
     Binds the env's tool belt (source navigation + RAG search over the backend's
     knowledge base) and a result tool, and runs an agent to completion — so the
@@ -141,7 +143,7 @@ async def run_llm_agent(
         _LlmInput(input=[]),
         thread_id=uniq_thread_id(f"{backend_name}-llm"),
         recursion_limit=recursion_limit,
-        description=f"{backend_name} authoring turn",
+        description=f"{backend_name} {turn_label} turn",
     )
     result = res.get("result")
     return result if isinstance(result, str) else json.dumps(result)
@@ -193,8 +195,8 @@ def _first_line(s: str) -> str:
 
 
 def _parse_judge(review: str) -> tuple[bool, str]:
-    """Interpret a judge reply as (accept, feedback). Accepts a JSON ``{accept, feedback}`` or a
-    plain reply led by ``ACCEPT`` / ``REJECT``. (No backend enables the judge today.)"""
+    """Interpret a judge reply as (accept, feedback). Accepts a JSON ``{accept, feedback}`` (what
+    the Crucible judge emits) or a plain reply led by ``ACCEPT`` / ``REJECT``."""
     try:
         obj = json.loads(review)
         if isinstance(obj, dict):
@@ -217,15 +219,27 @@ async def _author_turn(
 
 
 async def _judge_turn(
-    module: Any, input_json: str, spec: str, *, env: Any, recursion_limit: int, backend_name: str
+    module: Any, input_json: str, spec: str, *, env: Any, recursion_limit: int, backend_name: str,
+    emit: Callable[[str, dict], None] | None = None,
 ) -> tuple[bool, str]:
     """Optional LLM review of a spec: ``(accept, feedback)``. ``(True, "")`` when the backend
-    declares no judge (``judge_prompt`` → ``None``, the default)."""
+    declares no judge (``judge_prompt`` → ``None``, the default). When a review actually runs,
+    emit a ``judge`` event carrying the verdict so the frontend surfaces accept/reject."""
     jp = module.judge_prompt(input_json, spec)
     if not jp:
         return True, ""
-    review = await run_llm_agent(env, json.loads(jp), recursion_limit=recursion_limit, backend_name=backend_name)
-    return _parse_judge(review)
+    review = await run_llm_agent(
+        env, json.loads(jp), recursion_limit=recursion_limit,
+        backend_name=backend_name, turn_label="judge",
+    )
+    ok, feedback = _parse_judge(review)
+    if emit is not None:
+        emit("judge", {
+            "line": "reviewer accepted the tests" if ok
+            else f"reviewer rejected — revising: {_first_line(feedback)}",
+            "outcome": "GOOD" if ok else "BAD",
+        })
+    return ok, feedback
 
 
 async def author_and_compile(
@@ -264,10 +278,11 @@ async def author_and_compile(
             emit("build_output", {"line": _first_line(errors) or "build failed; revising"})
             continue
         ok, feedback = await _judge_turn(
-            module, input_json, spec, env=env, recursion_limit=recursion_limit, backend_name=backend_name
+            module, input_json, spec, env=env, recursion_limit=recursion_limit,
+            backend_name=backend_name, emit=emit,
         )
         if not ok:
-            failure = {"draft": spec, "errors": feedback}
+            failure = {"draft": spec, "errors": feedback, "kind": "judge"}
             continue
         return spec
     return GaveUp(reason=f"{backend_name}: did not pass compile/judge in {max_attempts} attempts")
@@ -430,10 +445,10 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             )
             ok, feedback = await _judge_turn(
                 self._module, input_json, spec, env=run.env,
-                recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name,
+                recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name, emit=emit,
             )
             if not ok:
-                failure = {"draft": spec, "errors": feedback}
+                failure = {"draft": spec, "errors": feedback, "kind": "judge"}
                 continue
 
             verdicts: dict[str, dict] = {}
