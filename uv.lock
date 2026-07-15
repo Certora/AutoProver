@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and extra != 'extra-11-ai-composer-certora-cli' and extra != 'extra-11-ai-composer-certora-cli-beta' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror' and extra != 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda'",
@@ -124,6 +124,11 @@ s3 = [
 ]
 
 [package.dev-dependencies]
+apps = [
+    { name = "crucible-app" },
+    { name = "echoprover" },
+    { name = "maturin-import-hook" },
+]
 ci = [
     { name = "pyright" },
 ]
@@ -189,6 +194,11 @@ requires-dist = [
 provides-extras = ["ml", "s3", "certora-cli", "certora-cli-beta", "certora-cli-beta-mirror", "prover", "cpu", "cuda"]
 
 [package.metadata.requires-dev]
+apps = [
+    { name = "crucible-app", editable = "rust/crucible-app" },
+    { name = "echoprover", editable = "rust/example-app" },
+    { name = "maturin-import-hook", specifier = ">=0.3.0" },
+]
 ci = [{ name = "pyright" }]
 dev = [{ name = "maturin", specifier = ">=1.14.1" }]
 ragbuild = [
@@ -928,7 +938,7 @@ name = "click"
 version = "8.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta') or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-certora-cli-beta' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065, upload-time = "2025-11-15T20:45:42.706Z" }
 wheels = [
@@ -965,6 +975,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/51/d3/57c6631159a1b48d2
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/00/3106b1854b45bd0474ced037dfe6b73b90fe68a68968cef47c23de3d43d2/confection-0.1.5-py3-none-any.whl", hash = "sha256:e29d3c3f8eac06b3f77eb9dfb4bf2fc6bcc9622a98ca00a698e3d019c6430b14", size = 35451, upload-time = "2024-05-31T16:16:59.075Z" },
 ]
+
+[[package]]
+name = "crucible-app"
+version = "0.1.0"
+source = { editable = "rust/crucible-app" }
 
 [[package]]
 name = "cryptography"
@@ -1262,6 +1277,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/9d/a4/e44218c2b394e31a6
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b0/0d/9feae160378a3553fa9a339b0e9c1a048e147a4127210e286ef18b730f03/durationpy-0.10-py3-none-any.whl", hash = "sha256:3b41e1b601234296b4fb368338fdcd3e13e0b4fb5b67345948f4f2bf9868b286", size = 3922, upload-time = "2025-05-17T13:52:36.463Z" },
 ]
+
+[[package]]
+name = "echoprover"
+version = "0.1.0"
+source = { editable = "rust/example-app" }
 
 [[package]]
 name = "einops"
@@ -2293,6 +2313,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/27/bf677183920718da49cd7982d6a3ffc440aad8919329f571d189f81b7bdf/maturin-1.14.1-py3-none-win32.whl", hash = "sha256:1a04de0a20188f95c721b5702eed18140bdcccb28c386797093eca3f62f4d4e0", size = 8931293, upload-time = "2026-06-19T05:19:41.183Z" },
     { url = "https://files.pythonhosted.org/packages/63/4b/585adeb9167b08d3cdff0032a938b0e72655c92003df4f52c3f696a1bcc2/maturin-1.14.1-py3-none-win_amd64.whl", hash = "sha256:3c9f94640ecc4895e94abaf834a0684430032c865b2748a36c12461fd9252fdd", size = 10314067, upload-time = "2026-06-19T05:19:44.389Z" },
     { url = "https://files.pythonhosted.org/packages/51/d4/dac8c0720ae246be1700afb6fbdbbea20fe35b13f6570b2f70faa005df77/maturin-1.14.1-py3-none-win_arm64.whl", hash = "sha256:15cea8fcb3ba47dd636f50092bb34baea8b04ac777392f23e6bf8a9a61efb894", size = 9718943, upload-time = "2026-06-19T05:19:47.49Z" },
+]
+
+[[package]]
+name = "maturin-import-hook"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "filelock" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/a1/3b007a4132265d5da19096d6835cd4c7e9908afb9156afb96d19ff190f39/maturin_import_hook-0.3.0.tar.gz", hash = "sha256:cdd51ce267663c437c4aea1bfd5f7ee5884b54a9d866ea924227d68d758bbba2", size = 30785, upload-time = "2025-06-08T15:43:57.801Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/55/0c17a1fccec90dffbb1d904d7ddb7971e4e95f994c6264637e8fe66a5b86/maturin_import_hook-0.3.0-py3-none-any.whl", hash = "sha256:f5d20b4bc3056d84170dc08fe655160421b28d2b5128b48f55312315cdbb2cfe", size = 30848, upload-time = "2025-06-08T15:43:56.298Z" },
 ]
 
 [[package]]
@@ -5053,7 +5085,7 @@ name = "tqdm"
 version = "4.67.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta') or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-certora-cli-beta' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd8dac228323f2777d886cb206987444e4bce66338dd4/tqdm-4.67.3.tar.gz", hash = "sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb", size = 169598, upload-time = "2026-02-03T17:35:53.048Z" }
 wheels = [

@@ -52,23 +52,32 @@ box, `cuda` for a GPU box — they are mutually exclusive). Keep your existing
 
 ```bash
 # GPU-less host:
-uv sync --extra cpu --extra ml --extra certora-cli
+uv sync --extra cpu --extra ml --extra certora-cli --group apps
 # GPU host: swap --extra cpu for --extra cuda
 ```
 
-> **Gotcha — `uv sync` prunes the maturin wheels.** `uv sync` reconciles the venv to
-> exactly what `pyproject.toml` declares. The `crucible_app` (and `echoprover`) wheels
-> are installed out-of-band via `maturin develop`, so **every `uv sync` removes them**.
-> Always rebuild the wheel *after* syncing (next step). If you skip it you'll get
-> `ModuleNotFoundError: No module named 'crucible_app'`.
+The **`apps` group** declares the `crucible_app` and `echoprover` wheels as editable
+path dependencies (`[tool.uv.sources]`), so `uv sync --group apps` **builds them via
+maturin and keeps them** — it no longer prunes the wheels the way a bare `uv sync`
+did with the old out-of-band `maturin develop`. The group is deliberately outside the
+default groups, so the container image (no Rust toolchain) never tries to compile it.
 
-### 1e. Build the `crucible_app` wheel into the venv
+### 1e. Auto-rebuild on Rust changes (one-time hook install)
+
+Install the maturin import hook into the venv **once**:
+
+```bash
+python -m maturin_import_hook site install
+```
+
+After that, with the venv **activated** (so `maturin` is on `PATH`), editing anything
+under `rust/crucible-app` transparently recompiles `crucible_app` on the next `import`
+— no manual `maturin` step. As a fallback (e.g. running without an activated venv), you
+can still force a rebuild explicitly:
 
 ```bash
 uv run --no-sync maturin develop --release -m rust/crucible-app/Cargo.toml
 ```
-
-Rerun this after any change to `rust/crucible-app`, and after any `uv sync`.
 
 ### 1f. Build the sandbox launcher (`run-confined`)
 
@@ -90,8 +99,7 @@ cheat-sheet if it's absent, so you can skip this for a first demo. It needs the
 `ragbuild` dependency group:
 
 ```bash
-uv sync --extra cpu --extra ml --extra certora-cli --group ragbuild
-uv run --no-sync maturin develop --release -m rust/crucible-app/Cargo.toml   # re-add wheel!
+uv sync --extra cpu --extra ml --extra certora-cli --group ragbuild --group apps
 CRUCIBLE_REPO="$CRUCIBLE_REPO" ./scripts/populate_crucible_rag.sh
 ```
 
@@ -192,12 +200,13 @@ CRUCIBLE_REPO="$CRUCIBLE_REPO" COMPOSER_SANDBOX_PROVIDER=launcher \
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `NotImplementedError: Sentence transformers not available` | venv synced without the `ml` extra | `uv sync --extra cpu --extra ml --extra certora-cli`, then rebuild the wheel (1e) |
-| `ModuleNotFoundError: No module named 'crucible_app'` | a `uv sync` pruned the maturin wheel | `uv run --no-sync maturin develop --release -m rust/crucible-app/Cargo.toml` |
+| `NotImplementedError: Sentence transformers not available` | venv synced without the `ml` extra | `uv sync --extra cpu --extra ml --extra certora-cli --group apps` |
+| `ModuleNotFoundError: No module named 'crucible_app'` | synced without the `apps` group | re-sync with `--group apps` (1d) |
+| `maturin not found` when a Rust edit should have rebuilt | import hook can't see `maturin` on `PATH` | activate the venv (or use `uv run`) so `.venv/bin` is on `PATH`; re-import |
 | `FileNotFoundError: crucible checkout not configured` | `CRUCIBLE_REPO` unset / wrong | point it at a clone containing `crates/crucible-fuzzer` |
 | sandbox "provider unavailable" / fail-closed | `run-confined` not built | build it (1f), or set `COMPOSER_SANDBOX_PROVIDER=none` |
 | Postgres connection errors | DB not up | `docker compose -f scripts/docker-compose.yml up -d` |
-| `Failed to spawn: pyright` (only when validating) | `uv sync` dropped the `ci` group | add `--group ci --group test` to the sync, then rebuild the wheel |
+| `Failed to spawn: pyright` (only when validating) | `uv sync` dropped the `ci` group | add `--group ci --group test` to the sync (keep `--group apps`) |
 
 > After **any** `uv sync`, re-run the wheel build (1e) — this is the most common
 > foot-gun.

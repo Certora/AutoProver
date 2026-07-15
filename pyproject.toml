@@ -91,6 +91,20 @@ ragbuild = [
 dev = [
     "maturin>=1.14.1",
 ]
+# The Rust/PyO3 application wheels (built via maturin from the `rust/` workspace),
+# declared as editable path deps below so `uv sync --group apps` builds AND
+# preserves them — otherwise a bare `uv sync` prunes any hand-built wheel as
+# extraneous. Kept OUT of [project.dependencies] and out of the default groups so
+# the container image (final stage has no Rust toolchain; syncs with UV_NO_DEV=1
+# --group ragbuild) never tries to compile them. `maturin-import-hook` transparently
+# recompiles a changed crate on import, so editing Rust needs no manual `maturin`
+# step either — activate it once per venv with:
+#     python -m maturin_import_hook site install
+apps = [
+    "crucible_app",
+    "echoprover",
+    "maturin-import-hook>=0.3.0",
+]
 
 [tool.uv]
 conflicts = [
@@ -104,6 +118,9 @@ conflicts = [
 
 [tool.uv.sources]
 graphcore = { path = "./graphcore", editable = true }
+# Rust/PyO3 wheels built from the local workspace (see the `apps` group above).
+crucible_app = { path = "rust/crucible-app", editable = true }
+echoprover = { path = "rust/example-app", editable = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "cuda" },
