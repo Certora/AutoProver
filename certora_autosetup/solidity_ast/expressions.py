@@ -170,7 +170,9 @@ class Literal(SolcNode):
 class MemberAccess(SolcNode):
     argumentTypes: list[TypeDescriptions] | None = None
     isConstant: bool
-    isLValue: bool
+    # solc 0.7.2 (only) omits isLValue on enum-member accesses — a compiler bug
+    # window, not an introduction gate; LENIENT_REQUIRED, no VERSION_GATES entry.
+    isLValue: bool | None = None
     isPure: bool
     lValueRequested: bool
     typeDescriptions: TypeDescriptions

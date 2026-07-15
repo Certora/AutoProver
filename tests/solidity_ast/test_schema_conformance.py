@@ -400,7 +400,10 @@ DELIBERATELY_OPEN = {
 # - FunctionDefinition.kind: added in 0.5 (0.4 uses isConstructor).
 # - InlineAssembly.AST/evmVersion: absent in the <= 0.5 assembly dialect.
 # - Return.functionReturnParameters: omitted for `return;` inside a modifier body.
+# - MemberAccess.isLValue: omitted by solc 0.7.2 (only) on enum-member accesses —
+#   a bug window, present both before and after, so it cannot be a version gate.
 LENIENT_REQUIRED = {
+    ("MemberAccess", "isLValue"),
     ("ContractDefinition", "abstract"),
     ("FunctionDefinition", "virtual"),
     ("FunctionDefinition", "kind"),

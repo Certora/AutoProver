@@ -41,9 +41,9 @@ VERSION_GATES: dict[str, dict[str, Version]] = {
     "ContractDefinition": {"abstract": Version("0.6.0")},
     "FunctionDefinition": {"kind": Version("0.5.0"), "virtual": Version("0.6.0")},
     "ModifierDefinition": {"virtual": Version("0.6.0")},
-    "FunctionCall": {"tryCall": Version("0.6.2")},
+    "FunctionCall": {"tryCall": Version("0.6.0")},
     "VariableDeclaration": {"mutability": Version("0.6.6")},
-    "InlineAssembly": {"AST": Version("0.6.0"), "evmVersion": Version("0.6.12")},
+    "InlineAssembly": {"AST": Version("0.6.0"), "evmVersion": Version("0.6.2")},
 }
 
 
