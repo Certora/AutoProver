@@ -103,6 +103,8 @@ err on the side of long-and-specific.
   fail (not just an inner call); see "Expecting test failure" below.
 * When you need to mock, `vm.mockCall` is the cheatcode; look it up with
   `foundry_cheatcodes_manual_search` if you haven't used it before.
+* **If `forge_test` reports a build failure, fix the compile error before
+  anything else** -- before iterating on test logic or fuzz seeds.
 
 ## Writing fuzz tests
 
