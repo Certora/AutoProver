@@ -112,9 +112,8 @@ class CorePipelineResult[FormT: BackendResult]:
 
     @property
     def all_failed(self) -> bool:
-        """Every attempted component failed to generate or gave up — nothing was delivered.
-        The run is a total failure and its entry point returns a non-zero exit code. Guarded
-        on a non-empty outcome set so "all of nothing" is never reported as failure (the
+        """Every attempted component failed to generate or gave up - te run is a total failure.
+        Guarded on a non-empty outcome set so "all of nothing" is never reported as failure (the
         driver raises before returning in the no-outcomes case anyway)."""
         return bool(self.outcomes) and self.n_delivered == 0
 
