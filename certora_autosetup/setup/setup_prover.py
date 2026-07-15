@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
@@ -64,6 +65,27 @@ class SummarySetupError(Exception):
 scripts_dir_path = Path(__file__).parent.resolve()
 sys.path.insert(0, str(scripts_dir_path))
 
+
+
+@dataclass
+class _ContractDef:
+    """ContractDefinition fields needed to resolve inheritance/abstract info."""
+
+    id: Optional[int]
+    name: Optional[str]
+    abstract: bool
+    contract_kind: str
+    linearized_base_contracts: List[int]
+
+    @classmethod
+    def from_ast_node(cls, node: Dict[str, Any]) -> "_ContractDef":
+        return cls(
+            id=node.get("id"),
+            name=node.get("name"),
+            abstract=node.get("abstract", False),
+            contract_kind=node.get("contractKind", "contract"),
+            linearized_base_contracts=node.get("linearizedBaseContracts", []),
+        )
 
 
 class SetupProver:
@@ -1142,41 +1164,30 @@ class SetupProver:
 
             # Stream the (multi-GB) .asts.json once, keeping only the fields of each
             # ContractDefinition needed below so it is never fully materialized.
-            contract_defs = []
+            contract_defs: List[_ContractDef] = []
             for _file_path, abs_path_dict in stream_ast_files(ast_file_path):
                 for _abs_path, nodes in abs_path_dict.items():
                     for _node_id, node in nodes.items():
                         if isinstance(node, dict) and node.get("nodeType") == "ContractDefinition":
-                            contract_defs.append({
-                                "id": node.get("id"),
-                                "name": node.get("name"),
-                                "abstract": node.get("abstract", False),
-                                "contractKind": node.get("contractKind", "contract"),
-                                "linearizedBaseContracts": node.get("linearizedBaseContracts", []),
-                            })
+                            contract_defs.append(_ContractDef.from_ast_node(node))
 
             # Build ID to contract name mapping once
             id_to_name = {}
-            for node in contract_defs:
-                contract_id = node["id"]
-                contract_name = node["name"]
-                if contract_id and contract_name:
-                    id_to_name[contract_id] = contract_name
+            for cd in contract_defs:
+                if cd.id and cd.name:
+                    id_to_name[cd.id] = cd.name
 
             # Now process contracts and resolve inheritance using the pre-built mapping
-            for node in contract_defs:
-                contract_name = node["name"]
+            for cd in contract_defs:
+                contract_name = cd.name
                 if contract_name:
                     # Check if abstract or interface
-                    is_abstract = node["abstract"]
-                    contract_kind = node["contractKind"]
-
-                    if is_abstract or contract_kind == "interface":
+                    if cd.abstract or cd.contract_kind == "interface":
                         abstract_contracts.add(contract_name)
-                        self.log(f"Identified {'abstract' if is_abstract else 'interface'}: {contract_name}", "DEBUG")
+                        self.log(f"Identified {'abstract' if cd.abstract else 'interface'}: {contract_name}", "DEBUG")
 
                     # Get linearized base contracts (includes self + all inherited contracts)
-                    linearized = node["linearizedBaseContracts"]
+                    linearized = cd.linearized_base_contracts
                     if len(linearized) > 1:  # More than just self
                         # Convert IDs to contract names using pre-built mapping
                         base_contracts = [id_to_name[contract_id] for contract_id in linearized[1:] if contract_id in id_to_name]
