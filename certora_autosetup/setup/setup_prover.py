@@ -30,7 +30,12 @@ from certora_autosetup.setup.auto_munges import detect_and_apply_code_access_pat
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.setup.signature_types import ContractInfo
 from certora_autosetup.setup.solidity_utils import extract_definitions_from_solidity
-from certora_autosetup.solidity_ast import AstDump, ContractDefinition, build_parent_graph_json, find_all
+from certora_autosetup.solidity_ast import (
+    AstDump,
+    ContractDefinition,
+    build_parent_graph_json,
+    iter_nodes_of_type,
+)
 from packaging.version import Version
 from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
@@ -68,36 +73,32 @@ class _ContractDeclView:
 
 
 def _iter_contract_declarations(dump: AstDump) -> Iterator[_ContractDeclView]:
-    """Every contract declaration in an AST dump.
-
-    Sources whose typed parse failed are scanned via their raw flat map so a solc
-    surprise cannot hide contracts from setup; Vyper sources contribute nothing
-    (they have no ContractDefinition nodes).
-    """
+    """Every contract declaration in an AST dump: typed where the models parsed,
+    completed by a raw flat-map sweep for anything the typed walk could not reach
+    (a solc surprise cannot hide contracts from setup; Vyper sources contribute
+    nothing since they have no ContractDefinition nodes)."""
     for _, source in dump.iter_sources():
-        if source.root is not None:
-            for contract in find_all(source.root, ContractDefinition):
+        for node in iter_nodes_of_type(source, ContractDefinition):
+            if isinstance(node, ContractDefinition):
                 yield _ContractDeclView(
                     source_path=source.source_path,
-                    node_id=contract.id,
-                    name=contract.name,
-                    abstract=contract.abstract,
-                    contract_kind=contract.contractKind,
-                    linearized_base_ids=list(contract.linearizedBaseContracts),
+                    node_id=node.id,
+                    name=node.name,
+                    abstract=node.abstract,
+                    contract_kind=node.contractKind,
+                    linearized_base_ids=list(node.linearizedBaseContracts),
                 )
-        elif source.raw_kind == "parse_failed":
-            for node in source.raw.values():
-                if isinstance(node, dict) and node.get("nodeType") == "ContractDefinition":
-                    yield _ContractDeclView(
-                        source_path=source.source_path,
-                        node_id=node.get("id"),
-                        name=node.get("name") or "",
-                        abstract=bool(node.get("abstract", False)),
-                        contract_kind=node.get("contractKind", "contract"),
-                        linearized_base_ids=[
-                            i for i in node.get("linearizedBaseContracts", []) if isinstance(i, int)
-                        ],
-                    )
+            else:
+                yield _ContractDeclView(
+                    source_path=source.source_path,
+                    node_id=node.get("id"),
+                    name=node.get("name") or "",
+                    abstract=bool(node.get("abstract", False)),
+                    contract_kind=node.get("contractKind", "contract"),
+                    linearized_base_ids=[
+                        i for i in node.get("linearizedBaseContracts", []) if isinstance(i, int)
+                    ],
+                )
 
 
 class CompilationAnalysisError(Exception):
@@ -769,7 +770,7 @@ class SetupProver:
         ast_path = self._build_dir / FILE_BUILD_ASTS if self._build_dir else None
         if not ast_path or not ast_path.exists():
             return {}
-        dump = AstDump.load(ast_path)
+        dump = AstDump.load_cached(ast_path)
         for decl in _iter_contract_declarations(dump):
             if decl.contract_kind != "interface" and decl.name:
                 rel = self.scope.get_relative_path(Path(decl.source_path))
@@ -1181,7 +1182,7 @@ class SetupProver:
             return inheritance_info, abstract_contracts
 
         try:
-            dump = AstDump.load(ast_file_path)
+            dump = AstDump.load_cached(ast_file_path)
 
             self.log(f"Extracting inheritance info from {ast_file_path}")
 

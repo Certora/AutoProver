@@ -12,9 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Tuple
 
-from pydantic import ValidationError
-
-from certora_autosetup.solidity_ast import AstDump, MemberAccess, SourceAst, find_all, parse_src
+from certora_autosetup.solidity_ast import AstDump, MemberAccess, SourceAst, iter_nodes_of_type, parse_src
 from certora_autosetup.utils.scope import Scope
 
 CODE_ACCESS_PATCH_FILE = ".certora_internal/code_access_patches.json"
@@ -215,20 +213,34 @@ def _load_ast_parent_graph(graph_path: Path) -> Dict[str, Dict[str, Dict[str, st
         return {}
 
 
-def _iter_member_accesses(source: SourceAst) -> Iterator[MemberAccess]:
-    """MemberAccess nodes of one source: from the typed tree when it parsed, and by
-    validating individual raw flat-map nodes when it did not (so a solc surprise
-    elsewhere in the file cannot hide a .code access). Vyper sources yield nothing.
-    """
-    if source.root is not None:
-        yield from find_all(source.root, MemberAccess)
-    elif source.raw_kind == "parse_failed":
-        for node in source.raw.values():
-            if isinstance(node, dict) and node.get("nodeType") == "MemberAccess":
-                try:
-                    yield MemberAccess.model_validate(node)
-                except ValidationError:
-                    continue
+@dataclass(frozen=True)
+class _CodeAccessCandidate:
+    """The load-bearing fields of a `.code` MemberAccess, whether it came from the
+    typed tree or from the raw flat-map sweep of nodes the models could not reach."""
+
+    node_id: str
+    src: str
+    expr_src: str
+
+
+def _iter_code_accesses(source: SourceAst) -> Iterator[_CodeAccessCandidate]:
+    """`.code` MemberAccess candidates of one source, with exact-parity coverage:
+    typed nodes first, then raw flat-map nodes the typed walk did not reach (nested
+    under an unknown node type, or the whole source unparsable) — so a solc surprise
+    cannot hide a .code access. Vyper sources yield nothing."""
+    for node in iter_nodes_of_type(source, MemberAccess):
+        if isinstance(node, MemberAccess):
+            if node.memberName == 'code':
+                yield _CodeAccessCandidate(
+                    node_id=str(node.id), src=node.src, expr_src=node.expression.src
+                )
+        elif node.get('memberName') == 'code':
+            expression = node.get('expression', {})
+            yield _CodeAccessCandidate(
+                node_id=str(node.get('id')),
+                src=node.get('src', ''),
+                expr_src=expression.get('src', '') if isinstance(expression, dict) else '',
+            )
 
 
 def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Path, scope: Scope) -> None:
@@ -281,84 +293,80 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
                 if not scope.is_file_in_scope(rel_path_for_scope):
                     continue
 
+                # The node's src offsets refer to THIS source file (not the unit's
+                # main file), so patches read and target it; the src file_id is not
+                # needed since the file is already known here.
+                patch_target = str(rel_path_for_scope)
+
                 # Find MemberAccess nodes with memberName="code" in this source
-                for node in _iter_member_accesses(source):
-                    if node.memberName == 'code':
-                        node_id = str(node.id)
+                for candidate in _iter_code_accesses(source):
+                    node_id = candidate.node_id
 
-                        # Check if this .code access is used as expression in another node using parent graph
-                        # If the parent graph exists, use it for O(1) lookup
-                        if parent_graph:
-                            parent_map = parent_graph.get(relative_path, {}).get(absolute_path, {})
-                            parent_id = parent_map.get(node_id)
+                    # Check if this .code access is used as expression in another node using parent graph
+                    # If the parent graph exists, use it for O(1) lookup
+                    if parent_graph:
+                        parent_map = parent_graph.get(relative_path, {}).get(absolute_path, {})
+                        parent_id = parent_map.get(node_id)
 
-                            if parent_id:
-                                # The raw flat map covers parsed and unparsed sources alike
-                                parent_node = source.raw.get(parent_id, {})
-                                parent_type = parent_node.get('nodeType')
+                        if parent_id:
+                            # The raw flat map covers parsed and unparsed sources alike
+                            parent_node = source.raw.get(parent_id, {})
+                            parent_type = parent_node.get('nodeType')
 
-                                # Skip if parent is MemberAccess (like .code.length) or FunctionCall (like x.code())
-                                if parent_type in ['MemberAccess', 'FunctionCall']:
-                                    continue
-                        else:
-                            # Fallback: check manually if graph not available
-                            is_chained = False
-                            for other_node in source.raw.values():
-                                if not isinstance(other_node, dict):
-                                    continue
+                            # Skip if parent is MemberAccess (like .code.length) or FunctionCall (like x.code())
+                            if parent_type in ['MemberAccess', 'FunctionCall']:
+                                continue
+                    else:
+                        # Fallback: check manually if graph not available
+                        is_chained = False
+                        for other_node in source.raw.values():
+                            if not isinstance(other_node, dict):
+                                continue
 
-                                # Check if used in MemberAccess (like .code.length) or FunctionCall (like x.code())
-                                if other_node.get('nodeType') in ['MemberAccess', 'FunctionCall']:
-                                    expr = other_node.get('expression', {})
-                                    if str(expr.get('id')) == node_id:
-                                        is_chained = True
-                                        break
+                            # Check if used in MemberAccess (like .code.length) or FunctionCall (like x.code())
+                            if other_node.get('nodeType') in ['MemberAccess', 'FunctionCall']:
+                                expr = other_node.get('expression', {})
+                                if str(expr.get('id')) == node_id:
+                                    is_chained = True
+                                    break
 
-                            if is_chained:
-                                continue  # Skip this .code access, it's part of a chain or function call
+                        if is_chained:
+                            continue  # Skip this .code access, it's part of a chain or function call
 
-                        # Extract source location: "offset:length:file_id" (byte offsets)
-                        if not node.src:
-                            continue
+                    # Extract source location: "offset:length:file_id" (byte offsets)
+                    if not candidate.src or not candidate.expr_src:
+                        continue
 
-                        try:
-                            offset, length, _ = node.src_location
-                        except ValueError:
-                            continue
+                    try:
+                        offset, length, _ = parse_src(candidate.src)
+                        expr_offset, expr_length, _ = parse_src(candidate.expr_src)
+                    except ValueError:
+                        continue
 
-                        # Get the expression being accessed (e.g., "pointer" from "pointer.code");
-                        # an UnknownNode expression has src="" and is skipped below
-                        expr_src = node.expression.src
-                        if not expr_src:
-                            continue
+                    # Read the original expression from the source file
+                    try:
+                        with open(patch_target, 'r') as src_file:
+                            src_content = src_file.read()
+                            expr_text = src_content[expr_offset:expr_offset + expr_length]
+                            original_text = src_content[offset:offset + length]
 
-                        try:
-                            expr_offset, expr_length, _ = parse_src(expr_src)
-                        except ValueError:
-                            continue
+                            # Create replacement: "certora_loadCode(expression)"
+                            replacement = f"certora_loadCode({expr_text})"
 
-                        # Read the original expression from the source file
-                        try:
-                            with open(relative_path, 'r') as src_file:
-                                src_content = src_file.read()
-                                expr_text = src_content[expr_offset:expr_offset + expr_length]
-                                original_text = src_content[offset:offset + length]
+                            patch = CodeAccessPatch(
+                                file=patch_target,
+                                offset=offset,
+                                length=length,
+                                original=original_text,
+                                replacement=replacement,
+                            )
+                            # The same source can appear under several compilation
+                            # units; apply must see each patch once
+                            if patch not in patches:
+                                patches.append(patch)
 
-                                # Create replacement: "certora_loadCode(expression)"
-                                replacement = f"certora_loadCode({expr_text})"
-
-                                patches.append(
-                                    CodeAccessPatch(
-                                        file=relative_path,
-                                        offset=offset,
-                                        length=length,
-                                        original=original_text,
-                                        replacement=replacement,
-                                    )
-                                )
-
-                        except Exception as e:
-                            log_func(f"Warning: Failed to read source for patch at {relative_path}: {e}", "WARNING")
+                    except Exception as e:
+                        log_func(f"Warning: Failed to read source for patch at {patch_target}: {e}", "WARNING")
 
         if not patches:
             log_func("✓ No .code accesses found")

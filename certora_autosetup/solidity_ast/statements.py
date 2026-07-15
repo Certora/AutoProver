@@ -89,24 +89,13 @@ class InlineAssembly(SolcNode):
 
     documentation: str | None = None
     AST: "YulBlock"
-    evmVersion: Literal[
-        "homestead",
-        "tangerineWhistle",
-        "spuriousDragon",
-        "byzantium",
-        "constantinople",
-        "petersburg",
-        "istanbul",
-        "berlin",
-        "london",
-        "paris",
-        "shanghai",
-        "cancun",
-        "prague",
-        "osaka",
-    ]
+    # The schema enumerates the EVM fork names, but each new fork would make every
+    # assembly-containing source fail whole-file validation until the vendored
+    # schema catches up — deliberately open (allowlisted in the conformance test).
+    evmVersion: str
     externalReferences: list[ExternalReference]
-    flags: list[Literal["memory-safe"]] | None = None
+    # Same reasoning: new assembly flags arrive with new solc releases.
+    flags: list[str] | None = None
     nodeType: Literal["InlineAssembly"]
 
 

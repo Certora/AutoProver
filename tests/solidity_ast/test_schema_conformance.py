@@ -358,6 +358,16 @@ def field_for(model: type, prop: str) -> Any:
     return None
 
 
+# Fields deliberately WIDER than the schema: version-freshness enums (EVM fork names,
+# assembly flags) whose closed transcription would demote every assembly-containing
+# source to parse_failed on the first solc release the vendored schema lags behind.
+# Presence/requiredness/nullability are still checked; only the enum shape is waived.
+DELIBERATELY_OPEN = {
+    ("InlineAssembly", "evmVersion"),
+    ("InlineAssembly", "flags"),
+}
+
+
 def check_property(
     model: type, prop: str, spec: dict[str, Any], required: bool, m: ModelInterface
 ) -> list[str]:
@@ -392,6 +402,8 @@ def check_property(
                 f"{where}: get_args(annotation) == {get_args(info.annotation)!r}, "
                 f"expected ({shape.values[0]!r},)"
             )
+    elif (model.__name__, prop) in DELIBERATELY_OPEN:
+        pass
     elif shape.kind != "null":  # a pure-null property only constrains nullability
         errors += check_shape(shape, info.annotation, m, where)
     return errors

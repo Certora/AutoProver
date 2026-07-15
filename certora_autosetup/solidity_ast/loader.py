@@ -17,16 +17,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Iterator, Literal, TypeVar, get_args
 
 from pydantic import ValidationError
 
 from . import unions as unions  # import resolves forward refs and rebuilds the models
 from .base import AstNode
 from .declarations import SourceUnit
-from .traversal import build_node_index
+from .traversal import build_node_index, find_all
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,15 @@ class AstDump:
             return cls.from_dict(json.load(f), on_error=on_error)
 
     @classmethod
+    def load_cached(cls, path: Path | str, *, on_error: OnError = "raw") -> "AstDump":
+        """``load()`` memoized on (resolved path, mtime, size) — a setup run reads the
+        same dump at several points. The returned instance is shared: treat it as
+        read-only.
+        """
+        stat = os.stat(path)
+        return _load_cached(str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size, on_error)
+
+    @classmethod
     def from_dict(cls, data: dict[str, Any], *, on_error: OnError = "raw") -> "AstDump":
         files = {
             original_file: FileAsts(
@@ -103,10 +114,44 @@ class AstDump:
         return None
 
 
+N = TypeVar("N", bound=AstNode)
+
+
+def iter_nodes_of_type(source: SourceAst, model: type[N]) -> Iterator[N | dict[str, Any]]:
+    """All nodes of one concrete model type in a source: typed instances from the
+    parsed tree first, then the raw flat-map dicts of matching nodeType that the
+    typed walk did not reach (nested under an UnknownNode, or the whole source
+    unparsable). Gives exact-parity coverage with a raw flat-map scan while staying
+    typed wherever the models reached; callers must accept both shapes.
+    """
+    (node_type,) = get_args(model.model_fields["nodeType"].annotation)
+    seen: set[int] = set()
+    if source.root is not None:
+        for node in find_all(source.root, model):
+            node_id = getattr(node, "id", None)  # Yul models carry no id
+            if isinstance(node_id, int):
+                seen.add(node_id)
+            yield node
+    for raw_node in source.raw.values():
+        if (
+            isinstance(raw_node, dict)
+            and raw_node.get("nodeType") == node_type
+            and raw_node.get("id") not in seen
+        ):
+            yield raw_node
+
+
+@lru_cache(maxsize=8)
+def _load_cached(resolved_path: str, _mtime_ns: int, _size: int, on_error: OnError) -> AstDump:
+    return AstDump.load(resolved_path, on_error=on_error)
+
+
 def _load_source(source_path: str, flat: dict[str, Any], on_error: OnError) -> SourceAst:
     node_dicts = [n for n in flat.values() if isinstance(n, dict)]
 
-    if any("nodeType" not in n and ("ast_type" in n or "node_id" in n) for n in node_dicts):
+    has_solidity = any("nodeType" in n for n in node_dicts)
+    has_vyper = any("nodeType" not in n and ("ast_type" in n or "node_id" in n) for n in node_dicts)
+    if has_vyper and not has_solidity:
         return SourceAst(source_path=source_path, root=None, raw=flat, raw_kind="vyper")
 
     roots = [n for n in node_dicts if n.get("nodeType") == "SourceUnit"]

@@ -17,7 +17,7 @@ __all__ = [
     "AstNode", "SolcNode", "YulNode", "UnknownNode", "SrcLocation", "parse_src",
     "TypeDescriptions", "Visibility", "StateMutability", "Mutability", "StorageLocation",
     # loader
-    "AstDump", "FileAsts", "SourceAst",
+    "AstDump", "FileAsts", "SourceAst", "iter_nodes_of_type",
     # traversal
     "iter_children", "walk", "find_all", "build_node_index", "build_parent_map",
     "build_parent_graph_json",
@@ -104,7 +104,7 @@ from .expressions import (
     TupleExpression,
     UnaryOperation,
 )
-from .loader import AstDump, FileAsts, SourceAst
+from .loader import AstDump, FileAsts, SourceAst, iter_nodes_of_type
 from .statements import (
     Block,
     Break,

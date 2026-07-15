@@ -10,7 +10,11 @@ from typing import Any
 
 import pytest
 
-from certora_autosetup.setup.auto_munges import CODE_ACCESS_PATCH_FILE, detect_code_accesses
+from certora_autosetup.setup.auto_munges import (
+    CODE_ACCESS_PATCH_FILE,
+    _iter_code_accesses,
+    detect_code_accesses,
+)
 from certora_autosetup.setup.setup_prover import _iter_contract_declarations
 from certora_autosetup.solidity_ast import AstDump
 from certora_autosetup.utils.scope import Scope
@@ -92,6 +96,93 @@ def test_declared_contracts_parity(fixture: str) -> None:
             actual.setdefault(decl.source_path, set()).add(decl.name)
 
     assert actual == expected
+
+
+def _code_access_ids(dump: AstDump) -> set[str]:
+    return {
+        c.node_id for _, source in dump.iter_sources() for c in _iter_code_accesses(source)
+    }
+
+
+def test_code_access_survives_unknown_ancestor() -> None:
+    """A future-solc nodeType enclosing a .code access must not hide it: the typed
+    walk stops at the UnknownNode, and the raw flat-map sweep must pick it up."""
+    raw = _load_raw("solc_0_8_30")
+    baseline = _code_access_ids(AstDump.from_dict(raw))
+    assert baseline
+
+    # Rename the nodeType of every enclosing statement of a .code access (its parent
+    # in the flat map heuristic: any node holding the access as a direct child).
+    mutated = json.loads(json.dumps(raw))
+    for per_source in mutated.values():
+        for nodes in per_source.values():
+            access_ids = {
+                node["id"]
+                for node in nodes.values()
+                if isinstance(node, dict)
+                and node.get("nodeType") == "MemberAccess"
+                and node.get("memberName") == "code"
+            }
+            for node in nodes.values():
+                if not isinstance(node, dict) or node.get("nodeType") == "MemberAccess":
+                    continue
+                children = [
+                    v for v in node.values() if isinstance(v, dict) and "id" in v
+                ] + [
+                    item
+                    for v in node.values()
+                    if isinstance(v, list)
+                    for item in v
+                    if isinstance(item, dict) and "id" in item
+                ]
+                if any(c["id"] in access_ids for c in children):
+                    node["nodeType"] = "SolcFutureStatement"
+
+    mutated_dump = AstDump.from_dict(mutated)
+    assert all(s.is_parsed for _, s in mutated_dump.iter_sources())
+    assert _code_access_ids(mutated_dump) == baseline
+
+
+def test_patch_targets_the_containing_source_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A .code access in an imported file compiled under another file's compilation
+    unit must be patched in the imported file, not the unit's main file."""
+    project = tmp_path / "project"
+    project.mkdir()
+    lib_text = "address a; a.code;"  # offsets below point into this text
+    (project / "lib.sol").write_text(lib_text)
+    (project / "main.sol").write_text("// no .code accesses here\n" * 4)
+
+    code_off = lib_text.index("a.code")
+    member_access = {
+        "id": 7,
+        "src": f"{code_off}:6:1",
+        "nodeType": "MemberAccess",
+        "memberName": "code",
+        "expression": {"id": 6, "src": f"{code_off}:1:1", "nodeType": "Identifier", "name": "a"},
+    }
+    source_unit = {
+        "id": 99, "src": "0:0:1", "nodeType": "SourceUnit",
+        "absolutePath": "lib.sol", "exportedSymbols": {}, "nodes": [],
+    }
+    dump = {
+        "main.sol": {
+            "main.sol": {"1": {
+                "id": 1, "src": "0:0:0", "nodeType": "SourceUnit",
+                "absolutePath": "main.sol", "exportedSymbols": {}, "nodes": [],
+            }},
+            "lib.sol": {"99": source_unit, "7": member_access},
+        }
+    }
+    ast_path = tmp_path / "asts.json"
+    ast_path.write_text(json.dumps(dump))
+
+    monkeypatch.chdir(project)
+    detect_code_accesses(lambda *a, **k: None, ast_path, tmp_path / "no_graph.json", Scope(project))
+
+    patches = json.loads((project / CODE_ACCESS_PATCH_FILE).read_text())
+    assert [p["file"] for p in patches] == ["lib.sol"]
+    assert patches[0]["original"] == "a.code"
+    assert patches[0]["replacement"] == "certora_loadCode(a)"
 
 
 def test_detect_code_accesses_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
