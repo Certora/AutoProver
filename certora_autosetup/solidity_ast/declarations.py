@@ -62,6 +62,14 @@ class VariableDeclaration(SolcNode):
     visibility: Visibility
     nodeType: Literal["VariableDeclaration"]
 
+    @property
+    def effective_mutability(self) -> Mutability:
+        """``mutability`` with the pre-0.6.6 case derived from ``constant`` (the only
+        mutability that existed then besides mutable) — never None."""
+        if self.mutability is not None:
+            return self.mutability
+        return "constant" if self.constant else "mutable"
+
 
 class ParameterList(SolcNode):
     """The parenthesized list of parameters or return values."""
@@ -132,8 +140,9 @@ class ModifierDefinition(SolcNode):
     documentation: "StructuredDocumentation | str | None" = None
     overrides: OverrideSpecifier | None = None
     parameters: ParameterList
-    # `virtual` only exists from solc 0.6; LENIENT_REQUIRED.
-    virtual: bool = False
+    # `virtual` only exists from solc 0.6, and pre-0.6 everything was implicitly
+    # overridable — None (unknown), not False; LENIENT_REQUIRED + VERSION_GATES.
+    virtual: bool | None = None
     visibility: Visibility
     nodeType: Literal["ModifierDefinition"]
 
@@ -156,8 +165,9 @@ class FunctionDefinition(SolcNode):
     returnParameters: ParameterList
     scope: int
     stateMutability: StateMutability
-    # `virtual` only exists from solc 0.6; LENIENT_REQUIRED.
-    virtual: bool = False
+    # `virtual` only exists from solc 0.6, and pre-0.6 everything was implicitly
+    # overridable — None (unknown), not False; LENIENT_REQUIRED + VERSION_GATES.
+    virtual: bool | None = None
     visibility: Visibility
     # Legacy-only fields, not in the schema (FIELD_ALLOWLIST): solc 0.4 flags in
     # place of `kind`/`stateMutability`, and the 0.4/0.5 predecessor of
@@ -167,6 +177,16 @@ class FunctionDefinition(SolcNode):
     payable: bool | None = None
     superFunction: int | None = None
     nodeType: Literal["FunctionDefinition"]
+
+    @property
+    def effective_kind(self) -> Literal["function", "receive", "constructor", "fallback", "freeFunction"]:
+        """``kind`` with the solc-0.4 case derived from ``isConstructor``/the empty
+        name (0.4's unnamed fallback function) — never None."""
+        if self.kind is not None:
+            return self.kind
+        if self.isConstructor:
+            return "constructor"
+        return "fallback" if self.name == "" else "function"
 
 
 class SymbolAlias(BaseModel):

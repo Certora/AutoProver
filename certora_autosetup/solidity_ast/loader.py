@@ -23,12 +23,43 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator, Literal, TypeVar, get_args
 
+from packaging.version import Version
 from pydantic import ValidationError
 
 from . import unions as unions  # import resolves forward refs and rebuilds the models
 from .base import AstNode
 from .declarations import SourceUnit
-from .traversal import build_node_index, find_all
+from .traversal import build_node_index, find_all, walk
+
+# Fields the models keep lenient (see LENIENT_REQUIRED in the conformance test) but
+# that MUST be present in dumps from the solc version that introduced them onward.
+# When the caller knows the producing version (autosetup always does), absence at or
+# above the gate is a hard error — wrong results are worse than a failed parse.
+# Gates err late where the exact introduction is unverified (never crash wrongly on
+# a version that genuinely lacked the field); tightened as fixture evidence grows.
+VERSION_GATES: dict[str, dict[str, Version]] = {
+    "ContractDefinition": {"abstract": Version("0.6.0")},
+    "FunctionDefinition": {"kind": Version("0.5.0"), "virtual": Version("0.6.0")},
+    "ModifierDefinition": {"virtual": Version("0.6.0")},
+    "FunctionCall": {"tryCall": Version("0.6.2")},
+    "VariableDeclaration": {"mutability": Version("0.6.6")},
+    "InlineAssembly": {"AST": Version("0.6.0"), "evmVersion": Version("0.6.12")},
+}
+
+
+def _version_gate_violation(root: AstNode, solc_version: Version) -> str | None:
+    """First gated field that is absent although the producing solc must emit it."""
+    for node in walk(root):
+        gates = VERSION_GATES.get(type(node).__name__)
+        if not gates:
+            continue
+        for field_name, gate in gates.items():
+            if solc_version >= gate and field_name not in node.model_fields_set:
+                return (
+                    f"{type(node).__name__}.{field_name} absent, but solc "
+                    f"{solc_version} (>= {gate}) always emits it"
+                )
+    return None
 
 logger = logging.getLogger(__name__)
 
@@ -67,26 +98,54 @@ class AstDump:
     files: dict[str, FileAsts]
 
     @classmethod
-    def load(cls, path: Path | str, *, on_error: OnError = "raw") -> "AstDump":
+    def load(
+        cls,
+        path: Path | str,
+        *,
+        on_error: OnError = "raw",
+        solc_version: str | Version | None = None,
+    ) -> "AstDump":
+        """``solc_version``: the compiler that produced the dump, when known —
+        enables the VERSION_GATES check (a gated field absent at or above its gate
+        fails the source instead of silently reading as None)."""
         with open(path, "r", encoding="utf-8") as f:
-            return cls.from_dict(json.load(f), on_error=on_error)
+            return cls.from_dict(json.load(f), on_error=on_error, solc_version=solc_version)
 
     @classmethod
-    def load_cached(cls, path: Path | str, *, on_error: OnError = "raw") -> "AstDump":
+    def load_cached(
+        cls,
+        path: Path | str,
+        *,
+        on_error: OnError = "raw",
+        solc_version: str | Version | None = None,
+    ) -> "AstDump":
         """``load()`` memoized on (resolved path, mtime, size) — a setup run reads the
         same dump at several points. The returned instance is shared: treat it as
         read-only.
         """
         stat = os.stat(path)
-        return _load_cached(str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size, on_error)
+        return _load_cached(
+            str(Path(path).resolve()),
+            stat.st_mtime_ns,
+            stat.st_size,
+            on_error,
+            str(solc_version) if solc_version is not None else None,
+        )
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], *, on_error: OnError = "raw") -> "AstDump":
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        *,
+        on_error: OnError = "raw",
+        solc_version: str | Version | None = None,
+    ) -> "AstDump":
+        version = Version(solc_version) if isinstance(solc_version, str) else solc_version
         files = {
             original_file: FileAsts(
                 original_file=original_file,
                 sources={
-                    source_path: _load_source(source_path, flat, on_error)
+                    source_path: _load_source(source_path, flat, on_error, version)
                     for source_path, flat in per_source.items()
                 },
             )
@@ -142,11 +201,18 @@ def iter_nodes_of_type(source: SourceAst, model: type[N]) -> Iterator[N | dict[s
 
 
 @lru_cache(maxsize=8)
-def _load_cached(resolved_path: str, _mtime_ns: int, _size: int, on_error: OnError) -> AstDump:
-    return AstDump.load(resolved_path, on_error=on_error)
+def _load_cached(
+    resolved_path: str, _mtime_ns: int, _size: int, on_error: OnError, solc_version: str | None
+) -> AstDump:
+    return AstDump.load(resolved_path, on_error=on_error, solc_version=solc_version)
 
 
-def _load_source(source_path: str, flat: dict[str, Any], on_error: OnError) -> SourceAst:
+def _load_source(
+    source_path: str,
+    flat: dict[str, Any],
+    on_error: OnError,
+    solc_version: Version | None = None,
+) -> SourceAst:
     node_dicts = [n for n in flat.values() if isinstance(n, dict)]
 
     has_solidity = any("nodeType" in n for n in node_dicts)
@@ -168,6 +234,11 @@ def _load_source(source_path: str, flat: dict[str, Any], on_error: OnError) -> S
         return _failed(
             source_path, flat, f"{e.error_count()} validation error(s): {e.errors()[0]}", on_error
         )
+
+    if solc_version is not None:
+        violation = _version_gate_violation(root, solc_version)
+        if violation:
+            return _failed(source_path, flat, f"version-gate violation: {violation}", on_error)
 
     nodes = build_node_index(root)
     missing = [i for i in flat if i.isdigit() and int(i) not in nodes]

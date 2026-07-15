@@ -33,7 +33,12 @@ SOLC_FIXTURES = LEGACY_FIXTURES + MODERN_FIXTURES
 
 @pytest.fixture(scope="module", params=SOLC_FIXTURES)
 def dump(request: pytest.FixtureRequest) -> AstDump:
-    return AstDump.load(FIXTURES / f"{request.param}.asts.json", on_error="raise")
+    # solc_0_6_12 -> 0.6.12: parse with the producing version so VERSION_GATES are
+    # enforced on every fixture, not just trusted.
+    version = request.param.removeprefix("solc_").replace("_", ".")
+    return AstDump.load(
+        FIXTURES / f"{request.param}.asts.json", on_error="raise", solc_version=version
+    )
 
 
 def test_all_sources_parse(dump: AstDump) -> None:

@@ -52,9 +52,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument("dump", help="path to a .asts.json / all_asts.json file")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument(
+        "--solc-version",
+        default=None,
+        help="compiler version that produced the dump; enables the VERSION_GATES "
+        "check (absent gated fields fail the source instead of reading as None)",
+    )
     args = parser.parse_args(argv)
 
-    dump = AstDump.load(args.dump)
+    dump = AstDump.load(args.dump, solc_version=args.solc_version)
     report: dict[str, dict[str, Any]] = {}
     for file_asts in dump.files.values():
         for source in file_asts.sources.values():
