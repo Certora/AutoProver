@@ -12,7 +12,8 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "solidity_ast"
 
 
 @pytest.mark.parametrize(
-    "fixture", ["solc_0_6_12", "solc_0_7_6", "solc_0_8_30", "vyper_mixed"]
+    "fixture",
+    ["solc_0_4_26", "solc_0_5_17", "solc_0_6_12", "solc_0_7_6", "solc_0_8_30", "vyper_mixed"],
 )
 def test_roundtrip_is_loyal(fixture: str) -> None:
     dump = AstDump.load(FIXTURES / f"{fixture}.asts.json", on_error="raise")

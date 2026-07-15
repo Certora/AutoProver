@@ -50,7 +50,8 @@ class VariableDeclaration(SolcNode):
     documentation: StructuredDocumentation | None = None
     functionSelector: str | None = None
     indexed: bool | None = None
-    mutability: Mutability
+    # Absent pre-0.6.6 (only `constant` existed); LENIENT_REQUIRED.
+    mutability: Mutability | None = None
     overrides: OverrideSpecifier | None = None
     scope: int
     stateVariable: bool
@@ -107,7 +108,7 @@ class EventDefinition(SolcNode):
     nameLocation: str | None = None
     anonymous: bool
     eventSelector: str | None = None
-    documentation: StructuredDocumentation | None = None
+    documentation: "StructuredDocumentation | str | None" = None
     parameters: ParameterList
     nodeType: Literal["EventDefinition"]
 
@@ -128,10 +129,11 @@ class ModifierDefinition(SolcNode):
     nameLocation: str | None = None
     baseModifiers: list[int] | None = None
     body: "Block | None" = None
-    documentation: StructuredDocumentation | None = None
+    documentation: "StructuredDocumentation | str | None" = None
     overrides: OverrideSpecifier | None = None
     parameters: ParameterList
-    virtual: bool
+    # `virtual` only exists from solc 0.6; LENIENT_REQUIRED.
+    virtual: bool = False
     visibility: Visibility
     nodeType: Literal["ModifierDefinition"]
 
@@ -143,18 +145,27 @@ class FunctionDefinition(SolcNode):
     nameLocation: str | None = None
     baseFunctions: list[int] | None = None
     body: "Block | None" = None
-    documentation: StructuredDocumentation | None = None
+    documentation: "StructuredDocumentation | str | None" = None
     functionSelector: str | None = None
     implemented: bool
-    kind: Literal["function", "receive", "constructor", "fallback", "freeFunction"]
+    # Absent pre-0.5 (solc 0.4 marks constructors via `isConstructor`); LENIENT_REQUIRED.
+    kind: Literal["function", "receive", "constructor", "fallback", "freeFunction"] | None = None
     modifiers: list[ModifierInvocation]
     overrides: OverrideSpecifier | None = None
     parameters: ParameterList
     returnParameters: ParameterList
     scope: int
     stateMutability: StateMutability
-    virtual: bool
+    # `virtual` only exists from solc 0.6; LENIENT_REQUIRED.
+    virtual: bool = False
     visibility: Visibility
+    # Legacy-only fields, not in the schema (FIELD_ALLOWLIST): solc 0.4 flags in
+    # place of `kind`/`stateMutability`, and the 0.4/0.5 predecessor of
+    # `baseFunctions`.
+    isConstructor: bool | None = None
+    isDeclaredConst: bool | None = None
+    payable: bool | None = None
+    superFunction: int | None = None
     nodeType: Literal["FunctionDefinition"]
 
 
@@ -260,12 +271,17 @@ class ContractDefinition(SolcNode):
 
     name: str
     nameLocation: str | None = None
-    abstract: bool
+    # Schema-required, but the concept only exists from solc 0.6 — a default keeps
+    # below-floor (0.5.x) sources parseable (lenient-older policy; conformance
+    # deviation LENIENT_REQUIRED).
+    abstract: bool = False
     baseContracts: list[InheritanceSpecifier]
     canonicalName: str | None = None
     contractDependencies: list[int]
     contractKind: Literal["contract", "interface", "library"]
-    documentation: StructuredDocumentation | None = None
+    # NatSpec is a plain string in dumps from solc <= 0.5 (node form from 0.6);
+    # same widening on Function/Modifier/EventDefinition. DELIBERATELY_OPEN.
+    documentation: "StructuredDocumentation | str | None" = None
     fullyImplemented: bool
     linearizedBaseContracts: list[int]
     nodes: list["ContractBodyNode"]

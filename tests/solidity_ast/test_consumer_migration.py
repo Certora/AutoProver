@@ -20,7 +20,7 @@ from certora_autosetup.solidity_ast import AstDump
 from certora_autosetup.utils.scope import Scope
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "solidity_ast"
-SOLC_FIXTURES = ["solc_0_6_12", "solc_0_7_6", "solc_0_8_30"]
+SOLC_FIXTURES = ["solc_0_4_26", "solc_0_5_17", "solc_0_6_12", "solc_0_7_6", "solc_0_8_30"]
 
 
 def _load_raw(name: str) -> dict[str, Any]:

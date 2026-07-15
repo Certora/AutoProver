@@ -164,8 +164,17 @@ def models() -> ModelInterface:
 
 # Model fields allowed to have no schema property backing them.
 # certoraRun injects certora_contract_name into the dump (AstNode base field);
+# the rest are the <= 0.5 dialect: InlineAssembly.operations (assembly source
+# text) and the solc-0.4/0.5 FunctionDefinition flags.
 # nativeSrc needs no entry because every Yul definition lists it in the schema.
-FIELD_ALLOWLIST = frozenset({"certora_contract_name"})
+FIELD_ALLOWLIST = frozenset({
+    "certora_contract_name",
+    "operations",
+    "isConstructor",
+    "isDeclaredConst",
+    "payable",
+    "superFunction",
+})
 
 # Definitions whose nodeType tag differs from the registry key: solc emits
 # nodeType "YulLiteral" for both literal kinds, discriminated by hexValue/value.
@@ -358,13 +367,49 @@ def field_for(model: type, prop: str) -> Any:
     return None
 
 
-# Fields deliberately WIDER than the schema: version-freshness enums (EVM fork names,
-# assembly flags) whose closed transcription would demote every assembly-containing
-# source to parse_failed on the first solc release the vendored schema lags behind.
-# Presence/requiredness/nullability are still checked; only the enum shape is waived.
+# Fields deliberately WIDER than the schema, all validated against real dumps
+# (fixtures for solc 0.4.26 / 0.5.17 and the project corpus sweep). Presence and
+# requiredness are still checked; only the shape check is waived:
+# - InlineAssembly.evmVersion/flags: version-freshness enums — a closed transcription
+#   would demote every assembly-containing source on the first solc release the
+#   vendored schema lags behind.
+# - SourceUnit.nodes: the schema's union lacks EventDefinition, but solc >= 0.8.22
+#   allows file-level events.
+# - documentation on Contract/Function/Modifier/EventDefinition: plain NatSpec string
+#   in dumps from solc <= 0.5 (the StructuredDocumentation node form is 0.6+).
+# - ElementaryTypeNameExpression.typeName: plain string in dumps from solc <= 0.5.
+# - InlineAssembly.externalReferences: solc <= 0.5 items are keyed by identifier name.
 DELIBERATELY_OPEN = {
     ("InlineAssembly", "evmVersion"),
     ("InlineAssembly", "flags"),
+    ("SourceUnit", "nodes"),
+    ("ContractDefinition", "documentation"),
+    ("FunctionDefinition", "documentation"),
+    ("ModifierDefinition", "documentation"),
+    ("EventDefinition", "documentation"),
+    ("ElementaryTypeNameExpression", "typeName"),
+    ("InlineAssembly", "externalReferences"),
+}
+
+# Schema-required fields the models default instead: solc omits them in situations
+# the schema does not account for — either below the 0.6 floor (lenient-older
+# policy: typed parsing must still work) or in corners the schema over-requires.
+# Shape is still checked. exclude_unset round-trips keep the absence loyal.
+# - ContractDefinition.abstract, {Function,Modifier}Definition.virtual,
+#   FunctionCall.tryCall, VariableDeclaration.mutability: concepts added in 0.6.x.
+# - FunctionDefinition.kind: added in 0.5 (0.4 uses isConstructor).
+# - InlineAssembly.AST/evmVersion: absent in the <= 0.5 assembly dialect.
+# - Return.functionReturnParameters: omitted for `return;` inside a modifier body.
+LENIENT_REQUIRED = {
+    ("ContractDefinition", "abstract"),
+    ("FunctionDefinition", "virtual"),
+    ("FunctionDefinition", "kind"),
+    ("ModifierDefinition", "virtual"),
+    ("FunctionCall", "tryCall"),
+    ("VariableDeclaration", "mutability"),
+    ("InlineAssembly", "AST"),
+    ("InlineAssembly", "evmVersion"),
+    ("Return", "functionReturnParameters"),
 }
 
 
@@ -382,12 +427,16 @@ def check_property(
     has_none = atoms_of(info.annotation, m).has_none
 
     if required:
-        if not info.is_required():
-            errors.append(f"{where}: schema-required but field has a default")
-        if nullable and not has_none:
-            errors.append(f"{where}: required-but-nullable, annotation lacks | None")
-        if not nullable and has_none:
-            errors.append(f"{where}: required non-nullable, annotation must not allow None")
+        if (model.__name__, prop) in LENIENT_REQUIRED:
+            if info.is_required():
+                errors.append(f"{where}: listed in LENIENT_REQUIRED but has no default")
+        else:
+            if not info.is_required():
+                errors.append(f"{where}: schema-required but field has a default")
+            if nullable and not has_none:
+                errors.append(f"{where}: required-but-nullable, annotation lacks | None")
+            if not nullable and has_none:
+                errors.append(f"{where}: required non-nullable, annotation must not allow None")
     else:
         if info.is_required():
             errors.append(f"{where}: schema-optional but field is required")

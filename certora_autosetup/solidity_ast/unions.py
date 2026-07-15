@@ -169,13 +169,17 @@ TypeName = Annotated[
 ]
 """Any type-name node (or UnknownNode)."""
 
-_SOURCEUNITNODE_TAGS = frozenset({"ContractDefinition", "EnumDefinition", "ErrorDefinition", "FunctionDefinition", "ImportDirective", "PragmaDirective", "StructDefinition", "UserDefinedValueTypeDefinition", "UsingForDirective", "VariableDeclaration"})
+# EventDefinition is absent from the vendored schema's SourceUnit.nodes union, but
+# solc >= 0.8.22 allows file-level events (seen in the wild; conformance deviation
+# DELIBERATELY_OPEN on SourceUnit.nodes).
+_SOURCEUNITNODE_TAGS = frozenset({"ContractDefinition", "EnumDefinition", "ErrorDefinition", "EventDefinition", "FunctionDefinition", "ImportDirective", "PragmaDirective", "StructDefinition", "UserDefinedValueTypeDefinition", "UsingForDirective", "VariableDeclaration"})
 
 SourceUnitNode = Annotated[
     Union[
         Annotated[ContractDefinition, Tag("ContractDefinition")],
         Annotated[EnumDefinition, Tag("EnumDefinition")],
         Annotated[ErrorDefinition, Tag("ErrorDefinition")],
+        Annotated[EventDefinition, Tag("EventDefinition")],
         Annotated[FunctionDefinition, Tag("FunctionDefinition")],
         Annotated[ImportDirective, Tag("ImportDirective")],
         Annotated[PragmaDirective, Tag("PragmaDirective")],

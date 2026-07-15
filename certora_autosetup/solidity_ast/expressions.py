@@ -70,7 +70,8 @@ class ElementaryTypeNameExpression(SolcNode):
     isPure: bool
     lValueRequested: bool
     typeDescriptions: TypeDescriptions
-    typeName: "ElementaryTypeName"
+    # A plain string ("uint256") in dumps from solc <= 0.5; DELIBERATELY_OPEN.
+    typeName: "ElementaryTypeName | str"
     nodeType: typing.Literal["ElementaryTypeNameExpression"]
 
 
@@ -88,7 +89,8 @@ class FunctionCall(SolcNode):
     kind: typing.Literal["functionCall", "typeConversion", "structConstructorCall"]
     names: list[str]
     nameLocations: list[str] | None = None
-    tryCall: bool
+    # try/catch only exists from solc 0.6; LENIENT_REQUIRED.
+    tryCall: bool = False
     nodeType: typing.Literal["FunctionCall"]
 
 

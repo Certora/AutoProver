@@ -85,17 +85,23 @@ class ExternalReference(BaseModel):
 
 
 class InlineAssembly(SolcNode):
-    """An ``assembly { ... }`` block; its Yul body lives under the ``AST`` field."""
+    """An ``assembly { ... }`` block; its Yul body lives under the ``AST`` field.
+
+    Dumps from solc <= 0.5 use a different dialect: no ``AST``/``evmVersion``, the
+    assembly source text in ``operations``, and ``externalReferences`` items keyed
+    by identifier name (LENIENT_REQUIRED / DELIBERATELY_OPEN deviations).
+    """
 
     documentation: str | None = None
-    AST: "YulBlock"
+    AST: "YulBlock | None" = None
     # The schema enumerates the EVM fork names, but each new fork would make every
     # assembly-containing source fail whole-file validation until the vendored
     # schema catches up — deliberately open (allowlisted in the conformance test).
-    evmVersion: str
-    externalReferences: list[ExternalReference]
+    evmVersion: str | None = None
+    externalReferences: list[ExternalReference | dict[str, ExternalReference]]
     # Same reasoning: new assembly flags arrive with new solc releases.
     flags: list[str] | None = None
+    operations: str | None = None
     nodeType: Literal["InlineAssembly"]
 
 
@@ -109,7 +115,10 @@ class PlaceholderStatement(SolcNode):
 class Return(SolcNode):
     documentation: str | None = None
     expression: "Expression | None" = None
-    functionReturnParameters: int
+    # Schema-required, but solc omits it for `return;` inside a modifier body (no
+    # function to return to) — seen in the wild on solc 0.8.x (conformance
+    # deviation LENIENT_REQUIRED).
+    functionReturnParameters: int | None = None
     nodeType: Literal["Return"]
 
 

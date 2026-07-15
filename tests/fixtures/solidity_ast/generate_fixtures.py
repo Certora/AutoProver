@@ -55,6 +55,8 @@ CONTRACTS_DIR = FIXTURES_DIR / "contracts"
 # (solc version, contract file, main contract) — breadth_06.sol is shared by
 # 0.6 and 0.7 (pragma >=0.6.12 <0.8.0).
 PAIRS: list[tuple[str, str, str]] = [
+    ("0.4.26", "breadth_04.sol", "Diamond"),
+    ("0.5.17", "breadth_05.sol", "Diamond"),
     ("0.6.12", "breadth_06.sol", "Diamond"),
     ("0.7.6", "breadth_06.sol", "Diamond"),
     ("0.8.30", "breadth_08.sol", "Diamond"),
@@ -155,8 +157,10 @@ def run_certora_dump(
             return json.load(f)
 
 
-def generate_fixtures(certora_run: str, solc_dir: Path | None) -> None:
+def generate_fixtures(certora_run: str, solc_dir: Path | None, only: list[str] | None = None) -> None:
     for version, contract_file, main_contract in PAIRS:
+        if only and version not in only:
+            continue
         solc_path = find_solc(version, solc_dir)
         raw = run_certora_dump(certora_run, contract_file, main_contract, solc_path)
         sanitized = sanitize(raw)
@@ -250,12 +254,18 @@ def main() -> int:
         help="directory containing solc-<version> binaries (checked before PATH "
         "and ~/.solc-select/artifacts)",
     )
+    parser.add_argument(
+        "--only",
+        nargs="*",
+        default=None,
+        help="regenerate only these solc versions (default: all PAIRS)",
+    )
     args = parser.parse_args()
 
     if args.golden:
         generate_golden()
     else:
-        generate_fixtures(args.certora_run, args.solc_dir)
+        generate_fixtures(args.certora_run, args.solc_dir, args.only)
     return 0
 
 

@@ -24,7 +24,11 @@ from certora_autosetup.solidity_ast import (
 )
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "solidity_ast"
-SOLC_FIXTURES = ["solc_0_6_12", "solc_0_7_6", "solc_0_8_30"]
+# 0.4/0.5 are below the >= 0.6 floor but must still parse fully typed (lenient-older
+# policy); version-specific assertions below gate on this split.
+LEGACY_FIXTURES = ["solc_0_4_26", "solc_0_5_17"]
+MODERN_FIXTURES = ["solc_0_6_12", "solc_0_7_6", "solc_0_8_30"]
+SOLC_FIXTURES = LEGACY_FIXTURES + MODERN_FIXTURES
 
 
 @pytest.fixture(scope="module", params=SOLC_FIXTURES)
@@ -76,7 +80,7 @@ def test_certora_contract_name_stamping(dump: AstDump) -> None:
     assert all(isinstance(n.certora_contract_name, str) for n in stamped)
 
 
-def test_inheritance_semantics(dump: AstDump) -> None:
+def test_inheritance_semantics(dump: AstDump, request: pytest.FixtureRequest) -> None:
     contracts = {
         c.name: c
         for _, _, root in dump.iter_parsed_roots()
@@ -89,7 +93,11 @@ def test_inheritance_semantics(dump: AstDump) -> None:
     assert set(linearized[1:]) >= {"Base"}
     assert any(c.contractKind == "interface" for c in contracts.values())
     assert any(c.contractKind == "library" for c in contracts.values())
-    assert any(c.abstract for c in contracts.values())
+    if "dump" in request.fixturenames and request.node.callspec.params["dump"] in MODERN_FIXTURES:
+        # the `abstract` flag only exists from solc 0.6
+        assert any(c.abstract for c in contracts.values())
+    else:
+        assert not contracts["Base"].fullyImplemented
 
 
 def test_src_location_points_at_source(dump: AstDump) -> None:
@@ -101,14 +109,20 @@ def test_src_location_points_at_source(dump: AstDump) -> None:
         assert snippet.split()[0] in (b"contract", b"abstract", b"interface", b"library")
 
 
-def test_yul_present(dump: AstDump) -> None:
+def test_yul_present(dump: AstDump, request: pytest.FixtureRequest) -> None:
     assemblies = [
         a for _, _, root in dump.iter_parsed_roots() for a in find_all(root, InlineAssembly)
     ]
     assert assemblies
     for assembly in assemblies:
-        assert isinstance(assembly.AST, YulBlock)
-        assert assembly.AST.statements
+        if request.node.callspec.params["dump"] in MODERN_FIXTURES:
+            assert isinstance(assembly.AST, YulBlock)
+            assert assembly.AST.statements
+        else:
+            # the <= 0.5 dialect: no Yul tree, assembly source text + keyed refs
+            assert assembly.AST is None
+            assert assembly.operations
+            assert all(isinstance(r, dict) for r in assembly.externalReferences)
 
 
 def test_08_specific_nodes_present() -> None:
