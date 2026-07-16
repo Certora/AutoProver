@@ -25,10 +25,13 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, NotRequired, cast, get_args, override
+from typing import Any, Awaitable, Callable, NotRequired, cast, get_args, override
 
-from graphcore.graph import FlowInput
+from pydantic import Field
+from graphcore.graph import FlowInput, tool_state_update
+from graphcore.tools.schemas import WithAsyncDependencies, WithInjectedId
 from langgraph.graph import MessagesState
+from langgraph.types import Command
 
 from composer.io.multi_job import TaskInfo
 from composer.pipeline.core import (
@@ -48,6 +51,7 @@ from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.graph_builder import bind_standard, run_to_completion
+from composer.ui.tool_display import tool_display
 from composer.spec.source.report.schema import Outcome, ReportBackend, RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import PropertyFormulation
@@ -109,13 +113,69 @@ class _LlmState(MessagesState):
     result: NotRequired[str]
 
 
+# In-loop-judge author state: `reviewed_text`/`review_ok` record the last draft the author sent
+# to `request_review` and the judge's verdict on it; the result gate (`_review_gate`) blocks
+# finalization until the submitted draft is one the judge accepted.
+class _JudgedAuthorState(MessagesState):
+    result: NotRequired[str]
+    reviewed_text: NotRequired[str]
+    review_ok: NotRequired[bool]
+
+
 class _LlmInput(FlowInput):
     pass
 
 
+# A callable that reviews a candidate artifact: ``(draft) -> (accepted, feedback)``. The host
+# builds it (see :func:`_make_judge_hook`) around the wheel's ``judge_prompt``.
+type _JudgeHook = Callable[[str], Awaitable[tuple[bool, str]]]
+
+
+# Appended to the system prompt when the judge runs in-loop, so the author knows the review
+# protocol and the finalize gate. Kept generic (no backend/domain specifics).
+_REVIEW_PROTOCOL = (
+    "\n\nBefore you finalize, a reviewer must accept your work. Call the `request_review` tool "
+    "with the exact artifact text you intend to submit; if the review is REJECTED, revise and "
+    "call `request_review` again. Only call `result` with a draft the reviewer ACCEPTED — the "
+    "`result` call is rejected otherwise."
+)
+
+
+def _review_gate(state: _JudgedAuthorState, result_value: str) -> str | None:
+    """Block ``result`` unless the submitted draft is exactly the one the judge accepted."""
+    if state.get("review_ok") and state.get("reviewed_text") == result_value:
+        return None
+    return (
+        "Not accepted yet: call `request_review` with this exact draft and get an ACCEPTED "
+        "review before calling `result` (revise and re-review if it was REJECTED)."
+    )
+
+
+@tool_display("Requesting review", "Review")
+class _RequestReview(WithInjectedId, WithAsyncDependencies[Command, "_JudgeHook"]):
+    """Ask the reviewer to evaluate your current draft against the task's criteria. Returns the
+    verdict and any feedback; if REJECTED, revise and call this again before finalizing."""
+
+    draft: str = Field(
+        description="The complete candidate artifact source to review — the exact text you intend "
+        "to submit via `result`, no surrounding prose or code fences."
+    )
+
+    @override
+    async def run(self) -> Command:
+        with self.tool_deps() as judge:
+            ok, feedback = await judge(self.draft)
+        verdict = "ACCEPTED" if ok else "REJECTED"
+        content = f"Review {verdict}.\n\n{feedback}" if feedback else f"Review {verdict}."
+        return tool_state_update(
+            tool_call_id=self.tool_call_id, content=content,
+            reviewed_text=self.draft, review_ok=ok,
+        )
+
+
 async def run_llm_agent(
     env: Any, messages: Any, *, recursion_limit: int, backend_name: str = "rust",
-    turn_label: str = "authoring",
+    turn_label: str = "authoring", judge: "_JudgeHook | None" = None, memory_tool: Any = None,
 ) -> str:
     """Run one bounded, tool-enabled turn and return its final text. ``turn_label``
     names the turn's role ("authoring" / "judge") for the UI/log panel.
@@ -123,15 +183,27 @@ async def run_llm_agent(
     Binds the env's tool belt (source navigation + RAG search over the backend's
     knowledge base) and a result tool, and runs an agent to completion — so the
     prompt can pull in framework docs / read the program. Must run inside a
-    ``with_handler`` scope (the caller wraps it in ``run.runner``)."""
+    ``with_handler`` scope (the caller wraps it in ``run.runner``).
+
+    When ``judge`` is given, the turn becomes an in-loop-review author (docs/crucible-judge-in-loop.md):
+    a ``request_review`` tool runs the judge in-session and ``result`` is gated on an accepted draft,
+    so the author self-revises against feedback. ``memory_tool`` (when given) is added to the belt so
+    facts persist across turns/components."""
     tools = list(getattr(env, "all_tools", None) or env.rag_tools)
+    if memory_tool is not None:
+        tools.append(memory_tool)
     system, instruction = _split_prompt(messages)
-    graph = (
-        bind_standard(
-            env.builder_heavy(),
-            _LlmState,
-            doc="Your complete final answer as a single string (e.g. the authored source file).",
-        )
+    doc = "Your complete final answer as a single string (e.g. the authored source file)."
+    if judge is None:
+        builder = bind_standard(env.builder_heavy(), _LlmState, doc=doc)
+        state_input: FlowInput = _LlmInput(input=[])
+    else:
+        builder = bind_standard(env.builder_heavy(), _JudgedAuthorState, doc=doc, validator=_review_gate)
+        tools = [*tools, _RequestReview.bind(judge).as_tool("request_review")]
+        system = (system or _DEFAULT_SYS_PROMPT) + _REVIEW_PROTOCOL
+        state_input = _LlmInput(input=[])
+    graph: Any = (
+        builder
         .with_input(_LlmInput)
         .with_sys_prompt(system or _DEFAULT_SYS_PROMPT)
         .with_initial_prompt(instruction)
@@ -140,7 +212,7 @@ async def run_llm_agent(
     )
     res = await run_to_completion(
         graph,
-        _LlmInput(input=[]),
+        state_input,
         thread_id=uniq_thread_id(f"{backend_name}-llm"),
         recursion_limit=recursion_limit,
         description=f"{backend_name} {turn_label} turn",
@@ -207,20 +279,25 @@ def _parse_judge(review: str) -> tuple[bool, str]:
 
 
 async def _author_turn(
-    module: Any, input_json: str, failure: dict | None, *, env: Any, recursion_limit: int, backend_name: str
+    module: Any, input_json: str, failure: dict | None, *, env: Any, recursion_limit: int,
+    backend_name: str, judge: "_JudgeHook | None" = None, memory_tool: Any = None,
 ) -> str:
     """One authoring turn: render the backend's prompt (with any prior failure as revise
-    context), run the tool-enabled LLM agent, and strip a code fence off the result."""
+    context), run the tool-enabled LLM agent, and strip a code fence off the result. When
+    ``judge`` is given, the author reviews and self-revises in-session (docs/crucible-judge-in-loop.md)."""
     prompt = json.loads(
         module.author_prompt(input_json, json.dumps(failure) if failure is not None else None)
     )
-    reply = await run_llm_agent(env, prompt, recursion_limit=recursion_limit, backend_name=backend_name)
+    reply = await run_llm_agent(
+        env, prompt, recursion_limit=recursion_limit, backend_name=backend_name,
+        judge=judge, memory_tool=memory_tool,
+    )
     return _strip_fence(reply)
 
 
 async def _judge_turn(
     module: Any, input_json: str, spec: str, *, env: Any, recursion_limit: int, backend_name: str,
-    emit: Callable[[str, dict], None] | None = None,
+    emit: Callable[[str, dict], None] | None = None, memory_tool: Any = None,
 ) -> tuple[bool, str]:
     """Optional LLM review of a spec: ``(accept, feedback)``. ``(True, "")`` when the backend
     declares no judge (``judge_prompt`` → ``None``, the default). When a review actually runs,
@@ -230,7 +307,7 @@ async def _judge_turn(
         return True, ""
     review = await run_llm_agent(
         env, json.loads(jp), recursion_limit=recursion_limit,
-        backend_name=backend_name, turn_label="judge",
+        backend_name=backend_name, turn_label="judge", memory_tool=memory_tool,
     )
     ok, feedback = _parse_judge(review)
     if emit is not None:
@@ -240,6 +317,20 @@ async def _judge_turn(
             "outcome": "GOOD" if ok else "BAD",
         })
     return ok, feedback
+
+
+def _make_judge_hook(
+    module: Any, input_json: str, *, env: Any, recursion_limit: int, backend_name: str,
+    emit: Callable[[str, dict], None] | None, memory_tool: Any,
+) -> "_JudgeHook":
+    """Wrap the wheel's judge as a ``(draft) -> (accepted, feedback)`` callable for the in-loop
+    ``request_review`` tool. Reuses :func:`_judge_turn` so the verdict event still fires."""
+    async def judge(draft: str) -> tuple[bool, str]:
+        return await _judge_turn(
+            module, input_json, draft, env=env, recursion_limit=recursion_limit,
+            backend_name=backend_name, emit=emit, memory_tool=memory_tool,
+        )
+    return judge
 
 
 async def author_and_compile(
@@ -434,22 +525,28 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         emit = make_emitter()
         units = json.loads(self._module.units(input_json))
 
-        # Fused author → judge → validate loop: validate's build IS the compile gate (no
-        # separate dry-run per component — that ~2×'d the e2e). The units share one build, so
-        # a BuildFailed from any unit re-authors the whole spec.
+        # When the wheel supplies a judge for this input, it runs in-loop: a `request_review` tool
+        # inside the author session, which self-revises against feedback and can only finalize an
+        # accepted draft (docs/crucible-judge-in-loop.md). The author and judge share the run
+        # memory across components. Probe the pure callout — `judge_prompt` returns None exactly
+        # when there is no judge for this kind, so no review machinery is bound then.
+        has_judge = self._module.judge_prompt(input_json, "") is not None
+        memory_tool = ctx.get_memory_tool() if has_judge else None
+        judge_hook = _make_judge_hook(
+            self._module, input_json, env=run.env, recursion_limit=ctx.recursion_limit,
+            backend_name=self._descriptor.name, emit=emit, memory_tool=memory_tool,
+        ) if has_judge else None
+
+        # Fused author → validate loop: validate's build IS the compile gate (no separate dry-run
+        # per component — that ~2×'d the e2e). The units share one build, so a BuildFailed from any
+        # unit re-authors the whole spec.
         failure: dict | None = None
         for _ in range(self._max_attempts):
             spec = await _author_turn(
                 self._module, input_json, failure, env=run.env,
                 recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name,
+                judge=judge_hook, memory_tool=memory_tool,
             )
-            ok, feedback = await _judge_turn(
-                self._module, input_json, spec, env=run.env,
-                recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name, emit=emit,
-            )
-            if not ok:
-                failure = {"draft": spec, "errors": feedback, "kind": "judge"}
-                continue
 
             verdicts: dict[str, dict] = {}
             property_units: list[tuple[str, list[str]]] = []

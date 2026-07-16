@@ -208,8 +208,11 @@ above. Two readable `await`s over backend callouts; no state machine.
 - `judge_prompt` → overridden for `kind="component"` (skipped for the fixture): a reviewer turn
   modeled on Foundry's feedback judge, retargeted to fuzzing — the load-bearing question is
   reachability (can the fuzzer drive a state where the invariant could fail?). Emits the
-  `{accept, feedback}` JSON the host's `_parse_judge` reads; a rejection re-authors the suite
-  with the feedback (as a `Judge`-kind `Failure`).
+  `{accept, feedback}` JSON the host's `_parse_judge` reads. Whenever a wheel supplies a judge for an
+  input, the host runs it as a `request_review` **tool inside the author session** — the author
+  self-revises and can only finalize an accepted draft (see `docs/crucible-judge-in-loop.md`) — so
+  there is no separate post-authoring judge turn. A wheel with no judge (`judge_prompt → None`) gets
+  the plain single-shot author.
 - `compile(input, spec, workdir, sandbox)` → `run_confined(sandbox, "crucible", ["run", program,
   probe, "--release", "--dry-run"], files={"fuzz/<program>/src/main.rs": fixture+spec}, workdir)`;
   `Failed{errors: tail}` if `is_build_error(out)` or nonzero exit, else `Ok`.

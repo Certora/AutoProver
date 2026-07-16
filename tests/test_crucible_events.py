@@ -96,6 +96,19 @@ def test_setup_has_no_judge_prompt():
     assert crucible_app.judge_prompt(_setup_input(), "spec") is None
 
 
+def test_review_gate_blocks_until_the_submitted_draft_was_accepted():
+    from composer.rustapp import adapter
+
+    # Accept only when the judge accepted THIS exact draft.
+    assert adapter._review_gate({"review_ok": True, "reviewed_text": "spec-A"}, "spec-A") is None
+    # A draft that was never reviewed (or a different one) is blocked.
+    assert adapter._review_gate({"review_ok": True, "reviewed_text": "spec-A"}, "spec-B") is not None
+    # A reviewed-but-rejected draft is blocked.
+    assert adapter._review_gate({"review_ok": False, "reviewed_text": "spec-A"}, "spec-A") is not None
+    # No review yet → blocked.
+    assert adapter._review_gate({}, "spec-A") is not None
+
+
 def test_fetch_verdicts_threads_finding_detail_into_message():
     # A BAD verdict's `detail` (the fuzzer's counterexample / assertion message, captured by
     # `validate`) must reach the report `Verdict.message` so a bare BAD explains itself.
