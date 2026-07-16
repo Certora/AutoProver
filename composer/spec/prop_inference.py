@@ -34,7 +34,6 @@ class PropertyGenerationInputBase:
     sort: Literal["specific", "generic"]
     when: Literal["initial", "always"]
 
-    digest: str
 
 @dataclass
 class CacheablePropertyGenerationInput(PropertyGenerationInputBase):
@@ -336,7 +335,7 @@ async def run_property_inference(
     ]
     if threat_model is not None:
         actual_extra_input.append(CacheablePropertyGenerationInput(
-            "certora:thread_model", "generic", "always", threat_model.to_digest(),
+            "certora:thread_model", "generic", "always",
             provide=lambda cache: [
                 "In addition, a coworker has already written a 'threat model' for this application, which may include vulnerabilities/issues that"
                 "are common in this type of application. This threat model is written for the entire application (not just the component you are analyzing) "
