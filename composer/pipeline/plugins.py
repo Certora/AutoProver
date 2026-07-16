@@ -1,10 +1,11 @@
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, Callable, Awaitable, Any, Iterable, AsyncIterator, Never
 import importlib.metadata
 from contextlib import AsyncExitStack, asynccontextmanager
 from functools import cached_property
+from jinja2.loaders import ChoiceLoader, PrefixLoader, PackageLoader
 
 
 from composer.io.multi_job import TaskInfo
@@ -13,6 +14,7 @@ from composer.spec.context import (
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.util import string_hash
+from composer.templates.loader import base_loader, make_loader
 from .ptypes import PipelineRun
 from .plugin_api import PipelinePluginLoader, PipelinePlugin, PluginContext
 
@@ -55,6 +57,9 @@ class PluginPhaseRunner[P: enum.Enum]:
         self,
         ctxt: WorkflowContext[C]
     ) -> PluginContext[C]:
+        new_loader = self.plugin.load_jinja_template
+        env = self._run.env
+        env = replace(env, models=replace(env.models, _loader=new_loader))
         async def run[T](
             label: str,
             job: Callable[[], Awaitable[T]]
@@ -66,7 +71,7 @@ class PluginPhaseRunner[P: enum.Enum]:
             )
         return PluginRunner(
             ctxt,
-            self._run.env,
+            env,
             self._run.source,
             run
         )

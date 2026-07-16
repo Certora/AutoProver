@@ -1,6 +1,10 @@
 from typing import AsyncContextManager, Protocol, Callable, Awaitable
+from functools import cached_property
 from abc import ABC, abstractmethod
+from graphcore.graph import TemplateLoader
+from jinja2.loaders import BaseLoader, PackageLoader, ChoiceLoader, PrefixLoader
 
+from composer.templates.loader import make_loader, base_loader, load_jinja_template
 from composer.spec.system_model import ContractComponentInstance
 from composer.pipeline.ptypes import PipelineRun
 from composer.spec.context import WorkflowContext, SourceCode
@@ -36,6 +40,27 @@ class PostPropertyInference:
 
 class PipelinePlugin(ABC):
     NAME: str
+
+    def plugin_loader(self) -> BaseLoader | None:
+        t = type(self).__module__
+        return PackageLoader(t)
+    
+    @cached_property
+    def load_jinja_template(self) -> TemplateLoader:
+        loader = self.plugin_loader()
+        if loader is None:
+            return load_jinja_template
+        
+    
+        new_jinja_loader = ChoiceLoader([
+            loader,
+            PrefixLoader({
+                "autoprover": base_loader
+            })
+        ])
+        new_loader = make_loader(jinja_loader=new_jinja_loader)
+        return new_loader
+
 
     async def property_inference_input_hook(
         self,
