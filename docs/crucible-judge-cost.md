@@ -68,9 +68,11 @@ Give the judge what authoring already knows, so it stops re-deriving:
   facts, so the judge reasons from them instead of re-exploring.
 - **Restrict the judge's tools + recursion.** Drop or tightly cap `code_explorer` for the judge
   turn (keep a bounded `get_file`/`grep` for spot-checks) and lower its `recursion_limit`. This is
-  where the 53 explorations collapse.
+  where the 53 explorations collapse. **[Done]** the review sub-agent now drops `code_explorer`
+  (`_JUDGE_EXCLUDE_TOOLS` in `composer/rustapp/adapter.py`); the recursion cap is still open.
 - **Give the judge the run's memory tool** (the CVL/Foundry lever) so facts verified for one
-  property carry to the next instead of being re-derived per component.
+  property carry to the next instead of being re-derived per component. **[Done]** in the in-loop
+  refactor (`docs/crucible-judge-in-loop.md`).
 
 ### Phase 2 — fix the cadence (match the author-invoked pattern)
 - **Don't judge unconditionally every attempt.** Today every attempt is author→judge→validate, so a

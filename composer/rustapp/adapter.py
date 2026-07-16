@@ -176,6 +176,7 @@ class _RequestReview(WithInjectedId, WithAsyncDependencies[Command, "_JudgeHook"
 async def run_llm_agent(
     env: Any, messages: Any, *, recursion_limit: int, backend_name: str = "rust",
     turn_label: str = "authoring", judge: "_JudgeHook | None" = None, memory_tool: Any = None,
+    exclude_tools: frozenset[str] = frozenset(),
 ) -> str:
     """Run one bounded, tool-enabled turn and return its final text. ``turn_label``
     names the turn's role ("authoring" / "judge") for the UI/log panel.
@@ -188,8 +189,9 @@ async def run_llm_agent(
     When ``judge`` is given, the turn becomes an in-loop-review author (docs/crucible-judge-in-loop.md):
     a ``request_review`` tool runs the judge in-session and ``result`` is gated on an accepted draft,
     so the author self-revises against feedback. ``memory_tool`` (when given) is added to the belt so
-    facts persist across turns/components."""
-    tools = list(getattr(env, "all_tools", None) or env.rag_tools)
+    facts persist across turns/components. ``exclude_tools`` drops named tools from the belt (used to
+    clamp the review sub-agent's exploration — docs/crucible-judge-cost.md §3)."""
+    tools = [t for t in (getattr(env, "all_tools", None) or env.rag_tools) if t.name not in exclude_tools]
     if memory_tool is not None:
         tools.append(memory_tool)
     system, instruction = _split_prompt(messages)
@@ -295,6 +297,13 @@ async def _author_turn(
     return _strip_fence(reply)
 
 
+# The review sub-agent gets the program API + fixture in its prompt and shares the run memory, so
+# it doesn't need the expensive `code_explorer` exploration sub-agent — direct file reads
+# (`get_file`/`grep`) cover its spot-checks. Dropping it is the bulk of the review cost
+# (docs/crucible-judge-cost.md §3): each `code_explorer` call is itself a multi-call sub-agent.
+_JUDGE_EXCLUDE_TOOLS = frozenset({"code_explorer"})
+
+
 async def _judge_turn(
     module: Any, input_json: str, spec: str, *, env: Any, recursion_limit: int, backend_name: str,
     emit: Callable[[str, dict], None] | None = None, memory_tool: Any = None,
@@ -308,6 +317,7 @@ async def _judge_turn(
     review = await run_llm_agent(
         env, json.loads(jp), recursion_limit=recursion_limit,
         backend_name=backend_name, turn_label="judge", memory_tool=memory_tool,
+        exclude_tools=_JUDGE_EXCLUDE_TOOLS,
     )
     ok, feedback = _parse_judge(review)
     if emit is not None:
