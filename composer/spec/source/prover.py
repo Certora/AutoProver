@@ -254,11 +254,6 @@ def get_prover_tool(
 
                 summary = get_run_summary()
 
-                # Label the prover run with the --msg:
-                # the component (spec stem, else the main contract) and a 1-based
-                # iteration number. The spec stem carries a constant "autospec_"
-                # prefix that adds no signal, so drop it. prover_total_calls counts
-                # calls already completed.
                 component = (spec_stem or main_contract).removeprefix("autospec_")
                 iteration = summary.prover_total_calls + 1
                 config["msg"] = f"{component} #{iteration}"
