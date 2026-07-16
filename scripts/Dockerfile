@@ -161,6 +161,11 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
 COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
 
+# Pre-built crucible_kb RAG manifest, committed in the crucible app dir — the entrypoint's
+# setup-db imports it (composer.scripts.rag_import) to populate the crucible_rag schema. No
+# crucible checkout is needed at build or run time; the corpus travels as this committed JSON.
+COPY rust/crucible-app/crucible_kb.rag.json $AUTOPROVE_HOME/crucible_kb.rag.json
+
 # The command-sandbox launcher, on PATH (/usr/local/bin is in PATH above). Crucible's
 # default provider is `launcher`, so this must be present or Crucible fail-closes.
 COPY --from=sandbox-builder /build/rust/target/release/run-confined /usr/local/bin/run-confined

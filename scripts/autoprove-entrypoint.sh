@@ -29,6 +29,7 @@ export USER=autoprove LOGNAME=autoprove
 PGHOST="${CERTORA_AI_COMPOSER_PGHOST:-postgres}"
 PGPORT="${CERTORA_AI_COMPOSER_PGPORT:-5432}"
 RAG_CONN="postgresql://rag_user:rag_password@${PGHOST}:${PGPORT}/rag_db"
+CRUCIBLE_RAG_CONN="postgresql://crucible_rag_user:rag_password@${PGHOST}:${PGPORT}/rag_db"
 
 if [[ "${1:-}" == "setup-db" ]]; then
   shift
@@ -53,6 +54,10 @@ if [[ "${1:-}" == "setup-db" ]]; then
   python -m composer.scripts.ragbuild \
       --output "$RAG_CONN" \
       "$AUTOPROVE_HOME/prover-docs/cvl.html"
+  echo "[autoprove] populating crucible_kb RAG at ${CRUCIBLE_RAG_CONN} ..."
+  python -m composer.scripts.rag_import \
+      --output "$CRUCIBLE_RAG_CONN" \
+      "$AUTOPROVE_HOME/crucible_kb.rag.json"
   echo "[autoprove] populating LangGraph knowledge base ..."
   python -m composer.scripts.kb_populate
   echo "[autoprove] setup-db done."

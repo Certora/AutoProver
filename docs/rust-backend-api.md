@@ -21,8 +21,8 @@ Everything else — running the LLM agent, retrying, streaming events, caching, 
 RAG search tools — is generic orchestration the pipeline already does for the CVL/Foundry
 backends. So the backend stops being a *driver* (the `resume` state machine) and becomes a
 *service* the driver consults. (RAG is unchanged: the author's knowledge-base search tools are
-still built the way they are today — e.g. Crucible's external `crucible_kb` corpus, populated
-by `scripts/populate_crucible_rag.sh` — not supplied through this API.)
+still built the way they are today — e.g. Crucible's external `crucible_kb` corpus, imported
+from a committed manifest via `composer.scripts.rag_import` — not supplied through this API.)
 
 The two slow steps are different from the pure ones: `compile` and `validate` actually run
 untrusted native tools, so they **execute inside the sandbox**. The backend does that itself
@@ -181,9 +181,9 @@ async def formalize(mod, input, env, sandbox, *, workdir, max_attempts, emit) ->
 - The **author system prompt is already backend-definable** (`_llm_agent._split_prompt`), so
   `Prompt.system` drops in.
 - **RAG is unchanged**: the host builds the author's knowledge-base search tools as it does
-  today (Crucible's external `crucible_kb`, populated by `scripts/populate_crucible_rag.sh`)
-  and passes them in `env.rag_tools`. Moving the corpus into the wheel is a possible later
-  step, not part of this change.
+  today (Crucible's external `crucible_kb`, imported from the committed
+  `rust/crucible-app/crucible_kb.rag.json` via `composer.scripts.rag_import`) and passes them in
+  `env.rag_tools`. Moving the corpus into the wheel is a possible later step, not part of this change.
 - **Sandbox policy** is built once by Python (`SandboxConfig.build_policy(workdir)`, the
   existing recipe) and passed straight through as `Sandbox` — Python keeps ownership of the
   *intent*; the backend only assembles it into a `run-confined` argv.
@@ -271,7 +271,7 @@ self-contained.
 `RealEffects` `run_command` routing (the backend now spawns `run-confined` itself).
 **Keep**: `descriptor`/`validate_preconditions`/`finalize`, the sandbox *policy* layer
 (`SandboxPolicy`/`SandboxConfig.build_policy`), `run-confined` itself, the existing RAG
-mechanism (`crucible_kb` + `populate_crucible_rag.sh`, surfaced as `env.rag_tools`), `_llm_agent`
+mechanism (`crucible_kb`, imported via `composer.scripts.rag_import`, surfaced as `env.rag_tools`), `_llm_agent`
 (now called directly by the pipeline), and `run_prover`/`run_feedback` only for the run-service
 exception.
 **Add**: the `Backend` callouts above (pure `descriptor`/`validate_preconditions`/`units`/

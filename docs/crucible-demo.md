@@ -95,12 +95,14 @@ To demo **without** confinement (trusted-input dev), skip this and set
 ### 1g. (Optional) Populate the RAG knowledge base
 
 Improves the model's Crucible-specific grounding. The pipeline falls back to a static
-cheat-sheet if it's absent, so you can skip this for a first demo. It needs the
-`ragbuild` dependency group:
+cheat-sheet if it's absent, so you can skip this for a first demo. The corpus ships as a
+committed manifest (`rust/crucible-app/crucible_kb.rag.json`) — no crucible checkout needed —
+imported by the generic importer under the `ragbuild` dependency group:
 
 ```bash
 uv sync --extra cpu --extra ml --extra certora-cli --group ragbuild --group apps
-CRUCIBLE_REPO="$CRUCIBLE_REPO" ./scripts/populate_crucible_rag.sh
+uv run --group ragbuild python -m composer.scripts.rag_import \
+    rust/crucible-app/crucible_kb.rag.json
 ```
 
 ---

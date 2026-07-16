@@ -549,9 +549,9 @@ small:
    the always-needed basics, while the same tool surface serves the rest. CVLR simply skips injection
    and relies on the search tools. So Crucible's `crucible_kb` can even start nearly empty without
    blocking the framework work.
-4. **Ingestion** reuses the `populate_<domain>_rag.sh` pattern per backend — `populate_crucible_rag.sh`
-   over the crucible repo's `docs/` (+ examples, + Anchor/Solana account-model docs) now; a
-   CVL-manual-style builder for CVLR later.
+4. **Ingestion** — Crucible's corpus ships as a committed manifest
+   (`rust/crucible-app/crucible_kb.rag.json`, generated from the crucible repo's `docs/`) and is
+   imported by the generic `composer.scripts.rag_import`; a CVL-manual-style corpus for CVLR later.
 5. **Learned knowledge (orthogonal, shared).** The Harness Guide's blockers are often *program-specific*
    (which keypair is admin, string-vs-binary PDA seeds, init order) — discovered during authoring, in
    no manual. Persist them via the existing learned-KB / memory store (`kb_tools` `KBPut`,
@@ -636,9 +636,10 @@ Each phase has a concrete gate, in the style of [ecosystem-abstraction.md §10](
    ~21 min) — analyzed 3 instructions, extracted 28 properties, authored the shared fixture, and
    produced per-instruction fuzz verdicts (deposit/withdraw delivered with BAD — the fuzzer found
    counterexamples; initialize gave up cleanly after failing to compile, surfaced as a handled
-   failure), then a report. **Knowledge base — built.** `composer/scripts/crucible_ragbuild.py` (a
-   markdown ingester driving the shared `BlockBuilder`; both `add_chunks_batch` + `add_manual_section`)
-   + `scripts/populate_crucible_rag.sh` populate a `crucible_kb` `ComposerRAGDB` (a `crucible_rag_user`
+   failure), then a report. **Knowledge base — built.** The Crucible corpus ships as a committed
+   manifest (`rust/crucible-app/crucible_kb.rag.json`) imported by the shared
+   `composer/scripts/rag_import.py` (drives `BlockBuilder`; both `add_chunks_batch` +
+   `add_manual_section`) into a `crucible_kb` `ComposerRAGDB` (a `crucible_rag_user`
    schema in `rag_db`, added to `init-db.sql`); `composer/tools/crucible_rag.py` exposes keyword /
    vector / get-section tools, which `build_crucible_env` binds into `env.rag_tools` (gracefully
    degrading to the cheat-sheet if the embedder is absent). Populated end-to-end (126 embedded + 126
@@ -738,6 +739,6 @@ safety one.
 | Closest backend precedent (local-CLI, refutation) | [composer/foundry/pipeline.py](../composer/foundry/pipeline.py) · [composer/foundry/runner.py](../composer/foundry/runner.py) |
 | Knowledge/RAG precedent to mirror (§7.5) | [composer/tools/foundry_rag.py](../composer/tools/foundry_rag.py) · [scripts/populate_foundry_rag.sh](../scripts/populate_foundry_rag.sh) · [composer/kb/knowledge_base.py](../composer/kb/knowledge_base.py) |
 | The Crucible backend crate (new) | `rust/crucible-app/` |
-| Crucible knowledge base / builder (new) | `crucible_kb` RAG DB · `scripts/populate_crucible_rag.sh` (new) |
+| Crucible knowledge base (new) | `crucible_kb` RAG DB · committed manifest `rust/crucible-app/crucible_kb.rag.json` + `composer/scripts/rag_import.py` (new) |
 | Scenario + gate | [test_scenarios/solana_vault/](../test_scenarios/solana_vault/) · `tests/test_crucible_gate.py` (new) |
 | Crucible itself (docs) | `/home/eric/src/crucible/docs/` (harness-guide, writing-tests, cli-reference, remote-fuzzing) |

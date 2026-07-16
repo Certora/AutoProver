@@ -71,8 +71,9 @@ The security-sensitive confinement mechanism, isolated for focused review.
 The Solana verification application, wiring PRs 1–3 together.
 
 - **Code:** `composer/crucible/*`, `rust/crucible-app`, `test_scenarios/solana_vault`,
-  crucible RAG (`composer/scripts/crucible_ragbuild.py`, `composer/tools/crucible_rag.py`,
-  `scripts/populate_crucible_rag.sh`, `composer/rag/db.py`), `ReportBackend` "crucible"
+  crucible RAG (committed manifest `rust/crucible-app/crucible_kb.rag.json` + shared
+  `composer/scripts/rag_import.py` + `composer/rag/import_format.py`, `composer/tools/crucible_rag.py`,
+  `composer/rag/db.py`), `ReportBackend` "crucible"
   + render labels + `as_report_backend`, sandbox default → launcher for crucible
 - **Docs:** crucible proposal / application / toolchain-versioning
 - **Gate:** `test_crucible_gate`, `test_crucible_setup_gate`,
