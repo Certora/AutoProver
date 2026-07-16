@@ -68,6 +68,28 @@ def test_shape_mismatch_degrades_per_source() -> None:
         AstDump.from_dict(data, on_error="raise")
 
 
+def test_stream_units_equivalent_to_load() -> None:
+    path = FIXTURES / "solc_0_8_30.asts.json"
+    loaded = AstDump.load(path, on_error="raise", solc_version="0.8.30")
+    streamed = list(AstDump.stream_units(path, on_error="raise", solc_version="0.8.30"))
+    assert [u.original_file for u in streamed] == list(loaded.files)
+    for unit in streamed:
+        expected = loaded.files[unit.original_file]
+        assert unit.sources.keys() == expected.sources.keys()
+        for source_path, source in unit.sources.items():
+            other = expected.sources[source_path]
+            assert source.raw_kind == other.raw_kind
+            assert source.nodes.keys() == other.nodes.keys()
+            assert source.root == other.root
+
+
+def test_stream_units_unit_filter_skips_before_validation() -> None:
+    path = FIXTURES / "solc_0_8_30.asts.json"
+    assert list(AstDump.stream_units(path, unit_filter=lambda rel: False)) == []
+    kept = list(AstDump.stream_units(path, unit_filter=lambda rel: rel.endswith(".sol")))
+    assert kept
+
+
 def test_missing_source_unit_degrades() -> None:
     data = _dump_of({"7": {"id": 7, "src": "0:1:0", "nodeType": "PragmaDirective", "literals": []}})
     dump = AstDump.from_dict(data, on_error="raw")
