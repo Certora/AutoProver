@@ -40,6 +40,7 @@ from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
 from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
+from composer.spec.source.cex_capture import CexAnalysisStore
 
 
 _logger = logging.getLogger("composer.prover")
@@ -99,12 +100,14 @@ class _SpecCallbacks(ProverEventCallbacks):
         tool_call_id: str,
         summary: RunSummary,
         config: dict,
+        analysis_store: CexAnalysisStore | None = None,
     ) -> None:
         super().__init__(writer, tool_call_id)
         self._writer = writer
         self._tool_call_id = tool_call_id
         self._summary = summary
         self._config = config
+        self._analysis_store = analysis_store
         self._started_mono: float | None = None
 
     @override
@@ -157,6 +160,19 @@ class _SpecCallbacks(ProverEventCallbacks):
         await super().on_prover_result(
             results
         )
+
+    @override
+    async def on_analysis_complete(self, rule: RuleResult, explanation: str) -> None:
+        # Capture the per-rule counterexample analysis (last-write-wins across iterations) so the
+        # report phase can reshape the final iteration's analysis into a finding without re-running
+        # the analysis. Key by the bare rule name (rule.path.rule).
+        # Never let a capture error disturb the run.
+        if self._analysis_store is not None:
+            try:
+                self._analysis_store.record(rule.path.rule, explanation, rule.cex_dump)
+            except Exception:
+                _logger.exception("failed to capture cex analysis for %s", rule.name)
+        await super().on_analysis_complete(rule, explanation)
 
 
 class VerifySpecSchema(BaseModel):
@@ -216,6 +232,7 @@ def get_prover_tool(
     main_contract: str,
     project_root: str,
     prover_opts: ProverOptions,
+    analysis_store: CexAnalysisStore | None = None,
 ) -> BaseTool:
     sem = _prover_sem(prover_opts.cloud)
     stamper = make_validation_stamper(VALIDATION_KEY)
@@ -268,7 +285,8 @@ def get_prover_tool(
                             [config_path],
                             tool_call_id,
                             prover_opts,
-                            _SpecCallbacks(get_stream_writer(), tool_call_id, summary, config),
+                            _SpecCallbacks(get_stream_writer(), tool_call_id, summary, config,
+                                           analysis_store=analysis_store),
                             DefaultCexHandler(llm, state, summarization_threshold=10)
                         )
 

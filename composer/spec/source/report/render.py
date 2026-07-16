@@ -26,8 +26,8 @@ from typing import TypedDict
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, FormalizedProperty, GaveUpComponent, GroupStatus, Outcome,
-    PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim,
+    AutoProverReport, CoverageReport, Finding, FormalizedProperty, GaveUpComponent, GroupStatus,
+    Outcome, PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim,
 )
 
 
@@ -44,6 +44,14 @@ _GROUP_KIND: dict[GroupStatus, str] = {
     GroupStatus.BAD: "bad",
     GroupStatus.PARTIAL: "warn",
     GroupStatus.UNKNOWN: "muted",
+}
+# Finding severity (default Sherlock rubric) -> CSS badge kind. Unknown/custom severities render muted.
+_SEVERITY_KIND: dict[str, str] = {
+    "critical": "bad",
+    "high": "bad",
+    "medium": "warn",
+    "low": "info",
+    "informational": "muted",
 }
 
 # Per-backend human labels: the data carries the neutral `Outcome`; these turn it into the words an
@@ -134,6 +142,20 @@ class GroupView(TypedDict):
     rows: list[RowView]
 
 
+class FindingView(TypedDict):
+    title: str
+    severity: str
+    severity_kind: str
+    severity_reasoning: str | None
+    summary: str
+    impact: str
+    description: str
+    attack_path: str | None
+    link: LinkView
+    rule_name: str | None
+    spec_file: str | None
+
+
 class ReportTemplateParams(TypedDict):
     """The full, typed context of ``autoprove_report.html.j2``."""
     report: AutoProverReport
@@ -143,6 +165,7 @@ class ReportTemplateParams(TypedDict):
     prover_runs: list[RunView]
     rule_counts: list[ChipView]
     group_counts: list[ChipView]
+    findings: list[FindingView]
     groups: list[GroupView]
     skipped: list[SkippedClaim]
     gave_up: list[GaveUpComponent]
@@ -227,6 +250,25 @@ def _group_view(
     }
 
 
+def _finding_view(f: Finding) -> FindingView:
+    """Project a `Finding` into the template shape: the Sherlock fields the page shows, plus a
+    severity->CSS kind and the prover-run link pulled from provenance."""
+    prov = f.provenance
+    return {
+        "title": f.title,
+        "severity": f.severity,
+        "severity_kind": _SEVERITY_KIND.get(f.severity.lower(), "muted"),
+        "severity_reasoning": prov.severity_reasoning if prov else None,
+        "summary": f.content.summary,
+        "impact": f.content.impact,
+        "description": f.content.description,
+        "attack_path": f.content.attack_path,
+        "link": _link_view(prov.prover_link if prov else None),
+        "rule_name": prov.rule_name if prov else None,
+        "spec_file": prov.spec_file if prov else None,
+    }
+
+
 def _build_context(report: AutoProverReport) -> ReportTemplateParams:
     props_by_key = {p.key: p for p in report.properties}
     rules_by_ref = {r.ref: r for r in report.rules}
@@ -244,6 +286,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         ],
         "rule_counts": _outcome_counts([r.outcome for r in report.rules], unit_labels),
         "group_counts": _group_counts([g.status for g in report.groups], group_labels),
+        "findings": [_finding_view(f) for f in report.findings],
         "groups": [
             _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels)
             for g in report.groups

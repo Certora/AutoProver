@@ -101,6 +101,25 @@ class VerdictFetcher[R: ReportableResult](Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class RuleEvidence:
+    """Backend-supplied raw material for synthesizing a finding from a violated rule.
+
+    ``analysis`` is the backend's pre-computed root-cause / fix explanation for the violation
+    (prover: the ``analyze_cex_raw`` output captured during the run); ``counterexample`` is a concrete
+    failing trace excerpt (prover: the rule's ``cex_dump``). Both optional — a finding degrades to
+    property/group text when absent."""
+    analysis: str | None = None
+    counterexample: str | None = None
+
+
+class EvidenceFetcher(Protocol):
+    """Backend hook: given a violated rule's run link + name, return its `RuleEvidence` (or ``None``
+    when the backend has none). Prover reads the run-scoped CEX-analysis capture; foundry has none."""
+    async def __call__(self, link: str | None, rule_name: str, /) -> "RuleEvidence | None":
+        ...
+
+
 async def collect[R: ReportableResult](
     inputs: list[ReportComponentInput[R]],
     *,

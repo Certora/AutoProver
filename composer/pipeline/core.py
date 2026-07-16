@@ -36,7 +36,7 @@ from composer.spec.prop_inference import run_property_inference
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.source.report.collect import ReportComponentInput, RuleEvidence, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
@@ -55,7 +55,7 @@ class Formalizer[FormT: BackendResult](ABC):
     state — never set post-hoc. `FormT: ReportableResult` is what makes the report a core step."""
     formalized_type: type[FormT]
     backend_tag: ReportBackend
-    
+
     @abstractmethod
     async def formalize(
         self,
@@ -76,6 +76,11 @@ class Formalizer[FormT: BackendResult](ABC):
         """Per-unit outcomes. Prover: query ProverOutputUtility via inp.formalized.run_link
         off-thread. Foundry: read straight off inp.formalized.result."""
         ...
+
+    async def fetch_evidence(self, link: str | None, rule_name: str) -> RuleEvidence | None:
+        """Per-violated-rule evidence for findings synthesis — the prover returns its captured
+        counterexample analysis for `rule_name`. Default: none (backend produces no findings)."""
+        return None
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
@@ -209,7 +214,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
                 await child.cache_put(result)
         else:
             result = cached_result
-        
+
         outcome: Delivered[FormT] | GaveUp = (
             result if isinstance(result, GaveUp)
             else Delivered(result, backend.artifact_store.write_artifact(result_key, result))
@@ -239,6 +244,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
             job=lambda: build_report(
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
+                findings_llm=run.env.llm_heavy(),
+                fetch_evidence=formalizer.fetch_evidence,
             ),
             task_info=TaskInfo(REPORT_TASK_ID, label="Report Extraction", phase=backend.core_phases["report"])
         )

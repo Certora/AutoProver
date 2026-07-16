@@ -134,6 +134,58 @@ section.prop .desc {
 .badge-warn  { color: var(--warn-fg);  background: var(--warn-bg); }
 .badge-info  { color: var(--info-fg);  background: var(--info-bg); }
 .badge-muted { color: var(--muted-fg); background: var(--muted-bg); }
+.findings-head { margin: 20px 0 12px; }
+.findings-head h2 {
+    margin: 0 0 4px;
+    font-size: 18px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+section.finding {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--bad-fg);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 14px;
+}
+section.finding h3 {
+    margin: 0 0 8px;
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.finding-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: baseline;
+    font-size: 12px;
+    color: var(--muted-fg);
+    margin-bottom: 10px;
+}
+.finding-meta code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 11.5px;
+    word-break: break-all;
+}
+.finding-meta a { color: var(--link); text-decoration: none; }
+.finding-meta a:hover { text-decoration: underline; }
+.finding-summary { margin: 0 0 12px; }
+dl.finding-body {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 16px;
+    margin: 0;
+    font-size: 13px;
+}
+dl.finding-body dt { color: var(--muted-fg); font-weight: 600; }
+dl.finding-body dd { margin: 0; white-space: pre-wrap; }
 table.rules {
     width: 100%;
     border-collapse: collapse;
@@ -245,6 +297,29 @@ footer.report-foot {
 <div class="warnings"><strong>Coverage warnings:</strong>
   <ul>{% for w in coverage.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
 </div>
+{%- endif %}
+
+{%- if findings %}
+<section class="findings-head">
+  <h2>Findings <span class="badge badge-bad">{{ findings | length }}</span></h2>
+  <div class="subtitle muted">Violated {{ terms.unit_plural }} surfaced as audit issues — fields follow the standard issue-submission format.</div>
+</section>
+{%- for f in findings %}
+<section class="finding">
+  <h3><span class="badge badge-{{ f.severity_kind }}">{{ f.severity }}</span> {{ f.title }}</h3>
+  <div class="finding-meta">
+    {%- if f.rule_name %}<span>rule <code>{{ f.rule_name }}</code>{% if f.spec_file %} in <code>{{ f.spec_file }}</code>{% endif %}</span>{% endif %}
+    {%- if f.link.href %}<a href="{{ f.link.href }}" target="_blank" rel="noopener">{{ f.link.label }}</a>{% endif %}
+  </div>
+  <p class="finding-summary">{{ f.summary }}</p>
+  <dl class="finding-body">
+    {%- if f.severity_reasoning %}<dt>Severity rationale</dt><dd>{{ f.severity_reasoning }}</dd>{% endif %}
+    <dt>Impact</dt><dd>{{ f.impact }}</dd>
+    <dt>Description</dt><dd>{{ f.description }}</dd>
+    {%- if f.attack_path %}<dt>Attack path</dt><dd>{{ f.attack_path }}</dd>{% endif %}
+  </dl>
+</section>
+{%- endfor %}
 {%- endif %}
 
 {%- for g in groups %}

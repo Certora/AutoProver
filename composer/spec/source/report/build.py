@@ -13,14 +13,15 @@ from datetime import datetime, timezone
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from composer.spec.source.report.collect import (
-    ReportableResult, ReportComponentInput, VerdictFetcher, collect,
+    EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
 from composer.spec.source.report.coverage import ValidationError, validate
+from composer.spec.source.report.findings import build_findings
 from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm,
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, Outcome, PropertyKey, ReportBackend, RuleRef,
+    AutoProverReport, Finding, Outcome, PropertyKey, ReportBackend, RuleRef,
 )
 
 _log = logging.getLogger(__name__)
@@ -42,8 +43,15 @@ async def build_report[R: ReportableResult](
     components: list[ReportComponentInput[R]],
     llm: BaseChatModel,
     fetch_verdicts: VerdictFetcher[R],
+    findings_llm: BaseChatModel | None = None,
+    fetch_evidence: EvidenceFetcher | None = None,
 ) -> AutoProverReport:
-    """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job."""
+    """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
+
+    When ``findings_llm`` is supplied, violated rules are additionally synthesized into
+    Sherlock-``IssueIn``-shaped `Finding`s (best-effort; a synthesis failure yields no findings
+    rather than failing the report). ``fetch_evidence`` supplies each violation's captured
+    counterexample analysis; it is optional."""
     properties, rules, skipped, gave_up, dropped = await collect(
         components, fetch_verdicts=fetch_verdicts
     )
@@ -84,6 +92,22 @@ async def build_report[R: ReportableResult](
         )
         coverage.warnings = ["FALLBACK GROUPING APPLIED"] + coverage.warnings
 
+    # Violated rules -> findings. Its own guard: findings synthesis must never fail the report
+    # (the whole phase is also best-effort in the caller, but this keeps a working report even when
+    # only findings break).
+    findings: list[Finding] = []
+    if findings_llm is not None:
+        try:
+            findings = await build_findings(
+                contract_name=contract_name, backend=backend, rules=rules,
+                properties=properties, groups=groups, fetch_evidence=fetch_evidence,
+                llm=findings_llm,
+            )
+        except Exception as e:  # noqa: BLE001
+            if RERAISE_REPORT_FAILURES:
+                raise
+            _log.warning("report: findings synthesis failed (%s); continuing without findings", e)
+
     report = AutoProverReport(
         backend=backend,
         contract_name=contract_name,
@@ -96,5 +120,6 @@ async def build_report[R: ReportableResult](
         skipped=skipped,
         gave_up_components=gave_up,
         coverage=coverage,
+        findings=findings,
     )
     return report

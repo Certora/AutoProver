@@ -20,6 +20,7 @@ from composer.spec.context import (
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
 from composer.spec.source.artifacts import ProverArtifactStore
@@ -144,7 +145,8 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             )
             backend = ProverBackend(
                 ProverArtifactStore(staged.source.project_root, staged.source.contract_name),
-                make_prover_options(cloud=args.cloud)
+                make_prover_options(cloud=args.cloud),
+                CexAnalysisStore(),
             )
             return await cont(source_env, backend)
     yield callback

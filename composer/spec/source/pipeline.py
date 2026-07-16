@@ -46,8 +46,9 @@ from composer.spec.source.prover import get_prover_tool
 from composer.spec.source.author import batch_cvl_generation
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
-from composer.spec.source.report.collect import ReportComponentInput, Verdict, VerdictFetcher
+from composer.spec.source.report.collect import ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher
 from composer.spec.source.report.schema import RuleName
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.task_ids import (
     HARNESS_TASK_ID, AUTOSETUP_TASK_ID, SUMMARIES_TASK_ID,
     INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
@@ -108,6 +109,7 @@ class ProverRunner(Formalizer[GeneratedCVL]):
     _resources: list[CVLResource]
     _invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None
     _fetch: VerdictFetcher[GeneratedCVL]
+    _analysis_store: CexAnalysisStore
 
     @override
     async def formalize(
@@ -149,6 +151,16 @@ class ProverRunner(Formalizer[GeneratedCVL]):
         return await self._fetch(inp)
 
     @override
+    async def fetch_evidence(self, link: str | None, rule_name: str) -> RuleEvidence | None:
+        # The run captured each violated rule's counterexample analysis as it happened; hand the
+        # final-iteration analysis to the report's findings synthesizer. None -> the finding degrades
+        # to property/group text.
+        rec = self._analysis_store.get(rule_name)
+        if rec is None:
+            return None
+        return RuleEvidence(analysis=rec.analysis, counterexample=rec.counterexample)
+
+    @override
     async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL]], run: PipelineRun) -> None:
         # components_to_prover_runs.json: {run_key (slug): prover /output/ link}.
         runs: dict[str, str] = {
@@ -173,6 +185,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
     _prover_tool: BaseTool
     _prover_opts: ProverOptions
     _analyzed: SourceApplication
+    _analysis_store: CexAnalysisStore
 
     @override
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL]:
@@ -233,7 +246,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
         return ProverRunner(
             GeneratedCVL, "prover",
             self._store, self._prover_tool, setup_config.prover_config, resources, invariant,
-            make_prover_fetcher(),
+            make_prover_fetcher(), self._analysis_store,
         )
 
     async def _autosetup(self, run: PipelineRun) -> tuple[SetupSuccess, list[CVLResource]]:
@@ -284,6 +297,7 @@ class ProverBackend:
 
     artifact_store: ProverArtifactStore
     _prover_opts: ProverOptions
+    analysis_store: CexAnalysisStore
 
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
@@ -295,12 +309,12 @@ class ProverBackend:
         harnessed = _lift_harnessed(analyzed, sys_desc)
         prover_tool = get_prover_tool(
             run.env.llm_heavy(), run.source.contract_name, run.source.project_root,
-            prover_opts=self._prover_opts,
+            prover_opts=self._prover_opts, analysis_store=self.analysis_store,
         )
         return ProverPrepared(
             main_instance(harnessed, run.source),
             self.artifact_store, sys_desc, harnessed, prover_tool,
-            self._prover_opts, analyzed,
+            self._prover_opts, analyzed, self.analysis_store,
         )
 
     def to_artifact_id(self, c: ContractComponentInstance) -> ComponentSpec:
