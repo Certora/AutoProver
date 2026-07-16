@@ -1,0 +1,27 @@
+
+Write ONE Crucible `#[invariant_test]` function holding ALL the program's invariants (no
+fixture — it already exists as `Fixture`):
+
+- `#[invariant_test] fn c_invariants(fixture: &mut Fixture) { ... }` runs AFTER EACH fuzzed
+  action — put EVERY property's checks in this one fn (conservation, solvency, bounds, access
+  control, …). One fn = one build = one fuzz run covering all invariants.
+- Assert against ON-CHAIN state, not local mirrors:
+    let acct = fixture.ctx.read_anchor_account::<SomeState>(&fixture.some_pda).unwrap();
+    fuzz_assert_le!(acct.balance, cap, "message");   // fuzz_assert_{eq,ne,lt,le,gt,ge}
+- Read RAW lamports / data / owner (bypassing Anchor deserialization) via
+  `read_account` / `get_account`, which return `Result<Account>` — unwrap/`?` FIRST,
+  THEN the field (there is NO `get_account_lamports`, and `Result` has no `.lamports`):
+    let lamports = fixture.ctx.read_account(&fixture.some_pda).unwrap().lamports;
+  Existence check: `fixture.ctx.account_exists(&fixture.some_pda)` (returns bool).
+- TRANSACTION FEE — do NOT assert an EXACT lamport delta on a signer. The fee payer (the
+  FIRST signer of the `action_*`'s `.send()`, e.g. the `depositor`/`authority`) is debited the
+  tx fee (~5000 lamports/signature) ON TOP OF whatever lamports the instruction moves, so
+  `depositor_before - amount == depositor_after` is WRONG (off by the fee). Assert exact deltas
+  on NON-signer accounts (e.g. the vault PDA, which only receives the transfer); for a signer,
+  subtract the fee or assert a bound (`<=`) instead of `==`.
+- Drive state via the fixture's existing `action_*` methods; do not re-`send()`
+  instructions yourself unless necessary.
+- PREFIX each assertion's message with its property title in brackets (`"[<title>] ..."`) so a
+  counterexample's message names which property it refutes.
+- Return ONLY the one annotated `fn c_invariants`.
+

@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 autoprover-sdk = { path = "../autoprover-sdk" }
+askama = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # `extension-module` (don't link libpython) + `abi3-py312` (one wheel for cp312+).

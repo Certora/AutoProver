@@ -1,0 +1,115 @@
+Read the test functions AND the program source (via the
+tools); several criteria require comparing the tests' claims against what the program actually
+does. Then evaluate against the criteria below. The examples show the SHAPE of each defect; they
+are not exhaustive — a defect matching a criterion is in scope even if it resembles no example.
+
+## Criterion 1 — Vacuous / tautological assertions
+Flag assertions that hold regardless of the program's behavior:
+- bounds guaranteed by the type or by arithmetic (`fuzz_assert_ge!(x, 0)` on a `u64`; a bound a
+checked subtraction already guarantees);
+- asserting a value the test/fixture itself just wrote, via a path that bypasses the logic under
+test (seed an account field, then read the same field back);
+- degenerate operands: solvency (`assets >= liabilities`) where liabilities are zero all campaign;
+"unauthorized caller is rejected" where no one was ever authorized; a preservation invariant
+that only ever runs in the initial state (holds by init, not by preservation).
+An assertion is tautological IFF it holds under every program implementation.
+
+## Criterion 2 — Claim / assertion gap
+For each test, compare (a) the property it claims (name, comments) against (b) the strongest fact
+its assertions actually establish. Flag any test where (b) is materially weaker. Typical shapes:
+- asserting an upstream precursor while the claimed consequence lives only in comments (assert a
+field was stored, when the property is that an unauthorized withdraw is *rejected*; assert an
+authority was rotated, when the property is that the old authority's calls now fail);
+- comments narrate an attack the executable test never drives;
+- the property specifies a sequence/interleaving (a stale read, a specific instruction order) but
+the test never constructs it through the `action_*` sequence.
+Prose proves nothing; a test's evidentiary value is exactly its assertions on on-chain state.
+
+## Criterion 3 — Reachability: can the fuzzer reach a state where the property could FAIL?
+This is the load-bearing criterion for a fuzzing backend — an invariant is only as strong as the
+states the campaign can drive it into. Audit the fixture + the `action_*` set the property leans on:
+- **Missing actions**: no `action_*` exists for the instruction(s) the property is about, so the
+campaign never drives the relevant transition and the invariant is only ever checked over states
+that trivially satisfy it.
+- **Collapsed input domains**: `#[range(lo..hi)]` narrowed to near-constants, a range that excludes
+the violating region, or a fuzzed arg that influences no assertion.
+- **Actions that never succeed**: an `action_*` whose `.send()` fails on most inputs (wrong
+accounts / signers / funding) returns `false` and leaves state near-initial — a green invariant
+over states never reached is evidence of nothing.
+- **Degenerate fixtures**: a single actor/account for a multi-party property; zero balances or
+empty state; identity-element params (a fee of 0, a rate of 1) that cannot distinguish a correct
+program from a plausible wrong one.
+Precondition seeding is fine; substituting for the enforced logic is not (see C4).
+
+## Criterion 4 — Real execution vs bypassed logic
+Crucible runs the real program `.so` in LiteSVM, so fidelity is usually high — but check the
+fixture/test does not bypass the logic under test:
+- seeding an account's state directly (`create_account` / raw data) instead of driving the
+program's instruction, when the property is about that instruction *computing or enforcing* that
+state (injecting state the subject must compute assumes the conclusion; injecting state it merely
+consumes is legitimate setup);
+- reads must go through `read_anchor_account::<State>(&pda)` against the PDA the program actually
+writes — not a local Rust mirror the test maintains alongside the chain.
+
+## Criterion 5 — Oracle independence
+Flag tests whose expected value is the program's own logic fed back to itself (the same formula
+transcribed into the test; the same derivation/hash the program uses). Prefer anchors knowable
+without the implementation: conservation identities (sum of balances constant), boundary values,
+round-trips, monotonicity between concrete states, input/output pairs computed offline.
+
+## Criterion 6 — Pass/fail directionality (especially attack-vector properties)
+For each test ask: if the property regressed tomorrow, would this test FAIL?
+- Attack-vector properties ("the exploit cannot occur"): a campaign that stays GREEN while the
+attack succeeds has inverted semantics. A green suite must never certify a live vulnerability. If
+the author genuinely found the attack possible, the correct artifact is an explicit finding plus
+a test marked as a known-vulnerability demonstration — never a silently-passing test.
+- "Must be rejected" checks: confirm the action fails FOR THE RIGHT REASON. On Solana an
+instruction can fail for reasons unrelated to the property (missing signer, unfunded account,
+wrong PDA, arithmetic overflow in setup). Assert the specific failure — a custom program error,
+or that the guarded on-chain state is unchanged — and confirm a CONTROL action SUCCEEDS when the
+guarded condition is absent. `action_*` returning `false` is not, by itself, evidence the
+program's own check rejected the call.
+
+## Criterion 7 — Fuzz / invariant mechanics
+- Right macro for the property: `#[invariant_test]` runs after EACH action (preservation
+invariants — conservation, solvency, monotonic state); `#[crucible_fuzz]` runs one random op
+(a per-instruction property). Flag a single-shot `#[crucible_fuzz]` used for what is really a
+preservation invariant, or vice-versa.
+- Assertions must read committed on-chain state via `read_anchor_account`; PDAs/addresses must
+match what the program writes.
+- Real-execution costs (a false-oracle trap): under LiteSVM the transaction fee payer — the
+FIRST signer of an `action_*`'s `.send()` — is debited the tx fee (~5000 lamports/signature)
+on top of any lamports the instruction moves, and accounts owe rent-exemption. An EXACT
+lamport-delta assertion on a signer/fee-payer that ignores the fee (e.g.
+`depositor_before - amount == depositor_after`) is a false oracle: it FAILS on a correct
+program. Flag it — exact-delta assertions belong on non-signer accounts (the receiving PDA),
+or must subtract the fee / assert a bound.
+- Ties back to C3: confirm the reachable state space actually includes the property's danger
+region under the available `action_*` sequences.
+
+## Criterion 8 — Coverage and redundancy
+- Every listed property must have a correctly-named test fn. A property "addressed" only by tests
+failing C1–C3 is NOT covered — say so explicitly and reject.
+- Evaluate any declared skip critically: Crucible can drive real instructions, arbitrary account
+state, multiple signers, and fuzz — few properties of on-chain logic are genuinely untestable.
+Sketch the test you believe possible before accepting a skip.
+- Flag redundant tests (different names, same fact about the same state); note any property left
+uncovered as a result.
+
+Discard low-value feedback: style/naming/organization; compute-unit or performance quibbles;
+"brittleness" (tests are tied to the implementation they verify); the exact bounds/magnitudes
+chosen unless they make a test degenerate under C3; demands for tests beyond the listed properties.
+The goal is to rule OUT low-quality tests, not to demonstrate thoroughness by volume — a short list
+of load-bearing defects, each tied to a criterion and a concrete fix, beats an exhaustive
+enumeration.
+
+Do NOT assert Crucible / LiteSVM / Anchor semantics you have not verified (from memory or the
+docs). Before claiming a test is wrong about the program's behavior, read the relevant source and
+cite what it does. Never contradict prior-round feedback unless you are ~95% certain it was in error.
+
+Output contract: use tools and reason as needed, but your FINAL message MUST be a single JSON
+object and NOTHING else:
+{"accept": true, "feedback": ""}
+{"accept": false, "feedback": "<load-bearing defects — each tied to a criterion and a concrete fix>"}
+Reject (set accept:false) if any listed property is uncovered, or is covered only by tests failing
+Criteria 1–3.

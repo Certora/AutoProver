@@ -22,3 +22,7 @@ license = "MIT"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pyo3 = "0.24"
+# Compile-time Jinja-style templates (the `.j2` convention used by composer/templates/*.j2,
+# here for the Rust prompt/crate-file templates). Templates are checked at build time and
+# embedded in the wheel, so no runtime template loading or packaging.
+askama = "0.13"

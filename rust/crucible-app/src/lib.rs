@@ -19,6 +19,8 @@ use autoprover_sdk::{
     WorkspacePrep,
 };
 
+use askama::Template;
+
 // The crucible/solana/anchor stack a harness pins (docs/crucible-application.md §6.1). Hardcoded
 // for now to the combination the installed toolchain matches (was Python's `CrucibleHarness`).
 const ANCHOR_VERSION: &str = "1.0.1";
@@ -30,6 +32,141 @@ const LIBAFL_VERSION: &str = "0.15.1";
 /// is also the feature/target selector). See docs/crucible-unit-granularity.md §3.
 const SINGLE_HARNESS_FN: &str = "c_invariants";
 
+// --- askama templates ---------------------------------------------------------------------
+// Each struct binds a `.j2` file under `templates/` (the same convention as composer/templates/
+// *.j2, here for the Rust side). They replace the former inline string consts and `format!`
+// literals: `render()` fills the holes. `escape = "none"` because these render prompts and
+// Rust/TOML source — NOT HTML — so no entity escaping. Whitespace is preserved (see askama.toml).
+
+/// Backend-guidance prose injected into the property-extraction prompt. Crucible is a fuzzer,
+/// so — like Foundry — refutations are valuable but universals can't be *proven*.
+#[derive(Template)]
+#[template(path = "backend_guidance.j2", escape = "none")]
+struct BackendGuidance;
+
+/// Concise Crucible harness API reference for the fixture-authoring prompt (§7.5 cheat-sheet).
+#[derive(Template)]
+#[template(path = "harness_cheat_sheet.j2", escape = "none")]
+struct HarnessCheatSheet<'a> {
+    program: &'a str,
+}
+
+/// A complete, compiling worked example (a different `escrow` program) to pattern-match.
+#[derive(Template)]
+#[template(path = "example_fixture.j2", escape = "none")]
+struct ExampleFixture;
+
+/// Cheat-sheet for authoring the single `#[invariant_test]` fn holding all invariants.
+#[derive(Template)]
+#[template(path = "test_cheat_sheet.j2", escape = "none")]
+struct TestCheatSheet;
+
+/// Reviewer persona for the `judge_prompt` turn (peer of Foundry's judge system prompt).
+#[derive(Template)]
+#[template(path = "judge_system.j2", escape = "none")]
+struct JudgeSystem;
+
+/// A `#[invariant_test]` probe appended by the host to validate the fixture via `--dry-run`.
+#[derive(Template)]
+#[template(path = "probe_fn.j2", escape = "none")]
+struct ProbeFn;
+
+/// The pinned `[dependencies]` block for the harness crate.
+#[derive(Template)]
+#[template(path = "cargo_deps.j2", escape = "none")]
+struct CargoDeps<'a> {
+    cf: &'a str,
+    ctc: &'a str,
+    program: &'a str,
+    anchor_version: &'a str,
+    libafl_version: &'a str,
+    solana_version: &'a str,
+}
+
+/// The harness `Cargo.toml` skeleton (`deps` + `feats` are pre-rendered strings).
+#[derive(Template)]
+#[template(path = "cargo_toml.j2", escape = "none")]
+struct CargoToml<'a> {
+    program: &'a str,
+    deps: &'a str,
+    feats: &'a str,
+}
+
+/// Re-author suffix after a failed build / dry-run (leads with extracted compiler errors).
+#[derive(Template)]
+#[template(path = "revise_compile.j2", escape = "none")]
+struct ReviseCompile<'a> {
+    errors: &'a str,
+    prev_src: &'a str,
+    tail: &'a str,
+}
+
+/// Re-author suffix after a security reviewer rejected a compiling suite.
+#[derive(Template)]
+#[template(path = "revise_judge.j2", escape = "none")]
+struct ReviseJudge<'a> {
+    feedback: &'a str,
+    prev_src: &'a str,
+}
+
+/// The fixture-authoring prompt (the `setup` phase).
+#[derive(Template)]
+#[template(path = "author_setup.j2", escape = "none")]
+struct AuthorSetup<'a> {
+    program: &'a str,
+    cheat: &'a str,
+    example: &'a str,
+    facts: &'a str,
+    model: &'a str,
+    revise: &'a str,
+}
+
+/// The invariant-suite authoring prompt (per component).
+#[derive(Template)]
+#[template(path = "author_component.j2", escape = "none")]
+struct AuthorComponent<'a> {
+    harness_fn: &'a str,
+    program: &'a str,
+    n: usize,
+    first: &'a str,
+    listed: &'a str,
+    component: &'a str,
+    cheat: &'a str,
+    fixture: &'a str,
+    revise: &'a str,
+}
+
+/// The judge instruction (embeds `judge_guidance.j2` via `{% include %}`).
+#[derive(Template)]
+#[template(path = "judge_instruction.j2", escape = "none")]
+struct JudgeInstruction<'a> {
+    program: &'a str,
+    harness_fn: &'a str,
+    listed: &'a str,
+    component: &'a str,
+    fixture: &'a str,
+    spec: &'a str,
+}
+
+/// One instruction's mined Anchor facts (a row in `api_facts.j2`).
+struct IxFact {
+    name: String,
+    pascal: String,
+    args: Vec<String>,
+    accounts: Vec<String>,
+}
+
+/// The "API facts" block mined from the analyzed model (crate id, ids, types, instructions).
+#[derive(Template)]
+#[template(path = "api_facts.j2", escape = "none")]
+struct ApiFacts<'a> {
+    crate_id: &'a str,
+    analysis_id: Option<&'a str>,
+    program_id: String,
+    account_types: Vec<String>,
+    instructions: Vec<IxFact>,
+}
+
 /// The crucible checkout that resolves the harness crate's path deps (`$CRUCIBLE_REPO`). Read
 /// here so crate rendering is fully wheel-owned; `validate_preconditions` guarantees it is set.
 fn crucible_repo() -> Option<PathBuf> {
@@ -40,21 +177,18 @@ fn crucible_repo() -> Option<PathBuf> {
 /// plus the program-under-test as a path dep (was `CrucibleDep::render_deps`).
 fn crucible_deps(program: &str, repo: &Path) -> String {
     let crates = repo.join("crates");
-    format!(
-        "crucible-fuzzer = {{ path = \"{cf}\" }}\n\
-         crucible-test-context = {{ path = \"{ctc}\" }}\n\
-         anchor-lang = \"{ANCHOR_VERSION}\"\n\
-         arbitrary = {{ version = \"1\", features = [\"derive\"] }}\n\
-         ctrlc = \"3.4\"\n\
-         libafl = {{ version = \"{LIBAFL_VERSION}\", features = [\"std\", \"cli\", \"prelude\"] }}\n\
-         libafl_bolts = {{ version = \"{LIBAFL_VERSION}\", features = [\"std\"] }}\n\
-         {program} = {{ path = \"../../programs/{program}\", features = [\"no-entrypoint\"] }}\n\
-         solana-keypair = \"{SOLANA_VERSION}\"\n\
-         solana-pubkey = \"{SOLANA_VERSION}\"\n\
-         solana-signer = \"{SOLANA_VERSION}\"",
-        cf = crates.join("crucible-fuzzer").display(),
-        ctc = crates.join("crucible-test-context").display(),
-    )
+    let cf = crates.join("crucible-fuzzer").display().to_string();
+    let ctc = crates.join("crucible-test-context").display().to_string();
+    CargoDeps {
+        cf: &cf,
+        ctc: &ctc,
+        program,
+        anchor_version: ANCHOR_VERSION,
+        libafl_version: LIBAFL_VERSION,
+        solana_version: SOLANA_VERSION,
+    }
+    .render()
+    .expect("render cargo_deps")
 }
 
 /// The harness `Cargo.toml`: one `[[bin]]` (`invariant_test`) selected by a per-component Cargo
@@ -66,25 +200,10 @@ fn render_cargo_toml(program: &str, repo: &Path, features: &[String]) -> String 
     } else {
         features.iter().map(|f| format!("{f} = []")).collect::<Vec<_>>().join("\n")
     };
-    format!(
-        "[package]\n\
-         name = \"{program}_fuzz\"\n\
-         version = \"0.1.0\"\n\
-         edition = \"2021\"\n\
-         \n\
-         [workspace]\n\
-         \n\
-         [dependencies]\n\
-         {deps}\n\
-         \n\
-         [[bin]]\n\
-         name = \"invariant_test\"\n\
-         path = \"src/main.rs\"\n\
-         \n\
-         [features]\n\
-         {feats}\n",
-        deps = crucible_deps(program, repo),
-    )
+    let deps = crucible_deps(program, repo);
+    CargoToml { program, deps: &deps, feats: &feats }
+        .render()
+        .expect("render cargo_toml")
 }
 
 /// The crate's on-disk files for a confined build: `src/main.rs` plus a `Cargo.toml` declaring
@@ -109,21 +228,6 @@ fn which_dir(bin: &str) -> Option<String> {
         .find(|dir| dir.join(bin).is_file())
         .map(|dir| dir.display().to_string())
 }
-/// Backend-guidance prose injected into the property-extraction prompt. Crucible is
-/// a fuzzer, so — like Foundry — refutations are valuable but universals can't be
-/// *proven*; a handful of property kinds are a poor fit for sampling.
-const CRUCIBLE_BACKEND_GUIDANCE: &str = "\
-These properties will be checked with Crucible, a coverage-guided fuzzer for Solana \
-programs. As a fuzzer it cannot *prove* universally quantified properties or invariants, \
-but it approximates them well and any *refutation* (a fuzzing counterexample / crash) is \
-extremely valuable. So state universal safety properties and invariants freely — do not \
-restrict yourself because a fuzzer cannot definitively prove them.
-
-A few categories are a poor fit and should be skipped: properties about off-chain events \
-(key compromise, social engineering, oracle manipulation outside the modeled accounts), \
-and pure hash-collision resistance (\"no two inputs ever collide\"), which sampling cannot \
-refute. Arithmetic-overflow and type-level facts are worth stating: Rust overflow panics \
-and Anchor constraint failures surface as crashes the fuzzer can find.";
 
 /// The compiled binaries a Crucible run needs on `PATH`. Checked up-front so a run
 /// fails fast with an actionable message rather than deep in the build phase.
@@ -137,126 +241,8 @@ fn on_path(bin: &str) -> bool {
     };
     std::env::split_paths(&path).any(|dir| dir.join(bin).is_file())
 }
-/// Concise Crucible harness API reference injected into the authoring prompt (the
-/// §7.5 static cheat-sheet; RAG over a `crucible_kb` is layered on at packaging).
-const HARNESS_CHEAT_SHEET: &str = r#"
-Crucible harness API (author a FIXTURE only — no test fns):
 
-- Imports:
-    use crucible_fuzzer::*;                          // TestContext, macros, fuzz_assert_*
-    use crucible_fuzzer::anchor_lang::system_program;
-    use <program>::*;                                // instruction, accounts, ID, state types
-    use solana_keypair::Keypair; use solana_pubkey::Pubkey; use solana_signer::Signer;
-    use std::rc::Rc;
 
-- The fixture struct MUST be named `Fixture` and derive Clone; keypairs go in `Rc`:
-    #[derive(Clone)]
-    struct Fixture { ctx: TestContext, program_id: Pubkey, /* pdas, users (Rc<Keypair>) */ }
-
-- #[fuzz_fixture] impl Fixture { ... } with:
-    pub fn setup() -> Self {
-        let mut ctx = TestContext::new();
-        let program_id = Pubkey::new_from_array(ID.to_bytes());
-        ctx.add_program(&program_id, "../../target/deploy/<program>.so").unwrap();
-        // create funded accounts: ctx.create_account().pubkey(kp.pubkey())
-        //     .lamports(N).owner(system_program::ID).create().unwrap();
-        // derive PDAs: Pubkey::find_program_address(&[b"seed", key.as_ref()], &program_id)
-        // run any init instruction (see calling convention). Panic on setup failure.
-        Self { ctx, program_id, /* ... */ }
-    }
-    // one `action_<name>` per instruction; fuzzable args get #[range(lo..hi)]:
-    pub fn action_<name>(&mut self, #[range(0..1_000_000)] amount: u64) -> bool {
-        self.ctx.program(self.program_id)
-            .call(instruction::<Name> { amount })
-            .accounts(accounts::<Name> { /* fields */ })
-            .signers(&[&*self.some_keypair])
-            .send().map(|o| o.is_success()).unwrap_or(false)
-    }
-
-- Anchor path conventions (use the API FACTS below — do NOT guess these):
-    * `use <program>::*;` brings the crate's generated items into scope. `<program>` is
-      the crate id in the facts, NOT the `#[program] pub mod <name>` module name — the
-      module name does NOT change these crate-root paths.
-    * Instruction args struct: `instruction::<PascalName>` — snake_case `foo_bar` → `instruction::FooBar`.
-    * Accounts struct: `accounts::<PascalName>` — same PascalCase as the instruction.
-    * Program id: the `ID` constant; make a Pubkey via `Pubkey::new_from_array(ID.to_bytes())`.
-- Read the program source (via the tools) to confirm exact field names, PDA seeds
-  (binary vs string), and signer requirements — the API facts + model below are a summary.
-- Output ONLY the fixture module source (imports + struct + #[fuzz_fixture] impl).
-  Do NOT write `fn main`, `#[invariant_test]`, or `#[crucible_fuzz]` — those are added later.
-"#;
-
-/// A complete, compiling worked example (a DIFFERENT program — an escrow) so the author
-/// can pattern-match the exact shape: imports, `Rc<Keypair>` accounts, `TestContext`
-/// setup with a funded account + PDA + an init call, and `action_*` methods that build
-/// `instruction::`/`accounts::` structs and `.send()`. Adapt it to the target program's
-/// instructions/accounts/PDA seeds — do NOT copy it verbatim.
-const EXAMPLE_FIXTURE: &str = r#"
-EXAMPLE — a full, compiling fixture for a *different* program (an `escrow`). Study the
-shape, then write the equivalent for THIS program:
-
-```rust
-use crucible_fuzzer::anchor_lang::system_program;
-use crucible_fuzzer::*;
-use solana_keypair::Keypair;
-use solana_pubkey::Pubkey;
-use solana_signer::Signer;
-use std::rc::Rc;
-use escrow::*;                                   // the crate id — NOT the `#[program] mod` name
-
-#[derive(Clone)]
-struct Fixture {                                 // MUST be named `Fixture`
-    ctx: TestContext,
-    program_id: Pubkey,
-    depositor: Rc<Keypair>,
-    vault_pda: Pubkey,
-}
-
-#[fuzz_fixture]
-impl Fixture {
-    pub fn setup() -> Self {
-        let mut ctx = TestContext::new();
-        let program_id = Pubkey::new_from_array(ID.to_bytes());
-        ctx.add_program(&program_id, "../../target/deploy/escrow.so").unwrap();
-
-        let depositor = Rc::new(Keypair::new());
-        ctx.create_account().pubkey(depositor.pubkey())
-            .lamports(10_000_000_000).owner(system_program::ID).create().unwrap();
-
-        let (vault_pda, _) =
-            Pubkey::find_program_address(&[b"vault", depositor.pubkey().as_ref()], &program_id);
-
-        ctx.program(program_id)
-            .call(instruction::Initialize {})     // args struct; `{}` when the ix has no args
-            .accounts(accounts::Initialize {
-                vault: vault_pda,
-                depositor: depositor.pubkey(),
-                system_program: system_program::ID,
-            })
-            .signers(&[&*depositor])
-            .send().unwrap();                     // panic in setup() if init fails
-
-        Self { ctx, program_id, depositor, vault_pda }
-    }
-
-    pub fn action_deposit(&mut self, #[range(1..1_000_000)] amount: u64) -> bool {
-        self.ctx.program(self.program_id)
-            .call(instruction::Deposit { amount })
-            .accounts(accounts::Deposit {
-                vault: self.vault_pda,
-                depositor: self.depositor.pubkey(),
-                system_program: system_program::ID,
-            })
-            .signers(&[&*self.depositor])
-            .send().map(|o| o.is_success()).unwrap_or(false)
-    }
-}
-```
-"#;
-
-/// A `#[invariant_test]` probe appended (by the host) only to validate the fixture
-/// via `crucible run … --dry-run`: it must compile and `setup()` must run once.
-const PROBE_FN: &str = "\n\n#[invariant_test]\nfn c_probe(fixture: &mut Fixture) {\n    let _ = fixture;\n}\n";
 /// Extract just the rustc error diagnostics from a (possibly long) cargo build log so
 /// the revise prompt leads with the actual errors instead of pages of "Compiling …".
 /// Keeps each `error[..]`/`error:` block with its `-->`/`|`/`=` context; drops warnings
@@ -329,81 +315,78 @@ fn api_facts(analyzed: &serde_json::Value, program: &str) -> String {
     };
 
     let str_of = |v: Option<&serde_json::Value>| v.and_then(|x| x.as_str()).unwrap_or("?").to_string();
-    let mut out = String::from("PROGRAM API FACTS (use these EXACT names — do not guess):\n");
     // The crate id is the harness's actual Cargo dependency name — the program name
     // (== CrucibleDep's crate), NOT the analysis's `program_identifier`, which may be the
-    // `#[program] pub mod` name and would mis-resolve `use <id>::*`.
-    out.push_str(&format!("  crate id (for `use <id>::*`): {program}\n"));
-    let analysis_id = str_of(prog.get("program_identifier"));
-    if analysis_id != program && analysis_id != "?" {
-        out.push_str(&format!(
-            "  (note: `#[program] pub mod {analysis_id}` is the module name — it does NOT change \
-             the crate-root paths `{program}::instruction::*` / `{program}::accounts::*`)\n"
-        ));
-    }
-    out.push_str(&format!(
-        "  declare_id / program id: {}\n",
-        prog.get("program_id").and_then(|v| v.as_str()).unwrap_or("(not declared)")
-    ));
-    if let Some(types) = prog.get("account_types").and_then(|v| v.as_array()) {
-        let names: Vec<String> = types.iter().filter_map(|t| t.as_str().map(String::from)).collect();
-        if !names.is_empty() {
-            out.push_str(&format!("  state/account types: {}\n", names.join("; ")));
-        }
-    }
-    out.push_str("  instructions (snake handler → Anchor Pascal structs):\n");
-    if let Some(ixs) = prog.get("instructions").and_then(|v| v.as_array()) {
-        for ix in ixs {
-            let name = str_of(ix.get("name"));
-            let pascal = to_pascal(&name);
-            let args: Vec<String> = ix
-                .get("args")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                .unwrap_or_default();
-            let accts: Vec<String> = ix
-                .get("accounts")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.get("name").and_then(|n| n.as_str()).map(String::from))
-                        .collect()
+    // `#[program] pub mod` name and would mis-resolve `use <id>::*`. Surface the module name as
+    // a note only when it differs (the template renders it iff `analysis_id` is `Some`).
+    let analysis_raw = str_of(prog.get("program_identifier"));
+    let analysis_id: Option<String> =
+        (analysis_raw != program && analysis_raw != "?").then_some(analysis_raw);
+    let program_id = prog
+        .get("program_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(not declared)")
+        .to_string();
+    let account_types: Vec<String> = prog
+        .get("account_types")
+        .and_then(|v| v.as_array())
+        .map(|types| types.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let instructions: Vec<IxFact> = prog
+        .get("instructions")
+        .and_then(|v| v.as_array())
+        .map(|ixs| {
+            ixs.iter()
+                .map(|ix| {
+                    let name = str_of(ix.get("name"));
+                    let pascal = to_pascal(&name);
+                    let args = ix
+                        .get("args")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    let accounts = ix
+                        .get("accounts")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.get("name").and_then(|n| n.as_str()).map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    IxFact { name, pascal, args, accounts }
                 })
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "    - {name} → instruction::{pascal}, accounts::{pascal}; args: [{}]; accounts: [{}]\n",
-                args.join(", "),
-                accts.join(", "),
-            ));
-        }
+                .collect()
+        })
+        .unwrap_or_default();
+    ApiFacts {
+        crate_id: program,
+        analysis_id: analysis_id.as_deref(),
+        program_id,
+        account_types,
+        instructions,
     }
-    out
+    .render()
+    .expect("render api_facts")
 }
 
 /// The "previous attempt failed, fix it" suffix shared by both authoring loops: lead with
 /// the *extracted* compiler errors, then the prior source, then a trimmed raw-log tail.
 fn revise_suffix(prev_src: &str, raw: &str) -> String {
-    let errors_block = match compiler_diagnostics(raw) {
-        d if d.is_empty() => String::new(),
-        d => format!("COMPILER ERRORS to fix (extracted):\n{d}\n\n"),
-    };
+    let errors = compiler_diagnostics(raw);
     let tail = &raw[raw.len().saturating_sub(2500)..];
-    format!(
-        "\n\nThe previous attempt FAILED to build / dry-run. Fix it.\n{errors_block}\
-         Prior source:\n```rust\n{prev_src}\n```\n\nRaw build/dry-run output (tail):\n{tail}"
-    )
+    ReviseCompile { errors: &errors, prev_src, tail }
+        .render()
+        .expect("render revise_compile")
 }
 
 /// The "previous attempt was rejected by the reviewer" suffix. Unlike `revise_suffix`, the
 /// draft *compiled* — so frame it as review feedback to address, not compiler errors to fix
 /// (otherwise the author thrashes hunting for build errors that do not exist).
 fn judge_revise_suffix(prev_src: &str, feedback: &str) -> String {
-    format!(
-        "\n\nYour previous suite COMPILED but a security reviewer REJECTED it — this is NOT a \
-         build error. Revise the tests to address the review feedback below (each point names a \
-         criterion and a concrete fix):\n{feedback}\n\n\
-         Prior source:\n```rust\n{prev_src}\n```"
-    )
+    ReviseJudge { feedback, prev_src }
+        .render()
+        .expect("render revise_judge")
 }
 
 /// Dispatch the re-author suffix on which gate rejected the prior attempt.
@@ -413,166 +396,8 @@ fn revise_for(f: &Failure) -> String {
         FailureKind::Compile => revise_suffix(&f.draft, &f.errors),
     }
 }
-const TEST_CHEAT_SHEET: &str = r#"
-Write ONE Crucible `#[invariant_test]` function holding ALL the program's invariants (no
-fixture — it already exists as `Fixture`):
 
-- `#[invariant_test] fn c_invariants(fixture: &mut Fixture) { ... }` runs AFTER EACH fuzzed
-  action — put EVERY property's checks in this one fn (conservation, solvency, bounds, access
-  control, …). One fn = one build = one fuzz run covering all invariants.
-- Assert against ON-CHAIN state, not local mirrors:
-    let acct = fixture.ctx.read_anchor_account::<SomeState>(&fixture.some_pda).unwrap();
-    fuzz_assert_le!(acct.balance, cap, "message");   // fuzz_assert_{eq,ne,lt,le,gt,ge}
-- Read RAW lamports / data / owner (bypassing Anchor deserialization) via
-  `read_account` / `get_account`, which return `Result<Account>` — unwrap/`?` FIRST,
-  THEN the field (there is NO `get_account_lamports`, and `Result` has no `.lamports`):
-    let lamports = fixture.ctx.read_account(&fixture.some_pda).unwrap().lamports;
-  Existence check: `fixture.ctx.account_exists(&fixture.some_pda)` (returns bool).
-- TRANSACTION FEE — do NOT assert an EXACT lamport delta on a signer. The fee payer (the
-  FIRST signer of the `action_*`'s `.send()`, e.g. the `depositor`/`authority`) is debited the
-  tx fee (~5000 lamports/signature) ON TOP OF whatever lamports the instruction moves, so
-  `depositor_before - amount == depositor_after` is WRONG (off by the fee). Assert exact deltas
-  on NON-signer accounts (e.g. the vault PDA, which only receives the transfer); for a signer,
-  subtract the fee or assert a bound (`<=`) instead of `==`.
-- Drive state via the fixture's existing `action_*` methods; do not re-`send()`
-  instructions yourself unless necessary.
-- PREFIX each assertion's message with its property title in brackets (`"[<title>] ..."`) so a
-  counterexample's message names which property it refutes.
-- Return ONLY the one annotated `fn c_invariants`.
-"#;
 
-/// Reviewer persona for the optional `judge_prompt` turn — the Crucible peer of Foundry's
-/// `foundry_property_judge_system_prompt.j2`. The source-exploration / RAG / memory tools are
-/// injected by the host, so this only sets the stance.
-const CRUCIBLE_JUDGE_SYSTEM: &str = "\
-You are a senior Solana security engineer reviewing a colleague's Crucible fuzz-test suite, \
-written to demonstrate a set of security properties of a Solana program. A Crucible test is an \
-experiment the fuzzer drives: it calls the fixture's `action_*` methods in arbitrary sequences \
-and, after each, runs the `#[invariant_test]`/`#[crucible_fuzz]` assertions. Judge whether a GREEN \
-campaign is real evidence for each property — i.e. under which program implementations this suite \
-would actually FAIL. Use the source-exploration tools to read the program's Rust source and the \
-fixture before asserting anything about behavior; record durable findings with the memory tool.";
-
-/// The judge's evaluation criteria — modeled on Foundry's `foundry_feedback_prompt.j2` but
-/// retargeted to Crucible/LiteSVM fuzzing: the load-bearing axis is *reachability* (can the
-/// fuzzer, through the fixture's `action_*` methods, drive a state where the property could
-/// fail?) rather than Solidity cheatcode fidelity. Inserted verbatim, so it holds the literal
-/// JSON of the output contract (no format-string escaping).
-const CRUCIBLE_JUDGE_GUIDANCE: &str = r#"Read the test functions AND the program source (via the
-tools); several criteria require comparing the tests' claims against what the program actually
-does. Then evaluate against the criteria below. The examples show the SHAPE of each defect; they
-are not exhaustive — a defect matching a criterion is in scope even if it resembles no example.
-
-## Criterion 1 — Vacuous / tautological assertions
-Flag assertions that hold regardless of the program's behavior:
-- bounds guaranteed by the type or by arithmetic (`fuzz_assert_ge!(x, 0)` on a `u64`; a bound a
-  checked subtraction already guarantees);
-- asserting a value the test/fixture itself just wrote, via a path that bypasses the logic under
-  test (seed an account field, then read the same field back);
-- degenerate operands: solvency (`assets >= liabilities`) where liabilities are zero all campaign;
-  "unauthorized caller is rejected" where no one was ever authorized; a preservation invariant
-  that only ever runs in the initial state (holds by init, not by preservation).
-An assertion is tautological IFF it holds under every program implementation.
-
-## Criterion 2 — Claim / assertion gap
-For each test, compare (a) the property it claims (name, comments) against (b) the strongest fact
-its assertions actually establish. Flag any test where (b) is materially weaker. Typical shapes:
-- asserting an upstream precursor while the claimed consequence lives only in comments (assert a
-  field was stored, when the property is that an unauthorized withdraw is *rejected*; assert an
-  authority was rotated, when the property is that the old authority's calls now fail);
-- comments narrate an attack the executable test never drives;
-- the property specifies a sequence/interleaving (a stale read, a specific instruction order) but
-  the test never constructs it through the `action_*` sequence.
-Prose proves nothing; a test's evidentiary value is exactly its assertions on on-chain state.
-
-## Criterion 3 — Reachability: can the fuzzer reach a state where the property could FAIL?
-This is the load-bearing criterion for a fuzzing backend — an invariant is only as strong as the
-states the campaign can drive it into. Audit the fixture + the `action_*` set the property leans on:
-- **Missing actions**: no `action_*` exists for the instruction(s) the property is about, so the
-  campaign never drives the relevant transition and the invariant is only ever checked over states
-  that trivially satisfy it.
-- **Collapsed input domains**: `#[range(lo..hi)]` narrowed to near-constants, a range that excludes
-  the violating region, or a fuzzed arg that influences no assertion.
-- **Actions that never succeed**: an `action_*` whose `.send()` fails on most inputs (wrong
-  accounts / signers / funding) returns `false` and leaves state near-initial — a green invariant
-  over states never reached is evidence of nothing.
-- **Degenerate fixtures**: a single actor/account for a multi-party property; zero balances or
-  empty state; identity-element params (a fee of 0, a rate of 1) that cannot distinguish a correct
-  program from a plausible wrong one.
-Precondition seeding is fine; substituting for the enforced logic is not (see C4).
-
-## Criterion 4 — Real execution vs bypassed logic
-Crucible runs the real program `.so` in LiteSVM, so fidelity is usually high — but check the
-fixture/test does not bypass the logic under test:
-- seeding an account's state directly (`create_account` / raw data) instead of driving the
-  program's instruction, when the property is about that instruction *computing or enforcing* that
-  state (injecting state the subject must compute assumes the conclusion; injecting state it merely
-  consumes is legitimate setup);
-- reads must go through `read_anchor_account::<State>(&pda)` against the PDA the program actually
-  writes — not a local Rust mirror the test maintains alongside the chain.
-
-## Criterion 5 — Oracle independence
-Flag tests whose expected value is the program's own logic fed back to itself (the same formula
-transcribed into the test; the same derivation/hash the program uses). Prefer anchors knowable
-without the implementation: conservation identities (sum of balances constant), boundary values,
-round-trips, monotonicity between concrete states, input/output pairs computed offline.
-
-## Criterion 6 — Pass/fail directionality (especially attack-vector properties)
-For each test ask: if the property regressed tomorrow, would this test FAIL?
-- Attack-vector properties ("the exploit cannot occur"): a campaign that stays GREEN while the
-  attack succeeds has inverted semantics. A green suite must never certify a live vulnerability. If
-  the author genuinely found the attack possible, the correct artifact is an explicit finding plus
-  a test marked as a known-vulnerability demonstration — never a silently-passing test.
-- "Must be rejected" checks: confirm the action fails FOR THE RIGHT REASON. On Solana an
-  instruction can fail for reasons unrelated to the property (missing signer, unfunded account,
-  wrong PDA, arithmetic overflow in setup). Assert the specific failure — a custom program error,
-  or that the guarded on-chain state is unchanged — and confirm a CONTROL action SUCCEEDS when the
-  guarded condition is absent. `action_*` returning `false` is not, by itself, evidence the
-  program's own check rejected the call.
-
-## Criterion 7 — Fuzz / invariant mechanics
-- Right macro for the property: `#[invariant_test]` runs after EACH action (preservation
-  invariants — conservation, solvency, monotonic state); `#[crucible_fuzz]` runs one random op
-  (a per-instruction property). Flag a single-shot `#[crucible_fuzz]` used for what is really a
-  preservation invariant, or vice-versa.
-- Assertions must read committed on-chain state via `read_anchor_account`; PDAs/addresses must
-  match what the program writes.
-- Real-execution costs (a false-oracle trap): under LiteSVM the transaction fee payer — the
-  FIRST signer of an `action_*`'s `.send()` — is debited the tx fee (~5000 lamports/signature)
-  on top of any lamports the instruction moves, and accounts owe rent-exemption. An EXACT
-  lamport-delta assertion on a signer/fee-payer that ignores the fee (e.g.
-  `depositor_before - amount == depositor_after`) is a false oracle: it FAILS on a correct
-  program. Flag it — exact-delta assertions belong on non-signer accounts (the receiving PDA),
-  or must subtract the fee / assert a bound.
-- Ties back to C3: confirm the reachable state space actually includes the property's danger
-  region under the available `action_*` sequences.
-
-## Criterion 8 — Coverage and redundancy
-- Every listed property must have a correctly-named test fn. A property "addressed" only by tests
-  failing C1–C3 is NOT covered — say so explicitly and reject.
-- Evaluate any declared skip critically: Crucible can drive real instructions, arbitrary account
-  state, multiple signers, and fuzz — few properties of on-chain logic are genuinely untestable.
-  Sketch the test you believe possible before accepting a skip.
-- Flag redundant tests (different names, same fact about the same state); note any property left
-  uncovered as a result.
-
-Discard low-value feedback: style/naming/organization; compute-unit or performance quibbles;
-"brittleness" (tests are tied to the implementation they verify); the exact bounds/magnitudes
-chosen unless they make a test degenerate under C3; demands for tests beyond the listed properties.
-The goal is to rule OUT low-quality tests, not to demonstrate thoroughness by volume — a short list
-of load-bearing defects, each tied to a criterion and a concrete fix, beats an exhaustive
-enumeration.
-
-Do NOT assert Crucible / LiteSVM / Anchor semantics you have not verified (from memory or the
-docs). Before claiming a test is wrong about the program's behavior, read the relevant source and
-cite what it does. Never contradict prior-round feedback unless you are ~95% certain it was in error.
-
-Output contract: use tools and reason as needed, but your FINAL message MUST be a single JSON
-object and NOTHING else:
-  {"accept": true,  "feedback": ""}
-  {"accept": false, "feedback": "<load-bearing defects — each tied to a criterion and a concrete fix>"}
-Reject (set accept:false) if any listed property is uncovered, or is covered only by tests failing
-Criteria 1–3."#;
 
 /// Did the build fail (as opposed to the harness building and fuzzing)?
 fn is_build_error(out: &str) -> bool {
@@ -664,7 +489,7 @@ impl Backend for CrucibleApp {
             // Selects the shared `solana` ecosystem front half (system model + prompts).
             ecosystem: "solana".to_string(),
             backend_tag: "crucible".to_string(),
-            backend_guidance: CRUCIBLE_BACKEND_GUIDANCE.to_string(),
+            backend_guidance: BackendGuidance.render().expect("render backend_guidance"),
             analysis_key: "crucible-solana-analysis".to_string(),
             phases: vec![
                 // UI-only phase: discover the design doc when one isn't supplied (§host).
@@ -805,58 +630,50 @@ impl Backend for CrucibleApp {
 
     fn author_prompt(&self, input: &AuthorInput, failure: Option<&Failure>) -> Prompt {
         let program = &input.program;
+        let revise = failure.map(revise_for).unwrap_or_default();
         let instruction = if input.kind == "setup" {
             // Author the shared fixture from the analyzed model (carried in `component`).
             let analyzed = &input.component;
             let model =
                 serde_json::to_string_pretty(analyzed).unwrap_or_else(|_| analyzed.to_string());
-            let mut task = format!(
-                "Author a Crucible fuzz-harness FIXTURE (only) for the Solana program `{program}`.\n\
-                 {cheat}\n\n{example}\n\n{facts}\n\
-                 Full analyzed system model (accounts, PDAs, authorities, requirements):\n{model}\n\n\
-                 Use the source-exploration tools to read the program's Rust source for exact \
-                 signatures. Return the complete fixture module source as your final answer.",
-                cheat = HARNESS_CHEAT_SHEET.replace("<program>", program),
-                example = EXAMPLE_FIXTURE,
-                facts = api_facts(analyzed, program),
-                model = model,
-            );
-            if let Some(f) = failure {
-                task.push_str(&revise_for(f));
+            let cheat = HarnessCheatSheet { program }.render().expect("render harness_cheat_sheet");
+            let example = ExampleFixture.render().expect("render example_fixture");
+            let facts = api_facts(analyzed, program);
+            AuthorSetup {
+                program,
+                cheat: &cheat,
+                example: &example,
+                facts: &facts,
+                model: &model,
+                revise: &revise,
             }
-            task
+            .render()
+            .expect("render author_setup")
         } else {
             // Author ONE #[invariant_test] fn holding ALL invariants (single build + run).
-            let listed: Vec<String> = input
+            let listed = input
                 .props
                 .iter()
                 .map(|p| format!("- [{}] {}: {}", p.sort, p.title, p.description))
-                .collect();
+                .collect::<Vec<_>>()
+                .join("\n");
             let component = serde_json::to_string_pretty(&input.component)
                 .unwrap_or_else(|_| input.component.to_string());
             let fixture = ctx_str(input, "fixture");
-            let mut task = format!(
-                "Author a SINGLE Crucible `#[invariant_test]` function named EXACTLY \
-                 `{SINGLE_HARNESS_FN}` for the `{program}` program that checks ALL {n} properties \
-                 below — one fuzz run covers them all. It must hold after ANY sequence of actions \
-                 the fuzzer drives; read on-chain state and assert each property in the one fn.\n\n\
-                 Properties to check (assert each; PREFIX every assertion message with its property \
-                 title in brackets, e.g. `\"[{first}] ...\"`, so a counterexample names the property \
-                 it refutes):\n{listed}\n\n\
-                 Program API (drive instructions via the fixture's `action_*` methods):\n{component}\n\n\
-                 {cheat}\n\n\
-                 The shared fixture is ALREADY defined (do not redefine it); use `Fixture` and its \
-                 `action_*` methods. Fixture source for reference:\n```rust\n{fixture}\n```",
-                n = listed.len(),
-                listed = listed.join("\n"),
-                first = input.props.first().map(|p| p.title.as_str()).unwrap_or("property"),
-                component = component,
-                cheat = TEST_CHEAT_SHEET,
-            );
-            if let Some(f) = failure {
-                task.push_str(&revise_for(f));
+            let cheat = TestCheatSheet.render().expect("render test_cheat_sheet");
+            AuthorComponent {
+                harness_fn: SINGLE_HARNESS_FN,
+                program,
+                n: input.props.len(),
+                first: input.props.first().map(|p| p.title.as_str()).unwrap_or("property"),
+                listed: &listed,
+                component: &component,
+                cheat: &cheat,
+                fixture: &fixture,
+                revise: &revise,
             }
-            task
+            .render()
+            .expect("render author_component")
         };
         Prompt { system: None, instruction }
     }
@@ -869,30 +686,27 @@ impl Backend for CrucibleApp {
             return None;
         }
         let program = &input.program;
-        let listed: Vec<String> = input
+        let listed = input
             .props
             .iter()
             .map(|p| format!("- [{}] {}: {}", p.sort, p.title, p.description))
-            .collect();
+            .collect::<Vec<_>>()
+            .join("\n");
         let component = serde_json::to_string_pretty(&input.component)
             .unwrap_or_else(|_| input.component.to_string());
         let fixture = ctx_str(input, "fixture");
-        let instruction = format!(
-            "Evaluate the Crucible fuzz-test suite below for the Solana program `{program}`. \
-             Decide, per property, whether a PASSING fuzz campaign is real evidence — not merely \
-             that the tests compile (the build gate already ensures that).\n\n\
-             Properties this suite must demonstrate (ALL checked inside the single \
-             `{SINGLE_HARNESS_FN}` invariant fn):\n\
-             {listed}\n\n\
-             Program API (instructions / accounts / state — driven via the fixture's `action_*` \
-             methods):\n{component}\n\n\
-             The shared fixture the tests build on (already compiled — do not re-review it, but \
-             use it to judge what states the `action_*` methods can reach):\n```rust\n{fixture}\n```\n\n\
-             Test suite under review:\n```rust\n{spec}\n```\n\n{guidance}",
-            listed = listed.join("\n"),
-            guidance = CRUCIBLE_JUDGE_GUIDANCE,
-        );
-        Some(Prompt { system: Some(CRUCIBLE_JUDGE_SYSTEM.to_string()), instruction })
+        let instruction = JudgeInstruction {
+            program,
+            harness_fn: SINGLE_HARNESS_FN,
+            listed: &listed,
+            component: &component,
+            fixture: &fixture,
+            spec,
+        }
+        .render()
+        .expect("render judge_instruction");
+        let system = JudgeSystem.render().expect("render judge_system");
+        Some(Prompt { system: Some(system), instruction })
     }
 
     fn compile(
@@ -906,7 +720,8 @@ impl Backend for CrucibleApp {
         // Setup: dry-run the fixture behind a probe test. Component: fixture + the authored tests,
         // dry-run behind the shared harness feature `c_invariants` (which gates `main`).
         let (main_rs, feature) = if input.kind == "setup" {
-            (format!("{spec}{PROBE_FN}"), "c_probe".to_string())
+            let probe = ProbeFn.render().expect("render probe_fn");
+            (format!("{spec}{probe}"), "c_probe".to_string())
         } else {
             let fixture = ctx_str(input, "fixture");
             (format!("{fixture}\n\n{spec}"), SINGLE_HARNESS_FN.to_string())
@@ -1079,3 +894,203 @@ impl Backend for CrucibleApp {
 }
 
 autoprover_sdk::export_app!(crucible_app, CrucibleApp);
+
+#[cfg(test)]
+mod template_parity {
+    //! Guards the askama migration: the build-critical crate files must render byte-identically
+    //! to the former `format!` output (else the harness crate won't compile), and the static
+    //! prose templates must preserve their bytes. Prompts are checked for template residue only.
+    use super::*;
+
+    /// The OLD `crucible_deps` format! body — kept here verbatim as the parity oracle.
+    fn expected_deps(program: &str, repo: &Path) -> String {
+        let crates = repo.join("crates");
+        format!(
+            "crucible-fuzzer = {{ path = \"{cf}\" }}\n\
+             crucible-test-context = {{ path = \"{ctc}\" }}\n\
+             anchor-lang = \"{ANCHOR_VERSION}\"\n\
+             arbitrary = {{ version = \"1\", features = [\"derive\"] }}\n\
+             ctrlc = \"3.4\"\n\
+             libafl = {{ version = \"{LIBAFL_VERSION}\", features = [\"std\", \"cli\", \"prelude\"] }}\n\
+             libafl_bolts = {{ version = \"{LIBAFL_VERSION}\", features = [\"std\"] }}\n\
+             {program} = {{ path = \"../../programs/{program}\", features = [\"no-entrypoint\"] }}\n\
+             solana-keypair = \"{SOLANA_VERSION}\"\n\
+             solana-pubkey = \"{SOLANA_VERSION}\"\n\
+             solana-signer = \"{SOLANA_VERSION}\"",
+            cf = crates.join("crucible-fuzzer").display(),
+            ctc = crates.join("crucible-test-context").display(),
+        )
+    }
+
+    /// The OLD `render_cargo_toml` format! body — the parity oracle.
+    fn expected_cargo_toml(program: &str, repo: &Path, features: &[String]) -> String {
+        let feats = if features.is_empty() {
+            "# (no components yet)".to_string()
+        } else {
+            features.iter().map(|f| format!("{f} = []")).collect::<Vec<_>>().join("\n")
+        };
+        format!(
+            "[package]\n\
+             name = \"{program}_fuzz\"\n\
+             version = \"0.1.0\"\n\
+             edition = \"2021\"\n\
+             \n\
+             [workspace]\n\
+             \n\
+             [dependencies]\n\
+             {deps}\n\
+             \n\
+             [[bin]]\n\
+             name = \"invariant_test\"\n\
+             path = \"src/main.rs\"\n\
+             \n\
+             [features]\n\
+             {feats}\n",
+            deps = expected_deps(program, repo),
+        )
+    }
+
+    #[test]
+    fn crate_files_are_byte_identical_to_the_old_format() {
+        let repo = Path::new("/home/user/crucible");
+        assert_eq!(crucible_deps("vault", repo), expected_deps("vault", repo));
+        // empty features
+        assert_eq!(
+            render_cargo_toml("vault", repo, &[]),
+            expected_cargo_toml("vault", repo, &[]),
+        );
+        // one and several features
+        for feats in [vec!["c_invariants".to_string()], vec!["c_probe".into(), "c_invariants".into()]] {
+            assert_eq!(
+                render_cargo_toml("vault", repo, &feats),
+                expected_cargo_toml("vault", repo, &feats),
+                "cargo_toml mismatch for features {feats:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn static_templates_preserve_their_bytes() {
+        // askama drops exactly one trailing newline from a template file, so every `.j2` carries
+        // one extra (see the trailing blank line in each). The content is otherwise preserved
+        // verbatim, i.e. `render() + "\n" == file`. Asserting that here pins both facts: the
+        // static prose is byte-for-byte what shipped, and the one-newline convention holds.
+        let eq = |rendered: String, file: &str| assert_eq!(format!("{rendered}\n"), file);
+        eq(BackendGuidance.render().unwrap(), include_str!("../templates/backend_guidance.j2"));
+        eq(ExampleFixture.render().unwrap(), include_str!("../templates/example_fixture.j2"));
+        eq(TestCheatSheet.render().unwrap(), include_str!("../templates/test_cheat_sheet.j2"));
+        eq(JudgeSystem.render().unwrap(), include_str!("../templates/judge_system.j2"));
+        eq(ProbeFn.render().unwrap(), include_str!("../templates/probe_fn.j2"));
+    }
+
+    #[test]
+    fn harness_cheat_sheet_substitutes_program_and_has_no_placeholder() {
+        let out = HarnessCheatSheet { program: "vault" }.render().unwrap();
+        assert!(out.contains("use vault::*;"), "program not substituted:\n{out}");
+        assert!(!out.contains("<program>"), "leftover <program> placeholder");
+        assert!(!out.contains("{{"), "leftover askama expression");
+    }
+
+    #[test]
+    fn api_facts_renders_from_the_analyzed_model() {
+        let model = serde_json::json!({
+            "components": [{
+                "name": "vault",
+                "program_identifier": "vault_program",
+                "program_id": "Vau1t111",
+                "account_types": ["VaultState"],
+                "instructions": [
+                    {"name": "deposit", "args": ["amount"],
+                     "accounts": [{"name": "vault"}, {"name": "depositor"}]},
+                ],
+            }],
+        });
+        let out = api_facts(&model, "vault");
+        for needle in [
+            "crate id (for `use <id>::*`): vault",
+            "pub mod vault_program",                  // module-name note (differs from crate id)
+            "declare_id / program id: Vau1t111",
+            "state/account types: VaultState",
+            "- deposit → instruction::Deposit, accounts::Deposit; args: [amount]; accounts: [vault, depositor]",
+        ] {
+            assert!(out.contains(needle), "api_facts missing {needle:?} in:\n{out}");
+        }
+        assert!(!out.contains("{{") && !out.contains("{%"), "template residue in api_facts");
+        // Unrecognized model shape → empty (unchanged contract).
+        assert_eq!(api_facts(&serde_json::json!({}), "vault"), "");
+    }
+
+    fn assert_no_residue(s: &str) {
+        for t in ["{{", "{%", "{#"] {
+            assert!(!s.contains(t), "template residue {t:?} in:\n{s}");
+        }
+    }
+
+    #[test]
+    fn prompt_templates_render_end_to_end() {
+        use autoprover_sdk::Property;
+
+        let app = CrucibleApp;
+        let component = serde_json::json!({ "instructions": [{ "name": "deposit" }] });
+        let prop = Property {
+            title: "no overflow".into(),
+            sort: "invariant".into(),
+            description: "balance never overflows".into(),
+            slug: "no_overflow".into(),
+        };
+
+        // setup branch + a compile failure (exercises author_setup.j2 + revise_compile.j2).
+        let setup = AuthorInput {
+            kind: "setup".into(),
+            program: "vault".into(),
+            component: component.clone(),
+            props: vec![],
+            context: serde_json::Value::Null,
+        };
+        let compile_fail = Failure {
+            draft: "prior fixture src".into(),
+            errors: "error[E0433]: failed to resolve".into(),
+            kind: FailureKind::Compile,
+        };
+        // Prose templates are wrapped to 120, so a phrase can span a newline — compare with
+        // whitespace collapsed so the checks are wrap-insensitive.
+        let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let has = |hay: &str, needle: &str| assert!(
+            norm(hay).contains(&norm(needle)), "missing {needle:?} in:\n{hay}"
+        );
+
+        let p = app.author_prompt(&setup, Some(&compile_fail));
+        assert_no_residue(&p.instruction);
+        has(&p.instruction, "FIXTURE (only) for the Solana program `vault`");
+        has(&p.instruction, "The previous attempt FAILED");
+        has(&p.instruction, "error[E0433]");
+
+        // component branch + a judge failure (exercises author_component.j2 + revise_judge.j2).
+        let comp = AuthorInput {
+            kind: "component".into(),
+            program: "vault".into(),
+            component: component.clone(),
+            props: vec![prop],
+            context: serde_json::json!({ "fixture": "struct Fixture { ctx: TestContext }" }),
+        };
+        let judge_fail = Failure {
+            draft: "prior tests".into(),
+            errors: "Criterion 1: vacuous assertion".into(),
+            kind: FailureKind::Judge,
+        };
+        let p = app.author_prompt(&comp, Some(&judge_fail));
+        assert_no_residue(&p.instruction);
+        has(&p.instruction, "named EXACTLY `c_invariants`");
+        has(&p.instruction, "`\"[no overflow] ...\"`");
+        has(&p.instruction, "reviewer REJECTED");
+
+        // judge prompt (exercises judge_instruction.j2 + the judge_guidance.j2 include + system).
+        let jp = app.judge_prompt(&comp, "fn c_invariants(f: &mut Fixture) {}").expect("component judge");
+        assert_no_residue(&jp.instruction);
+        has(&jp.instruction, "Evaluate the Crucible fuzz-test suite");
+        has(&jp.instruction, "Criterion 1");
+        has(jp.system.as_deref().unwrap(), "senior Solana security engineer");
+        // setup has no judge turn.
+        assert!(app.judge_prompt(&setup, "x").is_none());
+    }
+}
