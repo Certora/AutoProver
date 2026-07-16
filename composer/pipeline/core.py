@@ -292,12 +292,19 @@ async def _extract_all[P: enum.Enum, H](
     # reunites the batches with the paired backend's concrete unit type ``U``.)
     triples: list[tuple[FeatureUnit, list[PropertyFormulation], WorkflowContext[ComponentGroup]]]
     if ecosystem.global_extraction:
-        assert ecosystem.extraction_unit is not None and ecosystem.property_unit is not None
-        _, props = await _extract(ecosystem.extraction_unit(main))
-        triples = []
-        for i, prop in enumerate(props):
-            unit = ecosystem.property_unit(main, prop, i)
-            triples.append((unit, [prop], await _unit_ctx(unit)))
+        assert ecosystem.extraction_unit is not None
+        ext_unit = ecosystem.extraction_unit(main)
+        ext_ctx, props = await _extract(ext_unit)
+        if ecosystem.collapse_units:
+            # One whole-program batch: every invariant is formalized into a single harness + run
+            # (docs/crucible-unit-granularity.md §3). Empty props → no batch (nothing to formalize).
+            triples = [(ext_unit, props, ext_ctx)] if props else []
+        else:
+            assert ecosystem.property_unit is not None
+            triples = []
+            for i, prop in enumerate(props):
+                unit = ecosystem.property_unit(main, prop, i)
+                triples.append((unit, [prop], await _unit_ctx(unit)))
     else:
         units = ecosystem.units(main)
         extracted = await asyncio.gather(*[_extract(u) for u in units])

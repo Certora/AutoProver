@@ -25,6 +25,11 @@ const ANCHOR_VERSION: &str = "1.0.1";
 const SOLANA_VERSION: &str = "3.0";
 const LIBAFL_VERSION: &str = "0.15.1";
 
+/// The single `#[invariant_test]` fn that holds ALL of a program's invariants — one harness,
+/// one build, one fuzz run (the Crucible macro self-gates `main()` by fn name == feature, so this
+/// is also the feature/target selector). See docs/crucible-unit-granularity.md §3.
+const SINGLE_HARNESS_FN: &str = "c_invariants";
+
 /// The crucible checkout that resolves the harness crate's path deps (`$CRUCIBLE_REPO`). Read
 /// here so crate rendering is fully wheel-owned; `validate_preconditions` guarantees it is set.
 fn crucible_repo() -> Option<PathBuf> {
@@ -409,12 +414,12 @@ fn revise_for(f: &Failure) -> String {
     }
 }
 const TEST_CHEAT_SHEET: &str = r#"
-Write ONE Crucible test function (no fixture — it already exists as `Fixture`):
+Write ONE Crucible `#[invariant_test]` function holding ALL the program's invariants (no
+fixture — it already exists as `Fixture`):
 
-- `#[invariant_test] fn <name>(fixture: &mut Fixture) { ... }` runs AFTER EACH
-  fuzzed action — use it for state invariants (conservation, solvency, bounds).
-- `#[crucible_fuzz] fn <name>(fixture: &mut Fixture, #[range(..)] x: u64) { ... }`
-  runs single random operations — use it for per-instruction properties.
+- `#[invariant_test] fn c_invariants(fixture: &mut Fixture) { ... }` runs AFTER EACH fuzzed
+  action — put EVERY property's checks in this one fn (conservation, solvency, bounds, access
+  control, …). One fn = one build = one fuzz run covering all invariants.
 - Assert against ON-CHAIN state, not local mirrors:
     let acct = fixture.ctx.read_anchor_account::<SomeState>(&fixture.some_pda).unwrap();
     fuzz_assert_le!(acct.balance, cap, "message");   // fuzz_assert_{eq,ne,lt,le,gt,ge}
@@ -431,7 +436,9 @@ Write ONE Crucible test function (no fixture — it already exists as `Fixture`)
   subtract the fee or assert a bound (`<=`) instead of `==`.
 - Drive state via the fixture's existing `action_*` methods; do not re-`send()`
   instructions yourself unless necessary.
-- Return ONLY the annotated test fn. It MUST be named exactly `{feature}`.
+- PREFIX each assertion's message with its property title in brackets (`"[<title>] ..."`) so a
+  counterexample's message names which property it refutes.
+- Return ONLY the one annotated `fn c_invariants`.
 "#;
 
 /// Reviewer persona for the optional `judge_prompt` turn — the Crucible peer of Foundry's
@@ -585,6 +592,36 @@ fn finding_detail(out: &str) -> Option<String> {
             Some(format!("crash {crash}: {}", summary.trim()))
         }
         _ => Some(line.to_string()),
+    }
+}
+
+/// Attribute a shared-target counterexample across the covered report units. Crucible tags each
+/// assertion message with its property title (`[<title>]`), so the finding names the invariant it
+/// refutes: that unit gets `BAD` (carrying the finding); the rest held over the explored space, so
+/// `GOOD`. If nothing can be attributed (no tagged title matched), mark them all `BAD` rather than
+/// silently pass a real counterexample. This is the backend's own attribution — the host never
+/// parses the finding.
+fn attribute_finding(covered: &[Unit], detail: Option<String>) -> ValidateOutcome {
+    let d = detail.clone().unwrap_or_default();
+    let named: std::collections::HashSet<&str> = covered
+        .iter()
+        .filter(|u| !u.property.is_empty() && d.contains(&u.property))
+        .map(|u| u.unit.as_str())
+        .collect();
+    let all_bad = named.is_empty();
+    ValidateOutcome::Verdicts {
+        verdicts: covered
+            .iter()
+            .map(|u| {
+                if all_bad || named.contains(u.unit.as_str()) {
+                    let mut v = Verdict::with_outcome("BAD");
+                    v.detail = detail.clone();
+                    (u.unit.clone(), v)
+                } else {
+                    (u.unit.clone(), Verdict::with_outcome("GOOD"))
+                }
+            })
+            .collect(),
     }
 }
 
@@ -742,7 +779,11 @@ impl Backend for CrucibleApp {
     }
 
     fn units(&self, input: &AuthorInput) -> Vec<Unit> {
-        // The setup fixture has no report units; a component has one per property.
+        // The setup fixture has no report units. A component's invariants all live in ONE harness
+        // fn (`SINGLE_HARNESS_FN`) — a single build + fuzz run covering every property
+        // (docs/crucible-unit-granularity.md §3) — but each property is still its own report row,
+        // mapping to that shared fuzz target. The host runs the shared target once and attributes
+        // a counterexample to the offending property via the finding message.
         if input.kind == "setup" {
             return Vec::new();
         }
@@ -752,7 +793,12 @@ impl Backend for CrucibleApp {
             .enumerate()
             .map(|(i, p)| {
                 let slug = if p.slug.is_empty() { format!("inv{i}") } else { p.slug.clone() };
-                Unit { property: p.title.clone(), unit: format!("c_{slug}") }
+                // Report row = c_<slug> (one per property); fuzz target = the shared c_invariants.
+                Unit {
+                    property: p.title.clone(),
+                    unit: format!("c_{slug}"),
+                    target: Some(SINGLE_HARNESS_FN.to_string()),
+                }
             })
             .collect()
     }
@@ -780,28 +826,30 @@ impl Backend for CrucibleApp {
             }
             task
         } else {
-            // Author one #[invariant_test]/#[crucible_fuzz] fn per unit, against the fixture.
-            let listed: Vec<String> = self
-                .units(input)
-                .into_iter()
-                .zip(input.props.iter())
-                .map(|(u, p)| format!("- fn `{}` — [{}] {}: {}", u.unit, p.sort, p.title, p.description))
+            // Author ONE #[invariant_test] fn holding ALL invariants (single build + run).
+            let listed: Vec<String> = input
+                .props
+                .iter()
+                .map(|p| format!("- [{}] {}: {}", p.sort, p.title, p.description))
                 .collect();
             let component = serde_json::to_string_pretty(&input.component)
                 .unwrap_or_else(|_| input.component.to_string());
             let fixture = ctx_str(input, "fixture");
             let mut task = format!(
-                "Author {n} Crucible test function(s) for the `{program}` program — ONE per \
-                 property below. Each function MUST be named EXACTLY as shown (the name is its \
-                 fuzz-target selector) and check its property:\n{listed}\n\n\
-                 Each must hold after ANY sequence of actions the fuzzer drives — prefer an \
-                 `#[invariant_test]` that reads on-chain state and asserts the property.\n\n\
+                "Author a SINGLE Crucible `#[invariant_test]` function named EXACTLY \
+                 `{SINGLE_HARNESS_FN}` for the `{program}` program that checks ALL {n} properties \
+                 below — one fuzz run covers them all. It must hold after ANY sequence of actions \
+                 the fuzzer drives; read on-chain state and assert each property in the one fn.\n\n\
+                 Properties to check (assert each; PREFIX every assertion message with its property \
+                 title in brackets, e.g. `\"[{first}] ...\"`, so a counterexample names the property \
+                 it refutes):\n{listed}\n\n\
                  Program API (drive instructions via the fixture's `action_*` methods):\n{component}\n\n\
                  {cheat}\n\n\
                  The shared fixture is ALREADY defined (do not redefine it); use `Fixture` and its \
                  `action_*` methods. Fixture source for reference:\n```rust\n{fixture}\n```",
                 n = listed.len(),
                 listed = listed.join("\n"),
+                first = input.props.first().map(|p| p.title.as_str()).unwrap_or("property"),
                 component = component,
                 cheat = TEST_CHEAT_SHEET,
             );
@@ -821,11 +869,10 @@ impl Backend for CrucibleApp {
             return None;
         }
         let program = &input.program;
-        let listed: Vec<String> = self
-            .units(input)
-            .into_iter()
-            .zip(input.props.iter())
-            .map(|(u, p)| format!("- fn `{}` — [{}] {}: {}", u.unit, p.sort, p.title, p.description))
+        let listed: Vec<String> = input
+            .props
+            .iter()
+            .map(|p| format!("- [{}] {}: {}", p.sort, p.title, p.description))
             .collect();
         let component = serde_json::to_string_pretty(&input.component)
             .unwrap_or_else(|_| input.component.to_string());
@@ -834,7 +881,8 @@ impl Backend for CrucibleApp {
             "Evaluate the Crucible fuzz-test suite below for the Solana program `{program}`. \
              Decide, per property, whether a PASSING fuzz campaign is real evidence — not merely \
              that the tests compile (the build gate already ensures that).\n\n\
-             Properties this suite must demonstrate (one test fn each, named EXACTLY as shown):\n\
+             Properties this suite must demonstrate (ALL checked inside the single \
+             `{SINGLE_HARNESS_FN}` invariant fn):\n\
              {listed}\n\n\
              Program API (instructions / accounts / state — driven via the fixture's `action_*` \
              methods):\n{component}\n\n\
@@ -855,20 +903,13 @@ impl Backend for CrucibleApp {
         sandbox: &Sandbox,
     ) -> CompileResult {
         let program = &input.program;
-        // Setup: dry-run the fixture behind a probe test. Component: fixture + the authored
-        // tests, dry-run behind the first unit's feature (all fns compile regardless of which
-        // feature gates `main`, so one build proves the whole harness compiles).
+        // Setup: dry-run the fixture behind a probe test. Component: fixture + the authored tests,
+        // dry-run behind the shared harness feature `c_invariants` (which gates `main`).
         let (main_rs, feature) = if input.kind == "setup" {
             (format!("{spec}{PROBE_FN}"), "c_probe".to_string())
         } else {
             let fixture = ctx_str(input, "fixture");
-            let feature = self
-                .units(input)
-                .into_iter()
-                .next()
-                .map(|u| u.unit)
-                .unwrap_or_else(|| "c_probe".to_string());
-            (format!("{fixture}\n\n{spec}"), feature)
+            (format!("{fixture}\n\n{spec}"), SINGLE_HARNESS_FN.to_string())
         };
         let files = crate_files(program, main_rs, std::slice::from_ref(&feature));
         let args = vec![
@@ -912,7 +953,22 @@ impl Backend for CrucibleApp {
             "--timeout".to_string(),
             timeout.to_string(),
         ];
-        let verdict = |o: &str| ValidateOutcome::Verdict { verdict: Verdict::with_outcome(o) };
+        // The report units this fuzz target covers (Crucible: every invariant shares `c_invariants`).
+        // The backend owns attribution — it maps ONE run to a verdict per covered unit.
+        let covered: Vec<Unit> =
+            self.units(input).into_iter().filter(|u| u.target_or_unit() == unit).collect();
+        let all = |o: &str, detail: Option<String>| -> ValidateOutcome {
+            ValidateOutcome::Verdicts {
+                verdicts: covered
+                    .iter()
+                    .map(|u| {
+                        let mut v = Verdict::with_outcome(o);
+                        v.detail = detail.clone();
+                        (u.unit.clone(), v)
+                    })
+                    .collect(),
+            }
+        };
         match run_confined(sandbox, "crucible", &args, &files, workdir) {
             Ok(out) => {
                 let combined = format!("{}\n{}", out.stdout, out.stderr);
@@ -921,28 +977,21 @@ impl Backend for CrucibleApp {
                 // build failure. This keeps `error[...]`-looking runtime/log text in a clean
                 // (exit 0) fuzz run from being misread as a build failure.
                 if combined.contains("[FUZZ_FINDING]") {
-                    // A crash = the property was refuted (a counterexample). Carry the finding
-                    // (assertion message + crash id) so the BAD verdict explains itself.
-                    let mut v = Verdict::with_outcome("BAD");
-                    v.detail = finding_detail(&combined);
-                    ValidateOutcome::Verdict { verdict: v }
+                    // A crash refutes ONE invariant — pin BAD to the property the finding names
+                    // (each assertion is tagged `[<title>]`), holding the rest GOOD over the
+                    // explored space. If it can't be attributed, mark all BAD (never hide it).
+                    attribute_finding(&covered, finding_detail(&combined))
                 } else if out.exit_code == 0 {
-                    verdict("GOOD") // ran to the budget with no violation = held
+                    all("GOOD", None) // ran to the budget with no violation = every invariant held
                 } else if is_build_error(&combined) {
                     // Shared build; re-author the whole spec (docs/rust-backend-api.md).
                     ValidateOutcome::BuildFailed { errors: build_errors(&out) }
                 } else {
                     // Non-zero exit with no build markers and no finding — capture the tail.
-                    let mut v = Verdict::with_outcome("ERROR");
-                    v.detail = Some(build_errors(&out));
-                    ValidateOutcome::Verdict { verdict: v }
+                    all("ERROR", Some(build_errors(&out)))
                 }
             }
-            Err(e) => {
-                let mut v = Verdict::with_outcome("ERROR");
-                v.detail = Some(e);
-                ValidateOutcome::Verdict { verdict: v }
-            }
+            Err(e) => all("ERROR", Some(e)),
         }
     }
 

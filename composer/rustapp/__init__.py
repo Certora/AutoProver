@@ -14,7 +14,7 @@ This package is the Python side of the seam described in
 
     descriptor() -> str                         # the AppDescriptor (declarative spine)
     validate_preconditions(args_json) -> str|None
-    units(input_json) -> str                    # the report rows / fuzz targets
+    units(input_json) -> str                    # the report rows / validation units
     author_prompt(input_json, failure_json|None) -> str
     judge_prompt(input_json, spec) -> str|None
     compile(input_json, spec, workdir, sandbox_json) -> str      # BLOCKING (run-confined)

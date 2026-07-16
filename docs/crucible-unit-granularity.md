@@ -1,10 +1,20 @@
 # Crucible unit granularity: per-instruction vs whole-program (global) fuzzing scenarios
 
-> **Status: implemented (commit fd51700).** Solana now uses global extraction with
-> per-invariant fuzz units (recommendation §6, steps 1+2 combined). The front-half gate
-> confirms it yields cross-instruction invariants (e.g. "cumulative withdrawn ≤ cumulative
-> deposited across all calls", "rent exemption preserved after ANY instruction"). The rest
-> of this note is the original decision record.
+> **Status: implemented (commit fd51700), then collapsed to a single harness (prototype).**
+> Solana first used global extraction with per-invariant fuzz units (recommendation §6). It now
+> **collapses all invariants into one whole-program harness + run** — the "single whole-program
+> unit" option §3/§6 identified and deferred *for attribution reasons that finding-level
+> observability now covers* (each `fuzz_assert` is tagged with its property title, so a
+> counterexample names the property it refutes). This is the `Ecosystem.collapse_units` path
+> (`composer/pipeline/ecosystem.py` → `SOLANA`; `_extract_all` in `core.py`) with a single
+> `c_invariants` fn (`rust/crucible-app/src/lib.rs`). Trade-off realized: one build + one fuzz run
+> for the whole program (vs N). Attribution is preserved: each property is still its own report
+> row (`c_<slug>`) sharing the single fuzz `target` (`Unit.target` in the SDK), and the host
+> (`_attribute_run`) pins a counterexample to the property the finding names (each assertion is
+> tagged with its property title), holding the rest GOOD — so a single run yields per-property
+> verdicts. Measured e2e: **0:59:22** for the whole vault (13 invariants), vs 1:33:20 for the
+> per-invariant in-loop run and 1:53:04 for the original — one build + one campaign instead of 13.
+> The rest of this note is the original decision record.
 
 Design note for [crucible-application.md §10 Q1](./crucible-application.md) — "are we
 using the right unit granularity for a fuzzer?" It describes moving Crucible's

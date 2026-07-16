@@ -76,7 +76,7 @@ def summarize_verdicts(
     """Extract the per-unit verdicts baked into a completed run's ``outcomes``.
 
     Only *delivered* units carry a verdict; give-ups / exceptions are already surfaced in
-    ``result.failures`` and skipped here. Each per-invariant unit bakes a single verdict, so we
+    ``result.failures`` and skipped here. Each delivered unit bakes a single verdict, so we
     read the one entry (falling back to UNKNOWN if a delivered result somehow carries none)."""
     verdicts: list[UnitVerdict] = []
     for o in result.outcomes:

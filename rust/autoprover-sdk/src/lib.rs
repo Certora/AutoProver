@@ -76,7 +76,7 @@ pub struct ArgSpec {
 ///
 /// A `notice` kind is surfaced as a persistent, always-visible callout (plus a toast)
 /// rather than a line in the collapsible per-task events log — for one-shot important
-/// results such as a per-invariant verdict. Ordinary kinds stream into the log.
+/// results such as a per-unit verdict. Ordinary kinds stream into the log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventKind {
     pub kind: String,
@@ -266,11 +266,25 @@ pub enum CompileResult {
     Failed { errors: String },
 }
 
-/// One report row / fuzz target: a property title and its backend-specific unit name.
+/// One report row: a property title and its backend-specific unit name (the rule the report keys
+/// by). `target` is the *validation target the host runs* — several report units may share one
+/// target (e.g. Crucible puts every invariant in one `c_invariants` target), so the host runs the
+/// target once and the backend attributes the outcome back to each unit. `None` ⇒ the unit is its
+/// own target (one run per unit, the default).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Unit {
     pub property: String,
     pub unit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+impl Unit {
+    /// The validation target this unit is checked by — its own `unit` name unless it shares a
+    /// target with others.
+    pub fn target_or_unit(&self) -> &str {
+        self.target.as_deref().unwrap_or(&self.unit)
+    }
 }
 
 /// A pure plan for preparing the workspace before formalization (Crucible: place the harness
@@ -309,16 +323,18 @@ pub struct SandboxGrants {
     pub extra_env: Vec<String>,
 }
 
-/// The result of `validate` — the fused build+check for one unit. Either the harness failed
-/// to BUILD (so the whole spec must be re-authored — the build is shared across units), or it
-/// built and produced a per-unit `Verdict`. Fusing the build gate into `validate` (rather than a
-/// separate `compile` dry-run per unit) is the component path's efficiency win — one toolchain
-/// run per unit, as the old loop did (docs/rust-backend-api.md; e2e was ~2× without it).
+/// The result of `validate` — the fused build+check for one validation **target**. Either the
+/// build failed (so the whole spec must be re-authored — the build is shared), or it built and
+/// produced a `Verdict` **per report unit the target covers** (`(unit, verdict)`). A target may
+/// cover several units (e.g. Crucible runs every invariant in one target), and the backend — which
+/// owns its own result/failure format — attributes the run to those units; the host records the
+/// verdicts verbatim (it does no verdict logic). Fusing the build gate into `validate` (rather than
+/// a separate `compile` dry-run) is the component path's efficiency win (docs/rust-backend-api.md).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ValidateOutcome {
     BuildFailed { errors: String },
-    Verdict { verdict: Verdict },
+    Verdicts { verdicts: Vec<(String, Verdict)> },
 }
 
 /// A per-unit outcome (mirrors `composer…report.collect.Verdict`). `outcome` is one of
@@ -332,9 +348,9 @@ pub struct Verdict {
     pub duration_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit_file: Option<String>,
-    /// Human-readable explanation of a non-GOOD outcome — the counterexample / assertion message
-    /// for a `BAD`, or the error text for an `ERROR`. Surfaced live and persisted to the report so
-    /// a verdict is self-explaining (otherwise a bare `BAD` gives no clue what the fuzzer found).
+    /// Human-readable explanation of a non-GOOD outcome — the failure detail (a counterexample /
+    /// assertion message) for a `BAD`, or the error text for an `ERROR`. Surfaced live and persisted
+    /// to the report so a verdict is self-explaining (otherwise a bare `BAD` gives no clue why).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -701,7 +717,7 @@ pub fn ffi_validate(
         Err(e) => {
             let mut v = Verdict::with_outcome("ERROR");
             v.detail = Some(e);
-            ValidateOutcome::Verdict { verdict: v }
+            ValidateOutcome::Verdicts { verdicts: vec![(unit.to_string(), v)] }
         }
     };
     serde_json::to_string(&outcome).unwrap_or_default()

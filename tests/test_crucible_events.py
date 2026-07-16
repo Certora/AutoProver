@@ -45,11 +45,14 @@ def test_descriptor_declares_design_doc_discovery_phase():
     assert _discovery_phase(app) is app.phase["discover_design_doc"]
 
 
-def test_units_are_one_c_slug_per_property():
+def test_each_property_is_its_own_row_sharing_one_fuzz_target():
+    # Collapse (docs/crucible-unit-granularity.md §3): every property is its own report row
+    # (`c_<slug>`) but they all share ONE fuzz `target` (`c_invariants`), so the host runs a
+    # single build + fuzz and attributes the outcome per property.
     units = json.loads(crucible_app.units(_component_input("solvency", "conservation")))
     assert units == [
-        {"property": "p solvency", "unit": "c_solvency"},
-        {"property": "p conservation", "unit": "c_conservation"},
+        {"property": "p solvency", "unit": "c_solvency", "target": "c_invariants"},
+        {"property": "p conservation", "unit": "c_conservation", "target": "c_invariants"},
     ]
 
 
@@ -57,12 +60,13 @@ def test_setup_has_no_units():
     assert json.loads(crucible_app.units(_setup_input())) == []
 
 
-def test_component_author_prompt_lists_each_units_fn_name():
-    prompt = json.loads(crucible_app.author_prompt(_component_input("solvency"), None))
+def test_component_author_prompt_asks_for_one_invariant_fn_covering_all_props():
+    prompt = json.loads(crucible_app.author_prompt(_component_input("solvency", "conservation"), None))
     assert prompt.get("system") is None
-    # Lists the required fn name + frames the whole-program invariant authoring task.
-    assert "c_solvency" in prompt["instruction"]
-    assert "test function" in prompt["instruction"]
+    ins = prompt["instruction"]
+    # One c_invariants fn asserting ALL listed properties.
+    assert "c_invariants" in ins
+    assert "p solvency" in ins and "p conservation" in ins
 
 
 def test_setup_author_prompt_asks_for_a_fixture():
@@ -77,15 +81,15 @@ def test_author_prompt_failure_appends_revise_context():
 
 
 def test_component_judge_prompt_reviews_the_suite():
-    spec = "#[invariant_test]\nfn c_x(fixture: &mut Fixture) {}"
-    raw = crucible_app.judge_prompt(_component_input("x"), spec)
+    spec = "#[invariant_test]\nfn c_invariants(fixture: &mut Fixture) {}"
+    raw = crucible_app.judge_prompt(_component_input("solvency"), spec)
     assert raw is not None
     prompt = json.loads(raw)
-    # A reviewer persona + the criteria-based task, listing the unit under review and the
+    # A reviewer persona + the criteria-based task, listing the properties under review and the
     # accept/reject JSON contract the host's _parse_judge consumes.
     assert "Solana security engineer" in prompt["system"]
     ins = prompt["instruction"]
-    assert "c_x" in ins
+    assert "p solvency" in ins and "c_invariants" in ins
     assert "Criterion 3 — Reachability" in ins
     assert '{"accept": false' in ins
     assert spec in ins
@@ -138,6 +142,43 @@ def test_fetch_verdicts_threads_finding_detail_into_message():
     assert verdicts["c_x"].message == "crash abc: deposit(5) — expected 105 got 100"
     # GOOD verdict with no detail carries no message.
     assert verdicts["c_y"].message is None
+
+
+def test_validate_returns_per_unit_verdicts_and_the_host_records_them():
+    # The backend owns attribution: `validate` returns a verdict PER report unit the target covers
+    # (the host does no verdict logic). Here we exercise the FFI contract shape + fetch_verdicts.
+    import asyncio
+    from pathlib import Path
+
+    from composer.pipeline.core import Delivered
+    from composer.rustapp.adapter import RustFormalizer
+    from composer.rustapp.descriptor import AppDescriptor
+    from composer.rustapp.result import RustFormalResult
+    from composer.spec.source.report.collect import ReportComponentInput
+    from composer.spec.source.report.schema import Outcome
+
+    # A parse error still yields the per-unit `verdicts` shape the host consumes.
+    out = json.loads(crucible_app.validate("not json", "spec", "c_invariants", "/tmp", "{}"))
+    assert out["kind"] == "verdicts"
+    assert out["verdicts"][0][0] == "c_invariants"
+    assert out["verdicts"][0][1]["outcome"] == "ERROR"
+
+    # And the host records whatever per-unit verdicts the backend produced (one BAD, one GOOD).
+    fz = RustFormalizer(crucible_app, AppDescriptor.model_validate_json(crucible_app.descriptor()))
+    res = RustFormalResult(
+        units=[("solvency", ["c_solvency"]), ("conservation", ["c_conservation"])],
+        verdicts={
+            "c_conservation": {"outcome": "BAD", "detail": "crash abc: [conservation] drift"},
+            "c_solvency": {"outcome": "GOOD"},
+        },
+    )
+    inp = ReportComponentInput(
+        name="vault", props=[], formalized=Delivered(res, Path("fuzz/vault/src/main.rs"))
+    )
+    verdicts = asyncio.run(fz.fetch_verdicts(inp))
+    assert verdicts["c_conservation"].outcome == Outcome.BAD
+    assert "conservation" in verdicts["c_conservation"].message
+    assert verdicts["c_solvency"].outcome == Outcome.GOOD
 
 
 def test_author_prompt_judge_failure_uses_review_framing():

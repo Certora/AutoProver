@@ -358,7 +358,7 @@ async def author_and_compile(
 ) -> str | GaveUp:
     """Author an artifact's spec, gate it with the backend's ``compile`` (retry on failure) and
     optional ``judge``. Returns the compiled spec text, or :class:`GaveUp`. Used for artifacts
-    that have no fuzz units to validate — e.g. Crucible's shared setup fixture (a compile-only
+    that have no report units to validate — e.g. Crucible's shared setup fixture (a compile-only
     gate). The component path fuses the build gate into ``validate`` instead (see
     :meth:`RustFormalizer.formalize`)."""
     input_json = json.dumps(input_dict)
@@ -558,15 +558,21 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 judge=judge_hook, memory_tool=memory_tool,
             )
 
+            # Each report unit declares the *target* that validates it (its own name by default;
+            # e.g. Crucible shares one `c_invariants` target across all its units). Run each
+            # DISTINCT target once; the backend returns a verdict per unit it covers — it owns
+            # attribution (how a failure maps to units), the host records verbatim.
+            targets = list(dict.fromkeys(u.get("target") or u["unit"] for u in units))
+            prop_of = {u["unit"]: u["property"] for u in units}
+
             verdicts: dict[str, dict] = {}
             property_units: list[tuple[str, list[str]]] = []
             build_failed: str | None = None
-            for u in units:
-                unit = u["unit"]
+            for target in targets:
                 res = json.loads(
                     await _run_blocking(
-                        lambda unit=unit, spec=spec: self._module.validate(
-                            input_json, spec, unit, str(workdir), sandbox_json
+                        lambda target=target, spec=spec: self._module.validate(
+                            input_json, spec, target, str(workdir), sandbox_json
                         ),
                         self._command_sem,
                     )
@@ -574,16 +580,17 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 if res.get("kind") == "build_failed":
                     build_failed = res.get("errors", "")
                     break
-                verdict = res["verdict"]
-                verdicts[unit] = verdict
-                property_units.append((u["property"], [unit]))
-                detail = verdict.get("detail")
-                line = f'{u["property"]}: {verdict.get("outcome")}'
-                emit(
-                    "verdict",
-                    {"outcome": verdict.get("outcome"), "name": u["property"],
-                     "line": f"{line} — {detail}" if detail else line},
-                )
+                for unit, verdict in res["verdicts"]:
+                    verdicts[unit] = verdict
+                    prop = prop_of.get(unit, unit)
+                    property_units.append((prop, [unit]))
+                    detail = verdict.get("detail")
+                    line = f'{prop}: {verdict.get("outcome")}'
+                    emit(
+                        "verdict",
+                        {"outcome": verdict.get("outcome"), "name": prop,
+                         "line": f"{line} — {detail}" if detail else line},
+                    )
             if build_failed is not None:
                 failure = {"draft": spec, "errors": build_failed}
                 emit("build_output", {"line": _first_line(build_failed) or "build failed; revising"})
@@ -725,7 +732,7 @@ class RustBackend:
     _core_phases: CorePhases
     artifact_store: ArtifactStore[Any, RustFormalResult]
     ecosystem: Ecosystem[Any, Any, Any]
-    # Wall-clock ceiling for a single compile/validate (a first harness build can be minutes).
+    # Wall-clock ceiling for a single compile/validate (a first build can be minutes).
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     # How to confine every toolchain run (docs/command-sandbox.md). None → unsandboxed.
     sandbox: SandboxConfig | None = None

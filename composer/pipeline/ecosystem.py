@@ -117,8 +117,14 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     global_extraction: bool = False
     #: The whole-program context the global extraction reads (only used when global_extraction).
     extraction_unit: Callable[[Main], FeatureUnit] | None = None
-    #: Build the per-property unit from (main, property, index) (only used when global_extraction).
+    #: Build the per-property unit from (main, property, index) (only used when global_extraction
+    #: and NOT collapse_units).
     property_unit: Callable[[Main, PropertyFormulation, int], FeatureUnit] | None = None
+    #: When True (with global_extraction), keep all extracted properties in a SINGLE batch on the
+    #: whole-program ``extraction_unit`` — one formalization, one harness, one run covering every
+    #: invariant (docs/crucible-unit-granularity.md §3; prototype of the "single whole-program
+    #: unit" collapse). When False, fan each property into its own ``property_unit``.
+    collapse_units: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -303,11 +309,13 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaInstructionIns
     locate_main=_solana_locate_main,
     units=_solana_units,
     analysis_extra_input=_solana_analysis_extra_input,
-    # Fuzzing wants whole-program invariants (one run per invariant), not per-instruction
-    # properties — docs/crucible-unit-granularity.md.
+    # Fuzzing wants whole-program invariants — docs/crucible-unit-granularity.md. Prototype:
+    # collapse all invariants into ONE whole-program harness + run (§3), instead of one per
+    # invariant, now that finding-level attribution recovers which property a counterexample hits.
     global_extraction=True,
     extraction_unit=_solana_extraction_unit,
     property_unit=_solana_property_unit,
+    collapse_units=True,
 )
 
 

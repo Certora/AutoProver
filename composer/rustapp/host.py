@@ -47,8 +47,8 @@ class BackendOptions:
     """Mutable run options closed over by :meth:`RustApplication.make_backend`.
 
     The CLI can adjust these (e.g. the sandbox) after building the application but
-    before :func:`run_application`, keeping one phase enum. Backend tuning knobs like a
-    fuzz budget travel as descriptor-declared args in :attr:`declared_args`.
+    before :func:`run_application`, keeping one phase enum. Backend-specific tuning knobs
+    (e.g. a fuzz budget) travel as descriptor-declared args in :attr:`declared_args`.
     """
 
     command_timeout_s: int = DEFAULT_TIMEOUT_S

@@ -78,7 +78,7 @@ class EventKind(BaseModel):
 
     ``notice`` events are surfaced as a persistent, always-visible callout (plus a toast)
     rather than a line in the collapsible per-task events log — for one-shot important
-    results such as a per-invariant verdict. Defaults to ``False`` so wheels built before
+    results such as a per-unit verdict. Defaults to ``False`` so wheels built before
     the field existed still load."""
 
     kind: str

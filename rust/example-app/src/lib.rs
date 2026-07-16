@@ -69,7 +69,7 @@ impl Backend for EchoApp {
             .enumerate()
             .map(|(i, p)| {
                 let slug = if p.slug.is_empty() { format!("p{i}") } else { p.slug.clone() };
-                Unit { property: p.title.clone(), unit: format!("rule_{slug}") }
+                Unit { property: p.title.clone(), unit: format!("rule_{slug}"), target: None }
             })
             .collect()
     }
@@ -101,12 +101,12 @@ impl Backend for EchoApp {
         &self,
         _input: &AuthorInput,
         _spec: &str,
-        _unit: &str,
+        unit: &str,
         _workdir: &Path,
         _sandbox: &Sandbox,
     ) -> ValidateOutcome {
-        // Self-contained: any well-formed spec builds; every unit "passes".
-        ValidateOutcome::Verdict { verdict: Verdict::with_outcome("GOOD") }
+        // Self-contained: any well-formed spec builds; the (own-target) unit "passes".
+        ValidateOutcome::Verdicts { verdicts: vec![(unit.to_string(), Verdict::with_outcome("GOOD"))] }
     }
 }
 

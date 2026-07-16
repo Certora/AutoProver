@@ -216,9 +216,14 @@ above. Two readable `await`s over backend callouts; no state machine.
 - `compile(input, spec, workdir, sandbox)` → `run_confined(sandbox, "crucible", ["run", program,
   probe, "--release", "--dry-run"], files={"fuzz/<program>/src/main.rs": fixture+spec}, workdir)`;
   `Failed{errors: tail}` if `is_build_error(out)` or nonzero exit, else `Ok`.
-- `validate(input, spec, unit, workdir, sandbox)` → `run_confined(sandbox, "crucible", ["run",
-  program, unit, "--release", "--mode", "explore", "--timeout", n], files={main.rs: fixture+spec}, workdir)`;
-  `BAD` if stdout contains `[FUZZ_FINDING]`, else `GOOD`. One unit per call.
+- `validate(input, spec, target, workdir, sandbox)` → `run_confined(sandbox, "crucible", ["run",
+  program, target, "--release", "--mode", "explore", "--timeout", n], files={main.rs: fixture+spec},
+  workdir)`. `target` is the fuzz feature (Crucible's single `c_invariants`, shared by every
+  invariant — see `docs/crucible-unit-granularity.md`). The run is classified once (`[FUZZ_FINDING]`
+  → BAD, exit 0 → GOOD, build markers → `BuildFailed`) and **attributed by the backend** to a
+  `Verdict` per report unit the target covers (`ValidateOutcome::Verdicts`): a counterexample is
+  pinned to the property whose title the finding names (assertions are tagged `[<title>]`), the rest
+  held GOOD. The host records these verbatim — it owns no verdict logic and never parses a finding.
 - `finalize` → unchanged.
 
 Every piece is the body of a current `resume` arm turned into a pure/blocking function —
