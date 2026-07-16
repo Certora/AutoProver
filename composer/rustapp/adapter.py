@@ -470,10 +470,12 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 verdict = res["verdict"]
                 verdicts[unit] = verdict
                 property_units.append((u["property"], [unit]))
+                detail = verdict.get("detail")
+                line = f'{u["property"]}: {verdict.get("outcome")}'
                 emit(
                     "verdict",
                     {"outcome": verdict.get("outcome"), "name": u["property"],
-                     "line": f'{u["property"]}: {verdict.get("outcome")}'},
+                     "line": f"{line} — {detail}" if detail else line},
                 )
             if build_failed is not None:
                 failure = {"draft": spec, "errors": build_failed}
@@ -498,6 +500,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 line=v.get("line"),
                 duration_seconds=v.get("duration_seconds"),
                 unit_file=v.get("unit_file") or formalized.unit_file,
+                message=v.get("detail"),
             )
             for unit, v in formalized.result.verdicts.items()
         }

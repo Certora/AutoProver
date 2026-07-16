@@ -84,6 +84,11 @@ class RuleVerdict(BaseModel):
     line: int | None = None
     duration_seconds: float | None = None
     prover_link: str | None = None
+    message: str | None = Field(
+        default=None,
+        description="Human-readable explanation of a non-GOOD outcome (e.g. the fuzzer's "
+        "counterexample / failed-assertion message). Diagnostics only; may be absent.",
+    )
 
     @property
     def ref(self) -> RuleRef:

@@ -135,6 +135,9 @@ class RowView(TypedDict):
     line: int | None
     link: LinkView
     descriptions: list[str]
+    #: Backend diagnostic for a non-GOOD row (e.g. the fuzzer's counterexample / failed-assertion
+    #: message). ``None`` when the backend supplied none.
+    message: str | None
 
 
 class GroupView(TypedDict):
@@ -238,6 +241,7 @@ def _group_view(
             "line": rule.line if rule else None,
             "link": _link_view(rule.prover_link if rule else None),
             "descriptions": descriptions[ref],
+            "message": rule.message if rule else None,
         })
     return {
         "slug": group.slug,

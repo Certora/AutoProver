@@ -96,6 +96,37 @@ def test_setup_has_no_judge_prompt():
     assert crucible_app.judge_prompt(_setup_input(), "spec") is None
 
 
+def test_fetch_verdicts_threads_finding_detail_into_message():
+    # A BAD verdict's `detail` (the fuzzer's counterexample / assertion message, captured by
+    # `validate`) must reach the report `Verdict.message` so a bare BAD explains itself.
+    import asyncio
+    from pathlib import Path
+
+    from composer.pipeline.core import Delivered
+    from composer.rustapp.adapter import RustFormalizer
+    from composer.rustapp.descriptor import AppDescriptor
+    from composer.rustapp.result import RustFormalResult
+    from composer.spec.source.report.collect import ReportComponentInput
+    from composer.spec.source.report.schema import Outcome
+
+    desc = AppDescriptor.model_validate_json(crucible_app.descriptor())
+    fz = RustFormalizer(crucible_app, desc)
+    res = RustFormalResult(
+        verdicts={
+            "c_x": {"outcome": "BAD", "detail": "crash abc: deposit(5) — expected 105 got 100"},
+            "c_y": {"outcome": "GOOD"},
+        }
+    )
+    inp = ReportComponentInput(
+        name="vault", props=[], formalized=Delivered(res, Path("fuzz/vault/src/main.rs"))
+    )
+    verdicts = asyncio.run(fz.fetch_verdicts(inp))
+    assert verdicts["c_x"].outcome == Outcome.BAD
+    assert verdicts["c_x"].message == "crash abc: deposit(5) — expected 105 got 100"
+    # GOOD verdict with no detail carries no message.
+    assert verdicts["c_y"].message is None
+
+
 def test_author_prompt_judge_failure_uses_review_framing():
     # A judge rejection is NOT a build failure (the draft compiled): the revise prompt must
     # frame it as review feedback, not compiler errors to fix.

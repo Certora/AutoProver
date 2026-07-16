@@ -332,11 +332,19 @@ pub struct Verdict {
     pub duration_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit_file: Option<String>,
+    /// Human-readable explanation of a non-GOOD outcome — the counterexample / assertion message
+    /// for a `BAD`, or the error text for an `ERROR`. Surfaced live and persisted to the report so
+    /// a verdict is self-explaining (otherwise a bare `BAD` gives no clue what the fuzzer found).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl Verdict {
     pub fn with_outcome(outcome: impl Into<String>) -> Self {
-        Verdict { outcome: outcome.into(), line: None, duration_seconds: None, unit_file: None }
+        Verdict {
+            outcome: outcome.into(), line: None, duration_seconds: None, unit_file: None,
+            detail: None,
+        }
     }
 }
 
@@ -690,9 +698,11 @@ pub fn ffi_validate(
     let sandbox: Sandbox = parse(sandbox_json, "Sandbox").unwrap_or_default();
     let outcome = match parse::<AuthorInput>(input_json, "AuthorInput") {
         Ok(input) => b.validate(&input, spec, unit, std::path::Path::new(workdir), &sandbox),
-        Err(e) => ValidateOutcome::Verdict {
-            verdict: Verdict { outcome: "ERROR".into(), line: None, duration_seconds: None, unit_file: Some(e) },
-        },
+        Err(e) => {
+            let mut v = Verdict::with_outcome("ERROR");
+            v.detail = Some(e);
+            ValidateOutcome::Verdict { verdict: v }
+        }
     };
     serde_json::to_string(&outcome).unwrap_or_default()
 }

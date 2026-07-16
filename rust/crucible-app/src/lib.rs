@@ -572,6 +572,22 @@ fn is_build_error(out: &str) -> bool {
     out.contains("could not compile") || out.contains("error[") || out.contains("Build failed")
 }
 
+/// Pull the human-readable finding out of a `crucible run` log so a `BAD` verdict explains
+/// itself. Crucible prints `[FUZZ_FINDING] crash:<id> reproduces:<bool> summary:<msg>`, where
+/// `<msg>` is the failed `fuzz_assert_*` message (with the actual vs expected values). Returns
+/// `crash <id>: <msg>`, or the raw marker line if the summary can't be parsed, or None.
+fn finding_detail(out: &str) -> Option<String> {
+    let line = out.lines().find(|l| l.contains("[FUZZ_FINDING]"))?.trim();
+    match line.split_once("summary:") {
+        Some((head, summary)) if !summary.trim().is_empty() => {
+            let crash =
+                head.split_whitespace().find_map(|t| t.strip_prefix("crash:")).unwrap_or("?");
+            Some(format!("crash {crash}: {}", summary.trim()))
+        }
+        _ => Some(line.to_string()),
+    }
+}
+
 // ===========================================================================
 // Backend glue: small pure helpers shared by the callouts.
 // ===========================================================================
@@ -905,19 +921,26 @@ impl Backend for CrucibleApp {
                 // build failure. This keeps `error[...]`-looking runtime/log text in a clean
                 // (exit 0) fuzz run from being misread as a build failure.
                 if combined.contains("[FUZZ_FINDING]") {
-                    verdict("BAD") // a crash = the property was refuted (a counterexample)
+                    // A crash = the property was refuted (a counterexample). Carry the finding
+                    // (assertion message + crash id) so the BAD verdict explains itself.
+                    let mut v = Verdict::with_outcome("BAD");
+                    v.detail = finding_detail(&combined);
+                    ValidateOutcome::Verdict { verdict: v }
                 } else if out.exit_code == 0 {
                     verdict("GOOD") // ran to the budget with no violation = held
                 } else if is_build_error(&combined) {
                     // Shared build; re-author the whole spec (docs/rust-backend-api.md).
                     ValidateOutcome::BuildFailed { errors: build_errors(&out) }
                 } else {
-                    verdict("ERROR")
+                    // Non-zero exit with no build markers and no finding — capture the tail.
+                    let mut v = Verdict::with_outcome("ERROR");
+                    v.detail = Some(build_errors(&out));
+                    ValidateOutcome::Verdict { verdict: v }
                 }
             }
             Err(e) => {
                 let mut v = Verdict::with_outcome("ERROR");
-                v.unit_file = Some(e);
+                v.detail = Some(e);
                 ValidateOutcome::Verdict { verdict: v }
             }
         }
