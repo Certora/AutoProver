@@ -17,12 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterator, Literal, TypeVar, get_args
+from typing import Any, Callable, Iterator, Literal, TypeVar, get_args
 
+import ijson
 from packaging.version import Version
 from pydantic import ValidationError
 
@@ -112,25 +111,31 @@ class AstDump:
             return cls.from_dict(json.load(f), on_error=on_error, solc_version=solc_version)
 
     @classmethod
-    def load_cached(
+    def stream_units(
         cls,
         path: Path | str,
         *,
         on_error: OnError = "raw",
         solc_version: str | Version | None = None,
-    ) -> "AstDump":
-        """``load()`` memoized on (resolved path, mtime, size) — a setup run reads the
-        same dump at several points. The returned instance is shared: treat it as
-        read-only.
+        unit_filter: Callable[[str], bool] | None = None,
+    ) -> Iterator[FileAsts]:
+        """Stream the dump one compilation unit (outer key) at a time — the dump can
+        be multi-GB, and whole-file loading OOMs constrained runs; peak memory here
+        is bounded by the largest single unit. ``unit_filter`` (on the outer key)
+        skips units before any validation work. Consumers must drop each unit before
+        taking the next.
         """
-        stat = os.stat(path)
-        return _load_cached(
-            str(Path(path).resolve()),
-            stat.st_mtime_ns,
-            stat.st_size,
-            on_error,
-            str(solc_version) if solc_version is not None else None,
-        )
+        version = Version(solc_version) if isinstance(solc_version, str) else solc_version
+        for original_file, per_source in stream_raw_units(path):
+            if unit_filter is not None and not unit_filter(original_file):
+                continue
+            yield FileAsts(
+                original_file=original_file,
+                sources={
+                    source_path: _load_source(source_path, flat, on_error, version)
+                    for source_path, flat in per_source.items()
+                },
+            )
 
     @classmethod
     def from_dict(
@@ -200,11 +205,11 @@ def iter_nodes_of_type(source: SourceAst, model: type[N]) -> Iterator[N | dict[s
             yield raw_node
 
 
-@lru_cache(maxsize=8)
-def _load_cached(
-    resolved_path: str, _mtime_ns: int, _size: int, on_error: OnError, solc_version: str | None
-) -> AstDump:
-    return AstDump.load(resolved_path, on_error=on_error, solc_version=solc_version)
+def stream_raw_units(path: Path | str) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Stream raw ``(original_file, {source_path: flat_node_map})`` pairs without any
+    model validation — for raw-only passes like the legacy parent-graph builder."""
+    with open(path, "rb") as f:
+        yield from ijson.kvitems(f, "")
 
 
 def _load_source(

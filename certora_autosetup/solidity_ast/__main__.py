@@ -2,11 +2,12 @@
 
 Usage::
 
-    python -m certora_autosetup.solidity_ast [--json] <path/to/all_asts.json>
+    python -m certora_autosetup.solidity_ast [--json] [--solc-version V] <path/to/all_asts.json>
 
 Per source file: parse status, node counts, unknown node types, unmodeled fields,
 and round-trip fidelity (does the typed tree re-serialize to the exact source
-JSON?) — a quick way to validate the models against a real project's dump.
+JSON?) — a quick way to validate the models against a real project's dump. The
+dump is streamed one compilation unit at a time, so multi-GB dumps stay cheap.
 ``--json`` emits one machine-readable summary object instead of text.
 """
 
@@ -21,11 +22,11 @@ from typing import Any
 from .base import UnknownNode
 from .declarations import ContractDefinition
 from .diagnostics import roundtrip_diffs
-from .loader import AstDump
+from .loader import AstDump, FileAsts, SourceAst
 from .traversal import find_all, walk
 
 
-def _source_report(source_ast: Any) -> dict[str, Any]:
+def _source_report(source_ast: SourceAst) -> dict[str, Any]:
     if source_ast.root is None:
         return {
             "status": source_ast.raw_kind,
@@ -48,6 +49,39 @@ def _source_report(source_ast: Any) -> dict[str, Any]:
     }
 
 
+def _print_unit_text(file_asts: FileAsts, per_file: dict[str, dict[str, Any]]) -> None:
+    print(file_asts.original_file)
+    id_to_name = {
+        c.id: c.name
+        for source in file_asts.sources.values()
+        if source.root is not None
+        for c in find_all(source.root, ContractDefinition)
+    }
+    for source in file_asts.sources.values():
+        r = per_file[source.source_path]
+        if r["status"] != "ok":
+            detail = f": {r['error']}" if r.get("error") else ""
+            print(f"  {source.source_path}  [{r['status']}]{detail}")
+            continue
+        print(f"  {source.source_path}  [ok] {r['nodes']} nodes, {r['indexed']} with ids")
+        if r["unknown_node_types"]:
+            print(f"    unknown node types: {r['unknown_node_types']}")
+        if r["unmodeled_fields"]:
+            print(f"    unmodeled fields: {r['unmodeled_fields']}")
+        if r["roundtrip_diffs"]:
+            print(f"    roundtrip diffs ({len(r['roundtrip_diffs'])}):")
+            for d in r["roundtrip_diffs"][:10]:
+                print(f"      {d}")
+        assert source.root is not None
+        for contract in find_all(source.root, ContractDefinition):
+            bases = [
+                id_to_name.get(i, f"#{i}") for i in contract.linearizedBaseContracts[1:]
+            ]
+            abstract = "abstract " if contract.abstract else ""
+            inherits = f" is {', '.join(bases)}" if bases else ""
+            print(f"    {abstract}{contract.contractKind} {contract.name}{inherits}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument("dump", help="path to a .asts.json / all_asts.json file")
@@ -60,13 +94,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    dump = AstDump.load(args.dump, solc_version=args.solc_version)
     report: dict[str, dict[str, Any]] = {}
-    for file_asts in dump.files.values():
-        for source in file_asts.sources.values():
-            report.setdefault(file_asts.original_file, {})[source.source_path] = (
-                _source_report(source)
-            )
+    for file_asts in AstDump.stream_units(args.dump, solc_version=args.solc_version):
+        per_file = {
+            source.source_path: _source_report(source)
+            for source in file_asts.sources.values()
+        }
+        report[file_asts.original_file] = per_file
+        if not args.json:
+            _print_unit_text(file_asts, per_file)
 
     flat = [r for per_file in report.values() for r in per_file.values()]
     ok = [r for r in flat if r["status"] == "ok"]
@@ -87,36 +123,6 @@ def main(argv: list[str] | None = None) -> int:
         json.dump({"summary": summary, "files": report}, sys.stdout, indent=1)
         print()
     else:
-        for original_file, per_file in report.items():
-            print(original_file)
-            for source_path, r in per_file.items():
-                if r["status"] != "ok":
-                    detail = f": {r['error']}" if r.get("error") else ""
-                    print(f"  {source_path}  [{r['status']}]{detail}")
-                    continue
-                print(f"  {source_path}  [ok] {r['nodes']} nodes, {r['indexed']} with ids")
-                if r["unknown_node_types"]:
-                    print(f"    unknown node types: {r['unknown_node_types']}")
-                if r["unmodeled_fields"]:
-                    print(f"    unmodeled fields: {r['unmodeled_fields']}")
-                if r["roundtrip_diffs"]:
-                    print(f"    roundtrip diffs ({len(r['roundtrip_diffs'])}):")
-                    for d in r["roundtrip_diffs"][:10]:
-                        print(f"      {d}")
-                root = next(
-                    s.root
-                    for fa in dump.files.values()
-                    for s in fa.sources.values()
-                    if s.source_path == source_path and s.root is not None
-                )
-                id_to_name = {c.id: c.name for c in find_all(root, ContractDefinition)}
-                for contract in find_all(root, ContractDefinition):
-                    bases = [
-                        id_to_name.get(i, f"#{i}") for i in contract.linearizedBaseContracts[1:]
-                    ]
-                    abstract = "abstract " if contract.abstract else ""
-                    inherits = f" is {', '.join(bases)}" if bases else ""
-                    print(f"    {abstract}{contract.contractKind} {contract.name}{inherits}")
         print(
             f"\n{summary['parsed']}/{summary['sources']} sources parsed, "
             f"{summary['fully_clean']} fully clean (no unknowns, no unmodeled fields, "

@@ -17,7 +17,7 @@ import sys
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 if TYPE_CHECKING:
     from certora_autosetup.setup.setup_summaries import SummarySetup
@@ -33,8 +33,10 @@ from certora_autosetup.setup.solidity_utils import extract_definitions_from_soli
 from certora_autosetup.solidity_ast import (
     AstDump,
     ContractDefinition,
+    FileAsts,
     build_parent_graph_json,
     iter_nodes_of_type,
+    stream_raw_units,
 )
 from packaging.version import Version
 from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
@@ -72,13 +74,19 @@ class _ContractDeclView:
     linearized_base_ids: List[int]
 
 
-def _iter_contract_declarations(dump: AstDump) -> Iterator[_ContractDeclView]:
-    """Every contract declaration in an AST dump: typed where the models parsed,
-    completed by a raw flat-map sweep for anything the typed walk could not reach
-    (a solc surprise cannot hide contracts from setup; Vyper sources contribute
-    nothing since they have no ContractDefinition nodes)."""
-    for _, source in dump.iter_sources():
-        for node in iter_nodes_of_type(source, ContractDefinition):
+def _iter_contract_declarations(units: Iterable[FileAsts]) -> Iterator[_ContractDeclView]:
+    """Every contract declaration in a stream of compilation units (typically
+    ``AstDump.stream_units(...)``, so the multi-GB dump is never fully in memory):
+    typed where the models parsed, completed by a raw flat-map sweep for anything
+    the typed walk could not reach (a solc surprise cannot hide contracts from
+    setup; Vyper sources contribute nothing — no ContractDefinition nodes)."""
+    for file_asts in units:
+        for source in file_asts.sources.values():
+            yield from _unit_contract_declarations(source)
+
+
+def _unit_contract_declarations(source) -> Iterator[_ContractDeclView]:
+    for node in iter_nodes_of_type(source, ContractDefinition):
             if isinstance(node, ContractDefinition):
                 yield _ContractDeclView(
                     source_path=source.source_path,
@@ -770,8 +778,7 @@ class SetupProver:
         ast_path = self._build_dir / FILE_BUILD_ASTS if self._build_dir else None
         if not ast_path or not ast_path.exists():
             return {}
-        dump = AstDump.load_cached(ast_path)
-        for decl in _iter_contract_declarations(dump):
+        for decl in _iter_contract_declarations(AstDump.stream_units(ast_path)):
             if decl.contract_kind != "interface" and decl.name:
                 rel = self.scope.get_relative_path(Path(decl.source_path))
                 contracts_by_file.setdefault(rel, set()).add(decl.name)
@@ -1182,13 +1189,12 @@ class SetupProver:
             return inheritance_info, abstract_contracts
 
         try:
-            dump = AstDump.load_cached(ast_file_path)
-
             self.log(f"Extracting inheritance info from {ast_file_path}")
 
-            declarations = list(_iter_contract_declarations(dump))
+            # Stream the (multi-GB) .asts.json once, keeping only the slim per-contract
+            # views needed below so the dump is never fully materialized.
+            declarations = list(_iter_contract_declarations(AstDump.stream_units(ast_file_path)))
 
-            # Extract inheritance info from AST structure
             # Build ID to contract name mapping once
             id_to_name = {
                 decl.node_id: decl.name for decl in declarations if decl.node_id and decl.name
@@ -1348,11 +1354,10 @@ class SetupProver:
         self.log("Building AST parent graph...")
 
         try:
-            with open(ast_path, 'r') as f:
-                asts_data = json.load(f)
-
-            # Build parent graph: node_id -> parent_node_id (byte-compatible legacy format)
-            parent_graph = build_parent_graph_json(asts_data)
+            # Build parent graph: node_id -> parent_node_id (byte-compatible legacy
+            # format, streamed one compilation unit at a time — the dump can be
+            # multi-GB)
+            parent_graph = build_parent_graph_json(stream_raw_units(ast_path))
 
             # Write parent graph to JSON
             graph_path = self.getASTParentGraphPath()

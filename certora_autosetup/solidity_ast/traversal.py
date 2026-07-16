@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterator, TypeVar
+from typing import Any, Iterable, Iterator, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -76,18 +76,26 @@ def build_parent_map(root: AstNode) -> dict[int, int]:
     return parent_map
 
 
-def build_parent_graph_json(raw_asts: dict[str, Any]) -> dict[str, dict[str, dict[str, str]]]:
-    """Parent graph over a RAW ``.asts.json``-shaped dict, in the exact legacy format
-    written to ``all_ast_parent_graph.json``: {rel_path: {abs_path: {child_id: parent_id}}}
-    with string ids.
+def build_parent_graph_json(
+    raw_asts: dict[str, Any] | Iterable[tuple[str, Any]],
+) -> dict[str, dict[str, dict[str, str]]]:
+    """Parent graph over RAW ``.asts.json`` data (a full dict, or streamed
+    ``(relative_path, path_data)`` pairs from ``loader.stream_raw_units``), in the
+    exact legacy format written to ``all_ast_parent_graph.json``:
+    {rel_path: {abs_path: {child_id: parent_id}}} with string ids.
 
-    Deliberately operates on the raw dict with the historical child heuristic (a child
+    Deliberately operates on the raw dicts with the historical child heuristic (a child
     is any direct dict value, or list element, carrying an ``id`` key) and preserves
     raw key order, so ``json.dump(..., indent=2)`` output stays byte-identical to what
     existing readers of the file expect. Use :func:`build_parent_map` for typed code.
     """
+    units: Iterable[tuple[str, Any]]
+    if isinstance(raw_asts, dict):
+        units = cast("Iterable[tuple[str, Any]]", raw_asts.items())
+    else:
+        units = raw_asts
     parent_graph: dict[str, dict[str, dict[str, str]]] = {}
-    for relative_path, path_data in raw_asts.items():
+    for relative_path, path_data in units:
         parent_graph[relative_path] = {}
         for absolute_path, nodes in path_data.items():
             parent_graph[relative_path][absolute_path] = {}

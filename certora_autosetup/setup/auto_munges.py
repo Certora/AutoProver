@@ -260,8 +260,6 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
             log_func("Warning: .asts.json file not found, skipping code access munging", "WARNING")
             return
 
-        dump = AstDump.load(ast_path)
-
         # Load parent graph for efficient parent lookups
         parent_graph = _load_ast_parent_graph(ast_graph_path)
 
@@ -269,10 +267,12 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
         patches = []
 
         # Structure: dict[relative_path: dict[absolute_path: dict[node_id: node_data]]]
-        for relative_path, file_asts in dump.files.items():
-            # Skip files not in scope
-            if not scope.is_file_in_scope(Path(relative_path)):
-                continue
+        # Streamed one compilation unit at a time (the dump can be multi-GB); units
+        # whose main file is out of scope are skipped before any validation work.
+        for file_asts in AstDump.stream_units(
+            ast_path, unit_filter=lambda rel: scope.is_file_in_scope(Path(rel))
+        ):
+            relative_path = file_asts.original_file
 
             for absolute_path, source in file_asts.sources.items():
                 # Convert absolute path to relative for scope checking

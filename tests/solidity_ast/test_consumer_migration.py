@@ -57,7 +57,7 @@ def test_inheritance_extraction_parity(fixture: str) -> None:
     raw = _load_raw(fixture)
     expected_inheritance, expected_abstract = _legacy_inheritance(raw)
 
-    declarations = list(_iter_contract_declarations(AstDump.from_dict(raw)))
+    declarations = list(_iter_contract_declarations(AstDump.from_dict(raw).files.values()))
     id_to_name = {d.node_id: d.name for d in declarations if d.node_id and d.name}
     inheritance: dict[str, list[str]] = {}
     abstract: set[str] = set()
@@ -91,7 +91,7 @@ def test_declared_contracts_parity(fixture: str) -> None:
                     expected.setdefault(abs_path, set()).add(node["name"])
 
     actual: dict[str, set[str]] = {}
-    for decl in _iter_contract_declarations(AstDump.from_dict(raw)):
+    for decl in _iter_contract_declarations(AstDump.from_dict(raw).files.values()):
         if decl.contract_kind != "interface" and decl.name:
             actual.setdefault(decl.source_path, set()).add(decl.name)
 
