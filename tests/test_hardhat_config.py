@@ -55,3 +55,54 @@ def test_missing_flag_keeps_reported_solc(manager: HardhatManager) -> None:
         {"solidity": "0.8.19", "paths": {}}, "javascript"
     )
     assert config.solc_version == "0.8.19"
+
+
+# Declared EVM version (settings.evmVersion) must be honored: solc's default EVM
+# target can be newer than the declared one (shanghai/PUSH0 vs a pinned "paris"),
+# changing codegen and even failing with stack-too-deep where the declared
+# target compiles.
+
+EVM_VERSION_CONFIG = {
+    "solidity": {
+        "compilers": [
+            {
+                "version": "0.8.22",
+                "settings": {
+                    "optimizer": {"enabled": True, "runs": 1},
+                    "viaIR": True,
+                    "evmVersion": "paris",
+                },
+            }
+        ]
+    },
+    "paths": {},
+    "solidityImplicitDefault": False,
+}
+
+
+def test_evm_version_extracted_from_compilers_array(manager: HardhatManager) -> None:
+    config = manager._extract_config_from_json(EVM_VERSION_CONFIG, "javascript")
+    assert config.evm_version == "paris"
+
+
+def test_evm_version_extracted_from_simple_format(manager: HardhatManager) -> None:
+    config = manager._extract_config_from_json(
+        {"solidity": {"version": "0.8.22", "settings": {"evmVersion": "paris"}}, "paths": {}},
+        "javascript",
+    )
+    assert config.evm_version == "paris"
+
+
+def test_evm_version_absent(manager: HardhatManager) -> None:
+    assert manager._extract_config_from_json(EXPLICIT_CONFIG, "javascript").evm_version is None
+    assert (
+        manager._extract_config_from_json({"solidity": "0.8.19", "paths": {}}, "javascript").evm_version
+        is None
+    )
+
+
+def test_evm_version_emitted_in_certora_dict(manager: HardhatManager) -> None:
+    config = manager._extract_config_from_json(EVM_VERSION_CONFIG, "javascript")
+    assert config.to_certora_dict()["solc_evm_version"] == "paris"
+    no_evm = manager._extract_config_from_json(EXPLICIT_CONFIG, "javascript")
+    assert "solc_evm_version" not in no_evm.to_certora_dict()

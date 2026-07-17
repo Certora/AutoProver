@@ -57,6 +57,36 @@ from certora_autosetup.utils.types import ContractHandle, ContractInfo
 COMPONENT = "Autosetup"
 
 
+def _reconcile_evm_version_keys(
+    config: Dict[str, Any],
+    updates: Dict[str, Any],
+    contract_names: List[str],
+) -> None:
+    """Reconcile solc_evm_version / solc_evm_version_map in a merged conf, in place.
+
+    The compilation updates started as a superset of the base build-system conf,
+    so when they carry neither the scalar nor the map, the invalid_evm_version
+    workaround removed the declared version — drop the base-re-emitted scalar
+    rather than resurrect a rejected setting. When the map is present it
+    supersedes the scalar (the prover forbids both), but must cover every
+    contract: extend it with the declared scalar for contracts it misses (e.g. a
+    cancun override plus the project-declared version for the rest).
+    """
+    if (
+        updates
+        and "solc_evm_version" not in updates
+        and "solc_evm_version_map" not in updates
+    ):
+        config.pop("solc_evm_version", None)
+    if "solc_evm_version_map" in config:
+        declared = config.pop("solc_evm_version", None)
+        if declared:
+            config["solc_evm_version_map"] = {
+                **{name: declared for name in contract_names},
+                **config["solc_evm_version_map"],
+            }
+
+
 class Autosetup:
     """Execute the autosetup phase and return an AutosetupResult.
 
@@ -433,6 +463,12 @@ class Autosetup:
         # Same for solc_optimize and solc_optimize_map
         if "solc_optimize_map" in config:
             config.pop("solc_optimize", None)
+
+        _reconcile_evm_version_keys(
+            config,
+            self.compilation_config_updates,
+            [ch.contract_name for ch in self.contract_handles],
+        )
 
         # Filter per-contract maps to only include contracts in self.contract_handles
         contract_names = {ch.contract_name for ch in self.contract_handles}

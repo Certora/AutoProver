@@ -126,6 +126,11 @@ class CompilationWorkaroundManager:
         # firing for the same consumer (different missing library) regenerates the
         # consumer's harness covering every library it has needed so far.
         self._harnesses_by_consumer: Dict[str, List[Tuple[str, str]]] = {}
+        # True when _seed_compile_maps promoted a declared scalar solc_evm_version
+        # into a total solc_evm_version_map. Only such a map may be collapsed back
+        # to the scalar on finalize — an unseeded partial map (e.g. a single cancun
+        # entry) must never be promoted to a global scalar.
+        self._evm_version_seeded = False
         # Convert default version to the detected convention
         if solc_convention == SolcConvention.SOLC_SELECT and solc_default_version.startswith("solc") \
                 and not solc_default_version.startswith("solc-"):
@@ -149,7 +154,8 @@ class CompilationWorkaroundManager:
     # Conf keys that move together when promoting/collapsing a scalar <-> map.
 
     def _seed_compile_maps(self, config: Dict, contracts: List[ContractHandle]) -> None:
-        """Promote scalar ``solc``/``solc_via_ir`` into fully-populated maps.
+        """Promote scalar ``solc``/``solc_via_ir`` (and ``solc_evm_version``,
+        when declared) into fully-populated maps.
         """
         if "compiler_map" not in config:
             default = config.pop("solc", None) or self.solc_default_version
@@ -157,6 +163,14 @@ class CompilationWorkaroundManager:
         if "solc_via_ir_map" not in config:
             via_ir = config.pop("solc_via_ir", False)
             config["solc_via_ir_map"] = {c.contract_name: via_ir for c in contracts}
+        # solc_evm_version is seeded only when declared: absence means "each
+        # solc's own default", which a map entry cannot express (the prover
+        # requires every *_map to cover all files).
+        if "solc_evm_version_map" not in config:
+            evm_version = config.pop("solc_evm_version", None)
+            if evm_version:
+                config["solc_evm_version_map"] = {c.contract_name: evm_version for c in contracts}
+                self._evm_version_seeded = True
 
     def _normalize_compile_maps(self, config: Dict) -> None:
         """Collapse a uniform compiler_map / solc_via_ir_map back to its scalar if all values are same.
@@ -173,11 +187,17 @@ class CompilationWorkaroundManager:
             if value:  # False is the prover default — no scalar needed.
                 config["solc_via_ir"] = value
 
+        emap = config.get("solc_evm_version_map")
+        if self._evm_version_seeded and isinstance(emap, dict) and emap and len(set(emap.values())) == 1:
+            config["solc_evm_version"] = next(iter(emap.values()))
+            del config["solc_evm_version_map"]
+
     def _mirror_compile_flags(self, src: Dict, dst: Dict) -> None:
         """Copy the compile-flag keys from ``src`` onto ``dst`` (dropping any the
         src no longer has), so the disk conf and the returned dict stay in sync
         after seeding/normalizing."""
-        compile_flag_keys = ("solc", "compiler_map", "solc_via_ir", "solc_via_ir_map")
+        compile_flag_keys = ("solc", "compiler_map", "solc_via_ir", "solc_via_ir_map",
+                             "solc_evm_version", "solc_evm_version_map")
         for key in compile_flag_keys:
             dst.pop(key, None)
             if key in src:
@@ -242,12 +262,15 @@ class CompilationWorkaroundManager:
         5. Stack-too-deep errors (via-ir workaround)
         6. Feature only available on the via-ir pipeline (enable via-ir out of necessity)
         7. Unsupported solc version for via-ir (disable via-ir for old compiler versions)
-        8. Cancun opcode errors (mcopy/tload/tstore — set EVM version to cancun)
-        9. Unnamed return variable warning (ignore_solidity_warnings)
-        10. YulException stack-too-deep with via-ir (try adding optimizer first)
-        11. YulException stack-too-deep persists (stop asserting autofinder success)
-        12. Missing dependency library (generate harness with dummy usage so solc emits the lib)
-        13. Catch-all: use_relpaths_for_solc_json (last resort before import-patch fallback)
+        8. Declared EVM version rejected by solc (drop solc_evm_version)
+        9. Cancun opcode errors (mcopy/tload/tstore — set EVM version to cancun)
+        10. Unnamed return variable warning (ignore_solidity_warnings)
+        11. YulException stack-too-deep with via-ir (try adding optimizer first)
+        12. YulException persists with optimizer (fall back to solc's default Yul
+            steps via strict_solc_optimizer)
+        13. YulException still persists (stop asserting autofinder success)
+        14. Missing dependency library (generate harness with dummy usage so solc emits the lib)
+        15. Catch-all: use_relpaths_for_solc_json (last resort before import-patch fallback)
 
         Args:
             cmd: Command to execute
@@ -341,6 +364,14 @@ class CompilationWorkaroundManager:
                 apply_fn=self._apply_disable_via_ir_workaround_to_config,
                 enabled=global_via_ir_enabled,
             ),
+            # Ordered before cancun_opcode_evm_version: its apply drops every EVM
+            # version key, so a cancun entry added later in the same pass survives.
+            CompilationWorkaround(
+                name="invalid_evm_version",
+                detect_fn=lambda output: self._detect_invalid_evm_version(output, compilation_config),
+                apply_fn=self._apply_invalid_evm_version_workaround_to_config,
+                enabled=True,
+            ),
             CompilationWorkaround(
                 name="cancun_opcode_evm_version",
                 detect_fn=lambda output: self._detect_cancun_opcode_errors(output, contracts),
@@ -369,20 +400,41 @@ class CompilationWorkaroundManager:
                 apply_fn=self._apply_optimizer_for_via_ir,
                 enabled=True,
             ),
+            # Escalation after yul_exception_add_optimizer: with optimizer +
+            # via-ir, certoraRun substitutes finder-friendly Yul steps that give
+            # less stack relief than solc's own pipeline — try the default
+            # pipeline before touching the autofinder assertion. Only fires on
+            # output produced AFTER the optimizer was tried (not in the pass
+            # that just added it).
+            CompilationWorkaround(
+                name="yul_exception_strict_optimizer",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._detect_yul_exception_stack_too_deep(output)
+                    and "solc_optimize" in compilation_config
+                    and not compilation_config.get("strict_solc_optimizer", False)
+                    and "yul_exception_add_optimizer" not in applied_this_pass
+                    else None
+                ),
+                apply_fn=self._apply_strict_optimizer_for_via_ir,
+                enabled=True,
+            ),
             CompilationWorkaround(
                 name="yul_exception_stack_too_deep",
-                # This is the escalation step after yul_exception_add_optimizer:
-                # it must only fire on output produced AFTER the optimizer was
-                # tried, not in the same pass that just added it (the live
-                # "solc_optimize in config" check would otherwise see the value
-                # the previous workaround set seconds ago and stop asserting
-                # autofinder success without ever testing the optimizer).
+                # Final escalation step: it must only fire on output produced
+                # AFTER the optimizer and the strict-steps fallback were both
+                # tried, not in the same pass that just applied either (the live
+                # config checks would otherwise see values a previous workaround
+                # set seconds ago and stop asserting autofinder success without
+                # ever testing them).
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
                     and compilation_config.get("assert_autofinder_success", False)
                     and "solc_optimize" in compilation_config
+                    and compilation_config.get("strict_solc_optimizer", False)
                     and "yul_exception_add_optimizer" not in applied_this_pass
+                    and "yul_exception_strict_optimizer" not in applied_this_pass
                     else None
                 ),
                 apply_fn=self._apply_yul_exception_workaround,
@@ -635,6 +687,25 @@ class CompilationWorkaroundManager:
                                 return contract_name
                     break
         return None
+
+    def _detect_invalid_evm_version(self, output: str, compilation_config: Dict) -> Optional[str]:
+        """Detect solc rejecting the conf's EVM version.
+
+        solc emits the uniform text "Invalid EVM version requested." both for an
+        unknown version name and for a name newer than that solc supports, so no
+        solc-version/EVM-name table is needed — the compiler's own rejection is
+        the authoritative signal. Gated on the LIVE conf still carrying an EVM
+        version key: after the apply removed it the gate is false, so the
+        workaround cannot re-fire on a stale output.
+        """
+        if (
+            "solc_evm_version" not in compilation_config
+            and "solc_evm_version_map" not in compilation_config
+        ):
+            return None
+        if "Invalid EVM version requested" not in _normalize_ws(output):
+            return None
+        return "detected"
 
     def _detect_via_ir_required(
         self, output: str, contracts: List[ContractHandle]
@@ -932,11 +1003,46 @@ class CompilationWorkaroundManager:
     ) -> Dict:
         """Apply EVM version cancun workaround to config for a contract with Cancun opcode errors."""
         self.log(f"Applying EVM version cancun workaround for contract: {contract_name}")
+        # The prover rejects a conf carrying both the scalar and the map. A
+        # declared scalar was already promoted into the map by _seed_compile_maps,
+        # so dropping it here loses nothing.
+        updated_config_dict.pop("solc_evm_version", None)
+        compilation_config.pop("solc_evm_version", None)
         if "solc_evm_version_map" not in updated_config_dict:
             updated_config_dict["solc_evm_version_map"] = {}
         updated_config_dict["solc_evm_version_map"][contract_name] = "cancun"
         self.log(f"Adding EVM version cancun workaround for contract: {contract_name}")
         compilation_config.update(updated_config_dict)
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _apply_invalid_evm_version_workaround_to_config(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Drop the conf's EVM version after solc rejected it.
+
+        Removal is global per conf: the prover requires solc_evm_version_map to
+        cover every file and a map entry cannot say "use this solc's default",
+        so a per-contract drop is not expressible. Affected contracts fall back
+        to their compiler's default EVM version.
+        """
+        self.log(
+            "Declared EVM version is not supported by the solc in use — dropping "
+            "solc_evm_version; contracts fall back to their compiler's default",
+            "WARNING",
+        )
+        for config in (compilation_config, updated_config_dict):
+            config.pop("solc_evm_version", None)
+            config.pop("solc_evm_version_map", None)
+        self._evm_version_seeded = False
 
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
@@ -980,6 +1086,37 @@ class CompilationWorkaroundManager:
 
         return updated_config_dict
 
+    def _apply_strict_optimizer_for_via_ir(
+        self,
+        _detect_result: str,
+        updated_config_dict: Dict,
+        compilation_config: Dict,
+        config_file: Path,
+        _contracts: List[ContractHandle],
+    ) -> Dict:
+        """Fall back to solc's own Yul optimizer pipeline for stack relief.
+
+        With optimizer + via-ir, certoraRun substitutes its finder-friendly Yul
+        step sequence (full inliner removed so autofinders survive), which gives
+        less stack relief than solc's default pipeline and can leave — or cause —
+        stack-too-deep in functions the default pipeline compiles.
+        strict_solc_optimizer restores solc's own steps; autofinders that stop
+        surviving them are handled by the next escalation step.
+        """
+        self.log(
+            "YulException persists with via-ir + optimizer — retrying with solc's "
+            "default Yul optimizer steps (strict_solc_optimizer)",
+            "WARNING",
+        )
+
+        compilation_config["strict_solc_optimizer"] = True
+        updated_config_dict["strict_solc_optimizer"] = True
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
     def _apply_yul_exception_workaround(
         self,
         _detect_result: str,
@@ -997,8 +1134,9 @@ class CompilationWorkaroundManager:
         so removing them here would reintroduce the errors they fix.
         """
         self.log(
-            "YulException persists with via-ir + optimizer — no longer asserting "
-            "autofinder success (failing files fall back un-instrumented)",
+            "YulException persists with via-ir + optimizer + solc's default Yul "
+            "steps — no longer asserting autofinder success (failing files fall "
+            "back un-instrumented)",
             "WARNING",
         )
 
