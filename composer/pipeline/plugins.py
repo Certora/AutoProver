@@ -5,7 +5,6 @@ from typing import Protocol, Callable, Awaitable, Any, Iterable, AsyncIterator, 
 import importlib.metadata
 from contextlib import AsyncExitStack, asynccontextmanager
 from functools import cached_property
-from jinja2.loaders import ChoiceLoader, PrefixLoader, PackageLoader
 
 
 from composer.io.multi_job import TaskInfo
@@ -14,7 +13,6 @@ from composer.spec.context import (
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.util import string_hash
-from composer.templates.loader import base_loader, make_loader
 from .ptypes import PipelineRun
 from .plugin_api import PipelinePluginLoader, PipelinePlugin, PluginContext
 

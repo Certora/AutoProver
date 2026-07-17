@@ -43,7 +43,10 @@ class PipelinePlugin(ABC):
 
     def plugin_loader(self) -> BaseLoader | None:
         t = type(self).__module__
-        return PackageLoader(t)
+        try:
+            return PackageLoader(t)
+        except ValueError:
+            return None
     
     @cached_property
     def load_jinja_template(self) -> TemplateLoader:
