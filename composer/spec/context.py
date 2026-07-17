@@ -21,7 +21,7 @@ from composer.input.files import Document
 from composer.io.mnemonic_store import assign_mnemonic
 from composer.core.user import user_data_ns
 from composer.spec.system_model import SolidityIdentifier
-
+from composer.diagnostics.budget import budget_pressure
 
 # ---------------------------------------------------------------------------
 # Workflow input types
@@ -240,6 +240,11 @@ class WorkflowContext[K]:
 
     async def cache_put(self, value: K) -> None:
         """Put a typed value in the cache. No-op if caching disabled."""
+        if budget_pressure():
+            # refuse to cache anything produced under budget pressure
+            # It's likely incomplete or "rushed", and a future run with more money
+            # should try again
+            return None
         if not isinstance(value, BaseModel):
             raise ValueError("Caching not allowed for non-basemodel keys")
         if self.cache_namespace is None:
@@ -257,8 +262,3 @@ class WorkflowContext[K]:
         tid = self.thread_id
         mnem = await assign_mnemonic(tid, self._store, user_data_ns() + MNEMONIC_KEYS)
         return (tid, mnem)
-
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
-
