@@ -1,0 +1,34 @@
+# Tuning surface of certora-fv-amenability. Calibration adjusts THIS file only —
+# scoring code never hardcodes a weight or threshold.
+#
+# score semantics: every signal emits [0,1] with 1 = fully amenable; the level is
+# derived from the weighted mean plus the hard rules below.
+
+weights:
+  asm_density: 0.8
+  asm_fp_manipulation: 1.5
+  asm_trampoline: 1.5
+  bitmask_style: 1.0
+  function_length: 1.0
+  unchecked_nonlinear: 0.8
+  mixed_theory: 1.2
+  curated_summary_hits: 1.0
+  storage_packing: 1.2
+  external_call_surface: 0.5
+  dynamic_loops: 0.7
+  surface_shape: 0.0   # informational normalizers only
+
+thresholds:
+  high_min: 0.75   # weighted score >= this -> high (unless a hard rule caps it)
+  low_max: 0.45    # weighted score < this  -> low
+
+hard_rules:
+  # Any HIGH-severity evidence from these signals caps the level at medium:
+  # these patterns are individually disqualifying for hands-off autosetup.
+  cap_at_medium_on_high_evidence:
+    - asm_fp_manipulation
+    - asm_trampoline
+    - storage_packing
+  # This many signals scoring <= severe_score forces low.
+  severe_score: 0.3
+  severe_count_forces_low: 3
