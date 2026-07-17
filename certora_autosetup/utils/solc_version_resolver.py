@@ -10,6 +10,7 @@ This module provides utilities to:
 
 import json
 import re
+import shutil
 import threading
 import urllib.error
 import urllib.request
@@ -19,7 +20,10 @@ from typing import List, Optional
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-from certora_autosetup.utils.config_manager import certora_format_to_raw_version
+from certora_autosetup.utils.config_manager import (
+    certora_format_to_raw_version,
+    convert_solc_version_to_certora_format,
+)
 from certora_autosetup.utils.logger import logger
 
 # Minimum solc version that supports viaIR (introduced as settings.viaIR in 0.7.5, stabilized in 0.8.13)
@@ -89,6 +93,19 @@ def fetch_available_solc_versions() -> List[str]:
             logger.log(f"Failed to fetch solc versions: {e}. Using fallback list.", "WARNING", "SolcVersionResolver")
             _solc_versions_cache = FALLBACK_VERSIONS
             return FALLBACK_VERSIONS
+
+
+def _solc_binary_installed(version: str) -> bool:
+    """Whether a solc binary providing ``version`` is on PATH.
+
+    ``version`` is a raw semantic version string exactly as listed by
+    ``fetch_available_solc_versions`` (e.g. "0.8.35"). Both installed-binary
+    naming conventions are probed: Certora's ("solc8.35", via the shared
+    converter) and solc-select's ("solc-0.8.35")."""
+    return any(
+        shutil.which(name)
+        for name in (convert_solc_version_to_certora_format(version), f"solc-{version}")
+    )
 
 
 def parse_pragma_constraint(pragma_spec: str) -> Optional[SpecifierSet]:
@@ -190,7 +207,9 @@ def resolve_pragma_to_version(
 
     If `preferred_version` is supplied and satisfies the pragma, it is returned
     unchanged. Otherwise fetches available versions from soliditylang.org and
-    selects the highest version matching the constraint.
+    selects the highest matching version whose solc binary is INSTALLED
+    (Certora or solc-select naming), falling back to the highest listed release
+    when no matching binary is on PATH.
 
     Args:
         pragma_spec: Pragma version specification (e.g., "0.8.26", "^0.8.0", ">=0.8.0 <0.8.6")
@@ -203,7 +222,7 @@ def resolve_pragma_to_version(
 
     Examples:
         "0.8.26"           -> "0.8.26"
-        "^0.8.0"           -> "0.8.33" (highest 0.8.x)
+        "^0.8.0"           -> "0.8.35" (highest 0.8.x with an installed binary)
         ">=0.8.0 <0.8.6"   -> "0.8.5"  (highest below 0.8.6)
     """
     try:
@@ -246,11 +265,20 @@ def resolve_pragma_to_version(
             )
             return None
 
-        # Select highest matching version
-        highest_version = max(matching_versions, key=Version)
+        # Prefer the highest matching version whose solc binary is actually
+        # installed: the newest release on soliditylang.org may not exist in
+        # the environment yet (nor be supported by the prover toolchain), and
+        # resolving a floating pragma to it breaks every consumer the day a
+        # new solc ships. Fall back to the listed highest when no matching
+        # binary is installed (environments that fetch compilers on demand).
+        installed_versions = [v for v in matching_versions if _solc_binary_installed(v)]
+        pool = installed_versions or matching_versions
+        highest_version = max(pool, key=Version)
 
         logger.log(
-            f"Resolved pragma '{pragma_spec}' to {highest_version} (from {len(matching_versions)} candidates)",
+            f"Resolved pragma '{pragma_spec}' to {highest_version} "
+            f"(from {len(matching_versions)} candidates, "
+            f"{'installed' if installed_versions else 'listed'})",
             "DEBUG",
             "SolcVersionResolver",
         )

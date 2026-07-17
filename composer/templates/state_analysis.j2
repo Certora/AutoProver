@@ -103,6 +103,14 @@ calls contract A, and contract A calls contract B, then contract B should be inc
 on from an interface I, and the application contains multiple implementers C1, C2, ... of I, those contracts C1, C2, ...
 should be included in the transitive closure.
 
+A `delegatecall` target's code runs in the *delegating* contract's own storage context — effectively as part of it — so
+follow delegation edges exactly as you follow ordinary calls. Thus if {{ contract_name }}, or any contract already in the
+closure, delegates to an implementation/extension contract E — whether via a proxy `fallback()`/`receive()` that
+delegatecalls a stored implementation address (e.g. an EIP-1967 or beacon slot), via an assembly `delegatecall` or a helper
+such as `_delegate`/`_delegateView`/`Address.functionDelegateCall`, or via a split contract that delegatecalls only some of
+its functions to a sibling logic/view contract — then E, and everything E in turn calls or delegates to, should be included
+in the transitive closure.
+
 **IMPORTANT**: Do *NOT* include contracts that *only* call into {{ contract_name }}. These "driver" contracts are *NOT*
 interesting to the formal verification of {{ contract_name }}.
 

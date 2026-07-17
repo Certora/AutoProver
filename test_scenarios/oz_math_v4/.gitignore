@@ -1,0 +1,6 @@
+.certora_internal/
+.CertoraProverLiteReports/
+.cachefs/
+out/
+cache/
+certora/

@@ -104,6 +104,19 @@ class CorePipelineResult[FormT: BackendResult]:
     outcomes: list[ComponentOutcome[FormT]]
     failures: list[str]
 
+    @property
+    def n_delivered(self) -> int:
+        """Components that produced a deliverable — a successful formalization. Everything
+        else (a ``GaveUp`` or a crash) is a component that failed to generate."""
+        return sum(1 for o in self.outcomes if isinstance(o.result, Delivered))
+
+    @property
+    def all_failed(self) -> bool:
+        """Every attempted component failed to generate or gave up - te run is a total failure.
+        Guarded on a non-empty outcome set so "all of nothing" is never reported as failure (the
+        driver raises before returning in the no-outcomes case anyway)."""
+        return bool(self.outcomes) and self.n_delivered == 0
+
 __all__ = [
     "CorePipelineResult",
     "ComponentOutcome",

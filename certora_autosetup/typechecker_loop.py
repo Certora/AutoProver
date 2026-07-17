@@ -18,6 +18,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from certora_autosetup.parsers.prover_config_parser import get_spec_from_verify_field
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
+from certora_autosetup.setup.oz_math_rounding import rounding_members_by_qualifier
+from certora_autosetup.setup.summary_resolver import extract_cvl_ast
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 from certora_autosetup.utils.paths import internal_round_summaries_dir, internal_typechecker_round_dir
@@ -85,14 +87,30 @@ class TypecheckerLoop:
         external_matches = re.findall(external_method_pattern, error_output)
         matches.extend(external_matches)
 
-        # Pattern 2: Math.Rounding enum type errors
-        # CRITICAL: [main] ERROR ALWAYS - Error in spec file (OZ_Math.spec:12:21): could not type expression "Math.Rounding.Ceil", message: In enum constant Math.Rounding.Ceil, Math.Rounding is not a valid enum type
-        rounding_pattern = r"Error in spec file \(([^:]+):(\d+):\d+\):.*?Math\.Rounding is not a valid enum type"
-        rounding_matches = re.findall(rounding_pattern, error_output)
-
-        # For rounding errors, we use special markers to indicate this is a rounding error
-        for spec_file, line_num in rounding_matches:
-            matches.append((spec_file, line_num, "ROUNDING_ERROR", "Math.Rounding"))
+        # Pattern 2: ambiguous/unresolvable Rounding type with suggestions.
+        # The error text has two variants, both carrying a "Did you mean" list
+        # of valid qualifiers:
+        # - CVL function line: "... Type Math.Rounding is not a valid type. Did you mean `HarnessV4.Rounding`, or `HarnessV5.Rounding`?"
+        # - methods{} entry:   "... Math.Rounding is not a valid EVM type. Did you mean `HarnessV5.Rounding`?"
+        # It also fires in the REVERSE direction (a qualified spelling in a scene
+        # where the plain name is unambiguous), suggesting e.g. `Math.Rounding`.
+        rounding_ambiguous_pattern = (
+            r"Error in spec file \(([^:)]+):(\d+):\d+\):.*?"
+            r"(?:Type )?([\w$]+)\.Rounding is not a valid (?:EVM )?type\.\s*"
+            r"Did you mean ((?:`[\w$]+\.Rounding`(?:,\s*)?(?:or\s*)?)+)\?"
+        )
+        for spec_file, line_num, bad_qualifier, suggestion_blob in re.findall(
+            rounding_ambiguous_pattern, error_output
+        ):
+            suggestions = re.findall(r"`([\w$]+)\.Rounding`", suggestion_blob)
+            matches.append(
+                (
+                    spec_file,
+                    line_num,
+                    "ROUNDING_AMBIGUOUS",
+                    f"{bad_qualifier}|{','.join(suggestions)}",
+                )
+            )
 
         # Pattern 3: Contract not found errors
         # Error in spec file (OZ_Math-ERC20.spec:4:5): Contract `Math` not found. Receiver contracts must be `currentContract`, the name of a contract in the scene, or a name introduced by a `using` statement.
@@ -121,8 +139,8 @@ class TypecheckerLoop:
         if self.verbose and matches:
             self.log(f"Found {len(matches)} typechecker errors to fix")
             for spec_file, line_num, contract, method in matches:
-                if contract == "ROUNDING_ERROR":
-                    self.log(f"  - {spec_file}:{line_num} - Math.Rounding enum error")
+                if contract == "ROUNDING_AMBIGUOUS":
+                    self.log(f"  - {spec_file}:{line_num} - ambiguous Rounding type ({method})")
                 elif contract == "CONTRACT_NOT_FOUND":
                     self.log(f"  - {spec_file}:{line_num} - Contract `{method}` not found")
                 else:
@@ -157,74 +175,24 @@ class TypecheckerLoop:
         for spec_file, spec_errors in errors_by_spec.items():
             spec_base = Path(spec_file).stem
 
-            # Check error type - Math.Rounding, contract not found, or a summary line
-            # referencing a method/declaration that does not exist in the compiled code
-            # (external method declaration / incompatible return / internal method entry).
-            has_rounding_error = any(
-                contract == "ROUNDING_ERROR" for _, contract, _ in spec_errors
+            # Check error type - ambiguous Rounding, contract not found, or a summary
+            # line referencing a method/declaration that does not exist in the compiled
+            # code (external method declaration / incompatible return / internal method entry).
+            has_rounding_ambiguous = any(
+                contract == "ROUNDING_AMBIGUOUS" for _, contract, _ in spec_errors
             )
             has_contract_not_found_error = any(
                 contract == "CONTRACT_NOT_FOUND" for _, contract, _ in spec_errors
             )
             summary_line_for_nonexisting_method_error = any(
-                contract not in ["ROUNDING_ERROR", "CONTRACT_NOT_FOUND"] for _, contract, _ in spec_errors
+                contract not in ["ROUNDING_AMBIGUOUS", "CONTRACT_NOT_FOUND"]
+                for _, contract, _ in spec_errors
             )
 
-            if has_rounding_error:
-                # Create callback for Math.Rounding error fix
-                def create_rounding_fix_callback(original_spec_file, keep_intermediate):
-                    def fix_rounding(
-                        spec_path: Path,
-                        rename_fn: Callable[[str], str],
-                        reverse_rename_fn: Callable[[str], str],
-                    ) -> Path:
-                        """Fix Math.Rounding enum errors by commenting out specific lines."""
-                        # Create new spec name with round suffix (or overwrite if not keeping intermediate files)
-                        if keep_intermediate:
-                            # Get the base name without ROUND suffixes
-                            base_name = reverse_rename_fn(spec_path.stem)
-                            new_spec_name = rename_fn(base_name)
-                            new_spec = spec_path.parent / f"{new_spec_name}.spec"
-                        else:
-                            new_spec = spec_path
-
-                        # Read original spec
-                        with open(spec_path, "r") as f:
-                            lines = f.readlines()
-
-                        # Comment out line 5 (index 4) and lines 10-17 (indices 9-16)
-                        lines_to_comment = [
-                            4,
-                            9,
-                            10,
-                            11,
-                            12,
-                            13,
-                            14,
-                            15,
-                            16,
-                        ]  # 0-indexed
-
-                        for line_idx in lines_to_comment:
-                            if line_idx < len(lines):
-                                original_line = lines[line_idx].rstrip()
-                                lines[line_idx] = (
-                                    f"// AUTO-DISABLED (Math.Rounding error): {original_line}\n"
-                                )
-
-                        # Write new spec
-                        with open(new_spec, "w") as f:
-                            f.writelines(lines)
-
-                        action = "Overwrote" if not keep_intermediate else "Created"
-                        self.log(
-                            f"{action} {new_spec.name} with Math.Rounding error fixes (commented lines 5, 10-17)"
-                        )
-                        return new_spec
-
-                    return fix_rounding
-
-                updates[spec_base] = create_rounding_fix_callback(spec_file, self.keep_intermediate_files)
+            if has_rounding_ambiguous and self._is_in_summaries_folder(spec_file):
+                updates[spec_base] = self._create_rounding_requalify_callback(
+                    spec_errors, self.keep_intermediate_files
+                )
 
             elif has_contract_not_found_error:
                 # Create callback for contract not found error fix (comment out the problematic line)
@@ -308,7 +276,7 @@ class TypecheckerLoop:
                         # Collect line numbers to comment (convert to 0-indexed)
                         lines_to_comment = set()
                         for line_num, contract, method in error_list:
-                            if contract != "ROUNDING_ERROR":
+                            if contract != "ROUNDING_AMBIGUOUS":
                                 lines_to_comment.add(
                                     int(line_num) - 1
                                 )  # Convert to 0-indexed
@@ -374,6 +342,129 @@ class TypecheckerLoop:
             if target in files:
                 return True
         return False
+
+    @staticmethod
+    def _expand_to_function_blocks(lines: List[str], reported: set) -> set:
+        """Expand 0-indexed reported error lines so that any line inside a
+        top-level CVL ``function`` definition takes the whole block with it —
+        commenting only part of a CVL function leaves an unparsable rest.
+
+        Block spans come from the CVL AST: ``ASTExtraction.jar syntax-check``
+        emits top-level function definitions under ``ast["subs"]``, each with a
+        0-based ``range`` covering the whole definition including the closing
+        brace. Reported lines outside any function (e.g. ``methods{}`` entries)
+        get no expansion — they are self-contained lines, safe to comment alone.
+        Jar/parse failures propagate: the jar ships with certora-cli, which this
+        loop already requires for certoraRun itself.
+        """
+        if not reported:
+            return set()
+        payload = extract_cvl_ast("".join(lines))
+        spans = []
+        if payload is not None:
+            for sub in (payload.get("ast") or {}).get("subs", []):
+                rng = sub.get("range") or {}
+                start = (rng.get("start") or {}).get("line")
+                end = (rng.get("end") or {}).get("line")
+                if isinstance(start, int) and isinstance(end, int):
+                    spans.append((start, end))
+        expanded = set(reported)
+        for idx in reported:
+            for start, end in spans:
+                if start <= idx <= end:
+                    expanded.update(range(start, end + 1))
+                    break
+        return expanded
+
+    def _create_rounding_requalify_callback(self, error_list, keep_intermediate):
+        """Callback fixing ambiguous-Rounding errors (certora-cli >= 8.17.1) by
+        requalifying the enum reference with the suggested contract whose Rounding
+        definition contains the referenced member, instead of disabling the summary.
+        Lines with no unique choice fall back to being commented out."""
+
+        def fix_rounding_requalify(
+            spec_path: Path,
+            rename_fn: Callable[[str], str],
+            reverse_rename_fn: Callable[[str], str],
+        ) -> Path:
+            if keep_intermediate:
+                base_name = reverse_rename_fn(spec_path.stem)
+                new_spec = spec_path.parent / f"{rename_fn(base_name)}.spec"
+            else:
+                new_spec = spec_path
+
+            with open(spec_path, "r") as f:
+                lines = f.readlines()
+
+            ambiguous = []  # (0-indexed line, bad_qualifier, [suggestions])
+            all_suggestions: set = set()
+            for line_num, contract, payload in error_list:
+                if contract != "ROUNDING_AMBIGUOUS":
+                    continue
+                bad_qualifier, _, suggestion_csv = payload.partition("|")
+                suggestions = [s for s in suggestion_csv.split(",") if s]
+                ambiguous.append((int(line_num) - 1, bad_qualifier, suggestions))
+                all_suggestions.update(suggestions)
+
+            members_of = rounding_members_by_qualifier(all_suggestions)
+
+            # Pass 1: lines referencing a concrete member (e.g. Math.Rounding.Ceil)
+            # pin the qualifier — the member exists in exactly one definition.
+            chosen: set = set()
+            requalified = 0
+            deferred = []  # member-less lines, resolved by the spec-wide choice
+            fallback_lines = set()
+            for idx, bad_qualifier, suggestions in ambiguous:
+                if idx >= len(lines):
+                    continue
+                bad_ref = f"{bad_qualifier}.Rounding"
+                member_match = re.search(
+                    rf"{re.escape(bad_ref)}\.(\w+)", lines[idx]
+                )
+                if member_match is None:
+                    deferred.append((idx, bad_qualifier, suggestions))
+                    continue
+                member = member_match.group(1)
+                candidates = [q for q in suggestions if member in members_of.get(q, set())]
+                if len(candidates) == 1:
+                    lines[idx] = lines[idx].replace(bad_ref, f"{candidates[0]}.Rounding")
+                    chosen.add(candidates[0])
+                    requalified += 1
+                else:
+                    self.log(
+                        f"Cannot requalify {bad_ref}.{member} at {spec_path.name}:{idx + 1}: "
+                        f"{len(candidates)} matching suggestions {candidates}",
+                        "WARNING",
+                    )
+                    fallback_lines.add(idx)
+
+            # Pass 2: member-less lines (e.g. a `X.Rounding rounding` parameter type)
+            # follow the unique member-pinned choice; without one they are disabled.
+            for idx, bad_qualifier, suggestions in deferred:
+                bad_ref = f"{bad_qualifier}.Rounding"
+                if len(chosen) == 1:
+                    lines[idx] = lines[idx].replace(bad_ref, f"{next(iter(chosen))}.Rounding")
+                    requalified += 1
+                else:
+                    fallback_lines.add(idx)
+
+            expanded_fallback = self._expand_to_function_blocks(lines, fallback_lines)
+            for idx in expanded_fallback:
+                if idx < len(lines) and not lines[idx].lstrip().startswith("//"):
+                    lines[idx] = f"// AUTO-DISABLED (Math.Rounding error): {lines[idx].rstrip()}\n"
+
+            with open(new_spec, "w") as f:
+                f.writelines(lines)
+
+            action = "Overwrote" if not keep_intermediate else "Created"
+            self.log(
+                f"{action} {new_spec.name}: requalified {requalified} ambiguous Rounding "
+                f"reference(s)"
+                + (f", disabled {len(expanded_fallback)} line(s)" if expanded_fallback else "")
+            )
+            return new_spec
+
+        return fix_rounding_requalify
 
     def _find_spec_file(self, spec_name: str) -> Optional[Path]:
         """

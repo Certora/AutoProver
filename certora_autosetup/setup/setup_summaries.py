@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, TypedDict, Coroutine, Literal, Annotated
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple, TypedDict, Coroutine, Literal, Annotated
 from pydantic import BaseModel, Field, ValidationError, Discriminator
 
 # Add parent directory to path for imports
@@ -41,8 +41,10 @@ from certora_autosetup.utils.constants import (
     DIR_CERTORA_INTERNAL,
     DIR_LLM_CACHE,
     PATH_ALL_METHODS_JSON,
+    PATH_ALL_USER_DEFINED_TYPES_JSON,
     SUMMARIES_SUBDIR,
 )
+from certora_autosetup.setup import oz_math_rounding
 from certora_autosetup.utils.llm_util import (
     call_llm_structured,
     call_llm_async_structured_cached,
@@ -114,6 +116,11 @@ except ImportError:
     sys.exit(1)
 
 from certora_autosetup.parsers.type_analyzer import TypeAnalyzer, TypeCategory
+
+# Curated-summary keys whose materialized content depends on the WHOLE scene, not
+# just the batch that matched them — re-rendered on every scene growth.
+SCENE_SENSITIVE_TEMPLATE_KEYS: FrozenSet[str] = frozenset({"oz_Math_mulDiv"})
+
 
 class CacheStats(TypedDict):
     hits: int
@@ -375,6 +382,15 @@ class SummarySetup:
         # summary attached and therefore should be added to the scene.
         self.matched_functions: Set[str] = set()
 
+        # Every contract name that has entered the verification scene so far
+        # (initial main + additional + call-resolution batches). Drives the
+        # scene-wide Math.Rounding classification: qualifier contracts must be
+        # in the prover scene for `C.Rounding` to resolve. Known gap: library
+        # files added to the conf as extra_libs never pass through
+        # on_contracts_entered_scene, so they can't serve as qualifiers —
+        # acceptable, since the usual qualifiers are the main/harness contracts.
+        self._scene_contracts: Set[str] = set()
+
         # Accumulated import lines for the base aggregator spec. Rewritten (sorted) by
         # ``_rewrite_aggregator`` after every batch of contracts entering the scene, so the
         # initial scope and call-resolution batches all funnel through one writer.
@@ -429,7 +445,7 @@ class SummarySetup:
         Returns:
             Dict with keys 'udvts' and 'enums', each containing a list of type info dicts.
         """
-        types_file = Path(".certora_internal/all_user_defined_types.json")
+        types_file = PATH_ALL_USER_DEFINED_TYPES_JSON
         result: dict[str, list[dict]] = {"udvts": [], "enums": []}
 
         if not types_file.exists():
@@ -766,105 +782,20 @@ class SummarySetup:
         self.log(f"Copied {copied} curated summary file(s) to {target_summaries}")
         return target_summaries
 
-    def _find_rounding_enum_value(self, contract_name) -> Optional[str]:
-        """Find the correct Rounding enum value from all_user_defined_types.json.
-
-        Returns:
-            Either "Up" or "Ceil" depending on what's found in the Rounding enum
-        """
-        try:
-            user_types_file = Path(".certora_internal/all_user_defined_types.json")
-            if not user_types_file.exists():
-                self.log("Warning: all_user_defined_types.json not found", "WARNING")
-                return None
-
-            with open(user_types_file, "r") as f:
-                user_types = json.load(f)
-
-            # Find the Rounding enum
-            for type_info in user_types:
-                if (
-                    type_info.get("typeCategory") == "UserDefinedEnum"
-                    and type_info.get("typeName") == "Rounding"
-                    and type_info.get("main_contract") == contract_name
-                ):
-                    enum_members = type_info.get("enumMembers", [])
-                    self.log(f"Found Rounding enum with members: {enum_members}")
-
-                    # Extract member names from the objects
-                    member_names = []
-                    for member in enum_members:
-                        if isinstance(member, dict) and "name" in member:
-                            member_names.append(member["name"])
-                        elif isinstance(member, str):
-                            member_names.append(member)
-
-                    # Check for Up or Ceil
-                    if "Ceil" in member_names:
-                        return "Ceil"
-                    elif "Up" in member_names:
-                        return "Up"
-                    else:
-                        self.log(
-                            f"Warning: Rounding enum found but contains neither 'Up' nor 'Ceil'. Members: {member_names}",
-                            "WARNING",
-                        )
-                        return None  # Default fallback
-
-            self.log("Warning: Rounding enum not found in user types", "WARNING")
-            return None
-
-        except Exception as e:
-            raise Exception(f"Error reading user types file: {e}")
-
     def process_template_in_place(
         self,
         template_file: Path,
         template_result_file: Path,
         contract_name: str,
     ) -> None:
-        """Substitute ``$CONTRACT_NAME$`` (and OZ_Math's rounding placeholders) in the
-        bundled template at ``template_file`` and write the result to
-        ``template_result_file``."""
-        # Read template content
+        """Substitute ``$CONTRACT_NAME$`` in the bundled template at
+        ``template_file`` and write the result to ``template_result_file``.
+
+        ``OZ_Math.template.spec`` is not handled here — ``_materialize_template``
+        routes it to the ``oz_math_rounding`` module."""
         template_content = template_file.read_text()
-
-        # Replace placeholders
         processed_content = template_content.replace("$CONTRACT_NAME$", contract_name)
-
-        # Special handling for OZ_Math.template.spec
-        if template_file.name == "OZ_Math.template.spec":
-            rounding_value = self._find_rounding_enum_value(contract_name)
-            if rounding_value is None:
-                processed_content = processed_content.replace(
-                    "$COMMENT_IF_NO_ROUNDING$", "//"
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_BLOCK_START_IF_NO_ROUNDING$", "/*"
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_BLOCK_END_IF_NO_ROUNDING$", "*/"
-                )
-            else:
-                processed_content = processed_content.replace(
-                    "$UINT_ROUND_UP$", rounding_value
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_IF_NO_ROUNDING$", ""
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_BLOCK_START_IF_NO_ROUNDING$", ""
-                )
-                processed_content = processed_content.replace(
-                    "$COMMENT_BLOCK_END_IF_NO_ROUNDING$", ""
-                )
-            self.log(
-                f"Processed OZ_Math template with Rounding value: {rounding_value}"
-            )
-
-        # Create output file
-        output_file = template_result_file
-        output_file.write_text(processed_content)
+        template_result_file.write_text(processed_content)
 
         self.log(
             f"Processed template {template_file.name} with contract name: {contract_name}"
@@ -907,7 +838,22 @@ class SummarySetup:
         dst = self.user_summaries_dir / versioned_rel_under
         dst.parent.mkdir(parents=True, exist_ok=True)
 
-        self.process_template_in_place(src, dst, main_contract)
+        if rel_under_summaries.name == oz_math_rounding.OZ_MATH_TEMPLATE_NAME:
+            # Rendered by the dedicated module: the emitted spec depends on the
+            # scene-wide Rounding classification (single vs conflicting
+            # definitions), which placeholders cannot express. The on-disk
+            # template is only an import stub that keeps Math.spec in the copy
+            # closure.
+            dst.write_text(
+                oz_math_rounding.render_oz_math_spec(
+                    oz_math_rounding.classify_scene_rounding(
+                        self._scene_contracts, self.main_contract, self.log
+                    )
+                )
+            )
+            self.log(f"Rendered OZ_Math summary spec to {dst}")
+        else:
+            self.process_template_in_place(src, dst, main_contract)
 
         return str(SUMMARIES_SUBDIR / versioned_rel_under)
 
@@ -2433,6 +2379,7 @@ Method signature: {method_signature}
         contract_names = list(dict.fromkeys(contract_names))  # de-dup, preserve order
         if not contract_names:
             return
+        self._scene_contracts.update(contract_names)
 
         # TODO(precision): matching and LLM analysis below are scoped to each contract's whole
         # compilation unit, not to the methods actually reachable from the main contract. A contract
@@ -2451,13 +2398,18 @@ Method signature: {method_signature}
             matched, tuples = self.match_summaries_from_all_methods(name)
             curated_keys |= matched
             per_contract_skip[name] = tuples
-        if curated_keys:
+        # A later batch can flip the scene-wide Rounding classification (e.g.
+        # single -> mixed) without re-matching oz_Math_mulDiv itself, so
+        # scene-sensitive templates are re-materialized whenever they have ever
+        # matched (materialization is idempotent, aggregator imports dedup).
+        rerender_keys = curated_keys | (self.matched_functions & SCENE_SENSITIVE_TEMPLATE_KEYS)
+        if rerender_keys:
             # Publish for downstream consumers (autosetup's library-scene filter) and for
             # prune_emitted_specs's curated-over-LLM dedup precedence.
             self.matched_functions |= curated_keys
-            self.copy_summaries_folder(curated_keys)
+            self.copy_summaries_folder(rerender_keys)
             registered = self._add_aggregator_imports(
-                self.curated_summary_import_path(key, main_contract) for key in curated_keys
+                self.curated_summary_import_path(key, main_contract) for key in rerender_keys
             )
             if registered:
                 self.log(f"Aggregator: registered curated specs {registered}")

@@ -4,8 +4,22 @@ import json
 import os
 import threading
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+
+import ijson
+
+
+def stream_ast_files(ast_path: Path) -> Iterator[tuple[str, Any]]:
+    """Yield ``(relative_path, path_data)`` pairs from a ``.asts.json``.
+
+    The file is streamed one top-level entry at a time, so only a single source
+    file's ASTs are held in memory. ``.asts.json`` is sometimes many GB.
+    Structure: ``dict[relative_path: dict[absolute_path: dict[node_id: node_data]]]``.
+    """
+    with open(ast_path, "rb") as f:
+        yield from ijson.kvitems(f, "")
 
 
 def atomic_write_json(file_path: Path, data: Any, indent: int = 2) -> None:

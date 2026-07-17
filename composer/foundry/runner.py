@@ -207,9 +207,10 @@ class ForgeTestTool(
             # linker error. No tests ran, and any previously recorded test
             # names no longer describe a runnable buffer — clear them.
             msg = (
+                "The project failed to BUILD -- no tests ran. Fix the compile "
+                "error before iterating on test logic or fuzz seeds.\n\n"
                 f"forge test did not produce parseable JSON "
-                f"(exit {returncode}). This usually means the project "
-                "failed to build.\n\n"
+                f"(exit {returncode}).\n\n"
                 f"stderr:\n{stderr}\n\nstdout:\n{stdout}"
                 f"{seed_footer}"
             )

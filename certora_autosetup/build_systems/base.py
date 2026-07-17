@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
+from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -114,9 +115,23 @@ class BuildSystemConfig(ABC):
             else:
                 result["solc"] = self.solc_version
 
-        # Apply optimizer settings
+        # Deliberately ignore the build system's own optimizer setting by default, even
+        # when the project enables it. That setting tunes the project's normal build and
+        # has nothing to do with what Certora's own compilation of the same sources needs;
+        # inheriting it can break the prover (e.g. a huge optimizer_runs) or is simply
+        # unnecessary. compilation_workarounds.py's escalation chain
+        # (yul_exception_add_optimizer, stack_too_deep_via_ir) already re-adds solc_optimize
+        # if compilation genuinely requires it, so we start unoptimized and let a real
+        # failure bring it back. This applies to every build system (Foundry, Hardhat, ...).
+        # Foundry's explicit per-contract compilation_restrictions path is separate and still
+        # emits solc_optimize / solc_optimize_map — that is a deliberate signal from the project.
         if self.optimizer:
-            result["solc_optimize"] = self.optimizer_runs
+            logger.log(
+                f"Ignoring {type(self).__name__}'s optimizer setting by default; compilation "
+                "workarounds will re-enable it if compilation requires it",
+                "INFO",
+                type(self).__name__,
+            )
 
         # Apply via_ir
         if self.via_ir:

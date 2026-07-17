@@ -138,6 +138,7 @@ def main():
         skip_llm=args.skip_llm,
         force_llm_regenerate=args.force_llm_regenerate,
         stop_after_summaries=args.stop_after_summaries,
+        stop_after_compilation_analysis=args.stop_after_compilation_analysis,
         scope=scope,
         verbose=args.verbose,
         certora_run_command=args.certora_run_command,
