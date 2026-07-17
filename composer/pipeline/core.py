@@ -181,27 +181,34 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     source = run.source
 
     # 1. System analysis (shared primitive, backend-parameterized; always yields SourceApplication).
-    analyzed = await run.runner(
-        TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
-        lambda: run_component_analysis(
-            ty=SourceApplication, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
-            input=source, env=run.env, extra_input=[
-                f"The main entry point of this application has been explicitly identified as {source.contract_name} at relative path {source.relative_path}. "
-                "Your output MUST contain an explicit contract instance with this solidity identifier.",
-                *spec.extra_input
-            ],
-            expected_main_id=source.contract_name,
-        ),
-    )
+    with named_budget_or_nop("system_analysis"):
+        analyzed = await run.runner(
+            TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
+            lambda: run_component_analysis(
+                ty=SourceApplication, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
+                input=source, env=run.env, extra_input=[
+                    f"The main entry point of this application has been explicitly identified as {source.contract_name} at relative path {source.relative_path}. "
+                    "Your output MUST contain an explicit contract instance with this solidity identifier.",
+                    *spec.extra_input
+                ],
+                expected_main_id=source.contract_name,
+            ),
+        )
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
 
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
-    prepared = await backend.prepare_system(analyzed, run)
+    with named_budget_or_nop("system_preparation"):
+        prepared = await backend.prepare_system(analyzed, run)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
-    formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
+    #    The budget scope is entered inside the coroutine (not around create_task) so the
+    #    cost-center binding lives in the spawned task's own context.
+    async def _prepare_formalization() -> Formalizer[FormT]:
+        with named_budget_or_nop("formalization_preparation"):
+            return await prepared.prepare_formalization(run)
+    formalizer_task = asyncio.create_task(_prepare_formalization())
 
     batches = await _extract_all(prepared.main, backend.backend_guidance, run,
                                 phases["extraction"], interactive, threat_model, max_bug_rounds)
@@ -220,14 +227,15 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
         result : FormT | GaveUp
         if cached_result is None:
             label = f"{batch.feat.component.name} ({len(batch.props)} properties)"
-            result : FormT | GaveUp = await run.runner(
-                TaskInfo(
-                    formalize_task_id(batch.feat.ind),
-                    f"{batch.feat.component.name} ({len(batch.props)} properties)",
-                    phases["formalization"]
-                ),
-                lambda: formalizer.formalize(label, batch.feat, batch.props, child, run),
-            )
+            with named_budget_or_nop("formalization"):
+                result : FormT | GaveUp = await run.runner(
+                    TaskInfo(
+                        formalize_task_id(batch.feat.ind),
+                        f"{batch.feat.component.name} ({len(batch.props)} properties)",
+                        phases["formalization"]
+                    ),
+                    lambda: formalizer.formalize(label, batch.feat, batch.props, child, run),
+                )
             if not isinstance(result, GaveUp):
                 await child.cache_put(result)
         else:
@@ -283,12 +291,13 @@ async def _extract_all[P: enum.Enum, H](
         feat = ContractComponentInstance(_contract=main, ind=idx)
         feat_ctx = await prop_ctx.child(_component_cache_key(feat),
                                         {"component": feat.component.model_dump()})
-        props = await run.runner(
-            TaskInfo(extract_task_id(idx), feat.component.name, phase),
-            lambda conv: run_property_inference(
-                feat_ctx, run.env, feat, refinement=conv if interactive else None,
-                threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance),
-        )
+        with named_budget_or_nop("property_extraction"):
+            props = await run.runner(
+                TaskInfo(extract_task_id(idx), feat.component.name, phase),
+                lambda conv: run_property_inference(
+                    feat_ctx, run.env, feat, refinement=conv if interactive else None,
+                    threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance),
+            )
         return _Batch(feat, props, feat_ctx) if props else None
 
     got = await asyncio.gather(*[_one(i) for i in range(len(main.contract.components))])
