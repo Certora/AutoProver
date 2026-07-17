@@ -82,10 +82,19 @@ class _ExploreCodeCommon(BaseModel):
     is roughly the slowest single answer instead of the sum.
     """
     question: str = Field(
-        description="A specific, focused question about the source code. "
-        "Good: 'What state variables does withdraw() modify and how?' "
-        "Bad: 'Tell me about the contract' "
-        "Bad: 'What is the definition of function X?' (read the source directly)"
+        description="""
+A specific, focused question about the source code. Do not ask questions about:
+* The current task you're working on
+* How to use other tools
+* Questions about CVL or the prover
+* Protocol related questions unrelated to the source code (e.g. expected deployment params, contract address seeds)
+* Questions about the Solidity language itself
+
+Good: 'What state variables does withdraw() modify and how?'
+Bad: 'Tell me about the contract'
+Bad: 'What is the definition of function X?' (read the source directly)
+Bad: 'Is it realistic to expect deposits > 2^128?'
+"""
     )
 
 
