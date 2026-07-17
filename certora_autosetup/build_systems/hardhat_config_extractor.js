@@ -27,11 +27,16 @@ try {
     if (hasTypeScriptConfig) {
         try {
             // Register ts-node with transpileOnly to skip type checking
-            // This allows loading TypeScript configs even if the project has type errors
+            // This allows loading TypeScript configs even if the project has type errors.
+            // moduleResolution must be overridden together with module: forcing
+            // commonjs while the project's tsconfig pins moduleResolution
+            // "nodenext"/"node16" is rejected by TypeScript (TS5110) even in
+            // transpileOnly mode, losing the whole config.
             require('ts-node').register({
                 transpileOnly: true,
                 compilerOptions: {
-                    module: 'commonjs'
+                    module: 'commonjs',
+                    moduleResolution: 'node'
                 }
             });
         } catch (tsError) {

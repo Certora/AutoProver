@@ -33,7 +33,7 @@ from certora_autosetup.utils.logger import logger
 # Build system keys that should be stripped from the output if the user's original conf didn't have them.
 # These are low-priority settings that can break the prover (e.g. solc_optimize with a huge value from foundry.toml).
 # High-priority keys like solc and packages are kept since they're often needed for compilation.
-_LOW_PRIORITY_BS_KEYS = {"solc_optimize", "solc_via_ir"}
+_LOW_PRIORITY_BS_KEYS = {"solc_optimize", "solc_via_ir", "solc_evm_version"}
 
 
 class _AcceptAllScope:

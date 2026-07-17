@@ -29,6 +29,9 @@ class BuildSystemConfig(ABC):
     optimizer: Optional[bool] = None
     optimizer_runs: int = 200
     via_ir: Optional[bool] = None
+    # Declared EVM target (foundry `evm_version`, hardhat `settings.evmVersion`);
+    # None means each solc's own default.
+    evm_version: Optional[str] = None
 
     # Common source configuration
     src: Optional[str] = None
@@ -55,6 +58,7 @@ class BuildSystemConfig(ABC):
                 "solc": "solc8.24",  # or "0.8.24" if convert_solc=False
                 "solc_optimize": 200,
                 "solc_via_ir": true,
+                "solc_evm_version": "paris",  # only when the project declares one
                 "packages": [...]
             }
         """
@@ -136,6 +140,16 @@ class BuildSystemConfig(ABC):
         # Apply via_ir
         if self.via_ir:
             result["solc_via_ir"] = True
+
+        # Honor the project's declared EVM target. Unlike the optimizer setting
+        # above, this is not a tuning knob: solc's default EVM version can be
+        # NEWER than the declared one (e.g. shanghai/PUSH0 vs a pinned "paris"),
+        # producing bytecode for the wrong chain and different codegen (which can
+        # even fail where the declared target compiles), and no reactive
+        # workaround could guess the intended version. If the declared version is
+        # rejected by the solc in use, the invalid_evm_version workaround drops it.
+        if self.evm_version:
+            result["solc_evm_version"] = self.evm_version
 
         return result
 

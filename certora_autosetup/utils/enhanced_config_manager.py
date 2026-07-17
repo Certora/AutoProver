@@ -1071,6 +1071,27 @@ class ConfigManager:
                     f" to {len(conf_object['solc_evm_version_map'])} entries"
                 )
                 modified = True
+            # Extend: the prover requires the map to cover every file, and a map
+            # entry cannot say "use this solc's default" — fill contracts newly
+            # injected into files (mocks/harnesses) with the declared scalar from
+            # the reference conf, else the map's most common value.
+            evm_map = conf_object["solc_evm_version_map"]
+            if evm_map:
+                fill = (
+                    self.reference_compiler_maps.get("solc_evm_version")
+                    or Counter(evm_map.values()).most_common(1)[0][0]
+                )
+                added = 0
+                for handle in contracts_in_files:
+                    if not any(handle.matches_map_key(key) for key in evm_map):
+                        evm_map[handle.contract_name] = fill
+                        added += 1
+                if added > 0:
+                    self.log(
+                        f"Filled {added} missing solc_evm_version_map entry/entries "
+                        f"with '{fill}' so files and the map stay consistent"
+                    )
+                    modified = True
 
         return modified
 

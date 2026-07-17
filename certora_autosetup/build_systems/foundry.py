@@ -63,7 +63,7 @@ class FoundryConfig(BuildSystemConfig):
         if self.restriction_manager is None:
             # No restrictions → apply_restrictions short-circuits, so the
             # defaults here are never consulted; we still pass optimizer_runs
-            # for consistency. (evm_version isn't a FoundryConfig field.)
+            # for consistency.
             self.restriction_manager = FoundryRestrictionManager(
                 restrictions=[], # No restriction means no effect of apply_restrictions
                 default_via_ir=bool(self.via_ir) if self.via_ir is not None else False,
@@ -221,6 +221,7 @@ class FoundryManager(BuildSystemManager):
             optimizer=optimizer_settings["enabled"],
             optimizer_runs=optimizer_settings["runs"],
             via_ir=via_ir,
+            evm_version=profile_data.get("evm_version"),  # Will be None if not specified
             src=profile_data.get("src"),  # Will be None if not specified
             out=profile_data.get("out"),  # Will be None if not specified
             libs=profile_data.get("libs"),  # Will be None if not specified
@@ -278,6 +279,7 @@ class FoundryManager(BuildSystemManager):
             optimizer=override.optimizer if override.optimizer is not None else base.optimizer,
             optimizer_runs=merged_optimizer_runs,
             via_ir=merged_via_ir,
+            evm_version=override.evm_version or base.evm_version,
             src=override.src or base.src,
             out=override.out or base.out,
             libs=override.libs or base.libs,
@@ -463,13 +465,13 @@ class FoundryRestrictionManager:
                 "FoundryRestrictionManager",
             )
 
-        # NOTE: per-path evm_version is intentionally NOT emitted. The prover
-        # requires solc_evm_version_map to be total, so unmatched contracts
-        # would have to be filled with the profile-level evm_version (e.g.
-        # "prague") — which breaks older-solc files that don't support it
-        # (solc 0.8.25 rejects "prague"). Leaving evm_version unset lets each
-        # contract use its solc's own default, which is always compatible — the
-        # behaviour that worked before per-path evm_version was introduced.
+        # NOTE: per-path evm_version from compilation_restrictions is
+        # intentionally NOT emitted. The prover requires solc_evm_version_map to
+        # be total, so unmatched contracts would have to be filled with a
+        # concrete version even where the project relies on each solc's own
+        # default. The PROFILE-level evm_version is honored separately (emitted
+        # as scalar solc_evm_version by _apply_common_solc_settings and dropped
+        # by the invalid_evm_version workaround if a solc rejects it).
 
         # ---------------- solc_optimize map ----------------
         restricted_optimize = self._optimize_map(contracts)
