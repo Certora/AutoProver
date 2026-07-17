@@ -23,6 +23,7 @@ from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     ProviderKind, CacheLevel, _ListIter, NoSuchElementError,
 )
+from composer.llm.pricing import PriceProvider, price_provider_for
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -175,16 +176,21 @@ class OpenAIModelProvider:
     model_name: str
     options: ModelConfiguration
     features: OpenAIModelFeatures
+    price_provider: PriceProvider
     provider: ProviderKind = "openai"
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "OpenAIModelProvider":
-        return OpenAIModelProvider(model_name, options, _model_parser(model_name))
+        return OpenAIModelProvider(
+            model_name, options, _model_parser(model_name), price_provider_for(model_name)
+        )
 
     def builder_for(
         self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_openai import ChatOpenAI
+        from composer.diagnostics.usage_callback import UsageCallback
+        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         kwargs: dict[str, Any] = {
@@ -205,5 +211,8 @@ class OpenAIModelProvider:
             temperature=1,
             timeout=None,
             max_retries=2,
+            # OpenAI has no cache-TTL knob, so long_cache stays False; cache_write_1h
+            # mirrors cache_write in the table anyway.
+            callbacks=[UsageCallback(), CostAccumulator(self.price_provider)],
             **kwargs,
         )

@@ -17,7 +17,7 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
@@ -41,8 +41,10 @@ from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from .ptypes import (
-    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp, PipelineRun, SystemAnalysisSpec
+    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
+    Delivered, GaveUp, PipelineRun, SystemAnalysisSpec, PhaseBudget
 )
+from composer.diagnostics.budget import total_budget, named_budget_or_nop
 
 COMMON_SYSTEM_CACHE_KEY = "system-analysis"
 
@@ -153,6 +155,27 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
+    budget: PhaseBudget | None = None
+) -> CorePipelineResult[FormT]:
+    if budget is not None:
+        with total_budget(cast(dict[str, float], budget)):
+            return await _run_pipeline_inner(
+                backend, run, interactive=interactive, 
+                max_bug_rounds=max_bug_rounds, threat_model=threat_model
+            )
+    else:
+        return await _run_pipeline_inner(
+            backend, run, interactive=interactive, 
+            max_bug_rounds=max_bug_rounds, threat_model=threat_model
+        )
+
+async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](
+    backend: PipelineBackend[P, FormT, H, A],
+    run: PipelineRun[P, H],
+    *,
+    interactive: bool,
+    threat_model: Document | None,
+    max_bug_rounds: int
 ) -> CorePipelineResult[FormT]:
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source

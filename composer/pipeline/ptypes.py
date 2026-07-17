@@ -117,6 +117,13 @@ class CorePipelineResult[FormT: BackendResult]:
         driver raises before returning in the no-outcomes case anyway)."""
         return bool(self.outcomes) and self.n_delivered == 0
 
+class PhaseBudget(TypedDict):
+    formalization_preparation: float
+    system_analysis: float
+    system_preparation: float
+    property_extraction: float
+    formalization: float
+
 __all__ = [
     "CorePipelineResult",
     "ComponentOutcome",
