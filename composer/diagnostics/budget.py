@@ -31,11 +31,26 @@ class BudgetPressureAbort(Exception):
 
 @dataclass
 class BudgetCounter:
+    """One node of the caps-over-pool scheme. Leaf counters are per-phase
+    *caps* whose ``parent`` is the run's shared *pool* (the real budget);
+    ``token_cost_budget`` creates parentless one-off counters. Cost accrues
+    up the chain, and both the hard stop and the pressure window trip on
+    whichever level is tighter — a phase can only starve later phases up to
+    its cap, while unspent phase money never leaves the pool (rollover is
+    automatic, not an explicit transfer)."""
     total_budget: float
     curr_cost: float
+    parent: "BudgetCounter | None" = None
 
     def overbudget(self) -> bool:
-        return self.curr_cost > self.total_budget
+        if self.curr_cost > self.total_budget:
+            return True
+        return self.parent.overbudget() if self.parent is not None else False
+
+    def pressured(self, threshold: float = BUDGET_PRESSURE_THRESHOLD) -> bool:
+        if self.curr_cost >= self.total_budget * threshold:
+            return True
+        return self.parent.pressured(threshold) if self.parent is not None else False
 
 _budget_accumulator = ContextVar[None | BudgetCounter]("_budget_accumulator", default=None)
 
@@ -53,17 +68,28 @@ than going over budget.
 
 @contextmanager
 def total_budget(
-    costs: Mapping[str, float]
+    total: float,
+    caps: Mapping[str, float]
 ) -> Iterator[None]:
+    """Install the run's budget: ``total`` is the pool (the real bound on
+    spend) and ``caps`` are per-phase ceilings. Caps need not sum to the
+    pool — they only bound how much a single phase may hog, so each can be
+    generous; whatever a phase doesn't spend simply remains in the pool for
+    later phases."""
     curr = _cost_centers.get()
     if curr is not None:
         raise RuntimeError("Not good")
+    pool = BudgetCounter(total_budget=total, curr_cost=0.0)
     prev = _cost_centers.set({
-        k: BudgetCounter(total_budget=v, curr_cost=0.0) for (k, v) in costs.items()
+        k: BudgetCounter(total_budget=v, curr_cost=0.0, parent=pool) for (k, v) in caps.items()
     })
+    # Work running outside any named center (e.g. the report phase) accrues
+    # to — and feels pressure from — the pool directly.
+    prev_accum = _budget_accumulator.set(pool)
     try:
         yield None
     finally:
+        _budget_accumulator.reset(prev_accum)
         _cost_centers.reset(prev)
 
 @contextmanager
@@ -108,10 +134,11 @@ def token_cost_budget(
 def accumulate_cost(
     cost: float
 ):
+    # Accrue up the chain: the active center and (through parent) the pool.
     accum = _budget_accumulator.get()
-    if accum is None:
-        return
-    accum.curr_cost += cost
+    while accum is not None:
+        accum.curr_cost += cost
+        accum = accum.parent
 
 def budget_monitor(
     *,
@@ -130,7 +157,7 @@ def budget_monitor(
         nonlocal warned
         if accum.overbudget() and on_overbudget is not None:
             on_overbudget()
-        if warned or not (accum.curr_cost >= accum.total_budget * warn_threshold):
+        if warned or not accum.pressured(warn_threshold):
             return (None, None)
         warned = True
         msg : str
@@ -162,14 +189,15 @@ def raise_budget_exceeded() -> None:
 
 
 def budget_pressure() -> bool:
-    """Whether the active budget is inside its wrap-up window (accrued cost at
-    or past ``BUDGET_PRESSURE_THRESHOLD`` of the allotment). False when no
-    budget is installed. Use this to skip launching work that would only be
-    told to immediately pack it in (e.g. further property-extraction rounds)."""
+    """Whether the active budget is inside its wrap-up window: accrued cost at
+    or past ``BUDGET_PRESSURE_THRESHOLD`` of the phase cap *or* of the run
+    pool, whichever trips first. False when no budget is installed. Use this
+    to skip launching work that would only be told to immediately pack it in
+    (e.g. further property-extraction rounds)."""
     res = _budget_accumulator.get()
     if res is None:
         return False
-    return res.curr_cost >= res.total_budget * BUDGET_PRESSURE_THRESHOLD
+    return res.pressured()
 
 
 def pressure_abort_monitor() -> StateMonitor[MessagesState]:

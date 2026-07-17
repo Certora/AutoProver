@@ -42,7 +42,7 @@ from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from .ptypes import (
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
-    Delivered, GaveUp, PipelineRun, SystemAnalysisSpec, PhaseBudget
+    Delivered, GaveUp, PipelineRun, SystemAnalysisSpec, RunBudget
 )
 from composer.diagnostics.budget import total_budget, named_budget_or_nop
 
@@ -155,10 +155,10 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
-    budget: PhaseBudget | None = None
+    budget: RunBudget | None = None
 ) -> CorePipelineResult[FormT]:
     if budget is not None:
-        with total_budget(cast(dict[str, float], budget)):
+        with total_budget(budget.total, cast(dict[str, float], budget.caps)):
             return await _run_pipeline_inner(
                 backend, run, interactive=interactive, 
                 max_bug_rounds=max_bug_rounds, threat_model=threat_model
