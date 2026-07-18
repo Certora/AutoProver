@@ -28,9 +28,9 @@ thresholds:
 
 hard_rules:
   # `low` requires this many structural-killer signals scoring at/below
-  # killer_severe_score simultaneously — the reference-implementation profile.
-  # (Crystal-class: trampolines + hand-rolled storage + FP surgery + monolithic
-  # mixed-theory functions all at once.)
+  # killer_severe_score simultaneously — the reference-implementation profile
+  # (trampolines + hand-rolled storage + FP surgery + monolithic mixed-theory
+  # functions all at once).
   structural_killers:
     - asm_trampoline
     - asm_fp_manipulation

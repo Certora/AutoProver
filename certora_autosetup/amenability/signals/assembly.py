@@ -125,8 +125,8 @@ def asm_fp_manipulation(ctx: AnalysisContext) -> SignalResult:
     # Only free-memory-pointer manipulation OUTSIDE a small scoped helper is a
     # real hazard — the same mstore(0x40) inside a focused internal helper (the
     # common OZ/solady pattern) is tractable. Scale with how much of it there is:
-    # a single interwoven write is medium-ish; pervasive FP surgery (the Crystal
-    # profile) craters the score.
+    # a single interwoven write is medium-ish; pervasive FP surgery craters the
+    # score.
     score = 1.0
     if scratch_writes:
         score = 0.7

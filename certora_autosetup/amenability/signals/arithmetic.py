@@ -119,8 +119,8 @@ def mixed_theory(ctx: AnalysisContext) -> SignalResult:
                     function=label,
                 ))
     # Mixed bitvector+nonlinear theory in one function is a real SMT hazard, but
-    # only pervasive mixing (the Crystal profile) is disqualifying; a handful of
-    # such functions is medium. Floor at 0.3.
+    # only pervasive mixing is disqualifying; a handful of such functions is
+    # medium. Floor at 0.3.
     return SignalResult(
         signal_id="mixed_theory",
         score=clamp(1.0 - flagged / 12.0) * 0.7 + 0.3,
