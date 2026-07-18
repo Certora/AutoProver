@@ -150,13 +150,21 @@ class CompilationWorkaroundManager:
 
     def _seed_compile_maps(self, config: Dict, contracts: List[ContractHandle]) -> None:
         """Promote scalar ``solc``/``solc_via_ir`` into fully-populated maps.
+
+        When a map is already present (e.g. precomputed from build artifacts,
+        or in a user conf fed through fixconf) the scalar still acts as the
+        default for contracts the map doesn't cover, and is then dropped —
+        certoraRun rejects a conf carrying both a map and its scalar.
         """
-        if "compiler_map" not in config:
-            default = config.pop("solc", None) or self.solc_default_version
-            config["compiler_map"] = {c.contract_name: default for c in contracts}
-        if "solc_via_ir_map" not in config:
-            via_ir = config.pop("solc_via_ir", False)
-            config["solc_via_ir_map"] = {c.contract_name: via_ir for c in contracts}
+        default = config.pop("solc", None) or self.solc_default_version
+        config.setdefault("compiler_map", {})
+        for c in contracts:
+            config["compiler_map"].setdefault(c.contract_name, default)
+
+        via_ir = config.pop("solc_via_ir", False)
+        config.setdefault("solc_via_ir_map", {})
+        for c in contracts:
+            config["solc_via_ir_map"].setdefault(c.contract_name, via_ir)
 
     def _normalize_compile_maps(self, config: Dict) -> None:
         """Collapse a uniform compiler_map / solc_via_ir_map back to its scalar if all values are same.
@@ -261,7 +269,13 @@ class CompilationWorkaroundManager:
         """
         # Check if global solc_via_ir is already enabled
         global_via_ir_enabled = updated_config_dict.get("solc_via_ir", False)
-        solc_already_set = "solc" in updated_config_dict
+        # An explicit compiler pin can arrive as the scalar "solc" or already
+        # folded into a compiler_map (e.g. precomputed from build artifacts);
+        # the bare "solc" binary is the environment default and needs no fallback.
+        solc_pinned = compilation_config.get("solc", "solc") != "solc" or any(
+            version != "solc"
+            for version in compilation_config.get("compiler_map", {}).values()
+        )
 
         # Names of the workarounds applied in the current pass over a failed
         # output. Cleared at the top of each pass; detect lambdas below may
@@ -289,7 +303,7 @@ class CompilationWorkaroundManager:
                 name="solc_not_found_fallback",
                 detect_fn=lambda output: self._detect_solc_not_found(output),
                 apply_fn=self._apply_solc_fallback_workaround,
-                enabled=solc_already_set and updated_config_dict.get("solc") != "solc",
+                enabled=solc_pinned,
             ),
             CompilationWorkaround(
                 name="remappings_conflict",
@@ -360,10 +374,15 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="yul_exception_add_optimizer",
+                # A solc_optimize_map (per-contract runs from foundry
+                # compilation_restrictions) is explicit project intent, and
+                # certoraRun rejects a conf carrying both the map and the
+                # scalar — skip this rung and let the ladder escalate.
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
                     and "solc_optimize" not in compilation_config
+                    and "solc_optimize_map" not in compilation_config
                     else None
                 ),
                 apply_fn=self._apply_optimizer_for_via_ir,
@@ -376,12 +395,17 @@ class CompilationWorkaroundManager:
                 # tried, not in the same pass that just added it (the live
                 # "solc_optimize in config" check would otherwise see the value
                 # the previous workaround set seconds ago and stop asserting
-                # autofinder success without ever testing the optimizer).
+                # autofinder success without ever testing the optimizer). A
+                # solc_optimize_map counts as "optimizer already tried": it is
+                # project-configured, and the add rung never fires next to it.
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
                     and compilation_config.get("assert_autofinder_success", False)
-                    and "solc_optimize" in compilation_config
+                    and (
+                        "solc_optimize" in compilation_config
+                        or "solc_optimize_map" in compilation_config
+                    )
                     and "yul_exception_add_optimizer" not in applied_this_pass
                     else None
                 ),
