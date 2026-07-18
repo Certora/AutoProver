@@ -22,9 +22,20 @@ from certora_autosetup.solidity_ast import (
 # (e.g. curated-summary library detection).
 DEPENDENCY_MARKERS = ("node_modules/", "lib/", "dependencies/", ".deps/")
 
+# Dumps produced inside build containers key sources by the container's project
+# mount; strip these so source text resolves against the host project_root.
+CONTAINER_ROOTS = ("/workspace/project/",)
+
+
+def _strip_container_root(source_path: str) -> str:
+    for root in CONTAINER_ROOTS:
+        if source_path.startswith(root):
+            return source_path[len(root):]
+    return source_path
+
 
 def is_dependency_path(source_path: str) -> bool:
-    p = source_path.lstrip("./")
+    p = _strip_container_root(source_path).lstrip("./")
     return any(p.startswith(m) or f"/{m}" in p for m in DEPENDENCY_MARKERS)
 
 
@@ -72,6 +83,9 @@ class AnalysisContext:
 
     def display_path(self, source_path: str) -> str:
         """Project-relative path for reports (falls back to the raw dump path)."""
+        stripped = _strip_container_root(source_path)
+        if stripped != source_path:
+            return stripped
         try:
             return str(Path(source_path).resolve().relative_to(self.project_root.resolve()))
         except ValueError:
@@ -79,7 +93,7 @@ class AnalysisContext:
 
     def _text(self, source_path: str) -> Optional[bytes]:
         if source_path not in self._source_texts:
-            candidate = self.project_root / source_path
+            candidate = self.project_root / _strip_container_root(source_path)
             self._source_texts[source_path] = (
                 candidate.read_bytes() if candidate.is_file() else None
             )

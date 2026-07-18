@@ -15,6 +15,7 @@ from certora_autosetup.amenability.compile import CannotScoreError, resolve_dump
 from certora_autosetup.amenability.context import AnalysisContext
 from certora_autosetup.amenability.report import (
     AmenabilityReport,
+    Level,
     Recommendation,
     ScoringErrorReport,
 )
@@ -74,8 +75,13 @@ def main() -> int:
     parser.add_argument("--ast-dump", action="append", default=[], type=Path,
                         help="existing certoraRun --dump_asts output (repeatable)")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
-    parser.add_argument("--no-llm", action="store_true", default=True,
-                        help="static-only scoring (the only mode in phase 1)")
+    parser.add_argument("--judge", action="store_true",
+                        help="run the LLM judge over the static report (requires "
+                             "Anthropic credentials); default is static-only")
+    parser.add_argument("--rubric-version", default=None,
+                        help="pin a specific judge rubric version (default: latest)")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="explicitly static-only (the default; kept for interface stability)")
     parser.add_argument("--output", type=Path, default=None, help="write report here instead of stdout")
     args = parser.parse_args()
 
@@ -118,6 +124,18 @@ def main() -> int:
         evidence=evidence,
         recommendations=_recommendations(evidence),
     )
+
+    if args.judge and not args.no_llm:
+        from certora_autosetup.amenability.judge import JudgeError, judge_report
+        try:
+            report.judge = judge_report(report, ctx, rubric_version=args.rubric_version)
+            report.level = Level(report.judge["level"])
+            report.confidence = round(
+                (confidence + report.judge["confidence"]) / 2, 2
+            )
+        except JudgeError as e:
+            print(f"judge failed, keeping static verdict: {e}", file=sys.stderr)
+
     payload = report.model_dump_json(indent=2)
     if args.output:
         args.output.write_text(payload + "\n")
