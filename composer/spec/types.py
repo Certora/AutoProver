@@ -56,10 +56,24 @@ type PropertyType = Literal["attack_vector", "safety_property", "invariant"]
 invariant. Shared so every layer (inference, report, grouping) addresses the
 same vocabulary instead of redeclaring the literal."""
 
-class PropertyFormulation(BaseModel):
+class UntitledPropertyFormulation(BaseModel):
+    sort: PropertyType = Field(description="The type of property you are describing.")
+    description: str = Field(description="The description of the property")
+
+    @property
+    def sort_description(self) -> str:
+        match self.sort:
+            case "attack_vector":
+                return "Attack Vector"
+            case "invariant":
+                return "Invariant"
+            case "safety_property":
+                return "Safety Property"
+
+class PropertyFormulation(UntitledPropertyFormulation):
     """
     A property or invariant that must hold for the component
     """
     title: str = Field(description="A short, descriptive snake_case identifier for the property (e.g. 'total_supply_preserved'). Must be unique within the batch of properties.")
-    sort: PropertyType = Field(description="The type of property you are describing.")
-    description: str = Field(description="The description of the property")
+    
+

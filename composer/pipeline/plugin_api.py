@@ -1,10 +1,10 @@
-from typing import AsyncContextManager, Protocol, Callable, Awaitable
+from typing import AsyncContextManager, Protocol, Callable, Awaitable, Any
 from functools import cached_property
 from abc import ABC, abstractmethod
 from graphcore.graph import TemplateLoader
 from jinja2.loaders import BaseLoader, PackageLoader, ChoiceLoader, PrefixLoader
 
-from composer.templates.loader import make_loader, base_loader, load_jinja_template
+from composer.templates.loader import base_loader, load_jinja_template, _autoescape
 from composer.spec.system_model import ContractComponentInstance
 from composer.pipeline.ptypes import PipelineRun
 from composer.spec.context import WorkflowContext, SourceCode
@@ -38,6 +38,35 @@ class PrePropertyInference:
 class PostPropertyInference:
     pass
 
+import jinja2
+from jinja2 import Environment, ChoiceLoader, PrefixLoader
+
+class _NonStrippingPrefixLoader(PrefixLoader):
+    """Like PrefixLoader, but the compiled template keeps its prefix in .name,
+    so join_path can see which namespace a template came from."""
+    def load(self, environment, name, globals=None):
+        loader, local_name = self.get_loader(name)
+        if globals is None:
+            globals = {}
+        try:
+            source, filename, uptodate = loader.get_source(environment, local_name)
+        except jinja2.TemplateNotFound as e:
+            raise jinja2.TemplateNotFound(name) from e
+        code = environment.compile(source, name, filename)   # full name, not local_name
+        return environment.template_class.from_code(environment, code, globals, uptodate)
+
+class _PluginEnvironment(Environment):
+    namespace_prefixes = ("autoprover/",)
+    def join_path(self, template, parent):
+        # already namespaced -> leave alone
+        if template.startswith(self.namespace_prefixes):
+            return template
+        # inherit the parent's namespace for bare references
+        if parent and parent.startswith(self.namespace_prefixes):
+            prefix = next(p for p in self.namespace_prefixes if parent.startswith(p))
+            return prefix + template
+        return template
+
 class PipelinePlugin(ABC):
     NAME: str
 
@@ -57,12 +86,16 @@ class PipelinePlugin(ABC):
     
         new_jinja_loader = ChoiceLoader([
             loader,
-            PrefixLoader({
+            _NonStrippingPrefixLoader({
                 "autoprover": base_loader
             })
         ])
-        new_loader = make_loader(jinja_loader=new_jinja_loader)
-        return new_loader
+        compilation_env = _PluginEnvironment(loader=new_jinja_loader, autoescape=_autoescape)
+        def _load_jinja_template(template_name: str, **kwargs: Any) -> str:
+            """Load and render a Jinja template from the script directory"""
+            template = compilation_env.get_template(template_name)
+            return template.render(**kwargs)
+        return _load_jinja_template
 
 
     async def property_inference_input_hook(

@@ -53,6 +53,7 @@ class PluginPhaseRunner[P: enum.Enum]:
 
     def bind[C](
         self,
+        uid: str,
         ctxt: WorkflowContext[C]
     ) -> PluginContext[C]:
         new_loader = self.plugin.load_jinja_template
@@ -64,7 +65,7 @@ class PluginPhaseRunner[P: enum.Enum]:
         ) -> T:
             label = f"({self._sub_phase.display_str}) Plugin {self.plugin.NAME}: {label}"
             return await self._run.runner(
-                TaskInfo(f"{self._phase[0]}-{self._sub_phase.id_str}-{self.plugin_id}", label, self._phase[0]),
+                TaskInfo(f"{self._phase[0].name}-{self._sub_phase.id_str}-{self.plugin_id}-{uid}", label, self._phase[0]),
                 job,
             )
         return PluginRunner(

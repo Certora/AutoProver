@@ -303,7 +303,7 @@ async def _extract_all[P: enum.Enum, H](
             ctxt = await prop_ctx.child(_pre_property_cache_key(feat, p), {
                 "plugin-name": p
             })
-            run_ctxt = runner.bind(ctxt)
+            run_ctxt = runner.bind(str(idx), ctxt)
             return await runner.plugin.property_inference_input_hook(
                 feat, run_ctxt
             )

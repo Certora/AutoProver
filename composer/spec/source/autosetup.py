@@ -167,7 +167,7 @@ async def run_autosetup(
                 _drain(proc.stdout, cb.log_stdout, logging.INFO),
                 _drain(proc.stderr, stderr_lines.append, logging.ERROR),
             )
-        except Exception:
+        except BaseException:
             _logger.exception("Error while draining AutoSetup subprocess output")
             # A sink raising (or cancellation) would leave the child running with
             # its pipes half-drained; kill it so wait() can reap.
