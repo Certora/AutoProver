@@ -70,9 +70,11 @@ def bitmask_style(ctx: AnalysisContext) -> SignalResult:
                 ))
     total = accessor_bitops + inline_bitops
     inline_ratio = inline_bitops / total if total else 0.0
-    # Low volume is harmless whatever the style; penalize volume * inline-ness.
-    volume_factor = clamp(total / 60.0)
-    score = clamp(1.0 - inline_ratio * volume_factor)
+    # Bit operations are bitvector-theory work — harder but tractable (medium),
+    # even in volume, unless they're also unencapsulated. Penalize volume *
+    # inline-ness but floor at 0.35 so bit-heavy code doesn't read as a rewrite.
+    volume_factor = clamp(total / 120.0)
+    score = clamp(1.0 - inline_ratio * volume_factor) * 0.65 + 0.35
     return SignalResult(
         signal_id="bitmask_style",
         score=score,

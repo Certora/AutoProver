@@ -122,16 +122,18 @@ def asm_fp_manipulation(ctx: AnalysisContext) -> SignalResult:
                             f"mstore({hex(target)}, ...) — scratch-space write",
                             function=f"{contract.name}.{fn.name or fn.kind}",
                         ))
-    # Only free-memory-pointer manipulation OUTSIDE a small scoped helper is
-    # disqualifying — the same mstore(0x40) inside a focused internal helper (the
-    # common OZ/solady pattern) is tractable.
+    # Only free-memory-pointer manipulation OUTSIDE a small scoped helper is a
+    # real hazard — the same mstore(0x40) inside a focused internal helper (the
+    # common OZ/solady pattern) is tractable. Scale with how much of it there is:
+    # a single interwoven write is medium-ish; pervasive FP surgery (the Crystal
+    # profile) craters the score.
     score = 1.0
     if scratch_writes:
-        score = 0.6
-    if interwoven_fp_writes:
-        score = 0.15
-    elif fp_writes:
+        score = 0.7
+    if fp_writes and not interwoven_fp_writes:
         score = 0.7   # fp writes exist but only in scoped helpers
+    if interwoven_fp_writes:
+        score = clamp(0.45 - 0.08 * (interwoven_fp_writes - 1))
     return SignalResult(
         signal_id="asm_fp_manipulation",
         score=score,

@@ -69,9 +69,12 @@ def dynamic_loops(ctx: AnalysisContext) -> SignalResult:
         for block in find_all(fn, InlineAssembly):
             if block.AST is not None:
                 yul_loops += sum(1 for _ in find_all(block.AST, YulForLoop))
+    # Dynamically-bounded loops are ubiquitous in real contracts and the prover
+    # handles them with loop_iter (a config knob, not a rewrite) — so this is a
+    # gentle friction signal, not a disqualifier. It floors at 0.4, never 0.
     return SignalResult(
         signal_id="dynamic_loops",
-        score=clamp(1.0 - dynamic / 12.0),
+        score=clamp(1.0 - dynamic / 60.0) * 0.6 + 0.4,
         evidence=evidence,
         raw={"dynamic_loops": dynamic, "storage_length_bounded": length_bounded,
              "yul_for_loops": yul_loops},

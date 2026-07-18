@@ -2,33 +2,40 @@
 # scoring code never hardcodes a weight or threshold.
 #
 # score semantics: every signal emits [0,1] with 1 = fully amenable; the level is
-# derived from the weighted mean plus the hard rules below.
+# derived from the weighted mean plus the co-occurrence rule below.
 
 weights:
-  asm_density: 0.8
+  # Structural killers — the patterns that can require a reference implementation.
+  # Weighted heavily; low is decided by how many of these fire together.
+  asm_trampoline: 1.6
   asm_fp_manipulation: 1.5
-  asm_trampoline: 1.5
-  bitmask_style: 1.0
-  function_length: 1.0
-  unchecked_nonlinear: 0.8
+  storage_packing: 1.5
+  function_length: 1.2
   mixed_theory: 1.2
-  curated_summary_hits: 1.0
-  storage_packing: 1.2
-  external_call_surface: 0.5
-  dynamic_loops: 0.7
+  # Friction — makes autosetup harder (config/summaries/harnesses) but is
+  # config-solvable, so these pull toward medium, not low. Lower weight.
+  asm_density: 0.6
+  bitmask_style: 0.7
+  unchecked_nonlinear: 0.5
+  curated_summary_hits: 0.7
+  external_call_surface: 0.4
+  dynamic_loops: 0.3
   surface_shape: 0.0   # informational normalizers only
 
 thresholds:
-  high_min: 0.75   # weighted score >= this -> high (unless a hard rule caps it)
-  low_max: 0.45    # weighted score < this  -> low
+  high_min: 0.72          # weighted mean >= this -> high
+  structural_low_max: 0.5  # low also requires the mean to be below this
 
 hard_rules:
-  # Any HIGH-severity evidence from these signals caps the level at medium:
-  # these patterns are individually disqualifying for hands-off autosetup.
-  cap_at_medium_on_high_evidence:
-    - asm_fp_manipulation
+  # `low` requires this many structural-killer signals scoring at/below
+  # killer_severe_score simultaneously — the reference-implementation profile.
+  # (Crystal-class: trampolines + hand-rolled storage + FP surgery + monolithic
+  # mixed-theory functions all at once.)
+  structural_killers:
     - asm_trampoline
+    - asm_fp_manipulation
     - storage_packing
-  # This many signals scoring <= severe_score forces low.
-  severe_score: 0.3
-  severe_count_forces_low: 3
+    - function_length
+    - mixed_theory
+  killer_severe_score: 0.25
+  killers_for_low: 3

@@ -18,9 +18,18 @@ from certora_autosetup.solidity_ast import FunctionDefinition
 SUMMARIES_REGISTRY = (
     Path(__file__).resolve().parents[2] / "setup" / "function_summaries.json"
 )
-# Names generic enough that a same-named project function is not evidence of a
-# hand-rolled math kernel.
-NONINDICATIVE_NAMES = {"toString"}
+# The only names whose hand-rolled reimplementation is a genuine amenability
+# signal: nonlinear fixed-point / full-precision math primitives that the prover
+# summarizes away when they come from a curated library but must reason about
+# fully when reimplemented. Everything else in the registry (toString, safeTransfer,
+# toUint*, get/set, extsload, ...) collides with unrelated helpers and is NOT
+# evidence of a hard-to-verify math kernel.
+MATH_KERNEL_NAMES = {
+    "mulDiv", "fullMulDiv", "mulDivUp", "fullMulDivUp",
+    "mulWad", "divWad", "mulWadUp", "divWadUp", "sMulWad", "sDivWad",
+    "powWad", "expWad", "lnWad", "log2", "log10", "log2Up",
+    "rpow", "rmul", "rdiv", "sqrt", "cbrt", "fixedPointMul",
+}
 EVIDENCE_CAP = 10
 
 
@@ -34,12 +43,9 @@ def _registry() -> dict:
 def curated_summary_hits(ctx: AnalysisContext) -> SignalResult:
     registry = _registry()
     curated_libraries: dict[str, set[str]] = {}
-    curated_fn_names: set[str] = set()
     for entry in registry.values():
         for lib in entry.get("library_names", []):
             curated_libraries.setdefault(lib, set()).update(entry.get("names", []))
-        curated_fn_names.update(entry.get("names", []))
-    curated_fn_names -= NONINDICATIVE_NAMES
 
     hits: list[str] = []
     hand_rolled: list[str] = []
@@ -56,12 +62,12 @@ def curated_summary_hits(ctx: AnalysisContext) -> SignalResult:
         if member_names & curated_libraries[contract.name]:
             hits.append(f"{contract.name} ({path})")
 
-    # Negative: curated-name functions implemented in PROJECT code outside any
-    # curated library — a hand-rolled equivalent.
+    # Negative: a genuine nonlinear-math kernel (mulDiv/sqrt/mulWad/...) hand-rolled
+    # in PROJECT code, outside any curated library. Generic-named helpers do not count.
     for path, contract, fn in ctx.iter_functions():
         if is_dependency_path(path):
             continue
-        if fn.name in curated_fn_names and contract.name not in curated_libraries:
+        if fn.name in MATH_KERNEL_NAMES and contract.name not in curated_libraries:
             hand_rolled.append(f"{contract.name}.{fn.name}")
             if len(evidence) < EVIDENCE_CAP:
                 evidence.append(make_evidence(
@@ -72,12 +78,15 @@ def curated_summary_hits(ctx: AnalysisContext) -> SignalResult:
                     function=f"{contract.name}.{fn.name}",
                 ))
 
-    if hand_rolled:
-        score = 0.3
-    elif hits:
+    # Using a curated math library is a positive; a hand-rolled kernel with no
+    # curated counterpart is a mild negative (needs a written summary — medium,
+    # not disqualifying); the common case (no heavy math) is neutral.
+    if hits:
         score = 1.0
+    elif hand_rolled:
+        score = 0.55
     else:
-        score = 0.7  # neither: neutral — the project may simply not need math libs
+        score = 0.85
     return SignalResult(
         signal_id="curated_summary_hits",
         score=score,

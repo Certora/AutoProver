@@ -61,9 +61,11 @@ def unchecked_nonlinear(ctx: AnalysisContext) -> SignalResult:
                         f"unchecked nonlinear `{op.operator}` with symbolic operands",
                         function=f"{contract.name}.{fn.name or fn.kind}",
                     ))
+    # Unchecked nonlinear arithmetic makes the SMT harder but is config/summary
+    # solvable (medium), not a rewrite trigger — floor at 0.35.
     return SignalResult(
         signal_id="unchecked_nonlinear",
-        score=clamp(1.0 - sites / 20.0),
+        score=clamp(1.0 - sites / 25.0) * 0.65 + 0.35,
         evidence=evidence,
         raw={"sites": sites},
     )
@@ -116,9 +118,12 @@ def mixed_theory(ctx: AnalysisContext) -> SignalResult:
                     "(no internal-function seam to separate the theories)",
                     function=label,
                 ))
+    # Mixed bitvector+nonlinear theory in one function is a real SMT hazard, but
+    # only pervasive mixing (the Crystal profile) is disqualifying; a handful of
+    # such functions is medium. Floor at 0.3.
     return SignalResult(
         signal_id="mixed_theory",
-        score=clamp(1.0 - flagged / 5.0),
+        score=clamp(1.0 - flagged / 12.0) * 0.7 + 0.3,
         evidence=evidence,
         raw={"flagged_functions": flagged, "per_function": per_fn},
     )
