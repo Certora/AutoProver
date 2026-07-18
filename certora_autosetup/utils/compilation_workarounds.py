@@ -374,15 +374,10 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="yul_exception_add_optimizer",
-                # A solc_optimize_map (per-contract runs from foundry
-                # compilation_restrictions) is explicit project intent, and
-                # certoraRun rejects a conf carrying both the map and the
-                # scalar — skip this rung and let the ladder escalate.
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
-                    and "solc_optimize" not in compilation_config
-                    and "solc_optimize_map" not in compilation_config
+                    and self._yul_optimizer_pending(compilation_config, contracts)
                     else None
                 ),
                 apply_fn=self._apply_optimizer_for_via_ir,
@@ -391,21 +386,18 @@ class CompilationWorkaroundManager:
             CompilationWorkaround(
                 name="yul_exception_stack_too_deep",
                 # This is the escalation step after yul_exception_add_optimizer:
-                # it must only fire on output produced AFTER the optimizer was
+                # it must only fire once the optimizer is on globally or for
+                # every scene contract (the rung above has nothing left to
+                # enable), and only on output produced AFTER the optimizer was
                 # tried, not in the same pass that just added it (the live
-                # "solc_optimize in config" check would otherwise see the value
-                # the previous workaround set seconds ago and stop asserting
-                # autofinder success without ever testing the optimizer). A
-                # solc_optimize_map counts as "optimizer already tried": it is
-                # project-configured, and the add rung never fires next to it.
+                # config check would otherwise see the value the previous
+                # workaround set seconds ago and stop asserting autofinder
+                # success without ever testing the optimizer).
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
                     and compilation_config.get("assert_autofinder_success", False)
-                    and (
-                        "solc_optimize" in compilation_config
-                        or "solc_optimize_map" in compilation_config
-                    )
+                    and not self._yul_optimizer_pending(compilation_config, contracts)
                     and "yul_exception_add_optimizer" not in applied_this_pass
                     else None
                 ),
@@ -985,19 +977,64 @@ class CompilationWorkaroundManager:
             json.dump(compilation_config, f, indent=2)
         return updated_config_dict
 
+    @staticmethod
+    def _optimizer_off(runs: Any) -> bool:
+        """A missing/zero solc_optimize_map entry means the optimizer is off
+        for that contract."""
+        return runs in (None, 0, "0", "")
+
+    def _yul_optimizer_pending(
+        self, config: Dict, contracts: List[ContractHandle]
+    ) -> bool:
+        """True while the add-optimizer rung still has something to enable:
+        no global solc_optimize, and — when a per-contract solc_optimize_map
+        is present — at least one scene contract's entry has the optimizer
+        off. With neither key set, the global rung itself is pending."""
+        if "solc_optimize" in config:
+            return False
+        optimize_map = config.get("solc_optimize_map")
+        if optimize_map is None:
+            return True
+        return any(
+            self._optimizer_off(optimize_map.get(c.contract_name)) for c in contracts
+        )
+
     def _apply_optimizer_for_via_ir(
         self,
         _detect_result: str,
         updated_config_dict: Dict,
         compilation_config: Dict,
         config_file: Path,
-        _contracts: List[ContractHandle],
+        contracts: List[ContractHandle],
     ) -> Dict:
-        """Apply optimizer alongside via-ir to resolve YulException stack-too-deep."""
-        self.log("Detected YulException stack-too-deep with via-ir — adding solc_optimize 200", "WARNING")
+        """Apply optimizer alongside via-ir to resolve YulException stack-too-deep.
 
-        compilation_config["solc_optimize"] = "200"
-        updated_config_dict["solc_optimize"] = "200"
+        With a per-contract solc_optimize_map (foundry compilation_restrictions)
+        only the entries whose optimizer is off are enabled — explicit project
+        runs values are kept, and the scalar is never set next to the map
+        (certoraRun rejects the pair)."""
+        if "solc_optimize_map" in compilation_config:
+            optimize_map = compilation_config["solc_optimize_map"]
+            enabled = [
+                c.contract_name
+                for c in contracts
+                if self._optimizer_off(optimize_map.get(c.contract_name))
+            ]
+            for name in enabled:
+                optimize_map[name] = "200"
+            updated_config_dict["solc_optimize_map"] = optimize_map
+            self.log(
+                "Detected YulException stack-too-deep with via-ir — enabling the "
+                f"optimizer (200 runs) in solc_optimize_map for {enabled}",
+                "WARNING",
+            )
+        else:
+            self.log(
+                "Detected YulException stack-too-deep with via-ir — adding solc_optimize 200",
+                "WARNING",
+            )
+            compilation_config["solc_optimize"] = "200"
+            updated_config_dict["solc_optimize"] = "200"
 
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)

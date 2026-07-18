@@ -594,10 +594,11 @@ def test_solc_fallback_fires_when_pin_is_in_compiler_map(
 def test_yul_optimizer_rung_respects_project_optimize_map(
     manager, monkeypatch, tmp_path
 ) -> None:
-    # A per-contract solc_optimize_map (foundry compilation_restrictions) is
-    # explicit project intent: the add-optimizer rung must not put the scalar
-    # next to it (certoraRun rejects the pair), and the ladder escalates to
-    # relaxing the autofinder assertion instead.
+    # A per-contract solc_optimize_map (foundry compilation_restrictions) with
+    # the optimizer on for EVERY contract: the add-optimizer rung has nothing
+    # left to enable and must not put the scalar next to the map (certoraRun
+    # rejects the pair) — the ladder escalates to relaxing the autofinder
+    # assertion instead.
     contracts = [
         ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
         ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
@@ -616,4 +617,36 @@ def test_yul_optimizer_rung_respects_project_optimize_map(
     assert success is True
     assert "solc_optimize" not in compilation_config
     assert compilation_config["solc_optimize_map"] == {"Foo": "1", "Bar": "200"}
+    assert compilation_config["assert_autofinder_success"] is False
+
+
+def test_yul_optimizer_rung_enables_off_entries_in_optimize_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A map entry of "0" (or a missing one) means the optimizer is off for that
+    # contract — exactly the misconfiguration the add-optimizer rung exists to
+    # fix. It must enable those entries in the map (never the scalar, which
+    # cannot legally sit next to it) while keeping explicit project runs
+    # values; only once every entry is on may the ladder escalate.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_YUL_STACK_TOO_DEEP, WRAPPED_YUL_STACK_TOO_DEEP],
+        contracts,
+        extra_config={
+            "solc_optimize_map": {"Foo": "0", "Bar": "1"},
+            "assert_autofinder_success": True,
+        },
+    )
+    assert success is True
+    # Pass 1 enables Foo's optimizer; pass 2 (optimizer on everywhere, error
+    # persists) escalates; the third compile succeeds.
+    assert fake_run.calls == 3
+    assert "solc_optimize" not in compilation_config
+    assert compilation_config["solc_optimize_map"] == {"Foo": "200", "Bar": "1"}
     assert compilation_config["assert_autofinder_success"] is False

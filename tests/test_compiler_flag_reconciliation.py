@@ -183,3 +183,35 @@ def test_merge_drops_base_scalar_when_updates_bring_map(monkeypatch) -> None:
     assert "solc_via_ir" not in config
     assert config["compiler_map"] == {"Vault": "solc8.35", "Helper": "solc8.30"}
     assert config["solc_via_ir_map"] == {"Vault": True, "Helper": False}
+
+
+# =============================================================================
+# SCALAR_TO_MAP_KEYS vs certora-cli
+# =============================================================================
+
+
+def test_scalar_to_map_keys_match_certora_cli() -> None:
+    # The pair names are literals because importing them at runtime is not
+    # clean: certora_cli's internal modules use flat imports (`from Shared
+    # import ...`), so reaching certoraContextAttributes requires putting the
+    # certora_cli package dir on sys.path (shadow risk for generic names like
+    # `Shared`) plus the set_attribute_class() global. This test pins the
+    # literals against the installed CLI in a subprocess instead, so any
+    # rename/removal upstream fails here rather than silently desyncing.
+    import subprocess as sp
+    import sys
+
+    conf_keys = [key for pair in ConfigManager.SCALAR_TO_MAP_KEYS for key in pair]
+    probe = (
+        "import sys, json, certora_cli\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, str(Path(certora_cli.__file__).parent))\n"
+        "import CertoraProver.certoraContextAttributes as Attrs\n"
+        "Attrs.set_attribute_class(Attrs.EvmProverAttributes)\n"
+        f"names = {conf_keys!r}\n"
+        "resolved = [getattr(Attrs.EvmProverAttributes, n.upper()).get_conf_key() for n in names]\n"
+        "print(json.dumps(resolved))\n"
+    )
+    result = sp.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert __import__("json").loads(result.stdout) == conf_keys
