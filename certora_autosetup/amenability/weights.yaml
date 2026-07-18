@@ -23,7 +23,7 @@ weights:
   surface_shape: 0.0   # informational normalizers only
 
 thresholds:
-  high_min: 0.72          # weighted mean >= this -> high
+  high_min: 0.78          # weighted mean >= this AND no severe structural killer -> high
   structural_low_max: 0.5  # low also requires the mean to be below this
 
 hard_rules:

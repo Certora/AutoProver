@@ -65,11 +65,13 @@ def aggregate(results: list[SignalResult], config: ScoringConfig) -> StaticRepor
     weighted = weighted_sum / weight_total if weight_total else 1.0
 
     # `low` only when several structural killers fire together AND the overall
-    # picture is genuinely weak — the reference-implementation profile. Anything
-    # short of that is medium (config-solvable) or high (clean).
+    # picture is genuinely weak — the reference-implementation profile.
+    # `high` means clean: a strong mean AND no structural killer firing severely
+    # (even one hand-rolled-storage or trampoline site means autosetup needs
+    # scoped config, i.e. medium). Everything in between is medium.
     if severe_killers >= config.killers_for_low and weighted < config.structural_low_max:
         level = Level.LOW
-    elif weighted >= config.high_min:
+    elif weighted >= config.high_min and severe_killers == 0:
         level = Level.HIGH
     else:
         level = Level.MEDIUM
