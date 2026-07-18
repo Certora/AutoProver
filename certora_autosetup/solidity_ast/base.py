@@ -25,8 +25,6 @@ Transcription conventions (uniform across all node modules):
                                          known case is ``UsingForDirective.global``)
 """
 
-from __future__ import annotations
-
 from typing import Callable, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict

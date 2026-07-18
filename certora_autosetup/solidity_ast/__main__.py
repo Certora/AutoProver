@@ -11,8 +11,6 @@ dump is streamed one compilation unit at a time, so multi-GB dumps stay cheap.
 ``--json`` emits one machine-readable summary object instead of text.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import sys

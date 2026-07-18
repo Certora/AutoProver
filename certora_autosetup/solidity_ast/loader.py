@@ -13,8 +13,6 @@ a source whose shape the models reject entirely is kept raw as ``parse_failed``;
 Vyper sources (``ast_type``/``node_id`` dialect) are kept raw as ``vyper``.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from dataclasses import dataclass, field

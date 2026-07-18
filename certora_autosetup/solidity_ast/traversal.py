@@ -1,7 +1,5 @@
 """Traversal utilities over typed AST nodes, plus the legacy raw parent-graph builder."""
 
-from __future__ import annotations
-
 from typing import Any, Iterable, Iterator, TypeVar, cast
 
 from pydantic import BaseModel

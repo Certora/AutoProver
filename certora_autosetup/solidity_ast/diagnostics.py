@@ -4,8 +4,6 @@ Used by the round-trip tests and by ``python -m certora_autosetup.solidity_ast``
 validate the models against real dumps at scale.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from .loader import SourceAst
