@@ -157,6 +157,55 @@ this tag just lets the renderer pick the right outcome labels ("Verified" vs "Su
 for a report.json it reads cold."""
 
 
+# ---------------------------------------------------------------------------
+# Findings — violated rules surfaced as audit issues.
+#
+# `Finding` carries the Sherlock Audit Engine "Submit Issue" fields (schema ``IssueIn``,
+# POST /v1/engagements/{id}/issues) that a run can populate at report time: ``title``, ``severity``,
+# and the ``content`` prose. One finding is emitted per violated rule (a `RuleVerdict` with
+# ``outcome == Outcome.BAD``); its prose is synthesized from the rule's counterexample analysis and
+# the property/group it breaks (see ``report/findings.py``). Sherlock length caps are mirrored but
+# not enforced (report.json is lenient — the submission endpoint is the validating gate).
+#
+# ``IssueIn.locations`` is deliberately NOT carried here: a run only knows local paths and CVL-spec
+# lines, not the source ``{owner}/{repo}`` / file / line a Sherlock location needs, so the submission
+# layer reconstructs locations from the engagement scope + the counterexample. The accurate
+# report-time locator lives in ``provenance`` (rule name, spec file, prover-run link).
+# ---------------------------------------------------------------------------
+
+class IssueContent(BaseModel):
+    """A finding's free-text sections — the ``IssueIn.content`` shape."""
+    summary: str = Field(max_length=2000, description="Short tl;dr of the finding, in one to three sentences.")
+    description: str = Field(max_length=50000, description="Full technical description of the vulnerability and how it manifests.")
+    impact: str = Field(max_length=20000, description="Concrete consequence if exploited (funds at risk, DoS, data exposure, ...).")
+    attack_path: str | None = Field(default=None, max_length=20000, description="Step-by-step exploit path, if applicable.")
+    assumptions_and_uncertainties: str | None = Field(default=None, max_length=10000, description="Assumptions relied on and anything the submitter is unsure about.")
+    proof_of_concept: str | None = Field(default=None, max_length=65536, description="Executable PoC, or the prover counterexample demonstrating the issue.")
+    references: list[str] | None = Field(default=None, description="Supporting links (e.g. the prover run).")
+
+
+class FindingProvenance(BaseModel):
+    """Report-only trace from a finding back to the verdict/property that produced it. NOT part of
+    the Sherlock ``IssueIn`` payload — a submitter drops it."""
+    rule_name: RuleName
+    spec_file: str
+    outcome: Outcome
+    group_slug: str | None = None
+    prover_link: str | None = None
+    #: The finding-synthesis LLM's justification for the assigned severity (Impact × Likelihood).
+    severity_reasoning: str | None = None
+
+
+class Finding(BaseModel):
+    """A violated rule rendered as an audit issue. ``title``/``severity``/``content`` are the Sherlock
+    ``IssueIn`` fields a run can fill at report time; ``provenance`` is report-only. ``IssueIn.locations``
+    is added by the submission layer (see the module comment), not stored here."""
+    title: str = Field(max_length=200, description="One-line title of the finding.")
+    severity: str = Field(description="Severity tier. Default rubric: critical / high / medium / low / informational.")
+    content: IssueContent
+    provenance: FindingProvenance | None = None
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal["3.0"] = "3.0"
@@ -172,3 +221,7 @@ class AutoProverReport(BaseModel):
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
     coverage: CoverageReport
+    #: Violated rules surfaced as Sherlock-``IssueIn``-shaped audit issues (one per BAD rule; empty
+    #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose
+    #: is synthesized at report time — see ``report/findings.py``.
+    findings: list[Finding] = Field(default_factory=list)

@@ -1,0 +1,21 @@
+Contract: {{ contract_name }}
+
+Violated rule: {{ rule_name }}
+{% if property_description -%}
+Property it formalizes ({{ property_sort }}): {{ property_title }}
+    {{ property_description }}
+{% endif -%}
+{% if group_title -%}
+Audit-level claim it belongs to: {{ group_title }}
+    {{ group_description }}
+{% endif %}
+{% if analysis -%}
+The prover's counterexample analysis (root cause + suggested fix), produced during the run:
+{{ analysis }}
+{%- else -%}
+(No counterexample analysis was captured for this rule — reason conservatively from the property.)
+{%- endif %}
+{% if counterexample %}
+Counterexample trace:
+{{ counterexample }}
+{% endif %}
