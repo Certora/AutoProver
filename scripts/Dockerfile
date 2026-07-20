@@ -59,16 +59,6 @@ RUN set -eux; \
     ( cd "$target" && /venv/bin/sphinx-build -M singlehtml . tmp ); \
     cp "$target/tmp/singlehtml/index.html" /out/cvl.html
 
-# ---- Stage 1b: build the `run-confined` command-sandbox launcher ----
-# Crucible confines every RunCommand via this small Rust binary (Landlock + seccomp;
-# docs/command-sandbox.md). It must be on PATH in the runtime image or Crucible
-# fail-closes. Built in a throwaway Rust stage; only the binary is copied out.
-FROM --platform=linux/amd64 rust:1-slim AS sandbox-builder
-WORKDIR /build
-COPY rust/ ./rust/
-# Only run-confined (+ its landlock/seccompiler/libc deps) — not the pyo3 members.
-RUN cd rust && cargo build -p run-confined --release
-
 # ---- Stage 2: final runtime image ----
 FROM --platform=linux/amd64 python:3.12-slim AS final
 
@@ -166,9 +156,11 @@ COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
 # crucible checkout is needed at build or run time; the corpus travels as this committed JSON.
 COPY rust/crucible-app/crucible_kb.rag.json $AUTOPROVE_HOME/crucible_kb.rag.json
 
-# The command-sandbox launcher, on PATH (/usr/local/bin is in PATH above). Crucible's
-# default provider is `launcher`, so this must be present or Crucible fail-closes.
-COPY --from=sandbox-builder /build/rust/target/release/run-confined /usr/local/bin/run-confined
+# The `run-confined` command-sandbox launcher is intentionally NOT baked into this
+# base image (not every AutoProver image needs it). Crucible's default provider is
+# `launcher` and is fail-closed, so any container that runs Crucible MUST add the
+# scripts/docker-compose.sandbox.yml overlay: it builds the launcher and mounts it
+# read-only at $RUN_CONFINED_BIN. See docs/command-sandbox.md.
 
 # Pre-download the sentence-transformers embedding model so first runs are
 # offline-fast. nomic-embed-text-v1.5 ships custom modeling code, hence

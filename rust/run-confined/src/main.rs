@@ -6,8 +6,15 @@
 //!   1. **Landlock** — a filesystem ruleset: default-deny, then grant `--rw` paths
 //!      full access and `--ro` paths read+execute. Confines reads *and* writes and,
 //!      by not granting `/proc`, closes the same-uid `/proc/<parent>/environ` leak.
-//!   2. **seccomp** — deny inet-domain `socket()` (blocks TCP, UDP/DNS, and the EC2
-//!      metadata endpoint) and `ptrace`/`process_vm_readv`/`process_vm_writev`.
+//!      On kernels with ABI ≥6, also scopes signals and abstract Unix sockets so the
+//!      child cannot SIGKILL the parent or talk to abstract UDS outside the sandbox.
+//!      On kernels with ABI ≥4 and `--allow-network` off, also default-denies Landlock
+//!      TCP bind/connect (defense-in-depth; UDP still blocked by seccomp).
+//!   2. **seccomp** — deny non-`AF_UNIX` `socket()` (blocks TCP, UDP/DNS, IMDS, netlink,
+//!      vsock, …), deny `io_uring_*` (blocks the classic seccomp network bypass), and
+//!      deny `ptrace`/`process_vm_readv`/`process_vm_writev`. On x86_64 each deny is
+//!      mirrored onto its x32-ABI syscall number (`nr | 0x4000_0000`) so the x32
+//!      calling convention cannot slip a denied syscall past the exact-number rules.
 //!   3. **env allowlist** — `execve` with only `--allow-env` variables (a scrubbed
 //!      environment).
 //!   4. **rlimits** — `--rlimit-*` caps on address space / CPU-seconds / pids / file size.
@@ -25,8 +32,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use landlock::{
-    Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
-    RulesetCreatedAttr, RulesetStatus, ABI,
+    Access, AccessFs, AccessNet, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
+    RulesetAttr, RulesetCreatedAttr, RulesetStatus, Scope, ABI,
 };
 use seccompiler::{
     apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
@@ -39,10 +46,6 @@ const EXIT_USAGE: i32 = 2;
 const EXIT_SANDBOX_UNAVAILABLE: i32 = 3;
 /// The confined `execve` itself failed (e.g. program not found on PATH).
 const EXIT_EXEC_FAILED: i32 = 127;
-
-/// `landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` returns the
-/// kernel's supported ABI version, or fails if Landlock is unavailable.
-const LANDLOCK_CREATE_RULESET_VERSION: libc::c_ulong = 1;
 
 #[derive(Default)]
 struct Config {
@@ -90,26 +93,32 @@ fn main() {
     die(EXIT_EXEC_FAILED, &format!("exec {:?} failed: {err}", cfg.program));
 }
 
-/// `--probe`: report whether the kernel supports Landlock. Exit 0 + print the ABI
-/// if so; exit `EXIT_SANDBOX_UNAVAILABLE` otherwise. Drives Python's fail-closed
-/// `available()` check without restricting this (throwaway) process.
+/// `--probe`: report whether the kernel supports Landlock. Exit 0 + print the
+/// enforcement status if so; exit `EXIT_SANDBOX_UNAVAILABLE` otherwise. Drives
+/// Python's fail-closed `available()` check.
+///
+/// We probe through the crate's public API rather than the raw
+/// `landlock_create_ruleset` syscall — the crate deliberately hides the numeric
+/// ABI, and this reuses the exact BestEffort negotiation `apply_landlock` does.
+/// It restricts *this* process as a side effect, which is harmless: `--probe` is
+/// a throwaway process that exits immediately after reporting.
 fn probe() -> ! {
-    let abi = unsafe {
-        libc::syscall(
-            libc::SYS_landlock_create_ruleset,
-            std::ptr::null::<libc::c_void>(),
-            0usize,
-            LANDLOCK_CREATE_RULESET_VERSION,
-        )
-    };
-    if abi > 0 {
-        println!("landlock abi {abi}");
-        std::process::exit(0);
+    let status = Ruleset::default()
+        .set_compatibility(CompatLevel::BestEffort)
+        .handle_access(AccessFs::from_all(ABI::V5))
+        .and_then(|r| r.scope(Scope::from_all(ABI::V6)))
+        .and_then(|r| r.create())
+        .and_then(|r| r.restrict_self());
+    match status {
+        Ok(s) if !matches!(s.ruleset, RulesetStatus::NotEnforced) => {
+            println!("landlock {:?}", s.ruleset);
+            std::process::exit(0);
+        }
+        _ => die(
+            EXIT_SANDBOX_UNAVAILABLE,
+            "kernel does not support Landlock (need Linux >= 5.13); refusing to run unconfined",
+        ),
     }
-    die(
-        EXIT_SANDBOX_UNAVAILABLE,
-        "kernel does not support Landlock (need Linux >= 5.13); refusing to run unconfined",
-    );
 }
 
 fn parse(argv: &[String]) -> Result<Config, String> {
@@ -183,28 +192,51 @@ fn set_rlimits(cfg: &Config) {
 
 fn set_no_new_privs() {
     // Required before loading a seccomp filter (and by Landlock) for an unprivileged
-    // process; ensures no exec can regain privileges.
-    unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    // process; ensures no exec can regain privileges. Fail-closed if it cannot be set.
+    let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if rc != 0 {
+        die(
+            EXIT_SANDBOX_UNAVAILABLE,
+            &format!(
+                "PR_SET_NO_NEW_PRIVS failed: {}",
+                std::io::Error::last_os_error()
+            ),
+        );
+    }
 }
 
 fn apply_landlock(cfg: &Config) -> Result<(), String> {
     // Handle the full access-right set the crate knows; BestEffort tolerates a kernel
     // that lacks the newest rights, but we still require Landlock to be *enforcing*
     // at all (checked below) — otherwise we would silently run unconfined.
-    let abi = ABI::V5;
+    //
+    // FS rights: ABI V5 (covers up through IoctlDev; V6/V7 add no new FS bits).
+    // Scopes (Signal + AbstractUnixSocket): ABI V6 — BestEffort drops them on older
+    // kernels (residual same-uid risk documented in command-sandbox.md §6).
+    // Net TCP deny: ABI V4 — BestEffort; defense-in-depth next to seccomp.
+    let abi_fs = ABI::V5;
 
-    let mut created = Ruleset::default()
+    let mut ruleset = Ruleset::default()
         .set_compatibility(CompatLevel::BestEffort)
-        .handle_access(AccessFs::from_all(abi))
+        .handle_access(AccessFs::from_all(abi_fs))
         .map_err(|e| e.to_string())?
-        .create()
+        .scope(Scope::from_all(ABI::V6))
         .map_err(|e| e.to_string())?;
+
+    if !cfg.allow_network {
+        // No TCP bind/connect rules → default-deny for Landlock net (when supported).
+        ruleset = ruleset
+            .handle_access(AccessNet::from_all(ABI::V4))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let mut created = ruleset.create().map_err(|e| e.to_string())?;
 
     for p in &cfg.ro_paths {
         match PathFd::new(p) {
             Ok(fd) => {
                 created = created
-                    .add_rule(PathBeneath::new(fd, AccessFs::from_read(abi)))
+                    .add_rule(PathBeneath::new(fd, AccessFs::from_read(abi_fs)))
                     .map_err(|e| e.to_string())?;
             }
             Err(e) => eprintln!("run-confined: skipping missing --ro path {p:?}: {e}"),
@@ -214,7 +246,7 @@ fn apply_landlock(cfg: &Config) -> Result<(), String> {
         match PathFd::new(p) {
             Ok(fd) => {
                 created = created
-                    .add_rule(PathBeneath::new(fd, AccessFs::from_all(abi)))
+                    .add_rule(PathBeneath::new(fd, AccessFs::from_all(abi_fs)))
                     .map_err(|e| e.to_string())?;
             }
             Err(e) => return Err(format!("required --rw path {p:?} is unopenable: {e}")),
@@ -232,22 +264,28 @@ fn apply_seccomp(cfg: &Config) -> Result<(), String> {
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
     if !cfg.allow_network {
-        // Deny socket() for AF_INET / AF_INET6 (arg 0) — blocks TCP, UDP (incl. DNS),
-        // and the IMDS endpoint. AF_UNIX and other local families still work.
-        let cond = |domain: i32| -> Result<SeccompRule, String> {
-            SeccompRule::new(vec![SeccompCondition::new(
-                0,
-                SeccompCmpArgLen::Dword,
-                SeccompCmpOp::Eq,
-                domain as u64,
-            )
-            .map_err(|e| e.to_string())?])
-            .map_err(|e| e.to_string())
-        };
-        rules.insert(
-            libc::SYS_socket as i64,
-            vec![cond(libc::AF_INET)?, cond(libc::AF_INET6)?],
-        );
+        // Deny socket() for every domain *except* AF_UNIX (cargo jobserver, etc.).
+        // Matching arg0 != AF_UNIX covers AF_INET/INET6 (TCP+UDP/DNS+IMDS), AF_NETLINK,
+        // AF_PACKET, AF_VSOCK, and any future family — not just the two inet domains.
+        let non_unix = SeccompRule::new(vec![SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            libc::AF_UNIX as u64,
+        )
+        .map_err(|e| e.to_string())?])
+        .map_err(|e| e.to_string())?;
+        rules.insert(libc::SYS_socket as i64, vec![non_unix]);
+    }
+
+    // io_uring can create sockets and connect without calling socket(2), which is a
+    // well-known seccomp bypass. Offline builds do not need it — deny unconditionally.
+    for nr in [
+        libc::SYS_io_uring_setup,
+        libc::SYS_io_uring_enter,
+        libc::SYS_io_uring_register,
+    ] {
+        rules.insert(nr as i64, Vec::new());
     }
 
     // Deny cross-process memory/ptrace (belt-and-suspenders to Landlock's own
@@ -258,6 +296,27 @@ fn apply_seccomp(cfg: &Config) -> Result<(), String> {
         libc::SYS_process_vm_writev,
     ] {
         rules.insert(nr as i64, Vec::new());
+    }
+
+    // Close the x32-ABI bypass. On x86_64, a task can invoke any syscall under the
+    // *same* AUDIT_ARCH_X86_64 identity but with the number OR'd with
+    // `__X32_SYSCALL_BIT` (0x4000_0000) — the x32 calling convention. seccompiler's
+    // architecture guard only checks AUDIT_ARCH (which x32 shares with x86_64), so an
+    // x32 call sails past it, then misses our exact-number JEQ rules below and lands on
+    // the default `Allow` — a total bypass of every deny above (x32 `socket`, `ptrace`,
+    // `io_uring_*`, `process_vm_*`). libseccomp guards against this automatically;
+    // seccompiler does not. We mirror each deny onto its x32-tagged number so both the
+    // native and x32 forms are caught (and any deny added above is mirrored for free).
+    // aarch64 has no such per-syscall compat bit — its AArch32 compat uses a distinct
+    // AUDIT_ARCH that the arch guard already kills — so this is x86_64-only.
+    #[cfg(target_arch = "x86_64")]
+    {
+        const X32_SYSCALL_BIT: i64 = 0x4000_0000;
+        let mirrored: Vec<(i64, Vec<SeccompRule>)> = rules
+            .iter()
+            .map(|(nr, chain)| (nr | X32_SYSCALL_BIT, chain.clone()))
+            .collect();
+        rules.extend(mirrored);
     }
 
     let filter = SeccompFilter::new(

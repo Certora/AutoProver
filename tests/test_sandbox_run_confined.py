@@ -70,6 +70,59 @@ async def test_confined_command_has_no_network(tmp_path):
 
 
 @_needs_sandbox
+async def test_confined_command_denies_io_uring(tmp_path):
+    """io_uring_setup is a known seccomp socket() bypass — must be denied.
+
+    Use /usr/bin/python3 (not a venv shim): the sandbox does not grant the
+    project .venv, so a PATH-resolved venv python fails before the probe runs.
+    """
+    res = await run_local_command(
+        "/usr/bin/python3",
+        [
+            "-c",
+            "import ctypes; c=ctypes.CDLL('libc.so.6',use_errno=True); "
+            "p=(ctypes.c_char*256)(); "
+            "fd=c.syscall(425,8,ctypes.byref(p)); "
+            "print('LEAK' if fd>=0 else 'denied')",
+        ],
+        {},
+        workdir=tmp_path,
+        provider=_PROVIDER,
+        policy=_system_policy(tmp_path),
+    )
+    assert res.exit_code == 0, res.stderr
+    assert "LEAK" not in res.stdout
+    assert "denied" in res.stdout
+
+
+@_needs_sandbox
+async def test_confined_command_denies_netlink_and_vsock(tmp_path):
+    res = await run_local_command(
+        "/usr/bin/python3",
+        [
+            "-c",
+            "import socket; "
+            "out=[]\n"
+            "for fam,name in ((socket.AF_NETLINK,'nl'), (getattr(socket,'AF_VSOCK',40),'vs')):\n"
+            "  try:\n"
+            "    socket.socket(fam, socket.SOCK_STREAM if name=='vs' else socket.SOCK_RAW)\n"
+            "    out.append(name+':LEAK')\n"
+            "  except OSError:\n"
+            "    out.append(name+':denied')\n"
+            "print(' '.join(out))",
+        ],
+        {},
+        workdir=tmp_path,
+        provider=_PROVIDER,
+        policy=_system_policy(tmp_path),
+    )
+    assert res.exit_code == 0, res.stderr
+    assert "LEAK" not in res.stdout
+    assert "nl:denied" in res.stdout
+    assert "vs:denied" in res.stdout
+
+
+@_needs_sandbox
 async def test_none_provider_is_not_confined(tmp_path):
     """Control: without a provider the same outside-read succeeds — proving it is the
     sandbox, not something else, doing the blocking above."""
