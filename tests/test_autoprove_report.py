@@ -20,11 +20,6 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
-<<<<<<< HEAD
-=======
-from composer.pipeline.core import Delivered
-
->>>>>>> da81a15 (AutoProve Plugin System, prop prompt improvements)
 from composer.spec.types import PropertyFormulation, PropertyType
 from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping, SkippedProperty
 
@@ -76,11 +71,7 @@ def _fetcher(by_link: dict[str, list]):
     return make_prover_fetcher(_FakeAPI(by_link))
 
 
-<<<<<<< HEAD
 def _prop(title, desc, *, sort: PropertyType = "safety_property") -> PropertyFormulation:
-=======
-def _prop(title, desc, *, sort: PropertyType = "safety_property", methods=None) -> PropertyFormulation:
->>>>>>> da81a15 (AutoProve Plugin System, prop prompt improvements)
     return PropertyFormulation(title=title, sort=sort, description=desc)
 
 
@@ -97,24 +88,10 @@ def _gen(mapping: dict[str, list[str]] | None = None,
     )
 
 
-<<<<<<< HEAD
-def _input(name, unit_file, props, result: GeneratedCVL | None, link : str | None="L1") -> ReportComponentInput[GeneratedCVL]:
-    """``link`` is the result's prover run link (``GeneratedCVL.final_link``); the prover fetcher
-    keys its verdicts off it. ``None`` (or a ``None`` result) means no run link, so no verdicts."""
-    return ReportComponentInput(
-        name=name,
-        props=props,
-        formalized=Delivered(
-            deliverable=pathlib.Path(unit_file),
-            result=result.model_copy(update={"final_link": link})
-        ) if result is not None else None
-    )
-=======
 def _input(name, unit_file, props, result: GeneratedCVL | None,
            link: str | None = "L1") -> ReportComponentInput[GeneratedCVL]:
     return ReportComponentInput(name=name, props=props,
                                 formalized=Delivered(result, unit_file) if result is not None else None)
->>>>>>> da81a15 (AutoProve Plugin System, prop prompt improvements)
 
 
 def _fp(component, title, refs, desc="d", sort: PropertyType = "safety_property") -> FormalizedProperty:
