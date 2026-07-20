@@ -109,6 +109,27 @@ fn sock_domain(domain: i32, typ: i32) -> String {
     }
 }
 
+// x32-ABI bypass (x86_64): invoke socket(2) via the x32 calling convention — same
+// AUDIT_ARCH_X86_64, but the syscall number OR'd with __X32_SYSCALL_BIT (0x4000_0000).
+// glibc's syscall() just loads the number into rax, so this issues a genuine x32 call.
+// Records the errno so the test can distinguish "seccomp denied it" (EPERM) from "the
+// kernel has no x32 support" (ENOSYS) — without the deny-mirror the call reaches the
+// kernel (ENOSYS here, a live fd on an x32-enabled kernel); with it, seccomp returns EPERM.
+fn sock_inet_x32() -> String {
+    const X32_BIT: i64 = 0x4000_0000;
+    const SYS_SOCKET_X86_64: i64 = 41;
+    unsafe {
+        let fd = syscall(SYS_SOCKET_X86_64 | X32_BIT, AF_INET as i64, SOCK_STREAM as i64, 0i64);
+        if fd >= 0 {
+            close(fd as i32);
+            "LEAK:socket-ok".to_string()
+        } else {
+            let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            format!("denied:errno={}", e)
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let outside = args.get(1).cloned().unwrap_or_default();
@@ -151,6 +172,7 @@ fn main() {
     // AF_UNIX must still work (cargo jobserver); record that separately for the control.
     probe("unix_sock", &sock_domain(AF_UNIX, SOCK_STREAM));
     probe("inet_sock", &sock_domain(AF_INET, SOCK_STREAM));
+    probe("inet_sock_x32", &sock_inet_x32());
 
     // Same-uid signal: kill(pid, 0) checks permission without delivering a fatal signal.
     probe("signal", &{
@@ -295,6 +317,19 @@ async def test_all_escapes_denied(scenario):
 
     # AF_UNIX remains allowed (toolchain jobserver / local IPC on path sockets).
     assert probe("unix_sock") == "LEAK:socket-ok"
+
+    # x32-ABI bypass (x86_64 only): the deny-mirror must make seccomp catch the
+    # x32-tagged socket() *itself*. Asserting the errno is EPERM (seccomp) — not
+    # ENOSYS (the kernel, reached only because the filter let the call through) —
+    # is what makes this a real regression test even on an x32-disabled kernel like
+    # CI's: without the mirror this reads `denied:errno=38`, with it `denied:errno=1`
+    # (and on an x32-*enabled* kernel, without the mirror it would be a live socket).
+    import errno as _errno
+
+    if os.uname().machine == "x86_64":
+        assert probe("inet_sock_x32") == f"denied:errno={_errno.EPERM}", probe(
+            "inet_sock_x32"
+        )
 
     # Landlock scopes (ABI ≥6 / Linux ≥6.12): signal + abstract UDS. On older
     # kernels BestEffort drops them — residual same-uid risk (command-sandbox.md §6).

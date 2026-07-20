@@ -227,6 +227,7 @@ container. Validated (stock python:3.12-slim, uid 1000, Docker default profile):
 | **secret** — `ptrace(ATTACH, parent)` | ✗ `EPERM` | **seccomp** (deny `ptrace`, `process_vm_readv`) |
 | network — `socket(AF_INET)` / netlink / vsock | ✗ `EPERM` | seccomp: deny `socket` when domain **≠ `AF_UNIX`** |
 | network — `io_uring_setup` (seccomp bypass) | ✗ `EPERM` | seccomp: deny `io_uring_{setup,enter,register}` |
+| network — x32-ABI `socket` (seccomp bypass) | ✗ `EPERM` | seccomp: each deny mirrored onto its x32 syscall number (`nr \| 0x4000_0000`) |
 | network — TCP via Landlock (defense-in-depth) | ✗ deny | Landlock net rules (ABI ≥4), no bind/connect grants |
 | same-uid — `kill(parent)` / abstract UDS | ✗ `EPERM` | Landlock **scopes** `Signal` + `AbstractUnixSocket` (ABI ≥6 / Linux ≥6.12) |
 | legitimate — write workdir, `exec` toolchain, `AF_UNIX` | ✓ works | Landlock rw grant + r+x on toolchain paths; `AF_UNIX` still allowed |
@@ -244,8 +245,13 @@ container. Validated (stock python:3.12-slim, uid 1000, Docker default profile):
   `socket` for every domain **except `AF_UNIX`** (so TCP, UDP/DNS, IMDS, netlink, vsock, … are
   blocked while cargo's jobserver still works), denies **`io_uring_*`** (the classic way to create
   sockets without calling `socket(2)`), and denies the remaining same-uid secret vectors
-  (`ptrace`, `process_vm_readv`/`writev`). Still a **deny-list** on top of default-allow — not a
-  full syscall allowlist; residual risk is tracked in §11.
+  (`ptrace`, `process_vm_readv`/`writev`). On **x86_64** each deny is **mirrored onto its x32-ABI
+  syscall number** (`nr | 0x4000_0000`): the x32 calling convention runs under the same
+  `AUDIT_ARCH_X86_64` identity, so seccompiler's arch guard passes it through, and without the mirror
+  an x32-tagged `socket`/`io_uring`/`ptrace` would miss the exact-number rules and reach
+  default-allow — a full bypass (which libseccomp guards against automatically; seccompiler does not).
+  Still a **deny-list** on top of default-allow — not a full syscall allowlist; residual risk is
+  tracked in §11.
 - **env allowlist** — the launcher `execve`s with a scrubbed environment (PATH, HOME, CARGO_HOME,
   RUSTUP_HOME, TERM, and benign build vars only). The `--clearenv` equivalent, done in-process.
 - **rlimits** — `setrlimit` for `RLIMIT_AS` / `RLIMIT_CPU` / `RLIMIT_NPROC` / `RLIMIT_FSIZE` (§7).
@@ -506,6 +512,14 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    the toolchain (cargo jobserver, rustc, linker) never needs another domain; if a benign
    `AF_NETLINK` use surfaces, decide whether to allow it narrowly. Full syscall **allowlist**
    (default-deny) remains a possible hardening step if the deny-list residual risk is unacceptable.
+   **x32-ABI bypass — closed.** A deny-list keyed on exact x86_64 syscall numbers was bypassable via
+   the x32 ABI (same `AUDIT_ARCH_X86_64`, number OR'd with `0x4000_0000`): the arch guard passes and
+   the exact-number rules miss, hitting default-allow. Critical because on kernels < 6.7 (e.g. the
+   AL2023 6.1 target) Landlock provides *no* network filtering, so seccomp is the sole network
+   control. Fixed by mirroring every deny onto its x32 number (`apply_seccomp`), regression-tested in
+   `tests/test_sandbox_escape.py` (asserts the x32 `socket` is denied with `EPERM` from seccomp, not
+   `ENOSYS` from the kernel). This is the deny-list's one arch-level hole; a full allowlist would also
+   close it structurally.
 3. **rlimits vs cgroup v2 (§7).** Is `RLIMIT_AS` enough to contain a memory-hungry fuzzer, or do we
    need cgroup `memory.max` (and thus writable cgroup delegation in the container) sooner?
 4. **Cache warming cost (§5).** Per-run `cargo fetch` adds latency; is a shared, pre-warmed

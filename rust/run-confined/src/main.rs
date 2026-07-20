@@ -12,7 +12,9 @@
 //!      TCP bind/connect (defense-in-depth; UDP still blocked by seccomp).
 //!   2. **seccomp** — deny non-`AF_UNIX` `socket()` (blocks TCP, UDP/DNS, IMDS, netlink,
 //!      vsock, …), deny `io_uring_*` (blocks the classic seccomp network bypass), and
-//!      deny `ptrace`/`process_vm_readv`/`process_vm_writev`.
+//!      deny `ptrace`/`process_vm_readv`/`process_vm_writev`. On x86_64 each deny is
+//!      mirrored onto its x32-ABI syscall number (`nr | 0x4000_0000`) so the x32
+//!      calling convention cannot slip a denied syscall past the exact-number rules.
 //!   3. **env allowlist** — `execve` with only `--allow-env` variables (a scrubbed
 //!      environment).
 //!   4. **rlimits** — `--rlimit-*` caps on address space / CPU-seconds / pids / file size.
@@ -294,6 +296,27 @@ fn apply_seccomp(cfg: &Config) -> Result<(), String> {
         libc::SYS_process_vm_writev,
     ] {
         rules.insert(nr as i64, Vec::new());
+    }
+
+    // Close the x32-ABI bypass. On x86_64, a task can invoke any syscall under the
+    // *same* AUDIT_ARCH_X86_64 identity but with the number OR'd with
+    // `__X32_SYSCALL_BIT` (0x4000_0000) — the x32 calling convention. seccompiler's
+    // architecture guard only checks AUDIT_ARCH (which x32 shares with x86_64), so an
+    // x32 call sails past it, then misses our exact-number JEQ rules below and lands on
+    // the default `Allow` — a total bypass of every deny above (x32 `socket`, `ptrace`,
+    // `io_uring_*`, `process_vm_*`). libseccomp guards against this automatically;
+    // seccompiler does not. We mirror each deny onto its x32-tagged number so both the
+    // native and x32 forms are caught (and any deny added above is mirrored for free).
+    // aarch64 has no such per-syscall compat bit — its AArch32 compat uses a distinct
+    // AUDIT_ARCH that the arch guard already kills — so this is x86_64-only.
+    #[cfg(target_arch = "x86_64")]
+    {
+        const X32_SYSCALL_BIT: i64 = 0x4000_0000;
+        let mirrored: Vec<(i64, Vec<SeccompRule>)> = rules
+            .iter()
+            .map(|(nr, chain)| (nr | X32_SYSCALL_BIT, chain.clone()))
+            .collect();
+        rules.extend(mirrored);
     }
 
     let filter = SeccompFilter::new(
