@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import time
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, cast
 
@@ -25,6 +26,7 @@ from .prover_runner import (
     ProverRunner,
     ResultTransformer,
 )
+from .preprocessing_watchdog import PreprocessingWatchdog, WatchdogVerdict
 from .runner_types import (
     JobHandle,
     JobStatus,
@@ -40,6 +42,14 @@ def extract_job_url(output: str) -> Optional[str]:
     return extract_job_url_from_text(output)
 
 
+class _WaitOutcome(Enum):
+    """Terminal outcome of waiting on a cloud job."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"  # includes the overall wait timeout (unchanged semantics)
+    PREPROCESSING_TIMEOUT = "preprocessing_timeout"
+
+
 class CloudProverRunner(ProverRunner):
     """
     Cloud job manager for prover execution.
@@ -49,6 +59,15 @@ class CloudProverRunner(ProverRunner):
 
     # Timeout for job completion including job queue time - 150 minutes
     JOB_TIMEOUT_SECONDS = 7200 + 1800
+
+    # Preprocessing watchdog defaults (see preprocessing_watchdog.py). The budget is
+    # time spent in RUNNING without the prover producing a treeview; healthy jobs
+    # produce one within minutes, while preprocessing blowups never do and would
+    # otherwise burn the whole JOB_TIMEOUT_SECONDS. Env-overridable; budget <= 0
+    # disables the watchdog.
+    PREPROCESSING_BUDGET_SECONDS = 1800
+    PREPROCESSING_GRACE_SECONDS = 300
+    PREPROCESSING_PROBE_SECONDS = 90
 
     def __init__(
         self,
@@ -89,6 +108,12 @@ class CloudProverRunner(ProverRunner):
         self.disable_cache = disable_cache
         self.cancel_jobs_on_cleanup = cancel_jobs_on_cleanup
         self.job_wait_timeout = self.JOB_TIMEOUT_SECONDS
+        self.preprocessing_budget = int(os.environ.get(
+            "AUTOSETUP_PREPROCESSING_BUDGET_SECONDS", self.PREPROCESSING_BUDGET_SECONDS))
+        self.preprocessing_grace = int(os.environ.get(
+            "AUTOSETUP_PREPROCESSING_GRACE_SECONDS", self.PREPROCESSING_GRACE_SECONDS))
+        self.preprocessing_probe_interval = int(os.environ.get(
+            "AUTOSETUP_PREPROCESSING_PROBE_SECONDS", self.PREPROCESSING_PROBE_SECONDS))
 
         # Progress tracking counters (read from spinner thread, written under asyncio lock)
         self._active_jobs = 0
@@ -821,9 +846,10 @@ class CloudProverRunner(ProverRunner):
 
             # Wait for job completion with configurable timeout
             job_wait_timeout = self.job_wait_timeout
-            success, prover_start_time, prover_finish_time = await self._wait_for_job_completion_with_api(
+            outcome, prover_start_time, prover_finish_time = await self._wait_for_job_completion_with_api(
                 prover_api, job_url, job_wait_timeout
             )
+            success = outcome is _WaitOutcome.COMPLETED
 
             duration = time.time() - start_time
 
@@ -895,6 +921,43 @@ class CloudProverRunner(ProverRunner):
                     duration=duration,
                     transformed_result=None,
                 )
+            elif outcome is _WaitOutcome.PREPROCESSING_TIMEOUT:
+                job_handle.status = JobStatus.PREPROCESSING_TIMEOUT
+                error_msg = (
+                    f"Preprocessing timeout: prover reported no rules in its treeview within "
+                    f"{self.preprocessing_budget}s of running (stuck in preprocessing); "
+                    f"job was cancelled after {duration:.1f}s"
+                )
+
+                log_with_contract(
+                    self.component,
+                    "error",
+                    job_spec.contract_name,
+                    error_msg,
+                )
+
+                # Drop the cached submission so a deliberate future run submits fresh
+                # instead of re-attaching to the cancelled job.
+                if not self.disable_cache:
+                    await self._remove_submission_cache(cache_key)
+
+                return ProverResult(
+                    job_handle=job_handle,
+                    success=False,
+                    report_path=None,
+                    output_data={
+                        "job_url": job_url,
+                        "output": submission_result.output if submission_result else "",
+                        "return_code": submission_result.return_code
+                        if submission_result
+                        else 0,
+                        "preprocessing_timeout": True,
+                    },
+                    job_spec=job_spec,
+                    error_message=error_msg,
+                    duration=duration,
+                    transformed_result=None,
+                )
             else:
                 # Job failed or timed out
                 job_handle.status = JobStatus.FAILED
@@ -949,17 +1012,29 @@ class CloudProverRunner(ProverRunner):
 
     async def _wait_for_job_completion_with_api(
         self, prover_api: ProverOutputAPI, job_url: str, timeout_seconds: int
-    ) -> tuple[bool, Optional[float], Optional[float]]:
+    ) -> tuple[_WaitOutcome, Optional[float], Optional[float]]:
         """Wait for job completion using ProverOutputAPI.
 
         Returns:
-            Tuple of (success, prover_start_time, prover_finish_time).
+            Tuple of (outcome, prover_start_time, prover_finish_time).
             Times may be None if unavailable.
         """
         import asyncio
 
         start_time = time.time()
         poll_interval = 10  # Poll every 10 seconds for faster completion detection
+
+        # A job with no treeview after the budget is stuck in prover preprocessing and
+        # will never produce results — cancel it instead of waiting out the full timeout.
+        watchdog = None
+        if self.preprocessing_budget > 0:
+            watchdog = PreprocessingWatchdog(
+                budget_seconds=self.preprocessing_budget,
+                grace_seconds=self.preprocessing_grace,
+                probe_interval_seconds=self.preprocessing_probe_interval,
+                probe_treeview=lambda: prover_api.get_treeview_status(job_url),
+                log=self.log,
+            )
 
         while time.time() - start_time < timeout_seconds:
             try:
@@ -996,10 +1071,10 @@ class CloudProverRunner(ProverRunner):
                         # Note: HALTED jobs are treated as successful in PreAudit because they often contain
                         # partial results for some rules that can still be analyzed
                         self.log(f"Job completed successfully: {job_url}")
-                        return True, prover_start, prover_finish
+                        return _WaitOutcome.COMPLETED, prover_start, prover_finish
                     elif job_info.status in [ProverJobStatus.FAILED, ProverJobStatus.CANCELED, ProverJobStatus.SERVICE_UNAVAILABLE, ProverJobStatus.UPLOAD_FAILED]:
                         self.log(f"Job failed with status {job_info.status}: {job_url}")
-                        return False, prover_start, prover_finish
+                        return _WaitOutcome.FAILED, prover_start, prover_finish
                     # Check if job has completed but with an unrecognized status
                     elif hasattr(job_info, "is_completed") and job_info.is_completed:
                         self.log(
@@ -1007,8 +1082,30 @@ class CloudProverRunner(ProverRunner):
                             f"treating as failed: {job_url}",
                             "WARNING"
                         )
-                        return False, prover_start, prover_finish
+                        return _WaitOutcome.FAILED, prover_start, prover_finish
                     # If status is 'RUNNING', 'QUEUED', etc., continue waiting
+
+                    if watchdog is not None:
+                        is_running = job_info.status == ProverJobStatus.RUNNING
+                        try:
+                            verdict = await asyncio.wait_for(
+                                asyncio.get_event_loop().run_in_executor(
+                                    None, watchdog.observe, is_running
+                                ),
+                                timeout=60,
+                            )
+                        except asyncio.TimeoutError:
+                            verdict = WatchdogVerdict.WAITING  # probe hung; try again next tick
+                        if verdict is WatchdogVerdict.PREPROCESSING_TIMEOUT:
+                            self.log(
+                                f"⏱ Preprocessing watchdog: treeview shows no rules after "
+                                f"{self.preprocessing_budget}s of RUNNING — prover is stuck in "
+                                f"preprocessing; cancelling {job_url}",
+                                "WARNING",
+                            )
+                            if not await self._cancel_cloud_job(job_url):
+                                self.log(f"Could not cancel {job_url}; abandoning it anyway", "WARNING")
+                            return _WaitOutcome.PREPROCESSING_TIMEOUT, prover_start, prover_finish
                 else:
                     self.log(f"No job info returned for {job_url}")
 
@@ -1022,12 +1119,12 @@ class CloudProverRunner(ProverRunner):
                     self.log(
                         f"Authentication issue detected, assuming job completed: {job_url}"
                     )
-                    return True, None, None
+                    return _WaitOutcome.COMPLETED, None, None
                 await asyncio.sleep(poll_interval)
 
         # Timeout reached
         self.log(f"Job completion timeout after {timeout_seconds}s", "WARNING")
-        return False, None, None
+        return _WaitOutcome.FAILED, None, None
 
     def _create_failed_result(
         self, job_spec: ProverJobSpec, cache_key: str, error_msg: str
