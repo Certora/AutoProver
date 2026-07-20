@@ -6,8 +6,13 @@
 //!   1. **Landlock** — a filesystem ruleset: default-deny, then grant `--rw` paths
 //!      full access and `--ro` paths read+execute. Confines reads *and* writes and,
 //!      by not granting `/proc`, closes the same-uid `/proc/<parent>/environ` leak.
-//!   2. **seccomp** — deny inet-domain `socket()` (blocks TCP, UDP/DNS, and the EC2
-//!      metadata endpoint) and `ptrace`/`process_vm_readv`/`process_vm_writev`.
+//!      On kernels with ABI ≥6, also scopes signals and abstract Unix sockets so the
+//!      child cannot SIGKILL the parent or talk to abstract UDS outside the sandbox.
+//!      On kernels with ABI ≥4 and `--allow-network` off, also default-denies Landlock
+//!      TCP bind/connect (defense-in-depth; UDP still blocked by seccomp).
+//!   2. **seccomp** — deny non-`AF_UNIX` `socket()` (blocks TCP, UDP/DNS, IMDS, netlink,
+//!      vsock, …), deny `io_uring_*` (blocks the classic seccomp network bypass), and
+//!      deny `ptrace`/`process_vm_readv`/`process_vm_writev`.
 //!   3. **env allowlist** — `execve` with only `--allow-env` variables (a scrubbed
 //!      environment).
 //!   4. **rlimits** — `--rlimit-*` caps on address space / CPU-seconds / pids / file size.
@@ -25,8 +30,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use landlock::{
-    Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
-    RulesetCreatedAttr, RulesetStatus, ABI,
+    Access, AccessFs, AccessNet, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
+    RulesetAttr, RulesetCreatedAttr, RulesetStatus, Scope, ABI,
 };
 use seccompiler::{
     apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
@@ -99,6 +104,7 @@ fn probe() -> ! {
     let status = Ruleset::default()
         .set_compatibility(CompatLevel::BestEffort)
         .handle_access(AccessFs::from_all(ABI::V5))
+        .and_then(|r| r.scope(Scope::from_all(ABI::V6)))
         .and_then(|r| r.create())
         .and_then(|r| r.restrict_self());
     match status {
@@ -184,28 +190,51 @@ fn set_rlimits(cfg: &Config) {
 
 fn set_no_new_privs() {
     // Required before loading a seccomp filter (and by Landlock) for an unprivileged
-    // process; ensures no exec can regain privileges.
-    unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    // process; ensures no exec can regain privileges. Fail-closed if it cannot be set.
+    let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if rc != 0 {
+        die(
+            EXIT_SANDBOX_UNAVAILABLE,
+            &format!(
+                "PR_SET_NO_NEW_PRIVS failed: {}",
+                std::io::Error::last_os_error()
+            ),
+        );
+    }
 }
 
 fn apply_landlock(cfg: &Config) -> Result<(), String> {
     // Handle the full access-right set the crate knows; BestEffort tolerates a kernel
     // that lacks the newest rights, but we still require Landlock to be *enforcing*
     // at all (checked below) — otherwise we would silently run unconfined.
-    let abi = ABI::V5;
+    //
+    // FS rights: ABI V5 (covers up through IoctlDev; V6/V7 add no new FS bits).
+    // Scopes (Signal + AbstractUnixSocket): ABI V6 — BestEffort drops them on older
+    // kernels (residual same-uid risk documented in command-sandbox.md §6).
+    // Net TCP deny: ABI V4 — BestEffort; defense-in-depth next to seccomp.
+    let abi_fs = ABI::V5;
 
-    let mut created = Ruleset::default()
+    let mut ruleset = Ruleset::default()
         .set_compatibility(CompatLevel::BestEffort)
-        .handle_access(AccessFs::from_all(abi))
+        .handle_access(AccessFs::from_all(abi_fs))
         .map_err(|e| e.to_string())?
-        .create()
+        .scope(Scope::from_all(ABI::V6))
         .map_err(|e| e.to_string())?;
+
+    if !cfg.allow_network {
+        // No TCP bind/connect rules → default-deny for Landlock net (when supported).
+        ruleset = ruleset
+            .handle_access(AccessNet::from_all(ABI::V4))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let mut created = ruleset.create().map_err(|e| e.to_string())?;
 
     for p in &cfg.ro_paths {
         match PathFd::new(p) {
             Ok(fd) => {
                 created = created
-                    .add_rule(PathBeneath::new(fd, AccessFs::from_read(abi)))
+                    .add_rule(PathBeneath::new(fd, AccessFs::from_read(abi_fs)))
                     .map_err(|e| e.to_string())?;
             }
             Err(e) => eprintln!("run-confined: skipping missing --ro path {p:?}: {e}"),
@@ -215,7 +244,7 @@ fn apply_landlock(cfg: &Config) -> Result<(), String> {
         match PathFd::new(p) {
             Ok(fd) => {
                 created = created
-                    .add_rule(PathBeneath::new(fd, AccessFs::from_all(abi)))
+                    .add_rule(PathBeneath::new(fd, AccessFs::from_all(abi_fs)))
                     .map_err(|e| e.to_string())?;
             }
             Err(e) => return Err(format!("required --rw path {p:?} is unopenable: {e}")),
@@ -233,22 +262,28 @@ fn apply_seccomp(cfg: &Config) -> Result<(), String> {
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
     if !cfg.allow_network {
-        // Deny socket() for AF_INET / AF_INET6 (arg 0) — blocks TCP, UDP (incl. DNS),
-        // and the IMDS endpoint. AF_UNIX and other local families still work.
-        let cond = |domain: i32| -> Result<SeccompRule, String> {
-            SeccompRule::new(vec![SeccompCondition::new(
-                0,
-                SeccompCmpArgLen::Dword,
-                SeccompCmpOp::Eq,
-                domain as u64,
-            )
-            .map_err(|e| e.to_string())?])
-            .map_err(|e| e.to_string())
-        };
-        rules.insert(
-            libc::SYS_socket as i64,
-            vec![cond(libc::AF_INET)?, cond(libc::AF_INET6)?],
-        );
+        // Deny socket() for every domain *except* AF_UNIX (cargo jobserver, etc.).
+        // Matching arg0 != AF_UNIX covers AF_INET/INET6 (TCP+UDP/DNS+IMDS), AF_NETLINK,
+        // AF_PACKET, AF_VSOCK, and any future family — not just the two inet domains.
+        let non_unix = SeccompRule::new(vec![SeccompCondition::new(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            libc::AF_UNIX as u64,
+        )
+        .map_err(|e| e.to_string())?])
+        .map_err(|e| e.to_string())?;
+        rules.insert(libc::SYS_socket as i64, vec![non_unix]);
+    }
+
+    // io_uring can create sockets and connect without calling socket(2), which is a
+    // well-known seccomp bypass. Offline builds do not need it — deny unconditionally.
+    for nr in [
+        libc::SYS_io_uring_setup,
+        libc::SYS_io_uring_enter,
+        libc::SYS_io_uring_register,
+    ] {
+        rules.insert(nr as i64, Vec::new());
     }
 
     // Deny cross-process memory/ptrace (belt-and-suspenders to Landlock's own

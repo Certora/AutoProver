@@ -76,6 +76,27 @@ def sandbox_cargo_home(workdir: str | Path) -> Path:
     return Path(workdir).resolve() / ".sandbox_cargo"
 
 
+def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
+    """RO subtrees of the *shared* cargo home that sandboxed builds may need.
+
+    Never grants the cargo-home **root**: that directory often holds
+    ``credentials.toml`` / ``credentials`` (crates.io and private-registry tokens).
+    Landlock PathBeneath is hierarchical, so granting the root would leak those.
+
+    Today only ``bin/`` is granted (the ``cargo`` / ``cargo-*`` shims on ``PATH``).
+    Offline deps live in the private per-run :func:`sandbox_cargo_home`, so the
+    shared ``registry/`` and ``git/`` trees are not required. A future shared
+    read-only cache optimization can add specific cache subtrees here without
+    re-opening the credentials file.
+    """
+    root = Path(cargo_home)
+    out: list[Path] = []
+    bin_dir = root / "bin"
+    if bin_dir.is_dir():
+        out.append(bin_dir)
+    return tuple(out)
+
+
 def rust_build_policy(
     workdir: str | Path,
     *,
@@ -91,14 +112,15 @@ def rust_build_policy(
     """Build a network-off policy for compiling/running Rust in ``workdir``.
 
     Grants: ``workdir`` + the device nodes (+ ``extra_rw``) read-write; the Rust
-    (``RUSTUP_HOME``/``CARGO_HOME``) and Solana platform-tool directories, the system
-    dirs, and ``extra_ro`` read-only. Non-existent paths are dropped.
+    toolchain (``RUSTUP_HOME``), the shared cargo **bin/** only (not the cargo-home
+    root — see :func:`shared_cargo_ro_paths`), Solana platform-tool directories, the
+    system dirs, and ``extra_ro`` read-only. Non-existent paths are dropped.
 
     With ``offline`` (the default — the sandbox has no network, §5), ``CARGO_NET_OFFLINE=1``
     is set in the child env. That one var forces *every* cargo invocation offline,
     including the nested ``cargo`` that ``crucible run`` spawns to build the harness —
-    so the deps must already be warm in ``CARGO_HOME`` (see :func:`warm_cargo_cache`,
-    run *outside* the sandbox first).
+    so the deps must already be warm in the private ``CARGO_HOME`` (see
+    :func:`warm_cargo_cache`, run *outside* the sandbox first).
     """
     home = Path.home()
     rustup = Path(os.environ.get("RUSTUP_HOME", home / ".rustup"))
@@ -107,7 +129,8 @@ def rust_build_policy(
     ro_candidates: list[Path] = [Path(p) for p in _SYSTEM_RO]
     ro_candidates += [
         rustup,
-        cargo,
+        # Shared cargo: bin/ only — never the home root (credentials.toml).
+        *shared_cargo_ro_paths(cargo),
         # cargo-build-sbf's downloaded sBPF platform-tools (layout varies by version).
         home / ".cache" / "solana",
         home / ".local" / "share" / "solana",
@@ -134,9 +157,10 @@ def rust_build_policy(
         env[var] = str(sandbox_tmp)
 
     # Point CARGO_HOME at a PRIVATE per-run cargo home under the workdir (see
-    # sandbox_cargo_home for the reasoning). The shared ~/.cargo stays read-only (its
-    # `bin/cargo` is still on PATH; we only redirect where cargo *writes*). Copy the
-    # user's global cargo config in so registry mirrors / build settings still apply.
+    # sandbox_cargo_home for the reasoning). The shared ~/.cargo root is *not*
+    # granted RO; only bin/ is (above). Copy the user's global cargo config into
+    # the private home so registry mirrors / build settings still apply — that
+    # copy is trusted-host code, not a Landlock grant of the secrets file.
     cargo_home = sandbox_cargo_home(wd)
     cargo_home.mkdir(parents=True, exist_ok=True)
     shared_cargo = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))

@@ -80,8 +80,10 @@ their real needs:
 Common surface, resolved once at sandbox-config time and expressed as Landlock rules (§6):
 
 - **Rust toolchain** — `RUSTUP_HOME` (default `~/.rustup`), `cargo`/`rustc` shims — read+exec.
-- **Cargo home** — `CARGO_HOME` (default `~/.cargo`): the `cargo` binary and the **registry cache**,
-  read-only inside; warmed *outside* (§5).
+- **Cargo home** — shared `CARGO_HOME` (default `~/.cargo`): only **`bin/`** is granted read+exec
+  (the `cargo` / `cargo-*` shims on `PATH`). The home **root is not granted**, so
+  `credentials.toml` / private-registry tokens stay unreadable. Offline registry contents live in
+  the private per-run `CARGO_HOME` under the workdir (§11 item 5), warmed *outside* (§5).
 - **Solana platform-tools** — cargo-build-sbf's sBPF rust toolchain — read+exec.
 - **The `crucible` binary** and libs it dlopens — read+exec.
 - **The crucible checkout** (`$CRUCIBLE_REPO/crates/…`) — the path deps — read-only.
@@ -219,23 +221,31 @@ container. Validated (stock python:3.12-slim, uid 1000, Docker default profile):
 | Guarantee | Probe result | Mechanism |
 |---|---|---|
 | filesystem — write outside workdir | ✗ `EACCES` | **Landlock** (full ABI FS bit set, grant only workdir rw) |
-| filesystem — read host file (`/etc/passwd`) | ✗ `EACCES` | Landlock (no grant) |
+| filesystem — read host file outside grants | ✗ `EACCES` | Landlock (no grant); note `/etc` *is* granted for NSS — escape gate uses a planted host file, not `/etc/passwd` |
+| filesystem — cargo `credentials.toml` | ✗ `EACCES` | policy grants shared cargo **`bin/` only**, never the home root |
 | **secret** — read `/proc/<parent>/environ` | ✗ `EACCES` | Landlock (no `/proc` grant) |
 | **secret** — `ptrace(ATTACH, parent)` | ✗ `EPERM` | **seccomp** (deny `ptrace`, `process_vm_readv`) |
-| network — `socket(AF_INET)` | ✗ `EPERM` | seccomp (deny inet-domain sockets → blocks TCP, UDP/DNS, IMDS) |
-| legitimate — write workdir, `exec` toolchain | ✓ works | Landlock rw grant + r+x on toolchain paths |
+| network — `socket(AF_INET)` / netlink / vsock | ✗ `EPERM` | seccomp: deny `socket` when domain **≠ `AF_UNIX`** |
+| network — `io_uring_setup` (seccomp bypass) | ✗ `EPERM` | seccomp: deny `io_uring_{setup,enter,register}` |
+| network — TCP via Landlock (defense-in-depth) | ✗ deny | Landlock net rules (ABI ≥4), no bind/connect grants |
+| same-uid — `kill(parent)` / abstract UDS | ✗ `EPERM` | Landlock **scopes** `Signal` + `AbstractUnixSocket` (ABI ≥6 / Linux ≥6.12) |
+| legitimate — write workdir, `exec` toolchain, `AF_UNIX` | ✓ works | Landlock rw grant + r+x on toolchain paths; `AF_UNIX` still allowed |
 
 - **[Landlock](https://docs.kernel.org/userspace-api/landlock.html)** (LSM; Linux ≥5.13, we observed
   ABI **8**) — an unprivileged process installs a filesystem ruleset on itself: default-deny, then
   grant rw to the workdir and read+exec to the toolchain paths of §3, handling the *full* set of FS
   access rights the running ABI supports (else unhandled operations stay unrestricted). This is what
   confines reads *and* writes and — crucially — closes the `/proc/<parent>/environ` leak that a user
-  namespace would otherwise have closed for free.
+  namespace would otherwise have closed for free. On ABI ≥6 it also installs **scopes** (signals +
+  abstract Unix sockets). On ABI ≥4 with network off it default-denies Landlock TCP bind/connect
+  (defense-in-depth next to seccomp; UDP is still seccomp-only).
 - **seccomp-BPF self-filter** (`PR_SET_NO_NEW_PRIVS` + `SECCOMP_SET_MODE_FILTER`) — installing a
   *stricter* filter on yourself is unprivileged and permitted by Docker's default profile. It denies
-  the network (`socket` with `AF_INET`/`AF_INET6` — covering TCP, UDP/DNS, and the IMDS endpoint,
-  while leaving `AF_UNIX` for benign local IPC) and the remaining same-uid secret vectors
-  (`ptrace`, `process_vm_readv`/`writev`).
+  `socket` for every domain **except `AF_UNIX`** (so TCP, UDP/DNS, IMDS, netlink, vsock, … are
+  blocked while cargo's jobserver still works), denies **`io_uring_*`** (the classic way to create
+  sockets without calling `socket(2)`), and denies the remaining same-uid secret vectors
+  (`ptrace`, `process_vm_readv`/`writev`). Still a **deny-list** on top of default-allow — not a
+  full syscall allowlist; residual risk is tracked in §11.
 - **env allowlist** — the launcher `execve`s with a scrubbed environment (PATH, HOME, CARGO_HOME,
   RUSTUP_HOME, TERM, and benign build vars only). The `--clearenv` equivalent, done in-process.
 - **rlimits** — `setrlimit` for `RLIMIT_AS` / `RLIMIT_CPU` / `RLIMIT_NPROC` / `RLIMIT_FSIZE` (§7).
@@ -248,10 +258,21 @@ the linker, the fuzz binary — runs confined.
 
 A user namespace (bwrap) would have run the child under a *remapped* uid, so cross-process access to
 AutoProver was denied by credential mismatch. Self-sandboxing keeps the child at AutoProver's **own
-uid**, so the two out-of-band secret vectors must be closed *explicitly* — and are: `/proc/<parent>/
-environ` by **not granting `/proc`** in the Landlock ruleset (proven `EACCES`), and `ptrace`/
-`process_vm_readv` by the **seccomp deny-list** (proven `EPERM`). These are the only same-uid vectors
-to AutoProver's memory/env; both verified closed in the stock container.
+uid**, so out-of-band vectors must be closed *explicitly*:
+
+| Vector | Close | Floor |
+|---|---|---|
+| `/proc/<parent>/environ` | Landlock: no `/proc` grant | 5.13 |
+| `ptrace` / `process_vm_*` | seccomp deny | any seccomp |
+| `kill` / signals to parent | Landlock scope `Signal` | **6.12** (ABI 6) |
+| abstract Unix sockets to outside | Landlock scope `AbstractUnixSocket` | **6.12** (ABI 6) |
+| path-based Unix sockets | Landlock FS (socket inode must be under a grant) | 5.13 |
+| readable secrets under toolchain paths | policy: grant shared cargo **`bin/` only**, not `~/.cargo` root (`credentials.toml`) | policy |
+
+On kernels **below 6.12** the two scopes are BestEffort-dropped: signal and abstract-UDS remain a
+**residual same-uid risk** (the child can still be killed by the wall-clock timeout; abstract
+listeners are uncommon in the AutoProver container). Target AMI upgrades past 6.12 close them
+fully; the escape suite asserts scopes only when the running kernel is ≥6.12.
 
 ### The launcher: a custom shim over audited crates (not hand-rolled primitives)
 
@@ -375,15 +396,16 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    ([composer/sandbox/launcher.py](../composer/sandbox/launcher.py)) that maps a
    `SandboxPolicy` to its argv. `run-confined --ro <path>… --rw <path>… --allow-env NAME[=VAL]…
    --rlimit-* … [--allow-network] -- <program> <args…>` sets rlimits + `NO_NEW_PRIVS`, builds the
-   Landlock ruleset (best-effort ABI negotiation, full FS bit set, deny-by-default + §3 grants) via
-   the [`landlock`](https://crates.io/crates/landlock) crate, builds the seccomp filter (deny inet
-   sockets + ptrace/process_vm_*) via [`seccompiler`](https://crates.io/crates/seccompiler), applies
-   both, then `execve`s the command with an env scrubbed to the allowlist. `--probe` builds a
-   best-effort ruleset and reports whether Landlock actually *enforces* (not the numeric ABI, which
-   the crate hides), driving `available()` → fail-closed (§7). Enforcement smoke-tested on the
-   host (write-outside / `/etc/passwd` / `/proc/<parent>/environ` / inet-socket all denied; workdir
-   write, AF_UNIX, and toolchain `exec` allowed); argv mapping golden-tested. Full escape gate is
-   step 5.
+   Landlock ruleset (best-effort ABI negotiation, full FS bit set, deny-by-default + §3 grants,
+   scopes for signals/abstract UDS on ABI ≥6, TCP default-deny on ABI ≥4 when network is off) via
+   the [`landlock`](https://crates.io/crates/landlock) crate, builds the seccomp filter (deny
+   non-`AF_UNIX` sockets, `io_uring_*`, and ptrace/process_vm_*) via
+   [`seccompiler`](https://crates.io/crates/seccompiler), applies both, then `execve`s the command
+   with an env scrubbed to the allowlist. `--probe` builds a best-effort ruleset and reports whether
+   Landlock actually *enforces* (not the numeric ABI, which the crate hides), driving `available()`
+   → fail-closed (§7). Enforcement smoke-tested on the host (write-outside / planted host file /
+   `/proc/<parent>/environ` / inet+io_uring+netlink sockets all denied; workdir write, AF_UNIX, and
+   toolchain `exec` allowed); argv mapping golden-tested. Full escape gate is step 5.
 3. **Thread `policy` + provider through `run_local_command`** — *done*: the runner accepts
    `provider`/`policy` (default `None` → the `none` passthrough, byte-for-byte today's behavior) and
    is fail-closed via `ensure_available`. A `SandboxConfig` ([composer/sandbox/config.py](../composer/sandbox/config.py))
@@ -450,7 +472,12 @@ A new expensive gate (`tests/test_crucible_sandbox_gate.py`) with two halves:
   the real project root *outside* the granted workdir. Assert **permission denied**.
 - **Reach the network** — the harness tries to connect to an external host **and** to
   `http://169.254.169.254/latest/meta-data/` (the EC2 metadata endpoint → IAM creds). Assert **both
-  fail** (socket creation denied).
+  fail** (socket creation denied). Also: `io_uring_setup` (seccomp bypass), `socket(AF_NETLINK)`,
+  `socket(AF_VSOCK)` — all denied; `socket(AF_UNIX)` still allowed.
+- **Same-uid control plane** (when kernel ≥6.12) — `kill(parent, 0)` and connect to an abstract
+  Unix socket owned outside the sandbox are denied (Landlock scopes).
+- **Cargo credentials** — a planted `credentials.toml` under the shared cargo home is **not**
+  readable (policy grants `bin/` only).
 
 The harness must not be able to fail the assertions silently — it writes each probe's result into
 the workdir (allowed) and the test reads them back, asserting every probe reports *denied*.
@@ -474,9 +501,11 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    the *running* kernel's ABI (unhandled rights stay unrestricted) with best-effort fallback on older
    kernels. The `landlock` crate does this; confirm the minimum supported ABI on our target AMIs and
    what "best-effort" degrades to (e.g. pre-ABI-3 has no `TRUNCATE` handling).
-2. **AF_UNIX / netlink allowance.** The seccomp filter denies `AF_INET`/`AF_INET6` but allows
-   `AF_UNIX`. Confirm the toolchain (cargo jobserver, rustc, linker) needs nothing more; if a
-   benign `AF_NETLINK` use surfaces, decide whether to allow it (it can read but not egress).
+2. **AF_UNIX-only socket allow (done for hostile domains).** seccomp now denies `socket` when
+   domain **≠ `AF_UNIX`** (so netlink/vsock/packet are closed too) and denies `io_uring_*`. Confirm
+   the toolchain (cargo jobserver, rustc, linker) never needs another domain; if a benign
+   `AF_NETLINK` use surfaces, decide whether to allow it narrowly. Full syscall **allowlist**
+   (default-deny) remains a possible hardening step if the deny-list residual risk is unacceptable.
 3. **rlimits vs cgroup v2 (§7).** Is `RLIMIT_AS` enough to contain a memory-hungry fuzzer, or do we
    need cgroup `memory.max` (and thus writable cgroup delegation in the container) sooner?
 4. **Cache warming cost (§5).** Per-run `cargo fetch` adds latency; is a shared, pre-warmed
@@ -486,11 +515,13 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    *shared* `~/.cargo` was a cross-run poisoning surface (overwrite an extracted `registry/src` to
    hit a later run). Fixed: `rust_build_policy` points `CARGO_HOME` at a **private per-run dir under
    the workdir** (`sandbox_cargo_home` → `<workdir>/.sandbox_cargo`), the warm step (`warm_cargo_cache`,
-   unsandboxed) fetches *into that same home*, and the shared `~/.cargo` is granted read-only (for the
-   `cargo` binary) — so untrusted writes touch only the run's throwaway cache. Validated: a fresh
+   unsandboxed) fetches *into that same home*, and the shared cargo home is granted **read-only on
+   `bin/` only** (`shared_cargo_ro_paths`) — never the home root, so `credentials.toml` cannot be
+   read by untrusted code. Untrusted writes touch only the run's throwaway cache. Validated: a fresh
    fetch into an empty private home + a confined offline build succeed. **Remaining cost:** deps are
    re-fetched per run (no shared writable cache); a shared *read-only* index/cache to avoid the
-   re-download is the deferred optimization.
+   re-download is the deferred optimization (add specific cache subtrees to `shared_cargo_ro_paths`,
+   still not the home root).
 6. **Off-the-shelf provider swap (deferred, seam is ready — §4/§6).** `sandlock` (needs kernel
    ≥6.12; unstated license) or `landrun` (+ a seccomp companion for UDP/DNS + rlimits) could replace
    the custom launcher as a new `SandboxProvider` if reviewers prefer an off-the-shelf boundary. Blocked

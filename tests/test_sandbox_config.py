@@ -11,7 +11,7 @@ from pathlib import Path
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.launcher import LauncherProvider
 from composer.sandbox.policy import NoneProvider, SandboxPolicy
-from composer.sandbox.recipes import rust_build_policy
+from composer.sandbox.recipes import rust_build_policy, shared_cargo_ro_paths
 
 
 def test_config_default_is_none_and_disabled():
@@ -100,3 +100,30 @@ def test_rust_build_policy_includes_system_and_dev_when_present():
         assert Path("/usr") in pol.ro_paths
     if Path("/dev/null").exists():
         assert Path("/dev/null") in pol.rw_paths
+
+
+def test_rust_build_policy_grants_cargo_bin_not_home_root(tmp_path, monkeypatch):
+    """Shared CARGO_HOME root must not be RO-granted (credentials.toml lives there)."""
+    cargo = tmp_path / "cargo_home"
+    (cargo / "bin").mkdir(parents=True)
+    (cargo / "credentials.toml").write_text('token = "secret"\n')
+    monkeypatch.setenv("CARGO_HOME", str(cargo))
+    # Isolate RUSTUP_HOME so a real ~/.rustup does not pollute path assertions.
+    rustup = tmp_path / "rustup"
+    rustup.mkdir()
+    monkeypatch.setenv("RUSTUP_HOME", str(rustup))
+
+    pol = rust_build_policy(tmp_path / "work")
+    assert (cargo / "bin").resolve() in pol.ro_paths
+    assert cargo.resolve() not in pol.ro_paths
+
+
+def test_shared_cargo_ro_paths_excludes_credentials(tmp_path):
+    """Unit-level: grant bin/ only, never the home root that holds credentials."""
+    cargo = tmp_path / "cargo_home"
+    (cargo / "bin").mkdir(parents=True)
+    (cargo / "credentials.toml").write_text('token = "secret"\n')
+    (cargo / "registry").mkdir()
+    paths = shared_cargo_ro_paths(cargo)
+    assert paths == (cargo / "bin",)
+    assert cargo not in paths
