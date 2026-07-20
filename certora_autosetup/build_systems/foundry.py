@@ -85,7 +85,10 @@ class FoundryConfig(BuildSystemConfig):
         Returns:
             Dictionary with Certora config format
         """
-        # Apply common settings (solc, optimizer, via_ir) using base class helper
+        # Apply common settings (solc, optimizer, via_ir) using base class helper.
+        # The base helper deliberately drops the project's own optimizer setting; see
+        # _apply_common_solc_settings. Foundry's explicit per-contract restrictions still
+        # re-emit solc_optimize / solc_optimize_map via apply_per_contract_settings.
         result = self._apply_common_solc_settings(convert_solc_to_certora_format)
 
         # Apply packages (Foundry-specific)

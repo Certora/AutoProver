@@ -52,7 +52,12 @@ try {
     // Extract relevant settings
     const output = {
         solidity: config.solidity || {},
-        paths: config.paths || {}
+        paths: config.paths || {},
+        // hre.config is the *resolved* config: when the user config has no
+        // `solidity` entry, hardhat fills in its own built-in default compiler
+        // (0.7.3), which says nothing about what the project's sources need.
+        // Flag that case so the caller can ignore the resolved version.
+        solidityImplicitDefault: hre.userConfig.solidity === undefined
     };
 
     // Output as JSON

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
@@ -32,7 +33,7 @@ from certora_autosetup.setup.solidity_utils import extract_definitions_from_soli
 from packaging.version import Version
 from certora_autosetup.utils.config_manager import convert_solc_version_to_certora_format
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
-from certora_autosetup.utils.file_utils import atomic_write_json_fsspec
+from certora_autosetup.utils.file_utils import atomic_write_json_fsspec, stream_ast_files
 from certora_autosetup.utils.llm_util import ledger_component
 from certora_autosetup.utils.constants import (
     DEFAULT_SOLC_VERSION,
@@ -64,6 +65,27 @@ class SummarySetupError(Exception):
 scripts_dir_path = Path(__file__).parent.resolve()
 sys.path.insert(0, str(scripts_dir_path))
 
+
+
+@dataclass
+class _ContractDef:
+    """ContractDefinition fields needed to resolve inheritance/abstract info."""
+
+    id: Optional[int]
+    name: Optional[str]
+    abstract: bool
+    contract_kind: str
+    linearized_base_contracts: List[int]
+
+    @classmethod
+    def from_ast_node(cls, node: Dict[str, Any]) -> "_ContractDef":
+        return cls(
+            id=node.get("id"),
+            name=node.get("name"),
+            abstract=node.get("abstract", False),
+            contract_kind=node.get("contractKind", "contract"),
+            linearized_base_contracts=node.get("linearizedBaseContracts", []),
+        )
 
 
 class SetupProver:
@@ -721,9 +743,7 @@ class SetupProver:
         ast_path = self._build_dir / FILE_BUILD_ASTS if self._build_dir else None
         if not ast_path or not ast_path.exists():
             return {}
-        with open(ast_path, "r", encoding="utf-8") as f:
-            asts = json.load(f)
-        for abs_path_dict in asts.values():
+        for _relative_path, abs_path_dict in stream_ast_files(ast_path):
             for abs_path, nodes in abs_path_dict.items():
                 rel = self.scope.get_relative_path(Path(abs_path))
                 for node in nodes.values():
@@ -1140,46 +1160,39 @@ class SetupProver:
             return inheritance_info, abstract_contracts
 
         try:
-            with open(ast_file_path, "r", encoding="utf-8") as f:
-                asts = json.load(f)
-
             self.log(f"Extracting inheritance info from {ast_file_path}")
 
-            # Extract inheritance info from AST structure
+            # Stream the (multi-GB) .asts.json once, keeping only the fields of each
+            # ContractDefinition needed below so it is never fully materialized.
+            contract_defs: List[_ContractDef] = []
+            for _file_path, abs_path_dict in stream_ast_files(ast_file_path):
+                for _abs_path, nodes in abs_path_dict.items():
+                    for _node_id, node in nodes.items():
+                        if isinstance(node, dict) and node.get("nodeType") == "ContractDefinition":
+                            contract_defs.append(_ContractDef.from_ast_node(node))
+
             # Build ID to contract name mapping once
             id_to_name = {}
-            for file_path, abs_path_dict in asts.items():
-                for abs_path, nodes in abs_path_dict.items():
-                    for node_id, node in nodes.items():
-                        if node.get("nodeType") == "ContractDefinition":
-                            contract_id = node.get("id")
-                            contract_name = node.get("name")
-                            if contract_id and contract_name:
-                                id_to_name[contract_id] = contract_name
+            for cd in contract_defs:
+                if cd.id and cd.name:
+                    id_to_name[cd.id] = cd.name
 
             # Now process contracts and resolve inheritance using the pre-built mapping
-            for file_path, abs_path_dict in asts.items():
-                for abs_path, nodes in abs_path_dict.items():
-                    for node_id, node in nodes.items():
-                        # Look for contract definitions to get linearizedBaseContracts
-                        if node.get("nodeType") == "ContractDefinition":
-                            contract_name = node.get("name")
-                            if contract_name:
-                                # Check if abstract or interface
-                                is_abstract = node.get("abstract", False)
-                                contract_kind = node.get("contractKind", "contract")
+            for cd in contract_defs:
+                contract_name = cd.name
+                if contract_name:
+                    # Check if abstract or interface
+                    if cd.abstract or cd.contract_kind == "interface":
+                        abstract_contracts.add(contract_name)
+                        self.log(f"Identified {'abstract' if cd.abstract else 'interface'}: {contract_name}", "DEBUG")
 
-                                if is_abstract or contract_kind == "interface":
-                                    abstract_contracts.add(contract_name)
-                                    self.log(f"Identified {'abstract' if is_abstract else 'interface'}: {contract_name}", "DEBUG")
-
-                                # Get linearized base contracts (includes self + all inherited contracts)
-                                linearized = node.get("linearizedBaseContracts", [])
-                                if len(linearized) > 1:  # More than just self
-                                    # Convert IDs to contract names using pre-built mapping
-                                    base_contracts = [id_to_name[contract_id] for contract_id in linearized[1:] if contract_id in id_to_name]
-                                    if base_contracts:
-                                        inheritance_info[contract_name] = base_contracts
+                    # Get linearized base contracts (includes self + all inherited contracts)
+                    linearized = cd.linearized_base_contracts
+                    if len(linearized) > 1:  # More than just self
+                        # Convert IDs to contract names using pre-built mapping
+                        base_contracts = [id_to_name[contract_id] for contract_id in linearized[1:] if contract_id in id_to_name]
+                        if base_contracts:
+                            inheritance_info[contract_name] = base_contracts
 
             self.log(f"Extracted inheritance for {len(inheritance_info)} contracts", "DEBUG")
             self.log(f"Found {len(abstract_contracts)} abstract/interface contracts to skip", "INFO")
@@ -1318,14 +1331,11 @@ class SetupProver:
         self.log("Building AST parent graph...")
 
         try:
-            with open(ast_path, 'r') as f:
-                asts_data = json.load(f)
-
             # Build parent graph: node_id -> parent_node_id
             parent_graph = {}
 
             # Structure: dict[relative_path: dict[absolute_path: dict[node_id: node_data]]]
-            for relative_path, path_data in asts_data.items():
+            for relative_path, path_data in stream_ast_files(ast_path):
                 parent_graph[relative_path] = {}
 
                 for absolute_path, nodes in path_data.items():

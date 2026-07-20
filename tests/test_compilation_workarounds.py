@@ -432,3 +432,91 @@ def test_detects_single_line_source_not_found(manager: CompilationWorkaroundMana
 
 def test_ignores_unrelated_source_not_found(manager: CompilationWorkaroundManager) -> None:
     assert manager._has_source_not_found(UNRELATED_OUTPUT) is False
+
+
+# =============================================================================
+# compiler_version_mismatch: wrap-tolerant detection + enabled with global solc
+# =============================================================================
+
+# Verbatim certoraRun output from a real mass-test run: the whole
+# scene was pinned to solc7.3 while every source is ^0.8.0, and solc wrapped the
+# marker phrase ("ParserError: Source \nfile requires different compiler version"),
+# defeating the old single-line substring check.
+WRAPPED_COMPILER_VERSION_MISMATCH = (
+    "Compiling certora/mocks/DummyERC20Impl.sol...\n"
+    "\n"
+    "solc7.3 had an error:\n"
+    "/workspace/project/certora/mocks/DummyERC20Impl.sol:2:1: ParserError: Source \n"
+    "file requires different compiler version (current compiler is \n"
+    "0.7.3+commit.9bfce1f6.Linux.g++) - note that nightly builds are considered to be\n"
+    "strictly less than the released version\n"
+    "pragma solidity ^0.8.0;\n"
+    "^---------------------^\n"
+)
+
+SINGLE_LINE_COMPILER_VERSION_MISMATCH = (
+    "Compiling certora/mocks/DummyERC20Impl.sol...\n"
+    "solc7.3 had an error:\n"
+    "certora/mocks/DummyERC20Impl.sol:2:1: ParserError: Source file requires different compiler version (current compiler is 0.7.3+commit.9bfce1f6.Linux.g++)\n"
+    "pragma solidity ^0.8.0;\n"
+)
+
+MISMATCH_CONTRACTS = [
+    ContractHandle(contract_name="DummyERC20Impl", source_file="certora/mocks/DummyERC20Impl.sol"),
+    ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol"),
+]
+
+
+@pytest.fixture
+def resolve_pragma_offline(monkeypatch):
+    """resolve_pragma_to_version fetches soliditylang.org; pin it for tests."""
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.resolve_pragma_to_version",
+        lambda spec, **kwargs: "0.8.30",
+    )
+
+
+def test_detects_wrapped_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager, resolve_pragma_offline
+) -> None:
+    # Regression: the wrapped marker phrase was missed, so the scene-wide wrong
+    # compiler pin was never repaired and the run died in compilation analysis.
+    result = manager._detect_compiler_version_mismatch(
+        WRAPPED_COMPILER_VERSION_MISMATCH, MISMATCH_CONTRACTS
+    )
+    assert result == ("DummyERC20Impl", "0.8.30")
+
+
+def test_detects_single_line_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager, resolve_pragma_offline
+) -> None:
+    result = manager._detect_compiler_version_mismatch(
+        SINGLE_LINE_COMPILER_VERSION_MISMATCH, MISMATCH_CONTRACTS
+    )
+    assert result == ("DummyERC20Impl", "0.8.30")
+
+
+def test_ignores_unrelated_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager,
+) -> None:
+    assert manager._detect_compiler_version_mismatch(UNRELATED_OUTPUT, MISMATCH_CONTRACTS) is None
+
+
+def test_compiler_mismatch_workaround_fires_with_global_solc(
+    manager, monkeypatch, tmp_path, resolve_pragma_offline
+) -> None:
+    # Regression: `enabled=not solc_already_set` disabled the only recovery path
+    # exactly when a build system pinned a wrong global solc. The workaround must
+    # override the seeded compiler_map entry from the pragma.
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_COMPILER_VERSION_MISMATCH],
+        MISMATCH_CONTRACTS,
+        extra_config={"solc": "solc7.3"},
+    )
+    assert success is True
+    assert fake_run.calls == 2  # failing compile + one recompile after the fix
+    assert compilation_config["compiler_map"]["DummyERC20Impl"] == "solc8.30"
+    assert compilation_config["compiler_map"]["Vault"] == "solc7.3"
