@@ -29,8 +29,7 @@ AutoProver's own secrets, network access, and filesystem from code running *insi
   and then runs it as a native LiteSVM-in-process binary (§7.2 — verified native, no SVM sandbox).
 
 So arbitrary code of the LLM's (and the analyzed program's) choosing executes with whatever
-ambient authority the AutoProver process has: `ANTHROPIC_API_KEY`, `CERTORA*` cloud tokens,
-`AWS_*`, `PG*`, the network route to `169.254.169.254`, and the entire bind-mounted host project.
+ambient authority the AutoProver process has.
 The trust boundary from §7.2 ("the LLM authors only file *contents*, never argv") stops the LLM
 from choosing *what command runs* — it does nothing about what that command, once running, can
 *reach*. That is this phase's job.
@@ -44,7 +43,7 @@ input (the gate scenario). This is the definition of done.
 
 | | |
 |---|---|
-| **Asset** | AutoProver's ambient secrets (LLM/cloud API keys, DB creds), its network egress (incl. `169.254.169.254` metadata → IAM role creds on EC2), and host files outside the command's declared inputs. |
+| **Asset** | AutoProver's ambient secrets, and host files outside the command's declared inputs. |
 | **Adversary** | Native code the LLM authored (harness `setup`/`action`/`build.rs`) **and** native code in the analyzed program (its `build.rs`, proc-macros) that `cargo build-sbf` runs. Assume it is actively hostile and knows it is being fuzzed. |
 | **Trust boundary** | The process boundary of each `RunCommand` invocation. Inside: untrusted. Outside: the trusted AutoProver process. `program`+`args` are trusted (Rust decider / Python build step author them, §7.2); only the *files* are untrusted. |
 | **Assumptions** | (1) The outer container/host is the infrastructure's boundary against the host machine and other tenants (on EC2, the Nitro hypervisor) — this phase is the boundary *within* the container, between AutoProver and its own untrusted child. (2) The kernel is patched and Landlock-capable (§8). (3) The host toolchains we grant read access are trusted. |
@@ -52,7 +51,7 @@ input (the gate scenario). This is the definition of done.
 
 **Explicit guarantees the sandbox must provide:**
 
-1. **No network** — no egress at all, including DNS and `169.254.169.254`.
+1. **No network** — no egress at all, including DNS.
 2. **No secrets** — the child's environment is a scrubbed allowlist, and it cannot recover
    AutoProver's secrets out-of-band (via `/proc/<parent>/environ` or `ptrace` — see §6, the
    same-uid caveats).
