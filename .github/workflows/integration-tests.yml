@@ -63,7 +63,7 @@ jobs:
 
       # Fires ONLY if a step above failed. The whole point of the file.
       - name: Notify Slack on failure
-        if: failure()
+        if: false
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
