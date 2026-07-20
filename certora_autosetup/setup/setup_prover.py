@@ -27,6 +27,7 @@ from certora_autosetup.parsers.build_system_detector import BuildSystem, BuildSy
 from certora_autosetup.parsers.foundry import FoundryContractExtractor
 from certora_autosetup.utils.contract_utils import parse_contract_files
 from certora_autosetup.setup.auto_munges import detect_and_apply_code_access_patches
+from certora_autosetup.setup.creation_detection import CreationUsage, detect_contract_creation
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.setup.signature_types import ContractInfo
 from certora_autosetup.setup.solidity_utils import extract_definitions_from_solidity
@@ -132,6 +133,7 @@ class SetupProver:
         self.compilation_config_updates: Dict[str, Any] = {}
         self.import_patcher_applied: bool = False
         self.erc7201_namespaces_found: bool = False
+        self.creation_usage: CreationUsage = CreationUsage()
         self._remappings_workaround_applied: bool = False
         self._build_dir: Path | None = None
         # SummarySetup is constructed during run_setup_summaries and kept around so that
@@ -1307,7 +1309,7 @@ class SetupProver:
             self.log(f"Error extracting contract infos: {e}", "ERROR")
             return []
 
-    def generate_ast_graph(self, ast_path: Path) -> None:
+    def generate_ast_graph(self, asts_data: Dict[str, Any]) -> None:
         """
         Generate a parent graph from the AST for efficient node parent lookups.
 
@@ -1316,7 +1318,8 @@ class SetupProver:
         operations like detecting chained member accesses.
 
         Args:
-            ast_path: Path to the .asts.json file
+            asts_data: Parsed all_asts.json contents (loaded once by the caller and shared
+                with contract-creation detection)
 
         Output:
             Writes to .certora_internal/.ast_graph.json with structure:
@@ -1457,7 +1460,17 @@ class SetupProver:
                     f"Failed to copy .asts.json from {asts_source} to {asts_target}: {e}"
                 )
 
-            self.generate_ast_graph(asts_target)
+            # Parsed once, shared by the parent-graph builder and creation detection below;
+            # a parse failure degrades both to a warning without failing the build processing.
+            try:
+                with open(asts_target, "r", encoding="utf-8") as f:
+                    asts_data: Dict[str, Any] = json.load(f)
+            except Exception as e:
+                self.log(f"Warning: failed to parse {asts_target}: {e}", "WARNING")
+                asts_data = {}
+            if asts_data:
+                self.generate_ast_graph(asts_data)
+            self.creation_usage = detect_contract_creation(self.log, asts_data, self.scope)
 
             # Generate signature database (uses the ast file copied before)
             self.generate_signature_database_json(build_json_path)
@@ -1604,6 +1617,32 @@ class SetupProver:
         # later (e.g. base-{Contract}.conf) also get the flag.
         if self.erc7201_namespaces_found:
             updated_config_dict["storage_extension_annotation"] = True
+
+        # Propagate contract-creation usage (detected during compilation analysis) into the
+        # config dict, mirroring the ERC-7201 flag above. Each key is skipped independently
+        # if the user already controls it -- via build-system config merged into
+        # updated_config_dict at line 294 (foundry.toml/hardhat.config), or via a raw
+        # --dynamic_bound/--dynamic_dispatch token passed through --extra-args (matches both
+        # "--dynamic_bound 1" and "--dynamic_bound=1" forms; does not attempt to parse the
+        # legacy "--settings -dynamicCreationBound=..." catch-all syntax).
+        def _extra_args_sets(flag: str) -> bool:
+            return any(arg == flag or arg.startswith(flag + "=") for arg in self.extra_args)
+
+        if self.creation_usage.found:
+            if "dynamic_bound" not in updated_config_dict and not _extra_args_sets("--dynamic_bound"):
+                self.log("=== CONTRACT CREATION DETECTED: enabling dynamic_bound ===")
+                updated_config_dict["dynamic_bound"] = "1"
+            # Only runtime-assembled creation bytecode (assembly create/create2 -- minimal-proxy
+            # clone libraries and the like) also needs dynamic_dispatch: calls on such an
+            # instance are statically unresolvable. A typed `new C()` instance resolves to a
+            # clone of C under dynamic_bound alone, keeping the more precise static resolution.
+            if (
+                self.creation_usage.raw_create
+                and "dynamic_dispatch" not in updated_config_dict
+                and not _extra_args_sets("--dynamic_dispatch")
+            ):
+                self.log("=== RUNTIME-BYTECODE CREATION DETECTED: enabling dynamic_dispatch ===")
+                updated_config_dict["dynamic_dispatch"] = True
 
         aggregator_path = (
             self.certora_dir / SUMMARIES_SUBDIR / f"{main_contract_name}_base_summaries.spec"
