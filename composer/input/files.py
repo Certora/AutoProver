@@ -85,6 +85,14 @@ def _bytes_digest(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()[:16]
 
 
+def file_digest(path: pathlib.Path) -> str:
+    """The digest ``Document.to_digest()`` reports for a document loaded
+    from ``path``, computed straight from the file bytes — every concrete
+    document shape digests its raw bytes, so this matches without going
+    through an uploader."""
+    return _bytes_digest(path.read_bytes())
+
+
 # Suffixes treated as binary regardless of byte content; short-circuits
 # the byte-scan heuristic for common cases.
 _KNOWN_BINARY_SUFFIXES = {".pdf"}

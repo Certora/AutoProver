@@ -63,16 +63,25 @@ class _AgentRoundResult(_BugAnalysisCache):
 class _AgentRoundWithHistory(_AgentRoundResult):
     agent_conversation: list[AnyMessage]
 
-def bug_analysis_key(
-    threat_model: Document | None,
+def bug_analysis_key_from_digest(
+    threat_model_digest: str | None,
     with_refinement: bool
 ) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
     base_key = "bug_analysis"
     if with_refinement:
         base_key += "|refine"
-    if threat_model is None:
+    if threat_model_digest is None:
         return CacheKey[ComponentGroup, _BugAnalysisCache](base_key)
-    return CacheKey[ComponentGroup, _BugAnalysisCache](base_key + "-tm-" + threat_model.to_digest())
+    return CacheKey[ComponentGroup, _BugAnalysisCache](base_key + "-tm-" + threat_model_digest)
+
+def bug_analysis_key(
+    threat_model: Document | None,
+    with_refinement: bool
+) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
+    return bug_analysis_key_from_digest(
+        threat_model.to_digest() if threat_model is not None else None,
+        with_refinement,
+    )
 
 class _AgentResult(_BugAnalysisCache):
     final_history: list[AnyMessage]

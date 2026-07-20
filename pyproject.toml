@@ -134,6 +134,7 @@ tui-foundry = "composer.cli.tui_foundry:main"
 autoprove-report-render = "composer.spec.source.report.render:main"
 tui-natspec = "composer.cli.tui_pipeline:main"
 cache-natspec = "composer.cli.cache_natspec:main"
+cache-autoprove = "composer.cli.cache_autoprove:main"
 console-codegen = "composer.cli.console_codegen:main"
 tui-codegen = "composer.cli.tui_codegen:main"
 # certora_autosetup entry points

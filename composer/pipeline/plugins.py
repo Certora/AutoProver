@@ -75,6 +75,26 @@ class PluginPhaseRunner[P: enum.Enum]:
         )
     
 
+PLUGIN_ENTRY_POINT_GROUP = "certora.autoprove.plugins"
+
+
+def installed_plugin_manifest() -> list[str]:
+    """Sorted names of the autoprove plugins installed in this environment —
+    the manifest ``load_plugins`` will end up loading, computable without
+    initializing anything."""
+    return sorted(
+        ep.name for ep in importlib.metadata.entry_points(group=PLUGIN_ENTRY_POINT_GROUP)
+    )
+
+
+def manifest_digest(manifest: list[str]) -> str | None:
+    """Digest of a sorted plugin manifest as suffixed onto per-component
+    cache keys; ``None`` when no plugins are active."""
+    if not manifest:
+        return None
+    return string_hash("|".join(manifest))
+
+
 @dataclass
 class PluginManager[P: enum.Enum]:
     _plugins: dict[str, PipelinePlugin]
@@ -82,10 +102,8 @@ class PluginManager[P: enum.Enum]:
 
     @cached_property
     def plugin_digest(self) -> None | str:
-        if not self.plugin_manifest:
-            return None
-        return string_hash("|".join(self.plugin_manifest))
-    
+        return manifest_digest(self.plugin_manifest)
+
     @cached_property
     def plugin_manifest(self) -> list[str]:
         return sorted(self._plugins.keys())
@@ -108,7 +126,7 @@ class PluginPhaseManager[P: enum.Enum](PluginManager):
 @asynccontextmanager
 async def load_plugins[P: enum.Enum](run: PipelineRun[P, Never]) -> AsyncIterator[PluginManager[P]]:
     plugins : dict[str, PipelinePluginLoader] = {}
-    for ep in importlib.metadata.entry_points(group="certora.autoprove.plugins"):
+    for ep in importlib.metadata.entry_points(group=PLUGIN_ENTRY_POINT_GROUP):
         if ep.name in plugins:
             raise RuntimeError(f"Multiple plugins with name: {ep.name}, failing")
         loader = ep.load()

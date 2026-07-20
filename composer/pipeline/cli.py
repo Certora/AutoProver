@@ -23,6 +23,8 @@ from composer.spec.artifacts import ArtifactIdentifier
 from composer.spec.service_host import ModelProvider
 from composer.spec.system_analysis import SolidityIdentifier
 from .core import PipelineBackend, run_pipeline
+from .plugins import installed_plugin_manifest
+from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.llm.registry import get_provider_for
@@ -235,11 +237,14 @@ async def cli_pipeline[P: enum.Enum, H](
                 await conns.uploader.get_document(pathlib.Path(threat_path))
                 if (threat_path := args.threat_model) is not None else None
             )
-            await data_logger("cache_root", {
-                "cache_root": list(cache_root) if cache_root is not None else None,
-                "contract_name": str(contract_name),
-                "memory_ns": memory_ns,
-            })
+            await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
+                cache_root=list(cache_root) if cache_root is not None else None,
+                contract_name=str(contract_name),
+                memory_ns=memory_ns,
+                plugins=installed_plugin_manifest(),
+                threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
+                interactive=args.interactive,
+            ).model_dump())
             full_source = SourceCode(
                 content=system_doc_doc,
                 contract_name=init_source.contract_name,
