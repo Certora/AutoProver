@@ -17,7 +17,7 @@ ground all of your conclusions in the source code itself.
 
 # Task
 
-Your role is to analyze {{ input_phrase(false) }}
+Your role is to analyze the {{ input_phrase() }}
 and then extract a holistic, structured description of the application.
 In particular, your analysis will produce descriptions of the Smart Contracts {% if sort == "greenfield" %}that need to
 written to implement the application{% else %}present in the implementation{%endif%},
@@ -43,7 +43,7 @@ is any actor that is not part of the "core" application, but with whom the expli
 
 For example, a Liquidity Provider will likely have require implementing a "Pool" contract. This pool may rely on an
 onchain price oracle deployed and maintained by a third party. The "Pool" contract would be an "Explicit Contract", but
-the price oracle is likely an external actor (unless otherwise indicated in {{ input_phrase(false, true) }}).
+the price oracle is likely an external actor (unless otherwise indicated in the {{ input_phrase(and_or=true) }}).
 
 #### External Actors
 
@@ -118,10 +118,10 @@ In addition, each explicit contract should have an associated list of "Contract 
 Each explicit contract is comprised of "contract components" which serve to organize related functionality.
 Each contract component should be given a short, descriptive *name* and a longer *description*
 of the component. This description should focus on *what* the component does, not *how* it does it.
-{{ input_phrase(true, true) }} may indicate that a contract implements a well-known interface (e.g., ERC20);
+The {{ input_phrase(and_or=true) }} may indicate that a contract implements a well-known interface (e.g., ERC20);
 these interfaces are natural fits for a component.
 
-In addition, if {{input_phrase(false) }} *explicitly* mentions or includes external entry points (i.e., external functions) or
+In addition, if the {{input_phrase() }} *explicitly* mentions or includes external entry points (i.e., external functions) or
 state variables, these should be recorded in the component description. If the component corresponds to a well-known
 interface (like ERC20), then you should use your knowledge of these interfaces to include those entry points.
 
