@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
+from certora_autosetup.utils.file_utils import stream_ast_files
 from certora_autosetup.utils.scope import Scope
 
 CODE_ACCESS_PATCH_FILE = ".certora_internal/code_access_patches.json"
@@ -229,9 +230,6 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
             log_func("Warning: .asts.json file not found, skipping code access munging", "WARNING")
             return
 
-        with open(ast_path, 'r') as f:
-            asts_data = json.load(f)
-
         # Load parent graph for efficient parent lookups
         parent_graph = _load_ast_parent_graph(ast_graph_path)
 
@@ -239,7 +237,7 @@ def detect_code_accesses(log_func: Callable, ast_path: Path, ast_graph_path: Pat
         patches = []
 
         # Structure: dict[relative_path: dict[absolute_path: dict[node_id: node_data]]]
-        for relative_path, path_data in asts_data.items():
+        for relative_path, path_data in stream_ast_files(ast_path):
             # Skip files not in scope
             if not scope.is_file_in_scope(Path(relative_path)):
                 continue

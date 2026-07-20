@@ -316,7 +316,12 @@ class CompilationWorkaroundManager:
                 name="compiler_version_mismatch",
                 detect_fn=lambda output: self._detect_compiler_version_mismatch(output, contracts),
                 apply_fn=self._apply_compiler_version_workaround_to_config,
-                enabled=not solc_already_set,
+                # Enabled even when a global solc is configured: the detector
+                # only fires when that compiler provably cannot parse a file
+                # (hard ParserError), and _seed_compile_maps has already
+                # promoted the scalar into compiler_map, so overriding one
+                # contract's entry from its pragma is always safe.
+                enabled=True,
             ),
             CompilationWorkaround(
                 name="stack_too_deep_via_ir",
@@ -692,58 +697,69 @@ class CompilationWorkaroundManager:
     def _detect_compiler_version_mismatch(
         self, output: str, contracts: List[ContractHandle]
     ) -> Optional[Tuple[str, str]]:
-        """Detect compiler version mismatch error and extract contract name and required version."""
+        """Detect compiler version mismatch error and extract contract name and required version.
+
+        solc hard-wraps its diagnostic text at a fixed width, so the marker
+        phrase is frequently split across newlines (e.g. "ParserError: Source
+        \\nfile requires different compiler version"). Match it with ``\\s+``
+        between words over the whole output, then map each match back to its
+        line index for the path/pragma context extraction.
+        """
         lines = output.split("\n")
 
-        for i in range(len(lines)):
-            line = lines[i]
+        marker = re.compile(
+            r"ParserError:\s+Source\s+file\s+requires\s+different\s+compiler\s+version"
+        )
+        for match in marker.finditer(output):
+            # Line index of the match start; the error may span several lines,
+            # so context searches below start from where the marker begins.
+            i = output.count("\n", 0, match.start())
 
-            if "ParserError: Source file requires different compiler version" in line:
-                # Try to find file_path from preceding "Compiling ..." line
-                file_path = _find_compiling_path_before(lines, i, max_lookback=15)
+            # Try to find file_path from preceding "Compiling ..." line
+            file_path = _find_compiling_path_before(lines, i, max_lookback=15)
 
-                # Fallback: Extract file_path from arrow line if not found above
-                if not file_path:
-                    for j in range(i + 1, min(i + 10, len(lines))):
-                        if "-->" in lines[j]:
-                            path_parts = []
-                            arrow_line = lines[j].split("-->", 1)
-                            if len(arrow_line) > 1:
-                                path_parts.append(arrow_line[1].strip())
+            # Fallback: Extract file_path from arrow line if not found above
+            if not file_path:
+                for j in range(i + 1, min(i + 10, len(lines))):
+                    if "-->" in lines[j]:
+                        path_parts = []
+                        arrow_line = lines[j].split("-->", 1)
+                        if len(arrow_line) > 1:
+                            path_parts.append(arrow_line[1].strip())
 
-                            for k in range(j + 1, min(j + 5, len(lines))):
-                                stripped = lines[k].strip()
-                                if not stripped or stripped == "|":
-                                    break
-                                path_parts.append(stripped)
-                                if re.search(r":\d+:\d+:\s*$", stripped):
-                                    break
-
-                            full_path = "".join(path_parts)
-                            path_match = re.search(r"^(.+?):\d+:\d+:\s*$", full_path)
-                            if path_match:
-                                file_path = path_match.group(1).strip()
+                        for k in range(j + 1, min(j + 5, len(lines))):
+                            stripped = lines[k].strip()
+                            if not stripped or stripped == "|":
+                                break
+                            path_parts.append(stripped)
+                            if re.search(r":\d+:\d+:\s*$", stripped):
                                 break
 
-                if not file_path:
-                    continue
+                        full_path = "".join(path_parts)
+                        path_match = re.search(r"^(.+?):\d+:\d+:\s*$", full_path)
+                        if path_match:
+                            file_path = path_match.group(1).strip()
+                            break
 
-                # Extract pragma specification from subsequent lines
-                for k in range(i + 1, min(i + 10, len(lines))):
-                    pragma_spec = extract_pragma_spec(lines[k])
-                    if pragma_spec:
-                        version = resolve_pragma_to_version(pragma_spec)
-                        if not version:
-                            self.log(f"Could not resolve pragma '{pragma_spec}' to concrete version", "WARNING")
-                            return None
+            if not file_path:
+                continue
 
-                        contract_name = self._get_contract_name_from_path(file_path, contracts)
-                        if contract_name:
-                            self.log(f"Detected compiler version mismatch for {contract_name}: requires {version}")
-                            return (contract_name, version)
-                        else:
-                            self.log(f"Warning: Could not map path '{file_path}' to contract name", "WARNING")
-                            return None
+            # Extract pragma specification from subsequent lines
+            for k in range(i + 1, min(i + 10, len(lines))):
+                pragma_spec = extract_pragma_spec(lines[k])
+                if pragma_spec:
+                    version = resolve_pragma_to_version(pragma_spec)
+                    if not version:
+                        self.log(f"Could not resolve pragma '{pragma_spec}' to concrete version", "WARNING")
+                        return None
+
+                    contract_name = self._get_contract_name_from_path(file_path, contracts)
+                    if contract_name:
+                        self.log(f"Detected compiler version mismatch for {contract_name}: requires {version}")
+                        return (contract_name, version)
+                    else:
+                        self.log(f"Warning: Could not map path '{file_path}' to contract name", "WARNING")
+                        return None
 
         return None
 

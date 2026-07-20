@@ -47,6 +47,7 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "isodate>=0.6.0",
     "fsspec>=2023.1.0",
+    "ijson>=3.2.0",
 ]
 
 [project.optional-dependencies]
