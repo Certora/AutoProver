@@ -89,8 +89,20 @@ cd rust && cargo build -p run-confined --release && cd ..
 ls rust/target/release/run-confined   # must exist
 ```
 
+The provider resolves the binary in this order: `$RUN_CONFINED_BIN` → `PATH` →
+the dev build at `rust/target/release/run-confined`. This host demo relies on the
+last (dev) fallback, so the build above is all you need.
+
 To demo **without** confinement (trusted-input dev), skip this and set
 `COMPOSER_SANDBOX_PROVIDER=none` in step 3.
+
+> **Containerized runs (not this demo).** The base image no longer bundles
+> `run-confined` — it is provided by the `scripts/docker-compose.sandbox.yml`
+> overlay, which builds the launcher and mounts it read-only at `$RUN_CONFINED_BIN`.
+> Because Crucible's default provider is fail-closed, add that overlay to every
+> compose invocation for a container that runs Crucible, e.g.
+> `docker compose -f scripts/docker-compose.yml -f scripts/docker-compose.sandbox.yml …`.
+> See [docs/command-sandbox.md](command-sandbox.md).
 
 ### 1g. (Optional) Populate the RAG knowledge base
 
@@ -206,7 +218,7 @@ CRUCIBLE_REPO="$CRUCIBLE_REPO" COMPOSER_SANDBOX_PROVIDER=launcher \
 | `ModuleNotFoundError: No module named 'crucible_app'` | synced without the `apps` group | re-sync with `--group apps` (1d) |
 | `maturin not found` when a Rust edit should have rebuilt | import hook can't see `maturin` on `PATH` | activate the venv (or use `uv run`) so `.venv/bin` is on `PATH`; re-import |
 | `FileNotFoundError: crucible checkout not configured` | `CRUCIBLE_REPO` unset / wrong | point it at a clone containing `crates/crucible-fuzzer` |
-| sandbox "provider unavailable" / fail-closed | `run-confined` not built | build it (1f), or set `COMPOSER_SANDBOX_PROVIDER=none` |
+| sandbox "provider unavailable" / fail-closed | `run-confined` not found | build it (1f), point `RUN_CONFINED_BIN` at a prebuilt binary, or set `COMPOSER_SANDBOX_PROVIDER=none` |
 | Postgres connection errors | DB not up | `docker compose -f scripts/docker-compose.yml up -d` |
 | `Failed to spawn: pyright` (only when validating) | `uv sync` dropped the `ci` group | add `--group ci --group test` to the sync (keep `--group apps`) |
 
