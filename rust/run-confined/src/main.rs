@@ -264,16 +264,10 @@ fn apply_seccomp(cfg: &Config) -> Result<(), String> {
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
     if !cfg.allow_network {
-        // !!! INTENTIONAL SECURITY BUG — DO NOT MERGE; REVERT THIS COMMIT. !!!
-        // Negative control to prove the escape-suite CI (sandbox-escape kernel 6.1)
-        // fails when the sandbox is broken. The socket() network block below is
-        // disabled, so socket(AF_INET,…) succeeds and the "No network" guarantee is
-        // gone. tests/test_sandbox_escape.py must go RED (inet_sock/net_ext/imds leak).
-        //
         // Deny socket() for every domain *except* AF_UNIX (cargo jobserver, etc.).
         // Matching arg0 != AF_UNIX covers AF_INET/INET6 (TCP+UDP/DNS+IMDS), AF_NETLINK,
         // AF_PACKET, AF_VSOCK, and any future family — not just the two inet domains.
-        let _non_unix = SeccompRule::new(vec![SeccompCondition::new(
+        let non_unix = SeccompRule::new(vec![SeccompCondition::new(
             0,
             SeccompCmpArgLen::Dword,
             SeccompCmpOp::Ne,
@@ -281,7 +275,7 @@ fn apply_seccomp(cfg: &Config) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?])
         .map_err(|e| e.to_string())?;
-        // BUG: rule intentionally NOT inserted (was: rules.insert(SYS_socket, [non_unix])).
+        rules.insert(libc::SYS_socket as i64, vec![non_unix]);
     }
 
     // io_uring can create sockets and connect without calling socket(2), which is a
