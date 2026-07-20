@@ -18,6 +18,10 @@ import tomllib
 # (message, level) -> None; matches BuildSystemManager.log / CompilationWorkaroundManager.log.
 LogFn = Callable[[str, str], None]
 
+# Remapping entries whose key ends in one of these target a concrete source file, not a directory
+# prefix, so they must not receive a trailing-slash boundary (see `_merge_remapping_entry`).
+_SOURCE_SUFFIXES = (".sol", ".vy", ".yul")
+
 
 def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile: str = "default") -> List[str]:
     """Build a merged packages list from forge remappings, foundry.toml, remappings.txt, package.json.
@@ -193,12 +197,16 @@ def _merge_remapping_entry(
     if not Path(path).is_absolute():
         path = str(base_dir / path)
 
-    # Canonicalize both sides to a trailing-slash form so the key's prefix boundary is preserved
-    # (see docstring) and key/path agree on that boundary. Guard empty sides (bare `=`).
-    if key and not key.endswith("/"):
-        key += "/"
-    if path and not path.endswith("/"):
-        path += "/"
+    # Canonicalize a DIRECTORY remapping to a trailing-slash form so the key's prefix boundary is
+    # preserved (see docstring) and key/path agree on that boundary. A remapping that targets a
+    # concrete source file (e.g. an import-patch entry `.../IFoo.sol=.../IFoo.sol`) must keep its
+    # exact form — appending `/` would make solc look for a directory `IFoo.sol/`. Detect the
+    # file case by a source-file extension on the key.
+    if not key.lower().endswith(_SOURCE_SUFFIXES):
+        if key and not key.endswith("/"):
+            key += "/"
+        if path and not path.endswith("/"):
+            path += "/"
 
     if key in remapping_key_to_path:
         if warn_on_mismatch and remapping_key_to_path[key] != path:

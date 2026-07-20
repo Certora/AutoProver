@@ -122,6 +122,26 @@ def test_context_scoped_key_keeps_trailing_slash(tmp_path: Path, monkeypatch) ->
         str(tmp_path / "lib/openzeppelin-contracts-v4/contracts") + "/"
 
 
+def test_file_level_remapping_keeps_exact_form(tmp_path: Path, monkeypatch) -> None:
+    # An import-patch entry that remaps a specific source FILE (…/IFoo.sol=…/IFoo.sol) must NOT
+    # get a trailing slash — otherwise solc looks for a directory `IFoo.sol/` and the import fails.
+    _no_forge(monkeypatch)
+    (tmp_path / "remappings.txt").write_text(
+        "src/interfaces/INoncesKeyed.sol=lib/aave-v4/src/interfaces/INoncesKeyed.sol\n"
+        "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/\n"
+    )
+
+    packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
+
+    keys = _keys(packages)
+    assert "src/interfaces/INoncesKeyed.sol" in keys           # file key: unchanged
+    assert "src/interfaces/INoncesKeyed.sol/" not in keys       # NOT slashed
+    assert _path_of(packages, "src/interfaces/INoncesKeyed.sol") == \
+        str(tmp_path / "lib/aave-v4/src/interfaces/INoncesKeyed.sol")   # file target: no slash
+    # directory remappings alongside it still get the boundary slash
+    assert "@openzeppelin/contracts/" in keys
+
+
 def test_package_json_deps_added_as_node_modules(tmp_path: Path, monkeypatch) -> None:
     _no_forge(monkeypatch)
     (tmp_path / "package.json").write_text('{"dependencies": {"@solmate/core": "^1.0.0"}}')
