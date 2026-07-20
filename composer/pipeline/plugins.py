@@ -63,7 +63,7 @@ class PluginPhaseRunner[P: enum.Enum]:
             label: str,
             job: Callable[[], Awaitable[T]]
         ) -> T:
-            label = f"({self._sub_phase.display_str}) Plugin {self.plugin.NAME}: {label}"
+            label = f"(Plugin {self._sub_phase.display_str}) {self.plugin.NAME}: {label}"
             return await self._run.runner(
                 TaskInfo(f"{self._phase[0].name}-{self._sub_phase.id_str}-{self.plugin_id}-{uid}", label, self._phase[0]),
                 job,
@@ -120,8 +120,11 @@ class PluginManager[P: enum.Enum]:
 class PluginPhaseManager[P: enum.Enum](PluginManager):
     _phase: tuple[P, str]
 
-    def runners(self, *, sub_phase_id: str, sub_phase_label: str) -> Iterable[PluginPhaseRunner[P]]:
-        for (k,v) in self._plugins.items():
+    def runners(self, *, sub_phase_id: str, sub_phase_label: str, sorted_run: bool = False) -> Iterable[PluginPhaseRunner[P]]:
+        to_iter : Iterable[tuple[str, PipelinePlugin]] = sorted(
+            self._plugins.items(), key=lambda r: r[0]
+        ) if sorted_run else self._plugins.items()
+        for (k,v) in to_iter:
             yield PluginPhaseRunner(v, self._run, self._phase, DisplayStrings(sub_phase_id, sub_phase_label), k)
 
 @asynccontextmanager

@@ -45,7 +45,7 @@ from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_I
 from .ptypes import (
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp, PipelineRun, SystemAnalysisSpec
 )
-from .plugin_api import PrePropertyInference
+from .plugin_api import PrePropertyInference, PostPropertyInference
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
 
 COMMON_SYSTEM_CACHE_KEY = "system-analysis"
@@ -289,6 +289,13 @@ def _pre_property_cache_key(feat: ContractComponentInstance, plugin: str) -> Cac
     key = f"{_component_digest(feat)}-{string_hash(plugin)}-pre"
     return CacheKey(key)
 
+def _post_property_cache_key(feat: ContractComponentInstance, plugin: str, curr_props: list[PropertyFormulation]) -> CacheKey[Properties, PostPropertyInference]:
+    props = string_hash("|".join(
+        p.model_dump_json() for p in curr_props
+    ))
+    key = f"{_component_digest(feat)}-{string_hash(plugin)}-{props}"
+    return CacheKey(key)
+
 async def _extract_all[P: enum.Enum, H](
     main: ContractInstance, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
@@ -298,7 +305,7 @@ async def _extract_all[P: enum.Enum, H](
 
     async def _one(idx: int) -> _Batch | None:
         feat = ContractComponentInstance(_contract=main, ind=idx)
-        async def run_plugin(runner: PluginPhaseRunner[P]) -> AnyPropertyGenerationInput | None:
+        async def run_plugin_pre(runner: PluginPhaseRunner[P]) -> AnyPropertyGenerationInput | None:
             p = runner.plugin_id
             ctxt = await prop_ctx.child(_pre_property_cache_key(feat, p), {
                 "plugin-name": p
@@ -309,7 +316,7 @@ async def _extract_all[P: enum.Enum, H](
             )
 
         pre_process = await asyncio.gather(*[
-            run_plugin(plug_runner) for plug_runner in plugins.runners(
+            run_plugin_pre(plug_runner) for plug_runner in plugins.runners(
                 sub_phase_id="pre-inference", sub_phase_label="Property Pre-Inference"
             )
         ])
@@ -327,8 +334,31 @@ async def _extract_all[P: enum.Enum, H](
         )
         if not props:
             return None
+        
+        async def run_plugin_post(
+            runner: PluginPhaseRunner, props: list[PropertyFormulation]
+        ) -> list[PropertyFormulation]:
+            p = runner.plugin_id
+            ctxt = await prop_ctx.child(
+                _post_property_cache_key(feat, p, props),
+                {
+                    "plugin-name": p,
+                    "props": [p.model_dump() for p in props]
+                }
+            )
+            run_ctxt = runner.bind(str(idx), ctxt)
+            return await runner.plugin.post_process_property_inference(
+                feat, run_ctxt, props
+            )
+        accum = props
+        for runner in plugins.runners(
+            sub_phase_id="post-inference", sub_phase_label="Property Post-Process", sorted_run=True
+        ):
+            accum = await run_plugin_post(
+                runner, accum
+            )
 
-        return _Batch(feat, props, feat_ctx) if props else None
+        return _Batch(feat, accum, feat_ctx) if accum else None
 
     got = await asyncio.gather(*[_one(i) for i in range(len(main.contract.components))])
     return [b for b in got if b is not None]
