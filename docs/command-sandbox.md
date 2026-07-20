@@ -455,8 +455,10 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    improvements is what surfaced it.
 
 Each step is behind the seam, so the earlier Phase 1–5 gates keep passing. **Prerequisite of the
-flip:** `run-confined` must be on PATH (built into the Docker image; `cargo build -p run-confined
---release` in dev) — otherwise Crucible fail-closes (§7/§8). A later off-the-shelf swap
+flip:** `run-confined` must be resolvable — `$RUN_CONFINED_BIN`, then PATH, then the dev build
+(`cargo build -p run-confined --release`). Containers opt in via the `scripts/docker-compose.sandbox.yml`
+overlay, which builds the launcher (`scripts/Dockerfile.sandbox`) and mounts it read-only at
+`$RUN_CONFINED_BIN`. Otherwise Crucible fail-closes (§7/§8). A later off-the-shelf swap
 (`landrun`/`sandlock`) is *only* a new step-2-style provider — the seam, policy, and gate are
 untouched.
 
