@@ -144,10 +144,12 @@ jobs:
       - name: Copy repo into the VM
         run: |
           set -euo pipefail
-          tar czf repo.tgz \
-            --exclude=.git --exclude=.venv --exclude=node_modules \
-            --exclude='rust/target' --exclude=graphcore \
-            .
+          # git archive => a clean snapshot of tracked source only. Do NOT tar the
+          # workspace: by this step it holds the *running* VM's al2023.qcow2 (QEMU is
+          # actively writing it) plus seed.iso / serial.log / repo.tgz, which trips
+          # "file changed as we read it". Tracked files are all the suite needs
+          # (composer/, tests/, rust/, pyproject.toml, uv.lock, .github/scripts).
+          git archive --format=tar.gz -o repo.tgz HEAD
           scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -i vmkey -P "$SSH_PORT" repo.tgz ec2-user@127.0.0.1:/home/ec2-user/
           $SSH 'mkdir -p /home/ec2-user/autoprover && tar xzf repo.tgz -C /home/ec2-user/autoprover'
