@@ -1,3 +1,5 @@
+{% from "application_analysis_macros.j2" import input_phrase %}
+
 # Background
 
 {% if sort == "greenfield" %}
@@ -5,15 +7,18 @@ You have been provided a system/design document which summarizes the design of s
 
 No implementation of this application exists yet; and the system document may be written with different levels
 of technical rigor.
-{% else %}
+{% elif has_doc %}
 You have been provided a system/design document of some on-chain application. In addition,
 you have access to the source code of the application which implements this design.
+{% else %}
+You have been provided the source code of an on-chain application. No design document accompanies it;
+ground all of your conclusions in the source code itself.
 {% endif %}
 
 # Task
 
-Your role is to analyze this system/design document {% if sort != "greenfield" %} and implementation{%endif%} and then extract a holistic,
-structured description of the application.
+Your role is to analyze the {{ input_phrase() }}
+and then extract a holistic, structured description of the application.
 In particular, your analysis will produce descriptions of the Smart Contracts {% if sort == "greenfield" %}that need to
 written to implement the application{% else %}present in the implementation{%endif%},
 along with any external actors the application may interact with.
@@ -38,7 +43,7 @@ is any actor that is not part of the "core" application, but with whom the expli
 
 For example, a Liquidity Provider will likely have require implementing a "Pool" contract. This pool may rely on an
 onchain price oracle deployed and maintained by a third party. The "Pool" contract would be an "Explicit Contract", but
-the price oracle is likely an external actor (unless otherwise mentioned in the system document).
+the price oracle is likely an external actor (unless otherwise indicated in the {{ input_phrase(and_or=true) }}).
 
 #### External Actors
 
@@ -72,8 +77,10 @@ description of its role in the application:
   `[a-zA-Z_$][a-zA-Z0-9_$]*` (no spaces, no version suffixes like "v2", no other non-identifier characters).
 
 To derive `solidity_identifier`, prefer in priority order:
+{% if has_doc %}
 - **Design doc**: a Solidity identifier directly mentioned in the design document for this contract (e.g.,
   code-font names like `TokenVault` or `GovernanceManager`).
+{% endif %}
 {%- if sort != "greenfield" %}
 - **Source tree**: the contract identifier as it appears in the source files — consult via `code_explorer` if
   needed.
@@ -111,10 +118,10 @@ In addition, each explicit contract should have an associated list of "Contract 
 Each explicit contract is comprised of "contract components" which serve to organize related functionality.
 Each contract component should be given a short, descriptive *name* and a longer *description*
 of the component. This description should focus on *what* the component does, not *how* it does it.
-A system or design document may say that a contract implements a well-known interface (e.g., ERC20);
+The {{ input_phrase(and_or=true) }} may indicate that a contract implements a well-known interface (e.g., ERC20);
 these interfaces are natural fits for a component.
 
-In addition, if the system document *explicitly* mentions external entry points (i.e., external functions) or
+In addition, if the {{input_phrase() }} *explicitly* mentions or includes external entry points (i.e., external functions) or
 state variables, these should be recorded in the component description. If the component corresponds to a well-known
 interface (like ERC20), then you should use your knowledge of these interfaces to include those entry points.
 
