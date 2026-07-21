@@ -31,6 +31,11 @@ from composer.io.protocol import IOHandler
 from composer.io.context import with_handler, run_graph
 from composer.io.event_handler import NullEventHandler
 from composer.ui.tool_display import tool_display
+from composer.diagnostics.timing import set_current_task_id
+
+# Requirements extraction runs as its own ``run_graph`` (no ``run_task`` scope);
+# set a task_id so the harness tape can address its LLM calls.
+REQUIREMENTS_TASK_ID = "requirements"
 
 
 @dataclass
@@ -172,6 +177,7 @@ async def get_requirements(
         graph_input = ExtractionInput(input=input_text, memory=None, did_read=False)
 
         async with with_handler(io, NullEventHandler()):  # type: ignore[arg-type]
-            final_state = await run_graph(built, ExtractionContext(rag_db=db), graph_input, config, description="Requirements extraction")
+            with set_current_task_id(REQUIREMENTS_TASK_ID):
+                final_state = await run_graph(built, ExtractionContext(rag_db=db), graph_input, config, description="Requirements extraction")  
         assert "reqs" in final_state
         return ExtractionResult(reqs=final_state["reqs"], thread_id=thread_id)

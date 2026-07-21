@@ -32,3 +32,11 @@ elif (_record := os.environ.get("COMPOSER_RECORD_TAPE")):
         os.environ.get("COMPOSER_RECORD_OUT"),
         no_thinking=bool(os.environ.get("COMPOSER_RECORD_NO_THINKING")),
     )
+
+if (_resp := os.environ.get("COMPOSER_RESPONSE_TAPE")):
+    # Scripted human replies for console HITL interrupts (commit approvals,
+    # requirement relaxations). Independent of — and replayed alongside —
+    # COMPOSER_TEST_TAPE; the tape module exposes ``install_response_tape``.
+    import importlib
+    _rmod = importlib.import_module(f"composer.testing.ui_harness_{_resp}")
+    _rmod.install_response_tape()
