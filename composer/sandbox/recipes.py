@@ -97,6 +97,26 @@ def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
     return tuple(out)
 
 
+def sandbox_rustup_home(workdir: str | Path) -> Path:
+    """The **private, per-run `RUSTUP_HOME`** for a sandboxed build, under the workdir.
+
+    Same reasoning as :func:`sandbox_cargo_home`: even with a fully pre-installed
+    toolchain, the ``rustup`` proxy (which ``cargo``/``rustc``/``cargo-build-sbf`` all
+    are) writes scratch into ``$RUSTUP_HOME/tmp`` on every invocation — so a confined
+    build against a **read-only** shared ``RUSTUP_HOME`` dies with ``could not create
+    temp file …/.rustup/tmp/…: Permission denied``. Granting the *shared* rustup home
+    read-write instead would expose it to untrusted ``build.rs`` across runs.
+
+    A per-run home under the (already-writable, per-run) workdir fixes it without that
+    exposure: the heavy, immutable ``toolchains`` dir is a **symlink** to the shared
+    home (still granted read-only, so its bytes are shared, not copied), while
+    ``tmp``/``downloads``/``update-hashes`` are this run's own writable scratch. On a
+    host dev flow the shared ``RUSTUP_HOME`` is writable so the gap never showed; a
+    shared read-only home (the container image's baked toolchain) is what surfaced it.
+    """
+    return Path(workdir).resolve() / ".sandbox_rustup"
+
+
 def rust_build_policy(
     workdir: str | Path,
     *,
@@ -169,6 +189,25 @@ def rust_build_policy(
         if src.is_file() and not (cargo_home / cfg).exists():
             shutil.copy(src, cargo_home / cfg)
     env["CARGO_HOME"] = str(cargo_home)
+
+    # Point RUSTUP_HOME at a PRIVATE per-run home under the workdir (see
+    # sandbox_rustup_home). The shared home stays read-only (granted above via
+    # `rustup`); the per-run home symlinks `toolchains` back to it (so the RO grant
+    # still covers the resolved toolchain files) and keeps rustup's writable scratch
+    # — tmp/downloads/update-hashes — inside the (writable) workdir. `settings.toml`
+    # is copied so default/override resolution still works.
+    rustup_home = sandbox_rustup_home(wd)
+    rustup_home.mkdir(parents=True, exist_ok=True)
+    tc_link = rustup_home / "toolchains"
+    shared_toolchains = rustup / "toolchains"
+    if not tc_link.exists() and shared_toolchains.is_dir():
+        tc_link.symlink_to(shared_toolchains)
+    src_settings = rustup / "settings.toml"
+    if src_settings.is_file() and not (rustup_home / "settings.toml").exists():
+        shutil.copy(src_settings, rustup_home / "settings.toml")
+    for scratch in ("tmp", "downloads", "update-hashes"):
+        (rustup_home / scratch).mkdir(exist_ok=True)
+    env["RUSTUP_HOME"] = str(rustup_home)
 
     return SandboxPolicy(
         rw_paths=rw_paths,

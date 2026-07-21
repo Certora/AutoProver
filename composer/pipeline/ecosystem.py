@@ -195,15 +195,18 @@ EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] =
 RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
 # The pipeline generates hundreds of MB of build/scratch *inside the workdir* mid-run, which the
 # source tools' file-listing would otherwise pull into LLM context and blow the model's window:
-#   • ``.sandbox_cargo`` — the command sandbox's private CARGO_HOME (docs/command-sandbox.md §3);
+#   • ``.sandbox_cargo``  — the command sandbox's private CARGO_HOME (docs/command-sandbox.md §3);
 #     a build fills it with the *entire* cargo registry (~19.5k files, ~520 MB).
+#   • ``.sandbox_rustup`` — the sandbox's private RUSTUP_HOME; its ``toolchains`` is a symlink to
+#     the shared rustup home, so a naive listing would enumerate the whole Rust toolchain.
 #   • ``.sandbox_tmp``    — the sandbox's private linker TMPDIR.
 #   • nested ``target/``  — cargo build output below the root (e.g. the generated
 #     ``fuzz/<program>/target``, ~4k files, ~900 MB); the top-level ``^target/`` above misses it.
 # These are never source, so they are never readable by the source tools (belt-and-suspenders with
 # each run's own cleanup: a re-run or cached CI workspace can leave them behind).
 RUST_FORBIDDEN_READ = (
-    RUST_FORBIDDEN_READ + r"|(^\.sandbox_cargo/.*)|(^\.sandbox_tmp/.*)|(.*/target/.*)"
+    RUST_FORBIDDEN_READ
+    + r"|(^\.sandbox_cargo/.*)|(^\.sandbox_rustup/.*)|(^\.sandbox_tmp/.*)|(.*/target/.*)"
 )
 
 RUST_CODE_EXPLORER_PROMPT = """\
