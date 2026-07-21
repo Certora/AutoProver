@@ -68,14 +68,19 @@ ENV RUSTUP_HOME=/opt/autoprove/home/.rustup \
     PATH=/opt/autoprove/home/.cargo/bin:/opt/autoprove/home/.local/share/solana/install/active_release/bin:${PATH}
 
 # ---- Host Rust toolchain (rustup) ----
-# Default toolchain = the newer CLI_RUST_VERSION (builds anchor/crucible/the wheel);
-# also install the pinned RUST_VERSION the scenario's rust-toolchain.toml selects for
-# the confined harness build. Both are preinstalled so the offline run-time build
-# never needs to rustup-download.
+# Three toolchains, all preinstalled so the offline, confined run-time build never
+# rustup-downloads (which, being offline, fails — the bug this fixes):
+#   * CLI_RUST_VERSION (default) — builds anchor/crucible/the wheel (needs rustc >= 1.91).
+#   * RUST_VERSION — the channel the scenario's rust-toolchain.toml pins.
+#   * `stable` — REQUIRED because crucible-fuzz-cli forces it for the harness build: it
+#     writes a `rust-toolchain.toml` with `channel = "stable"` into the fuzz crate AND
+#     sets `RUSTUP_TOOLCHAIN=stable` (crates/crucible-fuzz-cli/src/lib.rs). Host dev
+#     flows already have a `stable` toolchain, so this only bites the baked image.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --no-modify-path --default-toolchain "${CLI_RUST_VERSION}" --profile minimal \
  && rustup toolchain install "${RUST_VERSION}" --profile minimal \
- && rustup component add --toolchain "${RUST_VERSION}" rustfmt clippy
+ && rustup component add --toolchain "${RUST_VERSION}" rustfmt clippy \
+ && rustup toolchain install stable --profile minimal
 
 # ---- Solana platform-tools (agave) ----
 # HOME is /opt/autoprove/home (base image ENV), so the anza installer drops to
