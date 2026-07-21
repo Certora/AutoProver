@@ -5,14 +5,16 @@ from typing import Literal, TypeGuard, Any, TYPE_CHECKING
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
+from functools import cache
 
 import anthropic
 
-from composer.input.files import _UploaderBase
+from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderKind, CacheLevel, _ListIter, NoSuchElementError,
+    CacheLevel, ProviderServiceBase, ProviderSpec
 )
+from .parsing import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -38,7 +40,7 @@ def _validate_model(s: str) -> TypeGuard[ClaudeModelNames]:
 _interleaved_pivot_version = (4, 5)
 
 def _model_parser(model_name: str) -> ModelFeatures:
-    stream = _ListIter(model_name.split("-"))
+    stream = ListIter(model_name.split("-"))
     parsing: Literal["claude", "model", "version"] = "claude"
     try:
         claude = stream.next()
@@ -77,14 +79,43 @@ def matches(model: str) -> bool:
 
 # --- Files API uploader ----------------------------------------------------
 
+class AnthropicRenderer:
+    def text_block(self, text, *, with_cache: bool) -> dict:
+        to_ret : dict[str, Any] = {"type": "text", "text": text}
+        if with_cache:
+            to_ret["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": "5m"
+            }
+        return to_ret
+    
+    def file_block(self, file_id, *, with_cache: bool) -> dict:
+        to_ret : dict[str, Any] = {
+            "type": "document",
+            "source": {
+                "type": "file",
+                "file_id": file_id,
+            },
+        }
+        if with_cache:
+            to_ret["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": "5m"
+            }
+        return to_ret
+
+@cache
+def _get_service():
+    return AnthropicService()
+
 @dataclass
-class AnthropicFileUploader(_UploaderBase):
+class AnthropicFileUploader(UploaderBase):
     """``FileUploader`` impl backed by Anthropic's beta Files API."""
 
     client: anthropic.AsyncAnthropic
     uploaded: dict[str, str] | None = None
     _seed_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    provider: ProviderKind = "anthropic"
+    renderer: ContentRenderer = field(default_factory=AnthropicRenderer)
 
     async def _ensure_seeded(self) -> dict[str, str]:
         """Seed the dedup cache from the account's existing Files-API uploads on
@@ -117,6 +148,16 @@ class AnthropicFileUploader(_UploaderBase):
 
 # --- ModelProvider ---------------------------------------------------------
 
+class AnthropicService(ProviderServiceBase):
+    def __init__(self):
+        from graphcore.tools.memory import anthropic_async_memory_tool
+        super().__init__(
+            anthropic_async_memory_tool,
+            AnthropicFileUploader.lazy
+        )
+
+
+
 @dataclass
 class AnthropicModelProvider:
     """``ModelProvider`` for Anthropic. Probes ``model_name`` once at
@@ -126,11 +167,16 @@ class AnthropicModelProvider:
     model_name: str
     options: ModelConfiguration
     features: ModelFeatures
-    provider: ProviderKind = "anthropic"
+
+    provider: AnthropicService = field(default_factory=_get_service)
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
-        return AnthropicModelProvider(model_name, options, _model_parser(model_name))
+        return AnthropicModelProvider(
+            model_name,
+            options,
+            _model_parser(model_name),
+        )
 
     def builder_for(
         self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
@@ -176,3 +222,8 @@ class AnthropicModelProvider:
             model_kwargs=model_kwargs,
             callbacks=[UsageCallback()],
         )
+
+ANTHROPIC_SPEC = ProviderSpec(
+    matches=matches,
+    build=AnthropicModelProvider.create
+)

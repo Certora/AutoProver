@@ -6,7 +6,7 @@ import asyncio
 import sys
 
 from composer.input.parsing import fresh_workflow_argument_parser, upload_input
-from composer.llm.registry import get_provider_for, uploader_for
+from composer.llm.registry import get_provider_for
 from composer.workflow.executor import execute_ai_composer_workflow
 from composer.ui.codegen_rich import CodeGenRichApp
 from composer.ui.tool_display import tool_context
@@ -23,7 +23,7 @@ async def _main() -> int:
 
 
     llm = get_provider_for(options=args)
-    uploader = uploader_for(llm.provider)
+    uploader = llm.provider.uploader()
 
     input_data = await upload_input(uploader, args)
 

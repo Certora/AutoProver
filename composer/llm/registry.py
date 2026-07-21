@@ -8,62 +8,45 @@ provider.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Protocol, TYPE_CHECKING, overload, cast
+from typing import overload, cast
+from functools import cache
+import importlib.metadata
 
 from composer.input.types import ModelConfiguration, ModelOptionsBase, TieredModelOptions
-from composer.input.files import FileUploader
-from composer.llm.provider import ProviderKind, CacheLevel, ModelProvider
-from composer.llm import anthropic as _anthropic
-from composer.llm import openai as _openai
+from composer.llm.provider import ProviderService, ModelProvider
+from .provider import ProviderSpec
 
-if TYPE_CHECKING:
-    from langchain_core.language_models.chat_models import BaseChatModel
+LLM_PROVIDER_GROUP = "certora.autoprove.llm_provider"
 
-
-@dataclass(frozen=True)
-class ProviderSpec:
-    """One row of the provider registry: a name predicate, the provider kind it
-    maps to, and the factory that builds the provider's ``ModelProvider``."""
-    matches: Callable[[str], bool]
-    kind: ProviderKind
-    build: Callable[[str, ModelConfiguration], ModelProvider]
-
-
-_PROVIDERS: list[ProviderSpec] = [
-    ProviderSpec(
-        matches=_anthropic.matches,
-        kind="anthropic",
-        build=_anthropic.AnthropicModelProvider.create,
-    ),
-    ProviderSpec(
-        matches=_openai.matches,
-        kind="openai",
-        build=_openai.OpenAIModelProvider.create,
-    ),
-]
-
+@cache
+def _loader_providers() -> list[ProviderSpec]:
+    to_ret : list[ProviderSpec] = []
+    for ep in importlib.metadata.entry_points(
+        group=LLM_PROVIDER_GROUP
+    ):
+        prov = ep.load()
+        if not isinstance(prov, ProviderSpec):
+            raise ValueError(f"Could not load provider backend: {ep.name} with {ep.module}.{ep.value}")
+        to_ret.append(prov)
+    return to_ret
 
 def _lookup(model: str) -> ProviderSpec:
     lowered = model.lower()
-    for spec in _PROVIDERS:
+    for spec in _loader_providers():
         if spec.matches(lowered):
             return spec
     raise ValueError(
         f"Unrecognized model {model!r}: cannot determine its provider. Add a "
-        f"ProviderSpec to composer.llm.registry._PROVIDERS when introducing a "
+        f"ProviderSpec to the `{LLM_PROVIDER_GROUP}` importlib entrypoint when introducing a "
         f"new model family."
     )
 
-
-def provider_for(model: str) -> ProviderKind:
-    """Map a model identifier to its provider family via the registry."""
-    return _lookup(model).kind
 
 @dataclass(kw_only=True)
 class TieredProviders:
     lite: ModelProvider
     heavy: ModelProvider
-    provider_kind: ProviderKind
+    provider_service: ProviderService
 
 @overload
 def get_provider_for(*, model_name: str, options: ModelConfiguration) -> ModelProvider:
@@ -94,41 +77,6 @@ def get_provider_for(
         assert tiered is not None
         lite_model = _lookup(tiered.lite_model).build(tiered.lite_model, tiered)
         heavy_model = _lookup(tiered.heavy_model).build(tiered.heavy_model, tiered)
-        if lite_model.provider != heavy_model.provider:
+        if type(lite_model.provider) is not type(heavy_model.provider):
             raise ValueError(f"Cannot use different model providers for heavy and lite models: {tiered.lite_model} vs {tiered.heavy_model}")
-        return TieredProviders(lite=lite_model, heavy=heavy_model, provider_kind=lite_model.provider)
-
-def uploader_for(provider: ProviderKind) -> FileUploader:
-    """Construct the lazily-seeding Files-API uploader for ``provider``."""
-    match provider:
-        case "anthropic":
-            return _anthropic.AnthropicFileUploader.lazy()
-        case "openai":
-            return _openai.OpenAIFileUploader.lazy()
-
-
-class LLMFactory(Protocol):
-    def __call__(
-        self,
-        model_name: str,
-        *,
-        cache_level: CacheLevel | None = None,
-        disable_thinking: bool = False,
-    ) -> "BaseChatModel": ...
-
-
-def llm_factory(options: ModelConfiguration) -> LLMFactory:
-    """A model-name → chat-model factory bound to ``options``. The tiering layer
-    (``ModelProvider`` in ``spec/service_host.py``) calls this per tier with the
-    heavy/lite model name; each call resolves the provider and defers the
-    cache/thinking choice to ``builder_for``."""
-    def build(
-        model_name: str,
-        *,
-        cache_level: CacheLevel | None = None,
-        disable_thinking: bool = False,
-    ) -> "BaseChatModel":
-        return get_provider_for(model_name=model_name, options=options).builder_for(
-            cache_level=cache_level, disable_thinking=disable_thinking
-        )
-    return build
+        return TieredProviders(lite=lite_model, heavy=heavy_model, provider_service=lite_model.provider)

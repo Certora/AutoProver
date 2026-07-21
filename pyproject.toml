@@ -166,3 +166,9 @@ certora_autosetup = [
     "**/*.j2",
     "**/*.json",
 ]
+
+
+
+[project.entry-points."certora.autoprove.llm_provider"]
+openai = "composer.llm.openai:OPEN_AI_SPEC"
+anthropic = "composer.llm.anthropic:ANTHROPIC_SPEC"

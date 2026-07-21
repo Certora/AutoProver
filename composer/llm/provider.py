@@ -9,16 +9,47 @@ registry, or ``composer.input.files`` — so both ``composer.input.files`` and
 the per-provider modules can import it without an import cycle.
 """
 
-from typing import Literal, Protocol, TYPE_CHECKING
-from dataclasses import dataclass, field
+from typing import Protocol, TYPE_CHECKING, Callable
+from dataclasses import dataclass
+from functools import cached_property
 import enum
+from composer.input.files import FileUploader
+from composer.input.types import ModelConfiguration
+from abc import ABC
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
+    from graphcore.tools.memory import AsyncPostgresBackend
+    from langchain_core.tools import BaseTool
 
+class ProviderService(Protocol):
+    def select_memory_tool(
+        self, backend: "AsyncPostgresBackend"
+    ) -> "BaseTool":
+        ...
 
-type ProviderKind = Literal["anthropic", "openai"]
+    def uploader(self) -> FileUploader:
+        ...
 
+class ProviderServiceBase(ABC):
+    def __init__(self,
+        mem_fact: Callable[["AsyncPostgresBackend"], "BaseTool"],
+        uploader_fact: Callable[[], FileUploader]
+    ):
+        self.mem_fact = mem_fact
+        self.uploader_fact = uploader_fact
+
+    @cached_property
+    def _uploader_prop(self) -> FileUploader:
+        return self.uploader_fact()
+    
+    def uploader(self) -> FileUploader:
+        return self._uploader_prop
+    
+    def select_memory_tool(
+        self, backend: "AsyncPostgresBackend"
+    ) -> "BaseTool":
+        return self.mem_fact(backend)
 
 class CacheLevel(enum.StrEnum):
     NONE = "none"
@@ -33,33 +64,15 @@ class ModelProvider(Protocol):
     mints a chat model with the cache/thinking choice deferred to the call site."""
 
     @property
-    def provider(self) -> ProviderKind: ...
+    def provider(self) -> ProviderService: ...
 
     def builder_for(
         self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
     ) -> "BaseChatModel": ...
 
-
-class NoSuchElementError(RuntimeError):
-    pass
-
-
-@dataclass
-class _ListIter[T]:
-    l: list[T]
-    ind: int = field(default=0)
-
-    def has_next(self) -> bool:
-        return self.ind < len(self.l)
-
-    def peek(self) -> T:
-        if not self.has_next():
-            raise NoSuchElementError("Invalid state, no more elements")
-        return self.l[self.ind]
-
-    def next(self) -> T:
-        if not self.has_next():
-            raise NoSuchElementError("Invalid state, no more elements")
-        to_ret = self.l[self.ind]
-        self.ind += 1
-        return to_ret
+@dataclass(frozen=True)
+class ProviderSpec:
+    """One row of the provider registry: a name predicate, the provider kind it
+    maps to, and the factory that builds the provider's ``ModelProvider``."""
+    matches: Callable[[str], bool]
+    build: Callable[[str, ModelConfiguration], ModelProvider]

@@ -6,7 +6,6 @@ from pydantic import Field
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
-from composer.llm.provider import ProviderKind
 from langchain_core.prompt_values import PromptValue
 from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, AIMessage
@@ -119,32 +118,50 @@ class HarnessFakeLLM(FakeMessagesListChatModel):
 
 
 class _DummyUploader:
-    """A ``FileUploader`` stand-in that never touches a Files API: every input is
-    read from disk and returned as an in-memory text document. Installed under the
-    harness so a taped run does no real uploads — the codegen path uploads the spec
-    + interface via ``upload_text_file_if_needed``, which would otherwise hit the
-    live Files API."""
+    """A ``FileUploader`` stand-in that never touches a Files API: every input —
+    a path (``upload_*``/``get_document``) or an ``Uploadable`` handle
+    (``document_from``/``text_document_from``) — is returned as an in-memory text
+    document. Installed under the harness so a taped run does no real uploads,
+    which would otherwise hit the live Files API."""
 
     async def upload_text_file_if_needed(self, file_path: Any) -> Any:
-        return self._inline(file_path)
+        return self._inline_path(file_path)
 
     async def upload_file_if_needed(self, file_path: Any) -> Any:
-        return self._inline(file_path)
+        return self._inline_path(file_path)
 
     async def get_document(self, path: Any) -> Any:
         import os
-        return self._inline(path) if os.path.isfile(str(path)) else None
+        return self._inline_path(path) if os.path.isfile(str(path)) else None
 
-    @staticmethod
-    def _inline(path: Any) -> Any:
+    def text_document_from(self, src: Any) -> Any:
+        return self._inline_src(src)
+
+    async def document_from(self, src: Any) -> Any:
+        return self._inline_src(src)
+
+    @classmethod
+    def _inline_path(cls, path: Any) -> Any:
         import os
         from pathlib import Path
-        from composer.input.files import InMemoryTextFile
         p = str(path)
+        return cls._doc(os.path.basename(p), Path(p).read_text(encoding="utf-8"))
+
+    @classmethod
+    def _inline_src(cls, src: Any) -> Any:
+        text = src.string_contents
+        if text is None:
+            text = src.bytes_contents.decode("utf-8", errors="replace")
+        return cls._doc(src.basename, text)
+
+    @staticmethod
+    def _doc(basename: str, text: str) -> Any:
+        from composer.input.files import InMemoryTextFile
+        from composer.llm.anthropic import AnthropicRenderer
         return InMemoryTextFile(
-            basename=os.path.basename(p),
-            string_contents=Path(p).read_text(encoding="utf-8"),
-            provider="anthropic"
+            basename=basename,
+            string_contents=text,
+            renderer=AnthropicRenderer(),
         )
 
 
@@ -189,8 +206,21 @@ def install_fake_llm(fake: Any) -> None:
     import composer.llm.registry as registry
     import composer.workflow.services as services
 
+    from composer.llm.provider import ProviderServiceBase
+
+    class _FakeService(ProviderServiceBase):
+        """The real anthropic memory tool (backed by the harness's Postgres
+        memory backend), paired with the dummy uploader so no taped run touches
+        a live Files API. ``ProviderServiceBase`` memoizes the uploader, so a
+        single ``_DummyUploader`` is shared across the CLI pre-upload and the
+        in-workflow uploads."""
+
+        def __init__(self) -> None:
+            from graphcore.tools.memory import anthropic_async_memory_tool
+            super().__init__(anthropic_async_memory_tool, _DummyUploader)
+
     class _FakeProvider:
-        provider : ProviderKind = "anthropic"
+        provider = _FakeService()
 
         def builder_for(self, *, cache_level: Any = None, disable_thinking: bool = False) -> Any:
             return _current_fake()
@@ -201,11 +231,10 @@ def install_fake_llm(fake: Any) -> None:
         *, model_name: Any = None, options: Any = None, tiered: Any = None
     ) -> Any:
         if tiered is not None:
-            return registry.TieredProviders(lite=fp, heavy=fp, provider_kind="anthropic")
+            return registry.TieredProviders(lite=fp, heavy=fp, provider_service=fp.provider)
         return fp
 
     registry.get_provider_for = _fake_get_provider_for
-    registry.uploader_for = lambda _provider: _DummyUploader()
     services.create_llm = lambda args: _current_fake()
     services.create_llm_base = lambda args: _current_fake()
     _llm_seams_patched = True

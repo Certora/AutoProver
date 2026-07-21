@@ -15,14 +15,13 @@ import uuid
 from typing import cast, Protocol
 
 
-from composer.core.user import user_data_ns
 from composer.input.types import ModelOptions, RAGDBOptions, DEFAULT_RECURSION_LIMIT
 from composer.input.parsing import add_protocol_args
-from composer.io.thread_logging import DEFAULT_META_NS, thread_logger, default_logging_ns
+from composer.io.thread_logging import thread_logger, default_logging_ns
 from composer.spec.agent_index import agent_index_config_from_env
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.rag.models import get_model
-from composer.workflow.services import llm_factory, standard_connections
+from composer.workflow.services import standard_connections
 from composer.spec.service_host import ModelProvider
 from composer.kb.knowledge_base import DefaultEmbedder, DEFAULT_KB_NS
 from composer.spec.services import build_rag_tool_env
@@ -128,12 +127,10 @@ async def _main() -> int:
 
     # Set up services. Natspec does not support model-swapping, so the heavy
     # and lite tiers collapse onto the single configured model.
-    model_factory = llm_factory(args)
     model = get_model()
 
     llm_provider = get_provider_for(options=args)
 
-    logging_ns = user_data_ns() + DEFAULT_META_NS
     run_id = uuid.uuid4().hex
 
     async with (
