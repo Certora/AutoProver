@@ -325,7 +325,7 @@ def get_prover_tool(
         )
 
         stuck_rules = {
-            k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED")
+            k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
         }
 
         stuck_count = {
