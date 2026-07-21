@@ -41,15 +41,27 @@ def _require(cond: bool, why: str) -> None:
         pytest.skip(why)
 
 
-async def test_solana_vault_builds_under_launcher():
+async def test_solana_vault_builds_under_launcher(tmp_path):
     _require(_SCENARIO.is_dir(), f"scenario missing: {_SCENARIO}")
     _require(shutil.which("cargo-build-sbf") is not None, "cargo-build-sbf not on PATH")
     _require(LauncherProvider().available().ok, "run-confined unbuilt or kernel lacks Landlock")
 
+    # Build a writable copy, not the committed scenario: build_program writes target/
+    # into project_root, which is read-only for the non-root user on the in-container
+    # image (and would otherwise pollute test_scenarios/ on the host).
+    scenario = tmp_path / "solana_vault"
+    shutil.copytree(
+        _SCENARIO, scenario,
+        ignore=shutil.ignore_patterns(
+            ".sandbox_cargo", ".sandbox_tmp", "target", "corpus", "output",
+            "fuzz", "certora", ".certora_internal",
+        ),
+    )
+
     # Warm the dep cache with an ordinary (unsandboxed) build first, so the confined
     # offline build has everything it needs — mirrors the §5 fetch-outside / build-inside
     # split on a fresh machine.
-    await build_program(_SCENARIO, "vault", timeout_s=480)
+    await build_program(scenario, "vault", timeout_s=480)
 
     cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
     extra_ro: list[Path] = [Path.home() / ".cargo" / "bin"]
@@ -60,5 +72,5 @@ async def test_solana_vault_builds_under_launcher():
         extra_ro=tuple(extra_ro),
         extra_rw=(cargo_home,),
     )
-    built = await build_program(_SCENARIO, "vault", sandbox=cfg, timeout_s=480)
+    built = await build_program(scenario, "vault", sandbox=cfg, timeout_s=480)
     assert built.so_path.is_file(), "cargo-build-sbf under the launcher did not produce the .so"

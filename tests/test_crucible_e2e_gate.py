@@ -74,20 +74,48 @@ def _require(cond: bool, why: str) -> None:
         pytest.skip(why)
 
 
-async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeypatch):
+async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeypatch, tmp_path):
     _require(_SCENARIO.is_dir(), f"scenario missing: {_SCENARIO}")
     _require(shutil.which("cargo-build-sbf") is not None, "cargo-build-sbf not on PATH")
     _require(shutil.which("crucible") is not None, "crucible CLI not on PATH")
     _require(_crucible_repo() is not None, "set CRUCIBLE_REPO to a local crucible checkout")
 
+    # Work on a writable copy, not the committed scenario. The run writes hundreds
+    # of MB of build artifacts into project_root (.sandbox_cargo/, target/, fuzz/,
+    # …); an in-container run's image copy is read-only for the non-root runtime
+    # user, and a host run would otherwise pollute test_scenarios/ (see
+    # docs/crucible-demo.md §3). Exclude the heavy generated dirs from the copy.
+    scenario = tmp_path / "solana_vault"
+    shutil.copytree(
+        _SCENARIO, scenario,
+        ignore=shutil.ignore_patterns(
+            ".sandbox_cargo", ".sandbox_tmp", "target", "corpus", "output",
+            "fuzz", "certora", ".certora_internal",
+        ),
+    )
+
+    # Idempotent provisioning: testcontainers hands out a fresh DB per session, but
+    # the containerized flow reuses the persistent compose `postgres`, where roles/
+    # DBs may already exist (e.g. after `setup-db`). autocommit=True means a failed
+    # CREATE doesn't poison the connection, so ignore "already exists".
+    # duplicate_object / duplicate_database / duplicate_table SQLSTATEs.
+    _dup_sqlstates = {"42710", "42P04", "42P07"}
+
+    def _ignore_dup(conn, statement) -> None:
+        try:
+            conn.execute(statement)
+        except Exception as e:  # psycopg.Error; keyed by SQLSTATE to stay stub-agnostic
+            if getattr(e, "sqlstate", None) not in _dup_sqlstates:
+                raise
+
     admin_url = pg_container.get_connection_url(driver=None)
     with psycopg.connect(admin_url, autocommit=True) as admin:
         for cfg in services._DATABASE_CONFIGS.values():
-            admin.execute(SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+            _ignore_dup(admin, SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
                 Identifier(cfg["user"]), Literal(cfg["password"])))
-            admin.execute(SQL("CREATE DATABASE {} OWNER {}").format(
+            _ignore_dup(admin, SQL("CREATE DATABASE {} OWNER {}").format(
                 Identifier(cfg["database"]), Identifier(cfg["user"])))
-        admin.execute(SQL("CREATE DATABASE {}").format(Identifier(_RAG_DB)))
+        _ignore_dup(admin, SQL("CREATE DATABASE {}").format(Identifier(_RAG_DB)))
     for db in _VECTOR_DBS:
         with psycopg.connect(_db_url(pg_container, db), autocommit=True) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -107,10 +135,10 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
         standard_connections(provider="anthropic", embedder=DefaultEmbedder(MockSentenceTransformer())) as conns,
         async_tool_context(),
     ):
-        content = await conns.uploader.get_document(_SCENARIO / "system.md")
+        content = await conns.uploader.get_document(scenario / "system.md")
         assert content is not None
         source = SourceCode(
-            content=content, project_root=str(_SCENARIO),
+            content=content, project_root=str(scenario),
             contract_name=SolidityIdentifier(_PROGRAM),
             relative_path=f"programs/{_PROGRAM}/src/lib.rs", forbidden_read=RUST_FORBIDDEN_READ,
         )
@@ -118,7 +146,7 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
         model_provider = ModelProvider(
             heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
-        basic = build_basic_source_tools(root=str(_SCENARIO), forbidden_read=RUST_FORBIDDEN_READ)
+        basic = build_basic_source_tools(root=str(scenario), forbidden_read=RUST_FORBIDDEN_READ)
         full = build_source_tools(basic, model_provider, conns.indexed_store, ("crucible_e2e", "src"), recursion_limit=100)
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
         ctx = WorkflowContext.create(

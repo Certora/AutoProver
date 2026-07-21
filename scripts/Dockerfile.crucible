@@ -1,0 +1,136 @@
+# syntax=docker/dockerfile:1.7
+#
+# Crucible toolchain overlay image — layered ON TOP of the lean base autoprove
+# image (scripts/Dockerfile). The base ships NONE of the Solana/Rust/Crucible
+# toolchain on purpose (docs/crucible-toolchain-versioning.md §1); most AutoProver
+# containers don't need it. This image bakes exactly ONE blessed, mutually-
+# compatible combo — "Option 1 / pin-and-bump" from that doc — so `console-crucible`
+# runs fully inside the container. Bumping the combo = bumping the ARGs below and
+# rebuilding.
+#
+# It does NOT bundle the run-confined sandbox launcher; Crucible's provider is
+# fail-closed, so run this image with BOTH the sandbox overlay and the crucible
+# overlay:
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.crucible.yml ...
+#
+# The build clones the PUBLIC crucible repo over HTTPS (no private auth), matching
+# the base image's "no SSH/private auth" property.
+
+ARG BASE_IMAGE=autoprover-local:latest
+
+# ---- Blessed toolchain combo (docs/crucible-toolchain-versioning.md §6.1) ----
+# host rustc: the solana_vault scenario's rust-toolchain.toml pins 1.89.0.
+# solana/agave (cargo-build-sbf + sBPF rustc): 3.1.10 (platform-tools v1.52).
+# anchor CLI: 1.1.2 (the crucible_app wheel's REQUIRED_BINARIES demands `anchor`).
+# crucible CLI + crates: tag v0.2.0 (path-dep source + `crucible` CLI).
+# These MUST stay compatible with the harness's hardcoded anchor-lang 1.0.1 /
+# solana 3.0 / libafl 0.15.1 pins (rust/crucible-app/src/lib.rs).
+FROM --platform=linux/amd64 ${BASE_IMAGE} AS crucible
+# Host toolchain the HARNESS builds under — matches the solana_vault scenario's
+# rust-toolchain.toml, which rustup auto-selects when cargo runs in the scenario.
+ARG RUST_VERSION=1.89.0
+# A newer toolchain used only to BUILD the host CLIs + the crucible_app wheel:
+# anchor-cli 1.1.2's dep graph (cargo-platform) needs rustc >= 1.91, so it can't
+# build under 1.89.0. This does not change the blessed harness combo.
+ARG CLI_RUST_VERSION=1.96.1
+ARG SOLANA_VERSION=3.1.10
+ARG ANCHOR_VERSION=1.1.2
+ARG CRUCIBLE_REPO_URL=https://github.com/asymmetric-research/crucible.git
+ARG CRUCIBLE_REF=v0.2.0
+ARG CERTORA_CLI_PACKAGE=certora-cli
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Build + runtime toolchain deps. The base image purged build-essential once its
+# wheels were installed; Crucible needs a C toolchain PERMANENTLY because the
+# harness + program builds invoke cc/linker at RUN TIME (inside the run-confined
+# sandbox). libssl/libudev/protobuf are agave/anchor/crucible build deps.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential pkg-config libssl-dev libudev-dev zlib1g-dev \
+      protobuf-compiler python3-dev \
+      curl ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+
+# ---- Toolchain location: the runtime user's HOME ----
+# The confined RunCommand sandbox grants exactly the STANDARD toolchain layout
+# (composer/sandbox/recipes.py): $RUSTUP_HOME, $CARGO_HOME/bin, ~/.local/share/solana,
+# and ~/.cache/solana. So the toolchain MUST live there or run-confined can't exec it
+# (Landlock denies the path). Install everything under the base image's HOME
+# (/opt/autoprove/home) — already world-writable — which doubles as a writable
+# CARGO_HOME for the unsandboxed warm build (the confined build uses a private
+# per-run CARGO_HOME under the workdir regardless; docs/command-sandbox.md §3).
+ENV RUSTUP_HOME=/opt/autoprove/home/.rustup \
+    CARGO_HOME=/opt/autoprove/home/.cargo \
+    PATH=/opt/autoprove/home/.cargo/bin:/opt/autoprove/home/.local/share/solana/install/active_release/bin:${PATH}
+
+# ---- Host Rust toolchain (rustup) ----
+# Default toolchain = the newer CLI_RUST_VERSION (builds anchor/crucible/the wheel);
+# also install the pinned RUST_VERSION the scenario's rust-toolchain.toml selects for
+# the confined harness build. Both are preinstalled so the offline run-time build
+# never needs to rustup-download.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --default-toolchain "${CLI_RUST_VERSION}" --profile minimal \
+ && rustup toolchain install "${RUST_VERSION}" --profile minimal \
+ && rustup component add --toolchain "${RUST_VERSION}" rustfmt clippy
+
+# ---- Solana platform-tools (agave) ----
+# HOME is /opt/autoprove/home (base image ENV), so the anza installer drops to
+# ~/.local/share/solana/install/active_release — the path the sandbox recipe grants.
+RUN sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)" \
+ && cargo-build-sbf --version
+
+# ---- Anchor CLI ----
+# Required by the crucible_app wheel's REQUIRED_BINARIES check (and used best-effort
+# for `anchor idl build`). Installed as a REAL binary into the shared CARGO_HOME/bin
+# — NOT via avm, whose `anchor` proxy resolves versions from $HOME/.avm at run time
+# (the runtime HOME differs and root's .avm isn't world-readable → fail).
+RUN cargo install --locked anchor-cli --version "${ANCHOR_VERSION}" \
+ && anchor --version
+
+# ---- Crucible checkout + CLI ----
+# The generated harness path-depends on $CRUCIBLE_REPO/crates/crucible-fuzzer, and
+# the `crucible` CLI is `crates/crucible-fuzz-cli`. Bake the checkout at a pinned
+# ref and install the CLI onto PATH; export CRUCIBLE_REPO so the wheel resolves it.
+ENV CRUCIBLE_REPO=/opt/crucible
+RUN git clone --depth 1 --branch "${CRUCIBLE_REF}" "${CRUCIBLE_REPO_URL}" "$CRUCIBLE_REPO" \
+ && cargo install --path "$CRUCIBLE_REPO/crates/crucible-fuzz-cli" --root /usr/local --locked \
+ && crucible --help >/dev/null \
+ && chmod -R go+rX "$CRUCIBLE_REPO"
+
+# ---- Build the crucible_app (+ echoprover) wheels into the venv ----
+# The base image omits the `apps` group (it has no Rust toolchain); now that Rust
+# is present, sync it so `import crucible_app` works. Also add the `test` group
+# (pytest) so the containerized e2e gate runs in this image. Mirror the base extras
+# so uv doesn't prune them.
+WORKDIR $AUTOPROVE_HOME/AutoProver
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+    uv sync --frozen --no-editable \
+      --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" \
+      --group ragbuild --group apps --group test \
+ && python -c "import crucible_app; print('crucible_app OK')"
+
+# ---- Pre-install the sBPF platform-tools ----
+# On first use, cargo-build-sbf INSTALLS the platform-tools (its own sBPF rustc) into
+# ~/.cache/solana — a write the non-root runtime user's confined/offline build can't
+# make. Trigger that install now, as root (HOME is the runtime home), by building the
+# bundled scenario to sBPF in a throwaway copy, so run time finds the tools present.
+RUN cp -r test_scenarios/solana_vault /tmp/warm-sbf \
+ && ( cd /tmp/warm-sbf && cargo-build-sbf ) \
+ && test -f /tmp/warm-sbf/target/deploy/vault.so \
+ && rm -rf /tmp/warm-sbf
+
+# Permissions for the arbitrary host UID the container runs as:
+#  - the venv, the source tree, and the crucible checkout: world-READable.
+#  - the whole HOME (the toolchain — rustup/cargo/solana + caches): world-WRITable,
+#    so runtime cargo (the unsandboxed warm build) writes its registry/git cache and
+#    cargo-build-sbf its lock files. This does NOT weaken the confined build, which
+#    gets these dirs read-only via Landlock and writes to a private per-run CARGO_HOME
+#    under the workdir (docs/command-sandbox.md §3).
+RUN chmod -R go+rX /opt/autoprove/venv "$AUTOPROVE_HOME/AutoProver" "$CRUCIBLE_REPO" \
+ && chmod -R go+rwX /opt/autoprove/home
+
+WORKDIR /work

@@ -8,6 +8,15 @@ per-instruction test authoring + fuzzing → report.
 Budget ~15–20 minutes of wall-clock for a full run, plus one-time setup (toolchain +
 a ~0.5 GB model download on first run). It makes real, paid LLM calls.
 
+There are two ways to run it:
+
+- **On the host** (§1–§7) — you install the toolchain locally and run `console-crucible`
+  under `uv`. Fastest iteration for development.
+- **Fully in the container** ([§8](#8-running-entirely-in-the-container)) — a prebuilt
+  image bundles the whole blessed toolchain (Rust + Solana platform-tools + anchor +
+  crucible), so the only prerequisites are Docker and an API key. Best for a clean,
+  reproducible run.
+
 ---
 
 ## 1. Prerequisites (one-time)
@@ -221,6 +230,99 @@ CRUCIBLE_REPO="$CRUCIBLE_REPO" COMPOSER_SANDBOX_PROVIDER=launcher \
 | sandbox "provider unavailable" / fail-closed | `run-confined` not found | build it (1f), point `RUN_CONFINED_BIN` at a prebuilt binary, or set `COMPOSER_SANDBOX_PROVIDER=none` |
 | Postgres connection errors | DB not up | `docker compose -f scripts/docker-compose.yml up -d` |
 | `Failed to spawn: pyright` (only when validating) | `uv sync` dropped the `ci` group | add `--group ci --group test` to the sync (keep `--group apps`) |
+| (container) `Crucible toolchain missing: …` | running `console-crucible` on the base image | add `-f scripts/docker-compose.crucible.yml` (§8) |
+| (container) `run-confined not found` / fail-closed | sandbox overlay not layered in | add `-f scripts/docker-compose.sandbox.yml` (§8) |
+| (container) `pull access denied for autoprover-local` | base image not built | build the base first (§8b) |
 
 > After **any** `uv sync`, re-run the wheel build (1e) — this is the most common
 > foot-gun.
+
+---
+
+## 8. Running entirely in the container
+
+Instead of installing the toolchain on the host (§1), you can run the whole vertical
+inside a container. The **crucible toolchain image** (`scripts/Dockerfile.crucible`)
+bakes one blessed, mutually-compatible combo — host Rust `1.89.0`, Solana platform-tools
+`3.1.10`, `anchor` `1.1.2`, and `crucible` `v0.2.0` (checkout + CLI) — on top of the lean
+base image, following Option 1 in [crucible-toolchain-versioning.md](./crucible-toolchain-versioning.md).
+Programs that need a different combo are out of scope for this image; bump the ARGs in
+`scripts/Dockerfile.crucible` and rebuild to re-bless.
+
+The image layers three compose files (base + the sandbox launcher overlay + the crucible
+toolchain overlay). Because Crucible's sandbox provider is fail-closed, the
+`docker-compose.sandbox.yml` overlay is **required**.
+
+### 8a. Prerequisites
+
+Only Docker and an API key — no host toolchain:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Define the three-file stack once for convenience:
+
+```bash
+export COMPOSE="-f scripts/docker-compose.yml \
+  -f scripts/docker-compose.sandbox.yml \
+  -f scripts/docker-compose.crucible.yml"
+```
+
+### 8b. Build (one-time; slow — compiles the Solana/Rust/crucible toolchain)
+
+The crucible image does `FROM autoprover-local:latest`, so build the base first:
+
+```bash
+docker compose -f scripts/docker-compose.yml --profile autoprove build   # base
+docker compose $COMPOSE --profile autoprove build                        # sandbox + crucible
+```
+
+### 8c. Start Postgres + initialize the schema
+
+```bash
+docker compose $COMPOSE up -d postgres
+docker compose $COMPOSE --profile autoprove run --rm autoprove setup-db
+```
+
+### 8d. Run the demo
+
+Mount the host directory holding the scenario as `/work` and pass container paths.
+Run as your host UID so outputs aren't root-owned:
+
+```bash
+export HOST_UID=$(id -u) HOST_GID=$(id -g) HOST_WORK_DIR="$PWD"
+docker compose $COMPOSE --profile autoprove run --rm autoprove \
+    console-crucible \
+    /work/test_scenarios/solana_vault \
+    /work/test_scenarios/solana_vault/programs/vault/src/lib.rs:vault \
+    /work/test_scenarios/solana_vault/system.md \
+    --max-bug-rounds 1 --fuzz-timeout 30
+```
+
+`CRUCIBLE_REPO` and `COMPOSER_SANDBOX_PROVIDER=launcher` are baked into the image, and
+`run-confined` is mounted by the sandbox overlay — nothing else to set. The entrypoint
+derives the RAG connection from the compose Postgres, so no `--rag-db` is needed.
+
+### 8e. Run the e2e gate in the container
+
+The full-vertical gate ([tests/test_crucible_e2e_gate.py](../tests/test_crucible_e2e_gate.py))
+runs in-container against the compose Postgres — no docker-in-docker. Point it at that
+DB with `COMPOSER_TEST_PG_URL` (a superuser DSN; the test provisions roles/DBs
+idempotently) and run pytest from the image's repo dir:
+
+```bash
+docker compose $COMPOSE --profile autoprove run --rm \
+    -w /opt/autoprove/AutoProver \
+    -e COMPOSER_TEST_PG_URL=postgresql://postgres:postgres_admin_password@postgres:5432/postgres \
+    autoprove \
+    python -m pytest tests/test_crucible_e2e_gate.py -m expensive -q -s
+```
+
+It copies the scenario to a writable temp dir first, so it neither needs a writable
+image nor pollutes `test_scenarios/`. Same paid-LLM budget as the host run (§4).
+
+> **Toolchain downloads on first run.** `cargo-build-sbf` fetches its sBPF
+> platform-tools into `$HOME/.cache/solana` on first use; the container has network at
+> run time (the confined step is offline but the trusted warm step is not), so this
+> happens automatically on the first build.

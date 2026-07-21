@@ -80,6 +80,29 @@ case "${1:-}" in
     fi
     exec "$cmd" "$@"
     ;;
+  console-crucible|tui-crucible)
+    # Crucible runs fully in-container, but ONLY on the crucible toolchain image
+    # (scripts/Dockerfile.crucible) with the sandbox overlay mounted. Fail fast
+    # with an actionable message instead of a deep build/sandbox error. The RAG
+    # connection is derived from CERTORA_AI_COMPOSER_PGHOST/PGPORT (no --rag-db).
+    missing=()
+    for bin in crucible cargo-build-sbf anchor; do
+      command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
+    done
+    if (( ${#missing[@]} > 0 )); then
+      echo "[autoprove] Crucible toolchain missing: ${missing[*]}." >&2
+      echo "[autoprove] Run the crucible image: add -f scripts/docker-compose.crucible.yml" >&2
+      exit 1
+    fi
+    if [[ "${COMPOSER_SANDBOX_PROVIDER:-launcher}" == "launcher" ]] \
+       && [[ -z "${RUN_CONFINED_BIN:-}" || ! -x "${RUN_CONFINED_BIN:-/nonexistent}" ]] \
+       && ! command -v run-confined >/dev/null 2>&1; then
+      echo "[autoprove] run-confined not found and the launcher provider is fail-closed." >&2
+      echo "[autoprove] Add -f scripts/docker-compose.sandbox.yml, or set COMPOSER_SANDBOX_PROVIDER=none." >&2
+      exit 1
+    fi
+    exec "$@"
+    ;;
   console-foundry|tui-foundry)
     # Foundry mode runs the project's own `forge test`, which can use the `ffi`
     # cheatcode and external cheatcodes. Enable the hardened fork's guards so
