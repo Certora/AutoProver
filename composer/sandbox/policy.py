@@ -35,7 +35,7 @@ file *contents*.
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol
 
 
 class SandboxUnavailable(RuntimeError):
@@ -101,7 +101,6 @@ class Reason:
 Availability = Literal["ok"] | Reason
 
 
-@runtime_checkable
 class SandboxProvider(Protocol):
     """Maps a :class:`SandboxPolicy` + a command to a concrete :class:`LaunchSpec`.
 
@@ -110,7 +109,10 @@ class SandboxProvider(Protocol):
     trivially unit-testable; the actual confinement happens in the launched process.
     """
 
-    name: str
+    @property
+    def name(self) -> str:
+        """A short, stable identifier for this mechanism (e.g. ``"none"``, ``"launcher"``)."""
+        ...
 
     async def available(self) -> Availability:
         """Whether this provider can confine a command in the current environment.

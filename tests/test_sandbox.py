@@ -66,8 +66,11 @@ async def test_none_provider_available():
 
 
 def test_none_provider_satisfies_protocol():
-    # runtime_checkable structural check: the concrete class implements the seam.
-    assert isinstance(NoneProvider(), SandboxProvider)
+    # Static structural conformance: pyright rejects this assignment if NoneProvider
+    # stops implementing the seam. (No runtime isinstance — the protocol isn't
+    # @runtime_checkable; the type checker is the gate.)
+    provider: SandboxProvider = NoneProvider()
+    assert provider.name == "none"
 
 
 @pytest.mark.asyncio
