@@ -7,6 +7,9 @@ methods {
     function $CONTRACT_NAME$.exttload(bytes32 slot) external returns (bytes32) => NONDET DELETE;
     function $CONTRACT_NAME$.exttload(bytes32[] slots) external returns (bytes32[] memory) => ArbBytes32(slots) DELETE;
     function $CONTRACT_NAME$.exttload(bytes32[] slots) external returns (bytes memory) => ArbBytes(slots) DELETE;
+    // camelCase naming (e.g. Aave: extSload / extSloads)
+    function $CONTRACT_NAME$.extSload(bytes32 slot) external returns (bytes32) => NONDET DELETE;
+    function $CONTRACT_NAME$.extSloads(bytes32[] slots) external returns (bytes32[] memory) => ArbBytes32(slots) DELETE;
 }
 
 function ArbBytes32(bytes32[] slots) returns bytes32[] {

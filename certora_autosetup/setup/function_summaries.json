@@ -107,10 +107,22 @@
     "description": "OpenZeppelin BitMaps operations",
     "additional_contracts": ["specs/summaries/OpenZeppelin/harnesses/OZ_BitMaps.sol"]
   },
+  "oz_arrays_unsafeMemoryAccess": {
+    "names": ["unsafeMemoryAccess"],
+    "library_names": ["Arrays"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_Arrays.spec",
+    "description": "OpenZeppelin Arrays.unsafeMemoryAccess (unchecked memory array read)"
+  },
+  "eip712_hashTypedData": {
+    "names": ["_hashTypedData", "_hashTypedDataV4"],
+    "library_names": ["EIP712"],
+    "summary_file": "specs/summaries/EIP712.spec",
+    "description": "EIP-712 typed-data hashing (solady _hashTypedData / OpenZeppelin _hashTypedDataV4)"
+  },
   "extload": {
-    "names": ["extsload", "exttload"],
+    "names": ["extsload", "exttload", "extSload", "extSloads"],
     "summary_file": "specs/summaries/extload.template.spec",
-    "description": "External storage load functions (extsload/exttload)"
+    "description": "External storage load functions (extsload/exttload, incl. camelCase extSload/extSloads)"
   },
   "safeTransfer": {
     "names": ["safeTransfer"],
