@@ -12,7 +12,7 @@ import pytest
 
 from composer.sandbox.launcher import LauncherProvider, _resolve_binary
 from composer.sandbox.config import SandboxConfig
-from composer.sandbox.policy import Availability, LaunchSpec, SandboxPolicy
+from composer.sandbox.policy import LaunchSpec, Reason, SandboxPolicy
 
 _FAKE_BIN = "/opt/run-confined"
 
@@ -94,7 +94,7 @@ async def test_available_reports_missing_binary():
     prov = LauncherProvider(binary=None)
     prov._binary = None
     avail = await prov.available()
-    assert avail.ok is False
+    assert isinstance(avail, Reason)
     assert "run-confined" in avail.reason
 
 
@@ -117,5 +117,4 @@ _needs_bin = pytest.mark.skipif(_REAL_BIN is None, reason="run-confined not buil
 async def test_probe_reports_available_on_this_host():
     """On a Landlock-capable host the real binary's --probe → available()."""
     avail = await LauncherProvider().available()
-    assert isinstance(avail, Availability)
-    assert avail.ok is True, avail.reason
+    assert avail == "ok", avail

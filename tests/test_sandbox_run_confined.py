@@ -22,7 +22,7 @@ pytestmark = pytest.mark.asyncio
 _PROVIDER = LauncherProvider()
 # Evaluated at collection time (no running loop), so drive the async probe with asyncio.run.
 _needs_sandbox = pytest.mark.skipif(
-    not asyncio.run(_PROVIDER.available()).ok,
+    asyncio.run(_PROVIDER.available()) != "ok",
     reason="run-confined unbuilt or kernel lacks Landlock",
 )
 
@@ -148,9 +148,9 @@ async def test_unavailable_provider_fails_closed(tmp_path):
         name = "x"
 
         async def available(self):
-            from composer.sandbox.policy import Availability
+            from composer.sandbox.policy import Reason
 
-            return Availability(ok=False, reason="nope")
+            return Reason("nope")
 
         def wrap(self, policy, program, args):  # pragma: no cover - must not be called
             raise AssertionError("wrap reached despite unavailable")

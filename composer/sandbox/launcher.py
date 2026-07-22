@@ -21,6 +21,7 @@ from pathlib import Path
 from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
+    Reason,
     SandboxPolicy,
 )
 
@@ -59,12 +60,9 @@ class LauncherProvider:
 
     async def available(self) -> Availability:
         if self._binary is None:
-            return Availability(
-                ok=False,
-                reason=(
-                    f"{_BIN_NAME} binary not found; build rust/run-confined "
-                    f"(cargo build -p run-confined --release) or set RUN_CONFINED_BIN"
-                ),
+            return Reason(
+                f"{_BIN_NAME} binary not found; build rust/run-confined "
+                f"(cargo build -p run-confined --release) or set RUN_CONFINED_BIN"
             )
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -74,7 +72,7 @@ class LauncherProvider:
                 stderr=asyncio.subprocess.PIPE,
             )
         except OSError as e:
-            return Availability(ok=False, reason=f"{_BIN_NAME} --probe could not run: {e}")
+            return Reason(f"{_BIN_NAME} --probe could not run: {e}")
         try:
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_PROBE_TIMEOUT_S)
         except TimeoutError:
@@ -83,8 +81,8 @@ class LauncherProvider:
             raise
         if proc.returncode != 0:
             reason = stderr.decode().strip() or f"{_BIN_NAME} --probe reported no Landlock support"
-            return Availability(ok=False, reason=reason)
-        return Availability(ok=True)
+            return Reason(reason)
+        return "ok"
 
     def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
         """The ``run-confined …  --`` argv that confines ``policy``, up to and

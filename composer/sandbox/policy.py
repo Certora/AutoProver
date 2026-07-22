@@ -35,7 +35,7 @@ file *contents*.
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 
 class SandboxUnavailable(RuntimeError):
@@ -87,12 +87,18 @@ class LaunchSpec:
 
 
 @dataclass(frozen=True)
-class Availability:
-    """Result of :meth:`SandboxProvider.available` — whether the provider can
-    actually confine here (e.g. the launcher probes the kernel's Landlock ABI)."""
+class Reason:
+    """Why a provider *cannot* confine here — the payload of an unavailable result
+    (e.g. the launcher binary is missing, or the kernel lacks Landlock)."""
 
-    ok: bool
-    reason: str = ""
+    reason: str
+
+
+# A provider's availability: the literal ``"ok"`` when it can confine here, or a
+# :class:`Reason` when it cannot. Modeling it as a union rather than a ``(bool, str)``
+# pair makes the illegal "available *and* has a reason" state unrepresentable — the
+# ``"ok"`` arm has nowhere to put one, and the ``Reason`` arm always carries one.
+Availability = Literal["ok"] | Reason
 
 
 @runtime_checkable
@@ -143,7 +149,7 @@ class NoneProvider:
     name = "none"
 
     async def available(self) -> Availability:
-        return Availability(ok=True)
+        return "ok"
 
     def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
         # No confinement wrapper: the command runs directly, so there is no prefix.
@@ -158,5 +164,5 @@ async def ensure_available(provider: SandboxProvider) -> None:
     """Fail-closed check: raise :class:`SandboxUnavailable` unless ``provider`` can
     confine here. Call before running untrusted input under a real provider."""
     avail = await provider.available()
-    if not avail.ok:
+    if avail != "ok":
         raise SandboxUnavailable(provider.name, avail.reason)

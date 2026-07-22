@@ -15,6 +15,7 @@ from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
     NoneProvider,
+    Reason,
     SandboxPolicy,
     SandboxProvider,
     SandboxUnavailable,
@@ -61,7 +62,7 @@ def test_none_provider_ignores_policy():
 
 @pytest.mark.asyncio
 async def test_none_provider_available():
-    assert await NoneProvider().available() == Availability(ok=True)
+    assert await NoneProvider().available() == "ok"
 
 
 def test_none_provider_satisfies_protocol():
@@ -82,7 +83,7 @@ async def test_ensure_available_fails_closed():
         name = "landlock-missing"
 
         async def available(self) -> Availability:
-            return Availability(ok=False, reason="kernel lacks Landlock (need Linux >= 5.13)")
+            return Reason("kernel lacks Landlock (need Linux >= 5.13)")
 
         def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
             raise AssertionError("wrap must not be reached when unavailable")
