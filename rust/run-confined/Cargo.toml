@@ -10,6 +10,8 @@ name = "run-confined"
 path = "src/main.rs"
 
 [dependencies]
+# Command-line parsing (derive API).
+clap = { version = "4", features = ["derive"] }
 # Filesystem confinement (ABI negotiation + full access-right set).
 landlock = "0.4"
 # seccomp-BPF compiler from AWS Firecracker — we hand it a small allow/deny
