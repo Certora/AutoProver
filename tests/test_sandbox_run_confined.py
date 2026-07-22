@@ -7,6 +7,7 @@ the kernel supports Landlock (so CI without the Rust build stays green); the ful
 escape gate on the real Crucible build is step 5.
 """
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -19,8 +20,10 @@ from composer.sandbox.policy import SandboxPolicy, SandboxUnavailable
 pytestmark = pytest.mark.asyncio
 
 _PROVIDER = LauncherProvider()
+# Evaluated at collection time (no running loop), so drive the async probe with asyncio.run.
 _needs_sandbox = pytest.mark.skipif(
-    not _PROVIDER.available().ok, reason="run-confined unbuilt or kernel lacks Landlock"
+    not asyncio.run(_PROVIDER.available()).ok,
+    reason="run-confined unbuilt or kernel lacks Landlock",
 )
 
 
@@ -144,7 +147,7 @@ async def test_unavailable_provider_fails_closed(tmp_path):
     class _Unavailable:
         name = "x"
 
-        def available(self):
+        async def available(self):
             from composer.sandbox.policy import Availability
 
             return Availability(ok=False, reason="nope")

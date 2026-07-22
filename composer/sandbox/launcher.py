@@ -10,12 +10,12 @@ provider is actually constructed, so the seam never imports a concrete mechanism
 
 ``wrap`` is pure argv construction (unit-testable, no subprocess); ``available``
 shells out to ``run-confined --probe`` once to confirm the kernel supports Landlock
-(fail-closed otherwise).
+(fail-closed otherwise) — asynchronously, so probing never blocks the event loop.
 """
 
+import asyncio
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 from composer.sandbox.policy import (
@@ -57,7 +57,7 @@ class LauncherProvider:
     def binary(self) -> str | None:
         return self._binary
 
-    def available(self) -> Availability:
+    async def available(self) -> Availability:
         if self._binary is None:
             return Availability(
                 ok=False,
@@ -67,16 +67,22 @@ class LauncherProvider:
                 ),
             )
         try:
-            proc = subprocess.run(
-                [self._binary, "--probe"],
-                capture_output=True,
-                text=True,
-                timeout=_PROBE_TIMEOUT_S,
+            proc = await asyncio.create_subprocess_exec(
+                self._binary,
+                "--probe",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
         except OSError as e:
             return Availability(ok=False, reason=f"{_BIN_NAME} --probe could not run: {e}")
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_PROBE_TIMEOUT_S)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
         if proc.returncode != 0:
-            reason = proc.stderr.strip() or f"{_BIN_NAME} --probe reported no Landlock support"
+            reason = stderr.decode().strip() or f"{_BIN_NAME} --probe reported no Landlock support"
             return Availability(ok=False, reason=reason)
         return Availability(ok=True)
 

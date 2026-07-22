@@ -110,7 +110,7 @@ class SandboxConfig:
             fsize_bytes=self.fsize_bytes,
         )
 
-    def backend_spec(self, workdir: str | Path, *, timeout_s: int) -> BackendSpec:
+    async def backend_spec(self, workdir: str | Path, *, timeout_s: int) -> BackendSpec:
         """The ``Sandbox`` JSON a Rust backend's ``compile``/``validate`` consume to launch
         a confined command (`autoprover_sdk::Sandbox`). Python keeps ownership of the
         confinement *intent* (this policy) and of translating it into an argv wrapper; the
@@ -122,7 +122,7 @@ class SandboxConfig:
         if not self.enabled:
             return {"argv_prefix": [], "timeout_s": timeout_s}
         provider = self.resolve_provider()
-        ensure_available(provider)  # fail-closed: raise before any untrusted code runs
+        await ensure_available(provider)  # fail-closed: raise before any untrusted code runs
         policy = self.build_policy(workdir)
         assert policy is not None  # enabled config ⇒ build_policy returns a real policy
         return {"argv_prefix": provider.argv_prefix(policy), "timeout_s": timeout_s}

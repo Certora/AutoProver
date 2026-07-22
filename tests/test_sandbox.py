@@ -59,8 +59,9 @@ def test_none_provider_ignores_policy():
     assert spec.env is None
 
 
-def test_none_provider_available():
-    assert NoneProvider().available() == Availability(ok=True)
+@pytest.mark.asyncio
+async def test_none_provider_available():
+    assert await NoneProvider().available() == Availability(ok=True)
 
 
 def test_none_provider_satisfies_protocol():
@@ -68,24 +69,26 @@ def test_none_provider_satisfies_protocol():
     assert isinstance(NoneProvider(), SandboxProvider)
 
 
-def test_ensure_available_passes_for_ok_provider():
-    ensure_available(NoneProvider())  # must not raise
+@pytest.mark.asyncio
+async def test_ensure_available_passes_for_ok_provider():
+    await ensure_available(NoneProvider())  # must not raise
 
 
-def test_ensure_available_fails_closed():
+@pytest.mark.asyncio
+async def test_ensure_available_fails_closed():
     """An unavailable provider raises rather than letting the command run unconfined."""
 
     class _Unavailable:
         name = "landlock-missing"
 
-        def available(self) -> Availability:
+        async def available(self) -> Availability:
             return Availability(ok=False, reason="kernel lacks Landlock (need Linux >= 5.13)")
 
         def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
             raise AssertionError("wrap must not be reached when unavailable")
 
     with pytest.raises(SandboxUnavailable) as ei:
-        ensure_available(_Unavailable())
+        await ensure_available(_Unavailable())
     assert ei.value.provider == "landlock-missing"
     assert "Landlock" in ei.value.reason
     assert "unavailable" in str(ei.value)

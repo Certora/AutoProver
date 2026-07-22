@@ -89,10 +89,11 @@ def test_wrap_uses_binary_name_when_unresolved():
     assert spec.argv[0] == "run-confined"
 
 
-def test_available_reports_missing_binary():
+@pytest.mark.asyncio
+async def test_available_reports_missing_binary():
     prov = LauncherProvider(binary=None)
     prov._binary = None
-    avail = prov.available()
+    avail = await prov.available()
     assert avail.ok is False
     assert "run-confined" in avail.reason
 
@@ -112,8 +113,9 @@ _needs_bin = pytest.mark.skipif(_REAL_BIN is None, reason="run-confined not buil
 
 
 @_needs_bin
-def test_probe_reports_available_on_this_host():
+@pytest.mark.asyncio
+async def test_probe_reports_available_on_this_host():
     """On a Landlock-capable host the real binary's --probe → available()."""
-    avail = LauncherProvider().available()
+    avail = await LauncherProvider().available()
     assert isinstance(avail, Availability)
     assert avail.ok is True, avail.reason

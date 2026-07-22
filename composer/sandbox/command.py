@@ -120,7 +120,7 @@ async def run_local_command(
     ``CARGO_HOME``); the sandboxed path's env is fully governed by the provider/policy.
     """
     prov: SandboxProvider = provider if provider is not None else NoneProvider()
-    ensure_available(prov)  # fail-closed: raises before running if it can't confine
+    await ensure_available(prov)  # fail-closed: raises before running if it can't confine
     spec = prov.wrap(policy if policy is not None else SandboxPolicy(), program, list(args))
     child_env = dict(spec.env) if spec.env is not None else None
     if env_overlay:

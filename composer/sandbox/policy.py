@@ -106,8 +106,12 @@ class SandboxProvider(Protocol):
 
     name: str
 
-    def available(self) -> Availability:
-        """Whether this provider can confine a command in the current environment."""
+    async def available(self) -> Availability:
+        """Whether this provider can confine a command in the current environment.
+
+        Async because a real provider may probe the environment out-of-process (the
+        launcher shells out to ``run-confined --probe``); awaiting keeps that off the
+        event loop."""
         ...
 
     def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
@@ -138,7 +142,7 @@ class NoneProvider:
 
     name = "none"
 
-    def available(self) -> Availability:
+    async def available(self) -> Availability:
         return Availability(ok=True)
 
     def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
@@ -150,9 +154,9 @@ class NoneProvider:
         return LaunchSpec(argv=(program, *args), env=None)
 
 
-def ensure_available(provider: SandboxProvider) -> None:
+async def ensure_available(provider: SandboxProvider) -> None:
     """Fail-closed check: raise :class:`SandboxUnavailable` unless ``provider`` can
     confine here. Call before running untrusted input under a real provider."""
-    avail = provider.available()
+    avail = await provider.available()
     if not avail.ok:
         raise SandboxUnavailable(provider.name, avail.reason)

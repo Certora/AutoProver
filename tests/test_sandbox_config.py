@@ -57,27 +57,32 @@ def test_config_enabled_build_policy_grants_workdir(tmp_path):
     assert pol.mem_bytes == (1 << 30)
 
 
-def test_backend_spec_none_is_passthrough():
+@pytest.mark.asyncio
+async def test_backend_spec_none_is_passthrough():
     """A passthrough config yields an empty ``argv_prefix`` — the backend runs the
     command directly, with no confinement wrapper to prepend."""
-    assert SandboxConfig().backend_spec("/work", timeout_s=42) == {
+    assert await SandboxConfig().backend_spec("/work", timeout_s=42) == {
         "argv_prefix": [],
         "timeout_s": 42,
     }
 
 
-def test_backend_spec_enabled_ships_provider_argv_prefix(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_backend_spec_enabled_ships_provider_argv_prefix(tmp_path, monkeypatch):
     """An enabled config ships the resolved provider's ``argv_prefix`` verbatim, so a
     Rust backend launches ``[*argv_prefix, program, *args]`` with no mechanism knowledge.
     The provider/availability check is stubbed to stay a pure unit test (no real binary)."""
     import composer.sandbox.config as config_mod
 
+    async def _ok(prov):
+        return None
+
     provider = LauncherProvider(binary="/opt/run-confined")
     monkeypatch.setattr(SandboxConfig, "resolve_provider", lambda self: provider)
-    monkeypatch.setattr(config_mod, "ensure_available", lambda prov: None)
+    monkeypatch.setattr(config_mod, "ensure_available", _ok)
 
     cfg = SandboxConfig(provider="launcher", mem_bytes=1 << 30)
-    spec = cfg.backend_spec(tmp_path, timeout_s=900)
+    spec = await cfg.backend_spec(tmp_path, timeout_s=900)
 
     policy = cfg.build_policy(tmp_path)
     assert policy is not None

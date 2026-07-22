@@ -20,6 +20,7 @@ needed to compile). Skipped unless `rustc` and a working launcher are present. T
 expensive Part B in `tests/test_crucible_sandbox_gate.py`.
 """
 
+import asyncio
 import os
 import re
 import shutil
@@ -49,8 +50,9 @@ _SCOPES_AVAILABLE = _kernel_at_least(6, 12)
 pytestmark = pytest.mark.asyncio
 
 _PROVIDER = LauncherProvider()
+# Evaluated at collection time (no running loop), so drive the async probe with asyncio.run.
 _needs = pytest.mark.skipif(
-    shutil.which("rustc") is None or not _PROVIDER.available().ok,
+    shutil.which("rustc") is None or not asyncio.run(_PROVIDER.available()).ok,
     reason="needs rustc + a working run-confined launcher (Linux/Landlock)",
 )
 
