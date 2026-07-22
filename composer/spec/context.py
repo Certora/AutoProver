@@ -121,9 +121,16 @@ class Contract:
 
 type Abstraction = CVLGeneration | FoundryGeneration
 
+class EditorAgent:
+    """editor for a single property"""
+
+class EditorJudge:
+    """judge for the editor"""
+
+
 type Marker = (
     InvJudge | InvFormal | Properties | ComponentGroup
-    | CVLJudge | FoundryJudge | Abstraction | Contract
+    | CVLJudge | FoundryJudge | Abstraction | Contract | EditorAgent | EditorJudge
 )
 
 # ---------------------------------------------------------------------------

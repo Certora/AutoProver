@@ -7,6 +7,28 @@
 
 {% include "cvl_edit_guidance.j2" %}
 
+{% if source_editing %}
+## Editing the Source Under Verification
+
+The Solidity you are verifying is a working copy, and you have a narrow ability to have it changed
+when a construct in the source is defeating the prover. The changes themselves are made by a
+dedicated editor agent: you describe the problem you need solved, and you evaluate what comes back.
+
+- **`code_editor`** — request an edit. Describe the problem and the intended shape of the fix, not
+  the edit itself. The editor stages its work and returns a summary, a soundness argument, a diff,
+  and an edit id; nothing changes until you apply it.
+- **`commit_edit`** — apply a staged edit, by its id, to your working copy. From that point on your
+  file reads, the feedback judge, and the prover all see the edited source.
+- **`edit_history_log`** — list the edits you have applied, with each one's summary and diff.
+- **`revert_to_edit`** — roll your working copy back to an earlier applied edit, discarding the
+  edits applied after it.
+
+Treat source edits as a last resort, reached only after spec-side approaches have failed: every
+applied edit becomes part of the final deliverable, where a human auditor must read and accept it.
+After applying or reverting an edit, prover results and feedback verdicts obtained before the
+change no longer describe your working copy — re-run them before relying on them.
+{% endif %}
+
 ## Authoring CVL with References
 
 {% include "doc_ref_author.j2" %}

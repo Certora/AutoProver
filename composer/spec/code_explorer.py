@@ -9,20 +9,17 @@ from typing import NotRequired, override, Protocol, Any
 
 from pydantic import Field, BaseModel
 
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import InMemorySaver
 
-from graphcore.graph import Builder, FlowInput, MessagesState
+from graphcore.graph import FlowInput, MessagesState
 from graphcore.tools.schemas import WithAsyncImplementation, WithInjectedId
-from graphcore.tools.vfs import fs_tools
 
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.templates.loader import load_jinja_template
 from composer.spec.tool_env import BaseSourceTools, BasicAgentTools
 from composer.spec.util import uniq_thread_id
-from composer.spec.agent_index import AgentIndex, IndexedTool, WithAgentIndex
+from composer.spec.agent_index import AgentIndex, IndexedTool
 from composer.ui.tool_display import tool_display_of, CommonTools
 
 
@@ -83,10 +80,19 @@ class _ExploreCodeCommon(BaseModel):
     is roughly the slowest single answer instead of the sum.
     """
     question: str = Field(
-        description="A specific, focused question about the source code. "
-        "Good: 'What state variables does withdraw() modify and how?' "
-        "Bad: 'Tell me about the contract' "
-        "Bad: 'What is the definition of function X?' (read the source directly)"
+        description="""
+A specific, focused question about the source code. Do not ask questions about:
+* The current task you're working on
+* How to use other tools
+* Questions about CVL or the prover
+* Protocol related questions unrelated to the source code (e.g. expected deployment params, contract address seeds)
+* Questions about the Solidity language itself
+
+Good: 'What state variables does withdraw() modify and how?'
+Bad: 'Tell me about the contract'
+Bad: 'What is the definition of function X?' (read the source directly)
+Bad: 'Is it realistic to expect deposits > 2^128?'
+"""
     )
 
 

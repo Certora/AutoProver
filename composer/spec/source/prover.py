@@ -12,10 +12,16 @@ import asyncio
 import json
 import logging
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, asynccontextmanager, ExitStack, nullcontext
 from pathlib import Path
-from typing import Annotated, Callable, Iterator, override, AsyncContextManager
+from typing import (
+    Annotated, AsyncIterator, Callable, Iterator, override, AsyncContextManager,
+)
 from typing_extensions import TypedDict, NotRequired
+
+from graphcore.tools.vfs import VFSAccessor, VFSState
+
+from composer.spec.source.live_explorer import VersionedHistory
 
 from langchain_core.tools import InjectedToolCallId, tool, BaseTool
 from langgraph.prebuilt import InjectedState
@@ -86,10 +92,20 @@ class ProverStateExtra(TypedDict):
     # Basename the spec is materialized/persisted under (e.g. "autospec_<slug>").
     # NotRequired so other ProverStateExtra injectors (e.g. config_edit) needn't set it.
     spec_stem: NotRequired[str]
+    # The author's working copy of the source under verification; verify_spec runs
+    # against its materialization when non-empty (see ProjectDirectory). Absent/empty
+    # outside the editing-enabled pipeline. No merge op intentionally: the vfs is
+    # only ever replaced wholesale (commit_edit / revert_to_edit).
+    vfs: NotRequired[dict[str, str]]
 
 type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | RuleAnalysisResult | ProverRun | ProverLink | ProverResult
 
-class StateWithSkips(CVLGenerationState, ProverStateExtra):
+# ``verify_spec`` only runs in the source pipeline, whose state always seeds
+# ``version_history`` — permanently empty in phases without the edit tools
+# (structural invariants, never-edited authors), in which case it contributes
+# nothing to the digest. The prover's validation stamp is bound to it so a
+# post-run edit invalidates the stamp.
+class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory):
     pass
 
 class _SpecCallbacks(ProverEventCallbacks):
@@ -211,10 +227,48 @@ def _prover_sem(cloud: bool) -> AsyncContextManager[None]:
 
     return ToRet()
 
+
+type ProjectDirectory = Callable[[dict[str, str]], AsyncContextManager[str]]
+"""Per-run choice of the directory the prover executes in, given the author's
+current VFS overlay. Yields the directory path; its lifetime is the run."""
+
+
+def in_situ_project(project_root: str) -> ProjectDirectory:
+    """The no-editing strategy: every run executes directly in the project
+    directory."""
+    @asynccontextmanager
+    async def provide(vfs: dict[str, str]) -> AsyncIterator[str]:
+        yield project_root
+    return provide
+
+
+def materializing_project(
+    project_root: str, accessor: VFSAccessor[VFSState]
+) -> ProjectDirectory:
+    """The editing strategy: an empty VFS runs in-situ; a non-empty VFS is
+    materialized over the project into a temporary directory that lives for
+    the duration of the run. The copy (and the teardown) run in a worker
+    thread — materializing a whole project is blocking IO that would
+    otherwise stall every concurrently-streaming batch."""
+    @asynccontextmanager
+    async def provide(vfs: dict[str, str]) -> AsyncIterator[str]:
+        if not vfs:
+            yield project_root
+            return
+        stack = ExitStack()
+        tmp = await asyncio.to_thread(
+            stack.enter_context, accessor.materialize({"vfs": vfs})
+        )
+        try:
+            yield tmp
+        finally:
+            await asyncio.to_thread(stack.close)
+    return provide
+
 def get_prover_tool(
     llm: LLM,
     main_contract: str,
-    project_root: str,
+    project_directory: ProjectDirectory,
     prover_opts: ProverOptions,
 ) -> BaseTool:
     sem = _prover_sem(prover_opts.cloud)
@@ -235,7 +289,8 @@ def get_prover_tool(
         state: Annotated[StateWithSkips, InjectedState],
         rules: list[str] | None = None
     ) -> str | Command:
-        if state["curr_spec"] is None:
+        spec = state["curr_spec"]
+        if spec is None:
             return "Specification not yet put on VFS"
         conf = state["config"]
         # With a seeded stem, name the spec/conf after it (so on-disk names match the
@@ -243,8 +298,9 @@ def get_prover_tool(
         spec_stem = state.get("spec_stem")
         conf_dir = (CERTORA_DIR / "confs") if spec_stem is not None else CERTORA_DIR
         lock = spec_locks.setdefault(spec_stem, asyncio.Lock()) if spec_stem is not None else nullcontext()
-        async with lock:
-            with tmp_spec(root=project_root, content=state["curr_spec"], name=spec_stem) as generated:
+
+        async def run_in(run_root: str) -> str | Command:
+            with tmp_spec(root=run_root, content=spec, name=spec_stem) as generated:
                 config = prover_config_overlay(
                     conf, main_contract=main_contract, verify_target=f"{main_contract}:{generated}"
                 )
@@ -259,7 +315,7 @@ def get_prover_tool(
                 config["msg"] = f"{component} iteration number {iteration}"
 
                 with temp_certora_file(
-                    root=project_root,
+                    root=run_root,
                     content=json.dumps(config, indent=2),
                     ext="conf",
                     name=spec_stem,
@@ -268,7 +324,7 @@ def get_prover_tool(
                 ) as config_path:
                     async with sem:
                         result = await run_prover(
-                            Path(project_root),
+                            Path(run_root),
                             [config_path],
                             tool_call_id,
                             prover_opts,
@@ -288,10 +344,17 @@ def get_prover_tool(
                 if rules is None and all_verified:
                     return tool_state_update(
                         tool_call_id=tool_call_id, content=result.result_str,
-                        prover_link=result.link, validations=stamper(state),
+                        prover_link=result.link,
+                        validations=stamper(state, state["version_history"]),
                     )
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link
                 )
+
+        # The author's working copy decides where this run executes (in-situ for
+        # an empty VFS, a temp materialization otherwise); the same-stem lock
+        # guards the deterministic spec/conf names within it.
+        async with lock, project_directory(state.get("vfs") or {}) as run_root:
+            return await run_in(run_root)
 
     return verify_spec

@@ -20,12 +20,10 @@ from composer.spec.cvl_generation import (
     CVLGenerationExtra,
     SkippedProperty,
     check_completion,
-    _FeedbackSchema,
-    _RecordSkipSchema,
-    _UnskipSchema,
+    property_tools,
     FEEDBACK_VALIDATION_KEY,
-    FeedbackToolContext,
-    FeedbackToolImpl
+    FeedbackServices,
+    FeedbackToolImpl,
 )
 from composer.spec.feedback import Rebuttal
 
@@ -86,12 +84,12 @@ class DummyPutCVL(WithAsyncImplementation[Command], WithInjectedId):
             curr_spec=self.cvl
         )
 
-TOOLS = [
-    _RecordSkipSchema.as_tool(_RECORD_SKIP_NAME),
-    _UnskipSchema.as_tool(_UNSKIP_NAME),
-    _FeedbackSchema.as_tool(_FEEDBACK_NAME),
+# The property-management suite (feedback + skip tools) now carries per-batch
+# deps, so it's built per-scenario from the FeedbackServices via the production
+# ``property_tools`` helper. Only these two tools are dependency-free/static.
+_STATIC_TOOLS = [
     result_tool,
-    DummyPutCVL.as_tool(_PUT_CVL)
+    DummyPutCVL.as_tool(_PUT_CVL),
 ]
 
 @dataclass
@@ -156,15 +154,17 @@ def scenario(
     skips: list[SkippedProperty] | None = None,
     required: list[str] | None = None
 ):
-    return Scenario(CVLTestState, *TOOLS).init(
+    services = FeedbackServices(
+        feedback_thunk=feedback_impl,
+        titles=[f"p{i}" for i in range(num_props)],
+    )
+    return Scenario(CVLTestState, *property_tools(services), *_STATIC_TOOLS).init(
         curr_spec=curr_spec,
         validations={},
-        skips=skips if skips else [],
+        skipped=skips if skips else [],
         property_rules=[],
         required_validations=required if required else [FEEDBACK_VALIDATION_KEY]
-    ).with_context(FeedbackToolContext(
-        feedback_impl, titles=[f"p{i}" for i in range(num_props)]
-    ))
+    )
 
 
 # =========================================================================
