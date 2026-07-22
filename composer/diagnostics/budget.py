@@ -78,7 +78,7 @@ def total_budget(
     later phases."""
     curr = _cost_centers.get()
     if curr is not None:
-        raise RuntimeError("Not good")
+        raise RuntimeError("Budget already installed, cannot overwrite existing.")
     pool = BudgetCounter(total_budget=total, curr_cost=0.0)
     prev = _cost_centers.set({
         k: BudgetCounter(total_budget=v, curr_cost=0.0, parent=pool) for (k, v) in caps.items()
