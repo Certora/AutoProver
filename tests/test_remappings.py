@@ -63,9 +63,10 @@ def test_fallback_merges_foundry_toml_and_remappings_txt(tmp_path: Path, monkeyp
 
     packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
 
-    assert _keys(packages) == {"@openzeppelin/contracts", "solady", "forge-std"}
-    # relative targets resolved absolute against base_dir
-    assert _path_of(packages, "solady") == str(tmp_path / "lib/solady/src")
+    # Keys are canonicalized to a trailing-slash form (the boundary is significant).
+    assert _keys(packages) == {"@openzeppelin/contracts/", "solady/", "forge-std/"}
+    # relative targets resolved absolute against base_dir, also trailing-slash normalized
+    assert _path_of(packages, "solady/") == str(tmp_path / "lib/solady/src") + "/"
 
 
 def test_forge_remappings_take_priority_over_foundry_toml(tmp_path: Path, monkeypatch) -> None:
@@ -75,14 +76,14 @@ def test_forge_remappings_take_priority_over_foundry_toml(tmp_path: Path, monkey
 
     packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
 
-    assert _path_of(packages, "@oz") == str(tmp_path / "lib/forge-inferred-oz")
+    assert _path_of(packages, "@oz/") == str(tmp_path / "lib/forge-inferred-oz") + "/"
 
 
-def test_distinct_prefix_keys_both_kept(tmp_path: Path, monkeypatch) -> None:
-    # `@openzeppelin/contracts` must NOT swallow `@openzeppelin/contracts-upgradeable`:
-    # both distinct keys are kept so solc resolves imports by longest prefix. This is
-    # why keeping rstrip("/") is safe once the complete list is emitted — a shorter key
-    # must not shadow a more-specific longer one.
+def test_distinct_prefix_keys_keep_their_boundary_slash(tmp_path: Path, monkeypatch) -> None:
+    # `@openzeppelin/contracts/` must NOT swallow `@openzeppelin/contracts-upgradeable/`.
+    # The trailing slash is the prefix boundary: stripping it (the old `rstrip("/")`) turned
+    # `@openzeppelin/contracts` into a prefix of `@openzeppelin/contracts-upgradeable`, so a
+    # context-scoped v4 mapping mis-resolved upgradeable imports to a nonexistent path.
     _no_forge(monkeypatch)
     (tmp_path / "remappings.txt").write_text(
         "@openzeppelin/contracts/=lib/oz/contracts/\n"
@@ -91,8 +92,54 @@ def test_distinct_prefix_keys_both_kept(tmp_path: Path, monkeypatch) -> None:
 
     packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
 
-    assert "@openzeppelin/contracts" in _keys(packages)
-    assert "@openzeppelin/contracts-upgradeable" in _keys(packages)
+    keys = _keys(packages)
+    assert "@openzeppelin/contracts/" in keys
+    assert "@openzeppelin/contracts-upgradeable/" in keys
+    # the boundary-less form must NOT be emitted (that is the swallow-the-sibling bug)
+    assert "@openzeppelin/contracts" not in keys
+
+
+def test_context_scoped_key_keeps_trailing_slash(tmp_path: Path, monkeypatch) -> None:
+    # Regression: a context-scoped remapping sending one dependency's OZ imports to a
+    # vendored OZ v4 tree (a common pattern when a project mixes OZ v4 and v5). If the key's
+    # trailing slash is stripped, the scoped `@openzeppelin/contracts` prefix-matches
+    # `@openzeppelin/contracts-upgradeable/...` and — because solc ranks longest-context
+    # first — rewrites it to `lib/openzeppelin-contracts-v4/contracts-upgradeable/...`, which
+    # does not exist (v4 OZ has no contracts-upgradeable subtree).
+    _no_forge(monkeypatch)
+    (tmp_path / "remappings.txt").write_text(
+        "lib/some-dependency/:@openzeppelin/contracts/=lib/openzeppelin-contracts-v4/contracts/\n"
+        "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/\n"
+    )
+
+    packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
+
+    keys = _keys(packages)
+    assert "lib/some-dependency/:@openzeppelin/contracts/" in keys
+    assert "lib/some-dependency/:@openzeppelin/contracts" not in keys
+    # the scoped v4 target keeps its trailing slash so key/path agree on the boundary
+    assert _path_of(packages, "lib/some-dependency/:@openzeppelin/contracts/") == \
+        str(tmp_path / "lib/openzeppelin-contracts-v4/contracts") + "/"
+
+
+def test_file_level_remapping_keeps_exact_form(tmp_path: Path, monkeypatch) -> None:
+    # An import-patch entry that remaps a specific source FILE (…/IFoo.sol=…/IFoo.sol) must NOT
+    # get a trailing slash — otherwise solc looks for a directory `IFoo.sol/` and the import fails.
+    _no_forge(monkeypatch)
+    (tmp_path / "remappings.txt").write_text(
+        "src/interfaces/INoncesKeyed.sol=lib/aave-v4/src/interfaces/INoncesKeyed.sol\n"
+        "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/\n"
+    )
+
+    packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
+
+    keys = _keys(packages)
+    assert "src/interfaces/INoncesKeyed.sol" in keys           # file key: unchanged
+    assert "src/interfaces/INoncesKeyed.sol/" not in keys       # NOT slashed
+    assert _path_of(packages, "src/interfaces/INoncesKeyed.sol") == \
+        str(tmp_path / "lib/aave-v4/src/interfaces/INoncesKeyed.sol")   # file target: no slash
+    # directory remappings alongside it still get the boundary slash
+    assert "@openzeppelin/contracts/" in keys
 
 
 def test_package_json_deps_added_as_node_modules(tmp_path: Path, monkeypatch) -> None:
@@ -101,7 +148,7 @@ def test_package_json_deps_added_as_node_modules(tmp_path: Path, monkeypatch) ->
 
     packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
 
-    assert _path_of(packages, "@solmate/core") == str(tmp_path / "node_modules/@solmate/core")
+    assert _path_of(packages, "@solmate/core/") == str(tmp_path / "node_modules/@solmate/core") + "/"
 
 
 def test_empty_project_yields_no_packages(tmp_path: Path, monkeypatch) -> None:
@@ -124,8 +171,8 @@ def test_parse_config_populates_packages_from_remappings_txt(tmp_path: Path, mon
     config = manager.parse_config(foundry_toml)
 
     keys = {p.split("=", 1)[0] for p in (config.packages or [])}
-    assert "solady" in keys, "remappings.txt entry missing from parse_config packages (the bug)"
-    assert "@openzeppelin/contracts" in keys
+    assert "solady/" in keys, "remappings.txt entry missing from parse_config packages (the bug)"
+    assert "@openzeppelin/contracts/" in keys
 
 
 def test_parse_config_reads_foundry_toml_when_forge_absent(tmp_path: Path, monkeypatch) -> None:
@@ -138,7 +185,7 @@ def test_parse_config_reads_foundry_toml_when_forge_absent(tmp_path: Path, monke
     manager = FoundryManager(project_root=tmp_path, scope=None)
     config = manager.parse_config(foundry_toml)
 
-    assert config.packages and any(p.split("=", 1)[0] == "@oz" for p in config.packages)
+    assert config.packages and any(p.split("=", 1)[0] == "@oz/" for p in config.packages)
 
 
 def test_non_default_profile_remappings_read_when_forge_absent(tmp_path: Path, monkeypatch) -> None:
@@ -151,7 +198,7 @@ def test_non_default_profile_remappings_read_when_forge_absent(tmp_path: Path, m
 
     packages = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None, profile="ci")
 
-    assert _path_of(packages, "@oz") == str(tmp_path / "lib/ci-oz")
+    assert _path_of(packages, "@oz/") == str(tmp_path / "lib/ci-oz") + "/"
 
 
 def test_forge_run_with_foundry_profile_env(tmp_path: Path, monkeypatch) -> None:

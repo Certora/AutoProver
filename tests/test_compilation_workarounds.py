@@ -520,3 +520,133 @@ def test_compiler_mismatch_workaround_fires_with_global_solc(
     assert fake_run.calls == 2  # failing compile + one recompile after the fix
     assert compilation_config["compiler_map"]["DummyERC20Impl"] == "solc8.30"
     assert compilation_config["compiler_map"]["Vault"] == "solc7.3"
+
+
+# =============================================================================
+# Seeding: a precomputed compiler_map with a lingering scalar solc
+# =============================================================================
+#
+# _precompute_compiler_settings can hand the loop a conf that already carries a
+# compiler_map (from Foundry build artifacts) next to the build system's scalar
+# "solc" — certoraRun rejects that pair before invoking any solc, so no output
+# detector can ever catch it (observed in the wild on projects whose foundry.toml
+# pins one solc version while the build artifacts were produced with another).
+# Seeding must fold the scalar into the map (as the default for uncovered
+# contracts) so the very first certoraRun already gets a legal conf.
+
+
+def test_seed_folds_scalar_solc_into_existing_compiler_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    contracts = [
+        ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol"),
+        ContractHandle(
+            contract_name="DummyERC20Impl", source_file="certora/mocks/DummyERC20Impl.sol"
+        ),
+    ]
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [],
+        contracts,
+        extra_config={"solc": "solc8.30", "compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert fake_run.calls == 1  # legal conf from the start — no retry needed
+    assert "solc" not in compilation_config
+    assert compilation_config["compiler_map"] == {
+        "Vault": "solc8.35",
+        "DummyERC20Impl": "solc8.30",
+    }
+    assert "solc" not in updated
+    assert updated["compiler_map"] == compilation_config["compiler_map"]
+
+
+SOLC_NOT_FOUND_OUTPUT = (
+    "attribute/flag 'compiler_map': Solidity executable solc8.35 not found in path\n"
+)
+
+
+def test_solc_fallback_fires_when_pin_is_in_compiler_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # The pin can arrive already folded into compiler_map with no scalar "solc"
+    # (precomputed from build artifacts) — the missing-binary fallback must
+    # still be armed, keyed on the map contents rather than the scalar.
+    monkeypatch.setattr(manager, "_pick_solc_fallback", lambda: "solc8.30")
+    contracts = [ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol")]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert fake_run.calls == 2  # failing compile + one recompile on the fallback
+    # The uniform fallback map collapses back to a scalar on exit.
+    assert compilation_config["solc"] == "solc8.30"
+    assert "compiler_map" not in compilation_config
+
+
+def test_yul_optimizer_rung_respects_project_optimize_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A per-contract solc_optimize_map (foundry compilation_restrictions) with
+    # the optimizer on for EVERY contract: the add-optimizer rung has nothing
+    # left to enable and must not put the scalar next to the map (certoraRun
+    # rejects the pair) — the ladder escalates to relaxing the autofinder
+    # assertion instead.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_YUL_STACK_TOO_DEEP],
+        contracts,
+        extra_config={
+            "solc_optimize_map": {"Foo": "1", "Bar": "200"},
+            "assert_autofinder_success": True,
+        },
+    )
+    assert success is True
+    assert "solc_optimize" not in compilation_config
+    assert compilation_config["solc_optimize_map"] == {"Foo": "1", "Bar": "200"}
+    assert compilation_config["assert_autofinder_success"] is False
+
+
+def test_yul_optimizer_rung_enables_off_entries_in_optimize_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A map entry of "0" (or a missing one) means the optimizer is off for that
+    # contract — exactly the misconfiguration the add-optimizer rung exists to
+    # fix. It must enable those entries in the map (never the scalar, which
+    # cannot legally sit next to it) while keeping explicit project runs
+    # values; only once every entry is on may the ladder escalate.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_YUL_STACK_TOO_DEEP, WRAPPED_YUL_STACK_TOO_DEEP],
+        contracts,
+        extra_config={
+            "solc_optimize_map": {"Foo": "0", "Bar": "1"},
+            "assert_autofinder_success": True,
+        },
+    )
+    assert success is True
+    # Pass 1 enables Foo's optimizer; pass 2 (optimizer on everywhere, error
+    # persists) escalates; the third compile succeeds.
+    assert fake_run.calls == 3
+    assert "solc_optimize" not in compilation_config
+    assert compilation_config["solc_optimize_map"] == {"Foo": "200", "Bar": "1"}
+    assert compilation_config["assert_autofinder_success"] is False

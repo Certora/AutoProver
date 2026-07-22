@@ -289,7 +289,7 @@ def get_prover_tool(
 
                 component = (spec_stem or main_contract).removeprefix("autospec_")
                 iteration = len(state["prover_history"]) + 1
-                config["msg"] = f"{component} #{iteration}"
+                config["msg"] = f"{component} iteration number {iteration}"
 
                 with temp_certora_file(
                     root=project_root,
