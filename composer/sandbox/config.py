@@ -14,11 +14,30 @@ by default; override with ``COMPOSER_SANDBOX_PROVIDER=none`` for trusted-input d
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NotRequired, Self, TypedDict, Unpack
 
 from composer.sandbox.policy import SandboxPolicy, SandboxProvider, ensure_available, get_provider
 from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH, rust_build_policy
 
 _ENV_VAR = "COMPOSER_SANDBOX_PROVIDER"
+
+
+class SandboxArgs(TypedDict):
+    """Keyword overrides accepted by :meth:`SandboxConfig.from_env`.
+
+    Mirrors the :class:`SandboxConfig` fields that a backend may override —
+    ``provider`` is excluded because ``from_env`` reads it from the environment.
+    Every field is :data:`~typing.NotRequired` so callers pass only what they set.
+    """
+
+    extra_ro: NotRequired[tuple[Path, ...]]
+    extra_rw: NotRequired[tuple[Path, ...]]
+    env_passthrough: NotRequired[tuple[str, ...]]
+    offline: NotRequired[bool]
+    mem_bytes: NotRequired[int | None]
+    cpu_seconds: NotRequired[int | None]
+    nproc: NotRequired[int | None]
+    fsize_bytes: NotRequired[int | None]
 
 
 @dataclass(frozen=True)
@@ -36,7 +55,7 @@ class SandboxConfig:
     fsize_bytes: int | None = None
 
     @classmethod
-    def from_env(cls, **overrides) -> "SandboxConfig":
+    def from_env(cls, **overrides: Unpack[SandboxArgs]) -> Self:
         """Read the provider from ``$COMPOSER_SANDBOX_PROVIDER`` (default ``none``);
         remaining fields come from ``overrides`` (e.g. a backend's ``extra_ro``)."""
         return cls(provider=os.environ.get(_ENV_VAR, "none"), **overrides)
