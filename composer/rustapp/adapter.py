@@ -499,10 +499,10 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         materializes its crate per confined run via the ``files`` map)."""
         return None
 
-    def _sandbox_spec(self, workdir: Path) -> dict:
+    async def _sandbox_spec(self, workdir: Path) -> dict:
         if self._sandbox is None or not self._sandbox.enabled:
-            return {"run_confined": None, "timeout_s": self._command_timeout_s}
-        return self._sandbox.backend_spec(workdir, timeout_s=self._command_timeout_s)
+            return {"argv_prefix": [], "timeout_s": self._command_timeout_s}
+        return await self._sandbox.backend_spec(workdir, timeout_s=self._command_timeout_s)
 
     # -- the loop ----------------------------------------------------------
 
@@ -530,7 +530,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             "context": self._context(run),
         }
         input_json = json.dumps(input_dict)
-        sandbox_dict = self._sandbox_spec(workdir)
+        sandbox_dict = await self._sandbox_spec(workdir)
         sandbox_json = json.dumps(sandbox_dict)
         emit = make_emitter()
         units = json.loads(self._module.units(input_json))
@@ -689,9 +689,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit]):
         setup_result: str | None = None
         if descriptor.setup is not None:
             sandbox_dict = (
-                b.sandbox.backend_spec(workdir, timeout_s=b.command_timeout_s)
+                await b.sandbox.backend_spec(workdir, timeout_s=b.command_timeout_s)
                 if (b.sandbox is not None and b.sandbox.enabled)
-                else {"run_confined": None, "timeout_s": b.command_timeout_s}
+                else {"argv_prefix": [], "timeout_s": b.command_timeout_s}
             )
             emit = make_emitter()
             fixture = await run.runner(

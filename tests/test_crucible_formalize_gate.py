@@ -235,13 +235,13 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
         phase = build_phase_enum(load_descriptor(module))
 
         # The component artifact: author the test(s), `compile` (dry-run), then `validate`
-        # the unit (fuzz). Unsandboxed here (trusted inputs), so run_confined=None.
+        # the unit (fuzz). Unsandboxed here (trusted inputs), so the argv prefix is empty.
         input_dict = {
             "kind": "component", "program": _PROGRAM, "component": _COMPONENT, "props": _PROPS,
             "context": {"fixture": _FIXTURE, "fuzz_timeout": 15},
         }
         input_json = json.dumps(input_dict)
-        sandbox_dict = {"run_confined": None, "timeout_s": 1200}
+        sandbox_dict = {"argv_prefix": [], "timeout_s": 1200}
         sandbox_json = json.dumps(sandbox_dict)
 
         run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)

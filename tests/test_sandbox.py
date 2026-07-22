@@ -15,12 +15,11 @@ from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
     NoneProvider,
+    Reason,
     SandboxPolicy,
     SandboxProvider,
     SandboxUnavailable,
     ensure_available,
-    get_provider,
-    register_provider,
 )
 
 
@@ -61,67 +60,39 @@ def test_none_provider_ignores_policy():
     assert spec.env is None
 
 
-def test_none_provider_available():
-    assert NoneProvider().available() == Availability(ok=True)
+@pytest.mark.asyncio
+async def test_none_provider_available():
+    assert await NoneProvider().available() == "ok"
 
 
 def test_none_provider_satisfies_protocol():
-    # runtime_checkable structural check: the concrete class implements the seam.
-    assert isinstance(NoneProvider(), SandboxProvider)
+    # Static structural conformance: pyright rejects this assignment if NoneProvider
+    # stops implementing the seam. (No runtime isinstance — the protocol isn't
+    # @runtime_checkable; the type checker is the gate.)
+    provider: SandboxProvider = NoneProvider()
+    assert provider.name == "none"
 
 
-def test_get_provider_known():
-    prov = get_provider("none")
-    assert isinstance(prov, NoneProvider)
-    assert prov.name == "none"
+@pytest.mark.asyncio
+async def test_ensure_available_passes_for_ok_provider():
+    await ensure_available(NoneProvider())  # must not raise
 
 
-def test_get_provider_unknown_is_value_error():
-    with pytest.raises(ValueError, match="unknown sandbox provider 'bogus'"):
-        get_provider("bogus")
-
-
-def test_register_provider_roundtrip():
-    """A newly registered factory becomes resolvable by name (how step 2 adds the
-    launcher without this module importing it)."""
-
-    class _Fake:
-        name = "fake"
-
-        def available(self) -> Availability:
-            return Availability(ok=True)
-
-        def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
-            return LaunchSpec(argv=("fake", program, *args))
-
-    register_provider("fake", _Fake)
-    try:
-        assert isinstance(get_provider("fake"), _Fake)
-    finally:
-        # keep the module-level registry clean for other tests
-        from composer.sandbox import policy as _s
-
-        _s._PROVIDERS.pop("fake", None)
-
-
-def test_ensure_available_passes_for_ok_provider():
-    ensure_available(NoneProvider())  # must not raise
-
-
-def test_ensure_available_fails_closed():
+@pytest.mark.asyncio
+async def test_ensure_available_fails_closed():
     """An unavailable provider raises rather than letting the command run unconfined."""
 
     class _Unavailable:
         name = "landlock-missing"
 
-        def available(self) -> Availability:
-            return Availability(ok=False, reason="kernel lacks Landlock (need Linux >= 5.13)")
+        async def available(self) -> Availability:
+            return Reason("kernel lacks Landlock (need Linux >= 5.13)")
 
         def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
             raise AssertionError("wrap must not be reached when unavailable")
 
     with pytest.raises(SandboxUnavailable) as ei:
-        ensure_available(_Unavailable())
+        await ensure_available(_Unavailable())
     assert ei.value.provider == "landlock-missing"
     assert "Landlock" in ei.value.reason
     assert "unavailable" in str(ei.value)

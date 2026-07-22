@@ -8,9 +8,11 @@ network off.
 
 from pathlib import Path
 
+import pytest
+
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.launcher import LauncherProvider
-from composer.sandbox.policy import NoneProvider, SandboxPolicy
+from composer.sandbox.policy import NoneProvider
 from composer.sandbox.recipes import rust_build_policy, shared_cargo_ro_paths
 
 
@@ -35,10 +37,16 @@ def test_config_from_env_launcher(monkeypatch):
     assert cfg.extra_ro == (Path("/usr"),)
 
 
-def test_config_none_build_policy_is_empty():
-    """The none provider ignores the policy, so build_policy returns a bare one."""
-    pol = SandboxConfig().build_policy("/work")
-    assert pol == SandboxPolicy()
+def test_resolve_provider_unknown_is_value_error():
+    cfg = SandboxConfig(provider="bogus")
+    with pytest.raises(ValueError, match="unknown sandbox provider 'bogus'"):
+        cfg.resolve_provider()
+
+
+def test_config_none_build_policy_is_none():
+    """A passthrough config has no confinement to describe — build_policy returns
+    None rather than a misleading empty policy."""
+    assert SandboxConfig().build_policy("/work") is None
 
 
 def test_config_enabled_build_policy_grants_workdir(tmp_path):
@@ -47,6 +55,41 @@ def test_config_enabled_build_policy_grants_workdir(tmp_path):
     assert tmp_path in pol.rw_paths
     assert pol.network is False
     assert pol.mem_bytes == (1 << 30)
+
+
+@pytest.mark.asyncio
+async def test_backend_spec_none_is_passthrough():
+    """A passthrough config yields an empty ``argv_prefix`` — the backend runs the
+    command directly, with no confinement wrapper to prepend."""
+    assert await SandboxConfig().backend_spec("/work", timeout_s=42) == {
+        "argv_prefix": [],
+        "timeout_s": 42,
+    }
+
+
+@pytest.mark.asyncio
+async def test_backend_spec_enabled_ships_provider_argv_prefix(tmp_path, monkeypatch):
+    """An enabled config ships the resolved provider's ``argv_prefix`` verbatim, so a
+    Rust backend launches ``[*argv_prefix, program, *args]`` with no mechanism knowledge.
+    The provider/availability check is stubbed to stay a pure unit test (no real binary)."""
+    import composer.sandbox.config as config_mod
+
+    async def _ok(prov):
+        return None
+
+    provider = LauncherProvider(binary="/opt/run-confined")
+    monkeypatch.setattr(SandboxConfig, "resolve_provider", lambda self: provider)
+    monkeypatch.setattr(config_mod, "ensure_available", _ok)
+
+    cfg = SandboxConfig(provider="launcher", mem_bytes=1 << 30)
+    spec = await cfg.backend_spec(tmp_path, timeout_s=900)
+
+    policy = cfg.build_policy(tmp_path)
+    assert policy is not None
+    assert spec["timeout_s"] == 900
+    assert spec["argv_prefix"] == provider.argv_prefix(policy)
+    assert spec["argv_prefix"][0] == "/opt/run-confined"
+    assert spec["argv_prefix"][-1] == "--"
 
 
 def test_rust_build_policy_shape(tmp_path, monkeypatch):

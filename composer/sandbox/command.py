@@ -22,10 +22,12 @@ file *contents* may derive from LLM output. We enforce path confinement here
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TypedDict
 
 from composer.sandbox.policy import (
     NoneProvider,
@@ -47,13 +49,21 @@ class UnsafePath(ValueError):
     """A requested file path is absolute or escapes the workdir."""
 
 
+class CommandResultObservation(TypedDict):
+    """The ``Observation::CommandResult`` payload the IoC loop feeds back to Rust."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
 @dataclass(frozen=True)
 class CommandResult:
     exit_code: int
     stdout: str
     stderr: str
 
-    def as_observation(self) -> dict:
+    def as_observation(self) -> CommandResultObservation:
         """The ``Observation::CommandResult`` payload the IoC loop feeds back to Rust."""
         return {
             "exit_code": self.exit_code,
@@ -63,14 +73,13 @@ class CommandResult:
 
 
 def _confined_target(workdir: Path, rel: str) -> Path:
-    """Resolve ``rel`` under ``workdir``, rejecting absolute paths / ``..`` escapes."""
-    p = PurePosixPath(rel)
-    if p.is_absolute() or ".." in p.parts:
-        raise UnsafePath(
-            f"file path {rel!r} is absolute or traverses outside the workdir"
-        )
-    target = workdir / p
-    # Belt-and-suspenders: the resolved path must still live under the workdir.
+    """Resolve ``rel`` under ``workdir``, rejecting anything that escapes it.
+
+    The resolved path must live under ``workdir`` — this rejects absolute paths
+    (which ``workdir / p`` would adopt wholesale), ``..`` traversal, and symlinked
+    components that would otherwise point outside.
+    """
+    target = workdir / PurePosixPath(rel)
     try:
         target.resolve().relative_to(workdir.resolve())
     except ValueError as e:
@@ -92,9 +101,9 @@ async def run_local_command(
 ) -> CommandResult:
     """Write ``files`` into ``workdir``, then run ``program args`` there and capture output.
 
-    ``workdir`` persists across calls (a session materializes its crate once and
-    runs several commands against it). Concurrency is bounded by ``sem`` when
-    given — important because fuzzers are resource-hungry.
+    ``workdir`` persists across calls. 
+    
+    Concurrency is bounded by ``sem`` when given.
 
     ``provider`` selects the sandbox mechanism (``docs/command-sandbox.md``); with
     the default (``None`` → the ``none`` passthrough) the command runs exactly as
@@ -111,7 +120,7 @@ async def run_local_command(
     ``CARGO_HOME``); the sandboxed path's env is fully governed by the provider/policy.
     """
     prov: SandboxProvider = provider if provider is not None else NoneProvider()
-    ensure_available(prov)  # fail-closed: raises before running if it can't confine
+    await ensure_available(prov)  # fail-closed: raises before running if it can't confine
     spec = prov.wrap(policy if policy is not None else SandboxPolicy(), program, list(args))
     child_env = dict(spec.env) if spec.env is not None else None
     if env_overlay:
@@ -150,7 +159,5 @@ async def run_local_command(
             rc, out_b.decode(errors="replace"), err_b.decode(errors="replace")
         )
 
-    if sem is not None:
-        async with sem:
-            return await _run()
-    return await _run()
+    async with (sem if sem is not None else contextlib.nullcontext()):
+        return await _run()

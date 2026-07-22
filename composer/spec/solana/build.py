@@ -100,6 +100,7 @@ async def build_program(
     if sandbox is not None and sandbox.enabled:
         provider = sandbox.resolve_provider()
         policy = sandbox.build_policy(root)
+        assert policy is not None  # enabled config ⇒ build_policy returns a real policy
         # Warm the registry with network BEFORE the sandboxed, offline build (§5),
         # into the SAME private CARGO_HOME the sandboxed build will read (the policy's).
         await warm_cargo_cache(root, cargo_home=policy.env_allowlist.get("CARGO_HOME"), timeout_s=timeout_s)

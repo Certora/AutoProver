@@ -31,6 +31,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
+use clap::Parser;
 use landlock::{
     Access, AccessFs, AccessNet, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
     RulesetAttr, RulesetCreatedAttr, RulesetStatus, Scope, ABI,
@@ -40,14 +41,100 @@ use seccompiler::{
     SeccompFilter, SeccompRule, TargetArch,
 };
 
-/// Bad command line (a programming error on the trusted caller's side).
-const EXIT_USAGE: i32 = 2;
-/// The sandbox could not be established — fail-closed, command NOT run.
-const EXIT_SANDBOX_UNAVAILABLE: i32 = 3;
-/// The confined `execve` itself failed (e.g. program not found on PATH).
-const EXIT_EXEC_FAILED: i32 = 127;
+// Exit codes follow the coreutils exec-wrapper convention (`env`, `timeout`,
+// `nice`): the launcher reserves the high 125–127 band for *its own* failures so
+// they can't be confused with the wrapped command's status, which otherwise passes
+// through untouched across the `execve`.
 
-#[derive(Default)]
+/// `run-confined` itself failed before handing off — a bad argv *or* the sandbox
+/// could not be established. Fail-closed: the command was NOT run. (Both cases mean
+/// "we never reached your command"; the specific reason is on stderr / `--probe`.)
+const EXIT_LAUNCHER_FAILED: i32 = 125;
+/// The command was found but could not be executed (e.g. not executable, bad format)
+/// — `exec` failed with something other than `ENOENT`.
+const EXIT_NOT_EXECUTABLE: i32 = 126;
+/// The command was not found — `exec` failed with `ENOENT`. Matches shells' 127.
+const EXIT_NOT_FOUND: i32 = 127;
+
+/// Command-line surface. The argv is authored by the trusted Python caller, so the
+/// contract here mirrors that caller's expectations; `--probe` is handled separately
+/// (before clap) because it short-circuits into a self-restricting kernel check.
+#[derive(Parser)]
+#[command(
+    name = "run-confined",
+    about = "Confine this process (Landlock + seccomp + rlimits + scrubbed env), then exec the command after `--`.",
+    disable_help_flag = true
+)]
+struct Cli {
+    /// Grant full read+write access beneath PATH (repeatable).
+    #[arg(long = "rw", value_name = "PATH")]
+    rw: Vec<PathBuf>,
+
+    /// Grant read+execute access beneath PATH (repeatable).
+    #[arg(long = "ro", value_name = "PATH")]
+    ro: Vec<PathBuf>,
+
+    /// Allow network syscalls (skip the seccomp + Landlock net deny).
+    #[arg(long = "allow-network")]
+    allow_network: bool,
+
+    /// Pass NAME=VALUE, or bare NAME to forward it from the current environment if set
+    /// (repeatable). NAME not in the environment is silently skipped.
+    #[arg(long = "allow-env", value_name = "SPEC")]
+    allow_env: Vec<String>,
+
+    /// RLIMIT_AS cap (bytes of address space).
+    #[arg(long = "rlimit-as", value_name = "BYTES")]
+    rlimit_as: Option<u64>,
+    /// RLIMIT_CPU cap (CPU-seconds).
+    #[arg(long = "rlimit-cpu", value_name = "SECONDS")]
+    rlimit_cpu: Option<u64>,
+    /// RLIMIT_NPROC cap (max processes).
+    #[arg(long = "rlimit-nproc", value_name = "COUNT")]
+    rlimit_nproc: Option<u64>,
+    /// RLIMIT_FSIZE cap (max file size, bytes).
+    #[arg(long = "rlimit-fsize", value_name = "BYTES")]
+    rlimit_fsize: Option<u64>,
+
+    /// The command to run, given after `--`: PROGRAM followed by its ARGS.
+    #[arg(last = true, required = true, value_name = "PROGRAM [ARGS...]")]
+    command: Vec<String>,
+}
+
+impl Cli {
+    /// Lower the parsed surface into the `Config` the confinement steps consume,
+    /// resolving `--allow-env` specs against the current environment.
+    fn into_config(self) -> Config {
+        let mut env = Vec::new();
+        for spec in self.allow_env {
+            if let Some((name, value)) = spec.split_once('=') {
+                env.push((name.to_string(), value.to_string()));
+            } else if let Ok(value) = std::env::var(&spec) {
+                // NAME with no '=': pass through from the current environment if set.
+                env.push((spec, value));
+            }
+            // NAME not present in the environment: silently skip (nothing to pass).
+        }
+
+        // `required = true` on `command` guarantees at least the program is present.
+        let mut command = self.command;
+        let program = command.remove(0);
+
+        Config {
+            rw_paths: self.rw,
+            ro_paths: self.ro,
+            env,
+            allow_network: self.allow_network,
+            rlimit_as: self.rlimit_as,
+            rlimit_cpu: self.rlimit_cpu,
+            rlimit_nproc: self.rlimit_nproc,
+            rlimit_fsize: self.rlimit_fsize,
+            program,
+            args: command,
+        }
+    }
+}
+
 struct Config {
     rw_paths: Vec<PathBuf>,
     ro_paths: Vec<PathBuf>,
@@ -67,34 +154,48 @@ fn die(code: i32, msg: &str) -> ! {
 }
 
 fn main() {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-
-    if argv.first().map(String::as_str) == Some("--probe") {
+    // `--probe` short-circuits before clap: it is a standalone kernel-capability check
+    // (it restricts *this* throwaway process), takes no other arguments, and must not
+    // trip clap's required-`command` rule.
+    if std::env::args().nth(1).as_deref() == Some("--probe") {
         probe();
     }
 
-    let cfg = parse(&argv).unwrap_or_else(|e| die(EXIT_USAGE, &e));
+    // clap prints its own usage/error text; a malformed argv is a launcher failure
+    // (EXIT_LAUNCHER_FAILED). Help/version requests are not errors and still exit 0.
+    let cfg = Cli::try_parse()
+        .unwrap_or_else(|e| {
+            let _ = e.print();
+            std::process::exit(if e.use_stderr() { EXIT_LAUNCHER_FAILED } else { 0 });
+        })
+        .into_config();
 
     // Order matters: rlimits + env are harmless early; apply Landlock, then seccomp
     // LAST so our own setup syscalls aren't caught by the filter; then exec.
     set_rlimits(&cfg);
     set_no_new_privs();
     if let Err(e) = apply_landlock(&cfg) {
-        die(EXIT_SANDBOX_UNAVAILABLE, &format!("Landlock setup failed: {e}"));
+        die(EXIT_LAUNCHER_FAILED, &format!("Landlock setup failed: {e}"));
     }
     if let Err(e) = apply_seccomp(&cfg) {
-        die(EXIT_SANDBOX_UNAVAILABLE, &format!("seccomp setup failed: {e}"));
+        die(EXIT_LAUNCHER_FAILED, &format!("seccomp setup failed: {e}"));
     }
 
     let mut cmd = Command::new(&cfg.program);
     cmd.args(&cfg.args).env_clear().envs(cfg.env.iter().cloned());
-    // `exec` replaces this process image; it only returns on failure.
+    // `exec` replaces this process image; it only returns on failure. Split ENOENT
+    // (not found → 127) from every other exec error (found but unrunnable → 126).
     let err = cmd.exec();
-    die(EXIT_EXEC_FAILED, &format!("exec {:?} failed: {err}", cfg.program));
+    let code = if err.raw_os_error() == Some(libc::ENOENT) {
+        EXIT_NOT_FOUND
+    } else {
+        EXIT_NOT_EXECUTABLE
+    };
+    die(code, &format!("exec {:?} failed: {err}", cfg.program));
 }
 
 /// `--probe`: report whether the kernel supports Landlock. Exit 0 + print the
-/// enforcement status if so; exit `EXIT_SANDBOX_UNAVAILABLE` otherwise. Drives
+/// enforcement status if so; exit `EXIT_LAUNCHER_FAILED` otherwise. Drives
 /// Python's fail-closed `available()` check.
 ///
 /// We probe through the crate's public API rather than the raw
@@ -115,59 +216,10 @@ fn probe() -> ! {
             std::process::exit(0);
         }
         _ => die(
-            EXIT_SANDBOX_UNAVAILABLE,
+            EXIT_LAUNCHER_FAILED,
             "kernel does not support Landlock (need Linux >= 5.13); refusing to run unconfined",
         ),
     }
-}
-
-fn parse(argv: &[String]) -> Result<Config, String> {
-    let mut cfg = Config::default();
-    let mut i = 0;
-
-    let take = |i: &mut usize, flag: &str| -> Result<String, String> {
-        *i += 1;
-        argv.get(*i)
-            .cloned()
-            .ok_or_else(|| format!("{flag} requires a value"))
-    };
-    let parse_u64 = |s: &str, flag: &str| -> Result<u64, String> {
-        s.parse::<u64>().map_err(|_| format!("{flag} expects an integer, got {s:?}"))
-    };
-
-    while i < argv.len() {
-        match argv[i].as_str() {
-            "--rw" => cfg.rw_paths.push(PathBuf::from(take(&mut i, "--rw")?)),
-            "--ro" => cfg.ro_paths.push(PathBuf::from(take(&mut i, "--ro")?)),
-            "--allow-network" => cfg.allow_network = true,
-            "--rlimit-as" => cfg.rlimit_as = Some(parse_u64(&take(&mut i, "--rlimit-as")?, "--rlimit-as")?),
-            "--rlimit-cpu" => cfg.rlimit_cpu = Some(parse_u64(&take(&mut i, "--rlimit-cpu")?, "--rlimit-cpu")?),
-            "--rlimit-nproc" => cfg.rlimit_nproc = Some(parse_u64(&take(&mut i, "--rlimit-nproc")?, "--rlimit-nproc")?),
-            "--rlimit-fsize" => cfg.rlimit_fsize = Some(parse_u64(&take(&mut i, "--rlimit-fsize")?, "--rlimit-fsize")?),
-            "--allow-env" => {
-                let spec = take(&mut i, "--allow-env")?;
-                if let Some((name, value)) = spec.split_once('=') {
-                    cfg.env.push((name.to_string(), value.to_string()));
-                } else if let Ok(value) = std::env::var(&spec) {
-                    // NAME with no '=': pass through from the current environment if set.
-                    cfg.env.push((spec, value));
-                }
-                // NAME not present in the environment: silently skip (nothing to pass).
-            }
-            "--" => {
-                i += 1;
-                if i >= argv.len() {
-                    return Err("no program given after `--`".to_string());
-                }
-                cfg.program = argv[i].clone();
-                cfg.args = argv[i + 1..].to_vec();
-                return Ok(cfg);
-            }
-            other => return Err(format!("unknown flag {other:?} (did you forget `--` before the command?)")),
-        }
-        i += 1;
-    }
-    Err("missing `--` and command to run".to_string())
 }
 
 fn set_rlimits(cfg: &Config) {
@@ -196,7 +248,7 @@ fn set_no_new_privs() {
     let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
     if rc != 0 {
         die(
-            EXIT_SANDBOX_UNAVAILABLE,
+            EXIT_LAUNCHER_FAILED,
             &format!(
                 "PR_SET_NO_NEW_PRIVS failed: {}",
                 std::io::Error::last_os_error()

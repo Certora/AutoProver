@@ -66,13 +66,13 @@ def test_author_prompt_lists_the_properties():
 
 def test_compile_is_a_noop_ok():
     # The demo accepts any well-formed spec — compile is a no-op gate.
-    r = json.loads(echoprover.compile(_component_input("p"), "spec", "/tmp", json.dumps({"run_confined": None})))
+    r = json.loads(echoprover.compile(_component_input("p"), "spec", "/tmp", json.dumps({"argv_prefix": []})))
     assert r == {"status": "ok"}
 
 
 def test_validate_returns_a_good_verdict():
     res = json.loads(
-        echoprover.validate(_component_input("p"), "spec", "rule_p", "/tmp", json.dumps({"run_confined": None}))
+        echoprover.validate(_component_input("p"), "spec", "rule_p", "/tmp", json.dumps({"argv_prefix": []}))
     )
     # ValidateOutcome: the demo always builds, so a verdict (not build_failed).
     assert res == {"kind": "verdict", "verdict": {"outcome": "GOOD"}}

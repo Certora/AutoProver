@@ -4,24 +4,25 @@ Maps a tool-agnostic :class:`SandboxPolicy` to an invocation of the ``run-confin
 trusted Rust binary (``rust/run-confined``), which applies Landlock + seccomp +
 rlimits + a scrubbed env to itself and then ``execve``s the command
 (``docs/command-sandbox.md`` §6). This module is deliberately *separate* from the
-:mod:`composer.sandbox.policy` seam: importing it registers the ``"launcher"``
-provider, so the seam never imports a concrete mechanism.
+:mod:`composer.sandbox.policy` seam: it is wired in as the ``launcher``
+``composer.sandbox_providers`` entry point (pyproject.toml) and loaded only when that
+provider is actually constructed, so the seam never imports a concrete mechanism.
 
 ``wrap`` is pure argv construction (unit-testable, no subprocess); ``available``
 shells out to ``run-confined --probe`` once to confirm the kernel supports Landlock
-(fail-closed otherwise).
+(fail-closed otherwise) — asynchronously, so probing never blocks the event loop.
 """
 
+import asyncio
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
+    Reason,
     SandboxPolicy,
-    register_provider,
 )
 
 _BIN_NAME = "run-confined"
@@ -57,36 +58,39 @@ class LauncherProvider:
     def binary(self) -> str | None:
         return self._binary
 
-    def available(self) -> Availability:
+    async def available(self) -> Availability:
         if self._binary is None:
-            return Availability(
-                ok=False,
-                reason=(
-                    f"{_BIN_NAME} binary not found; build rust/run-confined "
-                    f"(cargo build -p run-confined --release) or set RUN_CONFINED_BIN"
-                ),
+            return Reason(
+                f"{_BIN_NAME} binary not found; build rust/run-confined "
+                f"(cargo build -p run-confined --release) or set RUN_CONFINED_BIN"
             )
         try:
-            proc = subprocess.run(
-                [self._binary, "--probe"],
-                capture_output=True,
-                text=True,
-                timeout=_PROBE_TIMEOUT_S,
+            proc = await asyncio.create_subprocess_exec(
+                self._binary,
+                "--probe",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
         except OSError as e:
-            return Availability(ok=False, reason=f"{_BIN_NAME} --probe could not run: {e}")
+            return Reason(f"{_BIN_NAME} --probe could not run: {e}")
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_PROBE_TIMEOUT_S)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
         if proc.returncode != 0:
-            reason = proc.stderr.strip() or f"{_BIN_NAME} --probe reported no Landlock support"
-            return Availability(ok=False, reason=reason)
-        return Availability(ok=True)
+            reason = stderr.decode().strip() or f"{_BIN_NAME} --probe reported no Landlock support"
+            return Reason(reason)
+        return "ok"
 
-    def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
-        """Build the ``run-confined … -- program args`` argv from ``policy``.
+    def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
+        """The ``run-confined …  --`` argv that confines ``policy``, up to and
+        including the ``--`` separator: a caller launches the command as
+        ``[*argv_prefix(policy), program, *args]``.
 
         Emits ``--allow-env NAME=VALUE`` (explicit values — the allowlist holds only
-        benign build vars, never secrets). ``env`` stays ``None``: the launcher
-        inherits AutoProver's env but scrubs it to the allowlist for the child, so
-        the child's environment is fully determined by the flags."""
+        benign build vars, never secrets)."""
         argv: list[str] = [self._binary or _BIN_NAME]
         for p in policy.ro_paths:
             argv += ["--ro", str(p)]
@@ -104,11 +108,13 @@ class LauncherProvider:
             argv += ["--rlimit-nproc", str(policy.nproc)]
         if policy.fsize_bytes is not None:
             argv += ["--rlimit-fsize", str(policy.fsize_bytes)]
-        argv += ["--", program, *args]
-        return LaunchSpec(argv=tuple(argv), env=None)
+        argv.append("--")
+        return argv
 
+    def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
+        """Build the ``run-confined … -- program args`` argv from ``policy``.
 
-# Registering on import keeps the `composer.sandbox.policy` seam free of any
-# concrete-mechanism import. Consumers (RealEffects, tests) `import` this module to
-# make ``get_provider("launcher")`` resolvable.
-register_provider("launcher", LauncherProvider)
+        ``env`` stays ``None``: the launcher inherits AutoProver's env but scrubs it
+        to the allowlist for the child, so the child's environment is fully determined
+        by the flags in :meth:`argv_prefix`."""
+        return LaunchSpec(argv=(*self.argv_prefix(policy), program, *args), env=None)

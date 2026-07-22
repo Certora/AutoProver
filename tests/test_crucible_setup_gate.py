@@ -170,12 +170,12 @@ async def test_crucible_fixture_authoring(pg_container: "PostgresContainer", mon
         phase = build_phase_enum(descriptor)
 
         # The setup artifact: author the fixture, then `compile` (crucible --dry-run) it.
-        # Unsandboxed here (the gate trusts its inputs), so run_confined=None.
+        # Unsandboxed here (the gate trusts its inputs), so the argv prefix is empty.
         setup_input = {
             "kind": "setup", "program": _PROGRAM,
             "component": _ANALYZED, "props": [], "context": {},
         }
-        sandbox_dict = {"run_confined": None, "timeout_s": 1200}
+        sandbox_dict = {"argv_prefix": [], "timeout_s": 1200}
         run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
 
         result = await run.runner(

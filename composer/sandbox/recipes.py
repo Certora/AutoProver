@@ -89,12 +89,8 @@ def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
     read-only cache optimization can add specific cache subtrees here without
     re-opening the credentials file.
     """
-    root = Path(cargo_home)
-    out: list[Path] = []
-    bin_dir = root / "bin"
-    if bin_dir.is_dir():
-        out.append(bin_dir)
-    return tuple(out)
+    bin_dir = Path(cargo_home) / "bin"
+    return (bin_dir,) if bin_dir.is_dir() else ()
 
 
 def sandbox_rustup_home(workdir: str | Path) -> Path:
@@ -155,7 +151,7 @@ def rust_build_policy(
         home / ".cache" / "solana",
         home / ".local" / "share" / "solana",
     ]
-    ro_candidates += list(extra_ro)
+    ro_candidates.extend(extra_ro)
     # Absolute paths only: the launcher opens each relative to *its* cwd (the workdir),
     # so a relative grant would resolve wrong. resolve() also canonicalizes symlinks.
     ro_paths = tuple(p.resolve() for p in ro_candidates if p.exists())

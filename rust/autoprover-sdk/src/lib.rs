@@ -365,41 +365,24 @@ impl Verdict {
 }
 
 // ===========================================================================
-// Sandbox — the confinement policy (Python-authored) + the shared launcher helper.
+// Sandbox — the confinement wrapper (Python-authored) + the shared launcher helper.
 // ===========================================================================
 
-/// Resource caps (rlimits); `None` = unset.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Rlimits {
-    #[serde(default)]
-    pub mem_bytes: Option<u64>,
-    #[serde(default)]
-    pub cpu_seconds: Option<u64>,
-    #[serde(default)]
-    pub nproc: Option<u64>,
-    #[serde(default)]
-    pub fsize_bytes: Option<u64>,
-}
-
-/// The confinement policy for a command, authored by Python (`SandboxConfig`/`SandboxPolicy`)
-/// and passed to `compile`/`validate`. `run_confined = None` runs the command directly (the
-/// trusted / `none` path). The backend never invents policy — it only assembles this into a
-/// `run-confined` argv (see [`run_confined`]); the mapping mirrors
-/// `composer/sandbox/launcher.py::LauncherProvider.wrap`.
+/// The confinement wrapper for a command, authored by Python
+/// (`SandboxConfig.backend_spec`) and passed to `compile`/`validate`. The backend never
+/// invents policy or names a sandbox mechanism: Python owns the confinement *intent* and
+/// translates it into `argv_prefix`, an opaque argv the backend simply prepends to its
+/// command — `[*argv_prefix, program, *args]` (see [`run_confined`]).
+///
+/// `argv_prefix` is **empty** for a passthrough (`provider="none"`) spec — the command runs
+/// directly (the trusted path). Otherwise it is a full `run-confined <flags…> --` wrapper
+/// (mirrors `composer/sandbox/launcher.py::LauncherProvider.argv_prefix`); its first element
+/// is the launcher binary. Because the prefix is opaque, swapping the sandbox mechanism never
+/// changes this shape.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Sandbox {
     #[serde(default)]
-    pub run_confined: Option<String>,
-    #[serde(default)]
-    pub rw: Vec<String>,
-    #[serde(default)]
-    pub ro: Vec<String>,
-    #[serde(default)]
-    pub allow_env: Vec<String>, // "NAME=VALUE"
-    #[serde(default)]
-    pub network: bool,
-    #[serde(default)]
-    pub rlimits: Rlimits,
+    pub argv_prefix: Vec<String>,
     #[serde(default = "default_timeout")]
     pub timeout_s: u64,
 }
@@ -429,13 +412,14 @@ fn confined_join(workdir: &std::path::Path, rel: &str) -> Result<std::path::Path
     Ok(workdir.join(p))
 }
 
-/// Materialize `files` into `workdir` (path-confined), then run `program args` there confined
-/// by `run-confined` per `sandbox` (or directly, when `sandbox.run_confined` is `None`). Blocks
-/// on the child; **call from within `Python::allow_threads`**. Enforces `sandbox.timeout_s`.
+/// Materialize `files` into `workdir` (path-confined), then run `program args` there behind
+/// `sandbox.argv_prefix` — i.e. `[*argv_prefix, program, *args]` (or `program args` directly,
+/// when `argv_prefix` is empty). Blocks on the child; **call from within
+/// `Python::allow_threads`**. Enforces `sandbox.timeout_s`.
 ///
 /// The **command line (`program`/`args`) is authored by the trusted backend**; only file
-/// *contents* may derive from the LLM (`docs/command-sandbox.md` §2). `run-confined` confines
-/// *itself* (Landlock+seccomp+rlimits+env scrub) and `execve`s the tool.
+/// *contents* may derive from the LLM (`docs/command-sandbox.md` §2). When present, the prefix's
+/// `run-confined` confines *itself* (Landlock+seccomp+rlimits+env scrub) and `execve`s the tool.
 pub fn run_confined(
     sandbox: &Sandbox,
     program: &str,
@@ -457,43 +441,20 @@ pub fn run_confined(
         std::fs::write(&target, contents).map_err(|e| e.to_string())?;
     }
 
-    // 2. Build argv: `run-confined <policy flags> -- program args`, or `program args` direct.
-    let mut cmd = match &sandbox.run_confined {
-        Some(bin) => {
-            let mut c = Command::new(bin);
-            for p in &sandbox.ro {
-                c.arg("--ro").arg(p);
-            }
-            for p in &sandbox.rw {
-                c.arg("--rw").arg(p);
-            }
-            for e in &sandbox.allow_env {
-                c.arg("--allow-env").arg(e);
-            }
-            if sandbox.network {
-                c.arg("--allow-network");
-            }
-            if let Some(v) = sandbox.rlimits.mem_bytes {
-                c.arg("--rlimit-as").arg(v.to_string());
-            }
-            if let Some(v) = sandbox.rlimits.cpu_seconds {
-                c.arg("--rlimit-cpu").arg(v.to_string());
-            }
-            if let Some(v) = sandbox.rlimits.nproc {
-                c.arg("--rlimit-nproc").arg(v.to_string());
-            }
-            if let Some(v) = sandbox.rlimits.fsize_bytes {
-                c.arg("--rlimit-fsize").arg(v.to_string());
-            }
-            c.arg("--").arg(program).args(args);
-            c
-        }
-        None => {
-            let mut c = Command::new(program);
-            c.args(args);
-            c
-        }
+    // 2. Build argv by prepending the (opaque, Python-authored) confinement prefix:
+    // `[*argv_prefix, program, *args]`. When the prefix is empty this is `program args`
+    // run directly; otherwise its first element is the launcher binary to spawn.
+    let (launch, mut launch_args): (&str, Vec<String>) = match sandbox.argv_prefix.split_first() {
+        Some((bin, rest)) => (bin, rest.to_vec()),
+        None => (program, Vec::new()),
     };
+    if !sandbox.argv_prefix.is_empty() {
+        // The prefix ends at its `--`; the wrapped command follows it.
+        launch_args.push(program.to_string());
+    }
+    launch_args.extend_from_slice(args);
+    let mut cmd = Command::new(launch);
+    cmd.args(&launch_args);
     cmd.current_dir(workdir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -506,7 +467,7 @@ pub fn run_confined(
             return Ok(CommandOutput {
                 exit_code: NOT_FOUND_EXIT,
                 stdout: String::new(),
-                stderr: format!("{}: not found", sandbox.run_confined.as_deref().unwrap_or(program)),
+                stderr: format!("{launch}: not found"),
             })
         }
         Err(e) => return Err(e.to_string()),

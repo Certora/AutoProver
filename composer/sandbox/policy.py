@@ -19,21 +19,23 @@ this seam — never on a concrete tool — a provider can be swapped without tou
 the command runner, ``RealEffects``, or the escape-test gate. It lives outside
 ``rustapp`` so Python-based backends can use it too, not just the Rust-IoC ones.
 
-This module ships the policy, the protocol, the ``none`` passthrough provider,
-and the provider registry. The ``run-confined`` launcher provider (Landlock +
-seccomp) registers itself under ``"launcher"`` when
-:mod:`composer.sandbox.launcher` is imported (typically via
-:meth:`composer.sandbox.config.SandboxConfig.resolve_provider`).
+This module ships the policy, the protocol, and the ``none`` passthrough provider.
+Concrete providers are declared as ``composer.sandbox_providers`` entry points
+(pyproject.toml) and resolved by name in
+:meth:`composer.sandbox.config.SandboxConfig.resolve_provider`, which imports the
+selected mechanism's module lazily — so this seam never imports a concrete mechanism.
+The ``run-confined`` launcher provider (Landlock + seccomp) is one such entry point
+(``launcher`` → :mod:`composer.sandbox.launcher`).
 
 **Trust boundary** (``docs/command-sandbox.md`` §7.2): the policy and the emitted
 ``LaunchSpec`` are authored by trusted Python — never the LLM, which controls only
 file *contents*.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol
 
 
 class SandboxUnavailable(RuntimeError):
@@ -85,15 +87,20 @@ class LaunchSpec:
 
 
 @dataclass(frozen=True)
-class Availability:
-    """Result of :meth:`SandboxProvider.available` — whether the provider can
-    actually confine here (e.g. the launcher probes the kernel's Landlock ABI)."""
+class Reason:
+    """Why a provider *cannot* confine here — the payload of an unavailable result
+    (e.g. the launcher binary is missing, or the kernel lacks Landlock)."""
 
-    ok: bool
-    reason: str = ""
+    reason: str
 
 
-@runtime_checkable
+# A provider's availability: the literal ``"ok"`` when it can confine here, or a
+# :class:`Reason` when it cannot. Modeling it as a union rather than a ``(bool, str)``
+# pair makes the illegal "available *and* has a reason" state unrepresentable — the
+# ``"ok"`` arm has nowhere to put one, and the ``Reason`` arm always carries one.
+Availability = Literal["ok"] | Reason
+
+
 class SandboxProvider(Protocol):
     """Maps a :class:`SandboxPolicy` + a command to a concrete :class:`LaunchSpec`.
 
@@ -102,10 +109,29 @@ class SandboxProvider(Protocol):
     trivially unit-testable; the actual confinement happens in the launched process.
     """
 
-    name: str
+    @property
+    def name(self) -> str:
+        """A short, stable identifier for this mechanism (e.g. ``"none"``, ``"launcher"``)."""
+        ...
 
-    def available(self) -> Availability:
-        """Whether this provider can confine a command in the current environment."""
+    async def available(self) -> Availability:
+        """Whether this provider can confine a command in the current environment.
+
+        Async because a real provider may probe the environment out-of-process (the
+        launcher shells out to ``run-confined --probe``); awaiting keeps that off the
+        event loop."""
+        ...
+
+    def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
+        """The confinement argv that precedes the command — everything a launcher
+        needs *except* the ``program args`` themselves, so that any process (Python
+        via :meth:`wrap`, or a Rust backend via
+        :meth:`composer.sandbox.config.SandboxConfig.backend_spec`) can launch a
+        confined command as ``[*argv_prefix(policy), program, *args]``.
+
+        Empty for a passthrough provider (no confinement wrapper). This is the single
+        place a mechanism encodes its flags, so the confined launch stays mechanism-agnostic
+        for callers that only get to prepend an argv (``docs/command-sandbox.md`` §4)."""
         ...
 
     def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
@@ -124,42 +150,21 @@ class NoneProvider:
 
     name = "none"
 
-    def available(self) -> Availability:
-        return Availability(ok=True)
+    async def available(self) -> Availability:
+        return "ok"
+
+    def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
+        # No confinement wrapper: the command runs directly, so there is no prefix.
+        return []
 
     def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
         # Policy is intentionally ignored: this provider provides no isolation.
         return LaunchSpec(argv=(program, *args), env=None)
 
 
-# Provider registry. The ``launcher`` factory is registered by importing
-# :mod:`composer.sandbox.launcher` (see :meth:`SandboxConfig.resolve_provider`).
-_PROVIDERS: dict[str, Callable[[], SandboxProvider]] = {
-    "none": NoneProvider,
-}
-
-
-def register_provider(name: str, factory: Callable[[], SandboxProvider]) -> None:
-    """Register a provider factory under ``name`` (used by later steps to add the
-    launcher / off-the-shelf providers without this module importing them)."""
-    _PROVIDERS[name] = factory
-
-
-def get_provider(name: str) -> SandboxProvider:
-    """Construct the provider registered under ``name``. Raises ``ValueError`` for an
-    unknown name (a config error, distinct from a provider being *unavailable*)."""
-    try:
-        factory = _PROVIDERS[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown sandbox provider {name!r}; known: {sorted(_PROVIDERS)}"
-        ) from None
-    return factory()
-
-
-def ensure_available(provider: SandboxProvider) -> None:
+async def ensure_available(provider: SandboxProvider) -> None:
     """Fail-closed check: raise :class:`SandboxUnavailable` unless ``provider`` can
     confine here. Call before running untrusted input under a real provider."""
-    avail = provider.available()
-    if not avail.ok:
+    avail = await provider.available()
+    if avail != "ok":
         raise SandboxUnavailable(provider.name, avail.reason)

@@ -95,15 +95,12 @@ struct Failure     { errors: String }                 // compile stderr or judge
 enum   CompileResult { Ok, Failed { errors: String } }
 struct Unit        { property: String, unit: String } // report row + fuzz target (e.g. c_<slug>)
 
-/// The confinement policy, authored by Python (never the LLM). The backend maps it to a
-/// `run-confined` argv and prepends the launcher; `None` = the trusted/`none` path (exec
-/// directly, no launcher). See composer/sandbox/policy.py::SandboxPolicy.
+/// The confinement wrapper, authored by Python (never the LLM). Python owns the confinement
+/// *intent* and lowers it to `argv_prefix` — an opaque argv the backend prepends to its command,
+/// naming no sandbox mechanism. Empty prefix = the trusted/`none` path (exec directly). See
+/// composer/sandbox/config.py::SandboxConfig.backend_spec.
 struct Sandbox {
-    run_confined: Option<PathBuf>,       // launcher path; None → run unconfined (trusted)
-    rw: Vec<PathBuf>, ro: Vec<PathBuf>,  // Landlock grants (workdir, toolchains, checkout)
-    allow_env: Vec<String>,              // env allowlist ("NAME" or "NAME=VAL")
-    network: bool,
-    rlimits: Rlimits,                    // as / cpu / nproc / fsize
+    argv_prefix: Vec<String>,  // confinement wrapper up to `--`; empty → run directly (trusted)
     timeout_s: u64,
 }
 ```
@@ -128,10 +125,10 @@ pub fn run_confined(
 
 It (1) materializes `files` into `workdir`, path-confining each write (reject absolute / `..`,
 as `composer.sandbox.command._confined_target` does); (2) builds the argv
-`[run_confined, <policy flags…>, "--", program, *args]` — or `[program, *args]` when
-`sandbox.run_confined` is `None` (the trusted/`none` path); (3) spawns it (std `Command`),
-waits with `timeout`, and captures the streams. The resulting launch is exactly what the
-Python `launcher` provider builds today —
+`[*sandbox.argv_prefix, program, *args]` — which collapses to `[program, *args]` when
+`argv_prefix` is empty (the trusted/`none` path); (3) spawns it (std `Command`),
+waits with `timeout`, and captures the streams. The prefix is authored wholesale by the Python
+`launcher` provider (`argv_prefix`), so the launch is exactly —
 
 ```text
 run-confined --rw <workdir> --rw <.sandbox_cargo> --ro <toolchain> --ro <crucible>
@@ -139,10 +136,11 @@ run-confined --rw <workdir> --rw <.sandbox_cargo> --ro <toolchain> --ro <crucibl
              --rlimit-as … -- crucible run <program> <feature> --release --mode explore --timeout N
 ```
 
-— just assembled in the SDK next to the backend that owns the command. So `compile` builds the
+— where everything up to and including `--` is Python's `argv_prefix` (opaque to the SDK, which
+just prepends it), and the backend appends only the command. So `compile` builds the
 `{program, args, files}` for a dry-run and calls `run_confined`; `validate` does the same for
 one unit's fuzz run; neither re-implements sandbox plumbing. The **command after `--` is
-backend-authored**; the **policy flags before it are Python-authored** (`Sandbox`); Landlock
+backend-authored**; the **prefix before it is Python-authored** (`Sandbox.argv_prefix`); Landlock
 grants only the `--rw` workdir, so even a bad file path can't escape.
 
 ## 3. The Python side
@@ -276,8 +274,9 @@ mechanism (`crucible_kb`, imported via `composer.scripts.rag_import`, surfaced a
 exception.
 **Add**: the `Backend` callouts above (pure `descriptor`/`validate_preconditions`/`units`/
 `author_prompt`/`judge_prompt`/`finalize` + the two GIL-releasing blocking `compile`/`validate`), the shared
-`autoprover_sdk::run_confined` helper (the `SandboxPolicy` → `run-confined` argv assembly moves
-here, out of the Python `launcher` provider), and one generic `formalize` in the core pipeline.
+`autoprover_sdk::run_confined` helper (which just prepends Python's opaque `argv_prefix` — the
+`SandboxPolicy` → `run-confined` argv assembly stays in the Python `launcher` provider), and one
+generic `formalize` in the core pipeline.
 
 Net: the FFI goes from "a coroutine hand-compiled into a state machine + an 8-variant effect
 protocol" to "pure prompt/unit callouts + `compile`/`validate` that run the toolchain via one
@@ -291,16 +290,17 @@ The rule ([command-sandbox.md](./command-sandbox.md) §2/§7): the **command lin
 Here `compile`/`validate` construct `program`/`args` in Rust and place them after `--`; the
 `Sandbox` policy (the `run-confined` flags before `--`) is authored by Python. The LLM's spec
 is written into the `--rw` workdir and confined by Landlock. Two audit points, both trivial:
-the pure command-building in the backend, and `SandboxConfig.build_policy` in Python. A test
-asserts the launched argv is `[run-confined, …policy…, "--", "crucible"/"cargo", …]` and never
-contains LLM text.
+the pure command-building in the backend, and `SandboxConfig.build_policy` /
+`LauncherProvider.argv_prefix` in Python. A test asserts the launched argv is
+`[*argv_prefix, "crucible"/"cargo", …]` (the prefix being `[run-confined, …policy…, "--"]`) and
+never contains LLM text.
 
 ## 8. Decisions and deferrals
 
 Resolved:
 
-- **Shared launcher helper — yes.** `autoprover_sdk::run_confined` owns the `Sandbox` →
-  `run-confined` argv assembly; every backend calls it (§2).
+- **Shared launcher helper — yes.** `autoprover_sdk::run_confined` prepends the Python-authored
+  `Sandbox.argv_prefix` to the backend's command; every backend calls it (§2).
 - **`compile` and `validate` stay separate.** No fusing the dry-run into the first fuzz — one
   whole-spec compile, then per-unit validation (§2).
 - **`validate` is per-unit.** The host enumerates units (`units(input)`) and calls `validate`

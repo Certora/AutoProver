@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from composer.sandbox.launcher import LauncherProvider, _resolve_binary
-from composer.sandbox.policy import Availability, LaunchSpec, SandboxPolicy, get_provider
+from composer.sandbox.config import SandboxConfig
+from composer.sandbox.policy import LaunchSpec, Reason, SandboxPolicy
 
 _FAKE_BIN = "/opt/run-confined"
 
@@ -60,6 +61,17 @@ def test_wrap_full_policy_flag_order():
     assert spec.env is None
 
 
+def test_argv_prefix_ends_with_separator_and_wrap_appends_command():
+    """``argv_prefix`` is the confinement wrapper up to ``--``; ``wrap`` is exactly
+    that prefix followed by ``program args`` (the contract a Rust backend relies on)."""
+    policy = SandboxPolicy(rw_paths=(Path("/work"),), ro_paths=(Path("/usr"),))
+    prov = _provider()
+    prefix = prov.argv_prefix(policy)
+    assert prefix == [_FAKE_BIN, "--ro", "/usr", "--rw", "/work", "--"]
+    spec = prov.wrap(policy, "cargo", ["build"])
+    assert list(spec.argv) == [*prefix, "cargo", "build"]
+
+
 def test_wrap_network_flag():
     policy = SandboxPolicy(rw_paths=(Path("/work"),), network=True)
     spec = _provider().wrap(policy, "echo", [])
@@ -77,17 +89,19 @@ def test_wrap_uses_binary_name_when_unresolved():
     assert spec.argv[0] == "run-confined"
 
 
-def test_available_reports_missing_binary():
+@pytest.mark.asyncio
+async def test_available_reports_missing_binary():
     prov = LauncherProvider(binary=None)
     prov._binary = None
-    avail = prov.available()
-    assert avail.ok is False
+    avail = await prov.available()
+    assert isinstance(avail, Reason)
     assert "run-confined" in avail.reason
 
 
-def test_launcher_registered_in_seam():
-    """Importing this module registered the provider under its name."""
-    prov = get_provider("launcher")
+def test_launcher_resolves_via_entry_point():
+    """The launcher is discovered through its ``composer.sandbox_providers`` entry
+    point — resolving it needs no explicit import of this module."""
+    prov = SandboxConfig(provider="launcher").resolve_provider()
     assert isinstance(prov, LauncherProvider)
     assert prov.name == "launcher"
 
@@ -99,8 +113,8 @@ _needs_bin = pytest.mark.skipif(_REAL_BIN is None, reason="run-confined not buil
 
 
 @_needs_bin
-def test_probe_reports_available_on_this_host():
+@pytest.mark.asyncio
+async def test_probe_reports_available_on_this_host():
     """On a Landlock-capable host the real binary's --probe → available()."""
-    avail = LauncherProvider().available()
-    assert isinstance(avail, Availability)
-    assert avail.ok is True, avail.reason
+    avail = await LauncherProvider().available()
+    assert avail == "ok", avail

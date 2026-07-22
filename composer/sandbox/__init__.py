@@ -8,11 +8,12 @@ confined: no network, no inherited secrets, only its own inputs on disk.
 
 - :mod:`composer.sandbox.policy` — the tool-agnostic seam: :class:`SandboxPolicy`
   (confinement intent), :class:`SandboxProvider` (maps policy+command → a
-  :class:`LaunchSpec`), the ``none`` passthrough, the provider registry, and the
-  fail-closed helpers.
+  :class:`LaunchSpec`), the ``none`` passthrough, and the fail-closed helpers.
+  Providers are declared as ``composer.sandbox_providers`` entry points and resolved
+  by :meth:`composer.sandbox.config.SandboxConfig.resolve_provider`.
 - :mod:`composer.sandbox.launcher` — the ``run-confined`` launcher provider
-  (Landlock + seccomp). Import it to register the ``"launcher"`` provider; the
-  *seam* deliberately never imports a concrete mechanism.
+  (Landlock + seccomp), wired in as the ``launcher`` ``composer.sandbox_providers``
+  entry point and loaded lazily; the *seam* deliberately never imports a mechanism.
 - :mod:`composer.sandbox.command` — :func:`run_local_command`, the single choke
   point that materializes files into a workdir and runs a command there.
 """
@@ -29,12 +30,11 @@ from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
     NoneProvider,
+    Reason,
     SandboxPolicy,
     SandboxProvider,
     SandboxUnavailable,
     ensure_available,
-    get_provider,
-    register_provider,
 )
 from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH, rust_build_policy
 
@@ -50,10 +50,9 @@ __all__ = [
     "SandboxProvider",
     "LaunchSpec",
     "Availability",
+    "Reason",
     "NoneProvider",
     "SandboxUnavailable",
-    "get_provider",
-    "register_provider",
     "ensure_available",
     # config + recipes
     "SandboxConfig",
