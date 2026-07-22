@@ -110,6 +110,18 @@ class SandboxProvider(Protocol):
         """Whether this provider can confine a command in the current environment."""
         ...
 
+    def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
+        """The confinement argv that precedes the command — everything a launcher
+        needs *except* the ``program args`` themselves, so that any process (Python
+        via :meth:`wrap`, or a Rust backend via
+        :meth:`composer.sandbox.config.SandboxConfig.backend_spec`) can launch a
+        confined command as ``[*argv_prefix(policy), program, *args]``.
+
+        Empty for a passthrough provider (no confinement wrapper). This is the single
+        place a mechanism encodes its flags, so the confined launch stays mechanism-agnostic
+        for callers that only get to prepend an argv (``docs/command-sandbox.md`` §4)."""
+        ...
+
     def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
         """Translate ``policy`` into how to launch ``program args`` confined."""
         ...
@@ -128,6 +140,10 @@ class NoneProvider:
 
     def available(self) -> Availability:
         return Availability(ok=True)
+
+    def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
+        # No confinement wrapper: the command runs directly, so there is no prefix.
+        return []
 
     def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
         # Policy is intentionally ignored: this provider provides no isolation.

@@ -80,13 +80,13 @@ class LauncherProvider:
             return Availability(ok=False, reason=reason)
         return Availability(ok=True)
 
-    def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
-        """Build the ``run-confined … -- program args`` argv from ``policy``.
+    def argv_prefix(self, policy: SandboxPolicy) -> list[str]:
+        """The ``run-confined …  --`` argv that confines ``policy``, up to and
+        including the ``--`` separator: a caller launches the command as
+        ``[*argv_prefix(policy), program, *args]``.
 
         Emits ``--allow-env NAME=VALUE`` (explicit values — the allowlist holds only
-        benign build vars, never secrets). ``env`` stays ``None``: the launcher
-        inherits AutoProver's env but scrubs it to the allowlist for the child, so
-        the child's environment is fully determined by the flags."""
+        benign build vars, never secrets)."""
         argv: list[str] = [self._binary or _BIN_NAME]
         for p in policy.ro_paths:
             argv += ["--ro", str(p)]
@@ -104,5 +104,13 @@ class LauncherProvider:
             argv += ["--rlimit-nproc", str(policy.nproc)]
         if policy.fsize_bytes is not None:
             argv += ["--rlimit-fsize", str(policy.fsize_bytes)]
-        argv += ["--", program, *args]
-        return LaunchSpec(argv=tuple(argv), env=None)
+        argv.append("--")
+        return argv
+
+    def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
+        """Build the ``run-confined … -- program args`` argv from ``policy``.
+
+        ``env`` stays ``None``: the launcher inherits AutoProver's env but scrubs it
+        to the allowlist for the child, so the child's environment is fully determined
+        by the flags in :meth:`argv_prefix`."""
+        return LaunchSpec(argv=(*self.argv_prefix(policy), program, *args), env=None)

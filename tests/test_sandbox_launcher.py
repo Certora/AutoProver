@@ -61,6 +61,17 @@ def test_wrap_full_policy_flag_order():
     assert spec.env is None
 
 
+def test_argv_prefix_ends_with_separator_and_wrap_appends_command():
+    """``argv_prefix`` is the confinement wrapper up to ``--``; ``wrap`` is exactly
+    that prefix followed by ``program args`` (the contract a Rust backend relies on)."""
+    policy = SandboxPolicy(rw_paths=(Path("/work"),), ro_paths=(Path("/usr"),))
+    prov = _provider()
+    prefix = prov.argv_prefix(policy)
+    assert prefix == [_FAKE_BIN, "--ro", "/usr", "--rw", "/work", "--"]
+    spec = prov.wrap(policy, "cargo", ["build"])
+    assert list(spec.argv) == [*prefix, "cargo", "build"]
+
+
 def test_wrap_network_flag():
     policy = SandboxPolicy(rw_paths=(Path("/work"),), network=True)
     spec = _provider().wrap(policy, "echo", [])

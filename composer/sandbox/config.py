@@ -25,6 +25,19 @@ _ENV_VAR = "COMPOSER_SANDBOX_PROVIDER"
 _PROVIDER_GROUP = "composer.sandbox_providers"
 
 
+class BackendSpec(TypedDict):
+    """The ``Sandbox`` JSON a Rust backend consumes (see :meth:`SandboxConfig.backend_spec`).
+
+    ``argv_prefix`` is the mechanism-agnostic confinement wrapper: the backend launches
+    its command as ``[*argv_prefix, program, *args]``. It is **empty** for a passthrough
+    (``provider="none"``) spec — the backend runs the command directly. Because the
+    prefix is opaque to the backend, swapping the sandbox mechanism never changes this
+    shape (``docs/command-sandbox.md`` §4)."""
+
+    argv_prefix: list[str]
+    timeout_s: int
+
+
 class SandboxArgs(TypedDict):
     """Keyword overrides accepted by :meth:`SandboxConfig.from_env`.
 
@@ -78,11 +91,13 @@ class SandboxConfig:
         known = sorted(ep.name for ep in entry_points(group=_PROVIDER_GROUP))
         raise ValueError(f"unknown sandbox provider {self.provider!r}; known: {known}")
 
-    def build_policy(self, workdir: str | Path) -> SandboxPolicy:
-        """The concrete policy for a command running in ``workdir``. The ``none``
-        provider ignores the policy, so a bare :class:`SandboxPolicy` suffices there."""
+    def build_policy(self, workdir: str | Path) -> SandboxPolicy | None:
+        """The concrete confinement policy for a command running in ``workdir``, or
+        ``None`` when this is a passthrough config (``provider="none"``): there is no
+        confinement to describe, and :func:`run_local_command` accepts ``policy=None``
+        directly."""
         if not self.enabled:
-            return SandboxPolicy()
+            return None
         return rust_build_policy(
             workdir,
             extra_ro=self.extra_ro,
@@ -95,30 +110,19 @@ class SandboxConfig:
             fsize_bytes=self.fsize_bytes,
         )
 
-    def backend_spec(self, workdir: str | Path, *, timeout_s: int) -> dict:
-        """The ``Sandbox`` JSON a Rust backend's ``compile``/``validate`` consume to build
-        their own ``run-confined`` launch (`autoprover_sdk::Sandbox`). Python keeps ownership
-        of the confinement *intent* (this policy); the backend only assembles it into an argv.
+    def backend_spec(self, workdir: str | Path, *, timeout_s: int) -> BackendSpec:
+        """The ``Sandbox`` JSON a Rust backend's ``compile``/``validate`` consume to launch
+        a confined command (`autoprover_sdk::Sandbox`). Python keeps ownership of the
+        confinement *intent* (this policy) and of translating it into an argv wrapper; the
+        backend only prepends ``argv_prefix`` to its command — it names no sandbox mechanism.
 
-        For a real provider this resolves the ``run-confined`` path and is **fail-closed**
-        (``ensure_available`` raises if the launcher can't confine here). The ``none`` provider
-        yields ``run_confined=None`` — the backend runs the command directly (trusted input)."""
+        For a real provider this resolves the launcher and is **fail-closed**
+        (``ensure_available`` raises if it can't confine here). The ``none`` provider yields
+        an empty ``argv_prefix`` — the backend runs the command directly (trusted input)."""
         if not self.enabled:
-            return {"run_confined": None, "timeout_s": timeout_s}
+            return {"argv_prefix": [], "timeout_s": timeout_s}
         provider = self.resolve_provider()
         ensure_available(provider)  # fail-closed: raise before any untrusted code runs
         policy = self.build_policy(workdir)
-        return {
-            "run_confined": getattr(provider, "binary", None),
-            "ro": [str(p) for p in policy.ro_paths],
-            "rw": [str(p) for p in policy.rw_paths],
-            "allow_env": [f"{k}={v}" for k, v in policy.env_allowlist.items()],
-            "network": policy.network,
-            "rlimits": {
-                "mem_bytes": policy.mem_bytes,
-                "cpu_seconds": policy.cpu_seconds,
-                "nproc": policy.nproc,
-                "fsize_bytes": policy.fsize_bytes,
-            },
-            "timeout_s": timeout_s,
-        }
+        assert policy is not None  # enabled config ⇒ build_policy returns a real policy
+        return {"argv_prefix": provider.argv_prefix(policy), "timeout_s": timeout_s}
