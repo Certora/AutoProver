@@ -1,4 +1,4 @@
-from typing import Iterator, Callable, Any, Mapping, Generator
+from typing import Iterator, Callable, Any, Mapping
 from typing_extensions import TypeVar
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -70,7 +70,7 @@ than going over budget.
 def total_budget(
     total: float,
     caps: Mapping[str, float]
-) -> Generator[None]:
+) -> Iterator[None]:
     """Install the run's budget: ``total`` is the pool (the real bound on
     spend) and ``caps`` are per-phase ceilings. Caps need not sum to the
     pool — they only bound how much a single phase may hog, so each can be
@@ -95,7 +95,7 @@ def total_budget(
 @contextmanager
 def named_budget(
     nm: str
-) -> Generator[None]:
+) -> Iterator[None]:
     if (res := _cost_centers.get()) is None:
         raise RuntimeError("No costs installed")
     if nm not in res:
@@ -109,7 +109,7 @@ def named_budget(
 @contextmanager
 def named_budget_or_nop(
     nm: str
-) -> Generator[None]:
+) -> Iterator[None]:
     if (_cost_centers.get()) is None:
         # A @contextmanager generator must yield exactly once even on the
         # nop path — a bare return raises "generator didn't yield".
@@ -121,7 +121,7 @@ def named_budget_or_nop(
 @contextmanager
 def token_cost_budget(
     total_cost: float,
-) -> Generator[None]:
+) -> Iterator[None]:
     if _budget_accumulator.get() is not None:
         raise RuntimeError("Nested budgets not supported")
     accum = BudgetCounter(total_budget=total_cost, curr_cost=0.0)
