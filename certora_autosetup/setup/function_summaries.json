@@ -159,5 +159,23 @@
     "library_names": ["CTHelpers"],
     "summary_file": "specs/summaries/CTHelpers.spec",
     "description": "Gnosis Conditional Tokens CTHelpers.getCollectionId (bn128 collection-id derivation)"
+  },
+  "aave_WadRayMath": {
+    "names": ["wadMulDown", "wadMulUp", "wadDivDown", "wadDivUp", "rayMulDown", "rayMulUp", "rayDivDown", "rayDivUp", "toWad", "toRay", "fromWadDown", "fromRayUp"],
+    "library_names": ["WadRayMath"],
+    "summary_file": "specs/summaries/Aave/Aave_Math.spec",
+    "description": "Aave WadRayMath fixed-point (WAD/RAY) operations"
+  },
+  "aave_PercentageMath": {
+    "names": ["percentMulDown", "percentMulUp", "percentDivDown", "percentDivUp", "fromBpsDown"],
+    "library_names": ["PercentageMath"],
+    "summary_file": "specs/summaries/Aave/Aave_Math.spec",
+    "description": "Aave PercentageMath operations"
+  },
+  "aave_MathUtils": {
+    "names": ["mulDivDown", "mulDivUp", "divUp"],
+    "library_names": ["MathUtils"],
+    "summary_file": "specs/summaries/Aave/Aave_Math.spec",
+    "description": "Aave MathUtils generic 256-bit mulDiv / divUp"
   }
 }
