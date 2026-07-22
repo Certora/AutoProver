@@ -13,13 +13,16 @@ by default; override with ``COMPOSER_SANDBOX_PROVIDER=none`` for trusted-input d
 
 import os
 from dataclasses import dataclass
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import NotRequired, Self, TypedDict, Unpack
 
-from composer.sandbox.policy import SandboxPolicy, SandboxProvider, ensure_available, get_provider
+from composer.sandbox.policy import SandboxPolicy, SandboxProvider, ensure_available
 from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH, rust_build_policy
 
 _ENV_VAR = "COMPOSER_SANDBOX_PROVIDER"
+# Providers are declared here (pyproject.toml) and resolved by name below.
+_PROVIDER_GROUP = "composer.sandbox_providers"
 
 
 class SandboxArgs(TypedDict):
@@ -65,11 +68,15 @@ class SandboxConfig:
         return self.provider != "none"
 
     def resolve_provider(self) -> SandboxProvider:
-        # Importing the launcher module registers the "launcher" provider; the seam
-        # itself never imports a concrete mechanism (docs/command-sandbox.md §6).
-        if self.provider == "launcher":
-            import composer.sandbox.launcher  # noqa: F401
-        return get_provider(self.provider)
+        """Construct the provider named by ``self.provider`` from its
+        ``composer.sandbox_providers`` entry point, importing that mechanism's module
+        lazily — the seam itself never imports a concrete mechanism
+        (docs/command-sandbox.md §6). Raises ``ValueError`` for an unknown name (a
+        config error, distinct from a provider being *unavailable*)."""
+        for ep in entry_points(group=_PROVIDER_GROUP, name=self.provider):
+            return ep.load()()
+        known = sorted(ep.name for ep in entry_points(group=_PROVIDER_GROUP))
+        raise ValueError(f"unknown sandbox provider {self.provider!r}; known: {known}")
 
     def build_policy(self, workdir: str | Path) -> SandboxPolicy:
         """The concrete policy for a command running in ``workdir``. The ``none``

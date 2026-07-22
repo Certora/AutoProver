@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from composer.sandbox.launcher import LauncherProvider, _resolve_binary
-from composer.sandbox.policy import Availability, LaunchSpec, SandboxPolicy, get_provider
+from composer.sandbox.config import SandboxConfig
+from composer.sandbox.policy import Availability, LaunchSpec, SandboxPolicy
 
 _FAKE_BIN = "/opt/run-confined"
 
@@ -85,9 +86,10 @@ def test_available_reports_missing_binary():
     assert "run-confined" in avail.reason
 
 
-def test_launcher_registered_in_seam():
-    """Importing this module registered the provider under its name."""
-    prov = get_provider("launcher")
+def test_launcher_resolves_via_entry_point():
+    """The launcher is discovered through its ``composer.sandbox_providers`` entry
+    point — resolving it needs no explicit import of this module."""
+    prov = SandboxConfig(provider="launcher").resolve_provider()
     assert isinstance(prov, LauncherProvider)
     assert prov.name == "launcher"
 

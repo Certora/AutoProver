@@ -4,8 +4,9 @@ Maps a tool-agnostic :class:`SandboxPolicy` to an invocation of the ``run-confin
 trusted Rust binary (``rust/run-confined``), which applies Landlock + seccomp +
 rlimits + a scrubbed env to itself and then ``execve``s the command
 (``docs/command-sandbox.md`` §6). This module is deliberately *separate* from the
-:mod:`composer.sandbox.policy` seam: importing it registers the ``"launcher"``
-provider, so the seam never imports a concrete mechanism.
+:mod:`composer.sandbox.policy` seam: it is wired in as the ``launcher``
+``composer.sandbox_providers`` entry point (pyproject.toml) and loaded only when that
+provider is actually constructed, so the seam never imports a concrete mechanism.
 
 ``wrap`` is pure argv construction (unit-testable, no subprocess); ``available``
 shells out to ``run-confined --probe`` once to confirm the kernel supports Landlock
@@ -21,7 +22,6 @@ from composer.sandbox.policy import (
     Availability,
     LaunchSpec,
     SandboxPolicy,
-    register_provider,
 )
 
 _BIN_NAME = "run-confined"
@@ -106,9 +106,3 @@ class LauncherProvider:
             argv += ["--rlimit-fsize", str(policy.fsize_bytes)]
         argv += ["--", program, *args]
         return LaunchSpec(argv=tuple(argv), env=None)
-
-
-# Registering on import keeps the `composer.sandbox.policy` seam free of any
-# concrete-mechanism import. Consumers (RealEffects, tests) `import` this module to
-# make ``get_provider("launcher")`` resolvable.
-register_provider("launcher", LauncherProvider)

@@ -19,18 +19,20 @@ this seam — never on a concrete tool — a provider can be swapped without tou
 the command runner, ``RealEffects``, or the escape-test gate. It lives outside
 ``rustapp`` so Python-based backends can use it too, not just the Rust-IoC ones.
 
-This module ships the policy, the protocol, the ``none`` passthrough provider,
-and the provider registry. The ``run-confined`` launcher provider (Landlock +
-seccomp) registers itself under ``"launcher"`` when
-:mod:`composer.sandbox.launcher` is imported (typically via
-:meth:`composer.sandbox.config.SandboxConfig.resolve_provider`).
+This module ships the policy, the protocol, and the ``none`` passthrough provider.
+Concrete providers are declared as ``composer.sandbox_providers`` entry points
+(pyproject.toml) and resolved by name in
+:meth:`composer.sandbox.config.SandboxConfig.resolve_provider`, which imports the
+selected mechanism's module lazily — so this seam never imports a concrete mechanism.
+The ``run-confined`` launcher provider (Landlock + seccomp) is one such entry point
+(``launcher`` → :mod:`composer.sandbox.launcher`).
 
 **Trust boundary** (``docs/command-sandbox.md`` §7.2): the policy and the emitted
 ``LaunchSpec`` are authored by trusted Python — never the LLM, which controls only
 file *contents*.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -130,31 +132,6 @@ class NoneProvider:
     def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
         # Policy is intentionally ignored: this provider provides no isolation.
         return LaunchSpec(argv=(program, *args), env=None)
-
-
-# Provider registry. The ``launcher`` factory is registered by importing
-# :mod:`composer.sandbox.launcher` (see :meth:`SandboxConfig.resolve_provider`).
-_PROVIDERS: dict[str, Callable[[], SandboxProvider]] = {
-    "none": NoneProvider,
-}
-
-
-def register_provider(name: str, factory: Callable[[], SandboxProvider]) -> None:
-    """Register a provider factory under ``name`` (used by later steps to add the
-    launcher / off-the-shelf providers without this module importing them)."""
-    _PROVIDERS[name] = factory
-
-
-def get_provider(name: str) -> SandboxProvider:
-    """Construct the provider registered under ``name``. Raises ``ValueError`` for an
-    unknown name (a config error, distinct from a provider being *unavailable*)."""
-    try:
-        factory = _PROVIDERS[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown sandbox provider {name!r}; known: {sorted(_PROVIDERS)}"
-        ) from None
-    return factory()
 
 
 def ensure_available(provider: SandboxProvider) -> None:

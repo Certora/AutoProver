@@ -8,6 +8,8 @@ network off.
 
 from pathlib import Path
 
+import pytest
+
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.launcher import LauncherProvider
 from composer.sandbox.policy import NoneProvider, SandboxPolicy
@@ -33,6 +35,12 @@ def test_config_from_env_launcher(monkeypatch):
     assert cfg.enabled is True
     assert isinstance(cfg.resolve_provider(), LauncherProvider)
     assert cfg.extra_ro == (Path("/usr"),)
+
+
+def test_resolve_provider_unknown_is_value_error():
+    cfg = SandboxConfig(provider="bogus")
+    with pytest.raises(ValueError, match="unknown sandbox provider 'bogus'"):
+        cfg.resolve_provider()
 
 
 def test_config_none_build_policy_is_empty():

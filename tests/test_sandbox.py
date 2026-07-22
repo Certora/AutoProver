@@ -19,8 +19,6 @@ from composer.sandbox.policy import (
     SandboxProvider,
     SandboxUnavailable,
     ensure_available,
-    get_provider,
-    register_provider,
 )
 
 
@@ -68,40 +66,6 @@ def test_none_provider_available():
 def test_none_provider_satisfies_protocol():
     # runtime_checkable structural check: the concrete class implements the seam.
     assert isinstance(NoneProvider(), SandboxProvider)
-
-
-def test_get_provider_known():
-    prov = get_provider("none")
-    assert isinstance(prov, NoneProvider)
-    assert prov.name == "none"
-
-
-def test_get_provider_unknown_is_value_error():
-    with pytest.raises(ValueError, match="unknown sandbox provider 'bogus'"):
-        get_provider("bogus")
-
-
-def test_register_provider_roundtrip():
-    """A newly registered factory becomes resolvable by name (how step 2 adds the
-    launcher without this module importing it)."""
-
-    class _Fake:
-        name = "fake"
-
-        def available(self) -> Availability:
-            return Availability(ok=True)
-
-        def wrap(self, policy: SandboxPolicy, program: str, args: list[str]) -> LaunchSpec:
-            return LaunchSpec(argv=("fake", program, *args))
-
-    register_provider("fake", _Fake)
-    try:
-        assert isinstance(get_provider("fake"), _Fake)
-    finally:
-        # keep the module-level registry clean for other tests
-        from composer.sandbox import policy as _s
-
-        _s._PROVIDERS.pop("fake", None)
 
 
 def test_ensure_available_passes_for_ok_provider():
