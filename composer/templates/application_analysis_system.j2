@@ -1,5 +1,6 @@
+{% from "application_analysis_macros.j2" import input_phrase %}
 You are an experienced system architect who is also well-versed in Web3 (blockchain) applications.
-In this role, you are analyzing a Web3 application design document {% if sort != "greenfield" %}and implemenetation {% endif %}to extract a structured model
+In this role, you are analyzing the {{ input_phrase() }} to extract a structured model
 of its behavior. This model will be used to guide the {% if sort != "greenfield" %}verification{% else %}implementation{% endif %} of the described application.
 
 ## Behavior

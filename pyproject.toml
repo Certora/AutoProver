@@ -76,7 +76,7 @@ cpu = ["torch"]
 cuda = ["torch"]
 
 [dependency-groups]
-test = ["pytest>=9.0", "pytest-asyncio>=1.3", "testcontainers>=4.0"]
+test = ["pytest>=9.0", "pytest-asyncio>=1.3", "testcontainers>=4.0", "pytest-xdist"]
 ci = ["pyright"]
 ragbuild = [
     # duplicated! no way to prevent this, says only language where this nonsense is required

@@ -85,6 +85,7 @@ async def run_graph[H, S: StateLike, I: StateLike, C: StateLike | None](
                 curr_input = graph_input
                 graph_input = None
                 interrupted = False
+                interrupt_data: H | None = None
                 async for (ty, payload) in graph.astream(
                     curr_input, config=curr_config, context=ctxt, stream_mode=["checkpoints", "updates", "custom"]
                 ):
@@ -105,35 +106,28 @@ async def run_graph[H, S: StateLike, I: StateLike, C: StateLike | None](
                             assert human_handler is not None
                             if "configurable" in curr_config and "checkpoint_id" in curr_config["configurable"]:
                                 del curr_config["configurable"]["checkpoint_id"]
-                            interrupt_data = cast(H, payload["__interrupt__"][0].value)
-                            curr_state = cast(S, (await graph.aget_state({"configurable": {"thread_id": tid}})).values)
-                            human_response = await human_handler(interrupt_data, curr_state)
-                            graph_input = Command(resume=human_response)
-                            interrupted = True
-                            break
-                        elif ty == "custom":
-                            event_sink(
-                                CustomUpdate(payload, thread_id=tid, checkpoint_id=curr_checkpoint) # pyright: ignore[reportPossiblyUnboundVariable]
-                            )
-                        else:
-                            assert ty == "updates"
-                            if "__interrupt__" in payload:
-                                assert human_handler is not None
-                                if "configurable" in curr_config and "checkpoint_id" in curr_config["configurable"]:
-                                    del curr_config["configurable"]["checkpoint_id"]
+                            # Record the interrupt but keep draining the stream:
+                            # the interrupt checkpoint may not be committed when
+                            # this update is yielded, and the resume below targets
+                            # the thread's latest checkpoint. Breaking out here
+                            # races that write — a resume against the stale
+                            # checkpoint replays the previous node (duplicated LLM
+                            # turns / re-fired interrupts / dropped state updates).
+                            if not interrupted:
                                 interrupt_data = cast(H, payload["__interrupt__"][0].value)
-                                curr_state = cast(S, (await graph.aget_state({"configurable": {"thread_id": tid}})).values)
-                                human_response = await human_handler(interrupt_data, curr_state)
-                                graph_input = Command(resume=human_response)
                                 interrupted = True
-                                break
-                            event_sink(
-                                StateUpdate(
-                                    payload, thread_id=tid
-                                )
+                            continue
+                        event_sink(
+                            StateUpdate(
+                                payload, thread_id=tid
                             )
-                    if interrupted:
-                        continue
+                        )
+                if interrupted:
+                    assert human_handler is not None
+                    curr_state = cast(S, (await graph.aget_state({"configurable": {"thread_id": tid}})).values)
+                    human_response = await human_handler(cast(H, interrupt_data), curr_state)
+                    graph_input = Command(resume=human_response)
+                    continue
 
                 result_state = (await graph.aget_state({"configurable": {"thread_id": tid}})).values
                 return cast(S, result_state)
