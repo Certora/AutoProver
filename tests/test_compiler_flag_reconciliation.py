@@ -27,21 +27,21 @@ from certora_autosetup.utils.types import ContractHandle
 
 
 def test_drops_solc_when_compiler_map_present() -> None:
-    conf = {"solc": "solc8.30", "compiler_map": {"Vault": "solc8.35"}}
+    conf = {"solc": "solc8.30", "compiler_map": {"Widget": "solc8.35"}}
     ConfigManager.drop_scalars_superseded_by_maps(conf)
-    assert conf == {"compiler_map": {"Vault": "solc8.35"}}
+    assert conf == {"compiler_map": {"Widget": "solc8.35"}}
 
 
 def test_each_pair_is_dropped_independently() -> None:
     conf = {
         "solc": "solc8.30",
-        "compiler_map": {"Vault": "solc8.35"},
+        "compiler_map": {"Widget": "solc8.35"},
         "solc_via_ir": True,
-        "solc_via_ir_map": {"Vault": True},
+        "solc_via_ir_map": {"Widget": True},
         "solc_optimize": "200",
-        "solc_optimize_map": {"Vault": "200"},
+        "solc_optimize_map": {"Widget": "200"},
         "solc_evm_version": "paris",
-        "solc_evm_version_map": {"Vault": "cancun"},
+        "solc_evm_version_map": {"Widget": "cancun"},
     }
     ConfigManager.drop_scalars_superseded_by_maps(conf)
     assert set(conf) == {
@@ -60,9 +60,9 @@ def test_scalars_survive_without_maps() -> None:
 
 def test_unrelated_pair_not_affected() -> None:
     # A via-ir map must not drop the solc scalar and vice versa.
-    conf = {"solc": "solc8.30", "solc_via_ir_map": {"Vault": True}}
+    conf = {"solc": "solc8.30", "solc_via_ir_map": {"Widget": True}}
     ConfigManager.drop_scalars_superseded_by_maps(conf)
-    assert conf == {"solc": "solc8.30", "solc_via_ir_map": {"Vault": True}}
+    assert conf == {"solc": "solc8.30", "solc_via_ir_map": {"Widget": True}}
 
 
 # =============================================================================
@@ -116,24 +116,24 @@ def test_precompute_drops_scalar_solc_when_map_is_built(
     )
     monkeypatch.setattr(
         "certora_autosetup.setup.setup_prover.FoundryContractExtractor",
-        lambda root: _StubExtractor({"src/Vault.sol": [("Vault", "0.8.35")]}),
+        lambda root: _StubExtractor({"src/Widget.sol": [("Widget", "0.8.35")]}),
     )
 
     contracts = [
-        ContractHandle(contract_name="Vault", source_file="src/Vault.sol"),
+        ContractHandle(contract_name="Widget", source_file="src/Widget.sol"),
         ContractHandle(
             contract_name="DummyERC20Impl", source_file="certora/mocks/DummyERC20Impl.sol"
         ),
     ]
     config = setup_prover._precompute_compiler_settings(
-        contracts, {"solc": "solc8.30", "files": ["src/Vault.sol", str(mock_src)]}
+        contracts, {"solc": "solc8.30", "files": ["src/Widget.sol", str(mock_src)]}
     )
 
     assert "solc" not in config
-    # Total over the scene: artifact version for Vault, pragma-resolved
+    # Total over the scene: artifact version for Widget, pragma-resolved
     # (biased to the old default) for the injected mock.
     assert config["compiler_map"] == {
-        "Vault": "solc8.35",
+        "Widget": "solc8.35",
         "DummyERC20Impl": "solc8.30",
     }
 
@@ -141,11 +141,11 @@ def test_precompute_drops_scalar_solc_when_map_is_built(
 def test_precompute_keeps_scalar_when_artifacts_agree(setup_prover, monkeypatch) -> None:
     monkeypatch.setattr(
         "certora_autosetup.setup.setup_prover.FoundryContractExtractor",
-        lambda root: _StubExtractor({"src/Vault.sol": [("Vault", "0.8.30")]}),
+        lambda root: _StubExtractor({"src/Widget.sol": [("Widget", "0.8.30")]}),
     )
-    contracts = [ContractHandle(contract_name="Vault", source_file="src/Vault.sol")]
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
     config = setup_prover._precompute_compiler_settings(
-        contracts, {"solc": "solc8.30", "files": ["src/Vault.sol"]}
+        contracts, {"solc": "solc8.30", "files": ["src/Widget.sol"]}
     )
     assert config["solc"] == "solc8.30"
     assert "compiler_map" not in config
@@ -163,11 +163,11 @@ def test_precompute_keeps_scalar_when_artifacts_agree(setup_prover, monkeypatch)
 def test_merge_drops_base_scalar_when_updates_bring_map(monkeypatch) -> None:
     autosetup = Autosetup.__new__(Autosetup)
     autosetup.compilation_config_updates = {
-        "compiler_map": {"Vault": "solc8.35", "Helper": "solc8.30"},
-        "solc_via_ir_map": {"Vault": True, "Helper": False},
+        "compiler_map": {"Widget": "solc8.35", "Helper": "solc8.30"},
+        "solc_via_ir_map": {"Widget": True, "Helper": False},
     }
     autosetup.contract_handles = [
-        ContractHandle(contract_name="Vault", source_file="src/Vault.sol"),
+        ContractHandle(contract_name="Widget", source_file="src/Widget.sol"),
         ContractHandle(contract_name="Helper", source_file="src/Helper.sol"),
     ]
     monkeypatch.setattr(
@@ -181,8 +181,8 @@ def test_merge_drops_base_scalar_when_updates_bring_map(monkeypatch) -> None:
 
     assert "solc" not in config
     assert "solc_via_ir" not in config
-    assert config["compiler_map"] == {"Vault": "solc8.35", "Helper": "solc8.30"}
-    assert config["solc_via_ir_map"] == {"Vault": True, "Helper": False}
+    assert config["compiler_map"] == {"Widget": "solc8.35", "Helper": "solc8.30"}
+    assert config["solc_via_ir_map"] == {"Widget": True, "Helper": False}
 
 
 # =============================================================================
@@ -215,3 +215,57 @@ def test_scalar_to_map_keys_match_certora_cli() -> None:
     result = sp.run([sys.executable, "-c", probe], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert __import__("json").loads(result.stdout) == conf_keys
+
+
+# =============================================================================
+# ConfigManager: solc_optimize_map stays consistent when files are added/removed
+#
+# certoraRun rejects a conf whose solc_optimize_map is missing an entry for a
+# file ("files are not matched in solc_optimize_map"). When call resolution
+# injects new files (e.g. indexed link-harnesses Sample_1.sol), the map
+# must gain matching entries; when files shrink, stale entries must be trimmed.
+# =============================================================================
+
+
+def _config_manager(tmp_path: Path) -> ConfigManager:
+    return ConfigManager(project_root=tmp_path)
+
+
+def test_update_optimize_map_adds_new_contract_with_default(tmp_path: Path) -> None:
+    mgr = _config_manager(tmp_path)
+    conf = {"solc_optimize_map": {"Sample": "22300"}}
+    added = mgr.update_optimize_map_for_contract(
+        conf, ContractHandle(contract_name="Sample_1", source_file="certora/harnesses/Sample_1.sol")
+    )
+    assert added is True
+    assert conf["solc_optimize_map"]["Sample_1"] == "200"
+
+
+def test_update_optimize_map_prefers_reference_value(tmp_path: Path) -> None:
+    mgr = _config_manager(tmp_path)
+    conf = {"solc_optimize_map": {"Sample": "22300"}}
+    mgr.update_optimize_map_for_contract(
+        conf,
+        ContractHandle(contract_name="Sample_1", source_file="certora/harnesses/Sample_1.sol"),
+        reference_maps={"solc_optimize_map": {"Sample_1": "22300"}},
+    )
+    assert conf["solc_optimize_map"]["Sample_1"] == "22300"
+
+
+def test_update_optimize_map_noop_without_map(tmp_path: Path) -> None:
+    # A scalar solc_optimize already covers every file, so no map to extend.
+    mgr = _config_manager(tmp_path)
+    conf = {"solc_optimize": "200"}
+    assert mgr.update_optimize_map_for_contract(
+        conf, ContractHandle(contract_name="Sample_1", source_file="certora/harnesses/Sample_1.sol")
+    ) is False
+    assert "solc_optimize_map" not in conf
+
+
+def test_update_optimize_map_noop_when_already_present(tmp_path: Path) -> None:
+    mgr = _config_manager(tmp_path)
+    conf = {"solc_optimize_map": {"Sample_1": "22300"}}
+    assert mgr.update_optimize_map_for_contract(
+        conf, ContractHandle(contract_name="Sample_1", source_file="certora/harnesses/Sample_1.sol")
+    ) is False
+    assert conf["solc_optimize_map"] == {"Sample_1": "22300"}
