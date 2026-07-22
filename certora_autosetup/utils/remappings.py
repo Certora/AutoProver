@@ -18,6 +18,10 @@ import tomllib
 # (message, level) -> None; matches BuildSystemManager.log / CompilationWorkaroundManager.log.
 LogFn = Callable[[str, str], None]
 
+# Remapping entries whose key ends in one of these target a concrete source file, not a directory
+# prefix, so they must not receive a trailing-slash boundary (see `_merge_remapping_entry`).
+_SOURCE_SUFFIXES = (".sol", ".vy", ".yul")
+
 
 def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile: str = "default") -> List[str]:
     """Build a merged packages list from forge remappings, foundry.toml, remappings.txt, package.json.
@@ -162,13 +166,18 @@ def _merge_remapping_entry(
 ) -> None:
     """Record a single `key=path` remapping entry into the running key->path/source maps.
 
-    Both sides of the entry are whitespace-stripped and ``rstrip("/")``-normalized before
-    storage, so the merged list is internally consistent regardless of which source emitted the
-    entry (and tolerant of ``@oz/ = lib/oz/``-style spacing). Solc/forge accept the normalized
-    form (`key=path`) as long as key and path agree on trailing slashes, which this guarantees.
-    Distinct keys (e.g. ``@openzeppelin/contracts`` vs ``@openzeppelin/contracts-upgradeable``)
-    stay separate entries; solc resolves imports by longest-prefix so the more specific key wins
-    — provided it is present, which is exactly why forge remappings is the authoritative source.
+    Both sides of the entry are whitespace-stripped and normalized to a canonical *trailing-slash*
+    form (a slash is appended when missing), so the merged list is internally consistent regardless
+    of which source emitted the entry (and tolerant of ``@oz/ = lib/oz/``-style spacing). The key's
+    trailing slash is significant and MUST be preserved: a remapping key marks a path *prefix* whose
+    boundary is the slash, so ``@openzeppelin/contracts/`` must not swallow imports beginning
+    ``@openzeppelin/contracts-upgradeable/``. solc chooses among applicable remappings by longest
+    matching *context* first (only then longest prefix), so a context-scoped key like
+    ``lib/some-dependency/:@openzeppelin/contracts`` — if its boundary slash were stripped —
+    outranks the correct global ``@openzeppelin/contracts-upgradeable`` mapping and rewrites the
+    upgradeable import to a nonexistent path. Keeping the slash keeps the two packages distinct.
+    (Normalizing both sides to end in a slash also collapses ``@oz/contracts`` and
+    ``@oz/contracts/`` from different sources onto one key, so the dedup below stays correct.)
 
     Relative target paths are resolved to absolute against ``base_dir`` so the packages list is
     valid even when the process CWD differs from the project dir.
@@ -181,11 +190,23 @@ def _merge_remapping_entry(
     Caller is responsible for confirming the entry contains an ``=`` before calling.
     """
     raw_key, raw_path = entry.split("=", 1)
-    key = raw_key.strip().rstrip("/")
-    path = raw_path.strip().rstrip("/")
+    key = raw_key.strip()
+    path = raw_path.strip()
 
+    # Resolve a relative target against base_dir first (Path() drops any trailing slash).
     if not Path(path).is_absolute():
         path = str(base_dir / path)
+
+    # Canonicalize a DIRECTORY remapping to a trailing-slash form so the key's prefix boundary is
+    # preserved (see docstring) and key/path agree on that boundary. A remapping that targets a
+    # concrete source file (e.g. an import-patch entry `.../IFoo.sol=.../IFoo.sol`) must keep its
+    # exact form — appending `/` would make solc look for a directory `IFoo.sol/`. Detect the
+    # file case by a source-file extension on the key.
+    if not key.lower().endswith(_SOURCE_SUFFIXES):
+        if key and not key.endswith("/"):
+            key += "/"
+        if path and not path.endswith("/"):
+            path += "/"
 
     if key in remapping_key_to_path:
         if warn_on_mismatch and remapping_key_to_path[key] != path:
