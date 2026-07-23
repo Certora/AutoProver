@@ -9,8 +9,7 @@ verified artifact) belongs to the **backend**, a separate axis.
 
 Today two ecosystems are implemented: `EVM` (Solidity, fully wired to the CVL/prover and
 Foundry backends) and `SOLANA` (Rust, front half only — analysis + property extraction, gated
-by a null backend). Companion: [application-abstraction.md](./application-abstraction.md) (the
-pieces of an analyzed application).
+by a null backend).
 
 ---
 
