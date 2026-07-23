@@ -299,10 +299,6 @@ async def _extract_all[P: enum.Enum, H](
 ) -> list[_Batch[FeatureUnit]]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
 
-    # The ecosystem-generalized form of the per-component loop: the ecosystem enumerates the units
-    # to infer over (EVM: one per component; Solana: a singleton whole-program unit), and each is
-    # extracted concurrently into at most one batch. ``_Batch`` is over the ``FeatureUnit`` protocol;
-    # run_pipeline's single cast reunites the batches with the backend's concrete unit type ``U``.
     async def _one(feat: FeatureUnit) -> _Batch[FeatureUnit] | None:
         feat_ctx = await prop_ctx.child(_component_cache_key(feat), feat.context_tag())
         props = await run.runner(
