@@ -112,6 +112,23 @@ class TypecheckerLoop:
                 )
             )
 
+        # Pattern 2b: a Rounding enum-constant reference the typechecker rejects while
+        # offering no `Did you mean` alternative. This is the shape it takes when the
+        # enum is declared only in a library (OZ `Math`) that is inlined / duplicated
+        # across compiled units: `Math.Rounding` is not a usable CVL enum type and no
+        # contract re-declares it. e.g.:
+        #   Error in spec file (OZ_Math-ERC20.spec:12:21): could not type expression
+        #   "Math.Rounding.Ceil", message: In enum constant Math.Rounding.Ceil,
+        #   Math.Rounding is not a valid enum type
+        rounding_unresolvable_pattern = (
+            r"Error in spec file \(([^:)]+):(\d+):\d+\): could not type expression "
+            r"\"[\w$]+\.Rounding(?:\.\w+)?\".*?([\w$]+)\.Rounding is not a valid enum type"
+        )
+        for spec_file, line_num, bad_qualifier in re.findall(
+            rounding_unresolvable_pattern, error_output
+        ):
+            matches.append((spec_file, line_num, "ROUNDING_UNRESOLVABLE", bad_qualifier))
+
         # Pattern 3: Contract not found errors
         # Error in spec file (OZ_Math-ERC20.spec:4:5): Contract `Math` not found. Receiver contracts must be `currentContract`, the name of a contract in the scene, or a name introduced by a `using` statement.
         contract_not_found_pattern = r"Error in spec file \(([^:]+):(\d+):\d+\): Contract `([^`]+)` not found\."
@@ -141,6 +158,8 @@ class TypecheckerLoop:
             for spec_file, line_num, contract, method in matches:
                 if contract == "ROUNDING_AMBIGUOUS":
                     self.log(f"  - {spec_file}:{line_num} - ambiguous Rounding type ({method})")
+                elif contract == "ROUNDING_UNRESOLVABLE":
+                    self.log(f"  - {spec_file}:{line_num} - unresolvable Rounding type ({method}.Rounding)")
                 elif contract == "CONTRACT_NOT_FOUND":
                     self.log(f"  - {spec_file}:{line_num} - Contract `{method}` not found")
                 else:
@@ -181,15 +200,24 @@ class TypecheckerLoop:
             has_rounding_ambiguous = any(
                 contract == "ROUNDING_AMBIGUOUS" for _, contract, _ in spec_errors
             )
+            has_rounding_unresolvable = any(
+                contract == "ROUNDING_UNRESOLVABLE" for _, contract, _ in spec_errors
+            )
             has_contract_not_found_error = any(
                 contract == "CONTRACT_NOT_FOUND" for _, contract, _ in spec_errors
             )
             summary_line_for_nonexisting_method_error = any(
-                contract not in ["ROUNDING_AMBIGUOUS", "CONTRACT_NOT_FOUND"]
+                contract not in ["ROUNDING_AMBIGUOUS", "ROUNDING_UNRESOLVABLE", "CONTRACT_NOT_FOUND"]
                 for _, contract, _ in spec_errors
             )
 
-            if has_rounding_ambiguous and self._is_in_summaries_folder(spec_file):
+            if has_rounding_unresolvable and self._is_in_summaries_folder(spec_file):
+                # The enum reference has no valid qualifier: disable the summary that uses it.
+                updates[spec_base] = self._create_rounding_disable_directional_callback(
+                    spec_errors, self.keep_intermediate_files
+                )
+
+            elif has_rounding_ambiguous and self._is_in_summaries_folder(spec_file):
                 updates[spec_base] = self._create_rounding_requalify_callback(
                     spec_errors, self.keep_intermediate_files
                 )
@@ -465,6 +493,66 @@ class TypecheckerLoop:
             return new_spec
 
         return fix_rounding_requalify
+
+    def _create_rounding_disable_directional_callback(self, error_list, keep_intermediate):
+        """Build a callback that comments out the ``mulDivDirectionalSummary``
+        summary whose ``Math.Rounding`` enum reference the typechecker rejected with
+        no ``Did you mean`` alternative (see the ROUNDING_UNRESOLVABLE parser above).
+
+        The callback comments out each CVL function the error falls inside, together
+        with the ``methods{}`` entries that dispatch to those functions."""
+
+        def fix_rounding_disable_directional(
+            spec_path: Path,
+            rename_fn: Callable[[str], str],
+            reverse_rename_fn: Callable[[str], str],
+        ) -> Path:
+            if keep_intermediate:
+                base_name = reverse_rename_fn(spec_path.stem)
+                new_spec = spec_path.parent / f"{rename_fn(base_name)}.spec"
+            else:
+                new_spec = spec_path
+
+            with open(spec_path, "r") as f:
+                lines = f.readlines()
+
+            reported = {
+                int(line_num) - 1
+                for line_num, contract, _ in error_list
+                if contract == "ROUNDING_UNRESOLVABLE"
+            }
+            # A reported line inside a CVL function takes its whole block: a partially
+            # commented function does not parse.
+            to_comment = set(self._expand_to_function_blocks(lines, reported))
+
+            # Comment the methods{} entries that dispatch to a function being commented
+            # out, so no entry is left referencing a missing function.
+            disabled_fns = set()
+            for idx in to_comment:
+                if idx < len(lines):
+                    m = re.search(r"function\s+(mulDivDirectionalSummary\w*)\s*\(", lines[idx])
+                    if m:
+                        disabled_fns.add(m.group(1))
+            if disabled_fns:
+                for i, line in enumerate(lines):
+                    if "=>" in line and any(fn in line for fn in disabled_fns):
+                        to_comment.add(i)
+
+            for idx in sorted(to_comment):
+                if idx < len(lines) and not lines[idx].lstrip().startswith("//"):
+                    lines[idx] = f"// AUTO-DISABLED (unresolvable Math.Rounding): {lines[idx].rstrip()}\n"
+
+            with open(new_spec, "w") as f:
+                f.writelines(lines)
+
+            action = "Overwrote" if not keep_intermediate else "Created"
+            self.log(
+                f"{action} {new_spec.name}: disabled {len(to_comment)} line(s) of the directional "
+                f"Math.Rounding summary (no valid qualifier for the enum)"
+            )
+            return new_spec
+
+        return fix_rounding_disable_directional
 
     def _find_spec_file(self, spec_name: str) -> Optional[Path]:
         """
