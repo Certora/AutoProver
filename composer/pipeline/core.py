@@ -314,27 +314,21 @@ async def _extract_all[P: enum.Enum, H](
         )
         return ctx, props
 
-    # Both strategies reduce to a list of (unit, properties, unit-context) triples; the ecosystem
-    # differs only in the *fan direction*. Global extraction infers once over the whole program
-    # and fans each property into its own unit (one prop per batch); per-component infers per unit
-    # (concurrently) and keeps that unit's properties grouped. The ``_Batch`` build below is shared.
-    # (Extraction is unit-agnostic — over the ``FeatureUnit`` protocol; run_pipeline's single cast
-    # reunites the batches with the paired backend's concrete unit type ``U``.)
+    # Both strategies reduce to a list of (unit, properties, unit-context) triples. Global
+    # extraction infers once over the whole program and keeps ALL invariants in a single
+    # whole-program batch (collapse_units); per-component infers per unit (concurrently) and keeps
+    # that unit's properties grouped. The ``_Batch`` build below is shared. (Extraction is
+    # unit-agnostic — over the ``FeatureUnit`` protocol; run_pipeline's single cast reunites the
+    # batches with the paired backend's concrete unit type ``U``.)
     triples: list[tuple[FeatureUnit, list[PropertyFormulation], WorkflowContext[ComponentGroup]]]
     if ecosystem.global_extraction:
-        assert ecosystem.extraction_unit is not None
+        # Infer once over the whole program, then formalize every invariant in ONE whole-program
+        # harness + run (docs/crucible-unit-granularity.md §3). Empty props → no batch. Today
+        # global extraction always collapses (the per-property fan-out prototype was removed).
+        assert ecosystem.extraction_unit is not None and ecosystem.collapse_units
         ext_unit = ecosystem.extraction_unit(main)
         ext_ctx, props = await _extract(ext_unit)
-        if ecosystem.collapse_units:
-            # One whole-program batch: every invariant is formalized into a single harness + run
-            # (docs/crucible-unit-granularity.md §3). Empty props → no batch (nothing to formalize).
-            triples = [(ext_unit, props, ext_ctx)] if props else []
-        else:
-            assert ecosystem.property_unit is not None
-            triples = []
-            for i, prop in enumerate(props):
-                unit = ecosystem.property_unit(main, prop, i)
-                triples.append((unit, [prop], await _unit_ctx(unit)))
+        triples = [(ext_unit, props, ext_ctx)] if props else []
     else:
         units = ecosystem.units(main)
         extracted = await asyncio.gather(*[_extract(u) for u in units])

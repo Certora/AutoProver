@@ -34,10 +34,8 @@ from composer.spec.system_model import (
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaInstructionInstance,
-    SolanaInvariantUnit,
     SolanaProgramInstance,
 )
-from composer.spec.types import PropertyFormulation
 from composer.spec.util import FS_FORBIDDEN_READ
 
 LanguageTag = Literal["solidity", "rust"]
@@ -110,20 +108,17 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
 
     # -- Extraction strategy (docs/crucible-unit-granularity.md) -------------------------
     #: When True, the driver runs ONE whole-program property extraction (context =
-    #: ``extraction_unit(main)``) and fans each resulting property out into its own unit
-    #: via ``property_unit`` — one harness + verdict per property. When False (the EVM
-    #: default) it extracts per ``units(main)`` (one batch per component). Solana uses
-    #: global extraction so the fuzzer gets whole-program invariants, one run per invariant.
+    #: ``extraction_unit(main)``) and formalizes every resulting invariant in a single
+    #: whole-program harness + run (see ``collapse_units``). When False (the EVM default) it
+    #: extracts per ``units(main)`` — one batch per component. Solana uses global extraction so
+    #: the fuzzer gets whole-program invariants.
     global_extraction: bool = False
     #: The whole-program context the global extraction reads (only used when global_extraction).
     extraction_unit: Callable[[Main], FeatureUnit] | None = None
-    #: Build the per-property unit from (main, property, index) (only used when global_extraction
-    #: and NOT collapse_units).
-    property_unit: Callable[[Main, PropertyFormulation, int], FeatureUnit] | None = None
-    #: When True (with global_extraction), keep all extracted properties in a SINGLE batch on the
-    #: whole-program ``extraction_unit`` — one formalization, one harness, one run covering every
-    #: invariant (docs/crucible-unit-granularity.md §3; prototype of the "single whole-program
-    #: unit" collapse). When False, fan each property into its own ``property_unit``.
+    #: With global_extraction, keep all extracted properties in a SINGLE batch on the whole-program
+    #: ``extraction_unit`` — one formalization, one harness, one run covering every invariant
+    #: (docs/crucible-unit-granularity.md §3), finding-level attribution recovering which property a
+    #: counterexample hit. This is the only global-extraction mode today.
     collapse_units: bool = False
 
 
@@ -277,12 +272,6 @@ def _solana_extraction_unit(main: SolanaProgramInstance) -> SolanaProgramInstanc
     return main
 
 
-def _solana_property_unit(
-    main: SolanaProgramInstance, prop: PropertyFormulation, ind: int
-) -> SolanaInvariantUnit:
-    return SolanaInvariantUnit(ind, main, prop)
-
-
 def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
     return [
         f"The main program of this application has been explicitly identified as "
@@ -301,12 +290,11 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaInstructionIns
     locate_main=_solana_locate_main,
     units=_solana_units,
     analysis_extra_input=_solana_analysis_extra_input,
-    # Fuzzing wants whole-program invariants — docs/crucible-unit-granularity.md. Prototype:
-    # collapse all invariants into ONE whole-program harness + run (§3), instead of one per
-    # invariant, now that finding-level attribution recovers which property a counterexample hits.
+    # Fuzzing wants whole-program invariants (docs/crucible-unit-granularity.md §3): infer once
+    # over the program, then collapse every invariant into ONE whole-program harness + run —
+    # finding-level attribution recovers which property a counterexample hit.
     global_extraction=True,
     extraction_unit=_solana_extraction_unit,
-    property_unit=_solana_property_unit,
     collapse_units=True,
 )
 
