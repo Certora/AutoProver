@@ -30,7 +30,7 @@ from composer.workflow.services import CacheLevel
 
 
 from langgraph.types import Command
-from composer.spec.feedback import property_feedback_judge, FeedbackTemplate
+from composer.spec.feedback import property_feedback_judge, FeedbackTemplate, Properties
 from composer.ui.tool_display import tool_display
 
 from graphcore.graph import FlowInput
@@ -391,8 +391,8 @@ async def batch_cvl_generation(
     feedback_env = property_feedback_judge(
         ctx.child(CVL_JUDGE_KEY), env, FeedbackTemplate.bind({
             "sort": "existing",
-            "context": component
-        }), props
+            "context": component,
+        }).depends(Properties), props
     )
 
     res_state = await run_cvl_generator(
