@@ -165,10 +165,45 @@ feedback on the specification's assumptions about the contract's implementation.
 Do *NOT* assume that this specification must work with a particular API/library/implementation/storage layout etc. you are familiar with.
 {% endif %}
 
-### Criteria 7: Property Coverage
+### Criteria 7: Meaningful Contract Interaction
+
+A rule's verdict must depend on the contract. Reject any rule/invariant whose pass/fail outcome is fixed entirely by
+CVL-level arithmetic over its free variables, such that no contract function's return value and no contract state could
+change it — it re-derives a fact about integer arithmetic and testifies to nothing about the implementation. (Free
+*inputs* are fine — that is Criteria 3; the defect is a verdict that is a function of free variables *alone*. A *contract
+symbol* means a contract call, a state read like `currentContract.x`, or a ghost/hook mirroring storage.)
+
+Litmus (a thought experiment, so it applies even to a non-functional stub): could some type-compatible behavior of the
+contract symbols the rule touches make it *verify* while another makes it *produce a counterexample*? If the outcome is
+the same for every *non-vacuous* behavior, the rule is not meaningful. A behavior that only prunes all paths (e.g. a
+getter returning `0` so `require x > 0` never holds) does **not** count as a flip; and one load-bearing symbol suffices —
+an incidental getter alongside a real call is fine.
+
+Merely *naming* a contract symbol does not rescue a rule. Two shapes:
+1. *No interaction* — free-variable arithmetic asserted against itself, no contract symbol touched (e.g. asserting
+   `treasuryShares * totalFee == sharesMintedAsFees * treasuryFee` after `treasuryShares = (sharesMintedAsFees * treasuryFee) / totalFee`: a fact about CVL integer division).
+2. *Inert interaction* — a contract symbol is read but cannot swing the assert (e.g. reading `PRICE_UNIT()` then
+   asserting `revenue1 == revenue2` for prices with `price1 != price2`: a counterexample exists for *every*
+   `PRICE_UNIT() > 0`, so the symbol is decorative).
+
+CLARIFICATION: This is *not* the Criteria 1 tautology smell — a tautology always holds, whereas these rules are
+falsifiable (both shapes readily produce counterexamples) yet contract-independent. Report a rule already caught by
+Criteria 1 there, not here.
+
+CLARIFICATION: *Meaningful* means the verdict *depends on* the contract, **not** that the rule mutates state or avoids
+arithmetic. Do **NOT** flag a rule whose verdict a different implementation could change — e.g.
+`assert convertToShares(a) + convertToShares(b) >= convertToShares(a + b)`; a CVL formula checked against a *contract*
+output like `assert accruedInterest(p, r, t) == (p * r * t) / SECONDS_PER_YEAR()`; revert-characteristic rules
+(`f@withrevert(...); assert lastReverted <=> (predicate)`); or bounded-array element-wise rules.
+
+When rejecting, prescribe feeding the free inputs into the relevant contract function and asserting on its output (or the
+state it writes), instead of comparing a CVL derivation against another CVL derivation of the same quantity — comparing
+against a *contract* output is the cure, not the defect.
+
+### Criteria 8: Property Coverage
 
 Verify that the specification covers all {{ properties | length }} listed properties. For each property:
-- If the spec contains rules/invariants addressing it: evaluate those rules under criteria 1-6.
+- If the spec contains rules/invariants addressing it: evaluate those rules under criteria 1-7.
 - If the spec does NOT address a property AND the author has NOT declared a skip for it: reject the spec and flag the missing property.
 - If the author declared a skip for a property: critically evaluate the justification. If the property IS expressible in CVL
   (e.g., using ghost state, invariants, or other CVL features), reject the skip and explain how it can be formalized.
@@ -203,7 +238,7 @@ When formulating your feedback, be sure to consider any feedback you gave previo
 Using the write_rough_draft tool, create an initial draft of your analysis.
 
 ## Step 5
-Read back your rough draft, and compare every point of feedback against the 7 criteria. If the feedback is nonsensical, not actionable, or not in relation
+Read back your rough draft, and compare every point of feedback against the 8 criteria. If the feedback is nonsensical, not actionable, or not in relation
 to one of the criteria, discard it.
 
 {% if sort != "existing" %}
@@ -230,7 +265,7 @@ this specification.
 
 <guidance>
 <hard_requirement>
-Do not provide ANY feedback except for the 7 criteria above.
+Do not provide ANY feedback except for the 8 criteria above.
 </hard_requirement>
 <hard_requirement>
 Do NOT make assertions about the behavior of CVL without first checking the manual.

@@ -112,7 +112,8 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
 
 
 # ---- shared helpers (the de-duplicated cache keys + batch) -------------------
-PROPERTIES_KEY = CacheKey[None, Properties]("properties")
+def PROPERTIES_KEY(nm: str):
+    return CacheKey[None, Properties](nm)
 
 
 def main_instance(app: AnyApplication, source: SourceCode) -> ContractInstance:
@@ -180,8 +181,11 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
     formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
 
-    batches = await _extract_all(prepared.main, backend.backend_guidance, run,
-                                phases["extraction"], interactive, threat_model, max_bug_rounds)
+    batches = await _extract_all(
+        backend.analysis_spec.properties_key, 
+        prepared.main, backend.backend_guidance, run,
+        phases["extraction"], interactive, threat_model, max_bug_rounds
+    )
     formalizer = await formalizer_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
@@ -251,10 +255,11 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     return _tally(outcomes)
 
 async def _extract_all[P: enum.Enum, H](
+    prop_key: str,
     main: ContractInstance, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
 ) -> list[_Batch]:
-    prop_ctx = run.ctx.child(PROPERTIES_KEY)
+    prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
 
     async def _one(idx: int) -> _Batch | None:
         feat = ContractComponentInstance(_contract=main, ind=idx)

@@ -762,6 +762,31 @@ class ConfigManager:
     # compilation_workarounds.
     # =========================================================================
 
+    # (scalar, per-contract map) conf-key pairs. certoraRun hard-rejects a conf
+    # that sets both members of a pair (certoraContextValidator:
+    # convert_to_compiler_map for solc/compiler_map, check_map_attributes for
+    # the rest), so a map always supersedes its scalar counterpart.
+    SCALAR_TO_MAP_KEYS = (
+        ("solc", "compiler_map"),
+        ("solc_via_ir", "solc_via_ir_map"),
+        ("solc_optimize", "solc_optimize_map"),
+        ("solc_evm_version", "solc_evm_version_map"),
+    )
+
+    @staticmethod
+    def drop_scalars_superseded_by_maps(conf_object: Dict[str, Any]) -> None:
+        """Remove every scalar compile flag whose per-contract map is present.
+
+        Any step that puts a map into a conf must call this (or pop the scalar
+        itself) before the conf reaches certoraRun — the CLI rejects the pair
+        outright ("compiler map flags cannot be set with other compiler
+        flags"), and no compilation workaround can detect that rejection since
+        it happens before any solc invocation.
+        """
+        for scalar_key, map_key in ConfigManager.SCALAR_TO_MAP_KEYS:
+            if map_key in conf_object:
+                conf_object.pop(scalar_key, None)
+
     def _solc_convention(self) -> SolcConvention:
         """Convention this manager emits: derived from the boolean
         convert_solc_to_certora_format flag for symmetry with the rest of

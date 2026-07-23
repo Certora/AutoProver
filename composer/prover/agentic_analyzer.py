@@ -51,8 +51,10 @@ from composer.prover.core import (
 from composer.prover.ptypes import RuleResult, RulePath, AnalyzedDiagnosis
 from composer.prover.report_store import ReportStore
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.util import uniq_thread_id
+from composer.spec.util import uniq_thread_id, string_hash
 from composer.templates.loader import load_jinja_template
+from composer.diagnostics.timing import set_current_task_id
+from composer.prover.cex_task_ids import cex_rule_task_id, cex_aggregator_task_id
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 
 
@@ -479,8 +481,17 @@ class AgenticCexHandler(CexHandler):
                 for i, entry in enumerate(scratchpad)
             ]
 
+        async def _process_rule_addressed(
+            rule_group: FailingRule,
+        ) -> list[_PerRuleRootCause]:
+            # Distinct task_id lane per concurrent per-rule analysis (keyed by the
+            # prover tool_call_id + rule name) so the harness tape can address the
+            # gathered sub-agents; in production this just scopes timing per rule.
+            with set_current_task_id(cex_rule_task_id(tool_call_id, rule_group.rule_name)):
+                return await _process_rule(rule_group)
+
         per_rule = await asyncio.gather(
-            *(_process_rule(rg) for rg in failing_rules)
+            *(_process_rule_addressed(rg) for rg in failing_rules)
         )
         # Flatten preserving rule order (gather preserves input order).
         all_causes: list[_PerRuleRootCause] = [
@@ -501,9 +512,10 @@ class AgenticCexHandler(CexHandler):
         # Cross-rule aggregator. Sees the per-rule root causes (already
         # within-rule-clustered) and partitions them by cross-rule
         # equivalence.
-        agg = await self._run_aggregator(
-            all_causes, report_fs=report_fs, tool_call_id=tool_call_id,
-        )
+        with set_current_task_id(cex_aggregator_task_id(tool_call_id)):
+            agg = await self._run_aggregator(
+                all_causes, report_fs=report_fs, tool_call_id=tool_call_id,
+            )
 
         # Validator (see ``_aggregator_validator``) already enforced that
         # every cause_index is in range, no duplicates, every input
@@ -514,7 +526,10 @@ class AgenticCexHandler(CexHandler):
 
         for partition in agg.partitions:
             attributed: list[RulePath] = []
-            report_key = uuid.uuid4().hex
+            # Content-addressed rather than a uuid: stable across identical
+            # re-runs and reconstructible by the harness tape (which scripts the
+            # diagnosis text), while staying opaque to the author.
+            report_key = string_hash(partition.diagnosis)
             for i in partition.cause_indices:
                 for attr in all_causes[i].attributed_rule_paths:
                     attributed.append(attr)

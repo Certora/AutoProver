@@ -75,6 +75,10 @@ FILE_PROVER_USAGE = "prover_usage.json"
 FILE_ALL_METHODS_JSON = "all_methods.json"
 PATH_ALL_METHODS_JSON = Path(DIR_CERTORA_INTERNAL) / FILE_ALL_METHODS_JSON
 
+# Compiled-scene user-defined-type inventory emitted under .certora_internal/
+FILE_ALL_USER_DEFINED_TYPES_JSON = "all_user_defined_types.json"
+PATH_ALL_USER_DEFINED_TYPES_JSON = Path(DIR_CERTORA_INTERNAL) / FILE_ALL_USER_DEFINED_TYPES_JSON
+
 SUMMARIES_SUBDIR = Path("specs") / "summaries"
 
 # User-facing layout under certora/

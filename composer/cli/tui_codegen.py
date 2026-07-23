@@ -9,7 +9,6 @@ from composer.input.parsing import fresh_workflow_argument_parser, upload_input
 from composer.llm.registry import get_provider_for, uploader_for
 from composer.workflow.executor import execute_ai_composer_workflow
 from composer.ui.codegen_rich import CodeGenRichApp
-from composer.ui.ide_bridge import IDEBridge
 from composer.ui.tool_display import tool_context
 
 
@@ -28,22 +27,21 @@ async def _main() -> int:
 
     input_data = await upload_input(uploader, args)
 
-    async with IDEBridge.connect() as ide:
-        app = CodeGenRichApp(show_checkpoints=args.show_checkpoints, ide=ide) # type: ignore[attr-defined]
+    app = CodeGenRichApp(show_checkpoints=args.show_checkpoints, ide=ide) # type: ignore[attr-defined]
 
-        async def work() -> None:
-            app.result = await execute_ai_composer_workflow(
-                handler=app,
-                llm=llm,
-                input=input_data,
-                workflow_options=args,
-            )
+    async def work() -> None:
+        app.result = await execute_ai_composer_workflow(
+            handler=app,
+            llm=llm,
+            input=input_data,
+            workflow_options=args,
+        )
 
-        app.set_work(work)
-        with tool_context():
-            await app.run_async()
+    app.set_work(work)
+    with tool_context():
+        await app.run_async()
 
-        return app.exit_code
+    return app.exit_code
 
 
 def main() -> int:
