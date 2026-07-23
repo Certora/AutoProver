@@ -204,29 +204,25 @@ against a *contract* output is the cure, not the defect.
 
 Verify that the specification covers all {{ properties | length }} listed properties. For each property:
 - If the spec contains rules/invariants addressing it: evaluate those rules under criteria 1-7.
-- If the spec does NOT address a property AND the author has NOT declared a skip for it: reject the spec and flag the missing property.
-- If the author declared a skip for a property: critically evaluate the justification. If the property IS expressible in CVL
-  (e.g., using ghost state, invariants, or other CVL features), reject the skip and explain how it can be formalized.
-  Only accept a skip if the property is genuinely beyond CVL's expressiveness *as confirmed
-  by your own empirical research* or provided CVL-Document-Ref citations. Do *NOT* accept
-  accept an author's claims that a property is beyond CVL's expressiveness at face value,
-  nor should you make your *own* assumptions about CVL expressibility:
-  you MUST perform your own research (or examine any CVL Document references cited in their skip)
-  and critically examine their claims about CVL expressivity when evaluating the skip.
+- If the spec neither addresses the property NOR carries an author skip: reject the spec and flag the missing property.
+- If the author declared a skip: evaluate it by the rules below.
 
-  *Exception*: if the author has filed an empirical rebuttal (see Step 1) against a prior-round
-  formalization you proposed, accept that rebuttal per the Step 1 evaluation rules — do not
-  re-insist on the same proposal. If the rebuttal establishes that no working formalization was
-  found, the skip is VALID on the grounds that your prior proposal proved unworkable.
-{% if sort != "greenfield" %}
-  If the property being skipped could be formalized with Solidity code changes, the skip is VALID. Do *NOT* reject
-  skips with advice to change the Solidity code. The Solidity code is *IMMUTABLE* and suggestions to change the Solidity
-  code are INVALID.
-{% endif %}
+#### Evaluating a skip
 
-Do NOT "wave through" skip reasons because they sound plausible or confidently assert uncited
-facts about CVL or the prover behavior. Further, do not accept as a skip justification
-citations of limitations of their own authored CVL, i.e.,
+A spuriously skipped property is just as, if not more, fatal than a poorly written one. Each skipped property introduces a potential
+gap in the verification of the program which potentially lets bugs or other undesirable behavior appear in "verified" code.
+Accordingly, the reasons provided for a skip must be subject to intense scrutiny. The level of scrutiny you must apply depends
+on the grounds cited in the reason. First identify which the author is claiming:
+
+**Ground A — CVL cannot express it.** The claim is that CVL lacks the expressive power to state or observe the property:
+it cannot access some storage, cannot quantify over some structure, has no construct for the needed observation, and so on.
+This class is *checkable*, and is where the author is most likely to invent claims; a confident, technical-sounding statement of
+something being impossibile in CVL or "beyond the prover" should never be taken on faith.
+Verify the *specific* claim before accepting the skip: search the manual / use `cvl_researcher`, or read any CVL-Document-Ref the author cited.
+Accept only if your own research or the provided citations confirms the limitation; otherwise reject and name the construct that expresses it
+(ghost state, direct storage access, hooks, an invariant, a CVL function, bounded element-wise logic, ...).
+
+Further, do not accept a skip from the author that cites of limitations of their own authored CVL, i.e.,
 reject a reason that explains their chosen summarization/hook/ghost strategy
 doesn't admit verifying the skipped property. The author has *full control* over the *entire* CVL
 file you are reviewing, including the summaries, hooks, ghosts, cvl functions, etc.
@@ -234,15 +230,24 @@ If the summarization/hook/ghost strategy they chose makes the desired
 property impossible to verify, but an alternative strategy could, reject the skip with advice
 on how to adjust the strategy.
 
+**Ground B — the prover cannot discharge it.**
 
-**Array quantification limitation**: The Certora Prover cannot universally quantify over
-dynamic-length arrays. Properties that reason about all elements of an array can only be
-verified by explicitly bounding the array size and adding element-wise logic for each case.
-This means:
-- Rules that `require` a bounded array size (e.g., `require arr.length <= 3`) and verify
-  element-wise are a *valid* approach — do not reject them for overconstrained inputs.
-- If a property fundamentally requires reasoning over arbitrary-length arrays with no
-  feasible bound, accept a skip citing this limitation.
+The claim is that CVL expresses the property fine, but the *prover* cannot prove it in practice: timeouts, non-linear arithmetic, path explosion, non-termination, unknown error in the prover.
+This skip ground rests on run experience of the author you do not have;
+accept it on that basis (the same evidentiary logic as an empirical rebuttal in Step 1).
+Ideally the reason points at the concrete obstacle observed (which computation blew up, where it diverged).
+
+{% if sort != "greenfield" %}
+**Ground C — it would require Solidity changes.** The Solidity code is *IMMUTABLE*. If the only way to formalize the property is to change the source (harnesses included), the skip is VALID. Never reject a skip with advice to change the code.
+{% endif %}
+
+*Prior-round exception (Ground A):* if the author filed an empirical rebuttal (Step 1) showing a formalization *you* proposed does not work, either search for another plausible
+solution or accept the skip on the grounds that your proposal proved unworkable.
+
+#### The unbounded-array limitation (a specific Ground A)
+
+The prover cannot universally quantify over dynamic-length arrays, so a property that must reason about *all* elements of an arbitrary-length array with no feasible size bound is a valid Ground-A skip. Two scoping caveats:
+- Bounding the array (`require arr.length <= 3`) and verifying element-wise is a *valid formalization*, not an over-constraint — do not reject it under Criteria 4, and its availability defeats the skip whenever a bound is feasible.
 </criteria>
 
 When formulating your feedback, be sure to consider any feedback you gave previously.
