@@ -100,18 +100,13 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     validate_analysis: Callable[[BaseApplication, SolidityIdentifier | None], str | None]
     #: Locate the target unit (the "main contract"/program) in the analyzed model.
     locate_main: Callable[[App, SourceCode], Main]
+    #: Enumerate the units the extraction phase infers properties for — one batch per unit. EVM
+    #: returns one per component; a whole-program ecosystem (Solana) returns a singleton ``[main]``,
+    #: so all its invariants are inferred + formalized in a single harness + run
+    #: (docs/crucible-unit-granularity.md §3).
+    units: Callable[[Main], list[Unit]]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
-
-    # -- Extraction strategy (docs/crucible-unit-granularity.md) --------------------------
-    # An ecosystem supplies exactly ONE of the two below; which one is set selects the mode.
-    #: Per-component: enumerate the units the extraction phase infers properties for — one batch
-    #: per unit. Set by EVM (one component = one unit).
-    units: Callable[[Main], list[Unit]] | None = None
-    #: Whole-program: the single whole-program context extraction reads. All invariants are kept in
-    #: ONE harness + run (docs/crucible-unit-granularity.md §3), with finding-level attribution
-    #: recovering which property a counterexample hit. Set by Solana; its presence selects this mode.
-    extraction_unit: Callable[[Main], FeatureUnit] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -252,10 +247,11 @@ def _solana_locate_main(app: SolanaApplication, source: SourceCode) -> SolanaPro
     raise ValueError(f"main program {source.contract_name!r} not found in analyzed application")
 
 
-def _solana_extraction_unit(main: SolanaProgramInstance) -> SolanaProgramInstance:
-    # The whole program is the extraction context; SolanaProgramInstance is itself a
-    # FeatureUnit, so the driver reads it directly to propose whole-program invariants.
-    return main
+def _solana_units(main: SolanaProgramInstance) -> list[SolanaProgramInstance]:
+    # Whole-program mode: a single unit that IS the program — so all invariants are inferred and
+    # formalized in one harness + run (docs/crucible-unit-granularity.md §3). SolanaProgramInstance
+    # is itself a FeatureUnit, so the driver reads it directly to propose whole-program invariants.
+    return [main]
 
 
 def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
@@ -266,8 +262,11 @@ def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
     ]
 
 
-# Whole-program mode: no per-component units — the extraction unit IS the whole program, so the
-# ``Unit`` type param is ``SolanaProgramInstance`` (same as ``Main``).
+# Whole-program mode: ``units`` returns a singleton ``[main]`` (the ``Unit`` type param is
+# ``SolanaProgramInstance``, same as ``Main``). Fuzzing wants whole-program invariants
+# (docs/crucible-unit-granularity.md §3): all invariants are inferred over the program and
+# formalized into ONE harness + run — finding-level attribution recovers which property a
+# counterexample hit.
 SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaProgramInstance] = Ecosystem(
     name="solana",
     language=RUST,
@@ -276,12 +275,8 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaProgramInstanc
     property_prompts=PromptPair("solana/property_system.j2", "solana/property_prompt.j2"),
     validate_analysis=_solana_validate,
     locate_main=_solana_locate_main,
+    units=_solana_units,
     analysis_extra_input=_solana_analysis_extra_input,
-    # Fuzzing wants whole-program invariants (docs/crucible-unit-granularity.md §3): infer once
-    # over the program, then keep every invariant in ONE whole-program harness + run —
-    # finding-level attribution recovers which property a counterexample hit. Setting
-    # ``extraction_unit`` (and no ``units``) selects this mode.
-    extraction_unit=_solana_extraction_unit,
 )
 
 
