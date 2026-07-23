@@ -145,6 +145,17 @@ def _evm_analysis_extra_input(source: SourceCode) -> list[str | dict]:
     ]
 
 
+# Adding Vyper support (a second EVM source language) would, at a very high level:
+#   1. Extend ``LanguageTag`` with ``"vyper"`` and add a ``VYPER`` ``Language`` facet here (its
+#      own ``forbidden_read``, code-explorer prompt, and — eventually — failure-modes partial).
+#   2. Bind it to a Vyper-flavored EVM ``Ecosystem`` (its own analysis/property prompts) and
+#      route to it by detecting the target's source language at the entry point.
+#   3. Loosen the analysis model's Solidity assumptions: contracts are keyed by
+#      ``SolidityIdentifier`` / ``solidity_identifier`` throughout (see ``system_model`` and
+#      ``main_instance``), which would need to become language-neutral.
+# The CVL backend needs the least work — the Certora Prover already accepts Vyper (it verifies
+# compiled bytecode) — while the Foundry backend is Solidity-only by construction (it authors
+# and runs ``.t.sol`` tests), so it would need a separate Vyper story or be left EVM/Solidity-only.
 SOLIDITY = Language(
     name="solidity",
     default_forbidden_read=FS_FORBIDDEN_READ,
