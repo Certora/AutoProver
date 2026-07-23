@@ -148,6 +148,7 @@ async def test_global_extraction_fans_out_one_batch_per_invariant(monkeypatch):
     )
 
     batches = await core._extract_all(
+        prop_key="test-properties",
         main=object(), backend_guidance="", run=_Run(), phase=None,
         interactive=False, threat_model=None, max_rounds=1, ecosystem=eco,
     )
@@ -180,6 +181,7 @@ async def test_collapse_units_makes_one_whole_program_batch(monkeypatch):
     )
 
     batches = await core._extract_all(
+        prop_key="test-properties",
         main=object(), backend_guidance="", run=_Run(), phase=None,
         interactive=False, threat_model=None, max_rounds=1, ecosystem=eco,
     )

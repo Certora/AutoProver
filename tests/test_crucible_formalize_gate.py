@@ -43,7 +43,7 @@ from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import llm_factory, standard_connections
 
 from tests.conftest import MockSentenceTransformer, needs_postgres
-from tests.test_autoprove_integration import _MEMORIES_DDL, _RAG_DB, _VECTOR_DBS, _db_url
+from tests.conftest import _MEMORIES_DDL, _RAG_DB, _VECTOR_DBS, _db_url
 
 if TYPE_CHECKING:
     from testcontainers.postgres import PostgresContainer

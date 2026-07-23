@@ -31,7 +31,7 @@ from composer.workflow.services import standard_connections, llm_factory
 from composer.kb.knowledge_base import DefaultEmbedder
 
 from tests.conftest import needs_postgres, MockSentenceTransformer
-from tests.test_autoprove_integration import _RAG_DB, _VECTOR_DBS, _MEMORIES_DDL, _db_url
+from tests.conftest import _RAG_DB, _VECTOR_DBS, _MEMORIES_DDL, _db_url
 
 if TYPE_CHECKING:
     from testcontainers.postgres import PostgresContainer
