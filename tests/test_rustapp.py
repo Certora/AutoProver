@@ -74,8 +74,8 @@ def test_validate_returns_a_good_verdict():
     res = json.loads(
         echoprover.validate(_component_input("p"), "spec", "rule_p", "/tmp", json.dumps({"argv_prefix": []}))
     )
-    # ValidateOutcome: the demo always builds, so a verdict (not build_failed).
-    assert res == {"kind": "verdict", "verdict": {"outcome": "GOOD"}}
+    # ValidateOutcome: the demo always builds, so per-unit verdicts (not build_failed).
+    assert res == {"kind": "verdicts", "verdicts": [["rule_p", {"outcome": "GOOD"}]]}
 
 
 def test_result_round_trips_through_cache_serialization():

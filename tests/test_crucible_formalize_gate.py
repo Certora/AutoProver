@@ -257,7 +257,7 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             pytest.fail(f"per-component authoring gave up: {test_src.reason}")
 
         units = json.loads(module.units(input_json))
-        # validate is the fused build+fuzz; a clean vault run → a GOOD verdict (not build_failed).
+        # validate is the fused build+fuzz; a clean vault run → GOOD verdicts (not build_failed).
         res = json.loads(
             await asyncio.to_thread(module.validate, input_json, test_src, _FEATURE, str(_SCENARIO), sandbox_json)
         )
@@ -265,7 +265,9 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
     print("\n===== authored test =====\n" + test_src)
     print("units:", units, "validate:", res)
     assert "#[invariant_test]" in test_src or "#[crucible_fuzz]" in test_src
-    assert res["kind"] == "verdict", res
-    assert res["verdict"]["outcome"] == "GOOD", res
+    assert res["kind"] == "verdicts", res
+    (unit_name, verdict), = res["verdicts"]
+    assert unit_name == _FEATURE, res
+    assert verdict["outcome"] == "GOOD", res
     # property → this test's unit is recorded for the report.
     assert units == [{"property": _PROPS[0]["title"], "unit": _FEATURE}]
