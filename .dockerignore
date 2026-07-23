@@ -28,3 +28,7 @@ build/
 dist/
 .idea/
 .vscode/
+
+# Cargo build output — the image's sandbox-builder stage recompiles run-confined;
+# copying host target/ (large) would only bloat the build context.
+**/target/
