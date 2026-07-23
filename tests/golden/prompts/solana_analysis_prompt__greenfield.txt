@@ -1,0 +1,71 @@
+# Background
+
+
+You have been provided a system/design document describing a Solana application. No
+implementation exists yet, and the document may vary in technical rigor.
+
+
+# Task
+
+Analyze this design document and extract a holistic, structured model of the
+application. Your model describes the **programs** that need to be written, the
+**instructions** each program exposes, the **accounts** each instruction operates on (with the
+checks the program must enforce), and any **external authorities/actors** involved. Produce
+natural-language descriptions — do *NOT* write Rust or pseudo-code.
+
+## Application Description
+
+Provide an "Application Type" — a broad category (e.g. "AMM", "Staking", "NFT marketplace",
+"Escrow") — and a short (2–3 sentence) description that refines it. Then a list of "System
+Components": each is either a **Program** or an **External Authority**.
+
+### External Authorities
+
+Any actor not part of the core application the programs interact with: an admin/authority
+keypair, an off-chain signer, or a third-party program (e.g. an oracle) the system does not
+itself implement. The **SPL Token program, the System program, and other standard Solana
+programs are external authorities** unless the application implements them. Give each a short
+name, a description of its role, and the assumptions/trust placed in it.
+
+### Programs
+
+Each program the application implements. For each program provide:
+
+- `name`: a short conceptual label (e.g. "Vault", "Staking Pool").
+- `program_identifier`: the program's Rust crate/module identifier as it appears (or will
+  appear) in source — a valid Rust identifier (snake_case, matching `[a-zA-Z_][a-zA-Z0-9_]*`).
+- `program_id`: the on-chain base58 program id if declared (e.g. via `declare_id!`), else null.
+- `description`: the program's role in the application.
+- `account_types`: the account/state types this program owns and derives (PDAs) — name & purpose.
+- `instructions`: the program's instructions (entry points), described below.
+
+#### Instructions
+
+Each instruction (the program's entry points / handlers). For each:
+
+- `name`: the instruction's snake_case name.
+- `description`: what it does behaviorally (not how).
+- `args`: its non-account arguments (name & type).
+- `accounts`: every account it takes in its accounts context. For each account give its `name`,
+  its `account_type` (e.g. `Signer`, `Account<Vault>`, `Program`, `SystemAccount`,
+  `UncheckedAccount`, a PDA of specific seeds), its `roles` (signer / writable / readonly / pda /
+  program / sysvar), and the `constraints` the program is responsible for enforcing on it
+  (signer/owner checks, `has_one`, `seeds`+`bump`, `address`, or documented invariants). If an
+  account has no enforced constraints, record an empty list — that is itself important signal.
+- `signers`: which accounts must sign (the authorities the instruction authenticates).
+- `cpis`: cross-program invocations it performs (target program + what it does / signer used).
+- `requirements`: the instruction's behavioral specification, stated as requirements ("The
+  instruction must ...").
+
+## On Interactions
+
+Enumerate programs and authorities as comprehensively as the inputs allow. Halt transitive
+exploration at external-authority boundaries — do not speculate about what those actors do
+internally. When an instruction CPIs into another program the application implements, that
+callee is a Program (a component), not an external authority.
+
+# Memory
+
+You have a memory tool that may include prior progress on this task. Assume the documentation /
+source has NOT changed since the memories were written; you need not re-verify memorized facts
+and may proceed with them as if you derived them yourself.

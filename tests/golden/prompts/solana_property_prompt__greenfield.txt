@@ -1,0 +1,136 @@
+<background>
+You are performing a security review of a Solana program as a whole, to produce **program-level
+invariants** for a coverage-guided fuzzer. The fuzzer drives *random sequences* of the program's
+instructions and checks each property after every action — so the properties you write must hold
+across ANY reachable sequence of actions, not only within a single instruction.
+</background>
+
+<inputs>
+This task targets whole-program security invariants of the program ``
+(``), part of a `` application.
+
+
+
+The program exposes these instructions (the actions a fuzzer will drive in random sequences):
+
+</inputs>
+
+
+
+<task>
+Input: a design document for a Solana program, and a description of its instructions.
+Output: a list of whole-program "security properties" a fuzzer can check after every action.
+
+Follow these steps exactly:
+
+## Step 1
+
+Analyze the provided design and formulate a set of security
+properties that are PLAUSIBLE for this program. Prefer **cross-instruction** properties — ones a
+random sequence of actions could violate (conservation, monotonicity, access control that must hold
+no matter what came before) — over ones local to a single call. Each description must be precise and
+concise, and phrased as something checkable against on-chain state after any action.
+
+Security properties fall into three categories:
+
+1. **Invariants** — representational invariants that should always hold for the program's accounts/state,
+   across every reachable state.
+   Good: "The vault's token balance always equals the sum of all depositors' recorded shares."
+   Good: "A config PDA's `admin` field is only ever the key that signed the last `set_admin`."
+   Bad: "The accounts should be correct" (overly broad).
+
+2. **Safety properties** — concrete statements about what should not be possible in a correct program,
+   over any action sequence.
+   These SHOULD include intended-normal-behavior properties, not only immediately-security-critical ones.
+   Good: "Only the account stored in `vault.authority` (and it must sign) can ever reduce the vault balance."
+   Good: "`initialize` can succeed at most once for a given config PDA, no matter the call order."
+   Good: "No sequence of actions lets a user withdraw more than they have deposited."
+   Bad: "A user should not be able to hack the program" (overly broad).
+
+3. **Attack vectors** — plausible issues/edge cases exploitable to the protocol's detriment. You do
+   NOT need evidence they exist, only that they are PLAUSIBLE given the design.
+   Good: "If `vault` is an `UncheckedAccount` whose owner is not checked, an attacker can pass a
+   look-alike account they control and redirect the withdrawal."
+   Good: "If the `authority` account is not constrained to sign, anyone can invoke `withdraw` as
+   the authority (missing signer check)."
+   Good: "If the fee PDA's `bump` is taken from the instruction rather than re-derived, an attacker
+   can substitute a different PDA."
+   Bad: "The program could be exploited somehow" (overly broad).
+
+When reasoning about attack vectors and the checks each account requires, consider these failure modes:
+
+Rust language-level failure modes (shared by every Rust on-chain ecosystem — Solana, Soroban, …):
+
+- **Integer overflow / underflow.** On-chain Rust builds usually enable `overflow-checks`, so an
+  overflow *panics* (aborting the transaction) rather than wrapping — a denial-of-service /
+  griefing vector, not silent corruption. But code that uses `wrapping_*`, `unchecked_*`, `as`
+  casts (truncation), or arithmetic in a non-checked build can silently produce wrong values.
+  Look for arithmetic on balances, amounts, indices, and lengths.
+- **Panics as aborts.** `unwrap()`, `expect()`, `panic!`, array indexing out of bounds, and
+  `unreachable!` all abort the transaction. An attacker-controllable input that forces one is a
+  DoS / stuck-funds vector (e.g. an operation that can be made to always panic).
+- **Lossy conversions / precision.** `as` casts between integer widths truncate; integer
+  division rounds toward zero. Rounding direction that favors the caller over the protocol
+  (or vice versa) across two code paths is an arbitrage / value-leak vector.
+- **Unchecked results.** An ignored `Result`/error (`let _ = ...`, `.ok()`, `?` swallowed) that
+  should have aborted lets execution continue in an inconsistent state.
+
+Solana platform failure modes (the account/PDA/CPI model — reason about these specifically):
+
+- **Missing signer check.** An instruction that mutates state or moves value on behalf of an
+  authority but never checks that authority `is_signer` (or omits the Anchor `Signer<'info>` /
+  `has_one` / `#[account(signer)]` constraint) lets anyone act as that authority.
+- **Missing owner check.** An account deserialized as a program type without verifying its
+  `owner` is the expected program lets an attacker substitute a look-alike account they created
+  under a program they control (`UncheckedAccount` / `AccountInfo` without checks is the smell;
+  Anchor `Account<'info, T>` checks owner, raw does not).
+- **Account substitution / confused deputy.** Two accounts that must be related (e.g. a vault and
+  its authority, a token account and its mint/owner) but whose relationship is not constrained
+  (`has_one`, `constraint = a.key() == b.x`, `address = ...`) let an attacker pass a mismatched
+  pair — draining a different user's vault, minting to the wrong mint, etc.
+- **Unvalidated PDA seeds / bump.** A PDA account not re-derived and checked against its expected
+  `seeds` + canonical `bump` lets an attacker pass an arbitrary account in its place; a mutable
+  bump or non-canonical bump enables collisions/hijacking.
+- **Arbitrary CPI / program substitution.** Invoking a program taken from an unchecked account
+  (not pinned to a known program id) lets an attacker redirect the CPI to malicious code; missing
+  checks on the callee for token/system operations.
+- **Signer-seed / authority misuse in CPI.** A PDA that signs a CPI (`invoke_signed`) with seeds
+  an attacker can influence, or over-broad authority, lets value move without proper authorization.
+- **Lamport / rent draining & account close bugs.** Manual lamport transfers that don't preserve
+  rent exemption, or `close` handling that doesn't zero data / send to the right account, enable
+  reinitialization attacks or fund theft.
+- **Duplicate mutable accounts.** Passing the same account twice where the program assumes two
+  distinct accounts (e.g. `from`/`to`) can double-count or bypass a balance check.
+- **Missing reinitialization / init guards.** An `init`-like path callable twice, or state that
+  can be re-initialized after close, resets ownership/config.
+- **Sysvar / clock spoofing.** Reading a sysvar (clock, rent) from a passed account rather than the
+  canonical sysvar lets an attacker forge time/rent values.
+
+[BACKEND GUIDANCE]
+
+NB: you do **NOT** need to formalize the properties yourself; limit your analysis to properties that
+can reasonably be formalized by the downstream verification tool.
+
+## Step 2
+Write a rough-draft list of your properties using the `write_rough_draft` tool.
+
+## Step 3
+Review your rough draft. For each property, confirm it meets the Step-1 guidelines — a clear
+violation consequence, non-trivial, plausibly verifiable as a whole-program invariant. Drop anything
+you cannot defend.
+
+## Step 4
+Output the results using the result tool.
+</task>
+
+<guidance>
+  
+  <hard_requirement>
+    You need not prove a safety property/invariant definitely holds — only that it, with extreme
+    likelihood, SHOULD hold for a correct implementation.
+  </hard_requirement>
+  <reminder>
+     For attack vectors you need not find evidence the issue exists — only that it is plausible
+     given the program and its design.
+  </reminder>
+</guidance>
