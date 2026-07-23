@@ -33,11 +33,11 @@ class FeatureUnit(Protocol):
         """Stable string identifying this unit, hashed into its per-unit cache key."""
         ...
 
-    def context_tag(self) -> dict:
+    def context_tag(self) -> dict[str, object]:
         """The tag persisted alongside this unit's workflow context."""
         ...
 
-    def feature_json(self) -> dict:
+    def feature_json(self) -> dict[str, object]:
         """The unit's semantic content as a JSON-able dict, for a backend that
         marshals it across a boundary (e.g. a Rust wheel's ``FormalizeInput.component``).
         The shape is ecosystem-specific; the paired backend knows how to read it."""
@@ -291,10 +291,10 @@ class ContractComponentInstance:
     def cache_material(self) -> str:
         return "|".join([self.app.model_dump_json(), str(self.ind), str(self._contract.ind)])
 
-    def context_tag(self) -> dict:
+    def context_tag(self) -> dict[str, object]:
         return {"component": self.component.model_dump()}
 
-    def feature_json(self) -> dict:
+    def feature_json(self) -> dict[str, object]:
         return self.component.model_dump(mode="json")
 
     @staticmethod

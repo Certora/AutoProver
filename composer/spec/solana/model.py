@@ -166,10 +166,10 @@ class SolanaProgramInstance:
     def cache_material(self) -> str:
         return "|".join([self.app.model_dump_json(), str(self.ind), "program"])
 
-    def context_tag(self) -> dict:
+    def context_tag(self) -> dict[str, object]:
         return {"program": self.program.model_dump()}
 
-    def feature_json(self) -> dict:
+    def feature_json(self) -> dict[str, object]:
         return {
             "program": self.program.name,
             "instructions": [i.model_dump(mode="json") for i in self.program.instructions],
@@ -216,10 +216,10 @@ class SolanaInvariantUnit:
             [self.app.model_dump_json(), str(self._program.ind), str(self.ind), self.invariant.title]
         )
 
-    def context_tag(self) -> dict:
+    def context_tag(self) -> dict[str, object]:
         return {"invariant": self.invariant.model_dump(mode="json"), "program": self.program.name}
 
-    def feature_json(self) -> dict:
+    def feature_json(self) -> dict[str, object]:
         return {
             "program": self.program.name,
             "instructions": [i.model_dump(mode="json") for i in self.program.instructions],
@@ -262,10 +262,10 @@ class SolanaInstructionInstance:
     def cache_material(self) -> str:
         return "|".join([self.app.model_dump_json(), str(self.ind), str(self._program.ind)])
 
-    def context_tag(self) -> dict:
+    def context_tag(self) -> dict[str, object]:
         return {"instruction": self.instruction.model_dump()}
 
-    def feature_json(self) -> dict:
+    def feature_json(self) -> dict[str, object]:
         # The unit's semantic content for a backend marshalling it across a boundary:
         # the instruction, tagged with its program (a Solana backend needs both).
         return {
