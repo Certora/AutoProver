@@ -11,6 +11,7 @@ from composer.spec.system_model import BaseApplication, ExplicitContract, Extern
 from composer.spec.service_host import ServiceHost
 from composer.spec.util import slugify_filename
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
+from composer.diagnostics.budget import budget_monitor
 
 DESCRIPTION = "Component analysis"
 
@@ -132,7 +133,7 @@ async def run_component_analysis[T: BaseApplication](
         "application_analysis_prompt.j2",
         sort=env.sort,
         has_doc=input is not None
-    )
+    ).with_monitor(budget_monitor())
 
     graph = b.compile_async()
     inputs : list[str | dict] = []

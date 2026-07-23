@@ -117,6 +117,24 @@ class CorePipelineResult[FormT: BackendResult]:
         driver raises before returning in the no-outcomes case anyway)."""
         return bool(self.outcomes) and self.n_delivered == 0
 
+class PhaseBudget(TypedDict):
+    """Per-phase spending *caps* (USD). Ceilings, not allotments: they bound
+    how much a single phase may hog, and need not sum to the run total —
+    unspent phase money stays in the run pool for later phases."""
+    formalization_preparation: float
+    system_analysis: float
+    system_preparation: float
+    property_extraction: float
+    formalization: float
+
+
+@dataclass(frozen=True)
+class RunBudget:
+    """The run's token-cost budget: ``total`` is the pool (the real bound on
+    overall spend); ``caps`` are the per-phase ceilings drawn against it."""
+    total: float
+    caps: PhaseBudget
+
 __all__ = [
     "CorePipelineResult",
     "ComponentOutcome",

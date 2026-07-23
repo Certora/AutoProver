@@ -1,4 +1,4 @@
-from typing import NotRequired, override, Literal, Annotated
+from typing import Callable, NotRequired, override, Literal, Annotated
 from typing_extensions import TypedDict
 import json
 
@@ -32,8 +32,12 @@ from composer.workflow.services import CacheLevel
 from langgraph.types import Command
 from composer.spec.feedback import property_feedback_judge, FeedbackTemplate
 from composer.ui.tool_display import tool_display
+from composer.diagnostics.budget import (
+    BudgetExceeded, budget_monitor, raise_budget_exceeded,
+)
+from .monitor import monitor
 
-from graphcore.graph import FlowInput
+from graphcore.graph import FlowInput, MonitorReturn
 
 class SourceAuthorExtra(TypedDict):
     failed: bool | None
@@ -331,6 +335,41 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
 
+_BUDGET_WRAPUP_MESSAGE = """
+<system-alert>
+You have almost exceeded the token cost budget for this task. Wrap up IMMEDIATELY;
+a partial spec is better than going over budget. Concretely:
+
+- The feedback and prover validation requirements on publishing have been lifted. You no
+  longer need approval from the feedback judge — ignore any pending or future feedback,
+  including a judge response saying it was terminated.
+- Do NOT start new prover runs or research.
+- Delete any rules/invariants that do not currently work.
+- Skip (`record_skip`) every property you have not gotten to work, citing budget exhaustion.
+- Then publish what remains via the `result` tool.
+</system-alert>
+"""
+
+
+def _author_monitor() -> "Callable[[SourceCVLGenerationState], MonitorReturn]":
+    """The author's monitor: budget wrap-up takes precedence; otherwise the
+    usual reminders-channel drain. On the (single) turn the budget warning
+    fires any pending reminders are dropped — moot, since the warning tells
+    the agent to ignore prover/feedback outcomes anyway."""
+    b_monitor = budget_monitor(
+        warning_message=_BUDGET_WRAPUP_MESSAGE,
+        state_transformer=lambda _s: {"required_validations": []},
+        on_overbudget=raise_budget_exceeded,
+    )
+
+    def combined(curr_state: SourceCVLGenerationState) -> MonitorReturn:
+        msgs, upd = b_monitor(curr_state)
+        if msgs is None and upd is None:
+            return monitor(curr_state)
+        return msgs, upd
+
+    return combined
+
 async def batch_cvl_generation(
     ctx: WorkflowContext[CVLGeneration],
     init_config: dict,
@@ -376,6 +415,8 @@ async def batch_cvl_generation(
         [prover_tool, ExpectRulePassage.as_tool("expect_rule_passage"), ExpectRuleFailure.as_tool("expect_rule_failure"), GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"), ctx.get_memory_tool()]
     ).with_state(
         SourceCVLGenerationState
+    ).with_monitor(
+        _author_monitor()
     ).with_output_key(
         "result"
     ).with_input(
@@ -395,24 +436,29 @@ async def batch_cvl_generation(
         }), props
     )
 
-    res_state = await run_cvl_generator(
-        ctx = ctx,
-        d = task_graph,
-        description=description,
-        ctxt=feedback_env,
-        in_state=SourceCVLGenerationInput(
-            curr_spec=None,
-            config=init_config,
-            spec_stem=spec_stem,
-            input=[],
-            required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
-            rule_skips={},
-            skipped=[],
-            property_rules=[],
-            validations={},
-            failed=None,
+    try:
+        res_state = await run_cvl_generator(
+            ctx = ctx,
+            d = task_graph,
+            description=description,
+            ctxt=feedback_env,
+            in_state=SourceCVLGenerationInput(
+                curr_spec=None,
+                config=init_config,
+                spec_stem=spec_stem,
+                input=[],
+                required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
+                rule_skips={},
+                skipped=[],
+                property_rules=[],
+                validations={},
+                failed=None,
+                prover_history=[],
+                reminders_channel=[]
+            )
         )
-    )
+    except BudgetExceeded as e:
+        return GaveUp(reason=f"CVL generation terminated: {e}")
 
     assert "result" in res_state
     assert res_state["failed"] is not None

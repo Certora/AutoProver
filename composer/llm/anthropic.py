@@ -13,6 +13,7 @@ from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     ProviderKind, CacheLevel, _ListIter, NoSuchElementError,
 )
+from composer.llm.pricing import PriceProvider, price_provider_for
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -126,17 +127,21 @@ class AnthropicModelProvider:
     model_name: str
     options: ModelConfiguration
     features: ModelFeatures
-    provider: ProviderKind = "anthropic"
+    price_provider: PriceProvider
+    provider: Literal["anthropic"] = "anthropic"
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
-        return AnthropicModelProvider(model_name, options, _model_parser(model_name))
+        return AnthropicModelProvider(
+            model_name, options, _model_parser(model_name), price_provider_for(model_name)
+        )
 
     def builder_for(
         self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
         from composer.diagnostics.usage_callback import UsageCallback
+        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -174,5 +179,10 @@ class AnthropicModelProvider:
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=[UsageCallback()],
+            callbacks=[
+                UsageCallback(),
+                CostAccumulator(
+                    self.price_provider, long_cache=cache_level == CacheLevel.LONG
+                ),
+            ],
         )

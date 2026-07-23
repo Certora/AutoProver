@@ -43,7 +43,11 @@ from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowConte
 from composer.spec.cvl_generation import (
     PropertyFeedbackProtocol, RebuttalBase, SkippedProperty,
 )
-from composer.spec.feedback import PropertyFeedback
+from composer.spec.feedback import BUDGET_ABORT_FEEDBACK, PropertyFeedback
+from composer.diagnostics.budget import (
+    BudgetExceeded, BudgetPressureAbort, budget_monitor, budget_pressure,
+    pressure_abort_monitor, raise_budget_exceeded,
+)
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
@@ -372,6 +376,15 @@ class FeedbackTool(
     async def run(self) -> Command | str:
         if self.state["curr_test"] is None:
             return "No test written"
+        if budget_pressure():
+            # Don't launch a judge that would be terminated on its first
+            # monitor tick; the author's budget warning already tells it
+            # feedback approval is no longer required.
+            return (
+                "Good? False\nFeedback:\nThe feedback judge was not run due to "
+                "budget constraints. See the system alert: feedback approval is "
+                "no longer required for this task."
+            )
         with self.tool_deps() as deps:
             res = await deps.thunk(
                 self.state["curr_test"],
@@ -427,6 +440,8 @@ def _build_feedback_thunk(
         "foundry_property_judge_system_prompt.j2"
     ).with_tools(
         [*get_rough_draft_tools(ST), judge_ctx.get_memory_tool(), GetTestTool.as_tool("get_test")]
+    ).with_monitor(
+        pressure_abort_monitor()
     ).compile_async()
 
     async def thunk(
@@ -458,17 +473,20 @@ def _build_feedback_thunk(
                     f"    Addressing: {r.prior_feedback_reference}\n"
                     f"    Evidence: {r.evidence}"
                 )
-        res = await run_to_completion(
-            workflow,
-            TestJudgeInput(
-                input=input_parts, curr_test=test_source,
-                memory=None, did_read=False,
-            ),
-            thread_id=uniq_thread_id("foundry-feedback"),
-            recursion_limit=judge_ctx.recursion_limit,
-            description="Foundry test feedback judge",
-            within_tool=within_tool,
-        )
+        try:
+            res = await run_to_completion(
+                workflow,
+                TestJudgeInput(
+                    input=input_parts, curr_test=test_source,
+                    memory=None, did_read=False,
+                ),
+                thread_id=uniq_thread_id("foundry-feedback"),
+                recursion_limit=judge_ctx.recursion_limit,
+                description="Foundry test feedback judge",
+                within_tool=within_tool,
+            )
+        except BudgetPressureAbort:
+            return BUDGET_ABORT_FEEDBACK
         assert "result" in res
         return res["result"]
 
@@ -514,17 +532,22 @@ class PublishResultTool(
     async def run(self) -> Command | str:
         if (err := check_foundry_completion(self.state)) is not None:
             return err
-        ran = self.state["last_test_names"]
-        if ran is None:
-            # Unreachable in practice — the forge_test stamp required above
-            # implies a run recorded its test names — but defend anyway.
-            return "Completion REJECTED: no forge_test run has been recorded."
-        with self.tool_deps() as titles:
-            err = validate_property_tests(
-                self.property_tests, self.state["skipped"], titles, ran,
-            )
-        if err is not None:
-            return err
+        if not budget_pressure():
+            # The forge-ground-truth cross-check requires a recorded run; in
+            # the budget wrap-up window (where the agent is told to delete
+            # failing tests and publish without re-running forge) the declared
+            # mapping is accepted as-is.
+            ran = self.state["last_test_names"]
+            if ran is None:
+                # Unreachable in practice — the forge_test stamp required above
+                # implies a run recorded its test names — but defend anyway.
+                return "Completion REJECTED: no forge_test run has been recorded."
+            with self.tool_deps() as titles:
+                err = validate_property_tests(
+                    self.property_tests, self.state["skipped"], titles, ran,
+                )
+            if err is not None:
+                return err
         return tool_state_update(
             self.tool_call_id,
             "Accepted",
@@ -625,6 +648,21 @@ _FoundryPropertyGenTemplate = TypedTemplate[FoundryPropertyGenParams](
     "foundry_property_generation_prompt.j2"
 )
 
+_BUDGET_WRAPUP_MESSAGE = """
+<system-alert>
+You have almost exceeded the token cost budget for this task. Wrap up IMMEDIATELY;
+a partial test file is better than going over budget. Concretely:
+
+- The forge-test and feedback validation requirements on publishing have been lifted. You
+  no longer need approval from the feedback judge — ignore any pending or future feedback,
+  including a judge response saying it was terminated.
+- Do NOT start new forge runs or research.
+- Delete any tests that do not currently compile or pass.
+- Skip (`record_skip`) every property you have not gotten to work, citing budget exhaustion.
+- Then publish what remains via the `result` tool.
+</system-alert>
+"""
+
 
 async def batch_foundry_test_generation(
     ctx: WorkflowContext[FoundryGeneration],
@@ -700,6 +738,11 @@ async def batch_foundry_test_generation(
         .with_sys_prompt_template("foundry_property_generation_system_prompt.j2")
         .inject(lambda b: bound_template.render_to(b.with_initial_prompt_template))
         .with_summary_config(FoundryGenerationSummaryConfig())
+        .with_monitor(budget_monitor(
+            warning_message=_BUDGET_WRAPUP_MESSAGE,
+            state_transformer=lambda _s: {"required_validations": []},
+            on_overbudget=raise_budget_exceeded,
+        ))
     )
     graph = builder.compile_async()
 
@@ -716,13 +759,16 @@ async def batch_foundry_test_generation(
     )
 
     tid, mnem = await ctx.thread_and_mnemonic()
-    res_state = await run_to_completion(
-        graph,
-        init_state,
-        thread_id=tid,
-        description=f"{description} ({mnem})",
-        recursion_limit=ctx.recursion_limit,
-    )
+    try:
+        res_state = await run_to_completion(
+            graph,
+            init_state,
+            thread_id=tid,
+            description=f"{description} ({mnem})",
+            recursion_limit=ctx.recursion_limit,
+        )
+    except BudgetExceeded as e:
+        return GaveUp(reason=f"Foundry test generation terminated: {e}")
 
     assert "result" in res_state
     assert res_state["failed"] is not None
