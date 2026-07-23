@@ -180,8 +180,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     # ``SOLANA``) can't unify with a tied ``Main``; the only type accepting both is ``Any``. The
     # coupling is loose besides: ``prepare_system`` fixes ``analyzed: SourceApplication`` (so a
     # non-EVM ``App`` can't be tied without making it generic), and the backend's ``U`` isn't the
-    # ecosystem's ``Unit`` (the null backend uses ``FeatureUnit``; ``collapse_units`` fans a
-    # program into invariant units) — which is why the unit list is ``cast`` below, not inferred.
+    # ecosystem's ``Unit`` (the null backend uses ``FeatureUnit``; whole-program extraction yields
+    # one program-level unit) — which is why the unit list is ``cast`` below, not inferred.
     # So the backend↔ecosystem pairing is a runtime contract; the caller is trusted to pair them.
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
@@ -314,22 +314,21 @@ async def _extract_all[P: enum.Enum, H](
         )
         return ctx, props
 
-    # Both strategies reduce to a list of (unit, properties, unit-context) triples. Global
-    # extraction infers once over the whole program and keeps ALL invariants in a single
-    # whole-program batch (collapse_units); per-component infers per unit (concurrently) and keeps
-    # that unit's properties grouped. The ``_Batch`` build below is shared. (Extraction is
+    # Both strategies reduce to a list of (unit, properties, unit-context) triples. The mode is
+    # selected by which callable the ecosystem set: ``extraction_unit`` (whole-program) xor
+    # ``units`` (per-component). The ``_Batch`` build below is shared. (Extraction is
     # unit-agnostic — over the ``FeatureUnit`` protocol; run_pipeline's single cast reunites the
     # batches with the paired backend's concrete unit type ``U``.)
     triples: list[tuple[FeatureUnit, list[PropertyFormulation], WorkflowContext[ComponentGroup]]]
-    if ecosystem.global_extraction:
-        # Infer once over the whole program, then formalize every invariant in ONE whole-program
-        # harness + run (docs/crucible-unit-granularity.md §3). Empty props → no batch. Today
-        # global extraction always collapses (the per-property fan-out prototype was removed).
-        assert ecosystem.extraction_unit is not None and ecosystem.collapse_units
+    if ecosystem.extraction_unit is not None:
+        # Whole-program: infer once over the whole program, then formalize every invariant in ONE
+        # harness + run (docs/crucible-unit-granularity.md §3). Empty props → no batch.
         ext_unit = ecosystem.extraction_unit(main)
         ext_ctx, props = await _extract(ext_unit)
         triples = [(ext_unit, props, ext_ctx)] if props else []
     else:
+        # Per-component: one batch per unit.
+        assert ecosystem.units is not None, "ecosystem must set exactly one of units / extraction_unit"
         units = ecosystem.units(main)
         extracted = await asyncio.gather(*[_extract(u) for u in units])
         triples = [(u, props, ctx) for u, (ctx, props) in zip(units, extracted) if props]
