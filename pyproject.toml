@@ -102,7 +102,7 @@ dev = [
 # step either — activate it once per venv with:
 #     python -m maturin_import_hook site install
 apps = [
-    # crucible_app is added in PR3 (its crate lives in rust/crucible-app, which lands there).
+    "crucible_app",
     "echoprover",
     "maturin-import-hook>=0.3.0",
 ]
@@ -120,7 +120,7 @@ conflicts = [
 [tool.uv.sources]
 graphcore = { path = "./graphcore", editable = true }
 # Rust/PyO3 wheels built from the local workspace (see the `apps` group above).
-# crucible_app's source is added in PR3 (with its crate under rust/crucible-app).
+crucible_app = { path = "rust/crucible-app", editable = true }
 echoprover = { path = "rust/example-app", editable = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },

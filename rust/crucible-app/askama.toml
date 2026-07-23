@@ -1,0 +1,4 @@
+# Preserve template whitespace verbatim — these templates render prompts and Rust/TOML
+# source where newlines are significant, so we don't want askama trimming around tags.
+[general]
+whitespace = "preserve"

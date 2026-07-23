@@ -85,6 +85,8 @@ RUN mkdir -p $HOME/.cache/huggingface \
 # postgresql-client provides `psql` for the entrypoint's setup-db; git is
 # occasionally shelled out to by tooling. No openssh-client / SSH — the
 # Python install pulls from PyPI + the vendored graphcore submodule.
+# (The `RunCommand` sandbox uses in-kernel Landlock + seccomp — no package
+# needed; see docs/command-sandbox.md §6.)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git ca-certificates \
@@ -149,10 +151,16 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
 COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
 
-# The `run-confined` command-sandbox launcher is intentionally NOT baked in here
-# (not every AutoProver image needs it). Services that select the `launcher`
-# provider opt in via the scripts/docker-compose.sandbox.yml overlay, which
-# mounts the binary at $RUN_CONFINED_BIN at runtime — see docs/command-sandbox.md.
+# Pre-built crucible_kb RAG manifest, committed in the crucible app dir — the entrypoint's
+# setup-db imports it (composer.scripts.rag_import) to populate the crucible_rag schema. No
+# crucible checkout is needed at build or run time; the corpus travels as this committed JSON.
+COPY rust/crucible-app/crucible_kb.rag.json $AUTOPROVE_HOME/crucible_kb.rag.json
+
+# The `run-confined` command-sandbox launcher is intentionally NOT baked into this
+# base image (not every AutoProver image needs it). Crucible's default provider is
+# `launcher` and is fail-closed, so any container that runs Crucible MUST add the
+# scripts/docker-compose.sandbox.yml overlay: it builds the launcher and mounts it
+# read-only at $RUN_CONFINED_BIN. See docs/command-sandbox.md.
 
 # Pre-download the sentence-transformers embedding model so first runs are
 # offline-fast. nomic-embed-text-v1.5 ships custom modeling code, hence
