@@ -20,6 +20,7 @@ from composer.pipeline.ptypes import (
     CorePipelineResult
 )
 from composer.spec.artifacts import ArtifactIdentifier
+from composer.spec.system_model import FeatureUnit
 from composer.spec.service_host import ModelProvider
 from composer.spec.system_analysis import SolidityIdentifier
 from .core import PipelineBackend, run_pipeline
@@ -113,10 +114,10 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A]
+        backend: PipelineBackend[P, FormT, H, A, U]
     ) -> CorePipelineResult[FormT]:
         ...
 
@@ -249,9 +250,9 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A]
+                backend: PipelineBackend[P, FormT, H, A, U]
             ) -> CorePipelineResult[FormT]:
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
