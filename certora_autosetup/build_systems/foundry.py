@@ -22,6 +22,7 @@ else:
 from certora_autosetup.build_systems.base import BuildSystemConfig
 from certora_autosetup.build_systems.manager import BuildSystemManager
 from certora_autosetup.utils.logger import logger
+from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -84,7 +85,10 @@ class FoundryConfig(BuildSystemConfig):
         Returns:
             Dictionary with Certora config format
         """
-        # Apply common settings (solc, optimizer, via_ir) using base class helper
+        # Apply common settings (solc, optimizer, via_ir) using base class helper.
+        # The base helper deliberately drops the project's own optimizer setting; see
+        # _apply_common_solc_settings. Foundry's explicit per-contract restrictions still
+        # re-emit solc_optimize / solc_optimize_map via apply_per_contract_settings.
         result = self._apply_common_solc_settings(convert_solc_to_certora_format)
 
         # Apply packages (Foundry-specific)
@@ -176,11 +180,13 @@ class FoundryManager(BuildSystemManager):
             # Resolve paths relative to foundry.toml location
             config = self._resolve_paths(config, config_file.parent)
 
-            # Parse remappings and convert to packages format
-            if config.remappings:
-                config.packages = self._convert_remappings_to_packages(
-                    config.remappings, config_file.parent
-                )
+            # Build the packages list from forge remappings + foundry.toml + remappings.txt
+            # + package.json for the resolved profile.
+            packages = build_packages_from_remapping_sources(
+                base_dir=config_file.parent, log_fn=self.log, profile=profile
+            )
+            if packages:
+                config.packages = packages
 
             self.log(
                 f"Parsed foundry config: solc={config.solc_version}, optimizer={config.optimizer}"
@@ -299,42 +305,6 @@ class FoundryManager(BuildSystemManager):
             config.libs = resolved_libs
 
         return config
-
-    def _convert_remappings_to_packages(
-        self, remappings: List[str], foundry_dir: Path
-    ) -> List[str]:
-        """
-        Convert foundry remappings to Certora packages format.
-
-        Based on Brain's parse_packages and parse_remappings_from_foundry functions.
-        """
-        packages = []
-
-        for remapping in remappings:
-            try:
-                # Parse remapping format: "@openzeppelin/=lib/openzeppelin-contracts/"
-                if "=" in remapping:
-                    alias, path = remapping.split("=", 1)
-                    alias = alias.strip()
-                    path = path.strip()
-
-                    # Resolve relative paths
-                    if not Path(path).is_absolute():
-                        path = str(foundry_dir / path)
-
-                    # Convert to Certora package format
-                    # if alias.startswith("@"):
-                    #     # NPM-style package: @openzeppelin/contracts=lib/openzeppelin-contracts
-                    #     package_name = alias[1:]  # Remove @
-                    #     packages.append(f"{package_name}={path}")
-                    # else:
-                    #     # Simple alias: contracts=src/contracts
-                    packages.append(f"{alias}={path}")
-
-            except Exception as e:
-                self.log(f"Failed to parse remapping '{remapping}': {e}", "WARNING")
-
-        return packages
 
     def get_available_profiles(self, foundry_file: Path) -> List[str]:
         """Get list of available profiles in foundry.toml."""

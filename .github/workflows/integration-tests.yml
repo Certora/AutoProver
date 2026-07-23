@@ -14,7 +14,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Check out code
@@ -43,6 +43,13 @@ jobs:
           uv pip install solc-select
           uv run solc-select install 0.8.29
           uv run solc-select use 0.8.29
+          # certoraRun resolves Certora-convention names like `solc8.29` as
+          # literal executables; solc-select only ships the `solc` shim, so
+          # fetch the static binary under that exact name.
+          sudo curl -fsSL https://github.com/ethereum/solidity/releases/download/v0.8.29/solc-static-linux \
+            -o /usr/local/bin/solc8.29
+          sudo chmod +x /usr/local/bin/solc8.29
+          solc8.29 --version
 
       - name: async runners
         run: |

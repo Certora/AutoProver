@@ -67,9 +67,7 @@ def _code_explorer_graph(
         sys_prompt
     ).with_initial_prompt(
         "Answer the following question about the source code"
-    ).compile_async(
-        checkpointer=InMemorySaver()
-    )
+    ).compile_async()
 
 class _ExploreCodeCommon(BaseModel):
     """
