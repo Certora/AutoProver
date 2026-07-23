@@ -21,7 +21,7 @@ from composer.input.files import Document
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
-from composer.spec.system_model import ContractComponentInstance
+from composer.spec.system_model import FeatureUnit
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.service_host import Sort, ServiceHost
 from composer.io.conversation import ConversationContextProvider
@@ -101,13 +101,14 @@ field not exceeding 2^128 - 1, etc.)
 
 
 def _get_initial_prompt(
-    context: ContractComponentInstance,
+    context: FeatureUnit,
     sort: Sort,
     prev_results: list[_AgentRoundResult],
     backend_guidance: str,
+    template: str = "property_analysis_prompt.j2",
 ) -> str:
     return load_jinja_template(
-        "property_analysis_prompt.j2",
+        template,
         context=context,
         backend_guidance=backend_guidance,
         sort=sort,
@@ -279,12 +280,14 @@ def _unique_titles_validator(
 
 async def _run_bug_round(
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: FeatureUnit,
     front_matter_items: Sequence[str | dict],
     ctx: WorkflowContext[_AgentResult],
     round: int,
     prev: list[_AgentRoundResult],
     backend_guidance: str,
+    system_template: str = "property_analysis_system_prompt.j2",
+    initial_template: str = "property_analysis_prompt.j2",
 ) -> _AgentRoundWithHistory:
     round_ctx = ctx.child(agent_round_key(round))
     if (cached := await round_ctx.cache_get(_AgentRoundWithHistory)) is not None:
@@ -305,13 +308,13 @@ async def _run_bug_round(
     ).with_input(
         BugAnalysisInput
     ).with_initial_prompt(
-        _get_initial_prompt(component, env.sort, prev, backend_guidance)
+        _get_initial_prompt(component, env.sort, prev, backend_guidance, initial_template)
     ).with_tools(
         get_rough_draft_tools(ST)
     ).with_tools(
         env.analysis_tools
     ).with_sys_prompt_template(
-        "property_analysis_system_prompt.j2", sort=env.sort
+        system_template, sort=env.sort
     ).compile_async()
 
     flow_input: BugAnalysisInput = BugAnalysisInput(
@@ -341,11 +344,13 @@ async def _run_bug_round(
 async def _run_bug_analysis_inner(
     agent_component_analysis: WorkflowContext[_AgentResult],
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: FeatureUnit,
     extra_input: Sequence[str | dict],
     threat_model: Document | None,
     max_rounds: int,
     backend_guidance: str,
+    system_template: str = "property_analysis_system_prompt.j2",
+    initial_template: str = "property_analysis_prompt.j2",
 ) -> _AgentResult:
     if (cached := await agent_component_analysis.cache_get(_AgentResult)) is not None:
         return cached
@@ -367,7 +372,7 @@ async def _run_bug_analysis_inner(
     for i in range(0, max_rounds):
         next_result = await _run_bug_round(
             env, component, front_matter_items, agent_component_analysis, i, prev_rounds,
-            backend_guidance,
+            backend_guidance, system_template, initial_template,
         )
         if len(next_result.items) == 0:
             assert last_round_convo is not None
@@ -389,12 +394,15 @@ async def _run_bug_analysis_inner(
 async def run_property_inference(
     ctx: WorkflowContext[ComponentGroup],
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: FeatureUnit,
     extra_input : Sequence[str | dict] = tuple(),
     threat_model: Document | None = None,
     refinement: ConversationContextProvider | None = None,
     max_rounds: int = 3,
     backend_guidance: str = CERTORA_BACKEND_GUIDANCE,
+    *,
+    system_template: str = "property_analysis_system_prompt.j2",
+    initial_template: str = "property_analysis_prompt.j2",
 ) -> list[PropertyFormulation]:
     """
     Extract security properties for a component.
@@ -419,6 +427,8 @@ async def run_property_inference(
         threat_model,
         max_rounds=max_rounds,
         backend_guidance=backend_guidance,
+        system_template=system_template,
+        initial_template=initial_template,
     )
     if refinement is None:
         to_ret = agent_attempt.items

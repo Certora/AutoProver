@@ -1,0 +1,15 @@
+Rust language-level failure modes (shared by every Rust on-chain ecosystem — Solana, Soroban, …):
+
+- **Integer overflow / underflow.** On-chain Rust builds usually enable `overflow-checks`, so an
+  overflow *panics* (aborting the transaction) rather than wrapping — a denial-of-service /
+  griefing vector, not silent corruption. But code that uses `wrapping_*`, `unchecked_*`, `as`
+  casts (truncation), or arithmetic in a non-checked build can silently produce wrong values.
+  Look for arithmetic on balances, amounts, indices, and lengths.
+- **Panics as aborts.** `unwrap()`, `expect()`, `panic!`, array indexing out of bounds, and
+  `unreachable!` all abort the transaction. An attacker-controllable input that forces one is a
+  DoS / stuck-funds vector (e.g. an operation that can be made to always panic).
+- **Lossy conversions / precision.** `as` casts between integer widths truncate; integer
+  division rounds toward zero. Rounding direction that favors the caller over the protocol
+  (or vice versa) across two code paths is an arbitrage / value-leak vector.
+- **Unchecked results.** An ignored `Result`/error (`let _ = ...`, `.ok()`, `?` swallowed) that
+  should have aborted lets execution continue in an inconsistent state.

@@ -1,0 +1,9 @@
+These properties will be checked with Crucible, a coverage-guided fuzzer for Solana programs. As a fuzzer it cannot
+*prove* universally quantified properties or invariants, but it approximates them well and any *refutation* (a fuzzing
+counterexample / crash) is extremely valuable. So state universal safety properties and invariants freely — do not
+restrict yourself because a fuzzer cannot definitively prove them.
+
+A few categories are a poor fit and should be skipped: properties about off-chain events (key compromise, social
+engineering, oracle manipulation outside the modeled accounts), and pure hash-collision resistance ("no two inputs ever
+collide"), which sampling cannot refute. Arithmetic-overflow and type-level facts are worth stating: Rust overflow
+panics and Anchor constraint failures surface as crashes the fuzzer can find.

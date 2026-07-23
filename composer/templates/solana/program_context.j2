@@ -1,0 +1,21 @@
+This task targets whole-program security invariants of the program `{{ context.program.name }}`
+(`{{ context.program.program_identifier }}`), part of a `{{ context.app.application_type }}` application.
+
+{% if context.program.account_types %}
+The program owns / derives these account (state) types: {{ context.program.account_types | join(", ") }}.
+{% endif %}
+
+The program exposes these instructions (the actions a fuzzer will drive in random sequences):
+{% for ins in context.program.instructions %}
+### `{{ ins.name }}`
+{{ ins.description }}
+{% if ins.requirements %}Requirements:
+{% for req in ins.requirements %}  - {{ req }}
+{% endfor %}{% endif %}
+{% if ins.args %}Non-account arguments: {% for a in ins.args %}`{{ a }}`{% if not loop.last %}, {% endif %}{% endfor %}.
+{% endif %}Accounts (and the checks the program must enforce):
+{% for acc in ins.accounts %}  - `{{ acc.name }}` — {{ acc.account_type }}{% if acc.roles %} [{{ acc.roles | join(", ") }}]{% endif %}{% if acc.constraints %}; constraints: {{ acc.constraints | join("; ") }}{% endif %}.
+{% endfor %}{% if ins.signers %}Must sign: {{ ins.signers | join(", ") }}.
+{% endif %}{% if ins.cpis %}CPIs: {% for cpi in ins.cpis %}→ `{{ cpi.target_program }}` ({{ cpi.description }}){% if not loop.last %}; {% endif %}{% endfor %}.
+{% endif %}
+{% endfor %}

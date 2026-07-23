@@ -378,6 +378,24 @@ def _mini_report() -> AutoProverReport:
                             skipped=skipped, coverage=cov)
 
 
+def test_render_html_shows_finding_message():
+    # A backend diagnostic (the Crucible fuzzer's counterexample / failed-assertion message) is
+    # surfaced on the rule row, so a non-GOOD verdict explains itself in the report.
+    p1 = _fp("C", "p_dep", [("c.spec", "c_deposit")], desc="deposit increases balance")
+    rules = [RuleVerdict(name="c_deposit", spec_file="c.spec", outcome=Outcome.BAD,
+                         message="crash abc: deposit(5) - expected 105 got 100")]
+    groups = [PropertyGroup(slug="deposits", title="Deposits", description="d",
+                            status=GroupStatus.BAD, members=[("C", "p_dep")])]
+    cov = CoverageReport(total_properties=1, total_rules=1, total_groups=1,
+                         properties_per_group_min=1, properties_per_group_max=1,
+                         property_coverage_complete=True)
+    h = render_html(AutoProverReport(contract_name="Vault", backend="crucible",
+                                     properties=[p1], rules=rules, groups=groups,
+                                     skipped=[], coverage=cov))
+    assert 'class="finding"' in h
+    assert "crash abc: deposit(5) - expected 105 got 100" in h
+
+
 def test_render_html_group_rows_and_edge_labels():
     h = render_html(_mini_report())
     assert "deposit-openness" in h and "Deposit is open" in h

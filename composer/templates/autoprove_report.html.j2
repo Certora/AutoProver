@@ -177,6 +177,16 @@ section.gaps h4 {
 }
 ul.claims { margin: 4px 0 0 18px; padding: 0; font-size: 13px; }
 ul.claims li { margin-bottom: 4px; }
+.finding {
+    margin-top: 6px;
+    padding: 4px 8px;
+    background: var(--bg-pre);
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
 .sort-tag {
     display: inline-block;
     padding: 1px 7px;
@@ -263,6 +273,7 @@ footer.report-foot {
           <ul class="claims">{% for d in row.descriptions %}<li>{{ d }}</li>{% endfor %}</ul>
           {%- elif row.descriptions %}{{ row.descriptions[0] }}
           {%- else %}<span class="muted">(no inferred description)</span>{%- endif %}
+          {%- if row.message %}<div class="finding">{{ row.message }}</div>{%- endif %}
         </td>
         {%- if has_links %}
         <td class="col-link">
