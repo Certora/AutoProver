@@ -53,7 +53,13 @@ pytestmark = [pytest.mark.expensive, needs_postgres, pytest.mark.asyncio]
 _SCENARIO = Path(__file__).parent.parent / "test_scenarios" / "solana_vault"
 _PROGRAM = "vault"
 _SLUG = "deposit"
-_FEATURE = f"c_{_SLUG}"
+_FEATURE = f"c_{_SLUG}"  # this property's report unit (one row per property)
+# Every Crucible property shares ONE fuzz target/harness fn (docs/crucible-unit-granularity.md
+# §3); its name gates `main` via the `#[invariant_test]` macro. `validate` is called with the
+# *target* (as the real pipeline does: `u["target"] or u["unit"]`), not the per-property unit —
+# building with any other feature leaves `main` cfg'd out (E0601). Mirrors crucible-app's
+# SINGLE_HARNESS_FN.
+_TARGET = "c_invariants"
 
 # A fixed, known-good shared fixture (`struct Fixture`) — the per-component decider
 # authors a test *against* it. Mirrors the Phase-1 harness, renamed to `Fixture`.
@@ -145,6 +151,7 @@ _PROPS = [
     {
         "title": "recorded balance never exceeds deposited funds",
         "sort": "invariant",
+        "slug": _SLUG,  # host-assigned unit slug (the pipeline sets this via unique_slugs)
         "description": "The vault's recorded `balance` never exceeds the authority's initial funds "
         "(a conservation bound: you cannot have more recorded than could have been deposited).",
     },
@@ -257,9 +264,13 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             pytest.fail(f"per-component authoring gave up: {test_src.reason}")
 
         units = json.loads(module.units(input_json))
+        # Validate the shared *target* once, exactly as the pipeline does (adapter.py):
+        # every unit maps to `c_invariants`, whose fn name gates `main`.
+        targets = list(dict.fromkeys(u.get("target") or u["unit"] for u in units))
+        assert targets == [_TARGET], units
         # validate is the fused build+fuzz; a clean vault run → GOOD verdicts (not build_failed).
         res = json.loads(
-            await asyncio.to_thread(module.validate, input_json, test_src, _FEATURE, str(_SCENARIO), sandbox_json)
+            await asyncio.to_thread(module.validate, input_json, test_src, _TARGET, str(_SCENARIO), sandbox_json)
         )
 
     print("\n===== authored test =====\n" + test_src)
@@ -269,5 +280,5 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
     (unit_name, verdict), = res["verdicts"]
     assert unit_name == _FEATURE, res
     assert verdict["outcome"] == "GOOD", res
-    # property → this test's unit is recorded for the report.
-    assert units == [{"property": _PROPS[0]["title"], "unit": _FEATURE}]
+    # property → its report unit (c_<slug>), all sharing the one fuzz target.
+    assert units == [{"property": _PROPS[0]["title"], "unit": _FEATURE, "target": _TARGET}]
