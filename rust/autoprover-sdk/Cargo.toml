@@ -1,0 +1,18 @@
+[package]
+name = "autoprover-sdk"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "SDK for building AutoProver formalization backends / applications in Rust, callable from the Python pipeline via PyO3."
+
+[lib]
+name = "autoprover_sdk"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Re-exported (see `pub use pyo3`) so the `export_app!` macro can reference
+# `$crate::pyo3::…` and the app crate needs no direct dependency edge for the
+# macro body. The app crate still lists pyo3 to enable `extension-module` /
+# `abi3-py312`; cargo feature-unifies the two.
+pyo3 = { workspace = true }

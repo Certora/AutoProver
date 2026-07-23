@@ -89,6 +89,23 @@ ragbuild = [
     "markdown-it-py>=3.0",
     "mdit-py-plugins>=0.4",
 ]
+dev = [
+    "maturin>=1.14.1",
+]
+# The Rust/PyO3 application wheels (built via maturin from the `rust/` workspace),
+# declared as editable path deps below so `uv sync --group apps` builds AND
+# preserves them — otherwise a bare `uv sync` prunes any hand-built wheel as
+# extraneous. Kept OUT of [project.dependencies] and out of the default groups so
+# the container image (final stage has no Rust toolchain; syncs with UV_NO_DEV=1
+# --group ragbuild) never tries to compile them. `maturin-import-hook` transparently
+# recompiles a changed crate on import, so editing Rust needs no manual `maturin`
+# step either — activate it once per venv with:
+#     python -m maturin_import_hook site install
+apps = [
+    # crucible_app is added in PR3 (its crate lives in rust/crucible-app, which lands there).
+    "echoprover",
+    "maturin-import-hook>=0.3.0",
+]
 
 [tool.uv]
 conflicts = [
@@ -102,6 +119,9 @@ conflicts = [
 
 [tool.uv.sources]
 graphcore = { path = "./graphcore", editable = true }
+# Rust/PyO3 wheels built from the local workspace (see the `apps` group above).
+# crucible_app's source is added in PR3 (with its crate under rust/crucible-app).
+echoprover = { path = "rust/example-app", editable = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "cuda" },
@@ -132,6 +152,8 @@ console-autoprove = "composer.cli.console_autoprove:main"
 tui-autoprove = "composer.cli.tui_autoprove:main"
 console-foundry = "composer.cli.console_foundry:main"
 tui-foundry = "composer.cli.tui_foundry:main"
+console-crucible = "composer.crucible_launch:console_crucible"
+tui-crucible = "composer.crucible_launch:tui_crucible"
 autoprove-report-render = "composer.spec.source.report.render:main"
 tui-natspec = "composer.cli.tui_pipeline:main"
 cache-natspec = "composer.cli.cache_natspec:main"
@@ -147,7 +169,7 @@ certora-fixconf = "certora_autosetup.fixconf:main"
 autosetup = "certora_autosetup.autosetup.cli:main"
 fixconf = "certora_autosetup.fixconf:main"
 
-# Command-sandbox providers, discovered by composer.sandbox.SandboxConfig.resolve_provider.
+# Command-sandbox providers, resolved by composer.sandbox.config.SandboxConfig.resolve_provider.
 # Adding a provider = adding a line here (and re-running the editable install so the
 # dist-info picks it up); the seam never imports a concrete mechanism itself.
 [project.entry-points."composer.sandbox_providers"]
@@ -161,7 +183,7 @@ include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
 "" = "."
 
 [tool.setuptools.package-data]
-composer = ["templates/*.j2", "scripts/init-db.sql"]
+composer = ["templates/*.j2", "templates/**/*.j2", "templates/*.js", "scripts/init-db.sql"]
 # Bundled CVL summaries, spec templates, mocks and conf templates the prover
 # reads directly off disk; ship them with the wheel.
 certora_autosetup = [

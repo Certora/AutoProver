@@ -57,6 +57,10 @@ _OUTCOME_LABELS: dict[ReportBackend, dict[Outcome, str]] = {
         Outcome.GOOD: "Successful test", Outcome.BAD: "Failing test", Outcome.ERROR: "Error",
         Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
     },
+    "crucible": {
+        Outcome.GOOD: "No counterexample", Outcome.BAD: "Counterexample", Outcome.ERROR: "Error",
+        Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
+    },
 }
 _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     "prover": {
@@ -65,6 +69,10 @@ _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     },
     "foundry": {
         GroupStatus.GOOD: "All tests passing", GroupStatus.BAD: "Has failing test",
+        GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
+    },
+    "crucible": {
+        GroupStatus.GOOD: "No counterexamples", GroupStatus.BAD: "Has counterexample",
         GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
     },
 }
@@ -88,6 +96,10 @@ _TERMS: dict[ReportBackend, ReportTerms] = {
     "foundry": ReportTerms(
         title="Foundry test report", unit_singular="test", unit_plural="tests",
         unit_cap="Test", outcomes_label="Test outcomes",
+    ),
+    "crucible": ReportTerms(
+        title="Crucible fuzzing report", unit_singular="property", unit_plural="properties",
+        unit_cap="Property", outcomes_label="Property outcomes",
     ),
 }
 
@@ -123,6 +135,9 @@ class RowView(TypedDict):
     line: int | None
     link: LinkView
     descriptions: list[str]
+    #: Backend diagnostic for a non-GOOD row (e.g. the fuzzer's counterexample / failed-assertion
+    #: message). ``None`` when the backend supplied none.
+    message: str | None
 
 
 class GroupView(TypedDict):
@@ -149,6 +164,16 @@ class ReportTemplateParams(TypedDict):
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
+
+
+def outcome_label(backend: ReportBackend, outcome: Outcome) -> str:
+    """The human word an auditor reads for an ``Outcome`` under a backend (e.g. a
+    ``crucible`` ``GOOD`` → "No counterexample", a ``prover`` ``GOOD`` → "Verified").
+
+    The report's HTML render is the primary consumer, but the console/TUI verdict
+    rollups reuse this so the same run reads with one vocabulary everywhere — this is
+    the single place the per-backend wording lives."""
+    return _OUTCOME_LABELS[backend][outcome]
 
 
 def _is_url(link: str) -> bool:
@@ -216,6 +241,7 @@ def _group_view(
             "line": rule.line if rule else None,
             "link": _link_view(rule.prover_link if rule else None),
             "descriptions": descriptions[ref],
+            "message": rule.message if rule else None,
         })
     return {
         "slug": group.slug,

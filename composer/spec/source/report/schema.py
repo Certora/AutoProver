@@ -84,6 +84,11 @@ class RuleVerdict(BaseModel):
     line: int | None = None
     duration_seconds: float | None = None
     prover_link: str | None = None
+    message: str | None = Field(
+        default=None,
+        description="Human-readable explanation of a non-GOOD outcome (e.g. the fuzzer's "
+        "counterexample / failed-assertion message). Diagnostics only; may be absent.",
+    )
 
     @property
     def ref(self) -> RuleRef:
@@ -151,10 +156,13 @@ class CoverageReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-type ReportBackend = Literal["prover", "foundry"]
+type ReportBackend = Literal["prover", "foundry", "crucible"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
-this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test")
-for a report.json it reads cold."""
+this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
+vs "No counterexample") for a report.json it reads cold. The backends are the CVL prover
+(``"prover"``), Foundry (``"foundry"``), and the Rust/Crucible fuzzer (``"crucible"``, produced by
+``composer.rustapp``/``composer.crucible``). The set is closed: every backend lives in this repo,
+so a new one adds its literal here (and its labels in ``report/render.py``)."""
 
 
 class AutoProverReport(BaseModel):
