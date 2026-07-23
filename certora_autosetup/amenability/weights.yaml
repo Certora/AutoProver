@@ -1,0 +1,41 @@
+# Tuning surface of certora-fv-amenability. Calibration adjusts THIS file only —
+# scoring code never hardcodes a weight or threshold.
+#
+# score semantics: every signal emits [0,1] with 1 = fully amenable; the level is
+# derived from the weighted mean plus the co-occurrence rule below.
+
+weights:
+  # Structural killers — the patterns that can require a reference implementation.
+  # Weighted heavily; low is decided by how many of these fire together.
+  asm_trampoline: 1.6
+  asm_fp_manipulation: 1.5
+  storage_packing: 1.5
+  function_length: 1.2
+  mixed_theory: 1.2
+  # Friction — makes autosetup harder (config/summaries/harnesses) but is
+  # config-solvable, so these pull toward medium, not low. Lower weight.
+  asm_density: 0.6
+  bitmask_style: 0.7
+  unchecked_nonlinear: 0.5
+  curated_summary_hits: 0.7
+  external_call_surface: 0.4
+  dynamic_loops: 0.3
+  surface_shape: 0.0   # informational normalizers only
+
+thresholds:
+  high_min: 0.78          # weighted mean >= this AND no severe structural killer -> high
+  structural_low_max: 0.5  # low also requires the mean to be below this
+
+hard_rules:
+  # `low` requires this many structural-killer signals scoring at/below
+  # killer_severe_score simultaneously — the reference-implementation profile
+  # (trampolines + hand-rolled storage + FP surgery + monolithic mixed-theory
+  # functions all at once).
+  structural_killers:
+    - asm_trampoline
+    - asm_fp_manipulation
+    - storage_packing
+    - function_length
+    - mixed_theory
+  killer_severe_score: 0.25
+  killers_for_low: 3
