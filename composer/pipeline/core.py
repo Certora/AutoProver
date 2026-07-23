@@ -139,7 +139,15 @@ def _component_cache_key(c: FeatureUnit) -> CacheKey[Properties, ComponentGroup]
     return CacheKey(string_hash(c.cache_material()))
 
 
-def _batch_cache_key(props: list[PropertyFormulation]) -> CacheKey[ComponentGroup, Any]:
+def _batch_cache_key[FormT: BackendResult](
+    props: list[PropertyFormulation], result_type: type[FormT]
+) -> CacheKey[ComponentGroup, FormT]:
+    # The cache VALUE type can't be inferred from ``props`` (they don't carry the backend's
+    # result type), and ``CacheKey``/``WorkflowContext`` are invariant — so a bare bound
+    # (``CacheKey[ComponentGroup, BackendResult]``) won't assign to the caller's
+    # ``WorkflowContext[FormT]``, and a return-only TypeVar trips ``reportInvalidTypeVarUse``.
+    # Take the concrete ``result_type`` (the formalizer's ``formalized_type``) as a witness so
+    # ``FormT`` is inferred from an argument: the key is typed to exactly the caller's result.
     return CacheKey(string_hash("|".join(p.model_dump_json() for p in props)))
 
 
@@ -209,7 +217,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
         child : WorkflowContext[FormT] = await batch.feat_ctx.child(
-            _batch_cache_key(batch.props), {"properties": [p.model_dump() for p in batch.props]},
+            _batch_cache_key(batch.props, formalizer.formalized_type),
+            {"properties": [p.model_dump() for p in batch.props]},
         )
         cached_result: FormT | None = await child.cache_get(formalizer.formalized_type)
         result : FormT | GaveUp
