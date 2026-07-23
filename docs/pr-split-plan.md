@@ -121,10 +121,17 @@ the earlier PR, final form in the owning PR**:
 
 | File | Earlier PR gets… | Owning PR finalizes… |
 |---|---|---|
-| `composer/rustapp/adapter.py` | PR 2: thin generic adapter using `cast(ReportBackend, tag)` | PR 3: swap to `as_report_backend` |
-| `composer/spec/source/report/schema.py` + `render.py` | — (stays master's `prover`/`foundry`) | PR 3: close to `{…, crucible}` + crucible labels |
+| `composer/spec/solana/null_backend.py` | PR 1: `cast(ReportBackend, "crucible")` (report literal still master's `prover`/`foundry`) | PR 3: direct `"crucible"` tag (via the checkout; literal already open from PR 2) |
 | `composer/pipeline/ecosystem.py` | PR 1: whole file incl. `RUST_FORBIDDEN_READ` (a regex string, no import dep) | — |
+| `composer/spec/source/report/{schema,render,collect}.py` | PR 2: **crucible-aware from here** — `ReportBackend` incl. `"crucible"`, the `outcome_label` vocabulary, and `Verdict.message` (all needed by `rustapp`) | — |
+| `composer/rustapp/adapter.py` | PR 2: casts the backend tag (`cast(ReportBackend, tag)`) | PR 3: swap to `as_report_backend` |
+| `pyproject.toml` + `uv.lock` | PR 2: `apps` group + `[tool.uv.sources]` omit `crucible_app` (its crate lands in PR 3), so `uv sync`/`uv run` resolve | PR 3: re-add `crucible_app` |
 | `composer/sandbox/recipes.py` | — (stays master's) | PR 3: add `sandbox_rustup_home` + per-run `RUSTUP_HOME` |
+
+**Discovered during execution** (the split is more entangled than first sketched): `rustapp`
+references the `"crucible"` report backend, its `outcome_label` wording, and `Verdict.message`,
+so the report-layer changes move up to **PR 2** (not PR 3); and `null_backend` (PR 1) already
+names `"crucible"`, so it takes the earliest cast. Each branch's CI-env pyright is 0 errors.
 
 Everything else is disjoint by directory and maps cleanly. Note `composer/sandbox/*`
 and `rust/run-confined` are **frozen upstream** (from #73) — only `recipes.py` carries a
