@@ -9,11 +9,10 @@ source — Solidity, Rust — shared across chains that use the same language) a
 facet (the platform model + prompts). The language here is that of the *code under analysis*,
 not the language the AutoProver backend is implemented in (see :class:`Language`).
 
-Phase 1 introduces the seam and captures today's behavior as ``EVM = SOLIDITY ⊕ evm`` —
-a *move*, not a rewrite: the existing `SourceApplication`, prompt templates,
-`_validate_connectivity`, `main_instance`, and unit enumeration become the EVM ecosystem's
-members. The driver defaults to ``EVM``, so existing applications are unchanged. Solana /
-Soroban chains and the prompt-fragment split land in later phases.
+``EVM = SOLIDITY ⊕ evm`` binds the EVM types, prompt templates, ``_validate_connectivity``,
+``main_instance``, and unit enumeration into the seam; ``SOLANA = RUST ⊕ solana`` binds the
+Solana model + prompts and reuses the shared ``RUST`` language facet. The driver defaults to
+``EVM``, so Solidity applications pass no ecosystem. See ``docs/ecosystem-abstraction.md``.
 """
 
 from dataclasses import dataclass
