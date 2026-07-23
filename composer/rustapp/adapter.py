@@ -44,7 +44,7 @@ from composer.pipeline.core import (
 )
 from composer.pipeline.ecosystem import Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
-from composer.sandbox.config import SandboxConfig
+from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.spec.artifacts import ArtifactStore
@@ -348,7 +348,7 @@ async def author_and_compile(
     input_dict: dict,
     *,
     env: Any,
-    sandbox_dict: dict,
+    sandbox_dict: BackendSpec,
     workdir: Path,
     recursion_limit: int,
     backend_name: str,
@@ -499,7 +499,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         materializes its crate per confined run via the ``files`` map)."""
         return None
 
-    async def _sandbox_spec(self, workdir: Path) -> dict:
+    async def _sandbox_spec(self, workdir: Path) -> BackendSpec:
         if self._sandbox is None or not self._sandbox.enabled:
             return {"argv_prefix": [], "timeout_s": self._command_timeout_s}
         return await self._sandbox.backend_spec(workdir, timeout_s=self._command_timeout_s)
@@ -688,7 +688,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit]):
         context_extra: dict = dict(b.declared_args)
         setup_result: str | None = None
         if descriptor.setup is not None:
-            sandbox_dict = (
+            sandbox_dict: BackendSpec = (
                 await b.sandbox.backend_spec(workdir, timeout_s=b.command_timeout_s)
                 if (b.sandbox is not None and b.sandbox.enabled)
                 else {"argv_prefix": [], "timeout_s": b.command_timeout_s}
