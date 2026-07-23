@@ -90,16 +90,20 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         return None
 
 @dataclass
-class PreparedSystem[FormT: BackendResult, U: FeatureUnit](ABC):
-    # The located "main" unit is ecosystem-specific (EVM ContractInstance, Solana program, …);
-    # only the ecosystem's own ``units()`` consumes it, so the base keeps it untyped.
-    main: Any
+class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
+    #: The located "main" of the analyzed program — the ecosystem's ``Main`` type (EVM's
+    #: :class:`~composer.spec.system_model.ContractInstance`, Solana's
+    #: :class:`~composer.spec.solana.model.SolanaProgramInstance`). This is a *different* axis
+    #: from :class:`FeatureUnit` (the per-unit items ``units()`` iterates): EVM's main is not a
+    #: unit. The driver treats it opaquely — it only hands it to ``ecosystem.units(main)`` /
+    #: ``extraction_unit(main)`` — so each backend binds ``Main`` to its ecosystem's type.
+    main: Main
 
     @abstractmethod
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT, U]: ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -115,7 +119,7 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     async def prepare_system(
         self, analyzed: SourceApplication,
         run: PipelineRun[P, H]
-    ) -> PreparedSystem[FormT, U]: ...
+    ) -> PreparedSystem[FormT, U, Main]: ...
 
     def to_artifact_id(self, c: U) -> A: ...
 
@@ -147,8 +151,8 @@ def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit](
-    backend: PipelineBackend[P, FormT, H, A, U],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main](
+    backend: PipelineBackend[P, FormT, H, A, U, Main],
     run: PipelineRun[P, H],
     *,
     interactive: bool = False,
@@ -266,6 +270,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
 async def _extract_all[P: enum.Enum, H](
     prop_key: str,
+    # ``main`` stays untyped here: this internal helper drives the type-erased
+    # ``Ecosystem[Any, Any, Any]`` (see run_pipeline), so there is nothing to tie it to.
     main: Any, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
     ecosystem: Ecosystem[Any, Any, Any],

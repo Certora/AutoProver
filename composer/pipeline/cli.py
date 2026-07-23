@@ -114,10 +114,10 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A, U]
+        backend: PipelineBackend[P, FormT, H, A, U, Main]
     ) -> CorePipelineResult[FormT]:
         ...
 
@@ -250,9 +250,9 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U]
+                backend: PipelineBackend[P, FormT, H, A, U, Main]
             ) -> CorePipelineResult[FormT]:
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,

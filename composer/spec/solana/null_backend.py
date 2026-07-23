@@ -135,7 +135,7 @@ class NullSolanaFormalizer(Formalizer[NullResult, FeatureUnit]):
 
 
 @dataclass
-class NullSolanaPrepared(PreparedSystem[NullResult, FeatureUnit]):
+class NullSolanaPrepared(PreparedSystem[NullResult, FeatureUnit, SolanaProgramInstance]):
     form: NullSolanaFormalizer
 
     @override
@@ -147,8 +147,8 @@ class NullSolanaPrepared(PreparedSystem[NullResult, FeatureUnit]):
 
 @dataclass
 class NullSolanaBackend:
-    """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, SolanaApplication,
-    SolanaProgramInstance, SolanaInstructionInstance]`` — structural."""
+    """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, FeatureUnit,
+    SolanaProgramInstance]`` (P, FormT, H, A, Unit, Main) — structural."""
 
     artifact_store: NullSolanaArtifactStore
     backend_guidance = SOLANA_NULL_GUIDANCE
@@ -164,7 +164,7 @@ class NullSolanaBackend:
 
     async def prepare_system(
         self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None]
-    ) -> PreparedSystem[NullResult, FeatureUnit]:
+    ) -> PreparedSystem[NullResult, FeatureUnit, SolanaProgramInstance]:
         # Use the Solana ecosystem's locate_main so the backend and ecosystem agree on the
         # target program (imported lazily to avoid an import cycle with pipeline.ecosystem).
         from composer.pipeline.ecosystem import SOLANA

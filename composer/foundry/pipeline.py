@@ -78,7 +78,7 @@ assert no overflow are uninteresting. Properties implied by the type
 system (a uint256 being non-negative, etc.) are also uninteresting.
 """
 from composer.spec.system_model import (
-    ContractComponentInstance, SourceApplication,
+    ContractComponentInstance, ContractInstance, SourceApplication,
 )
 
 from composer.io.multi_job import HandlerFactory
@@ -138,7 +138,7 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstan
         return await _foundry_verdicts(inp)
 
 @dataclass
-class FoundrySystem(PreparedSystem[GeneratedFoundryTest, ContractComponentInstance]):
+class FoundrySystem(PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]):
     form: FoundryFormalizer
 
     @override
@@ -166,7 +166,7 @@ class FoundryBackend:
         self,
         analyzed: SourceApplication,
         run: PipelineRun[FoundryPhase, None]
-    ) -> PreparedSystem[GeneratedFoundryTest, ContractComponentInstance]:
+    ) -> PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]:
         return FoundrySystem(
             main_instance(
                 analyzed, run.source

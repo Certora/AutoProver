@@ -30,7 +30,7 @@ from composer.spec.context import WorkflowContext, CacheKey, CVLGeneration
 from composer.spec.types import PropertyFormulation
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
 from composer.spec.system_model import (
-    ContractComponentInstance, SourceApplication, HarnessedApplication,
+    ContractComponentInstance, ContractInstance, SourceApplication, HarnessedApplication,
     SourceExplicitContract, HarnessedExplicitContract, SourceExternalActor,
     HarnessDefinition, SolidityIdentifier,
 )
@@ -164,7 +164,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
 
 
 @dataclass
-class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance]):
+class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]):
     """Post-harness system: holds the harnessed app + prover tool, and runs the
     prover-only pre-formalization fan-out in ``prepare_formalization``."""
     _store: ProverArtifactStore
@@ -272,7 +272,8 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance]):
 
 @dataclass
 class ProverBackend:
-    """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec]."""
+    """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec,
+    ContractComponentInstance, ContractInstance] (P, FormT, H, A, Unit, Main)."""
     backend_guidance = CERTORA_BACKEND_GUIDANCE
     core_phases = CorePhases({
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
@@ -287,7 +288,7 @@ class ProverBackend:
 
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
-    ) -> PreparedSystem[GeneratedCVL, ContractComponentInstance]:
+    ) -> PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]:
         sys_desc = await run.runner(
             TaskInfo(HARNESS_TASK_ID, "Harness Creation", AutoProvePhase.HARNESS),
             lambda: run_harness_creation(run.ctx, run.source, run.env, analyzed),
