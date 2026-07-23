@@ -89,15 +89,17 @@ _OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
 # Sources should be re-checked when new model families ship.
 _PRICING: list[tuple[str, _ModelPricing]] = [
     # ---- Anthropic ----
-    # claude-opus-4.5 / 4.6 / 4.7 share a rate card; older 4 / 4.1
+    # claude-opus-4.5 / 4.6 / 4.7 / 4.8 share a rate card; older 4 / 4.1
     # are pricier. Matching by prefix-of-prefix so "claude-opus-4-7"
     # and "claude-opus-4-7-20260301" both hit the right entry.
+    ("claude-opus-4-8", _ModelPricing(short=_PriceTier(5.00, 25.00, 0.50, 6.25))),
     ("claude-opus-4-7", _ModelPricing(short=_PriceTier(5.00, 25.00, 0.50, 6.25))),
     ("claude-opus-4-6", _ModelPricing(short=_PriceTier(5.00, 25.00, 0.50, 6.25))),
     ("claude-opus-4-5", _ModelPricing(short=_PriceTier(5.00, 25.00, 0.50, 6.25))),
     ("claude-opus-4-1", _ModelPricing(short=_PriceTier(15.00, 75.00, 1.50, 18.75))),
     ("claude-opus-4",   _ModelPricing(short=_PriceTier(15.00, 75.00, 1.50, 18.75))),
 
+    ("claude-sonnet-5",   _ModelPricing(short=_PriceTier(3.00, 15.00, 0.30, 3.75))),
     ("claude-sonnet-4-6", _ModelPricing(short=_PriceTier(3.00, 15.00, 0.30, 3.75))),
     ("claude-sonnet-4-5", _ModelPricing(short=_PriceTier(3.00, 15.00, 0.30, 3.75))),
     ("claude-sonnet-4",   _ModelPricing(short=_PriceTier(3.00, 15.00, 0.30, 3.75))),
@@ -340,7 +342,7 @@ class MessageRenderer(ToolCallRenderer):
         if tag is not None:
             return _HUMAN_TAG_DISPLAY.get(tag, ("User input", True))
         return ("User input", True)
-    
+
     def get_flow_target(self, root: VerticalScroll, path: list[str]) -> VerticalScroll:
         # Walk from most specific to least specific: the current flow's container
         # may not exist yet (render_start creates it), so fall back to the parent's.

@@ -130,15 +130,15 @@ class _ModelOptionsCommon(Protocol):
 
 class ModelOptions(_ModelOptionsCommon, Protocol):
     model: Annotated[str, Arg(
-        help="Model to use for code generation (default: {default})", default="claude-opus-4-6"
+        help="Model to use for code generation (default: {default})", default="claude-opus-4-8"
         )]
 
 class ExtendedModelOptions(_ModelOptionsCommon, Protocol):
     heavy_model: Annotated[str, Arg(
-        help="Model to use for complex tasks (default: {default})", default="claude-opus-4-6"
+        help="Model to use for complex tasks (default: {default})", default="claude-opus-4-8"
     )]
     lite_model: Annotated[str, Arg(
-        help="Model to use for simpler tasks(default: {default})", default="claude-sonnet-4-6"
+        help="Model to use for simpler tasks(default: {default})", default="claude-sonnet-5"
     )]
 
 class UploadPaths(Protocol):
