@@ -95,8 +95,8 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
     #: :class:`~composer.spec.system_model.ContractInstance`, Solana's
     #: :class:`~composer.spec.solana.model.SolanaProgramInstance`). This is a *different* axis
     #: from :class:`FeatureUnit` (the per-unit items ``units()`` iterates): EVM's main is not a
-    #: unit. The driver treats it opaquely — it only hands it to ``ecosystem.units(main)`` /
-    #: ``extraction_unit(main)`` — so each backend binds ``Main`` to its ecosystem's type.
+    #: unit. The driver treats it opaquely — it only hands it to ``ecosystem.units(main)`` —
+    #: so each backend binds ``Main`` to its ecosystem's type.
     main: Main
 
     @abstractmethod

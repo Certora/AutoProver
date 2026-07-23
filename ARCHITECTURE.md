@@ -6,12 +6,16 @@
 
 ## 1. What it is
 
-AutoProver (internally "AI Composer") is a **multi-agent pipeline that turns a Solidity
+AutoProver (internally "AI Composer") is a **multi-agent pipeline that turns a smart-contract
 codebase + a design document into verified formal specifications.** Given a project root, a
-main contract, and a system description, it drives a fleet of LLM agents to analyze the
+main contract/program, and a system description, it drives a fleet of LLM agents to analyze the
 system, formulate properties, author CVL (Certora Verification Language) specs, and run the
 Certora Prover in a feedback loop until the specs verify (or the agent gives up with a
 reason).
+
+The default target is Solidity + the Certora Prover, but the front half is parameterized by an
+**ecosystem** (an analyzed *language* × *chain* pairing — see §4), so the same driver also
+analyzes Rust/Solana programs; the domain is not hardcoded into the shared steps.
 
 The same generic pipeline also powers two sibling workflows — **Foundry test generation**
 and **NatSpec greenfield code generation** — which reuse the shared analysis/extraction/
@@ -21,11 +25,14 @@ reporting machinery behind a backend protocol.
 
 A handful of decisions shape the whole codebase:
 
-- **Generic driver, pluggable backends.** One backend-agnostic driver
+- **Generic driver, two axes of pluggability.** One backend-agnostic driver
   ([composer/pipeline/core.py](composer/pipeline/core.py)) owns the steps that are the same
-  for everyone (system analysis, property extraction, caching, report assembly). Anything
-  backend-specific (how a spec is authored and verified) is contributed through a small
-  protocol. Adding the Foundry backend required *no* changes to the shared steps.
+  for everyone (system analysis, property extraction, caching, report assembly). Two things
+  plug into it independently: a **backend** contributes how a spec is authored and verified
+  (the *back* half), and an **ecosystem** supplies the domain-specific *front* half — the
+  analyzed-model type, prompts, source-reading conventions, and how the target is split into
+  units. Adding the Foundry backend required *no* changes to the shared steps; adding the
+  Solana ecosystem required *no* backend changes.
 - **Phase-chain immutability.** Each phase produces an immutable object that is the
   constructor input to the next: `Backend → PreparedSystem → Formalizer`. The *existence* of
   a `Formalizer` proves that system analysis and preparation already succeeded — ordering is
@@ -53,7 +60,7 @@ A handful of decisions shape the whole codebase:
         │                   │   1. System Analysis ───────► SourceApplication│
         │  builds context   │   2. backend.prepare_system ─► PreparedSystem  │
         ▼                   │   3. prepare_formalization ∥ property extraction│
-  AIComposerContext         │   4. per-component formalize (parallel)        │
+  AIComposerContext         │   4. per-unit formalize (parallel)             │
   (LLM, RAG, prover opts,   │   5. backend-agnostic Report                   │
    VFS, handler factory)    └───────────────┬────────────────────────────────┘
         │                                    │ PipelineBackend protocol
@@ -82,31 +89,51 @@ A handful of decisions shape the whole codebase:
 [composer/pipeline/core.py](composer/pipeline/core.py) is the spine. `run_pipeline()` executes
 five steps and never inspects anything backend-specific:
 
-1. **System analysis** (shared). Runs `run_component_analysis` to produce a
-   `SourceApplication` — the contracts, components, external actors, and their interactions.
-   Always yields the same type regardless of backend.
+1. **System analysis** (shared). Runs `run_component_analysis` to produce the ecosystem's
+   analyzed model (`App`) — for EVM, a `SourceApplication` of contracts, components, external
+   actors, and their interactions. Determined by the ecosystem, not the backend: every backend
+   on a given ecosystem sees the same analyzed type.
 2. **`backend.prepare_system(analyzed)`** — the backend's transform. The prover backend lifts
    the source app into a *harnessed* application (generating harness contracts for external
    dependencies); the Foundry backend is an identity transform.
 3. **`prepared.prepare_formalization()` runs concurrently with property extraction.** Neither
    depends on the other, so the prover's expensive AutoSetup/summary/invariant work overlaps
-   with per-component property inference. Property extraction fans out one agent per component,
-   bounded by a semaphore (`--max-concurrent`).
-4. **Per-component formalization** (parallel). For each component's properties, the backend's
+   with per-unit property inference. Property extraction fans out one agent per *unit* —
+   `ecosystem.units(main)` (EVM yields one per contract component; a whole-program ecosystem
+   like Solana yields a single unit that is the program) — bounded by a semaphore
+   (`--max-concurrent`).
+4. **Per-unit formalization** (parallel). For each unit's properties, the backend's
    `Formalizer.formalize()` is invoked. Results are cached by the backend's result type.
-5. **Report assembly** (shared, best-effort). The driver collects per-component verdicts via a
+5. **Report assembly** (shared, best-effort). The driver collects per-unit verdicts via a
    backend-supplied `fetch_verdicts` callback, an LLM groups properties into semantic clusters,
    and a coverage check validates the result. A failure here never fails the run.
 
+### The ecosystem seam
+
+`run_pipeline` also takes an `ecosystem: Ecosystem[App, Main, Unit]`
+([composer/pipeline/ecosystem.py](composer/pipeline/ecosystem.py)) — the *front-half* plug point,
+orthogonal to the backend. It pairs a **language** (how the target's source is read — fs-exclusion
+pattern, code-explorer prompt) with a **chain** and supplies the domain-specific pieces the shared
+steps need: the analyzed-model type (`App`), the analysis/property prompts, model validation, how
+to locate the target `Main`, and `units(main) -> list[Unit]` (the per-unit split the extraction and
+formalization phases iterate). `EVM` binds `(SourceApplication, ContractInstance,
+ContractComponentInstance)`; `SOLANA` binds its own whole-program types. A unit is any
+`FeatureUnit` ([spec/system_model.py](composer/spec/system_model.py)) — the ecosystem-agnostic
+interface the driver uses for per-unit cache keys, task ids, and labels. The default is `EVM`, so
+Solidity backends pass nothing.
+
 ### The backend contract
 
-A backend implements `PipelineBackend[P, FormT, H, A]` plus three phase objects:
+A backend implements `PipelineBackend[P, FormT, H, A, U, Main]` plus three phase objects. `U`
+(the `FeatureUnit` type) and `Main` are the ecosystem-tying parameters — `run_pipeline` binds a
+`PipelineBackend[..., U, Main]` to an `Ecosystem[App, Main, U]` so the analyzed model, main-unit,
+and per-unit values flow through without casts:
 
 | Object | Responsibility | Prover impl | Foundry impl |
 |---|---|---|---|
 | `PipelineBackend` | Phase-enum map, analysis prompt, artifact store, `prepare_system` | [spec/source/pipeline.py](composer/spec/source/pipeline.py) | [foundry/pipeline.py](composer/foundry/pipeline.py) |
-| `PreparedSystem` | Holds the located main contract; builds the `Formalizer` | harness-lifted app + AutoSetup/invariants | identity |
-| `Formalizer` | `formalize()` one component; `fetch_verdicts`; `finalize` | `batch_cvl_generation` + prover | `batch_foundry_test_generation` + `forge test` |
+| `PreparedSystem` | Holds the located `Main`; builds the `Formalizer` | harness-lifted app + AutoSetup/invariants | identity |
+| `Formalizer` | `formalize()` one unit; `fetch_verdicts`; `finalize` | `batch_cvl_generation` + prover | `batch_foundry_test_generation` + `forge test` |
 
 The phase enum (`CorePhases`) lets each backend label its own phases while the driver tags the
 three universal ones (analysis / extraction / formalization) for the UI and the replay tapes.
@@ -223,6 +250,11 @@ the authoring agent. A callback protocol streams per-rule outcomes to the UI and
   properties as Solidity `.t.sol` tests verified by `forge test` instead of CVL + prover.
   Verdicts come from test pass/expected-failure status. Entry points:
   [cli/console_foundry.py](composer/cli/console_foundry.py), `tui_foundry.py`.
+- **Solana ecosystem** ([composer/spec/solana/](composer/spec/solana/)) — the *front half* for
+  Rust/Solana targets: a `SolanaApplication` analysis model, Solana-specific analysis/property
+  prompts ([templates/solana/](composer/templates/solana/)), and whole-program `units()` (one
+  unit per program rather than per component). It plugs into the same driver via the `SOLANA`
+  ecosystem; the matching verification backend (Crucible) lands separately.
 - **NatSpec** ([composer/spec/natspec/](composer/spec/natspec/)) — a *greenfield* workflow
   (its own asyncio orchestrator, not the generic driver) that goes from a design doc to Solidity
   interfaces, stub implementations, and CVL. A semaphore-serialized "semantic registry"
