@@ -263,10 +263,7 @@ def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
 
 
 # Whole-program mode: ``units`` returns a singleton ``[main]`` (the ``Unit`` type param is
-# ``SolanaProgramInstance``, same as ``Main``). Fuzzing wants whole-program invariants
-# (docs/crucible-unit-granularity.md §3): all invariants are inferred over the program and
-# formalized into ONE harness + run — finding-level attribution recovers which property a
-# counterexample hit.
+# ``SolanaProgramInstance``, same as ``Main``). We may support finer-grained units in the future.
 SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaProgramInstance] = Ecosystem(
     name="solana",
     language=RUST,
