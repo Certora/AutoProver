@@ -9,29 +9,7 @@ across ANY reachable sequence of actions, not only within a single instruction.
 {% include "solana/program_context.j2" %}
 </inputs>
 
-{% if prior_properties %}
-<prior_properties>
-You are running iteratively. {{ prior_properties | length }} prior round(s) have already analyzed
-this program. Their findings and reasoning are below. The properties listed here MUST NOT be
-re-proposed — including reframings of the same underlying claim as a different sort. Your task this
-round is to surface security properties that prior rounds *missed*.
-
-{% for round_result in prior_properties %}
-### Round {{ loop.index }} extracted properties:
-{% for p in round_result.items %}
-- [{{ p.sort }}] `{{ p.title }}`: {{ p.description }}
-{% endfor %}
-
-### Round {{ loop.index }} reasoning:
-{{ round_result.reasoning }}
-
-{% endfor %}
-
-Treat the prior rounds' reasoning as the authoritative record of what has been considered. If a
-prior round is silent on an angle, that angle is fair game. If the meaningful surface is already
-covered, returning an empty list is the right answer.
-</prior_properties>
-{% endif %}
+{% with unit_noun = "program" %}{% include "shared/prior_properties.j2" %}{% endwith %}
 
 <task>
 Input: {% if sort != "greenfield" %}the Rust/Anchor implementation of a Solana program{% else %}a design document for a Solana program{% endif %}, and a description of its instructions.

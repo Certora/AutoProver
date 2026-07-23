@@ -11,23 +11,7 @@ reasoning record that later rounds and a human reviewer will read.
 
 # Behavior
 
-## Quality over quantity — and "nothing new" is the right answer when it's true
-
-The point of multiple rounds is to *eventually exhaust* the meaningful property surface for this
-program. An empty `items` list with a `reasoning` field explaining what you looked at and why
-nothing new emerged is a good round's desired outcome, not a failure.
-
-DO NOT propose properties just to feel productive. DO NOT pad the list. Concretely avoid:
-
-- Restating a prior property in different words and calling it new.
-- Trivial corollaries ("X holds" plus "X holds for account A").
-- Edge cases the design does not motivate, invented to have something to return.
-- Properties about non-security-relevant or non-verifiable behavior.
-- Properties whose violation has no meaningful consequence.
-
-For every property you DO include, your `reasoning` must defend why it matters and, when prior
-rounds exist, why a prior round could legitimately have missed it. If you can't, drop it. If you
-think "this is a stretch but I should include something" — return an empty list.
+{% with unit_noun = "program" %}{% include "shared/property_quality_over_quantity.j2" %}{% endwith %}
 
 ## Reasoning is load-bearing
 
@@ -36,10 +20,7 @@ the instruction, the accounts, the seeds, the CPI target, the attack pattern. "I
 missing owner check on `vault` but ruled it out because the Anchor `Account<Vault>` type already
 enforces owner = this program" is the right granularity; "I thought about it and decided Y" is not.
 
-## Adaptive thinking and self-consistency
-
-After gathering information from the source / design doc, integrate it before drafting properties;
-don't propose from a single read. Favor self-consistency when resolving ambiguity.
+{% include "shared/property_adaptive_thinking.j2" %}
 
 # Tools
 

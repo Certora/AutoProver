@@ -17,10 +17,11 @@ The program exposes these instructions (the actions a fuzzer will drive in rando
 
 
 <prior_properties>
-You are running iteratively. 1 prior round(s) have already analyzed
-this program. Their findings and reasoning are below. The properties listed here MUST NOT be
-re-proposed — including reframings of the same underlying claim as a different sort. Your task this
-round is to surface security properties that prior rounds *missed*.
+You are running iteratively. 1 prior round(s) have already
+analyzed this program. Their findings and reasoning are below. The properties listed
+here MUST NOT be re-proposed by you — including reframings of the same underlying claim
+as a different property sort (e.g. an attack-vector restated as an invariant, or vice
+versa). Your task this round is to surface security properties that prior rounds *missed*.
 
 
 ### Round 1 extracted properties:
@@ -33,9 +34,15 @@ prior-round reasoning
 
 
 
-Treat the prior rounds' reasoning as the authoritative record of what has been considered. If a
-prior round is silent on an angle, that angle is fair game. If the meaningful surface is already
-covered, returning an empty list is the right answer.
+When deciding what to look at this round, treat the prior rounds' reasoning as the
+authoritative record of what has been considered — not your own assumptions about what
+"a prior agent probably looked at". If a prior round's reasoning is silent on an angle,
+that angle is fair game for you.
+
+The standing rule from your system prompt — return an empty `items` list rather than
+pad with low-value properties — applies in full force here. If the prior rounds have
+already covered the meaningful property surface, returning nothing new is the right
+answer.
 </prior_properties>
 
 
