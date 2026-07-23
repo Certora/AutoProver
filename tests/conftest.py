@@ -14,6 +14,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "dummy-key-for-tests")
 from typing import Any, AsyncIterator, Iterator, Callable, Iterable, TYPE_CHECKING, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import numpy as np
 import psycopg
@@ -45,10 +46,43 @@ try:
 except ImportError:
     _HAS_TESTCONTAINERS = False
 
+def _external_pg_url() -> str | None:
+    """Admin DSN of an already-running postgres to use INSTEAD of testcontainers.
+
+    Set by the containerized test flow (docs/crucible-demo.md) so DB-backed tests
+    run inside the crucible container against the compose `postgres` service — no
+    docker-in-docker. Must be a superuser DSN (tests CREATE ROLE/DATABASE)."""
+    return os.environ.get("COMPOSER_TEST_PG_URL") or None
+
+
 needs_postgres = pytest.mark.skipif(
-    not _HAS_TESTCONTAINERS,
-    reason="testcontainers[postgres] not installed",
+    not (_HAS_TESTCONTAINERS or _external_pg_url()),
+    reason="no postgres: install testcontainers[postgres] or set COMPOSER_TEST_PG_URL",
 )
+
+
+class _ExternalPostgres:
+    """Minimal ``PostgresContainer`` stand-in for an already-running postgres, so
+    DB-backed tests run unchanged against the compose `postgres` service. Only the
+    surface the tests use is implemented."""
+
+    def __init__(self, url: str) -> None:
+        p = urlparse(url)
+        self.username = p.username or "postgres"
+        self.password = p.password or ""
+        self._host = p.hostname or "localhost"
+        self._port = p.port or 5432
+        self._db = (p.path or "/postgres").lstrip("/") or "postgres"
+
+    def get_connection_url(self, host: str | None = None, driver: str | None = "psycopg2") -> str:
+        scheme = "postgresql" if not driver else f"postgresql+{driver}"
+        return f"{scheme}://{self.username}:{self.password}@{self._host}:{self._port}/{self._db}"
+
+    def get_container_host_ip(self) -> str:
+        return self._host
+
+    def get_exposed_port(self, port: int) -> int:
+        return self._port
 
 
 @pytest.fixture(autouse=True)
@@ -242,8 +276,13 @@ async def langgraph_db() -> AsyncIterator[LanggraphDBSetup | None]:
 
 @pytest.fixture(scope="session")
 def pg_container() -> Iterator["PostgresContainer | None"]:
+    ext = _external_pg_url()
+    if ext:
+        yield _ExternalPostgres(ext)  # type: ignore[misc]
+        return
     if not _HAS_TESTCONTAINERS:
-        return None
+        yield None
+        return
     with PostgresContainer("pgvector/pgvector:pg16") as pg:
         yield pg
 

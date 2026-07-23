@@ -138,6 +138,23 @@ def emit_custom_event(payload: Mapping[str, Any]):
         raise ValueError("No IO handler installed")
     curr_io[0].push(ProgressEvent(dict(payload)))
 
+
+def push_custom_update(
+    payload: Mapping[str, Any], *, thread_id: str, checkpoint_id: str = ""
+) -> bool:
+    """Push a ``CustomUpdate`` to the current ``with_handler`` scope's queue so it
+    reaches ``EventHandler.handle_event`` — the out-of-graph analogue of
+    ``get_stream_writer()``. Used by backends (e.g. the Rust IoC loop) that emit
+    domain events *between* graph calls, where ``get_stream_writer()`` is unavailable.
+    Returns ``False`` (event dropped) if no handler scope is installed."""
+    curr_io = _io_handler.get()
+    if curr_io is None:
+        return False
+    curr_io[0].push(
+        CustomUpdate(payload=dict(payload), thread_id=thread_id, checkpoint_id=checkpoint_id)
+    )
+    return True
+
 async def run_graph[S: StateLike, C: StateLike | None, I: StateLike](
     graph: CompiledStateGraph[S, C, I, Any],
     ctxt: C,

@@ -1,21 +1,28 @@
-# Cargo workspace for AutoProver's Rust components.
+# Cargo workspace for AutoProver's Rust extension framework.
 #
-# In this PR the workspace contains a single member:
+# * `autoprover-sdk` — the library new Rust-based applications import. It defines
+#   the ABI (serde types), the `Application` / `FormalizeSession` traits, the FFI
+#   helpers, and the `export_app!` macro that emits the PyO3 module.
+# * `example-app`   — a self-contained demonstration application built into a
+#   Python wheel via maturin, used by the framework's round-trip test.
 #
-# * `run-confined` — the trusted command-sandbox launcher (Landlock filesystem +
-#   seccomp network/ptrace + rlimits + scrubbed env, then `execve`). The first
-#   `SandboxProvider` for the `RunCommand` effect — see docs/command-sandbox.md.
-#
-# Later PRs re-add the Rust *application framework* crates to `members`:
-# `autoprover-sdk` (the ABI + `export_app!` macro) and `example-app` (its
-# round-trip test wheel), then the `crucible-app` wheel. Those crates depend on
-# the shared `[workspace.dependencies]` (serde / pyo3); `run-confined` does not,
-# so this trimmed workspace declares none.
+# A new application is its own crate (cdylib) that depends on `autoprover-sdk`
+# and invokes `autoprover_sdk::export_app!`. It lives outside this workspace in
+# real use; `example-app` is kept here so the framework has something to test.
 [workspace]
 resolver = "2"
-members = ["run-confined"]
+members = ["autoprover-sdk", "example-app", "run-confined"]
 
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
 license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pyo3 = "0.24"
+# Compile-time Jinja-style templates (the `.j2` convention used by composer/templates/*.j2,
+# here for the Rust prompt/crate-file templates). Templates are checked at build time and
+# embedded in the wheel, so no runtime template loading or packaging.
+askama = "0.13"
