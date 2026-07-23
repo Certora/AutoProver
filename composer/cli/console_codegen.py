@@ -11,7 +11,7 @@ import asyncio
 import sys
 
 from composer.input.parsing import fresh_workflow_argument_parser, upload_input
-from composer.llm.registry import get_provider_for, uploader_for
+from composer.llm.registry import get_provider_for
 from composer.workflow.executor import execute_ai_composer_workflow
 from composer.workflow.types import WorkflowSuccess
 from composer.ui.console import ConsoleHandler
@@ -23,7 +23,7 @@ async def _main() -> int:
     args = parser.parse_args()
 
     llm = get_provider_for(options=args)
-    input_data = await upload_input(uploader_for(llm.provider), args)
+    input_data = await upload_input(llm.provider.uploader(), args)
 
     handler = ConsoleHandler(capture_prover_output=args.prover_capture_output)
     with tool_context():

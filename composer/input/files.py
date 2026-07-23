@@ -23,16 +23,16 @@ that should still be uploaded can be loaded explicitly via
 
 import asyncio
 import hashlib
-import io
 import mimetypes
-import os
 import pathlib
 import zlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Protocol, assert_never, Any, overload
 
-from composer.llm.provider import ProviderKind
+class ContentRenderer(Protocol):
+    def text_block(self, text: str, *, with_cache: bool) -> dict: ...
+    def file_block(self, file_id: str, *, with_cache: bool) -> dict: ...
 
 # ---------------------------------------------------------------------------
 # Protocols (the public surface)
@@ -123,20 +123,14 @@ class InMemoryTextFile:
 
     basename: str
     string_contents: str
-    provider: ProviderKind
+    renderer: ContentRenderer
 
     @property
     def bytes_contents(self) -> bytes:
         return self.string_contents.encode("utf-8")
 
     def to_dict(self, with_cache: bool = False) -> dict:
-        to_ret : dict[str, Any] = {"type": "text", "text": self.string_contents}
-        if with_cache:
-            to_ret["cache_control"] = {
-                "type": "ephemeral",
-                "ttl": "5m"
-            }
-        return to_ret
+        return self.renderer.text_block(self.string_contents, with_cache=with_cache)
 
     def to_digest(self) -> str:
         return _bytes_digest(self.bytes_contents)
@@ -156,33 +150,10 @@ class UploadedFile:
     basename: str
     contents: bytes
     digest: str
-    provider: ProviderKind
+    renderer: ContentRenderer
 
     def to_dict(self, with_cache: bool = False) -> dict:
-        match self.provider:
-            case "anthropic":
-                to_ret : dict[str, Any] = {
-                    "type": "document",
-                    "source": {
-                        "type": "file",
-                        "file_id": self.file_id,
-                    },
-                }
-                if with_cache:
-                    to_ret["cache_control"] = {
-                        "type": "ephemeral",
-                        "ttl": "5m"
-                    }
-                return to_ret
-            case "openai":
-                return {
-                    "type": "file",
-                    "file": {
-                        "file_id": self.file_id,
-                    },
-                }
-            case _:
-                assert_never(self.provider)
+        return self.renderer.file_block(file_id=self.file_id, with_cache=with_cache)
 
     def to_digest(self) -> str:
         return self.digest
@@ -278,8 +249,6 @@ def _file_data_impl(
 class FileUploader(Protocol):
     """Upload+dedup contract. Obtain via ``ModelProvider.uploader()`` (``composer.llm``)."""
 
-    provider: ProviderKind
-
     async def upload_file_if_needed(
         self, file_path: str | pathlib.Path
     ) -> UploadedFile: ...
@@ -301,7 +270,7 @@ class FileUploader(Protocol):
 
 
 
-class _UploaderBase(ABC):
+class UploaderBase(ABC):
     """Shared upload-or-reuse logic. Subclasses supply
     :meth:`_upload_bytes` (the provider-specific API call) and set
     ``provider`` at construction so it's stamped onto returned
@@ -312,7 +281,7 @@ class _UploaderBase(ABC):
     so we don't reupload a file whose bytes the account has already
     seen."""
 
-    provider: ProviderKind
+    renderer: ContentRenderer
 
     @abstractmethod
     async def _upload_bytes(
@@ -334,7 +303,7 @@ class _UploaderBase(ABC):
             basename=data.basename,
             contents=data.raw_data,
             digest=data.digest,
-            provider=self.provider,
+            renderer=self.renderer,
         )
 
     async def upload_text_file_if_needed(
@@ -352,7 +321,7 @@ class _UploaderBase(ABC):
             basename=data.basename,
             contents=data.raw_data,
             digest=data.digest,
-            provider=self.provider,
+            renderer=self.renderer,
         )
 
     async def get_document(
@@ -379,12 +348,12 @@ class _UploaderBase(ABC):
                 basename=data.basename,
                 contents=data.raw_data,
                 digest=data.digest,
-                provider=self.provider
+                renderer=self.renderer
             )
         return InMemoryTextFile(
             basename=p.name,
             string_contents=data.raw_data.decode("utf-8"),
-            provider=self.provider,
+            renderer=self.renderer,
         )
 
     async def upload_bytes_if_needed(
@@ -400,13 +369,13 @@ class _UploaderBase(ABC):
             basename=data.basename,
             contents=data.raw_data,
             digest=data.digest,
-            provider=self.provider
+            renderer=self.renderer
         )
 
     def text_document_from(self, src: TextUploadable) -> TextDocument:
         """Rehydrate a text ``Uploadable`` into an inline ``TextDocument`` (no
         upload — text stays in-prompt for transcript debuggability)."""
-        return InMemoryTextFile(basename=src.basename, string_contents=src.string_contents, provider=self.provider)
+        return InMemoryTextFile(basename=src.basename, string_contents=src.string_contents, renderer=self.renderer)
 
     async def document_from(self, src: Uploadable) -> Document:
         """Rehydrate an ``Uploadable`` (e.g. an audit-restored handle) into a
@@ -414,6 +383,6 @@ class _UploaderBase(ABC):
         binary goes through the Files API for the active provider."""
         text = src.string_contents
         if text is not None:
-            return InMemoryTextFile(basename=src.basename, string_contents=text, provider=self.provider)
+            return InMemoryTextFile(basename=src.basename, string_contents=text, renderer=self.renderer)
         return await self.upload_bytes_if_needed(src.basename, src.bytes_contents)
 

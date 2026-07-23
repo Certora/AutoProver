@@ -172,7 +172,7 @@ async def cli_pipeline[P: enum.Enum, H](
     )
 
     async with (
-        standard_connections(provider=tiered.provider_kind, embedder=DefaultEmbedder(model)) as conns,
+        standard_connections(provider=tiered.provider_service, embedder=DefaultEmbedder(model)) as conns,
         async_tool_context(),
         thread_logger(conns.store, {
             "root_thread_id": thread_id,
