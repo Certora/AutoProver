@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Generic
+from typing_extensions import TypeVar
 from pydantic import BaseModel, Field
 from functools import cached_property
 from composer.spec.util import slugify_filename

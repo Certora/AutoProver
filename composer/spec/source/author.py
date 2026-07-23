@@ -392,7 +392,7 @@ async def batch_cvl_generation(
         ctx.child(CVL_JUDGE_KEY), env, FeedbackTemplate.bind({
             "sort": "existing",
             "context": component,
-        }).depends(Properties), props
+        }), props
     )
 
     res_state = await run_cvl_generator(

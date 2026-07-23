@@ -223,7 +223,7 @@ async def generate_cvl_batch(
         ctx=ctx.child(CVL_JUDGE_KEY), env=env, prompt=FeedbackTemplate.bind({
             "context": component,
             "sort": env.sort,
-        }).depends(Properties), props=props, extra_inputs=stub_feedback_extras
+        }), props=props, extra_inputs=stub_feedback_extras
     )
 
     g = (

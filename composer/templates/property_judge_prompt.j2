@@ -306,3 +306,24 @@ Specifications are separate artifacts from the implementation; a specification t
 {% endif %}
 </tools>
 </guidance>
+
+{% if skipped %}
+The following properties were explicitly skipped by the author:
+{% for s in skipped %}
+   - Property {{s.property_title }}: {{ s.reason }}
+{% endfor %}
+{% endif %}
+
+{%if rebuttals%}
+The author has filed the following rebuttals against feedback from prior rounds.
+Evaluate each per the Step 1 rebuttal rule (and the Criteria 7 exception for skip-related rebuttals).
+Empirical evidence types (`typecheck_failure`, `counterexample`, `manual_citation`) 
+carry near-binding weight; `reasoned` rebuttals are a conversation, 
+not a veto.
+
+{% for r in rebuttals %}
+Rebuttal {{ loop.index }} [{{r.evidence_type}}]
+   Addressing: {{ r.prior_feedback_reference }}
+   Evidence: {{ r.evidence }}
+{% endfor %}
+{% endif %}

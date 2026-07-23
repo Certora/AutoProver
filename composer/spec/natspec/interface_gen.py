@@ -133,7 +133,7 @@ async def generate_interface[I: InterfaceDeclModel](
         c for c in summary.contract_components if c.solidity_identifier not in external_contracts
     ]
 
-    final_prompt = description.prompt.inject(
+    final_prompt = description.prompt.bind(
         InterfaceGenCallParams(
             summary=summary,
             target_contracts=target_contracts,

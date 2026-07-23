@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>{{ terms.title }} — {{ report.contract_name }}</title>
+<title>{{ terms.title }} — {{ contract_name }}</title>
 <style>
 :root {
     --bg: #ffffff;
@@ -208,15 +208,15 @@ footer.report-foot {
 <div class="container">
 
 <header class="report-head">
-  <h1>{{ terms.title }} — {{ report.contract_name }}</h1>
+  <h1>{{ terms.title }} — {{ contract_name }}</h1>
   <div class="subtitle">
     {{ coverage.total_properties }} properties &middot;
     {{ coverage.total_rules }} {{ terms.unit_plural }} &middot;
     {{ coverage.total_groups }} high-level properties
   </div>
   <dl class="meta-grid">
-    <dt>Contract</dt><dd>{{ report.contract_name }}</dd>
-    <dt>Run timestamp</dt><dd>{{ report.run_timestamp_utc or "—" }}</dd>
+    <dt>Contract</dt><dd>{{ contract_name }}</dd>
+    <dt>Run timestamp</dt><dd>{{ run_timestamp_utc or "—" }}</dd>
     {%- if has_links %}
     <dt>Prover runs</dt>
     <dd>
