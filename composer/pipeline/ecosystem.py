@@ -110,7 +110,7 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
 
 
 # ---------------------------------------------------------------------------
-# main-unit location (moved out of pipeline.core; re-exported there for callers)
+# main-unit location
 # ---------------------------------------------------------------------------
 
 
@@ -126,7 +126,7 @@ def main_instance(app: AnyApplication, source: SourceCode) -> ContractInstance:
 
 
 # ---------------------------------------------------------------------------
-# The EVM ecosystem (= today's behavior)
+# The EVM ecosystem
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] =
 
 
 # ---------------------------------------------------------------------------
-# The RUST language facet (shared by Solana and, later, Soroban)
+# The RUST language facet (shared by Solana, Soroban)
 # ---------------------------------------------------------------------------
 
 #: Cargo/Anchor project layout: hide build output, VCS, lockfiles, and the JS side; keep the
