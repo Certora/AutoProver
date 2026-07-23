@@ -171,6 +171,18 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     # ``ecosystem`` supplies the domain-specific front half; it defaults to ``EVM``, which
     # reproduces the previous hardcoded Solidity behavior exactly, so EVM callers (and cli.py)
     # need pass nothing. Non-EVM backends (e.g. the Rust/Crucible backend) pass ``ecosystem=SOLANA``.
+    #
+    # Its ``[App, Main, Unit]`` params are deliberately erased to ``Any``, not tied to the
+    # backend's — ``Ecosystem`` is INVARIANT (it holds callables that both consume and produce
+    # those types), so ``Ecosystem[SolanaApplication, …]`` and ``Ecosystem[SourceApplication, …]``
+    # are unrelated. At this generic boundary the backend (hence its ``Main``) is itself a free
+    # var, and — by invariance — a concretely-typed argument (the ``EVM`` default, or an explicit
+    # ``SOLANA``) can't unify with a tied ``Main``; the only type accepting both is ``Any``. The
+    # coupling is loose besides: ``prepare_system`` fixes ``analyzed: SourceApplication`` (so a
+    # non-EVM ``App`` can't be tied without making it generic), and the backend's ``U`` isn't the
+    # ecosystem's ``Unit`` (the null backend uses ``FeatureUnit``; ``collapse_units`` fans a
+    # program into invariant units) — which is why the unit list is ``cast`` below, not inferred.
+    # So the backend↔ecosystem pairing is a runtime contract; the caller is trusted to pair them.
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
 
