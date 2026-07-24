@@ -1,7 +1,10 @@
 import pathlib
-from typing import Protocol
+from typing import Protocol, Sequence
 import typing
-from functools import wraps
+import types
+from functools import wraps, reduce
+import operator
+
 import pytest
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
@@ -9,7 +12,11 @@ from hypothesis import HealthCheck, given, settings, strategies as st, Phase
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from composer.meta.types import Manifest
 from composer.meta.resolver import resolve_params
-from composer.spec.system_model import ContractComponentInstance, ContractInstance, AnyApplication, Application, FromSourceApplication, HarnessedApplication, _context_marker_attr
+from composer.spec.system_model import (
+    ContractComponentInstance, ContractInstance, AnyApplication, Application, FromSourceApplication,
+    HarnessedApplication, _context_marker_attr,
+    BaseApplication, ExplicitContract, ExternalActor, ContractComponent
+)
 from composer.spec.service_host import Sort # defined here? huh?
 import hypothesis.strategies._internal.core as hcore
 
@@ -57,6 +64,25 @@ def _build_template_context[T](t: type[T]) -> st.SearchStrategy[T]:
         )
     )
 
+def _unwrap_component_types(
+    t: typing.TypeAliasType | type
+) -> tuple[Sequence[type[ExplicitContract]], Sequence[type[ExternalActor]]]:
+    if isinstance(t, typing.TypeAliasType):
+        return _unwrap_component_types(
+            t.__value__
+        )
+    assert typing.get_origin(t) in (typing.Union, types.UnionType)
+    variants = typing.get_args(t)
+    to_ret_contracts : list[type[ExplicitContract]] = []
+    to_ret_external : list[type[ExternalActor]] = []
+    for t in variants:
+        assert isinstance(t, type) and issubclass(t, BaseModel)
+        if issubclass(t, ExternalActor):
+            to_ret_external.append(t)
+        else:
+            assert issubclass(t, ExplicitContract)
+            to_ret_contracts.append(t)
+    return (to_ret_contracts, to_ret_external)
 
 def _make_cursed_patcher(wrapped: _TypeResolver) -> _TypeResolver:
     assert callable(wrapped)
@@ -65,15 +91,37 @@ def _make_cursed_patcher(wrapped: _TypeResolver) -> _TypeResolver:
         return next((m.pattern for m in field_info.metadata
                  if getattr(m, "pattern", None)), None)
 
-    def _field_strategy(f: FieldInfo):
+    def _field_strategy[T: BaseModel](n: str, f: FieldInfo, cls: type[T]):
         if (p := _pattern_of(f)):
             return st.from_regex(p, fullmatch=True)
         ann = f.annotation
         assert ann is not None
+        if issubclass(cls, BaseApplication) and n == "components":
+            assert typing.get_origin(ann) is list
+            component_type = next(iter(typing.get_args(ann)))
+            (contracts, external) = _unwrap_component_types(component_type)
+            contract_types = reduce(
+                operator.or_,
+                (st.from_type(t) for t in contracts)
+            )
+            external_types = reduce(
+                operator.or_,
+                (st.from_type(t) for t in external)
+            )
+            external_comps = st.lists(external_types, max_size=2)
+            return st.lists(contract_types, min_size=1, max_size=3).flatmap(lambda conts: \
+                external_comps.flatmap(lambda exts: 
+                    st.permutations([
+                        *conts, *exts
+                    ])
+                )
+            )
+        if issubclass(cls, ExplicitContract) and n == "components":
+            return st.lists(st.from_type(ContractComponent), min_size=1)
         return st.from_type(ann)
 
     def _model_strategy[T: BaseModel](cls: type[T]) -> st.SearchStrategy[T]:
-        return st.builds(cls, **{n: _field_strategy(f) for n, f in cls.model_fields.items()})
+        return st.builds(cls, **{n: _field_strategy(n, f, cls) for n, f in cls.model_fields.items()})
 
     @wraps(wrapped)
     def _cursed_base_model_patch[T](thing: type[T]) -> st.SearchStrategy[T]:
