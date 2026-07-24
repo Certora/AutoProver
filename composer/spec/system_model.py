@@ -1,8 +1,10 @@
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
+from typing_extensions import ReadOnly
 from pydantic import BaseModel, Field
 from functools import cached_property
 from composer.spec.util import slugify_filename
+from composer.spec.service_host import Sort
 from .types import ComponentName, SolidityIdentifier, ContractName
 
 type ContractSort = Literal["dynamic", "singleton", "multiple"]
@@ -190,7 +192,7 @@ class ContractInstance:
     @property
     def contract(self) -> ExplicitContract:
         return self.app.contract_components[self.ind]
-    
+
     @cached_property
     def sibling_contracts(self) -> list[ExplicitContract]:
         to_ret : list[ExplicitContract] = []
@@ -245,3 +247,14 @@ class ContractComponentInstance:
             ind=component_index,
             _contract=ContractInstance(ind=contract_index, app=app),
         )
+
+class ComponentContextProtocol(TypedDict):
+    sort: ReadOnly[Sort]
+    context: ReadOnly[ContractComponentInstance | None]
+
+_context_marker_attr = "__template_ctxt_params__"
+
+
+def component_context[T: ComponentContextProtocol](t: type[T]) -> type[T]:
+    setattr(t, _context_marker_attr, True)
+    return t

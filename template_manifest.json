@@ -1,0 +1,92 @@
+{
+  "composer.cli.natspec_startup:_InterfaceTemplate": {
+    "module": "composer.cli.natspec_startup",
+    "qualname": "_InterfaceTemplate",
+    "template_name": "interface_generation_prompt.j2",
+    "ty_sort": "PartialTemplate"
+  },
+  "composer.cli.natspec_startup:_StubTemplate": {
+    "module": "composer.cli.natspec_startup",
+    "qualname": "_StubTemplate",
+    "template_name": "stub_generation_prompt.j2",
+    "ty_sort": "PartialTemplate"
+  },
+  "composer.foundry.author:_FoundryPropertyGenTemplate": {
+    "module": "composer.foundry.author",
+    "qualname": "_FoundryPropertyGenTemplate",
+    "template_name": "foundry_property_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvl_research:_ResearchSys": {
+    "module": "composer.spec.cvl_research",
+    "qualname": "_ResearchSys",
+    "template_name": "cvl_research_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.feedback:FeedbackTemplate": {
+    "module": "composer.spec.feedback",
+    "qualname": "FeedbackTemplate",
+    "template_name": "property_judge_prompt.j2",
+    "ty_sort": "PartialTemplate"
+  },
+  "composer.spec.feedback:FeedbackSystemTemplate": {
+    "module": "composer.spec.feedback",
+    "qualname": "FeedbackSystemTemplate",
+    "template_name": "property_judge_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.natspec.author:NoSourceGen": {
+    "module": "composer.spec.natspec.author",
+    "qualname": "NoSourceGen",
+    "template_name": "nosource_property_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.prop_inference:property_analysis_template": {
+    "module": "composer.spec.prop_inference",
+    "qualname": "property_analysis_template",
+    "template_name": "property_analysis_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.author:_PropertyGenTemplate": {
+    "module": "composer.spec.source.author",
+    "qualname": "_PropertyGenTemplate",
+    "template_name": "property_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.design_doc_finder:_FINDER_PROMPT": {
+    "module": "composer.spec.source.design_doc_finder",
+    "qualname": "_FINDER_PROMPT",
+    "template_name": "design_doc_finder_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.harness:HarnessAnalysis": {
+    "module": "composer.spec.source.harness",
+    "qualname": "HarnessAnalysis",
+    "template_name": "state_analysis.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.harness:_HarnessGenerationPrompt": {
+    "module": "composer.spec.source.harness",
+    "qualname": "_HarnessGenerationPrompt",
+    "template_name": "harness_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.report.render:_REPORT_TEMPLATE": {
+    "module": "composer.spec.source.report.render",
+    "qualname": "_REPORT_TEMPLATE",
+    "template_name": "autoprove_report.html.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.struct_invariant:_typed_invariant_prompt": {
+    "module": "composer.spec.source.struct_invariant",
+    "qualname": "_typed_invariant_prompt",
+    "template_name": "structural_invariant_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.summarizer:_SummarizationTemplate": {
+    "module": "composer.spec.source.summarizer",
+    "qualname": "_SummarizationTemplate",
+    "template_name": "cvl_setup_summarization_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  }
+}

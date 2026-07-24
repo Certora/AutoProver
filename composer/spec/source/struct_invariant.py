@@ -22,7 +22,7 @@ from graphcore.graph import FlowInput
 
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.context import WorkflowContext, SourceCode, CacheKey, InvJudge
+from composer.spec.context import WorkflowContext, SourceFields, SourceCode, CacheKey, InvJudge
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import HarnessedApplication
 from composer.spec.gen_types import TypedTemplate
@@ -79,7 +79,7 @@ def _merge_invariant_feedback(
 
 class InvariantParams(TypedDict):
     context: HarnessedApplication
-    contract_spec: SourceCode
+    contract_spec: SourceFields
 
 _typed_invariant_prompt = TypedTemplate[InvariantParams]("structural_invariant_prompt.j2")
 

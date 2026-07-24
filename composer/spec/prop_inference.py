@@ -4,7 +4,7 @@ Property generation agent: extracts security properties from application compone
 Parameterized by source availability via AnalysisInput tuple.
 """
 
-from typing import Any, Callable, NotRequired, override, Literal, Sequence
+from typing import Any, Callable, NotRequired, override, Literal, Sequence, TypedDict
 import re
 from difflib import SequenceMatcher
 from pydantic import BaseModel, Field
@@ -18,17 +18,17 @@ from graphcore.graph import MessagesState, FlowInput
 from graphcore.tools.schemas import WithImplementation
 
 from composer.input.files import Document
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
-from composer.spec.system_model import ContractComponentInstance
+from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.service_host import Sort, ServiceHost
 from composer.io.conversation import ConversationContextProvider
 from composer.spec.refinement import refinement_loop, EndConversation, SyncStateUpdateTool
 from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
-from composer.spec.util import string_hash
 
 from rich.markdown import Markdown
 from rich.console import Group
@@ -99,6 +99,14 @@ considered interesting (e.g., a uint256 being non-negative, a uint128
 field not exceeding 2^128 - 1, etc.)
 """
 
+@component_context
+class PropertyAnalysisParams(TypedDict):
+    sort: Sort
+    context: ContractComponentInstance
+    prior_properties: list[_AgentRoundResult]
+    backend_guidance: str
+
+property_analysis_template = TypedTemplate[PropertyAnalysisParams]("property_analysis_prompt.j2")
 
 def _get_initial_prompt(
     context: ContractComponentInstance,
@@ -106,13 +114,12 @@ def _get_initial_prompt(
     prev_results: list[_AgentRoundResult],
     backend_guidance: str,
 ) -> str:
-    return load_jinja_template(
-        "property_analysis_prompt.j2",
-        context=context,
-        backend_guidance=backend_guidance,
-        sort=sort,
-        prior_properties=prev_results
-    )
+    return property_analysis_template.bind({
+        "backend_guidance": backend_guidance,
+        "context": context,
+        "prior_properties": prev_results,
+        "sort": sort
+    }).render_to(load_jinja_template)
 
 @tool_display("Ending conversation...", None)
 class Exit(WithImplementation[str]):

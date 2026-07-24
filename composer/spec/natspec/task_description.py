@@ -5,13 +5,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, AsyncContextManager, Awaitable, ContextManager, Iterator, Mapping, Self, TypedDict
 
-from composer.spec.gen_types import InjectedTemplate
+from composer.spec.gen_types import ITypedTemplate
 from composer.spec.natspec.models import (
     InterfaceDeclModel,
     InterfaceResult,
     StubDeclarationModel,
 )
-from composer.spec.system_model import ExplicitContract, NatspecApplication, SolidityIdentifier
+from composer.spec.system_model import ExplicitContract, NatspecApplication, SolidityIdentifier, ExistingFromSource
 from composer.spec.util import temp_certora_file
 
 
@@ -28,7 +28,7 @@ from composer.spec.util import temp_certora_file
 class InterfaceGenCallParams(TypedDict):
     summary: NatspecApplication
     target_contracts: list[ExplicitContract]
-    existing_contracts: list[ExplicitContract]
+    existing_contracts: list[ExistingFromSource]
     solc_version: str
 
 
@@ -76,7 +76,7 @@ class AgentDescription[T, X: Mapping[str, Any]]:
     (e.g. current stubs) at agent-dispatch time.
     """
     output_ty: type[T]
-    prompt: InjectedTemplate[X]
+    prompt: ITypedTemplate[X]
     extra_input: list[str | dict | ExtraInputProducer] = field(default_factory=list)
 
 
