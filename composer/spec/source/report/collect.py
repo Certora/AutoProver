@@ -69,10 +69,14 @@ class Verdict:
     line: int | None = None
     duration_seconds: float | None = None
     unit_file: str | None = None
+    #: Human-readable explanation of a non-GOOD outcome (a counterexample / assertion message for
+    #: a BAD, error text for an ERROR). Provenance/diagnostics only; ``None`` when the backend
+    #: gives no detail (the prover/foundry fetchers don't).
+    message: str | None = None
 
     def merge(self, other: "Verdict | None") -> "Verdict":
         """Combine two results for one unit within a run: higher-priority outcome wins,
-        line/duration/unit_file kept from whichever side has them."""
+        line/duration/unit_file/message kept from whichever side has them."""
         if other is None:
             return self
         hi, lo = (
@@ -85,6 +89,7 @@ class Verdict:
             hi.line if hi.line is not None else lo.line,
             hi.duration_seconds if hi.duration_seconds is not None else lo.duration_seconds,
             hi.unit_file or lo.unit_file,
+            hi.message or lo.message,
         )
 
 
@@ -162,7 +167,7 @@ async def collect[R: ReportableResult](
             if key not in rules_by_key:
                 rules_by_key[key] = RuleVerdict(
                     name=unit_name, spec_file=key[0], outcome=v.outcome, line=v.line,
-                    duration_seconds=v.duration_seconds, prover_link=run_link,
+                    duration_seconds=v.duration_seconds, prover_link=run_link, message=v.message,
                 )
 
     # A referenced unit with no verdict still needs an (UNKNOWN) entry to render.
