@@ -6,9 +6,8 @@ trace. Consumed by ``snapshot-viewer`` (one timeline = one app) and by
 import json
 from typing import Awaitable, Callable
 
-from textual import events
 from textual.binding import Binding
-from textual.containers import VerticalScroll, HorizontalScroll, Horizontal
+from textual.containers import VerticalScroll
 from textual.widgets import Static, Collapsible
 
 from rich.text import Text
@@ -17,53 +16,7 @@ from rich.syntax import Syntax
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from composer.io.thread_timeline import SummarizationMarker, TimelineItem
-from composer.ui.clipboard import copy_to_clipboard
 from composer.ui.content import normalize_content
-
-
-class CopyButton(Static):
-    """A compact glyph that copies a fixed payload to the system clipboard.
-
-    Clickable and keyboard-focusable (Enter copies). The full payload is echoed
-    in the confirmation toast — never truncated — so the user can eyeball what
-    landed on the clipboard.
-    """
-
-    can_focus = True
-
-    DEFAULT_CSS = """
-    CopyButton { width: auto; padding: 0 1; color: $accent; }
-    CopyButton:hover { background: $accent 30%; }
-    CopyButton:focus { background: $accent 50%; text-style: bold; }
-    """
-
-    BINDINGS = [Binding("enter", "copy", "Copy", show=False)]
-
-    def __init__(self, payload: str, *, what: str, glyph: str = "⧉", **kwargs) -> None:
-        super().__init__(glyph, **kwargs)
-        self._payload = payload
-        self._what = what
-        self.tooltip = f"Copy {what}"
-
-    def on_click(self, event: events.Click) -> None:
-        event.stop()
-        self.action_copy()
-
-    def action_copy(self) -> None:
-        if copy_to_clipboard(self._payload):
-            self.app.notify(f"Copied {self._what}: {self._payload}")
-        else:
-            self.app.notify(
-                "No clipboard tool found (install wl-clipboard / xclip / xsel).",
-                severity="error",
-            )
-
-
-def _wide(body) -> HorizontalScroll:
-    """Wrap a wide payload (JSON, prover/CEX traces) in a content-height box
-    that scrolls sideways instead of clipping or wrapping. The inner widget is
-    sized to its natural width via CSS (``width: auto``)."""
-    return HorizontalScroll(body)
 
 
 def _first_line(s: str, max_len: int = 100) -> str:
@@ -128,7 +81,7 @@ class ThreadRenderer(VerticalScroll):
     DEFAULT_CSS = """
     ThreadRenderer { height: 1fr; padding: 0 2; }
     ThreadRenderer > * { margin-bottom: 1; }
-    ThreadRenderer .turn-header { margin-top: 1; width: 1fr; }
+    ThreadRenderer .turn-header { margin-top: 1; }
     ThreadRenderer .turn-header:hover { background: $accent 30%; }
     ThreadRenderer .tool-call { margin-left: 2; }
     ThreadRenderer .tool-result { margin-left: 2; }
@@ -148,17 +101,6 @@ class ThreadRenderer(VerticalScroll):
     ThreadRenderer DescendableToolCall > CollapsibleTitle:focus {
         background: $warning 40%;
     }
-
-    ThreadRenderer HorizontalScroll { height: auto; }
-    ThreadRenderer HorizontalScroll > * { width: auto; }
-
-    ThreadRenderer .hdr-row { height: auto; }
-    ThreadRenderer #thread-id-bar {
-        height: auto;
-        margin-bottom: 1;
-        background: $panel;
-    }
-    ThreadRenderer #thread-id-bar > .thread-id-label { width: 1fr; padding: 0 1; }
     """
 
     BINDINGS = [
@@ -180,14 +122,12 @@ class ThreadRenderer(VerticalScroll):
         self,
         timeline: list[tuple[TimelineItem, str | None]],
         *,
-        thread_id: str | None = None,
         descendable_tool_call_ids: set[str] | None = None,
         on_tool_descend: Callable[[str], Awaitable[None]] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._timeline = timeline
-        self._lg_thread_id = thread_id
         self._descendable = descendable_tool_call_ids or set()
         self._on_tool_descend = on_tool_descend
 
@@ -203,19 +143,6 @@ class ThreadRenderer(VerticalScroll):
     def _render_all(self) -> list:
         widgets: list = []
 
-        if self._lg_thread_id:
-            widgets.append(
-                Horizontal(
-                    Static(
-                        Text(f"thread: {self._lg_thread_id}", style="bold"),
-                        classes="thread-id-label",
-                    ),
-                    CopyButton(self._lg_thread_id, what="thread id"),
-                    id="thread-id-bar",
-                    classes="hdr-row",
-                )
-            )
-
         # Pair tool results to calls by tool_call_id. Ids are unique across
         # summary epochs so pairing across them is fine.
         tool_results: dict[str, ToolMessage] = {}
@@ -224,7 +151,7 @@ class ThreadRenderer(VerticalScroll):
                 tool_results[item.tool_call_id] = item
 
         turn = 0
-        for idx, (item, ckpt_id) in enumerate(self._timeline):
+        for idx, (item, _ckpt_id) in enumerate(self._timeline):
             match item:
                 case SummarizationMarker():
                     widgets.append(self._render_summarization(item, idx))
@@ -234,7 +161,7 @@ class ThreadRenderer(VerticalScroll):
                     widgets.append(self._render_human(item, idx))
                 case AIMessage():
                     turn += 1
-                    widgets.extend(self._render_turn(item, idx, turn, ckpt_id, tool_results))
+                    widgets.extend(self._render_turn(item, idx, turn, tool_results))
                 case ToolMessage():
                     pass  # rendered inline with its AI message
                 case _:
@@ -277,7 +204,6 @@ class ThreadRenderer(VerticalScroll):
         msg: AIMessage,
         idx: int,
         turn: int,
-        ckpt_id: str | None,
         tool_results: dict[str, ToolMessage],
     ) -> list:
         widgets: list = []
@@ -303,17 +229,7 @@ class ThreadRenderer(VerticalScroll):
         if n_tool_calls:
             header.append(f"  {n_tool_calls} tool call(s)", style="dim")
         header.append(usage_str, style="dim")
-        header_widget = Static(header, classes="turn-header")
-        if ckpt_id is not None:
-            widgets.append(
-                Horizontal(
-                    header_widget,
-                    CopyButton(ckpt_id, what="checkpoint id"),
-                    classes="hdr-row",
-                )
-            )
-        else:
-            widgets.append(header_widget)
+        widgets.append(Static(header, classes="turn-header"))
 
         for block in blocks:
             match block["type"]:
@@ -348,7 +264,7 @@ class ThreadRenderer(VerticalScroll):
             if descendable:
                 assert self._on_tool_descend is not None
                 coll: Collapsible = DescendableToolCall(
-                    _wide(Static(Syntax(args_str, "json", theme="monokai"))),
+                    Static(Syntax(args_str, "json", theme="monokai")),
                     title=call_title,
                     collapsed=True,
                     classes="tool-call",
@@ -357,7 +273,7 @@ class ThreadRenderer(VerticalScroll):
                 )
             else:
                 coll = Collapsible(
-                    _wide(Static(Syntax(args_str, "json", theme="monokai"))),
+                    Static(Syntax(args_str, "json", theme="monokai")),
                     title=call_title,
                     collapsed=True,
                     classes="tool-call",
@@ -374,7 +290,7 @@ class ThreadRenderer(VerticalScroll):
                     result_title += f" [{status}]"
                 result_title += f": {preview}"
                 widgets.append(Collapsible(
-                    _wide(Static(content, markup=False)),
+                    Static(content, markup=False),
                     title=result_title,
                     collapsed=True,
                     classes="tool-result",
