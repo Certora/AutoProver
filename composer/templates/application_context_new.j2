@@ -18,7 +18,7 @@ described as {{ context.app.application_type }}.
 The other contracts in the application are:
 {% for other in context.ommer_contracts %}
 * The {{ contract_label(other) }} contract, described as {{ other.description }}. The contract's sort is {{ other.sort }}.
-{%- if sort is defined and sort == "update" %}
+{%- if sort == "update" %}
   Its status in the source tree is `{{ other.tag }}`{% if other.tag in ("unchanged", "edited") %} (source located at `{{ other.path }}`){% endif %}.
 {%- endif %}
 {% endfor %}
@@ -28,7 +28,7 @@ The sort of a contract means the following:
 - `dynamic`: One of the other explicit contracts will dynamically create instances of this contract during execution
 - `multiple`: Multiple instances of this contract will be created, but by some external actor during execution
    or as part of deployment.
-{% if sort is defined and sort  == "update" %}
+{% if sort == "update" %}
 
 The status/tag of a contract in the source tree means the following:
 - `unchanged`: The contract is already present in the existing source tree and the design does not

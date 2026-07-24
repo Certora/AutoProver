@@ -76,7 +76,7 @@ cpu = ["torch"]
 cuda = ["torch"]
 
 [dependency-groups]
-test = ["pytest>=9.0", "pytest-asyncio>=1.3", "testcontainers>=4.0", "pytest-xdist"]
+test = ["pytest>=9.0", "pytest-asyncio>=1.3", "testcontainers>=4.0", "pytest-xdist", "hypothesis"]
 ci = ["pyright"]
 ragbuild = [
     # duplicated! no way to prevent this, says only language where this nonsense is required
@@ -120,6 +120,7 @@ explicit = true
 [tool.pytest.ini_options]
 markers = [
     "expensive: hits the real prover / network — deselect with -m 'not expensive'",
+    "fuzz: fuzz tests"
 ]
 # optional but recommended once you're registering marks:
 addopts = "--strict-markers"   # a typo'd mark becomes an error, not a silent no-match

@@ -11,7 +11,7 @@ from composer.spec.natspec.models import (
     InterfaceResult,
     StubDeclarationModel,
 )
-from composer.spec.system_model import ExplicitContract, NatspecApplication, SolidityIdentifier
+from composer.spec.system_model import ExplicitContract, NatspecApplication, SolidityIdentifier, ExistingFromSource
 from composer.spec.util import temp_certora_file
 
 
@@ -28,7 +28,7 @@ from composer.spec.util import temp_certora_file
 class InterfaceGenCallParams(TypedDict):
     summary: NatspecApplication
     target_contracts: list[ExplicitContract]
-    existing_contracts: list[ExplicitContract]
+    existing_contracts: list[ExistingFromSource]
     solc_version: str
 
 

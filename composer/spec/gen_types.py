@@ -1,7 +1,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Literal, Mapping, Any, Protocol, final
+from typing import Literal, Mapping, Any, Protocol, final, TypedDict
 
 from pydantic import BaseModel, Field
 

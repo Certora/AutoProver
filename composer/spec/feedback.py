@@ -19,7 +19,7 @@ from composer.cvl.tools import get_cvl
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.gen_types import TemplateInstantiation, TypedTemplate, ITypedTemplate, PartialTemplate
 from composer.spec.cvl_generation import FeedbackToolContext, Rebuttal, SkippedProperty
-from composer.spec.system_model import ContractComponentInstance
+from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.spec.util import uniq_thread_id
 
 class PropertyFeedback(BaseModel):
@@ -36,6 +36,7 @@ class FeedbackInputs(Properties):
     rebuttals: Sequence[Rebuttal]
     skipped: Sequence[SkippedProperty]
 
+@component_context
 class FeedbackInherentParams(TypedDict):
     context: ContractComponentInstance | None
     # Matches the tri-state on the env-level ``sort``:
