@@ -1,0 +1,52 @@
+This task targets the security properties of the instruction `{{ context.instruction.name }}`
+of the program `{{ context.program.name }}` (`{{ context.program.program_identifier }}`).
+
+This instruction is described as:
+
+{{ context.instruction.description }}
+
+The requirements for this instruction are:
+{% for req in context.instruction.requirements %}
+* {{ req }}
+{% endfor %}
+{% if context.instruction.args %}
+
+Non-account arguments: {% for a in context.instruction.args %}`{{ a }}`{% if not loop.last %}, {% endif %}{% endfor %}.
+{% endif %}
+
+Accounts this instruction takes, and the checks the program is responsible for enforcing on each:
+{% for acc in context.instruction.accounts %}
+* `{{ acc.name }}` — {{ acc.account_type }}{% if acc.roles %} [{{ acc.roles | join(", ") }}]{% endif %}.
+  {% if acc.constraints %}Program-enforced constraints: {{ acc.constraints | join("; ") }}.{% else %}No constraints were recorded for this account — consider whether a signer/owner/relationship check is required here.{% endif %}
+{% endfor %}
+{% if context.instruction.signers %}
+
+Accounts that must sign: {{ context.instruction.signers | join(", ") }}.
+{% endif %}
+{% if context.instruction.cpis %}
+
+Cross-program invocations this instruction performs:
+{% for cpi in context.instruction.cpis %}
+* → `{{ cpi.target_program }}`: {{ cpi.description }}
+{% endfor %}
+{% endif %}
+
+The `{{ context.program.name }}` program is part of a `{{ context.app.application_type }}` application.
+{% if context.program.account_types %}
+It owns / derives these account (state) types: {{ context.program.account_types | join(", ") }}.
+{% endif %}
+
+{% set siblings = [] %}
+{% for p in context.app.programs %}{% if p.program_identifier != context.program.program_identifier %}{% set _ = siblings.append(p) %}{% endif %}{% endfor %}
+{% if siblings %}
+Other programs in the application:
+{% for p in siblings %}
+* `{{ p.name }}` (`{{ p.program_identifier }}`): {{ p.description }}
+{% endfor %}
+{% endif %}
+{% if context.app.authorities %}
+External authorities / actors the system interacts with:
+{% for a in context.app.authorities %}
+* {{ a.name }}: {{ a.description }}
+{% endfor %}
+{% endif %}
