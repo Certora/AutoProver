@@ -1,0 +1,62 @@
+
+EXAMPLE — a full, compiling fixture for a *different* program (an `escrow`). Study the
+shape, then write the equivalent for THIS program:
+
+```rust
+use crucible_fuzzer::anchor_lang::system_program;
+use crucible_fuzzer::*;
+use solana_keypair::Keypair;
+use solana_pubkey::Pubkey;
+use solana_signer::Signer;
+use std::rc::Rc;
+use escrow::*;                                   // the crate id — NOT the `#[program] mod` name
+
+#[derive(Clone)]
+struct Fixture {                                 // MUST be named `Fixture`
+    ctx: TestContext,
+    program_id: Pubkey,
+    depositor: Rc<Keypair>,
+    vault_pda: Pubkey,
+}
+
+#[fuzz_fixture]
+impl Fixture {
+    pub fn setup() -> Self {
+        let mut ctx = TestContext::new();
+        let program_id = Pubkey::new_from_array(ID.to_bytes());
+        ctx.add_program(&program_id, "../../target/deploy/escrow.so").unwrap();
+
+        let depositor = Rc::new(Keypair::new());
+        ctx.create_account().pubkey(depositor.pubkey())
+            .lamports(10_000_000_000).owner(system_program::ID).create().unwrap();
+
+        let (vault_pda, _) =
+            Pubkey::find_program_address(&[b"vault", depositor.pubkey().as_ref()], &program_id);
+
+        ctx.program(program_id)
+            .call(instruction::Initialize {})     // args struct; `{}` when the ix has no args
+            .accounts(accounts::Initialize {
+                vault: vault_pda,
+                depositor: depositor.pubkey(),
+                system_program: system_program::ID,
+            })
+            .signers(&[&*depositor])
+            .send().unwrap();                     // panic in setup() if init fails
+
+        Self { ctx, program_id, depositor, vault_pda }
+    }
+
+    pub fn action_deposit(&mut self, #[range(1..1_000_000)] amount: u64) -> bool {
+        self.ctx.program(self.program_id)
+            .call(instruction::Deposit { amount })
+            .accounts(accounts::Deposit {
+                vault: self.vault_pda,
+                depositor: self.depositor.pubkey(),
+                system_program: system_program::ID,
+            })
+            .signers(&[&*self.depositor])
+            .send().map(|o| o.is_success()).unwrap_or(false)
+    }
+}
+```
+

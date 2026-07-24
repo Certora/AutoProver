@@ -1,0 +1,18 @@
+Author a SINGLE Crucible `#[invariant_test]` function named EXACTLY `{{ harness_fn }}` for the `{{ program }}` program
+that checks ALL {{ n }} properties below — one fuzz run covers them all. It must hold after ANY sequence of actions the
+fuzzer drives; read on-chain state and assert each property in the one fn.
+
+Properties to check (assert each; PREFIX every assertion message with its property title in brackets, e.g.
+`"[{{ first }}] ..."`, so a counterexample names the property it refutes):
+{{ listed }}
+
+Program API (drive instructions via the fixture's `action_*` methods):
+{{ component }}
+
+{{ cheat }}
+
+The shared fixture is ALREADY defined (do not redefine it); use `Fixture` and its `action_*` methods. Fixture source for
+reference:
+```rust
+{{ fixture }}
+```{{ revise }}

@@ -1,0 +1,11 @@
+crucible-fuzzer = { path = "{{ cf }}" }
+crucible-test-context = { path = "{{ ctc }}" }
+anchor-lang = "{{ anchor_version }}"
+arbitrary = { version = "1", features = ["derive"] }
+ctrlc = "3.4"
+libafl = { version = "{{ libafl_version }}", features = ["std", "cli", "prelude"] }
+libafl_bolts = { version = "{{ libafl_version }}", features = ["std"] }
+{{ program }} = { path = "../../programs/{{ program }}", features = ["no-entrypoint"] }
+solana-keypair = "{{ solana_version }}"
+solana-pubkey = "{{ solana_version }}"
+solana-signer = "{{ solana_version }}"

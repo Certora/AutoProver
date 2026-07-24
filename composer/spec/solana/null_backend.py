@@ -7,14 +7,14 @@ It satisfies the full ``PipelineBackend`` contract over the Solana ecosystem's
 
 **Role:** a **test double** for the Solana front half (analysis + property extraction)
 without a real verifier — see ``tests/test_solana_gate.py``. Production Solana
-verification is the Crucible fuzzer backend.
+verification is :mod:`composer.crucible` (Crucible fuzzer backend).
 """
 
 import enum
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast, override
+from typing import override
 
 from pydantic import BaseModel, Field
 
@@ -35,7 +35,7 @@ from composer.spec.solana.model import (
     SolanaProgramInstance,
 )
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
-from composer.spec.source.report.schema import ReportBackend, RuleName
+from composer.spec.source.report.schema import RuleName
 from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 from composer.spec.util import ensure_dir
@@ -108,9 +108,7 @@ class NullSolanaFormalizer(Formalizer[NullResult, FeatureUnit]):
     def __init__(self) -> None:
         # Reuses the ``"crucible"`` report backend (the real Solana verifier this null backend
         # models); its results are all-UNKNOWN, so the label choice is provenance only.
-        # Intermediate (PR1): report/schema.py's ReportBackend literal is still master's
-        # {prover, foundry}; cast the tag until PR3 closes the literal to include "crucible".
-        super().__init__(NullResult, cast(ReportBackend, "crucible"))
+        super().__init__(NullResult, "crucible")
 
     @override
     async def formalize(

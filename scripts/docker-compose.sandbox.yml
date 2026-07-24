@@ -18,14 +18,16 @@
 #
 # Adding the sandbox to a FUTURE service: mirror the three keys added to
 # `autoprove` below (the `depends_on` completion gate, the `run_confined` mount,
-# and RUN_CONFINED_BIN). `depends_on` pulls the builder in even when its profile
-# is not explicitly enabled, so the one-shot publish always runs first.
+# and RUN_CONFINED_BIN).
 
 services:
   run-confined-build:
-    # Gated so a bare `docker compose up` never starts it; consumers pull it in
-    # via depends_on regardless of which profile they run under.
-    profiles: ["sandbox"]
+    # Deliberately NOT profile-gated: a `depends_on` on a profiled service is
+    # treated as "undefined service" by `docker compose build`/`config` unless
+    # that profile is also passed, so gating it would force every consumer to add
+    # a second `--profile`. It only exists when this overlay is layered in, and
+    # it's a harmless one-shot (publishes the binary and exits), so leaving it
+    # ungated is both simpler and robust.
     image: autoprover-run-confined:latest
     build:
       context: ..

@@ -473,10 +473,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         context_extra: dict | None = None,
         setup_result: str | None = None,
     ):
-        # Intermediate (PR2): report schema still master's `prover`/`foundry`, so cast the
-        # wheel's tag directly rather than validating against a set that lacks "crucible".
-        # PR3 (crucible) closes the ReportBackend literal and swaps this to as_report_backend.
-        super().__init__(RustFormalResult, cast(ReportBackend, descriptor.backend_tag))
+        super().__init__(RustFormalResult, as_report_backend(descriptor.backend_tag))
         self._module = module
         self._descriptor = descriptor
         self._sandbox = sandbox

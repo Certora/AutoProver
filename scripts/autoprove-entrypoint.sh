@@ -29,6 +29,7 @@ export USER=autoprove LOGNAME=autoprove
 PGHOST="${CERTORA_AI_COMPOSER_PGHOST:-postgres}"
 PGPORT="${CERTORA_AI_COMPOSER_PGPORT:-5432}"
 RAG_CONN="postgresql://rag_user:rag_password@${PGHOST}:${PGPORT}/rag_db"
+CRUCIBLE_RAG_CONN="postgresql://crucible_rag_user:rag_password@${PGHOST}:${PGPORT}/rag_db"
 
 if [[ "${1:-}" == "setup-db" ]]; then
   shift
@@ -53,6 +54,10 @@ if [[ "${1:-}" == "setup-db" ]]; then
   python -m composer.scripts.ragbuild \
       --output "$RAG_CONN" \
       "$AUTOPROVE_HOME/prover-docs/cvl.html"
+  echo "[autoprove] populating crucible_kb RAG at ${CRUCIBLE_RAG_CONN} ..."
+  python -m composer.scripts.rag_import \
+      --output "$CRUCIBLE_RAG_CONN" \
+      "$AUTOPROVE_HOME/crucible_kb.rag.json"
   echo "[autoprove] populating LangGraph knowledge base ..."
   python -m composer.scripts.kb_populate
   echo "[autoprove] setup-db done."
@@ -74,6 +79,29 @@ case "${1:-}" in
       set -- "$@" --rag-db "$RAG_CONN"
     fi
     exec "$cmd" "$@"
+    ;;
+  console-crucible|tui-crucible)
+    # Crucible runs fully in-container, but ONLY on the crucible toolchain image
+    # (scripts/Dockerfile.crucible) with the sandbox overlay mounted. Fail fast
+    # with an actionable message instead of a deep build/sandbox error. The RAG
+    # connection is derived from CERTORA_AI_COMPOSER_PGHOST/PGPORT (no --rag-db).
+    missing=()
+    for bin in crucible cargo-build-sbf anchor; do
+      command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
+    done
+    if (( ${#missing[@]} > 0 )); then
+      echo "[autoprove] Crucible toolchain missing: ${missing[*]}." >&2
+      echo "[autoprove] Run the crucible image: add -f scripts/docker-compose.crucible.yml" >&2
+      exit 1
+    fi
+    if [[ "${COMPOSER_SANDBOX_PROVIDER:-launcher}" == "launcher" ]] \
+       && [[ -z "${RUN_CONFINED_BIN:-}" || ! -x "${RUN_CONFINED_BIN:-/nonexistent}" ]] \
+       && ! command -v run-confined >/dev/null 2>&1; then
+      echo "[autoprove] run-confined not found and the launcher provider is fail-closed." >&2
+      echo "[autoprove] Add -f scripts/docker-compose.sandbox.yml, or set COMPOSER_SANDBOX_PROVIDER=none." >&2
+      exit 1
+    fi
+    exec "$@"
     ;;
   console-foundry|tui-foundry)
     # Foundry mode runs the project's own `forge test`, which can use the `ffi`

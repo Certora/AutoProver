@@ -1,0 +1,21 @@
+Evaluate the Crucible fuzz-test suite below for the Solana program `{{ program }}`. Decide, per property, whether a
+PASSING fuzz campaign is real evidence — not merely that the tests compile (the build gate already ensures that).
+
+Properties this suite must demonstrate (ALL checked inside the single `{{ harness_fn }}` invariant fn):
+{{ listed }}
+
+Program API (instructions / accounts / state — driven via the fixture's `action_*` methods):
+{{ component }}
+
+The shared fixture the tests build on (already compiled — do not re-review it, but use it to judge what states the
+`action_*` methods can reach):
+```rust
+{{ fixture }}
+```
+
+Test suite under review:
+```rust
+{{ spec }}
+```
+
+{% include "judge_guidance.j2" %}

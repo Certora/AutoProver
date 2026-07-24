@@ -1,0 +1,46 @@
+
+Crucible harness API (author a FIXTURE only — no test fns):
+
+- Imports:
+    use crucible_fuzzer::*;                          // TestContext, macros, fuzz_assert_*
+    use crucible_fuzzer::anchor_lang::system_program;
+    use {{ program }}::*;                                // instruction, accounts, ID, state types
+    use solana_keypair::Keypair; use solana_pubkey::Pubkey; use solana_signer::Signer;
+    use std::rc::Rc;
+
+- The fixture struct MUST be named `Fixture` and derive Clone; keypairs go in `Rc`:
+    #[derive(Clone)]
+    struct Fixture { ctx: TestContext, program_id: Pubkey, /* pdas, users (Rc<Keypair>) */ }
+
+- #[fuzz_fixture] impl Fixture { ... } with:
+    pub fn setup() -> Self {
+        let mut ctx = TestContext::new();
+        let program_id = Pubkey::new_from_array(ID.to_bytes());
+        ctx.add_program(&program_id, "../../target/deploy/{{ program }}.so").unwrap();
+        // create funded accounts: ctx.create_account().pubkey(kp.pubkey())
+        //     .lamports(N).owner(system_program::ID).create().unwrap();
+        // derive PDAs: Pubkey::find_program_address(&[b"seed", key.as_ref()], &program_id)
+        // run any init instruction (see calling convention). Panic on setup failure.
+        Self { ctx, program_id, /* ... */ }
+    }
+    // one `action_<name>` per instruction; fuzzable args get #[range(lo..hi)]:
+    pub fn action_<name>(&mut self, #[range(0..1_000_000)] amount: u64) -> bool {
+        self.ctx.program(self.program_id)
+            .call(instruction::<Name> { amount })
+            .accounts(accounts::<Name> { /* fields */ })
+            .signers(&[&*self.some_keypair])
+            .send().map(|o| o.is_success()).unwrap_or(false)
+    }
+
+- Anchor path conventions (use the API FACTS below — do NOT guess these):
+    * `use {{ program }}::*;` brings the crate's generated items into scope. `{{ program }}` is
+      the crate id in the facts, NOT the `#[program] pub mod <name>` module name — the
+      module name does NOT change these crate-root paths.
+    * Instruction args struct: `instruction::<PascalName>` — snake_case `foo_bar` → `instruction::FooBar`.
+    * Accounts struct: `accounts::<PascalName>` — same PascalCase as the instruction.
+    * Program id: the `ID` constant; make a Pubkey via `Pubkey::new_from_array(ID.to_bytes())`.
+- Read the program source (via the tools) to confirm exact field names, PDA seeds
+  (binary vs string), and signer requirements — the API facts + model below are a summary.
+- Output ONLY the fixture module source (imports + struct + #[fuzz_fixture] impl).
+  Do NOT write `fn main`, `#[invariant_test]`, or `#[crucible_fuzz]` — those are added later.
+

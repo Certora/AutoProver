@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "crucible_app"
+version = "0.1.0"
+description = "AutoProver Solana verification application (Crucible fuzzing backend)."
+requires-python = ">=3.12"
+classifiers = ["Programming Language :: Rust"]
+
+[tool.maturin]
+# The compiled module is imported as `crucible_app` (matches `export_app!(crucible_app, …)`).
+module-name = "crucible_app"
+# abi3 wheel — one artifact for cp312+.
+features = ["pyo3/extension-module"]
