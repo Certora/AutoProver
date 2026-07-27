@@ -1,0 +1,51 @@
+# docker-compose.sandbox.yml — OVERLAY that gives a service the `run-confined`
+# command-sandbox launcher (Landlock + seccomp; docs/command-sandbox.md).
+#
+# Layered on top of scripts/docker-compose.yml, never used alone. Not every AutoProver
+# container needs it, so this overlay supplies it at runtime instead:
+#
+#   1. `run-confined-build` builds scripts/Dockerfile.sandbox and, on start,
+#      copies the launcher into the shared `run_confined` named volume, then exits.
+#   2. Consuming services mount that volume read-only and point
+#      RUN_CONFINED_BIN at it. The launcher provider resolves $RUN_CONFINED_BIN
+#      first (composer/sandbox/launcher.py), so it need not be on PATH.
+#
+# Usage (add -f for this overlay to any base invocation):
+#   docker compose -f scripts/docker-compose.yml -f scripts/docker-compose.sandbox.yml \
+#       --profile autoprove build
+#   docker compose -f scripts/docker-compose.yml -f scripts/docker-compose.sandbox.yml \
+#       --profile autoprove run --rm autoprove console-autoprove --cloud /work/<proj> ...
+#
+# Adding the sandbox to a FUTURE service: mirror the three keys added to
+# `autoprove` below (the `depends_on` completion gate, the `run_confined` mount,
+# and RUN_CONFINED_BIN). `depends_on` pulls the builder in even when its profile
+# is not explicitly enabled, so the one-shot publish always runs first.
+
+services:
+  run-confined-build:
+    # Gated so a bare `docker compose up` never starts it; consumers pull it in
+    # via depends_on regardless of which profile they run under.
+    profiles: ["sandbox"]
+    image: autoprover-run-confined:latest
+    build:
+      context: ..
+      dockerfile: scripts/Dockerfile.sandbox
+    volumes:
+      - run_confined:/out
+    # One-shot: the image's CMD publishes the binary and exits 0.
+    restart: "no"
+
+  autoprove:
+    depends_on:
+      # Base file already declares postgres here; compose merges the two entries.
+      run-confined-build:
+        condition: service_completed_successfully
+    environment:
+      # Absolute path to the mounted launcher; the provider prefers this over PATH.
+      RUN_CONFINED_BIN: /sandbox/run-confined
+    volumes:
+      # Read-only: only run-confined-build (rw, above) writes the binary.
+      - run_confined:/sandbox:ro
+
+volumes:
+  run_confined:

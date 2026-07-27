@@ -133,9 +133,14 @@ class BuildSystemConfig(ABC):
                 type(self).__name__,
             )
 
-        # Apply via_ir
+        # via_ir is intentionally not inherited: viaIR inlines internal functions, which
+        # might prevent CVL internal summaries from being applied.
         if self.via_ir:
-            result["solc_via_ir"] = True
+            logger.log(
+                f"Ignoring {type(self).__name__}'s via_ir setting",
+                "INFO",
+                type(self).__name__,
+            )
 
         return result
 
