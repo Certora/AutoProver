@@ -28,11 +28,13 @@ import pathlib
 import zlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol, assert_never, Any, overload
+from typing import Protocol, overload
+
+from composer.llm.types import CacheLevel
 
 class ContentRenderer(Protocol):
-    def text_block(self, text: str, *, with_cache: bool) -> dict: ...
-    def file_block(self, file_id: str, *, with_cache: bool) -> dict: ...
+    def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict: ...
+    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict: ...
 
 # ---------------------------------------------------------------------------
 # Protocols (the public surface)
@@ -65,7 +67,7 @@ class TextUploadable(Uploadable, Protocol):
 class Document(Uploadable, Protocol):
     """A piece of content destined for an LLM message."""
 
-    def to_dict(self, with_cache: bool = False) -> dict: ...
+    def to_dict(self, cache_level: CacheLevel = CacheLevel.NONE) -> dict: ...
     def to_digest(self) -> str: ...
 
 
@@ -129,8 +131,8 @@ class InMemoryTextFile:
     def bytes_contents(self) -> bytes:
         return self.string_contents.encode("utf-8")
 
-    def to_dict(self, with_cache: bool = False) -> dict:
-        return self.renderer.text_block(self.string_contents, with_cache=with_cache)
+    def to_dict(self, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        return self.renderer.text_block(self.string_contents, cache_level=cache_level)
 
     def to_digest(self) -> str:
         return _bytes_digest(self.bytes_contents)
@@ -152,8 +154,8 @@ class UploadedFile:
     digest: str
     renderer: ContentRenderer
 
-    def to_dict(self, with_cache: bool = False) -> dict:
-        return self.renderer.file_block(file_id=self.file_id, with_cache=with_cache)
+    def to_dict(self, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        return self.renderer.file_block(file_id=self.file_id, cache_level=cache_level)
 
     def to_digest(self) -> str:
         return self.digest

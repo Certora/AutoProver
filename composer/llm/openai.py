@@ -19,17 +19,16 @@ import asyncio
 
 import openai
 
-from composer.input.files import UploaderBase, FileUploader, ContentRenderer
+from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    CacheLevel, ProviderServiceBase, ProviderSpec
+    ProviderServiceBase, ProviderSpec
 )
+from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
-    from langchain_core.tools import BaseTool
-    from graphcore.tools.memory import AsyncPostgresBackend
 
 
 # --- model probing ---------------------------------------------------------
@@ -135,10 +134,10 @@ class OpenAIService(ProviderServiceBase):
 
 @dataclass
 class OpenAIRenderer:
-    def text_block(self, text, *, with_cache: bool) -> dict:
+    def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
         to_ret : dict[str, Any] = {"type": "text", "text": text}
         return to_ret
-    def file_block(self, file_id: str, *, with_cache: bool) -> dict:
+    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
         return {
             "type": "file",
             "file": {
@@ -210,7 +209,7 @@ class OpenAIModelProvider:
         return OpenAIModelProvider(model_name, options, _model_parser(model_name))
 
     def builder_for(
-        self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
+        self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_openai import ChatOpenAI
 

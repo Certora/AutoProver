@@ -12,8 +12,9 @@ import anthropic
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    CacheLevel, ProviderServiceBase, ProviderSpec
+    ProviderServiceBase, ProviderSpec
 )
+from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
@@ -76,20 +77,28 @@ def _model_parser(model_name: str) -> ModelFeatures:
 def matches(model: str) -> bool:
     return model.split("-", 1)[0] == "claude"
 
+def level_to_ttl(c: CacheLevel) -> str | None:
+    match c:
+        case CacheLevel.NONE:
+            return None
+        case CacheLevel.SHORT:
+            return "5m"
+        case CacheLevel.LONG:
+            return "1h"
 
 # --- Files API uploader ----------------------------------------------------
 
 class AnthropicRenderer:
-    def text_block(self, text, *, with_cache: bool) -> dict:
+    def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
         to_ret : dict[str, Any] = {"type": "text", "text": text}
-        if with_cache:
+        if (ttl := level_to_ttl(cache_level)) is not None:
             to_ret["cache_control"] = {
                 "type": "ephemeral",
-                "ttl": "5m"
+                "ttl": ttl
             }
         return to_ret
-    
-    def file_block(self, file_id, *, with_cache: bool) -> dict:
+
+    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
         to_ret : dict[str, Any] = {
             "type": "document",
             "source": {
@@ -97,10 +106,10 @@ class AnthropicRenderer:
                 "file_id": file_id,
             },
         }
-        if with_cache:
+        if (ttl := level_to_ttl(cache_level)) is not None:
             to_ret["cache_control"] = {
                 "type": "ephemeral",
-                "ttl": "5m"
+                "ttl": ttl
             }
         return to_ret
 
@@ -179,7 +188,7 @@ class AnthropicModelProvider:
         )
 
     def builder_for(
-        self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
+        self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
         from composer.diagnostics.usage_callback import UsageCallback
@@ -199,15 +208,9 @@ class AnthropicModelProvider:
         if opts.memory_tool:
             betas.append("context-management-2025-06-27")
 
-        match cache_level:
-            case CacheLevel.SHORT:
-                ttl = "5m"
-            case CacheLevel.LONG:
-                ttl = "1h"
-            case None | CacheLevel.NONE:
-                ttl = None
+        ttl = level_to_ttl(cache_level)
         model_kwargs = (
-            {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl else {}
+            {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl is not None else {}
         )
 
         return ChatAnthropic(

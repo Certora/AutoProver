@@ -18,6 +18,7 @@ from graphcore.graph import MessagesState, FlowInput
 from graphcore.tools.schemas import WithImplementation
 
 from composer.input.files import Document
+from composer.llm.provider import CacheLevel
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
@@ -358,7 +359,7 @@ async def _run_bug_analysis_inner(
             "so some of the issues/vulnerabilities/attacks may not be relevant to your analysis. Do *NOT* overfit to this threat model; carefully "
             "analyze what content of the provided threat model is worth considering vs out of scope. Further, this threat model is just a starting point, "
             "you should ALSO look for threats *not* mentioned in this document.",
-            threat_model.to_dict(with_cache=True)
+            threat_model.to_dict(cache_level=CacheLevel.SHORT)
         ])
 
     prev_rounds : list[_AgentRoundResult] = []

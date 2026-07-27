@@ -206,7 +206,7 @@ def install_fake_llm(fake: Any) -> None:
     import composer.llm.registry as registry
     import composer.workflow.services as services
 
-    from composer.llm.provider import ProviderServiceBase
+    from composer.llm.provider import ProviderServiceBase, CacheLevel
 
     class _FakeService(ProviderServiceBase):
         """The real anthropic memory tool (backed by the harness's Postgres
@@ -222,7 +222,7 @@ def install_fake_llm(fake: Any) -> None:
     class _FakeProvider:
         provider = _FakeService()
 
-        def builder_for(self, *, cache_level: Any = None, disable_thinking: bool = False) -> Any:
+        def builder_for(self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False) -> Any:
             return _current_fake()
 
     fp = _FakeProvider()

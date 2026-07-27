@@ -12,10 +12,11 @@ the per-provider modules can import it without an import cycle.
 from typing import Protocol, TYPE_CHECKING, Callable
 from dataclasses import dataclass
 from functools import cached_property
-import enum
 from composer.input.files import FileUploader
 from composer.input.types import ModelConfiguration
+from .types import CacheLevel
 from abc import ABC
+
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -51,11 +52,6 @@ class ProviderServiceBase(ABC):
     ) -> "BaseTool":
         return self.mem_fact(backend)
 
-class CacheLevel(enum.StrEnum):
-    NONE = "none"
-    SHORT = "short"
-    LONG = "long"
-
 
 class ModelProvider(Protocol):
     """A provider-specific LLM backend, bound to one model.
@@ -67,7 +63,7 @@ class ModelProvider(Protocol):
     def provider(self) -> ProviderService: ...
 
     def builder_for(
-        self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
+        self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel": ...
 
 @dataclass(frozen=True)
