@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1.7
+#
+# Builds the `run-confined` command-sandbox launcher (Landlock + seccomp; see
+# docs/command-sandbox.md) and publishes it onto a shared volume so app
+# containers can opt into the sandbox WITHOUT baking it into their own image.
+#
+# Not every AutoProver image needs the sandbox, so this is deliberately kept out
+# of scripts/Dockerfile. It is wired in per-service via the compose overlay
+# scripts/docker-compose.sandbox.yml, which runs this as a one-shot "publish the
+# binary into a named volume" service and then mounts that volume read-only into
+# the consuming service at $RUN_CONFINED_BIN.
+#
+# Build context is the repo root (same as scripts/Dockerfile).
+
+# ---- Build the launcher in a throwaway Rust stage ----
+# NOTE: the --platform=linux/amd64 pin means this Rust build runs under QEMU
+# emulation on Apple Silicon; cached after the first build. Bookworm-based, to
+# match the python:3.12-slim runtime the binary is mounted into.
+FROM --platform=linux/amd64 rust:1-slim AS sandbox-builder
+WORKDIR /build
+COPY rust/ ./rust/
+# Only run-confined (+ its landlock/seccompiler/libc deps) — not the pyo3 members.
+RUN cd rust && cargo build -p run-confined --release
+
+# ---- Minimal publisher image ----
+# Holds just the binary; its CMD copies it into the mounted /out volume. Kept on
+# bookworm-slim so the glibc the binary was linked against is present if anything
+# ever execs it here (consumers run it in their own bookworm-based image).
+FROM --platform=linux/amd64 debian:bookworm-slim AS final
+COPY --from=sandbox-builder /build/rust/target/release/run-confined /run-confined
+# The overlay mounts a named volume at /out; publish the launcher into it (0755
+# so a non-root host-UID runtime user in the consumer can exec it). Idempotent:
+# safe to re-run on every `up`.
+CMD ["sh", "-c", "install -m 0755 /run-confined /out/run-confined && echo 'run-confined published to /out/run-confined'"]

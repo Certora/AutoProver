@@ -149,6 +149,11 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
 COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
 
+# The `run-confined` command-sandbox launcher is intentionally NOT baked in here
+# (not every AutoProver image needs it). Services that select the `launcher`
+# provider opt in via the scripts/docker-compose.sandbox.yml overlay, which
+# mounts the binary at $RUN_CONFINED_BIN at runtime — see docs/command-sandbox.md.
+
 # Pre-download the sentence-transformers embedding model so first runs are
 # offline-fast. nomic-embed-text-v1.5 ships custom modeling code, hence
 # trust_remote_code. Then make the cache world-writable so the HF library can
