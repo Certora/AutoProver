@@ -99,11 +99,23 @@ class CVLResource(BaseModel):
     sort: Literal["import"]
 
 class ITypedTemplate[T: Mapping[str, Any]](Protocol):
+    """
+    Any type that supports binding parameters to yield a TemplateInstantiation.
+    Implemented by TypedTemplate and the intermediate object yielded by PartialTemplate.bind
+    """
     def bind(self, params: T) -> "TemplateInstantiation":
         ...
 
 @final
 class TypedTemplate[T: Mapping[str, Any]]:
+    """
+    A template with the expected parameters it uses described by a TypedDict
+    of type `T` (`TypedDict` is not a valid type bound in python, we get by with `Mapping`).
+
+    `T` is a phantom type parameter, and there is (obviously) no mechanism to ensure `T`
+    accurate describes the parameters used by the parameter (see `test_fuzzed_templates` for a mitigation
+    mechanism.)
+    """
     def __init__(self, name: str):
         self._wrapped = name
 
@@ -137,6 +149,15 @@ class _StagedTemplate[T: Mapping[str, Any]]:
 
 @dataclass
 class PartialTemplate[T: Mapping[str, Any], U: Mapping[str, Any]]:
+    """
+    A template whose parameters are injected in two places. Part of the parameters (`T`) is bound
+    first, and then at some later point the rest of the parameters (`U`) are bound. Use to construct
+    typed template when no actor has the "full picture".
+
+    Like TypedTemplate, `T` and `U` are both phantom types, and it is statically impossible to verify
+    these types, together, describe the parameters actually used by the named template. See `test_fuzzed_templates`
+    for our defense strategy.
+    """
     def __init__(self, name: str):
         self._wrapped = name
 

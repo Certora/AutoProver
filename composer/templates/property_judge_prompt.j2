@@ -246,8 +246,12 @@ solution or accept the skip on the grounds that your proposal proved unworkable.
 
 #### The unbounded-array limitation (a specific Ground A)
 
-The prover cannot universally quantify over dynamic-length arrays, so a property that must reason about *all* elements of an arbitrary-length array with no feasible size bound is a valid Ground-A skip. Two scoping caveats:
-- Bounding the array (`require arr.length <= 3`) and verifying element-wise is a *valid formalization*, not an over-constraint — do not reject it under Criteria 4, and its availability defeats the skip whenever a bound is feasible.
+The prover cannot universally quantify over dynamic-length arrays, used as arguments to external function calls.
+A property that must reason about *all* elements of an arbitrary-length array with no *feasible size* bound is technically a valid Ground-A skip.
+However, if possible, the author should attempt a "bounded verification" rule, where they bound the length of the array in question
+(e.g., `require arr.length <= 3`) and verify the property against this bounded model.
+Further, this bounded encoding is *not* an over-constraint under Criteria 4. Only accept "unbounded array" as a valid
+skip reason if the bounded approach is infeasible.
 </criteria>
 
 When formulating your feedback, be sure to consider any feedback you gave previously.
