@@ -11,7 +11,7 @@ import anthropic
 from composer.input.files import _UploaderBase
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderKind, CacheLevel, _ListIter, NoSuchElementError,
+    ProviderKind, CacheLevel, _ListIter, NoSuchElementError, compaction_threshold,
 )
 
 if TYPE_CHECKING:
@@ -26,6 +26,10 @@ type ClaudeModelNames = Literal["opus", "sonnet", "haiku", "fable"]
 class ModelFeatures:
     interleaved_thinking: bool
     adaptive_thinking: bool
+    # Whether summarized thinking has to be asked for. From 4.7 on, a response still carries
+    # thinking blocks but their text is empty unless the request opts in; up to 4.6 the summary
+    # came back by default.
+    thinking_summary_opt_in: bool
     version_tuple: tuple[int, int]
     name: ClaudeModelNames
 
@@ -36,6 +40,12 @@ def _validate_model(s: str) -> TypeGuard[ClaudeModelNames]:
 
 # Interleaved thinking on <= 4.5; adaptive thinking on newer models.
 _interleaved_pivot_version = (4, 5)
+
+# From 4.7 on, a response still carries thinking blocks but their
+# text is empty unless the request opts in; up to 4.6 the summary
+# came back by default.
+# Last version to return a thinking summary without being asked.
+_default_thinking_summary_version = (4, 6)
 
 def _model_parser(model_name: str) -> ModelFeatures:
     stream = _ListIter(model_name.split("-"))
@@ -60,6 +70,7 @@ def _model_parser(model_name: str) -> ModelFeatures:
         return ModelFeatures(
             interleaved_thinking=interleaved_flag,
             adaptive_thinking=not interleaved_flag,
+            thinking_summary_opt_in=version_tuple > _default_thinking_summary_version,
             name=model_class,
             version_tuple=version_tuple,
         )
@@ -73,6 +84,32 @@ def _model_parser(model_name: str) -> ModelFeatures:
 
 def matches(model: str) -> bool:
     return model.split("-", 1)[0] == "claude"
+
+
+_long_context_window = 1_000_000
+_base_context_window = 200_000
+
+
+def _long_context_pivot(family: ClaudeModelNames) -> tuple[int, int] | None:
+    """The first version of `family` to ship the 1M-token window, or None for a family that has
+    none. A version comparison rather than a list of model identifiers, so a new release of a
+    family that already crossed over needs no edit here; a `match` so that a family added to
+    `ClaudeModelNames` fails the type check here rather than at runtime."""
+    match family:
+        case "opus" | "sonnet":
+            return (4, 6)
+        case "fable":
+            return (5, 0)
+        case "haiku":
+            # No long-context haiku has shipped; understating one only costs earlier compaction.
+            return None
+
+
+def _context_window(features: ModelFeatures) -> int:
+    pivot = _long_context_pivot(features.name)
+    if pivot is not None and features.version_tuple >= pivot:
+        return _long_context_window
+    return _base_context_window
 
 
 # --- Files API uploader ----------------------------------------------------
@@ -132,6 +169,10 @@ class AnthropicModelProvider:
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
         return AnthropicModelProvider(model_name, options, _model_parser(model_name))
 
+    @property
+    def max_prompt_tokens(self) -> int:
+        return compaction_threshold(_context_window(self.features))
+
     def builder_for(
         self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
     ) -> "BaseChatModel":
@@ -144,6 +185,10 @@ class AnthropicModelProvider:
             thinking = None
         elif self.features.adaptive_thinking:
             thinking = {"type": "adaptive"}
+            if self.features.thinking_summary_opt_in:
+                # Ask for the summary the model would otherwise leave empty. It costs nothing
+                # (thinking is billed the same either way), we want it to help with debugging.
+                thinking["display"] = "summarized"
         else:
             thinking = {"type": "enabled", "budget_tokens": opts.thinking_tokens}
 
@@ -167,7 +212,6 @@ class AnthropicModelProvider:
         return ChatAnthropic(
             model_name=self.model_name,
             max_tokens_to_sample=opts.tokens,
-            temperature=1,
             timeout=None,
             max_retries=8,
             stop=None,

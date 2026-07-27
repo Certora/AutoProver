@@ -89,9 +89,13 @@ _OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
 # Sources should be re-checked when new model families ship.
 _PRICING: list[tuple[str, _ModelPricing]] = [
     # ---- Anthropic ----
-    # claude-opus-4.5 / 4.6 / 4.7 / 4.8 share a rate card; older 4 / 4.1
-    # are pricier. Matching by prefix-of-prefix so "claude-opus-4-7"
-    # and "claude-opus-4-7-20260301" both hit the right entry.
+    # Fable is its own rate card, a tier above Opus.
+    ("claude-fable-5", _ModelPricing(short=_PriceTier(10.00, 50.00, 1.00, 12.50))),
+
+    # claude-opus-5 and claude-opus-4.5 / 4.6 / 4.7 / 4.8 share a rate card;
+    # older 4 / 4.1 are pricier. Matching by prefix-of-prefix so
+    # "claude-opus-4-7" and "claude-opus-4-7-20260301" both hit the right entry.
+    ("claude-opus-5",   _ModelPricing(short=_PriceTier(5.00, 25.00, 0.50, 6.25))),
     ("claude-opus-4-8", _ModelPricing(short=_PriceTier(5.00, 25.00, 0.50, 6.25))),
     ("claude-opus-4-7", _ModelPricing(short=_PriceTier(5.00, 25.00, 0.50, 6.25))),
     ("claude-opus-4-6", _ModelPricing(short=_PriceTier(5.00, 25.00, 0.50, 6.25))),

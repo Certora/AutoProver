@@ -192,6 +192,10 @@ def install_fake_llm(fake: Any) -> None:
     class _FakeProvider:
         provider : ProviderKind = "anthropic"
 
+        # Taped messages carry no token usage, so `current_prompt_tokens` reads 0 all run and this
+        # is never reached. It exists because a summarizing graph has to be given a budget.
+        max_prompt_tokens : int = 500_000
+
         def builder_for(self, *, cache_level: Any = None, disable_thinking: bool = False) -> Any:
             return _current_fake()
 

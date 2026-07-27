@@ -35,9 +35,27 @@ class ModelProvider(Protocol):
     @property
     def provider(self) -> ProviderKind: ...
 
+    @property
+    def max_prompt_tokens(self) -> int:
+        """Prompt-token threshold at which a workflow should compact its history, derived from this
+        model's context window. Handed to graphcore alongside the model itself, since graphcore
+        sees only an opaque chat model and cannot work the window out for itself."""
+        ...
+
     def builder_for(
         self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
     ) -> "BaseChatModel": ...
+
+
+# Compaction has to leave room for everything that rides on top of the prompt just measured: the
+# response, the thinking budget, and the next batch of tool results all have to fit the same
+# window. Half of it is a working figure, not a derived one.
+_PROMPT_TOKEN_SHARE = 0.5
+
+
+def compaction_threshold(context_window: int) -> int:
+    """The prompt-token budget to allow a model with a ``context_window``-token window."""
+    return int(context_window * _PROMPT_TOKEN_SHARE)
 
 
 class NoSuchElementError(RuntimeError):
