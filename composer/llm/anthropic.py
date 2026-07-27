@@ -14,7 +14,7 @@ from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     CacheLevel, ProviderServiceBase, ProviderSpec
 )
-from .parsing import ListIter, NoSuchElementError
+from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel

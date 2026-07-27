@@ -24,7 +24,7 @@ from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     CacheLevel, ProviderServiceBase, ProviderSpec
 )
-from .parsing import ListIter, NoSuchElementError
+from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -156,7 +156,7 @@ class OpenAIFileUploader(UploaderBase):
     client: openai.AsyncOpenAI
     uploaded: dict[str, str] | None = None
     _seed_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    provider: ContentRenderer = field(default_factory=OpenAIRenderer)
+    renderer: ContentRenderer = field(default_factory=OpenAIRenderer)
 
     async def _ensure_seeded(self) -> dict[str, str]:
         """Seed the dedup cache from the account's existing user-data uploads on
