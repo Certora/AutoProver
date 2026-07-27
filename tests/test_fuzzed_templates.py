@@ -1,8 +1,9 @@
 import pathlib
-from typing import Protocol, Sequence
+import sys
+from typing import Sequence, Iterator
 import typing
 import types
-from functools import wraps, reduce
+from functools import reduce
 import operator
 
 import pytest
@@ -18,7 +19,6 @@ from composer.spec.system_model import (
     BaseApplication, ExplicitContract, ExternalActor, ContractComponent
 )
 from composer.spec.service_host import Sort # defined here? huh?
-import hypothesis.strategies._internal.core as hcore
 
 import os
 
@@ -33,11 +33,6 @@ env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), undefined=StrictUndefi
 FUZZABLE = sorted(
     (key, entry) for key, entry in MANIFEST.items()
 )
-
-class _TypeResolver(Protocol):
-    def __call__[T](self, thing: type[T]) -> st.SearchStrategy[T]:
-        ...
-
 
 def _build_template_context[T](t: type[T]) -> st.SearchStrategy[T]:
     """Strategy for a context-marked template-param TypedDict: draw ``sort``,
@@ -95,129 +90,60 @@ def _unwrap_component_types(
             to_ret_contracts.append(t)
     return (to_ret_contracts, to_ret_external)
 
-def _make_cursed_patcher(wrapped: _TypeResolver) -> _TypeResolver:
-    """Wrap Hypothesis's internal type resolver so Pydantic models and
-    context-marked template-param TypedDicts are built by *our* strategies at
-    every nesting depth.
+def _pattern_of(field_info: FieldInfo):
+    return next((m.pattern for m in field_info.metadata
+             if getattr(m, "pattern", None)), None)
 
-    Why it exists
-    -------------
-    The fuzz test hands each template a random-but-valid instance of its
-    parameter TypedDict(s). Those params bottom out in two kinds of value
-    Hypothesis cannot generate correctly on its own:
+def _field_strategy[T: BaseModel](n: str, f: FieldInfo, cls: type[T]):
+    """Strategy for a single model field ``n`` of ``cls``, overriding
+    Hypothesis's annotation-only inference wherever that inference would
+    produce a value Pydantic rejects or the downstream code cannot use.
 
-    * **Pydantic models** (``Application``, ``ExplicitContract``, ...). Their
-      validation constraints live in ``FieldInfo`` metadata, not in the type
-      annotation Hypothesis inspects — e.g. ``solidity_identifier`` carries a
-      ``pattern=`` regex. Default ``builds``-from-annotations produces strings
-      that fail that validator, so every draw raises ``ValidationError`` instead
-      of yielding a model. Component lists likewise need shaping (see
-      ``_field_strategy``) or the app has no contract to index into.
-    * **Context params** (TypedDicts stamped with the context marker). Their
-      ``sort`` and ``context`` fields are coupled: templates read sort-gated,
-      subtype-specific fields off the context (``application_context_new.j2``
-      renders an ommer contract's ``.tag``/``.path`` only when
-      ``sort == "update"``, and those fields exist only on ``FromSourceContract``
-      variants). Drawing the two independently pairs ``sort == "update"`` with an
-      app lacking ``.tag`` — a ``StrictUndefined`` crash that is a fuzzer
-      artifact, not a template bug. The context also embeds array indices that
-      must stay in bounds for the app it points at.
-
-    Why not the obvious approaches
-    ------------------------------
-    ``st.register_type_strategy`` (used here for the two dataclasses) registers
-    one exact type at a time. The Pydantic handling is instead a single blanket
-    rule keyed on "is a ``BaseModel``" covering an open-ended hierarchy;
-    enumerating every model to register it would be tedious and perpetually
-    incomplete. Patching the *public* ``st.from_type`` would not help either:
-    within one generation Hypothesis recurses into nested field types through
-    its private module-level resolver, so a public-API hook never sees the
-    nested models or params.
-
-    How it works — and what's cursed
-    --------------------------------
-    The caller monkeypatches ``hypothesis.strategies._internal.core._from_type``
-    — an undocumented private global — with the wrapper returned here for the
-    duration of one test, restoring it in a ``finally``. Every type resolution,
-    top-level and nested, funnels through that one function, so wrapping it once
-    intercepts the whole tree. ``@wraps`` preserves the original resolver's
-    identity for anything that introspects it.
-
-    The wrapper is a dispatcher:
-
-    * ``BaseModel`` subclass -> ``_model_strategy`` (pattern-aware, list-shaped
-      building via explicit per-field strategies).
-    * a type carrying the context marker attribute -> ``_build_template_context``
-      (draw ``sort``, then a coherent in-bounds ``context``).
-    * anything else -> the original resolver.
-
-    The recursion inside ``_field_strategy`` / ``_build_template_context`` calls
-    ``st.from_type`` again, which re-enters this same wrapper *because* the global
-    is patched — that is how pattern-aware, index-safe building propagates all
-    the way down.
+    The ``st.from_type`` calls here recurse through the registry populated in
+    ``_register_strategies`` (nested models are registered too), so pattern-aware,
+    list-shaped building propagates all the way down without any interception of
+    Hypothesis internals.
     """
-    assert callable(wrapped)
-
-    def _pattern_of(field_info: FieldInfo):
-        return next((m.pattern for m in field_info.metadata
-                 if getattr(m, "pattern", None)), None)
-
-    def _field_strategy[T: BaseModel](n: str, f: FieldInfo, cls: type[T]):
-        """Strategy for a single model field ``n`` of ``cls``, overriding
-        Hypothesis's annotation-only inference wherever that inference would
-        produce a value Pydantic rejects or the downstream code cannot use."""
-        # A `pattern=` constraint lives in FieldInfo.metadata, invisible to the
-        # annotation Hypothesis inspects; generate straight from the regex so the
-        # value passes validation (e.g. `solidity_identifier`).
-        if (p := _pattern_of(f)):
-            return st.from_regex(p, fullmatch=True)
-        ann = f.annotation
-        assert ann is not None
-        # `components` is `list[<contract | external-actor union>]`. Force at least
-        # one contract (downstream indexing and `contract_components` need a
-        # non-empty contract set) plus a bounded external-actor mix, then permute.
-        # Each variant recurses through the patched resolver, so nested models are
-        # themselves built pattern-aware.
-        if issubclass(cls, BaseApplication) and n == "components":
-            assert typing.get_origin(ann) is list
-            component_type = next(iter(typing.get_args(ann)))
-            (contracts, external) = _unwrap_component_types(component_type)
-            contract_types = reduce(
-                operator.or_,
-                (st.from_type(t) for t in contracts)
+    # A `pattern=` constraint lives in FieldInfo.metadata, invisible to the
+    # annotation Hypothesis inspects; generate straight from the regex so the
+    # value passes validation (e.g. `solidity_identifier`).
+    if (p := _pattern_of(f)):
+        return st.from_regex(p, fullmatch=True)
+    ann = f.annotation
+    assert ann is not None
+    # `components` is `list[<contract | external-actor union>]`. Force at least
+    # one contract (downstream indexing and `contract_components` need a
+    # non-empty contract set) plus a bounded external-actor mix, then permute.
+    if issubclass(cls, BaseApplication) and n == "components":
+        assert typing.get_origin(ann) is list
+        component_type = next(iter(typing.get_args(ann)))
+        (contracts, external) = _unwrap_component_types(component_type)
+        contract_types = reduce(
+            operator.or_,
+            (st.from_type(t) for t in contracts)
+        )
+        external_types = reduce(
+            operator.or_,
+            (st.from_type(t) for t in external)
+        )
+        external_comps = st.lists(external_types, max_size=2)
+        return st.lists(contract_types, min_size=1, max_size=3).flatmap(lambda conts: \
+            external_comps.flatmap(lambda exts:
+                st.permutations([
+                    *conts, *exts
+                ])
             )
-            external_types = reduce(
-                operator.or_,
-                (st.from_type(t) for t in external)
-            )
-            external_comps = st.lists(external_types, max_size=2)
-            return st.lists(contract_types, min_size=1, max_size=3).flatmap(lambda conts: \
-                external_comps.flatmap(lambda exts: 
-                    st.permutations([
-                        *conts, *exts
-                    ])
-                )
-            )
-        # At least one sub-component so a ContractComponentInstance built off this
-        # contract always has a component to point at.
-        if issubclass(cls, ExplicitContract) and n == "components":
-            return st.lists(st.from_type(ContractComponent), min_size=1)
-        return st.from_type(ann)
+        )
+    # At least one sub-component so a ContractComponentInstance built off this
+    # contract always has a component to point at.
+    if issubclass(cls, ExplicitContract) and n == "components":
+        return st.lists(st.from_type(ContractComponent), min_size=1)
+    return st.from_type(ann)
 
-    def _model_strategy[T: BaseModel](cls: type[T]) -> st.SearchStrategy[T]:
-        """Build ``cls`` with an explicit strategy per model field (see
-        ``_field_strategy``), replacing Hypothesis's annotation-only inference."""
-        return st.builds(cls, **{n: _field_strategy(n, f, cls) for n, f in cls.model_fields.items()})
-
-    @wraps(wrapped)
-    def _cursed_base_model_patch[T](thing: type[T]) -> st.SearchStrategy[T]:
-        if isinstance(thing, type) and issubclass(thing, BaseModel):
-            return _model_strategy(thing)
-        elif isinstance(thing, type) and getattr(thing, _context_marker_attr, None) is not None:
-            return _build_template_context(thing)
-        else:
-            return wrapped(thing)
-    return _cursed_base_model_patch
+def _model_strategy[T: BaseModel](cls: type[T]) -> st.SearchStrategy[T]:
+    """Build ``cls`` with an explicit strategy per model field (see
+    ``_field_strategy``), replacing Hypothesis's annotation-only inference."""
+    return st.builds(cls, **{n: _field_strategy(n, f, cls) for n, f in cls.model_fields.items()})
 
 def contract_resolver(t: type) -> st.SearchStrategy[ContractInstance]:
     builder : st.SearchStrategy[AnyApplication] = st.from_type(AnyApplication) # type: ignore
@@ -277,9 +203,73 @@ def sort_to_application(
     )
     return st.from_type(t)
 
-st.register_type_strategy(ContractInstance, contract_resolver)
+def _all_subclasses(cls: type) -> Iterator[type]:
+    for sub in cls.__subclasses__():
+        yield sub
+        yield from _all_subclasses(sub)
 
-st.register_type_strategy(ContractComponentInstance, instance_resolver)
+def _is_first_party(cls: type) -> bool:
+    """True iff ``cls`` is defined in this repo's own source (not an installed
+    dependency). The path check excludes ``site-packages``/``.venv`` because the
+    virtualenv lives *inside* the repo root, so a plain ``relative_to(REPO_ROOT)``
+    would otherwise sweep in every third-party model (langchain, pydantic, ...)."""
+    mod = sys.modules.get(cls.__module__)
+    f = getattr(mod, "__file__", None)
+    if not f:
+        return False
+    p = pathlib.Path(f).resolve()
+    try:
+        p.relative_to(REPO_ROOT)
+    except ValueError:
+        return False
+    return "site-packages" not in p.parts and ".venv" not in p.parts
+
+def _register_strategies() -> None:
+    """Register, via the public ``st.register_type_strategy`` API, a strategy for
+    every type a template param can bottom out in — replacing the old monkeypatch
+    of Hypothesis's private ``_from_type``.
+
+    This works at every nesting depth because Hypothesis's resolver consults the
+    same global registry for top-level *and* nested field types; a strategy
+    registered for ``FromSourceContract`` is honoured whether it is asked for
+    directly or as an element of some other model's ``components`` list.
+
+    Completeness relies on the target types being *imported* when we scan:
+
+    * Pydantic models — every first-party ``BaseModel`` subclass currently loaded
+      gets a pattern-aware, list-shaped builder (see ``_model_strategy``).
+      Resolving every template's params below force-imports the modules that
+      define the params and, transitively, the models they reference, so the scan
+      sees the full set. Registering an unused model is inert (strategies are lazy
+      and only consulted if that type is actually drawn).
+    * Context params — TypedDicts stamped with the context marker get the coupled
+      ``sort``/``context`` builder (see ``_build_template_context``).
+
+    If a future template references a first-party model that is *not* transitively
+    imported by param resolution, that model will not be registered and Hypothesis
+    will fall back to annotation-only building — surfacing as a loud
+    ``ValidationError`` naming the model, not silent bad data. The fix is to make
+    sure it gets imported (usually automatic, since params reference their models
+    by real — non-``from __future__`` — annotations).
+    """
+    context_params: set[type] = set()
+    for _key, entry in FUZZABLE:
+        for t in resolve_params(entry):
+            if getattr(t, _context_marker_attr, None) is not None:
+                context_params.add(t)
+
+    st.register_type_strategy(ContractInstance, contract_resolver)
+    st.register_type_strategy(ContractComponentInstance, instance_resolver)
+
+    for model in set(_all_subclasses(BaseModel)):
+        if model in (ContractInstance, ContractComponentInstance) or not _is_first_party(model):
+            continue
+        st.register_type_strategy(model, lambda _t, m=model: _model_strategy(m))
+
+    for t in context_params:
+        st.register_type_strategy(t, lambda _x, tt=t: _build_template_context(tt))
+
+_register_strategies()
 
 settings.register_profile("quick", settings(
     max_examples=10,
@@ -302,24 +292,17 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "quick"))
 )
 @given(data=st.data())
 def test_template_renders_under_fuzzed_params(key, entry, data):
-    # Monkeypatch Hypothesis's private internal type resolver for the duration of
-    # this test (restored in `finally`). Every type resolution — top-level and
-    # every nested field — funnels through this one global, which is what lets the
-    # patcher intercept Pydantic models and context params at any depth. See
-    # `_make_cursed_patcher`.
-    old = hcore._from_type
-    hcore._from_type = _make_cursed_patcher(old)
-    try:
-        param_types = resolve_params(entry)
-        template_params = st.tuples(
-            *(
-                st.from_type(t) for t in param_types
-            )
-        ).map(lambda ab: {
-            k: v for tup in ab for (k,v) in tup.items()
-        })
-        params = data.draw(template_params, label=f"params for {key}")
-        template = env.get_template(entry.template_name)
-        template.render(**params)
-    finally:
-        hcore._from_type = old
+    # Strategies for Pydantic models and context params are registered once at
+    # import time via the public `st.register_type_strategy` (see
+    # `_register_strategies`); nothing to patch here.
+    param_types = resolve_params(entry)
+    template_params = st.tuples(
+        *(
+            st.from_type(t) for t in param_types
+        )
+    ).map(lambda ab: {
+        k: v for tup in ab for (k,v) in tup.items()
+    })
+    params = data.draw(template_params, label=f"params for {key}")
+    template = env.get_template(entry.template_name)
+    template.render(**params)
