@@ -179,7 +179,10 @@ class RunExplorerApp(App):
         self._expanded: set[str] = set()
         # from_tool_id -> [ThreadMeta] index (one-time pass over run's ThreadMeta)
         self._by_from_tool: dict[str, list[tuple[str, ThreadMeta]]] = defaultdict(list)
+        # thread_run_id -> ThreadMeta, for O(1) lookup when mounting a renderer.
+        self._meta_by_run_id: dict[str, ThreadMeta] = {}
         for tid, meta in source.threads:
+            self._meta_by_run_id[tid] = meta
             ft = meta.get("from_tool_id")
             if ft is not None:
                 self._by_from_tool[ft].append((tid, meta))
@@ -274,8 +277,10 @@ class RunExplorerApp(App):
         switcher = self.query_one("#switcher", ContentSwitcher)
         if thread_run_id not in self._mounted_renderers:
             cache = await self._get_thread_cache(thread_run_id)
+            meta = self._meta_by_run_id.get(thread_run_id)
             renderer = ThreadRenderer(
                 cache.timeline,
+                thread_id=meta.get("thread_id") if meta is not None else None,
                 descendable_tool_call_ids=cache.descendable_tool_call_ids,
                 on_tool_descend=self._descend_to_child,
                 id=f"r_{thread_run_id}",
