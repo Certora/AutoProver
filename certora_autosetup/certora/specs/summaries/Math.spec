@@ -14,6 +14,25 @@ function mulDivUpSummary(uint256 x, uint256 y, uint256 denominator) returns uint
     return assert_uint256(result);
 }
 
+// 256-bit-intermediate variants: model libraries that compute x*y in a single 256-bit
+// word (e.g. Aave WadRayMath / PercentageMath / MathUtils, which revert when a > max/b),
+// so they revert on intermediate x*y overflow. This differs from mulDivDownSummary above,
+// which keeps the full product (matching 512-bit mulDiv like OpenZeppelin Math / Uniswap
+// FullMath) and reverts only on result overflow.
+function mulDivDownSummary256(uint256 x, uint256 y, uint256 denominator) returns uint256 {
+    mathint product = x * y;
+    if (denominator == 0 || product > max_uint256) revert();
+    return require_uint256(product / denominator);
+}
+
+function mulDivUpSummary256(uint256 x, uint256 y, uint256 denominator) returns uint256 {
+    mathint product = x * y;
+    if (denominator == 0 || product > max_uint256) revert();
+    mathint result = (product + denominator - 1) / denominator;
+    if (result > max_uint256) revert();
+    return require_uint256(result);
+}
+
 function averageSummary(uint256 a, uint256 b) returns uint256 {
     return require_uint256((a+b)/2);
 }
