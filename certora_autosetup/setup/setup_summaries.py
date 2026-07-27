@@ -795,11 +795,83 @@ class SummarySetup:
         routes it to the ``oz_math_rounding`` module."""
         template_content = template_file.read_text()
         processed_content = template_content.replace("$CONTRACT_NAME$", contract_name)
+        processed_content = self._filter_template_entries_to_contract(processed_content, contract_name)
         template_result_file.write_text(processed_content)
 
         self.log(
             f"Processed template {template_file.name} with contract name: {contract_name}"
         )
+
+    @staticmethod
+    def _normalize_type_for_match(sol_type: str) -> str:
+        """Normalize a Solidity type for signature comparison: drop data-location
+        keywords and whitespace, so e.g. ``bytes32[] memory`` and ``bytes32[]`` compare equal."""
+        return re.sub(r"\s+", "", re.sub(r"\b(memory|calldata|storage)\b", " ", sol_type))
+
+    # Materialized methods{} entry: `function <Receiver>.<name>(<params>) ... [returns (<ret>)] ... ;`.
+    # The `.` after the receiver distinguishes these from CVL helper functions
+    # (`function ArbBytes32(...) { ... }`), which have no receiver and are left untouched.
+    _TEMPLATE_METHOD_ENTRY_RE = re.compile(
+        r"^\s*function\s+(?P<receiver>[\w.]+)\.(?P<name>\w+)\s*\((?P<params>[^)]*)\)(?P<tail>[^;]*);\s*$"
+    )
+    _TEMPLATE_RETURNS_RE = re.compile(r"\breturns\s*\((?P<ret>[^)]*)\)")
+
+    def _filter_template_entries_to_contract(self, content: str, contract_name: str) -> str:
+        """Keep only the materialized methods{} entries that correspond to a real method of
+        ``contract_name``, matched by (name, parameter types, return type).
+
+        Templates list several overloads / return variants of a family (e.g. extload's
+        ``extsload`` / ``exttload`` / ``extSload``); a given contract implements only some,
+        and emitting the rest breaks CVL:
+          - two entries for one qualified signature with different returns make
+            ``combineFunctions`` throw "un-mergeable signature for a function that came from
+            the compiler";
+          - a ``DELETE`` summary for a method the contract lacks throws
+            "Only public/external methods are DELETE-able".
+        Emitting only the contract's actual methods avoids both. Entries whose receiver is
+        not ``contract_name`` (e.g. wildcard ``_.``) and every non-entry line are preserved
+        verbatim. If the contract's methods can't be determined, the content is returned
+        unchanged."""
+        try:
+            methods = self.methods_parser.get_methods_by_originating_contract(contract_name)
+        except Exception:
+            methods = []
+        if not methods:
+            return content
+
+        # (name, param-type-tuple, return-type-tuple) present on the contract.
+        present: Set[Tuple[str, Tuple[str, ...], Tuple[str, ...]]] = set()
+        for m in methods:
+            params = tuple(self._normalize_type_for_match(t) for t in m.get("fullSignature", []))
+            rets = tuple(self._normalize_type_for_match(t) for t in m.get("returns", []))
+            present.add((m["name"], params, rets))
+
+        kept: List[str] = []
+        for line in content.splitlines():
+            match = self._TEMPLATE_METHOD_ENTRY_RE.match(line)
+            if match is None or match.group("receiver") != contract_name:
+                kept.append(line)
+                continue
+            params = tuple(
+                self._normalize_type_for_match(p.strip().split()[0])
+                for p in match.group("params").split(",")
+                if p.strip()
+            )
+            ret_match = self._TEMPLATE_RETURNS_RE.search(match.group("tail"))
+            rets = (
+                tuple(self._normalize_type_for_match(r) for r in ret_match.group("ret").split(","))
+                if ret_match
+                else ()
+            )
+            if (match.group("name"), params, rets) in present:
+                kept.append(line)
+            else:
+                self.log(
+                    f"Dropping summary entry {contract_name}.{match.group('name')}"
+                    f"({','.join(params)}): no matching method on the contract"
+                )
+        result = "\n".join(kept)
+        return result + "\n" if content.endswith("\n") else result
 
     @staticmethod
     def _versioned_template_relpath(rel_under_summaries: Path, main_contract: str) -> Path:
