@@ -19,7 +19,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 from certora_autosetup.parsers.prover_config_parser import get_spec_from_verify_field
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
 from certora_autosetup.setup.oz_math_rounding import rounding_members_by_qualifier
-from certora_autosetup.setup.summary_resolver import extract_cvl_ast
+from certora_autosetup.setup.summary_resolver import (
+    expr_summary_entries,
+    extract_cvl_ast,
+    toplevel_decl_spans,
+)
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 from certora_autosetup.utils.paths import internal_round_summaries_dir, internal_typechecker_round_dir
@@ -372,30 +376,27 @@ class TypecheckerLoop:
         return False
 
     @staticmethod
-    def _expand_to_function_blocks(lines: List[str], reported: set) -> set:
+    def _expand_to_function_blocks(
+        lines: List[str], reported: set, payload: Optional[dict] = None
+    ) -> set:
         """Expand 0-indexed reported error lines so that any line inside a
         top-level CVL ``function`` definition takes the whole block with it —
         commenting only part of a CVL function leaves an unparsable rest.
 
         Block spans come from the CVL AST: ``ASTExtraction.jar syntax-check``
-        emits top-level function definitions under ``ast["subs"]``, each with a
-        0-based ``range`` covering the whole definition including the closing
-        brace. Reported lines outside any function (e.g. ``methods{}`` entries)
-        get no expansion — they are self-contained lines, safe to comment alone.
-        Jar/parse failures propagate: the jar ships with certora-cli, which this
-        loop already requires for certoraRun itself.
+        emits top-level definitions under ``ast["subs"]``, each with a 0-based
+        ``range`` covering the whole definition including the closing brace.
+        Reported lines outside any block (e.g. ``methods{}`` entries) get no
+        expansion — they are self-contained lines, safe to comment alone. Pass a
+        pre-parsed ``payload`` to reuse a single parse; otherwise the spec is
+        parsed here. Jar/parse failures propagate: the jar ships with certora-cli,
+        which this loop already requires for certoraRun itself.
         """
         if not reported:
             return set()
-        payload = extract_cvl_ast("".join(lines))
-        spans = []
-        if payload is not None:
-            for sub in (payload.get("ast") or {}).get("subs", []):
-                rng = sub.get("range") or {}
-                start = (rng.get("start") or {}).get("line")
-                end = (rng.get("end") or {}).get("line")
-                if isinstance(start, int) and isinstance(end, int):
-                    spans.append((start, end))
+        if payload is None:
+            payload = extract_cvl_ast("".join(lines))
+        spans = [(start, end) for _name, start, end in toplevel_decl_spans(payload)]
         expanded = set(reported)
         for idx in reported:
             for start, end in spans:
@@ -495,12 +496,15 @@ class TypecheckerLoop:
         return fix_rounding_requalify
 
     def _create_rounding_disable_directional_callback(self, error_list, keep_intermediate):
-        """Build a callback that comments out the ``mulDivDirectionalSummary``
-        summary whose ``Math.Rounding`` enum reference the typechecker rejected with
-        no ``Did you mean`` alternative (see the ROUNDING_UNRESOLVABLE parser above).
+        """Build a callback that comments out the directional-rounding summary whose
+        ``Math.Rounding`` enum reference the typechecker rejected with no ``Did you
+        mean`` alternative (see the ROUNDING_UNRESOLVABLE parser above).
 
         The callback comments out each CVL function the error falls inside, together
-        with the ``methods{}`` entries that dispatch to those functions."""
+        with the ``methods{}`` entries that dispatch to those functions. Both the
+        function blocks and the dispatching entries are located via the CVL AST, so
+        the fix is independent of the summary function's name and of how each entry
+        is laid out across lines."""
 
         def fix_rounding_disable_directional(
             spec_path: Path,
@@ -521,22 +525,30 @@ class TypecheckerLoop:
                 for line_num, contract, _ in error_list
                 if contract == "ROUNDING_UNRESOLVABLE"
             }
+            # Parse the spec once; the block expansion, the disabled-function names,
+            # and the methods{} entry lookup below all read from this single AST.
+            payload = extract_cvl_ast("".join(lines))
+
             # A reported line inside a CVL function takes its whole block: a partially
             # commented function does not parse.
-            to_comment = set(self._expand_to_function_blocks(lines, reported))
+            to_comment = set(self._expand_to_function_blocks(lines, reported, payload))
 
-            # Comment the methods{} entries that dispatch to a function being commented
-            # out, so no entry is left referencing a missing function.
-            disabled_fns = set()
-            for idx in to_comment:
-                if idx < len(lines):
-                    m = re.search(r"function\s+(mulDivDirectionalSummary\w*)\s*\(", lines[idx])
-                    if m:
-                        disabled_fns.add(m.group(1))
+            # Names of the top-level functions being commented out, read from the AST:
+            # a reported line inside a definition's span disables that whole definition.
+            disabled_fns = {
+                name
+                for name, start, end in toplevel_decl_spans(payload)
+                if name and any(start <= idx <= end for idx in reported)
+            }
+            # Comment the methods{} entries whose `=>` summary dispatches to a disabled
+            # function, so none is left referencing a missing function. Both the dispatch
+            # target and each entry's exact span come from the AST — the same source as
+            # the block spans above — so a multi-line entry is commented in full and an
+            # unrelated line that merely mentions the name is never touched.
             if disabled_fns:
-                for i, line in enumerate(lines):
-                    if "=>" in line and any(fn in line for fn in disabled_fns):
-                        to_comment.add(i)
+                for target, start, end in expr_summary_entries(payload):
+                    if target in disabled_fns:
+                        to_comment.update(range(start, end + 1))
 
             for idx in sorted(to_comment):
                 if idx < len(lines) and not lines[idx].lstrip().startswith("//"):

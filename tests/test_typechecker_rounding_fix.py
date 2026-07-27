@@ -112,13 +112,34 @@ function mulDivDirectionalSummary(uint256 x, uint256 y, uint256 denominator, Mat
 """
 
 # The directional function block above spans 0-based lines 9..16 — what the
-# CVL AST reports for it (ast["subs"][0].range). Canned so the cheap suite
-# never shells out to the jar (no JDK in cheap CI).
-CANNED_AST = {"ast": {"subs": [
-    {"declarationId": "mulDivDirectionalSummary",
-     "range": {"start": {"line": 9, "charByteOffset": 0},
-               "end": {"line": 16, "charByteOffset": 1}}},
-]}}
+# CVL AST reports for it (ast["subs"][0].range). The methods{} entries (0-based
+# lines 3..6) appear under ast["importedMethods"], each an expression summary
+# (`=> fn(...)`) whose target is exp.methodId and whose range delimits the entry.
+# Canned so the cheap suite never shells out to the jar (no JDK in cheap CI).
+def _exp_entry(target: str, line: int) -> dict:
+    return {
+        "summary": {
+            "type": "spec.cvlast.SpecCallSummary.Exp",
+            "exp": {"type": "spec.cvlast.CVLExp.UnresolvedApplyExp", "methodId": target},
+        },
+        "range": {"start": {"line": line, "charByteOffset": 4},
+                  "end": {"line": line, "charByteOffset": 200}},
+    }
+
+
+CANNED_AST = {"ast": {
+    "subs": [
+        {"declarationId": "mulDivDirectionalSummary",
+         "range": {"start": {"line": 9, "charByteOffset": 0},
+                   "end": {"line": 16, "charByteOffset": 1}}},
+    ],
+    "importedMethods": [
+        _exp_entry("mulDivDownSummary", 3),
+        _exp_entry("mulDivDirectionalSummary", 4),
+        _exp_entry("averageSummary", 5),
+        _exp_entry("sqrtSummaryDown", 6),
+    ],
+}}
 
 
 @pytest.fixture
@@ -314,3 +335,53 @@ def test_disable_directional_when_unresolvable(loop, tmp_path, canned_ast) -> No
     assert not any(
         "Math.Rounding" in l and not l.lstrip().startswith("//") for l in lines
     )
+
+
+# A methods{} entry wrapped across several lines, plus a decoy comment that names
+# the summary function next to a `=>`. The AST reports the entry's full span and the
+# real dispatch target, so the whole entry is commented and the decoy is left alone —
+# neither of which a per-line `"=>" in line and fn in line` scan could get right.
+MULTILINE_SPEC = """methods {
+    function Foo.mulDiv(
+        uint256 x, MathX.Rounding rounding
+    ) internal returns (uint256)
+        => mulDivDirectionalSummary(x, rounding);
+    function Foo.plain(uint256 a) internal => plainSummary(a);
+}
+
+// mulDivDirectionalSummary is only mentioned here => in prose, not a real entry
+
+function mulDivDirectionalSummary(uint256 x, MathX.Rounding rounding) returns uint256 {
+    return x;
+}
+"""
+
+MULTILINE_AST = {"ast": {
+    "subs": [
+        {"declarationId": "mulDivDirectionalSummary",
+         "range": {"start": {"line": 10, "charByteOffset": 0},
+                   "end": {"line": 12, "charByteOffset": 1}}},
+    ],
+    "importedMethods": [
+        # The directional entry wraps 0-based lines 1..4.
+        _exp_entry("mulDivDirectionalSummary", 1) | {
+            "range": {"start": {"line": 1, "charByteOffset": 4},
+                      "end": {"line": 4, "charByteOffset": 50}}},
+        _exp_entry("plainSummary", 5),
+    ],
+}}
+
+
+def test_disable_directional_multiline_entry_and_decoy(loop, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tl, "extract_cvl_ast", lambda source: MULTILINE_AST)
+    spec = tmp_path / "OZ_Math-Foo.spec"
+    spec.write_text(MULTILINE_SPEC)
+    # The enum reference is reported inside the directional function block (line 11).
+    errors = [("11", "ROUNDING_UNRESOLVABLE", "MathX")]
+    callback = loop._create_rounding_disable_directional_callback(errors, keep_intermediate=False)
+    callback(spec, lambda s: s, lambda s: s)
+    lines = spec.read_text().splitlines()
+    disabled = [i for i, l in enumerate(lines) if "AUTO-DISABLED" in l]
+    # Every line of the wrapped entry (1..4) and the function block (10..12); the
+    # `plainSummary` entry (5) and the prose decoy (8) are untouched.
+    assert disabled == [1, 2, 3, 4, 10, 11, 12]
