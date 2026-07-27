@@ -426,13 +426,11 @@ class Autosetup:
         if self.compilation_config_updates:
             config.update(self.compilation_config_updates)
 
-        # solc_via_ir and solc_via_ir_map cannot coexist; the map supersedes the global flag
-        if "solc_via_ir_map" in config:
-            config.pop("solc_via_ir", None)
-
-        # Same for solc_optimize and solc_optimize_map
-        if "solc_optimize_map" in config:
-            config.pop("solc_optimize", None)
+        # A per-contract map supersedes its scalar counterpart, and certoraRun
+        # rejects a conf carrying both. The merge above can produce such pairs:
+        # the base build-system dict contributes scalars (e.g. "solc") while
+        # the compilation updates contribute the maps.
+        ConfigManager.drop_scalars_superseded_by_maps(config)
 
         # Filter per-contract maps to only include contracts in self.contract_handles
         contract_names = {ch.contract_name for ch in self.contract_handles}
@@ -802,11 +800,14 @@ class Autosetup:
                     "_test_run",
                     target_dir=internal_confs_dir,
                 )
+                # The test run exercises the generated sanity rule; rule_sanity's own
+                # checks would duplicate it, so they are turned off for this invocation
+                # only (via extra_args, leaving the conf's rule_sanity untouched).
                 autosetup._test_run_specs.append(ProverJobSpec(
                     config_file=test_config,
                     contract_name=contract_name,
                     phase=f"Sanity Test Run - {contract_name}",
-                    extra_args=autosetup.config.extra_args,
+                    extra_args=[*autosetup.config.extra_args, "--rule_sanity", "none"],
                 ))
 
                 if skip_warmup:

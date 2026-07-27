@@ -19,7 +19,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 from certora_autosetup.parsers.prover_config_parser import get_spec_from_verify_field
 from certora_autosetup.parsers.spec_imports import parse_imports_from_spec
 from certora_autosetup.setup.oz_math_rounding import rounding_members_by_qualifier
-from certora_autosetup.setup.summary_resolver import extract_cvl_ast
+from certora_autosetup.setup.summary_resolver import (
+    expr_summary_entries,
+    extract_cvl_ast,
+    toplevel_decl_spans,
+)
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 from certora_autosetup.utils.paths import internal_round_summaries_dir, internal_typechecker_round_dir
@@ -112,6 +116,23 @@ class TypecheckerLoop:
                 )
             )
 
+        # Pattern 2b: a Rounding enum-constant reference the typechecker rejects while
+        # offering no `Did you mean` alternative. This is the shape it takes when the
+        # enum is declared only in a library (OZ `Math`) that is inlined / duplicated
+        # across compiled units: `Math.Rounding` is not a usable CVL enum type and no
+        # contract re-declares it. e.g.:
+        #   Error in spec file (OZ_Math-ERC20.spec:12:21): could not type expression
+        #   "Math.Rounding.Ceil", message: In enum constant Math.Rounding.Ceil,
+        #   Math.Rounding is not a valid enum type
+        rounding_unresolvable_pattern = (
+            r"Error in spec file \(([^:)]+):(\d+):\d+\): could not type expression "
+            r"\"[\w$]+\.Rounding(?:\.\w+)?\".*?([\w$]+)\.Rounding is not a valid enum type"
+        )
+        for spec_file, line_num, bad_qualifier in re.findall(
+            rounding_unresolvable_pattern, error_output
+        ):
+            matches.append((spec_file, line_num, "ROUNDING_UNRESOLVABLE", bad_qualifier))
+
         # Pattern 3: Contract not found errors
         # Error in spec file (OZ_Math-ERC20.spec:4:5): Contract `Math` not found. Receiver contracts must be `currentContract`, the name of a contract in the scene, or a name introduced by a `using` statement.
         contract_not_found_pattern = r"Error in spec file \(([^:]+):(\d+):\d+\): Contract `([^`]+)` not found\."
@@ -141,6 +162,8 @@ class TypecheckerLoop:
             for spec_file, line_num, contract, method in matches:
                 if contract == "ROUNDING_AMBIGUOUS":
                     self.log(f"  - {spec_file}:{line_num} - ambiguous Rounding type ({method})")
+                elif contract == "ROUNDING_UNRESOLVABLE":
+                    self.log(f"  - {spec_file}:{line_num} - unresolvable Rounding type ({method}.Rounding)")
                 elif contract == "CONTRACT_NOT_FOUND":
                     self.log(f"  - {spec_file}:{line_num} - Contract `{method}` not found")
                 else:
@@ -181,15 +204,24 @@ class TypecheckerLoop:
             has_rounding_ambiguous = any(
                 contract == "ROUNDING_AMBIGUOUS" for _, contract, _ in spec_errors
             )
+            has_rounding_unresolvable = any(
+                contract == "ROUNDING_UNRESOLVABLE" for _, contract, _ in spec_errors
+            )
             has_contract_not_found_error = any(
                 contract == "CONTRACT_NOT_FOUND" for _, contract, _ in spec_errors
             )
             summary_line_for_nonexisting_method_error = any(
-                contract not in ["ROUNDING_AMBIGUOUS", "CONTRACT_NOT_FOUND"]
+                contract not in ["ROUNDING_AMBIGUOUS", "ROUNDING_UNRESOLVABLE", "CONTRACT_NOT_FOUND"]
                 for _, contract, _ in spec_errors
             )
 
-            if has_rounding_ambiguous and self._is_in_summaries_folder(spec_file):
+            if has_rounding_unresolvable and self._is_in_summaries_folder(spec_file):
+                # The enum reference has no valid qualifier: disable the summary that uses it.
+                updates[spec_base] = self._create_rounding_disable_directional_callback(
+                    spec_errors, self.keep_intermediate_files
+                )
+
+            elif has_rounding_ambiguous and self._is_in_summaries_folder(spec_file):
                 updates[spec_base] = self._create_rounding_requalify_callback(
                     spec_errors, self.keep_intermediate_files
                 )
@@ -344,30 +376,27 @@ class TypecheckerLoop:
         return False
 
     @staticmethod
-    def _expand_to_function_blocks(lines: List[str], reported: set) -> set:
+    def _expand_to_function_blocks(
+        lines: List[str], reported: set, payload: Optional[dict] = None
+    ) -> set:
         """Expand 0-indexed reported error lines so that any line inside a
         top-level CVL ``function`` definition takes the whole block with it —
         commenting only part of a CVL function leaves an unparsable rest.
 
         Block spans come from the CVL AST: ``ASTExtraction.jar syntax-check``
-        emits top-level function definitions under ``ast["subs"]``, each with a
-        0-based ``range`` covering the whole definition including the closing
-        brace. Reported lines outside any function (e.g. ``methods{}`` entries)
-        get no expansion — they are self-contained lines, safe to comment alone.
-        Jar/parse failures propagate: the jar ships with certora-cli, which this
-        loop already requires for certoraRun itself.
+        emits top-level definitions under ``ast["subs"]``, each with a 0-based
+        ``range`` covering the whole definition including the closing brace.
+        Reported lines outside any block (e.g. ``methods{}`` entries) get no
+        expansion — they are self-contained lines, safe to comment alone. Pass a
+        pre-parsed ``payload`` to reuse a single parse; otherwise the spec is
+        parsed here. Jar/parse failures propagate: the jar ships with certora-cli,
+        which this loop already requires for certoraRun itself.
         """
         if not reported:
             return set()
-        payload = extract_cvl_ast("".join(lines))
-        spans = []
-        if payload is not None:
-            for sub in (payload.get("ast") or {}).get("subs", []):
-                rng = sub.get("range") or {}
-                start = (rng.get("start") or {}).get("line")
-                end = (rng.get("end") or {}).get("line")
-                if isinstance(start, int) and isinstance(end, int):
-                    spans.append((start, end))
+        if payload is None:
+            payload = extract_cvl_ast("".join(lines))
+        spans = [(start, end) for _name, start, end in toplevel_decl_spans(payload)]
         expanded = set(reported)
         for idx in reported:
             for start, end in spans:
@@ -465,6 +494,77 @@ class TypecheckerLoop:
             return new_spec
 
         return fix_rounding_requalify
+
+    def _create_rounding_disable_directional_callback(self, error_list, keep_intermediate):
+        """Build a callback that comments out the directional-rounding summary whose
+        ``Math.Rounding`` enum reference the typechecker rejected with no ``Did you
+        mean`` alternative (see the ROUNDING_UNRESOLVABLE parser above).
+
+        The callback comments out each CVL function the error falls inside, together
+        with the ``methods{}`` entries that dispatch to those functions. Both the
+        function blocks and the dispatching entries are located via the CVL AST, so
+        the fix is independent of the summary function's name and of how each entry
+        is laid out across lines."""
+
+        def fix_rounding_disable_directional(
+            spec_path: Path,
+            rename_fn: Callable[[str], str],
+            reverse_rename_fn: Callable[[str], str],
+        ) -> Path:
+            if keep_intermediate:
+                base_name = reverse_rename_fn(spec_path.stem)
+                new_spec = spec_path.parent / f"{rename_fn(base_name)}.spec"
+            else:
+                new_spec = spec_path
+
+            with open(spec_path, "r") as f:
+                lines = f.readlines()
+
+            reported = {
+                int(line_num) - 1
+                for line_num, contract, _ in error_list
+                if contract == "ROUNDING_UNRESOLVABLE"
+            }
+            # Parse the spec once; the block expansion, the disabled-function names,
+            # and the methods{} entry lookup below all read from this single AST.
+            payload = extract_cvl_ast("".join(lines))
+
+            # A reported line inside a CVL function takes its whole block: a partially
+            # commented function does not parse.
+            to_comment = set(self._expand_to_function_blocks(lines, reported, payload))
+
+            # Names of the top-level functions being commented out, read from the AST:
+            # a reported line inside a definition's span disables that whole definition.
+            disabled_fns = {
+                name
+                for name, start, end in toplevel_decl_spans(payload)
+                if name and any(start <= idx <= end for idx in reported)
+            }
+            # Comment the methods{} entries whose `=>` summary dispatches to a disabled
+            # function, so none is left referencing a missing function. Both the dispatch
+            # target and each entry's exact span come from the AST — the same source as
+            # the block spans above — so a multi-line entry is commented in full and an
+            # unrelated line that merely mentions the name is never touched.
+            if disabled_fns:
+                for target, start, end in expr_summary_entries(payload):
+                    if target in disabled_fns:
+                        to_comment.update(range(start, end + 1))
+
+            for idx in sorted(to_comment):
+                if idx < len(lines) and not lines[idx].lstrip().startswith("//"):
+                    lines[idx] = f"// AUTO-DISABLED (unresolvable Math.Rounding): {lines[idx].rstrip()}\n"
+
+            with open(new_spec, "w") as f:
+                f.writelines(lines)
+
+            action = "Overwrote" if not keep_intermediate else "Created"
+            self.log(
+                f"{action} {new_spec.name}: disabled {len(to_comment)} line(s) of the directional "
+                f"Math.Rounding summary (no valid qualifier for the enum)"
+            )
+            return new_spec
+
+        return fix_rounding_disable_directional
 
     def _find_spec_file(self, spec_name: str) -> Optional[Path]:
         """
