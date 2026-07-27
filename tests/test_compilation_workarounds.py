@@ -650,3 +650,45 @@ def test_yul_optimizer_rung_enables_off_entries_in_optimize_map(
     assert "solc_optimize" not in compilation_config
     assert compilation_config["solc_optimize_map"] == {"Foo": "200", "Bar": "1"}
     assert compilation_config["assert_autofinder_success"] is False
+
+
+# Whole-project solc error with no per-file "Compiling <path>..." progress line: the
+# offending file is named only in the `-->` source-location line. solc hard-wraps the
+# diagnostic, so that line sits a few lines below "CompilerError" (verbatim wrapping).
+BULK_STACK_TOO_DEEP = (
+    "solc8.34 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with `--via-ir` (cli) or the \n"
+    "equivalent `viaIR: true` (standard JSON) while enabling the optimizer. \n"
+    "Otherwise, try removing local variables.\n"
+    "   --> contracts/Foo.sol:352:36:\n"
+)
+
+
+def test_detects_bulk_stack_too_deep_via_source_location(manager: CompilationWorkaroundManager) -> None:
+    # No "Compiling <path>..." line — the file is recovered from `--> <path>:line:col`.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_stack_too_deep_errors(BULK_STACK_TOO_DEEP, contracts) == "Foo"
+
+
+def test_bulk_stack_too_deep_unmapped_path_returns_none(manager: CompilationWorkaroundManager) -> None:
+    # The `-->` file isn't one of the scene contracts, so there is nothing to enable
+    # via_ir for — return None rather than guessing.
+    contracts = [ContractHandle(contract_name="Other", source_file="contracts/Other.sol")]
+    assert manager._detect_stack_too_deep_errors(BULK_STACK_TOO_DEEP, contracts) is None
+
+
+# A per-file "Compiling <path>..." error resolves via that line (Pattern 2), which
+# takes precedence over the `-->` source-location fallback.
+COMPILING_LINE_STACK_TOO_DEEP = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.34 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with `--via-ir`.\n"
+    "   --> lib/somewhere/Inlined.sol:10:5:\n"
+)
+
+
+def test_compiling_line_takes_precedence_over_source_location(manager: CompilationWorkaroundManager) -> None:
+    # The Compiling line names Foo; the `-->` names an unrelated inlined lib file.
+    # Pattern 2 wins, mapping to the contract actually being compiled.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_stack_too_deep_errors(COMPILING_LINE_STACK_TOO_DEEP, contracts) == "Foo"
