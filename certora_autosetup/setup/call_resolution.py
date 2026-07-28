@@ -49,6 +49,7 @@ from certora_autosetup.utils.enhanced_config_manager import (
 
 # PreAudit imports
 from certora_autosetup.utils.prover_runner import ProverRunner
+from certora_autosetup.utils.runner_types import ProverResult
 from certora_autosetup.utils.scope import Scope
 from certora_autosetup.utils.types import ContractHandle
 
@@ -491,40 +492,41 @@ class CallResolutionPhase:
         """
         logger.debug(f"[{self.contract_name}] Running prover for iteration {self.current_iteration}")
 
+        prover_result = await self._submit_call_resolution_run()
+
         # The run can fail because a summary/contract brought into the scene last iteration
-        # doesn't typecheck; on failure, fix the conf and retry the run once. The job spec is
-        # rebuilt each attempt so it picks up the conf the fixer just rewrote.
-        for attempt in range(2):
-            config_content = FileContent.from_file(self.config_file)
-            job_spec = ProverJobSpec(
-                contract_name=self.contract_name,
-                phase="call_resolution",
-                config_file=config_content,
-                extra_args=self.extra_args,
-                msg=ProverJobSpec.build_job_msg(
-                    self.contract_name, self.config_file, suffix=f"(iteration {self.current_iteration})"
-                ),
-            )
+        # doesn't typecheck; on failure, change the conf via the typechecker loop and retry the
+        # run once (the helper re-reads the conf the fixer just rewrote).
+        if not prover_result.success and await asyncio.to_thread(
+            self.typecheck_fix, self.config_file, f"call resolution {self.contract_name}"
+        ):
+            logger.info("Typechecker changed the conf; retrying the prover run")
+            prover_result = await self._submit_call_resolution_run()
 
-            prover_result = await self.prover_runner.check_with_prover(job_spec)
-            self._prover_runs.append((self.current_iteration, prover_result.job_url))
-
-            if prover_result.success:
-                break
-
-            error_msg = prover_result.error_message or "Unknown prover error"
-            logger.error(f"Prover execution failed: {error_msg}")
-            if attempt == 0 and await asyncio.to_thread(
-                self.typecheck_fix, self.config_file, f"call resolution {self.contract_name}"
-            ):
-                logger.info("Typechecker changed the conf; retrying the prover run")
-                continue
+        if not prover_result.success:
+            logger.error(f"Prover execution failed: {prover_result.error_message or 'Unknown prover error'}")
             return None
 
         job_id = prover_result.job_handle.job_id
         unresolved_calls = self.prover_runner.extract_unresolved_calls(job_id)
         logger.info(f"Found {len(unresolved_calls)} unresolved calls")
         return unresolved_calls
+
+    async def _submit_call_resolution_run(self) -> ProverResult:
+        """Build the call-resolution job spec from the current conf, submit it, record the run."""
+        config_content = FileContent.from_file(self.config_file)
+        job_spec = ProverJobSpec(
+            contract_name=self.contract_name,
+            phase="call_resolution",
+            config_file=config_content,
+            extra_args=self.extra_args,
+            msg=ProverJobSpec.build_job_msg(
+                self.contract_name, self.config_file, suffix=f"(iteration {self.current_iteration})"
+            ),
+        )
+        prover_result = await self.prover_runner.check_with_prover(job_spec)
+        self._prover_runs.append((self.current_iteration, prover_result.job_url))
+        return prover_result
 
     def _write_call_resolution_spec_file(self) -> Optional[Path]:
         """
