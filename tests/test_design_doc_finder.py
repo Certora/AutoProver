@@ -16,7 +16,7 @@ The agent's real file-reading over a live model is covered by the (nightly) Coun
 integration tape.
 """
 
-from typing import Any, cast, Literal
+from typing import Any, cast
 
 from dataclasses import dataclass
 
@@ -35,9 +35,10 @@ from graphcore.graph import Builder, FlowInput
 
 from langgraph.checkpoint.memory import InMemorySaver
 
+from composer.llm.anthropic import AnthropicRenderer, _get_service
 from composer.input.files import InMemoryTextFile
 from composer.spec.context import WorkflowContext, SourceFields
-from composer.spec.service_host import ModelProvider, CoreModelProvider
+from composer.spec.service_host import ModelProvider
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.templates.loader import load_jinja_template
 from composer.ui.autoprove_app import AutoProvePhase
@@ -92,7 +93,7 @@ class _StubUploader:
         p = pathlib.Path(path)
         if not p.is_file():
             return None
-        return InMemoryTextFile(basename=p.name, string_contents=p.read_text(), provider="anthropic")
+        return InMemoryTextFile(basename=p.name, string_contents=p.read_text(), renderer=AnthropicRenderer())
 
 
 def _source(
@@ -321,7 +322,7 @@ class FakeModelFactory:
 
     @property
     def provider(self):
-        return "anthropic"
+        return _get_service()
 
     def builder_for(self, *args, **kwargs):
         return self.fake

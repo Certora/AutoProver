@@ -800,11 +800,14 @@ class Autosetup:
                     "_test_run",
                     target_dir=internal_confs_dir,
                 )
+                # The test run exercises the generated sanity rule; rule_sanity's own
+                # checks would duplicate it, so they are turned off for this invocation
+                # only (via extra_args, leaving the conf's rule_sanity untouched).
                 autosetup._test_run_specs.append(ProverJobSpec(
                     config_file=test_config,
                     contract_name=contract_name,
                     phase=f"Sanity Test Run - {contract_name}",
-                    extra_args=autosetup.config.extra_args,
+                    extra_args=[*autosetup.config.extra_args, "--rule_sanity", "none"],
                 ))
 
                 if skip_warmup:

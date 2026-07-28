@@ -416,12 +416,14 @@ class ConfigManager:
         contracts_added: List[ContractHandle],
     ) -> bool:
         """
-        Update compiler_map and solc_via_ir_map when new contracts are added.
+        Update compiler_map, solc_via_ir_map, and solc_optimize_map when new
+        contracts are added.
 
         Delegates to CompilationWorkaroundManager which handles:
         - Parsing pragma from source files
         - Creating/updating compiler_map entries
         - Creating/updating solc_via_ir_map entries
+        - Creating/updating solc_optimize_map entries
 
         Args:
             conf_object: The config dict to modify in-place
@@ -438,6 +440,7 @@ class ConfigManager:
         for contract in contracts_added:
             modified |= self.update_compiler_map_for_contract(conf_object, contract, ref_maps)
             modified |= self.update_via_ir_map_for_contract(conf_object, contract, ref_maps)
+            modified |= self.update_optimize_map_for_contract(conf_object, contract, ref_maps)
 
         return modified
 
@@ -1012,12 +1015,33 @@ class ConfigManager:
 
         return modified
 
+    def update_optimize_map_for_contract(
+        self,
+        conf_object: Dict[str, Any],
+        contract: ContractHandle,
+        reference_maps: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Add a solc_optimize_map entry for a newly-added contract. Mirrors
+        `update_via_ir_map_for_contract` for the optimize map. Only the map form is
+        extended; a scalar `solc_optimize` already applies to every file."""
+        contract_name = contract.contract_name
+        if "solc_optimize_map" not in conf_object:
+            return False
+        if contract_name in conf_object["solc_optimize_map"]:
+            return False
+        ref_optimize_map = (reference_maps or {}).get("solc_optimize_map", {})
+        optimize_value = ref_optimize_map.get(contract_name, "200")
+        conf_object["solc_optimize_map"][contract_name] = optimize_value
+        self.log(f"Added {contract_name} to solc_optimize_map (value={optimize_value})")
+        return True
+
     def sync_compiler_maps_with_files(
         self,
         conf_object: Dict[str, Any],
         convention: Optional[SolcConvention] = None,
     ) -> bool:
-        """Reconcile compiler_map, solc_via_ir_map, and solc_evm_version_map with `files`.
+        """Reconcile compiler_map, solc_via_ir_map, solc_evm_version_map, and
+        solc_optimize_map with `files`.
 
         Invariant: when `compiler_map` is present, every contract in `files`
         has a matching entry. Stale entries (no longer in `files`) get trimmed;
@@ -1094,6 +1118,20 @@ class ConfigManager:
                 self.log(
                     f"Trimmed solc_evm_version_map from {original_len}"
                     f" to {len(conf_object['solc_evm_version_map'])} entries"
+                )
+                modified = True
+
+        if "solc_optimize_map" in conf_object:
+            original_len = len(conf_object["solc_optimize_map"])
+            conf_object["solc_optimize_map"] = {
+                key: value
+                for key, value in conf_object["solc_optimize_map"].items()
+                if self._key_matches_any_contract(key, contracts_in_files)
+            }
+            if len(conf_object["solc_optimize_map"]) != original_len:
+                self.log(
+                    f"Trimmed solc_optimize_map from {original_len}"
+                    f" to {len(conf_object['solc_optimize_map'])} entries"
                 )
                 modified = True
 

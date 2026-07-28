@@ -1,0 +1,177 @@
+name: sandbox-escape (kernel 6.1)
+
+# Validates the RunCommand sandbox (rust/run-confined) on the PRODUCTION kernel
+# version — Amazon Linux 2023, kernel 6.1 (docs/command-sandbox.md §8).
+#
+# Landlock + seccomp are kernel-mediated and a container shares the host kernel,
+# so GitHub's ubuntu-latest runner (a newer, unpinned kernel) cannot test the 6.1
+# contract. We therefore boot the real AL2023 6.1 cloud image under QEMU/KVM and
+# run tests/test_sandbox_escape.py inside it. On 6.1 the suite asserts the FS,
+# env, network (seccomp-only — no Landlock net < 6.7) and x32 vectors are denied,
+# and self-skips the scope vectors (Landlock scopes need 6.12).
+
+on:
+  pull_request:
+    paths:
+      - "rust/run-confined/**"
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
+      - "composer/sandbox/**"
+      - "tests/test_sandbox_escape.py"
+      - ".github/workflows/sandbox-escape-6.1.yml"
+      - ".github/scripts/sandbox_vm_provision.sh"
+  push:
+    branches: [master]
+    paths:
+      - "rust/run-confined/**"
+      - "composer/sandbox/**"
+      - "tests/test_sandbox_escape.py"
+      - ".github/workflows/sandbox-escape-6.1.yml"
+      - ".github/scripts/sandbox_vm_provision.sh"
+  # Weekly: catch AL2023 dropping the 6.1 image or drift in the latest 6.1 build.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: sandbox-escape-6.1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  escape-suite-kernel-6_1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Override to pin an exact build for reproducibility; default resolves the
+      # latest published AL2023 *6.1* KVM image (job fails loudly if 6.1 is gone).
+      AL2023_KVM_DIR: "https://cdn.amazonlinux.com/al2023/os-images/latest/kvm/"
+      SSH_PORT: "2222"
+      SSH: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -i vmkey -p 2222 ec2-user@127.0.0.1"
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v5
+        # graphcore submodule not needed: the escape suite is stdlib + composer.sandbox.
+        with:
+          submodules: false
+
+      - name: Enable KVM on the runner
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -e /dev/kvm && echo "KVM available"
+
+      - name: Install QEMU + cloud-image tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            qemu-system-x86 qemu-utils ovmf cloud-image-utils genisoimage openssh-client
+
+      - name: Download + verify the AL2023 6.1 KVM image
+        run: |
+          set -euo pipefail
+          base="${AL2023_KVM_DIR%/}/"
+          img="$(curl -fsSL "$base" \
+            | grep -oE 'al2023-kvm-[^"]*kernel-6\.1-x86_64\.xfs\.gpt\.qcow2' \
+            | head -1)"
+          if [ -z "$img" ]; then
+            echo "::error::No kernel-6.1 AL2023 KVM image found under $base"
+            echo "AL2023 may have dropped 6.1 as a published image. Pin AL2023_KVM_DIR"
+            echo "to a versioned dir that still ships kernel-6.1, or move the prod floor."
+            exit 1
+          fi
+          echo "Image: $img"
+          curl -fsSL -o al2023.qcow2 "${base}${img}"
+          curl -fsSL -o SHA256SUMS  "${base}SHA256SUMS"
+          # SHA256SUMS lists "<hash>  <filename>"; verify our file matches.
+          awk -v f="$img" '$2==f {print $1"  al2023.qcow2"}' SHA256SUMS | sha256sum -c -
+          # Room for rustup + build artifacts (cloud-init grows the fs on boot).
+          qemu-img resize al2023.qcow2 +15G
+
+      - name: Build cloud-init seed (SSH key injection)
+        run: |
+          set -euo pipefail
+          ssh-keygen -t ed25519 -N "" -f vmkey -q
+          cat > user-data <<EOF
+          #cloud-config
+          ssh_authorized_keys:
+            - $(cat vmkey.pub)
+          EOF
+          cat > meta-data <<EOF
+          instance-id: sandbox-escape-6-1
+          local-hostname: al2023-6-1
+          EOF
+          cloud-localds seed.iso user-data meta-data
+
+      - name: Boot the VM
+        run: |
+          set -euo pipefail
+          # OVMF path differs across ubuntu releases; pick whichever exists.
+          for c in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd; do
+            [ -r "$c" ] && OVMF_CODE="$c" && break
+          done
+          for v in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd; do
+            [ -r "$v" ] && OVMF_VARS_SRC="$v" && break
+          done
+          cp "$OVMF_VARS_SRC" vars.fd
+          echo "Firmware: $OVMF_CODE"
+          qemu-system-x86_64 \
+            -enable-kvm -cpu host -smp 4 -m 8192 -machine q35 \
+            -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
+            -drive if=pflash,format=raw,unit=1,file=vars.fd \
+            -drive file=al2023.qcow2,if=virtio,format=qcow2 \
+            -drive file=seed.iso,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp::${SSH_PORT}-:22 \
+            -device virtio-net-pci,netdev=n0 \
+            -display none -serial file:serial.log -daemonize
+
+      - name: Wait for SSH
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if $SSH true 2>/dev/null; then
+              echo "SSH up after ~$((i*5))s"
+              $SSH 'sudo cloud-init status --wait || true'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VM did not become reachable over SSH in time"
+          echo "----- serial.log (tail) -----"; tail -n 100 serial.log || true
+          exit 1
+
+      - name: Copy repo into the VM
+        run: |
+          set -euo pipefail
+          # git archive => a clean snapshot of tracked source only. Do NOT tar the
+          # workspace: by this step it holds the *running* VM's al2023.qcow2 (QEMU is
+          # actively writing it) plus seed.iso / serial.log / repo.tgz, which trips
+          # "file changed as we read it". Tracked files are all the suite needs
+          # (composer/, tests/, rust/, pyproject.toml, uv.lock, .github/scripts).
+          git archive --format=tar.gz -o repo.tgz HEAD
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i vmkey -P "$SSH_PORT" repo.tgz ec2-user@127.0.0.1:/home/ec2-user/
+          $SSH 'mkdir -p /home/ec2-user/autoprover && tar xzf repo.tgz -C /home/ec2-user/autoprover'
+
+      - name: Run the escape suite on kernel 6.1
+        run: |
+          set -euo pipefail
+          $SSH 'bash /home/ec2-user/autoprover/.github/scripts/sandbox_vm_provision.sh /home/ec2-user/autoprover'
+
+      - name: Collect results
+        if: always()
+        run: |
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i vmkey -P "$SSH_PORT" \
+            ec2-user@127.0.0.1:/home/ec2-user/autoprover/sandbox-escape-junit.xml . 2>/dev/null || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: sandbox-escape-6.1
+          path: |
+            sandbox-escape-junit.xml
+            serial.log
+          if-no-files-found: ignore
