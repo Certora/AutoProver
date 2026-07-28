@@ -31,12 +31,12 @@ from composer.foundry.artifacts import FoundryArtifactStore
 from composer.foundry.report import _foundry_verdicts
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun,
-    GaveUp, SystemAnalysisSpec,
+    Curtailed, GaveUp, SystemAnalysisSpec,
     CorePhases, main_instance, CorePipelineResult,
     COMMON_SYSTEM_CACHE_KEY
 )
 from composer.foundry.artifacts import FoundryTestArtifact
-from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.source.report.collect import Formalized, Verdict
 from composer.spec.context import (
     WorkflowContext, SourceCode, FoundryGeneration
 )
@@ -119,7 +119,7 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
         props: list[PropertyFormulation],
         ctx: WorkflowContext[GeneratedFoundryTest],
         run: PipelineRun
-    ) -> GeneratedFoundryTest | GaveUp:
+    ) -> GeneratedFoundryTest | Curtailed[GeneratedFoundryTest] | GaveUp:
         return await batch_foundry_test_generation(
             ctx=ctx.abstract(FoundryGeneration),
             project_root=run.source.project_root,
@@ -132,10 +132,10 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
             forge_timeout_s=self.conf.forge_timeout_s,
             props=props
         )
-    
+
     @override
-    async def fetch_verdicts(self, inp: ReportComponentInput[GeneratedFoundryTest]) -> dict[str, Verdict]:
-        return await _foundry_verdicts(inp)
+    async def fetch_verdicts(self, formalized: Formalized[GeneratedFoundryTest]) -> dict[str, Verdict]:
+        return await _foundry_verdicts(formalized)
 
 @dataclass
 class FoundrySystem(PreparedSystem[GeneratedFoundryTest]):

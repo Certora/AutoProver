@@ -36,13 +36,13 @@ from composer.spec.prop_inference import run_property_inference
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.source.report.collect import Formalized, ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from .ptypes import (
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
-    Delivered, GaveUp, PipelineRun, SystemAnalysisSpec, RunBudget
+    Curtailed, Delivered, GaveUp, PipelineRun, SystemAnalysisSpec, RunBudget
 )
 from composer.diagnostics.budget import total_budget, named_budget_or_nop
 
@@ -66,7 +66,10 @@ class Formalizer[FormT: BackendResult](ABC):
         props: list[PropertyFormulation],
         ctx: WorkflowContext[FormT],
         run: PipelineRun
-    ) -> FormT | GaveUp: ...
+    ) -> FormT | Curtailed[FormT] | GaveUp:
+        """A full result, a ``Curtailed`` wrapper when the budget cut the author short (its
+        ``partial`` is whatever was published under the lifted gates), or a ``GaveUp``."""
+        ...
 
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         """Synthetic report inputs beyond the per-component outcomes — the prover folds in its
@@ -74,9 +77,10 @@ class Formalizer[FormT: BackendResult](ABC):
         return []
 
     @abstractmethod
-    async def fetch_verdicts(self, inp: ReportComponentInput[FormT]) -> dict[RuleName, Verdict]:
-        """Per-unit outcomes. Prover: query ProverOutputUtility via inp.formalized.run_link
-        off-thread. Foundry: read straight off inp.formalized.result."""
+    async def fetch_verdicts(self, formalized: Formalized[FormT]) -> dict[RuleName, Verdict]:
+        """Per-unit outcomes for one delivered result. Prover: query ProverOutputUtility via
+        ``formalized.run_link`` off-thread. Foundry: read straight off ``formalized.result``.
+        Never called for gave-up or budget-curtailed components."""
         ...
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT]], run: PipelineRun) -> None:
@@ -228,11 +232,11 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
             _batch_cache_key(batch.props), {"properties": [p.model_dump() for p in batch.props]},
         )
         cached_result: FormT | None = await child.cache_get(formalizer.formalized_type)
-        result : FormT | GaveUp
+        result : FormT | Curtailed[FormT] | GaveUp
         if cached_result is None:
             label = f"{batch.feat.component.name} ({len(batch.props)} properties)"
             with named_budget_or_nop("formalization"):
-                result : FormT | GaveUp = await run.runner(
+                result = await run.runner(
                     TaskInfo(
                         formalize_task_id(batch.feat.ind),
                         f"{batch.feat.component.name} ({len(batch.props)} properties)",
@@ -240,15 +244,28 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
                     ),
                     lambda: formalizer.formalize(label, batch.feat, batch.props, child, run),
                 )
-            if not isinstance(result, GaveUp):
+            # Only a full result is cacheable: a curtailed partial is exactly what a future,
+            # better-funded run must redo.
+            if isinstance(result, formalizer.formalized_type):
                 await child.cache_put(result)
         else:
             result = cached_result
-        
-        outcome: Delivered[FormT] | GaveUp = (
-            result if isinstance(result, GaveUp)
-            else Delivered(result, backend.artifact_store.write_artifact(result_key, result))
-        )
+
+        outcome: Delivered[FormT] | Curtailed[Delivered[FormT]] | GaveUp
+        if isinstance(result, GaveUp):
+            outcome = result
+        elif isinstance(result, Curtailed):
+            # Persist the partial for inspection under a quarantined name — never as the
+            # component's deliverable.
+            outcome = Curtailed(
+                Delivered(
+                    result.partial,
+                    backend.artifact_store.write_quarantined(result_key, result.partial),
+                ) if result.partial is not None else None,
+                result.detail,
+            )
+        else:
+            outcome = Delivered(result, backend.artifact_store.write_artifact(result_key, result))
         return ComponentOutcome(batch.feat, batch.props, outcome)
 
     settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
@@ -259,13 +276,14 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     await formalizer.finalize(outcomes, run)
 
     # 5. Report (shared, backend-agnostic). The driver assembles the per-component inputs; backends
-    # contribute only synthetic extras (prover: structural invariants). Best-effort: a failure here
-    # never fails the run.
+    # contribute only synthetic extras (prover: structural invariants). Delivered and curtailed
+    # results both flow through — the report grounds the former and appendixes the latter — while
+    # give-ups and crashes are handed over as None. Best-effort: a failure here never fails the run.
     inputs = [
         ReportComponentInput(
             name=o.feat.component.name,
             props=o.props,
-            formalized=o.result if isinstance(o.result, Delivered) else None,
+            formalized=o.result if isinstance(o.result, (Delivered, Curtailed)) else None,
         )
         for o in outcomes
     ] + formalizer.extra_report_inputs()
@@ -316,4 +334,12 @@ def _tally[FormT: BackendResult](outcomes: list[ComponentOutcome[FormT]]) -> Cor
             failures.append(f"{o.feat.component.name}: {o.result}")
         elif isinstance(o.result, GaveUp):
             failures.append(f"{o.feat.component.name}: GAVE_UP: {o.result.reason}")
+        elif isinstance(o.result, Curtailed):
+            what = (
+                f"unvalidated partial kept at {o.result.partial.deliverable}"
+                if o.result.partial is not None else "nothing published"
+            )
+            failures.append(
+                f"{o.feat.component.name}: BUDGET: formalization cut short ({what})"
+            )
     return CorePipelineResult(len(outcomes), sum(len(o.props) for o in outcomes), outcomes, failures)

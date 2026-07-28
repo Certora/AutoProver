@@ -1,4 +1,5 @@
 from typing import Protocol, AsyncIterator, TYPE_CHECKING
+import json
 import sys
 import pathlib
 import enum
@@ -6,6 +7,11 @@ from contextlib import asynccontextmanager
 
 import asyncio
 from dataclasses import dataclass
+
+from pydantic import (
+    BaseModel, ConfigDict, Field, NonNegativeFloat, PositiveFloat, ValidationError,
+    field_validator,
+)
 
 from composer.input.types import (
     ExtendedModelOptions,
@@ -17,7 +23,7 @@ from composer.spec.service_host import ServiceHost
 from composer.workflow.services import IndexedConnections, standard_connections
 from composer.pipeline.ptypes import (
     PipelineRun, BackendResult,
-    CorePipelineResult
+    CorePipelineResult, PhaseBudget, RunBudget
 )
 from composer.spec.artifacts import ArtifactIdentifier
 from composer.spec.service_host import ModelProvider
@@ -62,6 +68,58 @@ def user_ns(*parts: str | tuple[str, ...]) -> tuple[str, ...]:
     return user_data_ns() + tuple(out)
 
 
+BUDGET_PHASES: tuple[str, ...] = tuple(PhaseBudget.__annotations__)
+
+
+class BudgetFile(BaseModel):
+    """Schema of a ``--budget`` file.
+
+    A phase without an explicit cap defaults to ``total`` (bounded by the pool alone —
+    caps are ceilings, not allotments). A cap of ``0.0`` is legal and puts that phase in
+    the wrap-up window from its first monitor tick."""
+    model_config = ConfigDict(extra="forbid")
+
+    total: PositiveFloat = Field(description="The run pool in USD — the real bound on overall spend.")
+    caps: dict[str, NonNegativeFloat] = Field(
+        default_factory=dict,
+        description="Per-phase ceilings in USD, drawn against the pool; any subset of the phase names.",
+    )
+
+    @field_validator("caps")
+    @classmethod
+    def _known_phases(cls, v: dict[str, float]) -> dict[str, float]:
+        if (unknown := set(v) - set(BUDGET_PHASES)):
+            raise ValueError(
+                f"unknown phase(s) {sorted(unknown)}; valid phases: {list(BUDGET_PHASES)}"
+            )
+        return v
+
+    def to_run_budget(self) -> RunBudget:
+        return RunBudget(
+            total=self.total,
+            caps=PhaseBudget(**{p: self.caps.get(p, self.total) for p in BUDGET_PHASES}),  # type: ignore[typeddict-item]
+        )
+
+
+def parse_budget_file(path: pathlib.Path) -> RunBudget:
+    """Parse a run-budget file (JSON, or YAML when PyYAML is installed) into a `RunBudget`.
+    See :class:`BudgetFile` for the schema."""
+    if path.suffix in (".yaml", ".yml"):
+        try:
+            import yaml
+        except ImportError as e:
+            raise ValueError(
+                f"budget file {path} is YAML but PyYAML is not installed; use JSON instead"
+            ) from e
+        raw = yaml.safe_load(path.read_text())
+    else:
+        raw = json.loads(path.read_text())
+    try:
+        return BudgetFile.model_validate(raw).to_run_budget()
+    except ValidationError as e:
+        raise ValueError(f"invalid budget file {path}: {e}") from e
+
+
 class PipelineArgs(ExtendedModelOptions, Protocol):
     @property
     def recursion_limit(self) -> int:
@@ -98,9 +156,14 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
     @property
     def main_contract(self) -> str:
         ...
-    
+
     @property
     def system_doc(self) -> str | None:
+        ...
+
+    @property
+    def budget(self) -> str | None:
+        """Path to a run-budget file (see :func:`parse_budget_file`), or None to run unbudgeted."""
         ...
 
 @dataclass
@@ -140,6 +203,9 @@ async def cli_pipeline[P: enum.Enum, H](
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H]]]:
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
+
+    # Parse the budget up front so a malformed file fails before any services spin up.
+    budget = parse_budget_file(pathlib.Path(args.budget)) if args.budget is not None else None
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
@@ -241,6 +307,10 @@ async def cli_pipeline[P: enum.Enum, H](
                 "contract_name": str(contract_name),
                 "memory_ns": memory_ns,
             })
+            if budget is not None:
+                await data_logger("budget", {
+                    "total": budget.total, "caps": dict(budget.caps),
+                })
             full_source = SourceCode(
                 content=system_doc_doc,
                 contract_name=init_source.contract_name,
@@ -273,9 +343,9 @@ async def cli_pipeline[P: enum.Enum, H](
                     run=run,
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
-                    threat_model=threat_model
+                    threat_model=threat_model,
+                    budget=budget
                 )
-                ...
 
             yield (StagedPipeline(
                 conns=conns, llm_models=models, logger=data_logger,

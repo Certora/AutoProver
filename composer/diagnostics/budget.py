@@ -56,6 +56,19 @@ _budget_accumulator = ContextVar[None | BudgetCounter]("_budget_accumulator", de
 
 _cost_centers = ContextVar[None | dict[str, BudgetCounter]]("_cost_centers", default=None)
 
+# The *name* of the innermost named budget scope. Deliberately tracked separately from
+# the counters — and unconditionally, budget or no budget — so telemetry (the thread
+# logger stamps it into ThreadMeta.cost_center) can attribute work to phases on
+# unbudgeted runs too.
+_cost_center_name = ContextVar[str | None]("_cost_center_name", default=None)
+
+
+def current_cost_center() -> str | None:
+    """The name of the innermost named budget scope, or ``None`` outside any (the run
+    pool, or code that runs before/after the pipeline). Valid regardless of whether a
+    budget is installed."""
+    return _cost_center_name.get()
+
 
 DEFAULT_BUDGET_PRESSURE_MESSAGE = """
 <system-alert>
@@ -101,9 +114,11 @@ def named_budget(
     if nm not in res:
         raise RuntimeError(f"Named budget item not known: {nm}")
     prev = _budget_accumulator.set(res[nm])
+    name_tok = _cost_center_name.set(nm)
     try:
         yield
     finally:
+        _cost_center_name.reset(name_tok)
         _budget_accumulator.reset(prev)
 
 @contextmanager
@@ -111,9 +126,14 @@ def named_budget_or_nop(
     nm: str
 ) -> Iterator[None]:
     if (_cost_centers.get()) is None:
-        # A @contextmanager generator must yield exactly once even on the
-        # nop path — a bare return raises "generator didn't yield".
-        yield
+        # No budget installed: no counters to bind, but still stamp the cost-center
+        # name — phase attribution is telemetry, not billing. (A @contextmanager
+        # generator must yield exactly once even on this path.)
+        name_tok = _cost_center_name.set(nm)
+        try:
+            yield
+        finally:
+            _cost_center_name.reset(name_tok)
         return
     with named_budget(nm):
         yield

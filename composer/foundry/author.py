@@ -38,7 +38,7 @@ from graphcore.tools.schemas import (
     WithAsyncDependencies, WithAsyncImplementation, WithImplementation,
     WithInjectedId, WithInjectedState,
 )
-from composer.pipeline.core import GaveUp
+from composer.pipeline.core import Curtailed, GaveUp
 from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
 from composer.spec.cvl_generation import (
     PropertyFeedbackProtocol, RebuttalBase, SkippedProperty,
@@ -106,7 +106,7 @@ class GeneratedFoundryTest(BaseModel):
         return None  # foundry has no external run service
 
 
-type BatchFoundryResult = GeneratedFoundryTest | GaveUp
+type BatchFoundryResult = GeneratedFoundryTest | Curtailed[GeneratedFoundryTest] | GaveUp
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +740,7 @@ async def batch_foundry_test_generation(
         .with_summary_config(FoundryGenerationSummaryConfig())
         .with_monitor(budget_monitor(
             warning_message=_BUDGET_WRAPUP_MESSAGE,
-            state_transformer=lambda _s: {"required_validations": []},
+            state_transformer=lambda _s: {"required_validations": [], "budget_curtailed": True},
             on_overbudget=raise_budget_exceeded,
         ))
     )
@@ -756,6 +756,7 @@ async def batch_foundry_test_generation(
         expected_failures={},
         last_test_names=None,
         failed=None,
+        budget_curtailed=False,
     )
 
     tid, mnem = await ctx.thread_and_mnemonic()
@@ -768,15 +769,19 @@ async def batch_foundry_test_generation(
             recursion_limit=ctx.recursion_limit,
         )
     except BudgetExceeded as e:
-        return GaveUp(reason=f"Foundry test generation terminated: {e}")
+        return Curtailed(None, detail=str(e))
 
     assert "result" in res_state
     assert res_state["failed"] is not None
     if res_state["failed"]:
+        if res_state["budget_curtailed"]:
+            # A give-up issued after the wrap-up order isn't a considered "this batch is
+            # unformalizable" judgment — it's the budget talking. Keep the agent's account.
+            return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
     draft = res_state["curr_test"]
     assert draft is not None
-    return GeneratedFoundryTest(
+    generated = GeneratedFoundryTest(
         commentary=res_state["result"],
         test_source=draft,
         skipped=res_state["skipped"],
@@ -784,3 +789,7 @@ async def batch_foundry_test_generation(
         expected_failures=res_state["expected_failures"],
         ran_tests=res_state["last_test_names"] or [],
     )
+    if res_state["budget_curtailed"]:
+        # Published under lifted gates: hand it back as an explicitly unreliable partial.
+        return Curtailed(generated)
+    return generated

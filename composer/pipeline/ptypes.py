@@ -15,7 +15,7 @@ from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
     ContractComponentInstance
 )
-from composer.spec.types import PropertyFormulation, FormalResult
+from composer.spec.types import Curtailed, PropertyFormulation, FormalResult
 from composer.spec.source.report.collect import ReportableResult
 
 
@@ -77,8 +77,10 @@ class BackendJob:
 
 @dataclass(frozen=True)
 class Delivered[FormT: BackendResult]:
-    """A successful formalization and the project-relative path it was persisted to. The path exists
-    only because the result does, so the two travel together rather than as independent fields."""
+    """A formalization result and the project-relative path it was persisted to. The path exists
+    only because the result does, so the two travel together rather than as independent fields.
+    On its own this means a *successful* formalization; wrapped in a `Curtailed` it is the
+    quarantined partial a budget-cut author managed to publish."""
     result: FormT
     deliverable: Path
 
@@ -95,7 +97,7 @@ class Delivered[FormT: BackendResult]:
 
 @dataclass
 class ComponentOutcome[FormT: BackendResult](BackendJob):
-    result: Delivered[FormT] | GaveUp | BaseException
+    result: Delivered[FormT] | Curtailed[Delivered[FormT]] | GaveUp | BaseException
 
 @dataclass
 class CorePipelineResult[FormT: BackendResult]:
@@ -106,15 +108,17 @@ class CorePipelineResult[FormT: BackendResult]:
 
     @property
     def n_delivered(self) -> int:
-        """Components that produced a deliverable — a successful formalization. Everything
-        else (a ``GaveUp`` or a crash) is a component that failed to generate."""
+        """Components that produced a deliverable — a successful formalization. Everything else
+        (a ``GaveUp``, a budget ``Curtailed``, or a crash) is a component with no reliable
+        result."""
         return sum(1 for o in self.outcomes if isinstance(o.result, Delivered))
 
     @property
     def all_failed(self) -> bool:
-        """Every attempted component failed to generate or gave up - te run is a total failure.
-        Guarded on a non-empty outcome set so "all of nothing" is never reported as failure (the
-        driver raises before returning in the no-outcomes case anyway)."""
+        """Every attempted component ended without a reliable deliverable (gave up, crashed, or
+        was budget-curtailed) — the run is a total failure. Guarded on a non-empty outcome set so
+        "all of nothing" is never reported as failure (the driver raises before returning in the
+        no-outcomes case anyway)."""
         return bool(self.outcomes) and self.n_delivered == 0
 
 class PhaseBudget(TypedDict):
@@ -138,6 +142,7 @@ class RunBudget:
 __all__ = [
     "CorePipelineResult",
     "ComponentOutcome",
+    "Curtailed",
     "Delivered",
     "BackendJob",
     "SystemAnalysisSpec",
