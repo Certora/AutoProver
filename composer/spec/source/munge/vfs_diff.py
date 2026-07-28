@@ -8,6 +8,7 @@ addition, never a deletion.
 """
 
 import difflib
+import pathlib
 from typing import Callable
 
 from graphcore.tools.vfs import VFSState, VFSAccessor
@@ -31,6 +32,30 @@ def compute_diff(old: Callable[[str], str | None], new: dict[str, str]) -> str:
     concatenating the per-file unified diffs and dropping the unchanged files."""
     chunks = (file_diff(path, old(path), content) for path, content in new.items())
     return "".join(c for c in chunks if c)
+
+
+def fs_resolver(root: pathlib.Path) -> Callable[[str], str | None]:
+    """``old``-side resolver for the on-disk baseline under ``root`` (the V0
+    view): missing or non-UTF-8 files resolve to ``None`` (an addition)."""
+
+    def resolve(path: str) -> str | None:
+        try:
+            return (root / path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    return resolve
+
+
+def changed_paths(old: Callable[[str], str | None], new: dict[str, str]) -> list[str]:
+    """The overlay paths whose content differs from the ``old`` view, sorted."""
+    return sorted(path for path, content in new.items() if old(path) != content)
+
+
+def diff_against_baseline(vfs: dict[str, str], root: pathlib.Path) -> str:
+    """Cumulative unified diff from the on-disk baseline under ``root`` to the
+    ``vfs`` overlay."""
+    return compute_diff(fs_resolver(root), vfs)
 
 
 def _decode(raw: bytes | None) -> str | None:

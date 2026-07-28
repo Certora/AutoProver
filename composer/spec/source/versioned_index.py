@@ -47,7 +47,6 @@ class VersionedAgentIndex(AgentIndexBase):
     _store: BaseStore
 
     _target_ns: tuple[str, ...]
-    _migration_ns: tuple[str, ...]
 
     _migration_oracle: MigrationOracle
 
@@ -96,27 +95,18 @@ class VersionedAgentIndex(AgentIndexBase):
             if res.key in seen:
                 continue
             if "version_key" not in res.value:
-                known_migration = await self.migration_for(res.key, None, version_list[-1])
-                stale = True
-                if known_migration is not None:
-                    stale = known_migration["status"] == "stale"
-                # v0, base case
+                # v0, base case — recorded against the unedited baseline, so any
+                # applied edit may have invalidated it.
                 context.append({
-                    "stale": stale,
+                    "stale": True,
                     **cast(AgentResult, res.value),
                     "ref_string": res.key,
                     "score": cast(float, res.score)
                 })
             else:
                 cached_version = cast(VersionedResult, res.value)
-                stale = cached_version['version_key'] != version_list[-1]
-                if stale:
-                    known_migration = await self.migration_for(res.key, cached_version["version_key"], version_list[-1])
-                    if known_migration is not None:
-                        stale = known_migration["status"] == "stale"
-
                 context.append({
-                    "stale": stale,
+                    "stale": cached_version['version_key'] != version_list[-1],
                     "score": cast(float, res.score),
                     "ref_string": res.key,
                     "question": cached_version["question"],
@@ -126,53 +116,21 @@ class VersionedAgentIndex(AgentIndexBase):
             if len(context) == 5:
                 break
         return context
-    
-    @classmethod
-    def _migration_key(cls, doc_key: str, v1: str | None, v2: str) -> str:
-        return f"{doc_key}|{v1}|{v2}"
 
-    async def migration_for(self, key: str, v1: str | None, v2: str) -> AnswerPortability | None:
-        cached = await self._store.aget(self._migration_ns, self._migration_key(key, v1, v2))
-        if cached is None:
-            return None
-        return cast(AnswerPortability, cached.value)
-    
     @classmethod
     def _caveat(cls, s: AnswerPortability) -> str | None:
         return None if s["status"] == "ok" else s["reason"]
-    
-    async def migrate_answer(
-        self, key: str, result: AgentResult, start_ver: str | None, versions: list[str]
+
+    async def _portability_caveat(
+        self, start_version: str | None, end_version: str, result: AgentResult
     ) -> str | None:
-        canon_start = start_ver
-        i = len(versions) - 1
-        while i >= 0 and versions[i] != start_ver:
-            # check migration range from start_ver to curr
-            migration = await self.migration_for(
-                key, canon_start, versions[i]
-            )
-            if migration is None:
-                i -= 1
-                continue
-            if migration is not None and i == len(versions) - 1:
-                return self._caveat(migration)
-            elif migration["status"] == "stale":
-                # reclassify from initial answer state scratch
-                break
-            else:
-                assert migration["status"] == "ok"
-                canon_start = versions[i]
-                break
-        migration_res = await self._migration_oracle(
-            start_version=canon_start,
-            end_version=versions[-1],
+        port = await self._migration_oracle(
+            start_version=start_version,
+            end_version=end_version,
+            question=result["question"],
             answer=result["answer"],
-            question=result["question"]
         )
-        await self._store.aput(self._migration_ns, self._migration_key(
-            key, canon_start, versions[-1]
-        ), { **migration_res })
-        return self._caveat(migration_res)
+        return self._caveat(port)
 
     async def aget(self, key: str, versions: list[str]) -> VersionedRetrievalResult | None:
         res = await self._wrapped.aget(key)
@@ -181,11 +139,8 @@ class VersionedAgentIndex(AgentIndexBase):
                 return None
             return { **res, "caveat": None }
         if res is not None:
-            stat = await self.migrate_answer(
-                key, res, None, versions
-            )
             return {
-                "caveat": stat, **res
+                "caveat": await self._portability_caveat(None, versions[-1], res), **res
             }
 
         versioned_res = await self._store.aget(
@@ -203,9 +158,7 @@ class VersionedAgentIndex(AgentIndexBase):
         return {
             "answer": stored["answer"],
             "question": stored["question"],
-            "caveat": await self.migrate_answer(
-                key, stored, stored["version_key"], versions
-            )
+            "caveat": await self._portability_caveat(stored["version_key"], versions[-1], stored)
         }
 
     async def aput(

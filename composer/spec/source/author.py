@@ -43,6 +43,7 @@ from composer.ui.tool_display import tool_display
 
 from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.source.munge.munge_agent import editor_tool
+from composer.spec.source.munge.tool_names import COMMIT_EDIT, EDIT_HISTORY_LOG, REVERT_TO_EDIT
 from composer.spec.source.munge.vfs_diff import summarize_changes
 
 from graphcore.graph import FlowInput
@@ -211,7 +212,7 @@ If your current task itself began with a summary, include the salient parts of t
     def get_resume_prompt(self, state: SourceCVLGenerationState, summary: str) -> str:
         edit_note = (
             "\nAny source edits you applied remain in effect on your working copy; "
-            "the `edit_history_log` tool shows each applied edit and its diff.\n"
+            f"the `{EDIT_HISTORY_LOG}` tool shows each applied edit and its diff.\n"
             if self._source_editing else ""
         )
         return f"""
@@ -365,7 +366,7 @@ class ApplyEditTool(WithAsyncDependencies[str | Command, EditStore], WithInjecte
     async def run(self) -> str | Command:
         with self.tool_deps() as dep:
             if self.edit_id in self.state["version_history"]:
-                return f"{self.edit_id} has already been applied; if you want to revert to that state, use the revert_to_edit tool"
+                return f"{self.edit_id} has already been applied; if you want to revert to that state, use the {REVERT_TO_EDIT} tool"
             new_state = await dep.read(self.edit_id)
             if new_state is None:
                 return f"{self.edit_id} does not denote any known edit"
@@ -460,11 +461,9 @@ def generate_edit_management_tools(
     )
     return [
         editor,
-        # "commit_edit" is the name the editor's result message tells the author
-        # to call (see EditMungeTool.run's result_msg) — keep them in sync.
-        ApplyEditTool.bind(edit).as_tool("commit_edit"),
-        EditHistoryLog.bind(HistoryDeps(live_tools.mat, edit)).as_tool("edit_history_log"),
-        RevertToEdit.bind(edit).as_tool("revert_to_edit"),
+        ApplyEditTool.bind(edit).as_tool(COMMIT_EDIT),
+        EditHistoryLog.bind(HistoryDeps(live_tools.mat, edit)).as_tool(EDIT_HISTORY_LOG),
+        RevertToEdit.bind(edit).as_tool(REVERT_TO_EDIT),
     ]
 
 
@@ -662,7 +661,7 @@ async def batch_cvl_generation(
             restored_vfs = tail.vfs
             resume_note = [
                 "Source edits applied during your previous attempt at this task have "
-                "been restored to your working copy; use `edit_history_log` to review them."
+                f"been restored to your working copy; use `{EDIT_HISTORY_LOG}` to review them."
             ]
 
     try:

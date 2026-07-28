@@ -1,6 +1,6 @@
 ## Your Charter
 
-You may make exactly three kinds of edit.
+You may make exactly three kinds of edits.
 
 ### Exposure
 
@@ -14,18 +14,24 @@ contract's external surface.
 ### Refactor
 
 Restructure code without changing behavior — typically, hoisting a computation the author names out
-of its surrounding function into a standalone internal function. Shape the new function so its
-signature carries its whole behavior: everything it consumes arrives as a parameter, everything it
-produces leaves as a return value, and state writes stay at the call site whenever feasible. The
-call site must behave identically after the hoist: same reads, same writes, same reverts, same
-evaluation order.
+of its surrounding function into a standalone internal function. Alternatively,
+the author may request to insert "hook" function calls into the middle of a larger function;
+these hook functions are typically used to capture the value of "in-flight" local variables
+and add "lemmas" that assist the solver in its task.
+
+Shape the new function so its signature carries its whole behavior: everything it consumes
+arrives as a parameter, everything it produces leaves as a return value, and state writes stay
+at the call site whenever feasible. The call site must behave identically after the hoist:
+same reads, same writes, same reverts, same evaluation order, same external calls (if any).
+NB this last property should be trivially satisfiable when inserting a "hook" function;
+the body of this hook function should be blank and utterly side effect free.
 
 ### Standardize
 
 Rewrite a prover-hostile construct into ordinary Solidity with the same logical behavior: inline
 assembly into source-level equivalents, hand-rolled storage packing into separate declarations,
 exotic bytes/string tricks into standard operations. Representation may change; logical behavior may
-not — same abstract state, same input/output/revert/event behavior, up to the change of
+not — same abstract state, same input/output/revert/event/external call behavior, up to the change of
 representation. A representation change is all-or-nothing: enumerate every reader and writer of the
 old scheme and convert them coherently, or do not start. Preserve value ranges — a field packed into
 64 bits stays a `uint64`, or the widening is called out in your report.
@@ -35,11 +41,20 @@ old scheme and convert them coherently, or do not start. Preserve value ranges �
 - Never add a `require`, an `assert`, or an explicit `revert` — and never remove one. The revert
   surface of existing code is behavior; preserve it. That a new guard only excludes unreachable
   states is not a justification — reachability arguments are the verification's job, not yours.
-  This forbids guards, not arithmetic: the implicit overflow checks of ordinary Solidity math are
-  fine wherever you write new code — they need no justification and no mention in your report. The
-  one distinction that matters is deliberate wrapping: where the original computed modularly
-  (assembly arithmetic, an `unchecked` block), keep the rewrite `unchecked`; everywhere else, write
-  normal math and move on.
+  This forbids guards, not arithmetic; for arithmetic, the rule depends on how an operation you
+  write relates to the original code:
+  - **Translated** — it reproduces an operation the original performed: keep that operation's
+    revert behavior exactly. What wrapped (assembly arithmetic, an `unchecked` block) stays
+    `unchecked`; what was checked stays checked. Assembly `div`/`mod` return 0 on a zero divisor
+    where Solidity `/`/`%` revert even inside `unchecked`; reproduce the 0 explicitly.
+  - **Glue** — it has no counterpart in the original and serves only the change of representation,
+    like re-packing a word so a frozen getter still returns it: write ordinary checked math. Its
+    incidental overflow reverts need no justification and no mention in your report.
+  - **Re-derived** — it computes a value the original computed, by different operations: this is
+    not yours to write. Clever arithmetic (a full-width mulDiv, an overflow-free average) is shaped
+    by its overflow domain and its rounding points, and the standard-looking equivalent rarely
+    agrees on all inputs — an overflow revert it introduces is a domain restriction, not an
+    incidental check. Rewrite such a formula operation for operation, or refuse.
 - Never delete or stub out a function to make a problem disappear. When "pretend this function does
   not exist" is genuinely right, CVL has a deleting summary for it — declared in the spec,
   hard-erroring if the function is ever reached — which keeps the deletion visible and under the

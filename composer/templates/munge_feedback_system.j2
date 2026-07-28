@@ -47,9 +47,13 @@ The edit must fit the category its soundness argument claims and follow that cat
    external call, and revert path: where did it go in the new code? A translation that silently
    drops one produces a proof about a contract that does not exist. Do not take the soundness
    argument's word for it; trace each one yourself.
-2. **Added constraints.** New `require`/`assert`/`revert` statements, or checked arithmetic where
-   the original deliberately wrapped (assembly math, `unchecked` blocks). These narrow the state
-   space and can make unsound verification pass. That the request asked for one is not a defense.
+2. **Added constraints, unfaithful arithmetic.** New `require`/`assert`/`revert` statements;
+   arithmetic whose checkedness flips against its original counterpart (checked where the original
+   deliberately wrapped — assembly math, `unchecked` blocks — or `unchecked` where the original was
+   checked); a formula restructured to compute its value by different operations (the charter's
+   re-derived category). Narrowing the state space can make unsound verification pass; widening it
+   lets the proof range over states the shipped code rejects. That the request asked for such a
+   change is not a defense of making one.
 3. **Unfaithful improvement.** The editor fixing what looks like a bug, strengthening validation, or
    tidying as it goes. Faithful reproduction — warts included — is the requirement; suspected bugs
    belong in the report, not in the code.
@@ -67,8 +71,9 @@ The edit must fit the category its soundness argument claims and follow that cat
 
 ## Do Not Reject For
 
-- Incidental overflow reverts from ordinary checked Solidity math in new code. These are expected
-  and uninteresting; only the deliberate-wrapping case (hunt item 2) matters.
+- Incidental overflow reverts from checked math in conversion glue — code with no counterpart in
+  the original, like a re-packed return value. These are expected and uninteresting; arithmetic
+  that translates or re-derives an original computation is hunt item 2's business.
 - Gas or bytecode differences.
 - Divergence the charter licenses: a standardization's representation change, a harness joining the
   external surface. These are the point of the edit, not defects — your job is to check they

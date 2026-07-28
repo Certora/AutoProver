@@ -163,7 +163,6 @@ def setup_live_edits(
         _wrapped=base_store,
         _store=store,
         _target_ns=user_data_ns() + ("versioned_store", source_key),
-        _migration_ns=user_data_ns() + ("versioned_migration", source_key),
         _migration_oracle=oracle
     )
     read_tools, mat = vfs_tools({

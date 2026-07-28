@@ -21,6 +21,7 @@ context and hands them to ``run_pipeline``.
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import override
 
 from langchain_core.tools import BaseTool
@@ -47,7 +48,8 @@ from composer.spec.source.author import batch_cvl_generation, SourceEditing
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import ReportComponentInput, Verdict, VerdictFetcher
-from composer.spec.source.report.schema import RuleName
+from composer.spec.source.report.schema import AppliedEditRecord, RuleName, SourceEditRecord
+from composer.spec.source.munge.vfs_diff import diff_against_baseline
 from composer.spec.source.task_ids import (
     HARNESS_TASK_ID, AUTOSETUP_TASK_ID, SUMMARIES_TASK_ID,
     INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
@@ -149,6 +151,26 @@ class ProverRunner(Formalizer[GeneratedCVL]):
         self, inp: ReportComponentInput[GeneratedCVL],
     ) -> dict[RuleName, Verdict]:
         return await self._fetch(inp)
+
+    @override
+    async def source_edits(
+        self, outcomes: list[ComponentOutcome[GeneratedCVL]], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        # Only real component outcomes can carry edits: the structural-invariant
+        # phase runs without an editing kit (see SourceEditing).
+        records: list[SourceEditRecord] = []
+        for o in outcomes:
+            if not isinstance(o.result, Delivered) or not o.result.result.applied_edits:
+                continue
+            res = o.result.result
+            records.append(SourceEditRecord(
+                component=o.feat.component.name,
+                applied_edits=[AppliedEditRecord(**e.model_dump()) for e in res.applied_edits],
+                cumulative_diff=await asyncio.to_thread(
+                    diff_against_baseline, res.vfs, Path(run.source.project_root)
+                ),
+            ))
+        return records
 
     @override
     async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL]], run: PipelineRun) -> None:

@@ -13,6 +13,7 @@ from langchain_core.messages import ToolMessage
 from .edit_store import EditStore
 from .vfs_diff import summarize_changes
 from .compile_check import check_edits_compile, BuildFailed, EditsNotCompiled
+from .tool_names import CODE_EDITOR, COMMIT_EDIT, GIVE_UP, REQUEST_REVIEW, SUBMIT_EDIT
 
 from graphcore.graph import FlowInput
 from graphcore.tools.vfs import VFSState, VFSAccessor, VFSInput
@@ -136,7 +137,7 @@ The editor finished responding to your request.
 **Integration notes**:
 {"(None provided)" if not d.how_to_apply else d.how_to_apply}
 
-You can apply this edit to your working source by calling `commit_edit({application_key})`
+You can apply this edit to your working source by calling `{COMMIT_EDIT}({application_key})`
 
 -----
 
@@ -300,7 +301,7 @@ class RequestReviewTool(
                 # Stamp the hash of exactly what was approved; submit_edit checks it
                 # against the live VFS, so a later edit invalidates the approval.
                 digest = EditStore._deterministic_hash(self.state["vfs"])
-                body = "The reviewer approved these edits. You may now submit_edit (do not change anything first)."
+                body = f"The reviewer approved these edits. You may now {SUBMIT_EDIT} (do not change anything first)."
             else:
                 digest = None
                 body = f"The reviewer has feedback you must address:\n\n{verdict.feedback}"
@@ -337,7 +338,7 @@ class SubmitEditTool(
     async def run(self) -> Command | str:
         if self.state["reviewed_digest"] != EditStore._deterministic_hash(self.state["vfs"]):
             return (
-                "These edits have not been approved as they stand. Call request_review "
+                f"These edits have not been approved as they stand. Call {REQUEST_REVIEW} "
                 "on your current edits first — any change since your last review voids "
                 "the approval."
             )
@@ -385,11 +386,11 @@ def editor_tool(
     request_review = RequestReviewTool.bind(ReviewDeps(
         accessor=edit_tools.mat,
         feedback=feedback,
-    )).as_tool("request_review")
+    )).as_tool(REQUEST_REVIEW)
     submit = SubmitEditTool.bind(SubmitDeps(
         accessor=edit_tools.mat,
-    )).as_tool("submit_edit")
-    give_up = GiveUpTool.as_tool("give_up")
+    )).as_tool(SUBMIT_EDIT)
+    give_up = GiveUpTool.as_tool(GIVE_UP)
 
     b = (
         env
@@ -419,7 +420,7 @@ def editor_tool(
         accessor=edit_tools.mat,
         edit_store=edit_store,
         graph_runner=runner
-    )).as_tool("code_editor")
+    )).as_tool(CODE_EDITOR)
 
 __all__ = [
     "editor_tool"

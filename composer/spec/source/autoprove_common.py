@@ -148,9 +148,10 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             )
             # Source-editing kit: the edit snapshot store, the live (vfs-aware)
             # tool suite with its versioned explorer, and the migration oracle
-            # that re-validates cached explorer findings across edits. The base
-            # index shares the frozen explorer's namespace, so pre-edit (V0)
-            # findings stay visible to the live explorer.
+            # that caveats cached explorer findings with the files edited since
+            # they were recorded. The base index shares the frozen explorer's
+            # namespace, so pre-edit (V0) findings stay visible to the live
+            # explorer.
             edit_store = EditStore(
                 staged.conns.store, user_ns("edit_snapshots", staged.root_key)
             )
@@ -164,7 +165,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                     ),
                     store=staged.conns.indexed_store,
                     source_key=staged.root_key,
-                    oracle=mk_oracle(staged.llm_models.llm_lite(), edit_store, staged.source),
+                    oracle=mk_oracle(edit_store, staged.source),
                     recursion_limit=args.recursion_limit,
                 ),
                 store=edit_store,

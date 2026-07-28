@@ -37,7 +37,9 @@ from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
-from composer.spec.source.report.schema import RuleName, ReportBackend
+from composer.spec.source.report.schema import (
+    AutoProverReport, RuleName, ReportBackend, SourceEditRecord,
+)
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from .ptypes import (
@@ -69,6 +71,13 @@ class Formalizer[FormT: BackendResult](ABC):
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         """Synthetic report inputs beyond the per-component outcomes — the prover folds in its
         'Structural Invariants' here. Default: none."""
+        return []
+
+    async def source_edits(
+        self, outcomes: list[ComponentOutcome[FormT]], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        """Source-modification records for components whose verification ran against edited
+        source. Default: none (foundry; prover runs without editing)."""
         return []
 
     @abstractmethod
@@ -239,11 +248,14 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         for o in outcomes
     ] + formalizer.extra_report_inputs()
     try:
-        report = await run.runner(
-            job=lambda: build_report(
+        async def _report() -> AutoProverReport:
+            return await build_report(
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
-            ),
+                source_edits=await formalizer.source_edits(outcomes, run),
+            )
+        report = await run.runner(
+            job=_report,
             task_info=TaskInfo(REPORT_TASK_ID, label="Report Extraction", phase=backend.core_phases["report"])
         )
         backend.artifact_store.write_report(report)

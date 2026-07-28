@@ -202,6 +202,18 @@ footer.report-foot {
     font-size: 13px;
 }
 .warnings ul { margin: 4px 0 0 18px; padding: 0; }
+a.badge { text-decoration: none; }
+section.gaps details { margin: 10px 0 18px; }
+section.gaps summary { cursor: pointer; font-size: 13px; color: var(--muted-fg); }
+pre.diff {
+    background: var(--bg-pre);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.45;
+}
 </style>
 </head>
 <body>
@@ -249,7 +261,7 @@ footer.report-foot {
 
 {%- for g in groups %}
 <section class="prop" id="{{ g.slug }}">
-  <h2><span class="id">{{ g.slug }}</span> {{ g.title }} <span class="badge badge-{{ g.kind }}">{{ g.label }}</span></h2>
+  <h2><span class="id">{{ g.slug }}</span> {{ g.title }} <span class="badge badge-{{ g.kind }}">{{ g.label }}</span>{% if g.edited %} <a class="badge badge-warn" href="#source-modifications">edited source</a>{% endif %}</h2>
   <p class="desc">{{ g.description }}</p>
   <table class="rules">
     <thead><tr><th>{{ terms.unit_cap }}</th><th>Status</th><th>Description</th>{% if has_links %}<th></th>{% endif %}</tr></thead>
@@ -304,6 +316,28 @@ footer.report-foot {
   </ul>
   {%- endfor %}
   {%- endif %}
+</section>
+{%- endif %}
+
+{%- if source_edits %}
+<section class="gaps" id="source-modifications">
+  <h2>Source modifications</h2>
+  <p>The components below were verified against modified source: their outcomes are claims about
+  the modified code, not the code as it exists on disk. Each modification was made to work around a
+  construct the verification tooling cannot handle; the editor's account of every edit and the
+  cumulative diff from the on-disk source follow.</p>
+  {%- for se in source_edits %}
+  <h3>{{ se.component }} ({{ se.applied_edits | length }} edit{{ "s" if se.applied_edits | length != 1 else "" }})</h3>
+  {%- for e in se.applied_edits %}
+  <h4>Edit {{ loop.index }} — <span class="sort-tag">{{ e.edit_id }}</span></h4>
+  <p>{{ e.executive_summary }}</p>
+  <p><strong>Soundness argument:</strong> {{ e.why_sound }}</p>
+  {%- endfor %}
+  <details>
+    <summary>Cumulative diff from on-disk source</summary>
+    <pre class="diff">{{ se.cumulative_diff }}</pre>
+  </details>
+  {%- endfor %}
 </section>
 {%- endif %}
 
