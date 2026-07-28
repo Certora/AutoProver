@@ -14,15 +14,18 @@ signal and are ignored.
 from typing import Literal, TypeGuard, Any, TYPE_CHECKING
 import io
 from dataclasses import dataclass, field
+from functools import cache
 import asyncio
 
 import openai
 
-from composer.input.files import _UploaderBase
+from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderKind, CacheLevel, _ListIter, NoSuchElementError, compaction_threshold,
+    ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from .types import CacheLevel
+from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -67,7 +70,7 @@ def _parse_gpt_version(token: str) -> tuple[int, int]:
     return (int(token), 0)
 
 def _model_parser(model_name: str) -> OpenAIModelFeatures:
-    stream = _ListIter(model_name.split("-"))
+    stream = ListIter(model_name.split("-"))
     parsing: Literal["family", "version", "tier"] = "family"
     try:
         head = stream.next()
@@ -138,18 +141,38 @@ def _reasoning_effort(thinking_tokens: int) -> Literal["low", "medium", "high"]:
         return "medium"
     return "high"
 
+class OpenAIService(ProviderServiceBase):
+    def __init__(self):
+        from graphcore.tools.memory import openai_async_memory_tool
+        super().__init__(
+            openai_async_memory_tool,
+            OpenAIFileUploader.lazy
+        )
+
+@dataclass
+class OpenAIRenderer:
+    def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        to_ret : dict[str, Any] = {"type": "text", "text": text}
+        return to_ret
+    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        return {
+            "type": "file",
+            "file": {
+                "file_id": file_id,
+            },
+        }
 
 # --- Files API uploader ----------------------------------------------------
 
 @dataclass
-class OpenAIFileUploader(_UploaderBase):
+class OpenAIFileUploader(UploaderBase):
     """``FileUploader`` impl backed by OpenAI's Files API
     (``purpose="user_data"``)."""
 
     client: openai.AsyncOpenAI
     uploaded: dict[str, str] | None = None
     _seed_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    provider: ProviderKind = "openai"
+    renderer: ContentRenderer = field(default_factory=OpenAIRenderer)
 
     async def _ensure_seeded(self) -> dict[str, str]:
         """Seed the dedup cache from the account's existing user-data uploads on
@@ -179,6 +202,10 @@ class OpenAIFileUploader(_UploaderBase):
     def lazy() -> "OpenAIFileUploader":
         """A lazily-seeding uploader — no account file-list until first upload."""
         return OpenAIFileUploader(client=openai.AsyncOpenAI())
+    
+@cache
+def _openai_service():
+    return OpenAIService()
 
 
 # --- ModelProvider ---------------------------------------------------------
@@ -192,7 +219,7 @@ class OpenAIModelProvider:
     model_name: str
     options: ModelConfiguration
     features: OpenAIModelFeatures
-    provider: ProviderKind = "openai"
+    provider: OpenAIService = field(default_factory=_openai_service)
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "OpenAIModelProvider":
@@ -203,7 +230,7 @@ class OpenAIModelProvider:
         return compaction_threshold(_context_window(self.features))
 
     def builder_for(
-        self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
+        self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_openai import ChatOpenAI
 
@@ -227,3 +254,8 @@ class OpenAIModelProvider:
             max_retries=2,
             **kwargs,
         )
+
+OPEN_AI_SPEC = ProviderSpec(
+    matches=matches,
+    build=OpenAIModelProvider.create
+)

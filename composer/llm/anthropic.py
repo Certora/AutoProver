@@ -5,14 +5,17 @@ from typing import Literal, TypeGuard, Any, TYPE_CHECKING
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
+from functools import cache
 
 import anthropic
 
-from composer.input.files import _UploaderBase
+from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderKind, CacheLevel, _ListIter, NoSuchElementError, compaction_threshold,
+    ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from .types import CacheLevel
+from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -48,7 +51,7 @@ _interleaved_pivot_version = (4, 5)
 _default_thinking_summary_version = (4, 6)
 
 def _model_parser(model_name: str) -> ModelFeatures:
-    stream = _ListIter(model_name.split("-"))
+    stream = ListIter(model_name.split("-"))
     parsing: Literal["claude", "model", "version"] = "claude"
     try:
         claude = stream.next()
@@ -85,6 +88,14 @@ def _model_parser(model_name: str) -> ModelFeatures:
 def matches(model: str) -> bool:
     return model.split("-", 1)[0] == "claude"
 
+def level_to_ttl(c: CacheLevel) -> str | None:
+    match c:
+        case CacheLevel.NONE:
+            return None
+        case CacheLevel.SHORT:
+            return "5m"
+        case CacheLevel.LONG:
+            return "1h"
 
 _long_context_window = 1_000_000
 _base_context_window = 200_000
@@ -114,14 +125,43 @@ def _context_window(features: ModelFeatures) -> int:
 
 # --- Files API uploader ----------------------------------------------------
 
+class AnthropicRenderer:
+    def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        to_ret : dict[str, Any] = {"type": "text", "text": text}
+        if (ttl := level_to_ttl(cache_level)) is not None:
+            to_ret["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": ttl
+            }
+        return to_ret
+
+    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        to_ret : dict[str, Any] = {
+            "type": "document",
+            "source": {
+                "type": "file",
+                "file_id": file_id,
+            },
+        }
+        if (ttl := level_to_ttl(cache_level)) is not None:
+            to_ret["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": ttl
+            }
+        return to_ret
+
+@cache
+def _get_service():
+    return AnthropicService()
+
 @dataclass
-class AnthropicFileUploader(_UploaderBase):
+class AnthropicFileUploader(UploaderBase):
     """``FileUploader`` impl backed by Anthropic's beta Files API."""
 
     client: anthropic.AsyncAnthropic
     uploaded: dict[str, str] | None = None
     _seed_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    provider: ProviderKind = "anthropic"
+    renderer: ContentRenderer = field(default_factory=AnthropicRenderer)
 
     async def _ensure_seeded(self) -> dict[str, str]:
         """Seed the dedup cache from the account's existing Files-API uploads on
@@ -154,6 +194,16 @@ class AnthropicFileUploader(_UploaderBase):
 
 # --- ModelProvider ---------------------------------------------------------
 
+class AnthropicService(ProviderServiceBase):
+    def __init__(self):
+        from graphcore.tools.memory import anthropic_async_memory_tool
+        super().__init__(
+            anthropic_async_memory_tool,
+            AnthropicFileUploader.lazy
+        )
+
+
+
 @dataclass
 class AnthropicModelProvider:
     """``ModelProvider`` for Anthropic. Probes ``model_name`` once at
@@ -163,18 +213,23 @@ class AnthropicModelProvider:
     model_name: str
     options: ModelConfiguration
     features: ModelFeatures
-    provider: ProviderKind = "anthropic"
+
+    provider: AnthropicService = field(default_factory=_get_service)
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
-        return AnthropicModelProvider(model_name, options, _model_parser(model_name))
+        return AnthropicModelProvider(
+            model_name,
+            options,
+            _model_parser(model_name),
+        )
 
     @property
     def max_prompt_tokens(self) -> int:
         return compaction_threshold(_context_window(self.features))
 
     def builder_for(
-        self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
+        self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
         from composer.diagnostics.usage_callback import UsageCallback
@@ -198,15 +253,9 @@ class AnthropicModelProvider:
         if opts.memory_tool:
             betas.append("context-management-2025-06-27")
 
-        match cache_level:
-            case CacheLevel.SHORT:
-                ttl = "5m"
-            case CacheLevel.LONG:
-                ttl = "1h"
-            case None | CacheLevel.NONE:
-                ttl = None
+        ttl = level_to_ttl(cache_level)
         model_kwargs = (
-            {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl else {}
+            {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl is not None else {}
         )
 
         return ChatAnthropic(
@@ -220,3 +269,8 @@ class AnthropicModelProvider:
             model_kwargs=model_kwargs,
             callbacks=[UsageCallback()],
         )
+
+ANTHROPIC_SPEC = ProviderSpec(
+    matches=matches,
+    build=AnthropicModelProvider.create
+)
