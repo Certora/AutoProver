@@ -1384,6 +1384,83 @@ _REPORT_TAPE: list[BaseMessage] = [
 ]
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Budget-curtailment variant lanes
+# ───────────────────────────────────────────────────────────────────────────
+# Alternate invariant-CVL / formalize-0 lanes for the curtailment integration
+# test, which runs the pipeline with the ``formalization_preparation`` and
+# ``formalization`` caps at 0.0: the budget monitor's wrap-up alert fires on the
+# first tool-result tick (0 >= 0.8 * 0), lifting the validation gates and
+# stamping ``budget_curtailed`` — while the hard stop never fires (taped runs
+# accrue no cost, and 0 > 0 is false). Each lane therefore: puts a typechecking
+# draft, skips one property "for budget", and publishes WITHOUT ever consulting
+# the feedback judge or the prover — the lifted gates accept it. No judge or
+# CEX entries, and no live prover run, are consumed.
+
+_CURTAILED_INVARIANT_CVL_TAPE: list[BaseMessage] = [
+    # V1 — put a valid draft (real Typechecker.jar gatekeeps this put).
+    _ai(
+        "Drafting the structural invariants.",
+        _tc("put_cvl_raw", cvl_file=GOOD_INV_CVL),
+    ),
+    # The wrap-up alert lands before this turn: skip what isn't finished.
+    _ai(
+        "Budget pressure — skipping the remaining invariant and wrapping up.",
+        _tc(
+            "record_skip",
+            property_title="zero_address_is_zero",
+            reason="Budget exhausted before this invariant could be validated.",
+        ),
+    ),
+    # V3 — publish the partial under the lifted gates (no feedback/prover stamps).
+    _ai(
+        "Publishing the partial invariant spec.",
+        _tc(
+            "result",
+            commentary=(
+                "Budget-curtailed partial: increments_sum_is_count is drafted but "
+                "unverified; zero_address_is_zero was skipped."
+            ),
+            property_rules=[
+                {"property_title": "increments_sum_is_count", "rules": ["increments_sum_is_count"]},
+            ],
+        ),
+    ),
+]
+
+_CURTAILED_CVL_TAPE: list[BaseMessage] = [
+    # W1 — put the full three-rule draft (typechecks; never sent to the prover).
+    _ai(
+        "Writing the component spec.",
+        _tc("put_cvl_raw", cvl_file=COMPONENT_CVL),
+    ),
+    # The wrap-up alert lands before this turn.
+    _ai(
+        "Budget pressure — skipping the incrementOther property and wrapping up.",
+        _tc(
+            "record_skip",
+            property_title="other_increments_by_one",
+            reason="Budget exhausted before this property could be validated.",
+        ),
+    ),
+    # W3 — publish the partial under the lifted gates.
+    _ai(
+        "Publishing the partial component spec.",
+        _tc(
+            "result",
+            commentary=(
+                "Budget-curtailed partial: the two increment() rules are drafted but "
+                "unverified; other_increments_by_one was skipped."
+            ),
+            property_rules=[
+                {"property_title": "count_increments_by_one", "rules": ["increment_increases_count"]},
+                {"property_title": "sender_increments_by_one", "rules": ["increment_increases_sender_tally"]},
+            ],
+        ),
+    ),
+]
+
+
 # Design-doc discovery lane. Only consumed when the run omits the design doc
 # (system_doc=None); the finder lists the project, reads the design doc, and selects
 # it. Counter's design doc is ``system.md`` at the scenario root. A single flat lane:
@@ -1424,6 +1501,21 @@ _AUTOPROVE_TAPE: dict[str, list[BaseMessage]] = {
 }
 
 
+# The curtailment variant: identical up-front phases, budget-curtailed authoring lanes, and NO
+# report lane — with zero formalized properties ``build_report`` must skip the grouping LLM call
+# entirely, and a stray call fails loudly as a missing lane (the test runs with
+# ``RERAISE_REPORT_FAILURES``).
+_AUTOPROVE_CURTAILED_TAPE: dict[str, list[BaseMessage]] = {
+    DESIGN_DOC_DISCOVERY_TASK_ID: _DESIGN_DOC_TAPE,
+    SYSTEM_ANALYSIS_TASK_ID: _SYSTEM_ANALYSIS_TAPE,
+    HARNESS_TASK_ID: _HARNESS_TAPE,
+    INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
+    INVARIANT_CVL_TASK_ID: _CURTAILED_INVARIANT_CVL_TAPE,
+    extract_task_id(0): _BUG_TAPE,
+    formalize_task_id(0): _CURTAILED_CVL_TAPE,
+}
+
+
 # ---------------------------------------------------------------------------
 # Install / configuration API
 # ---------------------------------------------------------------------------
@@ -1443,6 +1535,18 @@ def get_autoprove_Counter_llm(with_delay: bool = True) -> HarnessFakeLLM:
     return HarnessFakeLLM(lanes=_AUTOPROVE_TAPE, with_human_delay=with_delay)
 
 
+def get_autoprove_Counter_curtailment_llm(with_delay: bool = True) -> HarnessFakeLLM:
+    """The budget-curtailment variant of the Counter tape (see the curtailed lanes above)."""
+    return HarnessFakeLLM(lanes=_AUTOPROVE_CURTAILED_TAPE, with_human_delay=with_delay)
+
+
+def _install(fake: HarnessFakeLLM) -> HarnessFakeLLM:
+    import composer.spec.agent_index as a_ind
+    a_ind._UNSAFE_DISABLE_CACHE = True
+    install_fake_llm(fake)
+    return fake
+
+
 def install_harness_tape(with_delay: bool = True) -> HarnessFakeLLM:
     """Route the autoprove pipeline's models to the Counter tape's fake LLM.
 
@@ -1454,11 +1558,12 @@ def install_harness_tape(with_delay: bool = True) -> HarnessFakeLLM:
 
     Returns the fake so the caller can inspect lane state for debugging.
     """
-    fake = get_autoprove_Counter_llm(with_delay)
-    import composer.spec.agent_index as a_ind
-    a_ind._UNSAFE_DISABLE_CACHE = True
-    install_fake_llm(fake)
-    return fake
+    return _install(get_autoprove_Counter_llm(with_delay))
+
+
+def install_curtailment_tape(with_delay: bool = True) -> HarnessFakeLLM:
+    """``install_harness_tape``, but with the budget-curtailment tape."""
+    return _install(get_autoprove_Counter_curtailment_llm(with_delay))
 
 
 __all__ = [
@@ -1468,7 +1573,9 @@ __all__ = [
     "GOOD_INV_CVL",
     "SUBTLE_INV_CVL",
     "get_autoprove_Counter_llm",
+    "get_autoprove_Counter_curtailment_llm",
     "install_harness_tape",
+    "install_curtailment_tape",
 ]
 
 

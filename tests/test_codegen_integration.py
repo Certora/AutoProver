@@ -73,8 +73,8 @@ def _make_args(rag_conn: str, scenario_dir: Path) -> CommandLineArgs:
 def _install_mocks(monkeypatch) -> None:
     """LLM / HITL / embedding mocks. The databases themselves — and the host/port
     connection redirection — are handled once per session by ``langgraph_db``."""
-    # The CappedVault tape (patches registry.get_provider_for + uploader_for and
-    # disables the agent-index cache) plus the scripted console HITL replies.
+    # The CappedVault tape (patches registry.get_provider_for and disables the
+    # agent-index cache) plus the scripted console HITL replies.
     install_harness_tape(with_delay=False)
     install_response_tape()
     # Swap the real sentence-transformer for the deterministic mock: no model
@@ -96,10 +96,10 @@ async def test_codegen_capped_vault_runs_end_to_end(scenario_provider, langgraph
     _install_mocks(monkeypatch)
 
     args = _make_args(langgraph_db.rag_db, scenario_dir)
-    # Go through the registry module (not a name imported at module load) so these
-    # pick up the tape's patched ``get_provider_for`` / ``uploader_for``.
+    # Go through the registry module (not a name imported at module load) so this
+    # picks up the tape's patched ``get_provider_for``.
     llm = registry.get_provider_for(options=args)
-    input_data = await upload_input(registry.uploader_for(llm.provider), args)
+    input_data = await upload_input(llm.provider.uploader(), args)
 
     # Run the whole workflow. Pass == it reaches WorkflowSuccess: the impl bug was
     # fixed, the spec over-constraint remediated + committed, and the contradictory

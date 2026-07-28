@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import pathlib
 
 from langchain_core.runnables import RunnableConfig
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from graphcore.graph import Builder
@@ -326,7 +325,7 @@ async def _run_codegen(
     memory = conn.memory(get_memory_ns(mem_root, "composer"))
     extra_tools.append(memory)
 
-    research_tool, cvl_builder = _cvl_knowledge_setup(llm.builder_for(), rag_db, conn, workflow_options.recursion_limit)
+    research_tool, cvl_builder = _cvl_knowledge_setup(llm, rag_db, conn, workflow_options.recursion_limit)
     extra_tools.append(research_tool)
 
     # VFS tooling: the mutable layer (its materializer is shared into the
@@ -361,7 +360,7 @@ async def _run_codegen(
     )
 
     crypto_tools = _codegen_author_tools(cex_handler, prover_opts, rag_db, vfs_tooling)
-    workflow_builder = _codegen_builder(llm.builder_for(), crypto_tools)
+    workflow_builder = _codegen_builder(llm, crypto_tools)
 
     workflow_graph = workflow_builder.with_tools(extra_tools).with_sys_prompt_template(
         "system_prompt.j2"
@@ -450,7 +449,7 @@ async def _run_codegen(
 
 
 def _cvl_knowledge_setup(
-    llm: BaseChatModel,
+    llm: ModelProvider,
     rag_db: ComposerRAGDB,
     conn: IndexedConnections,
     recursion_limit: int,
@@ -465,7 +464,7 @@ def _cvl_knowledge_setup(
     )
     builder = (
         Builder()
-        .with_llm(llm)
+        .with_llm(llm.builder_for(), max_prompt_tokens=llm.max_prompt_tokens)
         .with_loader(load_jinja_template)
         .with_checkpointer(conn.checkpointer)
     )
@@ -542,7 +541,7 @@ def _codegen_author_tools(
     ]
 
 
-def _codegen_builder(llm: BaseChatModel, crypto_tools: list[BaseTool]) -> Builder:
+def _codegen_builder(llm: ModelProvider, crypto_tools: list[BaseTool]) -> Builder:
     """The codegen workflow Builder with the author tool set bound."""
     return Builder().with_context(
         AIComposerContext
@@ -555,7 +554,7 @@ def _codegen_builder(llm: BaseChatModel, crypto_tools: list[BaseTool]) -> Builde
     ).with_state(
         AIComposerState
     ).with_llm(
-        llm
+        llm.builder_for(), max_prompt_tokens=llm.max_prompt_tokens
     ).with_output_key(
         "generated_code"
     ).with_summary_config(

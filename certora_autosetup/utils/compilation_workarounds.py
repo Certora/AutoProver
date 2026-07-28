@@ -63,6 +63,19 @@ def _path_from_compiling_line(line: str) -> Optional[str]:
     return line.removeprefix(prefix).removesuffix(suffix)
 
 
+# A solc source-location line, e.g. ``   --> contracts/Foo.sol:120:9:``. It names the
+# offending file in a whole-project (non-autofinder) solc error, where there is no
+# ``Compiling <path>...`` progress line to recover it from.
+_SOURCE_LOCATION_RE = re.compile(r"^\s*-->\s+(?P<path>.+?):\d+:\d+:?\s*$")
+
+
+def _path_from_source_location_line(line: str) -> Optional[str]:
+    """Return ``<path>`` from a solc ``  --> <path>:<line>:<col>:`` source-location
+    line, or None if ``line`` isn't one."""
+    match = _SOURCE_LOCATION_RE.match(line)
+    return match.group("path") if match else None
+
+
 def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
     """Walk backward from ``lines[idx]`` to the nearest preceding plain
     ``Compiling <path>...`` line and return its path, or None if there is none.
@@ -616,6 +629,27 @@ class CompilationWorkaroundManager:
                                 else:
                                     self.log(f"Warning: Could not map path '{path_part}' to contract name", "WARNING")
                         break
+
+        # Pattern 3: a whole-project solc error with no per-file "Compiling <path>..."
+        # progress line — the format certoraRun prints when the whole scene is compiled
+        # in one unit (e.g. `solc8.34 had an error:` / `CompilerError: Stack too deep` /
+        # `   --> <path>:<line>:<col>:`). Patterns 1 and 2 recover the file from a
+        # Compiling line, which is absent here, so the offending file is only named in the
+        # `-->` source-location line. Runs last so the per-contract patterns take
+        # precedence when a Compiling line is present.
+        for i, line in enumerate(lines):
+            if not line.startswith("CompilerError: Stack too deep"):
+                continue
+            for j in range(i + 1, min(i + 6, len(lines))):
+                src_path = _path_from_source_location_line(lines[j])
+                if src_path is None:
+                    continue
+                contract_name = self._get_contract_name_from_path(src_path, contracts)
+                if contract_name:
+                    self.log(f"Detected stack-too-deep error for {contract_name} (path: {src_path})")
+                    return contract_name
+                self.log(f"Warning: Could not map path '{src_path}' to contract name", "WARNING")
+                break
 
         return None
 

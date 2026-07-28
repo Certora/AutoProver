@@ -107,10 +107,22 @@
     "description": "OpenZeppelin BitMaps operations",
     "additional_contracts": ["specs/summaries/OpenZeppelin/harnesses/OZ_BitMaps.sol"]
   },
+  "oz_arrays_unsafeMemoryAccess": {
+    "names": ["unsafeMemoryAccess"],
+    "library_names": ["Arrays"],
+    "summary_file": "specs/summaries/OpenZeppelin/OZ_Arrays.spec",
+    "description": "OpenZeppelin Arrays.unsafeMemoryAccess (unchecked memory array read)"
+  },
+  "eip712_hashTypedData": {
+    "names": ["_hashTypedData", "_hashTypedDataV4"],
+    "library_names": ["EIP712"],
+    "summary_file": "specs/summaries/EIP712.spec",
+    "description": "EIP-712 typed-data hashing (solady _hashTypedData / OpenZeppelin _hashTypedDataV4)"
+  },
   "extload": {
-    "names": ["extsload", "exttload"],
+    "names": ["extsload", "exttload", "extSload", "extSloads"],
     "summary_file": "specs/summaries/extload.template.spec",
-    "description": "External storage load functions (extsload/exttload)"
+    "description": "External storage load functions (extsload/exttload, incl. camelCase extSload/extSloads)"
   },
   "safeTransfer": {
     "names": ["safeTransfer"],
@@ -147,5 +159,23 @@
     "library_names": ["CTHelpers"],
     "summary_file": "specs/summaries/CTHelpers.spec",
     "description": "Gnosis Conditional Tokens CTHelpers.getCollectionId (bn128 collection-id derivation)"
+  },
+  "aave_WadRayMath": {
+    "names": ["wadMulDown", "wadMulUp", "wadDivDown", "wadDivUp", "rayMulDown", "rayMulUp", "rayDivDown", "rayDivUp", "toWad", "toRay", "fromWadDown", "fromRayUp"],
+    "library_names": ["WadRayMath"],
+    "summary_file": "specs/summaries/Aave/Aave_Math.spec",
+    "description": "Aave WadRayMath fixed-point (WAD/RAY) operations"
+  },
+  "aave_PercentageMath": {
+    "names": ["percentMulDown", "percentMulUp", "percentDivDown", "percentDivUp", "fromBpsDown"],
+    "library_names": ["PercentageMath"],
+    "summary_file": "specs/summaries/Aave/Aave_Math.spec",
+    "description": "Aave PercentageMath operations"
+  },
+  "aave_MathUtils": {
+    "names": ["mulDivDown", "mulDivUp", "divUp"],
+    "library_names": ["MathUtils"],
+    "summary_file": "specs/summaries/Aave/Aave_Math.spec",
+    "description": "Aave MathUtils generic 256-bit mulDiv / divUp"
   }
 }

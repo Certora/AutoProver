@@ -47,6 +47,13 @@ _OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
 # Pricing tables transcribed from Anthropic + OpenAI rate cards.
 # Sources should be re-checked when new model families ship.
 _PRICING: list[tuple[str, ModelPricing]] = [
+    ("claude-fable-5", ModelPricing(short=PriceTier(10.00, 50.00, 1.00, 12.50, 20.0))),
+
+    # claude-opus-5 and claude-opus-4.5 / 4.6 / 4.7 / 4.8 share a rate card;
+    # older 4 / 4.1 are pricier. Matching by prefix-of-prefix so
+    # "claude-opus-4-7" and "claude-opus-4-7-20260301" both hit the right entry.
+    ("claude-opus-5",   ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.0))),
+
     # ---- Anthropic ----
     # claude-opus-4.5 / 4.6 / 4.7 share a rate card; older 4 / 4.1
     # are pricier. Matching by prefix-of-prefix so "claude-opus-4-7"
@@ -56,6 +63,8 @@ _PRICING: list[tuple[str, ModelPricing]] = [
     ("claude-opus-4-5", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
     ("claude-opus-4-1", ModelPricing(short=PriceTier(15.00, 75.00, 1.50, 18.75, 30.00))),
     ("claude-opus-4",   ModelPricing(short=PriceTier(15.00, 75.00, 1.50, 18.75, 30.00))),
+
+    ("claude-sonnet-5",   ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
 
     ("claude-sonnet-4-6", ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
     ("claude-sonnet-4-5", ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),

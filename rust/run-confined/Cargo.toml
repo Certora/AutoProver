@@ -1,0 +1,21 @@
+[package]
+name = "run-confined"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Trusted launcher that confines a command (Landlock filesystem + seccomp network/ptrace + rlimits + scrubbed env), then execs it. The first SandboxProvider for the RunCommand effect — see docs/command-sandbox.md."
+
+[[bin]]
+name = "run-confined"
+path = "src/main.rs"
+
+[dependencies]
+# Command-line parsing (derive API).
+clap = { version = "4", features = ["derive"] }
+# Filesystem confinement (ABI negotiation + full access-right set).
+landlock = "0.4"
+# seccomp-BPF compiler from AWS Firecracker — we hand it a small allow/deny
+# policy, not raw bytecode.
+seccompiler = "0.5"
+# setrlimit / prctl / syscall numbers / AF_* constants.
+libc = "0.2"

@@ -232,7 +232,7 @@ class MessageRenderer(ToolCallRenderer):
         if tag is not None:
             return _HUMAN_TAG_DISPLAY.get(tag, ("User input", True))
         return ("User input", True)
-    
+
     def get_flow_target(self, root: VerticalScroll, path: list[str]) -> VerticalScroll:
         # Walk from most specific to least specific: the current flow's container
         # may not exist yet (render_start creates it), so fall back to the parent's.
