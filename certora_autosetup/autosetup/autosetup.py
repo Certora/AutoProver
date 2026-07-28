@@ -894,6 +894,7 @@ class Autosetup:
                 summary_setup=self.setup_prover.summary_setup,
                 library_resolver=self.libraries_for_contracts,
                 is_library=self.is_library,
+                typecheck_fix=self._fix_config_with_typechecker,
             )
 
             self.log(f"🔗 Running call resolution for {contract_handle.contract_name}")

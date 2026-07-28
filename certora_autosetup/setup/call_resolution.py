@@ -144,6 +144,7 @@ class CallResolutionPhase:
         summary_setup: SummarySetup,
         library_resolver: Callable[[List[str]], List[ContractHandle]],
         is_library: Callable[[str], bool],
+        typecheck_fix: Callable[[Path, str], bool],
         max_prover_invocations: int = 10,
         verbose: bool = False,
         skip_proxy_detection: bool = False,
@@ -155,6 +156,9 @@ class CallResolutionPhase:
         self.config_file = config_file
         self.reports_dir = reports_dir
         self.extra_args = extra_args
+        # Fixes the conf when an iteration fails because a contract/summary brought into
+        # the scene last iteration doesn't typecheck; returns whether it changed anything.
+        self.typecheck_fix = typecheck_fix
 
         config_info = self.config_manager.extract_contract_and_spec_from_config(
             config_file, scope.project_root
@@ -487,23 +491,34 @@ class CallResolutionPhase:
         """
         logger.debug(f"[{self.contract_name}] Running prover for iteration {self.current_iteration}")
 
-        config_content = FileContent.from_file(self.config_file)
-        job_spec = ProverJobSpec(
-            contract_name=self.contract_name,
-            phase="call_resolution",
-            config_file=config_content,
-            extra_args=self.extra_args,
-            msg=ProverJobSpec.build_job_msg(
-                self.contract_name, self.config_file, suffix=f"(iteration {self.current_iteration})"
-            ),
-        )
+        # The run can fail because a summary/contract brought into the scene last iteration
+        # doesn't typecheck; on failure, fix the conf and retry the run once. The job spec is
+        # rebuilt each attempt so it picks up the conf the fixer just rewrote.
+        for attempt in range(2):
+            config_content = FileContent.from_file(self.config_file)
+            job_spec = ProverJobSpec(
+                contract_name=self.contract_name,
+                phase="call_resolution",
+                config_file=config_content,
+                extra_args=self.extra_args,
+                msg=ProverJobSpec.build_job_msg(
+                    self.contract_name, self.config_file, suffix=f"(iteration {self.current_iteration})"
+                ),
+            )
 
-        prover_result = await self.prover_runner.check_with_prover(job_spec)
-        self._prover_runs.append((self.current_iteration, prover_result.job_url))
+            prover_result = await self.prover_runner.check_with_prover(job_spec)
+            self._prover_runs.append((self.current_iteration, prover_result.job_url))
 
-        if not prover_result.success:
+            if prover_result.success:
+                break
+
             error_msg = prover_result.error_message or "Unknown prover error"
             logger.error(f"Prover execution failed: {error_msg}")
+            if attempt == 0 and await asyncio.to_thread(
+                self.typecheck_fix, self.config_file, f"call resolution {self.contract_name}"
+            ):
+                logger.info("Typechecker changed the conf; retrying the prover run")
+                continue
             return None
 
         job_id = prover_result.job_handle.job_id
