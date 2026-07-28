@@ -8,7 +8,6 @@ from composer.spec.tool_env import BaseRAGTools
 from composer.spec.service_host import ModelProvider, PureServiceHost, Sort
 from composer.spec.cvl_research import indexed_cvl_research_tool, CVL_RESEARCH_BASE_DOC
 from composer.tools.search import cvl_manual_tools
-from composer.workflow.provider import ProviderKind
 from composer.kb.knowledge_base import kb_tools
 from composer.spec.agent_index import AgentIndex, AgentIndexConfig, RetrieveDocumentTool
 

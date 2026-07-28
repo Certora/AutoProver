@@ -16,7 +16,7 @@ The agent's real file-reading over a live model is covered by the (nightly) Coun
 integration tape.
 """
 
-from typing import Any, cast, Literal
+from typing import Any, cast
 
 from dataclasses import dataclass
 
@@ -35,9 +35,10 @@ from graphcore.graph import Builder, FlowInput
 
 from langgraph.checkpoint.memory import InMemorySaver
 
+from composer.llm.anthropic import AnthropicRenderer, _get_service
 from composer.input.files import InMemoryTextFile
 from composer.spec.context import WorkflowContext, SourceFields
-from composer.spec.service_host import ModelProvider, CoreModelProvider
+from composer.spec.service_host import ModelProvider
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.templates.loader import load_jinja_template
 from composer.ui.autoprove_app import AutoProvePhase
@@ -73,6 +74,11 @@ class _ToolBindingFakeLLM(FakeMessagesListChatModel):
         return self
 
 
+# The finder graph enables summarization, so a builder must declare a compaction threshold.
+# The fake LLM reports no token usage, so the value only has to exist — it never trips.
+_FAKE_PROMPT_BUDGET = 100_000
+
+
 def _ctx(store: InMemoryStore, cache_ns: tuple[str, ...] | None) -> WorkflowContext[None]:
     return WorkflowContext.create(
         services=lambda _ns: cast(BaseTool, object()),
@@ -92,7 +98,7 @@ class _StubUploader:
         p = pathlib.Path(path)
         if not p.is_file():
             return None
-        return InMemoryTextFile(basename=p.name, string_contents=p.read_text(), provider="anthropic")
+        return InMemoryTextFile(basename=p.name, string_contents=p.read_text(), renderer=AnthropicRenderer())
 
 
 def _source(
@@ -207,7 +213,7 @@ async def test_finder_graph_selects_the_design_doc(tmp_path):
     ]
     builder = (
         Builder[None, None, None]()
-        .with_llm(_ToolBindingFakeLLM(responses=responses))
+        .with_llm(_ToolBindingFakeLLM(responses=responses), max_prompt_tokens=_FAKE_PROMPT_BUDGET)
         .with_loader(load_jinja_template)
     )
     graph = build_finder_graph(builder, tools, "Counter", "src/Counter.sol")
@@ -241,7 +247,7 @@ async def test_finder_graph_can_read_a_pdf_via_read_document(tmp_path):
     ]
     builder = (
         Builder[None, None, None]()
-        .with_llm(_ToolBindingFakeLLM(responses=responses))
+        .with_llm(_ToolBindingFakeLLM(responses=responses), max_prompt_tokens=_FAKE_PROMPT_BUDGET)
         .with_loader(load_jinja_template)
     )
     graph = build_finder_graph(builder, tools, "Counter", "src/Counter.sol")
@@ -276,7 +282,7 @@ async def test_read_document_keeps_tool_results_adjacent_under_parallel_calls(tm
     ]
     builder = (
         Builder[None, None, None]()
-        .with_llm(_ToolBindingFakeLLM(responses=responses))
+        .with_llm(_ToolBindingFakeLLM(responses=responses), max_prompt_tokens=_FAKE_PROMPT_BUDGET)
         .with_loader(load_jinja_template)
     )
     graph = build_finder_graph(builder, tools, "Counter", "src/Counter.sol")
@@ -321,7 +327,11 @@ class FakeModelFactory:
 
     @property
     def provider(self):
-        return "anthropic"
+        return _get_service()
+
+    @property
+    def max_prompt_tokens(self) -> int:
+        return _FAKE_PROMPT_BUDGET
 
     def builder_for(self, *args, **kwargs):
         return self.fake

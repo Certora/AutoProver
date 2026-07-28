@@ -1975,8 +1975,8 @@ Method signature: {method_signature}
             # Call LLM using existing infrastructure
 
             try:
-                # Use Claude Opus 4.5 for complex decimal conversion analysis
-                opus_model = "claude-opus-4-5-20251101"
+                # Use Claude Opus for complex decimal conversion analysis
+                opus_model = "claude-opus-5"
                 response = self._make_decimal_summary_call(
                     prompt,
                     opus_model,
