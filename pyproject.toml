@@ -15,7 +15,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@8b9d320316a2cfbfa775da0a961501539a4124f0",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@932cf73faad68266f5dd8b4d6943e82d2b3130ae",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -76,7 +76,7 @@ cpu = ["torch"]
 cuda = ["torch"]
 
 [dependency-groups]
-test = ["pytest>=9.0", "pytest-asyncio>=1.3", "testcontainers>=4.0"]
+test = ["pytest>=9.0", "pytest-asyncio>=1.3", "testcontainers>=4.0", "pytest-xdist"]
 ci = ["pyright"]
 ragbuild = [
     # duplicated! no way to prevent this, says only language where this nonsense is required
@@ -147,6 +147,13 @@ certora-fixconf = "certora_autosetup.fixconf:main"
 autosetup = "certora_autosetup.autosetup.cli:main"
 fixconf = "certora_autosetup.fixconf:main"
 
+# Command-sandbox providers, discovered by composer.sandbox.SandboxConfig.resolve_provider.
+# Adding a provider = adding a line here (and re-running the editable install so the
+# dist-info picks it up); the seam never imports a concrete mechanism itself.
+[project.entry-points."composer.sandbox_providers"]
+none = "composer.sandbox.policy:NoneProvider"
+launcher = "composer.sandbox.launcher:LauncherProvider"
+
 [tool.setuptools.packages.find]
 include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
 
@@ -166,3 +173,9 @@ certora_autosetup = [
     "**/*.j2",
     "**/*.json",
 ]
+
+
+
+[project.entry-points."certora.autoprove.llm_provider"]
+openai = "composer.llm.openai:OPEN_AI_SPEC"
+anthropic = "composer.llm.anthropic:ANTHROPIC_SPEC"

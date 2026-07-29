@@ -18,3 +18,7 @@ local/
 test_scenarios/**/certora/
 test_scenarios/**/out/
 test_scenarios/**/lib/forge-std
+
+# Rust build output (the run-confined command-sandbox workspace). Matches the
+# **/target/ pattern the .dockerignore uses.
+**/target/

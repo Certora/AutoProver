@@ -263,6 +263,10 @@ class SetupProver:
                         full_map[c.contract_name] = formatted
                         self.log(f"  {c.contract_name} -> {formatted} (from pragma)")
             config_dict["compiler_map"] = full_map
+            # certoraRun rejects a conf carrying both compiler_map and the
+            # scalar solc; the map is total over the scene, so the scalar
+            # carries no extra information.
+            ConfigManager.drop_scalars_superseded_by_maps(config_dict)
             self.log(
                 f"Precomputed compiler_map from build artifacts: "
                 f"{len(compiler_map)} contract(s) differ from default {default_solc}"

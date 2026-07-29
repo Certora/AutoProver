@@ -56,8 +56,6 @@ class BuildSystemConfig(ABC):
             Dictionary with Certora config format:
             {
                 "solc": "solc8.24",  # or "0.8.24" if convert_solc=False
-                "solc_optimize": 200,
-                "solc_via_ir": true,
                 "solc_evm_version": "paris",  # only when the project declares one
                 "packages": [...]
             }
@@ -137,9 +135,14 @@ class BuildSystemConfig(ABC):
                 type(self).__name__,
             )
 
-        # Apply via_ir
+        # via_ir is intentionally not inherited: viaIR inlines internal functions, which
+        # might prevent CVL internal summaries from being applied.
         if self.via_ir:
-            result["solc_via_ir"] = True
+            logger.log(
+                f"Ignoring {type(self).__name__}'s via_ir setting",
+                "INFO",
+                type(self).__name__,
+            )
 
         # Honor the project's declared EVM target. Unlike the optimizer setting
         # above, this is not a tuning knob: solc's default EVM version can be

@@ -68,16 +68,21 @@ class ModelProvider:
     def builder_heavy(
         self, *, cache_level: CacheLevel = CacheLevel.SHORT, disable_thinking: bool = False
     ) -> Builder[None, None, None]:
-        return self._builder(self.llm_heavy(cache_level=cache_level, disable_thinking=disable_thinking))
+        return self._builder(self.heavy_model, cache_level=cache_level, disable_thinking=disable_thinking)
 
     def builder_lite(
         self, *, cache_level: CacheLevel = CacheLevel.SHORT, disable_thinking: bool = False
     ) -> Builder[None, None, None]:
-        return self._builder(self.llm_lite(cache_level=cache_level, disable_thinking=disable_thinking))
+        return self._builder(self.lite_model, cache_level=cache_level, disable_thinking=disable_thinking)
 
-    def _builder(self, llm: LLM) -> Builder[None, None, None]:
+    def _builder(
+        self, model: CoreModelProvider, *, cache_level: CacheLevel, disable_thinking: bool
+    ) -> Builder[None, None, None]:
+        """Takes the tier's provider rather than a built model so the builder can also carry that
+        model's compaction threshold."""
         return Builder[None, None, None]().with_llm(
-            llm
+            model.builder_for(cache_level=cache_level, disable_thinking=disable_thinking),
+            max_prompt_tokens=model.max_prompt_tokens,
         ).with_loader(load_jinja_template).with_checkpointer(self.checkpointer)
 
 
