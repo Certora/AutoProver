@@ -2383,15 +2383,25 @@ Method signature: {method_signature}
         self.log(f"Matching summaries for {main_contract}...")
         # Filter to only methods that originate from this contract (compilation unit)
         contract_methods = mp.get_methods_by_originating_contract(main_contract)
+        # For a `library_names` entry, also consider every library method in the scene. A library
+        # is deduped to a single `originatingContract` that need not be `main_contract`, so an
+        # originating-scoped search alone can miss it. Restricted to `isLibrary` methods, since a
+        # library is always a resolvable CVL receiver while an inherited abstract base is not in
+        # every scene; non-library methods stay originating-scoped. Unioned with `contract_methods`
+        # so the candidate set only grows.
+        library_scene_methods = [m for m in mp.get_all_methods() if m.get("isLibrary")]
         matched_functions: Set[str] = set()
         matched_method_tuples: Set[Tuple[str, str]] = set()
 
         for func_name, func_info in self.function_summaries.items():
             self.log(f"Checking for {func_info['description']} usage...", "DEBUG")
+            candidate_methods = (
+                contract_methods + library_scene_methods if func_info.get("library_names") else contract_methods
+            )
 
             # Match by name (disjunctive - match any name in list)
             if "names" in func_info:
-                for method in contract_methods:
+                for method in candidate_methods:
                     if method["name"] in func_info["names"]:
                         # Optional: require the method to belong to one of library_names
                         if func_info.get("library_names"):
@@ -2412,7 +2422,7 @@ Method signature: {method_signature}
 
             # Match by signature (disjunctive - match any signature in list)
             if "signatures" in func_info and func_name not in matched_functions:
-                for method in contract_methods:
+                for method in candidate_methods:
                     method_sig = f"{method['name']}({','.join(method['fullSignature'])})"
                     if method_sig in func_info["signatures"]:
                         # Optional: require the method to belong to one of library_names
