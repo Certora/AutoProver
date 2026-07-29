@@ -100,7 +100,7 @@ def total_budget(
     # to — and feels pressure from — the pool directly.
     prev_accum = _budget_accumulator.set(pool)
     try:
-        yield None
+        yield
     finally:
         _budget_accumulator.reset(prev_accum)
         _cost_centers.reset(prev)
@@ -147,7 +147,7 @@ def token_cost_budget(
     accum = BudgetCounter(total_budget=total_cost, curr_cost=0.0)
     prev = _budget_accumulator.set(accum)
     try:
-        yield None
+        yield
     finally:
         _budget_accumulator.reset(prev)
 
