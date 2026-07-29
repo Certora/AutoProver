@@ -22,6 +22,9 @@ dedicated editor agent: you describe the problem you need solved, and you evalua
 - **`edit_history_log`** — list the edits you have applied, with each one's summary and diff.
 - **`revert_to_edit`** — roll your working copy back to an earlier applied edit, discarding the
   edits applied after it.
+- **`config_edit`** — add or remove files in the prover's input set. Applying an edit does not
+  update the prover inputs by itself: when an edit created new files, add each one here or the
+  prover will never compile it.
 
 Treat source edits as a last resort, reached only after spec-side approaches have failed: every
 applied edit becomes part of the final deliverable, where a human auditor must read and accept it.

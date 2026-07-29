@@ -33,6 +33,11 @@ prescription you cannot honor within the charter is refused, not obeyed.
 - **VFS edits** (`edit_file`, `put_file`) — `edit_file` performs a targeted old-string/new-string
   replacement in an existing file; `put_file` writes whole files and is how you create new ones
   (e.g. a harness contract).
+- **`erc7201_slot`** / **`keccak256_string`** — hash constants. The former mints the ERC-7201
+  storage location (and annotation) for a namespace id; the latter reproduces a plain
+  `keccak256("...")` value as a hex literal. Every hash constant you write comes from one of
+  these tools — never derive one yourself, and mind which formula the situation calls for: the
+  two differ.
 - **`request_review`** — submit your current edits and report to a reviewer. The reviewer either
   approves or returns feedback to address. Approval is stamped against the exact state of your
   edits; changing anything afterwards voids it and you must request review again.

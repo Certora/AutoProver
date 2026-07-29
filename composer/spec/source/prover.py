@@ -51,6 +51,18 @@ from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR
 _logger = logging.getLogger("composer.prover")
 
 
+OVERLAY_OWNED_KEYS: frozenset[str] = frozenset({
+    # forced by prover_config_overlay
+    "verify", "parametric_contracts", "optimistic_loop", "rule_sanity",
+    # set per-run by verify_spec
+    "rule", "msg",
+})
+"""Config keys the run pipeline forces onto the base config after spreading it: a
+base-config entry under one of these is silently overridden at run and dump time.
+The author's editable-flag registry (``author.EDITABLE_FLAGS``) must stay disjoint
+from this set, or an "accepted" flag edit would never reach the prover."""
+
+
 def prover_config_overlay(base_config: dict, *, main_contract: str, verify_target: str) -> dict:
     """The fixed prover settings the source pipeline layers on top of the base config.
 

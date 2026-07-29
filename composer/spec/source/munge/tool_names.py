@@ -7,6 +7,7 @@ graphcore and are not repeated here.
 # The author's edit-management surface.
 CODE_EDITOR = "code_editor"
 COMMIT_EDIT = "commit_edit"
+CONFIG_EDIT = "config_edit"
 EDIT_HISTORY_LOG = "edit_history_log"
 REVERT_TO_EDIT = "revert_to_edit"
 
@@ -14,3 +15,7 @@ REVERT_TO_EDIT = "revert_to_edit"
 REQUEST_REVIEW = "request_review"
 SUBMIT_EDIT = "submit_edit"
 GIVE_UP = "give_up"
+
+# The editor sub-agent's helpers.
+ERC7201_SLOT = "erc7201_slot"
+KECCAK_STRING = "keccak256_string"

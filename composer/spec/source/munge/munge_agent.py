@@ -13,7 +13,11 @@ from langchain_core.messages import ToolMessage
 from .edit_store import EditStore
 from .vfs_diff import summarize_changes
 from .compile_check import check_edits_compile, BuildFailed, EditsNotCompiled
-from .tool_names import CODE_EDITOR, COMMIT_EDIT, GIVE_UP, REQUEST_REVIEW, SUBMIT_EDIT
+from .erc7201 import ComputeErc7201Slot, ComputeKeccakString
+from .tool_names import (
+    CODE_EDITOR, COMMIT_EDIT, CONFIG_EDIT, ERC7201_SLOT, GIVE_UP, KECCAK_STRING,
+    REQUEST_REVIEW, SUBMIT_EDIT,
+)
 
 from graphcore.graph import FlowInput
 from graphcore.tools.vfs import VFSState, VFSAccessor, VFSInput
@@ -88,8 +92,9 @@ class EditMungeTool(WithAsyncDependencies[str, MungeToolDeps], WithInjectedId, W
     by the agent.
 
     Good request: "The inline assembly access in `readStoreData()` is crashing the prover. Can you rewrite it to use standard Solidity?"
-    Good request: "The iterative computation of sqrt inlined in `computePriceCurve()` needs to be summarized to avoid a timeout, can you refactor it into 
+    Good request: "The iterative computation of sqrt inlined in `computePriceCurve()` needs to be summarized to avoid a timeout, can you refactor it into
     a standalone function"
+    Good request: "The contract keeps its state in a struct at a hand-derived constant storage slot, which the prover's storage analysis cannot resolve. Can you move it to standard, annotated ERC-7201 namespaced storage?"
     Bad request: "Add the following line to the beginning of `transferAdmin()`: `require(msg.sender == address(this))`"
     Bad request: "Delete the body of `compoundInterest()`, it's too difficult for the prover."
     """
@@ -125,6 +130,12 @@ class EditMungeTool(WithAsyncDependencies[str, MungeToolDeps], WithInjectedId, W
             diff = summarize_changes(
                 res, deps.accessor, self.state["vfs"]
             )
+            added_note = (
+                f"\n**New files**: {', '.join(d.added_files)} — after applying this edit, add "
+                f"them to the prover's inputs with `{CONFIG_EDIT}`, or the prover will never "
+                "compile them.\n"
+                if d.added_files else ""
+            )
             result_msg = f"""
 The editor finished responding to your request.
 
@@ -136,7 +147,7 @@ The editor finished responding to your request.
 
 **Integration notes**:
 {"(None provided)" if not d.how_to_apply else d.how_to_apply}
-
+{added_note}
 You can apply this edit to your working source by calling `{COMMIT_EDIT}({application_key})`
 
 -----
@@ -401,7 +412,11 @@ def editor_tool(
         .with_sys_prompt_template("munge_editor_system.j2")
         .with_initial_prompt("Respond to the following edit request:")
         .with_tools(edit_tools.write_tools)
-        .with_tools([editor_ctx.get_memory_tool(), request_review, submit, give_up])
+        .with_tools([
+            editor_ctx.get_memory_tool(), request_review, submit, give_up,
+            ComputeErc7201Slot.as_tool(ERC7201_SLOT),
+            ComputeKeccakString.as_tool(KECCAK_STRING),
+        ])
         .compile_async()
     )
 

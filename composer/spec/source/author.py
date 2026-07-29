@@ -25,7 +25,9 @@ from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, 
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
 from composer.spec.types import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
-from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
+from composer.spec.source.prover import (
+    OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
+)
 from langgraph.graph import MessagesState
 from pathlib import Path
 from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
@@ -43,7 +45,9 @@ from composer.ui.tool_display import tool_display
 
 from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.source.munge.munge_agent import editor_tool
-from composer.spec.source.munge.tool_names import COMMIT_EDIT, EDIT_HISTORY_LOG, REVERT_TO_EDIT
+from composer.spec.source.munge.tool_names import (
+    COMMIT_EDIT, CONFIG_EDIT, EDIT_HISTORY_LOG, REVERT_TO_EDIT,
+)
 from composer.spec.source.munge.vfs_diff import summarize_changes
 
 from graphcore.graph import FlowInput
@@ -238,7 +242,9 @@ class AddFile(BaseModel):
     """
     type: Literal["add_file"]
     file_path: str = Field(description="The relative path to the file to include in the prover inputs")
-    contract_name: SolidityIdentifier | None = Field(description="The Solidity identifier of the contract within `file_path` to ingest into the prover, if it does not match the file stem")
+    contract_name: SolidityIdentifier | None = Field(
+        description="The Solidity identifier of the contract within `file_path`" \
+        "to ingest into the prover, if it does not match the file stem")
 
 class RemoveFile(BaseModel):
     """
@@ -248,35 +254,64 @@ class RemoveFile(BaseModel):
     type: Literal["remove_file"]
     path_to_remove: str = Field(description="The path to the file to remove from prover inputs")
 
-class AddLink(BaseModel):
+class SetStorageExtensionAnnotation(BaseModel):
     """
-    Add a link from one contract to another via a storage field.
-
-    For example, if contract A has a *top-level* storage field
-    `rewardToken` that points to the instance of `B` you should register the link
-    (A, rewardToken, B).
-
-    NB that the link field *must* be at the top-level of the contract's storage. Link flags cannot be used
-    to link fields in structs.
+    Enable or disable the `storage_extension_annotation` prover flag, which makes the
+    prover honor `@custom:storage-location` annotations. Setting it to false removes
+    the flag from the configuration.
     """
-    type: Literal["add_link"]
-    source_contract_name: SolidityIdentifier = Field(description="The Solidity identifier of the contract that is the source of the link")
-    link_field_name: str = Field(description="The storage field holding the link within `source_contract_name`")
-    target_contract_name : SolidityIdentifier = Field(description="The Solidity identifier of the contract held in `link_field_name` of `source_contract_name`")
+    type: Literal["storage_extension_annotation"]
+    value: bool = Field(description="True to enable the flag, false to remove it")
 
-class RemoveLink(BaseModel):
+class SetStorageExtensionHarnesses(BaseModel):
     """
-    Remove a link from one contract to another.
+    Replace the `storage_extension_harnesses` prover flag: (contract, harness) pairs
+    declaring that `harness` describes storage extensions of `contract`. The provided
+    pairs replace any previously configured ones; an empty list removes the flag from
+    the configuration.
     """
-    type: Literal["remove_link"]
-    source_contract_name : SolidityIdentifier = Field(description="The Solidity identifier of the contract whose link should be removed")
-    link_field_name : str = Field(description="The storage field holding the link within `source_contract_name` that should be removed")
+    type: Literal["storage_extension_harnesses"]
+    harnesses: list[tuple[SolidityIdentifier, SolidityIdentifier]] = Field(
+        description="The (extended contract, harness contract) pairs, as Solidity identifiers"
+    )
 
-type ConfigEdit = Annotated[RemoveLink | AddLink | AddFile | RemoveFile, Discriminator("type")]
+class ExtensionSpec(BaseModel):
+    """One extension of a contract: the extending contract and the functions to exclude."""
+    extension: SolidityIdentifier = Field(description="The Solidity identifier of the extension contract")
+    exclude: list[str] = Field(
+        default_factory=list,
+        description="Function names of the extension to exclude; empty to include all",
+    )
+
+class SetContractExtensions(BaseModel):
+    """
+    Replace the `contract_extensions` prover flag: for each extended contract, the
+    extension specs to apply. The provided mapping replaces any previously configured
+    one; an empty mapping removes the flag from the configuration.
+    """
+    type: Literal["contract_extensions"]
+    extensions: dict[SolidityIdentifier, list[ExtensionSpec]] = Field(
+        description="Extended contract -> its extension specs"
+    )
+
+type ConfigEdit = Annotated[
+    AddFile | RemoveFile | SetStorageExtensionAnnotation | SetStorageExtensionHarnesses
+    | SetContractExtensions,
+    Discriminator("type"),
+]
+
+# Conf keys written by the flag edits above. The run overlay silently forces its own
+# keys onto the base config (see OVERLAY_OWNED_KEYS), so an "accepted" edit to one of
+# them would never reach the prover — the two sets must stay disjoint.
+_FLAG_KEYS = frozenset({
+    "storage_extension_annotation", "storage_extension_harnesses", "contract_extensions",
+})
+assert not (_shadowed := _FLAG_KEYS & OVERLAY_OWNED_KEYS), \
+    f"flag edits shadowed by the run overlay: {', '.join(sorted(_shadowed))}"
 
 class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, WithInjectedState[ProverStateExtra]):
     """
-    Call this tool to make a edits to the prover configuration.
+    Call this tool to make edits to the prover configuration.
 
     Each individual edit is applied in some sequence; if the edits conflict with one another the result is undefined.
     The configuration change is atomic: if any of the edits fail to apply the configuration will remain unchanged,
@@ -285,13 +320,6 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
     edits: list[ConfigEdit] = Field(
         description="A list of the atomic edits to make to the file."
     )
-
-    def _parse_link(self, l) -> tuple[str, str, str]:
-        base = l.split("=", 1)
-        assert len(base) == 2, l
-        contract_and_field = base[0].split(":", 1)
-        assert len(contract_and_field), base[0]
-        return (contract_and_field[0], contract_and_field[1], base[1])
 
     @override
     async def run(self) -> Command | str:
@@ -322,33 +350,28 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
                         to_add
                     )
                     curr_config["files"] = new_files
-                case AddLink(source_contract_name=src, link_field_name=fld, target_contract_name=tgt):
-                    if ".sol" in src or ".sol" in tgt:
-                        return ".sol extension found in source/dest of AddLink; did you accidentally provide a filename?"
-                    if "link" in curr_config:
-                        curr_link : list[str] = curr_config["link"]
-                        for l in curr_link:
-                            (curr_src, curr_fld, curr_dst) = self._parse_link(l)
-                            if curr_src == src and curr_fld == fld:
-                                return f"Link for field {fld} in contract {src} already exists -> {curr_dst}"
-                    new_links = list(curr_config.get("link", []))
-                    new_links.append(f"{src}:{fld}={tgt}")
-                    curr_config["link"] = new_links
-                case RemoveLink(source_contract_name=src, link_field_name=fld):
-                    if "link" not in curr_config:
-                        return "No links configured, nothing to remove"
-                    new_links = []
-                    found = False
-                    curr_links = curr_config["link"]
-                    for (i, l) in enumerate(curr_links):
-                        (curr_src, curr_fld, _) = self._parse_link(l)
-                        if curr_src == src and curr_fld == fld:
-                            new_links.extend(curr_links[i+1:])
-                            found = True
-                            break
-                    if not found:
-                        return f"No existing link found that matches {src}:{fld}"
-                    curr_config["link"] = new_links
+                case SetStorageExtensionAnnotation(value=value):
+                    if value:
+                        curr_config["storage_extension_annotation"] = True
+                    else:
+                        curr_config.pop("storage_extension_annotation", None)
+                case SetStorageExtensionHarnesses(harnesses=harnesses):
+                    if any(".sol" in c or ".sol" in h for (c, h) in harnesses):
+                        return ".sol extension found in a harness pair; provide contract identifiers, not filenames"
+                    if harnesses:
+                        curr_config["storage_extension_harnesses"] = [f"{c}={h}" for (c, h) in harnesses]
+                    else:
+                        curr_config.pop("storage_extension_harnesses", None)
+                case SetContractExtensions(extensions=extensions):
+                    if any(".sol" in c or any(".sol" in e.extension for e in specs)
+                           for (c, specs) in extensions.items()):
+                        return ".sol extension found in a contract extension; provide contract identifiers, not filenames"
+                    if extensions:
+                        curr_config["contract_extensions"] = {
+                            c: [e.model_dump() for e in specs] for (c, specs) in extensions.items()
+                        }
+                    else:
+                        curr_config.pop("contract_extensions", None)
 
         return tool_state_update(
             self.tool_call_id,
@@ -464,6 +487,7 @@ def generate_edit_management_tools(
         ApplyEditTool.bind(edit).as_tool(COMMIT_EDIT),
         EditHistoryLog.bind(HistoryDeps(live_tools.mat, edit)).as_tool(EDIT_HISTORY_LOG),
         RevertToEdit.bind(edit).as_tool(REVERT_TO_EDIT),
+        ConfigEditTool.as_tool(CONFIG_EDIT),
     ]
 
 
@@ -489,8 +513,15 @@ class _LastAttemptEdits(BaseModel):
     draft paired with stale history. Accepted risk: that resume degrades to
     the pre-snapshot behavior (a draft referencing edits that were not
     restored), and the window is two consecutive store puts.
+
+    ``config`` snapshots the prover config for the same reason the history is
+    snapshotted: ``config_edit`` changes (e.g. an added file registering an
+    editor-minted harness) must survive the restart together with the working
+    copy they describe. None on records written before the field existed, in
+    which case resume falls back to the initial config.
     """
     version_history: list[str]
+    config: dict | None = None
 
 
 LAST_ATTEMPT_EDITS_KEY = CacheKey[CVLGeneration, _LastAttemptEdits]("last_attempt_edits")
@@ -649,20 +680,24 @@ async def batch_cvl_generation(
     # crash after edits but before any draft still restores the fork.
     restored_history: list[str] = []
     restored_vfs: dict[str, str] = {}
+    restored_config: dict = init_config
     resume_note: list[str | dict] = []
     if editing is not None:
         prior = await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_get(_LastAttemptEdits)
-        if prior is not None and prior.version_history:
-            tail = await editing.store.read(prior.version_history[-1])
-            assert tail is not None, (
-                f"recovered edit {prior.version_history[-1]} absent from the edit store"
-            )
-            restored_history = prior.version_history
-            restored_vfs = tail.vfs
-            resume_note = [
-                "Source edits applied during your previous attempt at this task have "
-                f"been restored to your working copy; use `{EDIT_HISTORY_LOG}` to review them."
-            ]
+        if prior is not None:
+            if prior.config is not None:
+                restored_config = prior.config
+            if prior.version_history:
+                tail = await editing.store.read(prior.version_history[-1])
+                assert tail is not None, (
+                    f"recovered edit {prior.version_history[-1]} absent from the edit store"
+                )
+                restored_history = prior.version_history
+                restored_vfs = tail.vfs
+                resume_note = [
+                    "Source edits applied during your previous attempt at this task have "
+                    f"been restored to your working copy; use `{EDIT_HISTORY_LOG}` to review them."
+                ]
 
     try:
         res_state = await run_cvl_generator(
@@ -671,7 +706,7 @@ async def batch_cvl_generation(
             description=description,
             in_state=SourceCVLGenerationInput(
                 curr_spec=None,
-                config=init_config,
+                config=restored_config,
                 input=resume_note,
                 required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
                 rule_skips={},
@@ -691,7 +726,9 @@ async def batch_cvl_generation(
             hist = last_state.get("version_history")
             if hist is not None:
                 await ctx.child(LAST_ATTEMPT_EDITS_KEY).cache_put(
-                    _LastAttemptEdits(version_history=list(hist))
+                    _LastAttemptEdits(
+                        version_history=list(hist), config=last_state.get("config"),
+                    )
                 )
 
     assert "result" in res_state

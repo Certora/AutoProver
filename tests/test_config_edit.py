@@ -9,9 +9,14 @@ import pytest
 from langgraph.graph import MessagesState
 
 from composer.spec.source.author import (
-    ConfigEditTool, AddFile, RemoveFile, AddLink, RemoveLink,
+    ConfigEditTool, AddFile, RemoveFile,
+    SetStorageExtensionAnnotation, SetStorageExtensionHarnesses, SetContractExtensions,
+    ExtensionSpec,
 )
-from composer.spec.source.prover import ProverStateExtra
+from composer.spec.source.munge.tool_names import CONFIG_EDIT
+from composer.spec.source.prover import (
+    OVERLAY_OWNED_KEYS, ProverStateExtra, prover_config_overlay,
+)
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
 
@@ -27,7 +32,7 @@ class ConfigTestState(MessagesState, ProverStateExtra):
     pass
 
 
-_EDIT = "config_edit"
+_EDIT = CONFIG_EDIT
 TOOL = ConfigEditTool.as_tool(_EDIT)
 
 
@@ -44,12 +49,16 @@ def _remove_file(path: str) -> dict:
     return RemoveFile(type="remove_file", path_to_remove=path).model_dump()
 
 
-def _add_link(src: str, field: str, tgt: str) -> dict:
-    return AddLink(type="add_link", source_contract_name=src, link_field_name=field, target_contract_name=tgt).model_dump()
+def _set_annotation(value: bool) -> dict:
+    return SetStorageExtensionAnnotation(type="storage_extension_annotation", value=value).model_dump()
 
 
-def _remove_link(src: str, field: str) -> dict:
-    return RemoveLink(type="remove_link", source_contract_name=src, link_field_name=field).model_dump()
+def _set_harnesses(*pairs: tuple[str, str]) -> dict:
+    return SetStorageExtensionHarnesses(type="storage_extension_harnesses", harnesses=list(pairs)).model_dump()
+
+
+def _set_extensions(extensions: dict) -> dict:
+    return SetContractExtensions(type="contract_extensions", extensions=extensions).model_dump()
 
 
 def _edit(*edits: dict) -> ToolCallDict:
@@ -63,13 +72,10 @@ def _edit(*edits: dict) -> ToolCallDict:
 
 def _scenario(
     files: list[str] | None = None,
-    links: list[str] | None = None,
 ):
     config: dict = {}
     if files is not None:
         config["files"] = files
-    if links is not None:
-        config["link"] = links
     return Scenario(ConfigTestState, TOOL).init(
         config=config, rule_skips={},
     )
@@ -81,10 +87,6 @@ def _config(st: ConfigTestState) -> dict:
 
 def _files(st: ConfigTestState) -> list[str]:
     return st["config"]["files"]
-
-
-def _links(st: ConfigTestState) -> list[str]:
-    return st["config"]["link"]
 
 
 def _edit_response(st: ConfigTestState) -> str:
@@ -144,60 +146,80 @@ class TestRemoveFile:
 
 
 # =========================================================================
-# AddLink
+# Flag edits
 # =========================================================================
 
 
-class TestAddLink:
-    async def test_sol_extension_rejected(self):
-        links = await _scenario(files=[], links=[]).turn(
-            _edit(_add_link("Foo.sol", "token", "Bar")),
-        ).map_run(_links)
-        assert links == []
-
-    async def test_duplicate_link_rejected(self):
-        links = await _scenario(files=[], links=["Foo:token=Bar"]).turn(
-            _edit(_add_link("Foo", "token", "Baz")),
-        ).map_run(_links)
-        assert links == ["Foo:token=Bar"]
-
-    async def test_add_link_appends(self):
-        links = await _scenario(files=[], links=[]).turn(
-            _edit(_add_link("Foo", "token", "Bar")),
-        ).map_run(_links)
-        assert "Foo:token=Bar" in links
-
-    async def test_add_link_preserves_existing(self):
-        links = await _scenario(files=[], links=["A:b=C"]).turn(
-            _edit(_add_link("Foo", "token", "Bar")),
-        ).map_run(_links)
-        assert "A:b=C" in links
-        assert "Foo:token=Bar" in links
-
-
-# =========================================================================
-# RemoveLink
-# =========================================================================
-
-
-class TestRemoveLink:
-    async def test_remove_link(self):
-        links = await _scenario(files=[], links=["Foo:token=Bar", "A:b=C"]).turn(
-            _edit(_remove_link("Foo", "token")),
-        ).map_run(_links)
-        assert links == ["A:b=C"]
-
-    async def test_remove_no_links_configured(self):
+class TestFlagEdits:
+    async def test_annotation_set(self):
         config = await _scenario(files=[]).turn(
-            _edit(_remove_link("Foo", "token")),
+            _edit(_set_annotation(True)),
         ).map_run(_config)
-        assert "link" not in config
+        assert config["storage_extension_annotation"] is True
 
-    async def test_remove_link_not_found(self):
-        links = await _scenario(files=[], links=["A:b=C"]).turn(
-            _edit(_remove_link("Foo", "token")),
-        ).map_run(_links)
-        assert links == ["A:b=C"]
+    async def test_annotation_false_deletes(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_annotation(True), _set_annotation(False)),
+        ).map_run(_config)
+        assert "storage_extension_annotation" not in config
+
+    async def test_harnesses_set_encodes_pairs(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_harnesses(("Vault", "VaultHarness"), ("Pool", "PoolHarness"))),
+        ).map_run(_config)
+        assert config["storage_extension_harnesses"] == ["Vault=VaultHarness", "Pool=PoolHarness"]
+
+    async def test_harnesses_empty_deletes(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_harnesses(("Vault", "VaultHarness")), _set_harnesses()),
+        ).map_run(_config)
+        assert "storage_extension_harnesses" not in config
+
+    async def test_harnesses_sol_extension_rejected(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_harnesses(("Vault.sol", "VaultHarness"))),
+        ).map_run(_config)
+        assert "storage_extension_harnesses" not in config
+
+    async def test_extensions_set(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_extensions({"Vault": [ExtensionSpec(extension="Ext")]})),
+        ).map_run(_config)
+        assert config["contract_extensions"] == {"Vault": [{"extension": "Ext", "exclude": []}]}
+
+    async def test_extensions_exclude_carried(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_extensions({"Vault": [ExtensionSpec(extension="Ext", exclude=["burn"])]})),
+        ).map_run(_config)
+        assert config["contract_extensions"] == {"Vault": [{"extension": "Ext", "exclude": ["burn"]}]}
+
+    async def test_extensions_empty_deletes(self):
+        config = await _scenario(files=[]).turn(
+            _edit(
+                _set_extensions({"Vault": [ExtensionSpec(extension="Ext")]}),
+                _set_extensions({}),
+            ),
+        ).map_run(_config)
+        assert "contract_extensions" not in config
+
+    async def test_extensions_sol_extension_rejected(self):
+        config = await _scenario(files=[]).turn(
+            _edit(_set_extensions({"Vault": [ExtensionSpec(extension="Ext.sol")]})),
+        ).map_run(_config)
+        assert "contract_extensions" not in config
+
+
+# =========================================================================
+# Overlay ownership
+# =========================================================================
+
+
+class TestOverlayOwnership:
+    async def test_overlay_keys_are_all_owned(self):
+        """Every key the run overlay forces must appear in OVERLAY_OWNED_KEYS, or the
+        flag-edit disjointness guard is checking against an understated set."""
+        overlaid = prover_config_overlay({}, main_contract="C", verify_target="C:x.spec")
+        assert set(overlaid) <= OVERLAY_OWNED_KEYS
 
 
 # =========================================================================
