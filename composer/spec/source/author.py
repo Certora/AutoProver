@@ -32,7 +32,7 @@ from langgraph.graph import MessagesState
 from pathlib import Path
 from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
 from composer.spec.service_host import ServiceHost, Sort
-from composer.workflow.services import CacheLevel
+from composer.llm.provider import CacheLevel
 from composer.pipeline.ptypes import GaveUp
 
 from langgraph.types import Command

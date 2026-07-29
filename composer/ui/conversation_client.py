@@ -101,4 +101,3 @@ class ConsoleConversationClient():
             await self.drain_task
         except Exception:
             print("Conversation cleanup failed")
-

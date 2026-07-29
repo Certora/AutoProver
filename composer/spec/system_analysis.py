@@ -91,7 +91,7 @@ def _validate_connectivity(
 async def run_component_analysis[T: BaseApplication](
     ty: type[T],
     child_ctxt: WorkflowContext[T],
-    input: SystemDoc,
+    input: SystemDoc | None,
     env: ServiceHost,
     extra_input: list[str | dict],
     expected_main_id: SolidityIdentifier | None = None,
@@ -99,6 +99,8 @@ async def run_component_analysis[T: BaseApplication](
     """Analyze application components from a system doc and optionally source code."""
     if (cached := await child_ctxt.cache_get(ty)) is not None:
         return cached
+
+    assert input is not None or env.sort != "greenfield"
 
     memory = child_ctxt.get_memory_tool()
 
@@ -123,19 +125,23 @@ async def run_component_analysis[T: BaseApplication](
     ).with_sys_prompt_template(
         "application_analysis_system.j2",
         sort=env.sort,
+        has_doc=input is not None
     ).with_tools(
         [memory, *get_rough_draft_tools(AnalysisState), *env.analysis_tools]
     ).with_initial_prompt_template(
         "application_analysis_prompt.j2",
         sort=env.sort,
+        has_doc=input is not None
     )
 
     graph = b.compile_async()
-    inputs : list[str | dict] = [
-        "The system document is as follows",
-        input.content.to_dict(),
-        *extra_input
-    ]
+    inputs : list[str | dict] = []
+    if input is not None:
+        inputs.extend([
+            "The system document is as follows",
+            input.content.to_dict()
+        ])
+    inputs.extend(extra_input)
 
     flow_input = AnalysisInput(input=inputs, did_read=False, memory=None)
 

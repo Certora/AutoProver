@@ -49,6 +49,7 @@ from certora_autosetup.utils.enhanced_config_manager import (
 
 # PreAudit imports
 from certora_autosetup.utils.prover_runner import ProverRunner
+from certora_autosetup.utils.runner_types import ProverResult
 from certora_autosetup.utils.scope import Scope
 from certora_autosetup.utils.types import ContractHandle
 
@@ -144,6 +145,7 @@ class CallResolutionPhase:
         summary_setup: SummarySetup,
         library_resolver: Callable[[List[str]], List[ContractHandle]],
         is_library: Callable[[str], bool],
+        typecheck_fix: Callable[[Path, str], bool],
         max_prover_invocations: int = 10,
         verbose: bool = False,
         skip_proxy_detection: bool = False,
@@ -155,6 +157,9 @@ class CallResolutionPhase:
         self.config_file = config_file
         self.reports_dir = reports_dir
         self.extra_args = extra_args
+        # Fixes the conf when an iteration fails because a contract/summary brought into
+        # the scene last iteration doesn't typecheck; returns whether it changed anything.
+        self.typecheck_fix = typecheck_fix
 
         config_info = self.config_manager.extract_contract_and_spec_from_config(
             config_file, scope.project_root
@@ -487,6 +492,28 @@ class CallResolutionPhase:
         """
         logger.debug(f"[{self.contract_name}] Running prover for iteration {self.current_iteration}")
 
+        prover_result = await self._submit_call_resolution_run()
+
+        # The run can fail because a summary/contract brought into the scene last iteration
+        # doesn't typecheck; on failure, change the conf via the typechecker loop and retry the
+        # run once (the helper re-reads the conf the fixer just rewrote).
+        if not prover_result.success and await asyncio.to_thread(
+            self.typecheck_fix, self.config_file, f"call resolution {self.contract_name}"
+        ):
+            logger.info("Typechecker changed the conf; retrying the prover run")
+            prover_result = await self._submit_call_resolution_run()
+
+        if not prover_result.success:
+            logger.error(f"Prover execution failed: {prover_result.error_message or 'Unknown prover error'}")
+            return None
+
+        job_id = prover_result.job_handle.job_id
+        unresolved_calls = self.prover_runner.extract_unresolved_calls(job_id)
+        logger.info(f"Found {len(unresolved_calls)} unresolved calls")
+        return unresolved_calls
+
+    async def _submit_call_resolution_run(self) -> ProverResult:
+        """Build the call-resolution job spec from the current conf, submit it, record the run."""
         config_content = FileContent.from_file(self.config_file)
         job_spec = ProverJobSpec(
             contract_name=self.contract_name,
@@ -497,19 +524,9 @@ class CallResolutionPhase:
                 self.contract_name, self.config_file, suffix=f"(iteration {self.current_iteration})"
             ),
         )
-
         prover_result = await self.prover_runner.check_with_prover(job_spec)
         self._prover_runs.append((self.current_iteration, prover_result.job_url))
-
-        if not prover_result.success:
-            error_msg = prover_result.error_message or "Unknown prover error"
-            logger.error(f"Prover execution failed: {error_msg}")
-            return None
-
-        job_id = prover_result.job_handle.job_id
-        unresolved_calls = self.prover_runner.extract_unresolved_calls(job_id)
-        logger.info(f"Found {len(unresolved_calls)} unresolved calls")
-        return unresolved_calls
+        return prover_result
 
     def _write_call_resolution_spec_file(self) -> Optional[Path]:
         """

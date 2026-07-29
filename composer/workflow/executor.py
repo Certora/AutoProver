@@ -5,9 +5,7 @@ from dataclasses import dataclass
 import pathlib
 
 from langchain_core.runnables import RunnableConfig
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
-
 
 from graphcore.graph import Builder
 from graphcore.tools.vfs import VFSState, VFSAccessor
@@ -22,7 +20,7 @@ from composer.input.files import (
 
 from composer.llm.provider import ModelProvider
 
-from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools
+from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools, DEFAULT_KB_NS as _KB_NS
 from composer.workflow.factories import get_vfs_tools, get_memory_ns
 from composer.workflow.services import standard_connections, IndexedConnections
 from composer.workflow.types import PromptParams, WorkflowSuccess, WorkflowFailure, WorkflowCrash, WorkflowResult
@@ -42,6 +40,7 @@ from composer.tools.search import cvl_manual_tools, cvl_manual_search
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import CodeGenIOHandler, WorkflowPurpose
 from composer.io.context import with_handler, run_graph
+from composer.diagnostics.timing import set_current_task_id
 from composer.ui.codegen_events import CodeGenEventHandler
 from composer.core.state import AIComposerInput, AIComposerExtra
 from composer.prover.agentic_analyzer import AgenticCexHandler
@@ -57,7 +56,16 @@ from composer.workflow.codegen_store import CodegenStore
 from composer.workflow.summarization import SummaryGeneration
 
 
-_KB_NS = ("cvl",)
+# Codegen runs through ``run_graph`` rather than ``run_task``, so it has no
+# task_id of its own. Set one explicitly around the main loop so the harness
+# tape can address codegen LLM calls (and so timing attributes to a real task).
+CODEGEN_TASK_ID = "codegen"
+
+# create_resume_commentary runs *after* the main graph returns — a bare
+# structured-output call, not part of the agent loop. Its own task_id keeps it in
+# a dedicated harness lane so the agent can't consume its scripted response (and a
+# mismatch surfaces as a clean codegen-lane exhaustion rather than here).
+RESUME_COMMENTARY_TASK_ID = "resume-commentary"
 
 
 class _ExecutorOptions(WorkflowOptions, ModelOptionsBase, Protocol):
@@ -317,7 +325,7 @@ async def _run_codegen(
     memory = conn.memory(get_memory_ns(mem_root, "composer"))
     extra_tools.append(memory)
 
-    research_tool, cvl_builder = _cvl_knowledge_setup(llm.builder_for(), rag_db, conn, workflow_options.recursion_limit)
+    research_tool, cvl_builder = _cvl_knowledge_setup(llm, rag_db, conn, workflow_options.recursion_limit)
     extra_tools.append(research_tool)
 
     # VFS tooling: the mutable layer (its materializer is shared into the
@@ -352,7 +360,7 @@ async def _run_codegen(
     )
 
     crypto_tools = _codegen_author_tools(cex_handler, prover_opts, rag_db, vfs_tooling)
-    workflow_builder = _codegen_builder(llm.builder_for(), crypto_tools)
+    workflow_builder = _codegen_builder(llm, crypto_tools)
 
     workflow_graph = workflow_builder.with_tools(extra_tools).with_sys_prompt_template(
         "system_prompt.j2"
@@ -414,13 +422,15 @@ async def _run_codegen(
 
     try:
         async with with_handler(handler, CodeGenEventHandler(handler)):
-            final_state = await run_graph(workflow_exec, work_context, flow_input, config, description="Code generation")
+            with set_current_task_id(CODEGEN_TASK_ID):
+                final_state = await run_graph(workflow_exec, work_context, flow_input, config, description="Code generation")
 
         result = final_state.get("generated_code", None)
         if result is None:
             return WorkflowFailure()
 
-        res_commentary = await create_resume_commentary(final_state, llm=llm.builder_for())
+        with set_current_task_id(RESUME_COMMENTARY_TASK_ID):
+            res_commentary = await create_resume_commentary(final_state, llm=llm.builder_for())
         await audit_store.register_complete(
             thread_id, materializer.iterate(final_state), res_commentary.interface_path, res_commentary.commentary
         )
@@ -439,7 +449,7 @@ async def _run_codegen(
 
 
 def _cvl_knowledge_setup(
-    llm: BaseChatModel,
+    llm: ModelProvider,
     rag_db: ComposerRAGDB,
     conn: IndexedConnections,
     recursion_limit: int,
@@ -454,7 +464,7 @@ def _cvl_knowledge_setup(
     )
     builder = (
         Builder()
-        .with_llm(llm)
+        .with_llm(llm.builder_for(), max_prompt_tokens=llm.max_prompt_tokens)
         .with_loader(load_jinja_template)
         .with_checkpointer(conn.checkpointer)
     )
@@ -531,7 +541,7 @@ def _codegen_author_tools(
     ]
 
 
-def _codegen_builder(llm: BaseChatModel, crypto_tools: list[BaseTool]) -> Builder:
+def _codegen_builder(llm: ModelProvider, crypto_tools: list[BaseTool]) -> Builder:
     """The codegen workflow Builder with the author tool set bound."""
     return Builder().with_context(
         AIComposerContext
@@ -544,7 +554,7 @@ def _codegen_builder(llm: BaseChatModel, crypto_tools: list[BaseTool]) -> Builde
     ).with_state(
         AIComposerState
     ).with_llm(
-        llm
+        llm.builder_for(), max_prompt_tokens=llm.max_prompt_tokens
     ).with_output_key(
         "generated_code"
     ).with_summary_config(

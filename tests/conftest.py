@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import psycopg
 import pytest
+from pytest import MonkeyPatch
 import pytest_asyncio
 from numpy import ndarray
 
@@ -26,7 +27,7 @@ from langchain_core.language_models.fake import FakeListLLM
 
 from psycopg.rows import dict_row
 from psycopg.connection_async import AsyncConnection
-from psycopg.sql import SQL, Identifier
+from psycopg.sql import SQL, Identifier, Literal
 from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
 import composer.diagnostics.timing as timing_mod
@@ -135,6 +136,108 @@ def qna_factory() -> Callable[[], QnATransformer]:
 # =========================================================================
 # Testcontainers: Postgres + indexed store
 # =========================================================================
+
+import pathlib
+import shutil
+
+@dataclass
+class ScenarioProvider:
+    _test_roots: pathlib.Path
+    _work_dir: pathlib.Path
+
+    def by_name(self, nm: str) -> pathlib.Path:
+        """Return a private copy of the scenario, made under this test's tmp dir.
+
+        The pipeline runs in-place — it materializes fixed-name spec/conf files
+        and dumps artifacts into the scenario directory — so tests sharing the
+        checked-in directory race under xdist and pollute the working tree.
+        """
+        src = self._test_roots / nm
+        assert src.is_dir(), f"{nm} is not a valid scenario name"
+        dst = self._work_dir / nm
+        shutil.copytree(
+            src,
+            dst,
+            ignore=shutil.ignore_patterns(".certora_internal", ".CertoraProverLiteReports", "emv-*"),
+        )
+        return dst
+
+
+@pytest.fixture
+def scenario_provider(tmp_path: pathlib.Path) -> ScenarioProvider:
+    scenario_dir = pathlib.Path(__file__).parent.parent / "test_scenarios"
+    return ScenarioProvider(scenario_dir, tmp_path)
+
+def _db_url(pg: "PostgresContainer", database: str) -> str:
+    return (
+        f"postgresql://{pg.username}:{pg.password}"
+        f"@{pg.get_container_host_ip()}:{pg.get_exposed_port(5432)}/{database}"
+    )
+
+_RAG_DB = "rag_db"
+# DBs that hold pgvector embeddings and need the extension (the store role's DB
+# + the RAG DB); checkpoint/memory are plain.
+_VECTOR_DBS = ("langgraph_store_db", _RAG_DB)
+
+
+# graphcore's Postgres memory backend doesn't self-create its schema; this mirrors
+# the memories_fs DDL in graphcore/tests/conftest.py (keep in sync if that moves).
+_MEMORIES_DDL = """
+CREATE TABLE IF NOT EXISTS memories_fs(
+    namespace TEXT NOT NULL,
+    entry_name TEXT NOT NULL,
+    full_path TEXT,
+    parent_path TEXT,
+    is_directory BOOL NOT NULL,
+    contents TEXT,
+    FOREIGN KEY(parent_path, namespace) REFERENCES memories_fs(full_path, namespace) ON DELETE CASCADE,
+    UNIQUE (namespace, full_path),
+    UNIQUE (namespace, parent_path, entry_name),
+    CHECK (parent_path is NOT NULL OR (full_path = '/memories' AND is_directory AND entry_name = 'memories')),
+    CHECK (parent_path is NULL OR (full_path = concat(parent_path, '/', entry_name))),
+    CHECK (contents IS NOT NULL != is_directory)
+);
+CREATE INDEX IF NOT EXISTS memories_namespace_path ON memories_fs(namespace, full_path text_pattern_ops);
+"""
+
+@dataclass
+class LanggraphDBSetup:
+    rag_db: str
+
+@pytest_asyncio.fixture(scope="session")
+async def langgraph_db() -> AsyncIterator[LanggraphDBSetup | None]:
+    if not _HAS_TESTCONTAINERS:
+        pytest.skip("No pgcontainers")
+    with PostgresContainer("pgvector/pgvector:pg16") as pg_container:
+        import composer.workflow.services as services
+        admin_url = pg_container.get_connection_url(driver=None)
+        with psycopg.connect(admin_url, autocommit=True) as admin:
+            for cfg in services._DATABASE_CONFIGS.values():
+                admin.execute(SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                    Identifier(cfg["user"]), Literal(cfg["password"])))
+                admin.execute(SQL("CREATE DATABASE {} OWNER {}").format(
+                    Identifier(cfg["database"]), Identifier(cfg["user"])))
+            admin.execute(SQL("CREATE DATABASE {}").format(Identifier(_RAG_DB)))
+        # pgvector must be installed by a superuser, so do it on the admin connection.
+        for db in _VECTOR_DBS:
+            with psycopg.connect(_db_url(pg_container, db), autocommit=True) as conn:
+                conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+        # The memory backend doesn't self-create its schema (the checkpointer/store do,
+        # via .setup()), so create memories_fs as the memory role (its DB owner).
+        mem = services._DATABASE_CONFIGS["memory"]
+        mem_url = (
+            f"postgresql://{mem['user']}:{mem['password']}"
+            f"@{pg_container.get_container_host_ip()}:{pg_container.get_exposed_port(5432)}/{mem['database']}"
+        )
+        with psycopg.connect(mem_url, autocommit=True) as conn:
+            conn.execute(_MEMORIES_DDL)
+
+        with MonkeyPatch().context() as mp:
+            mp.setenv("CERTORA_AI_COMPOSER_PGHOST", pg_container.get_container_host_ip())
+            mp.setenv("CERTORA_AI_COMPOSER_PGPORT", str(pg_container.get_exposed_port(5432)))
+            yield LanggraphDBSetup(_db_url(pg_container, _RAG_DB))
+
 
 
 @pytest.fixture(scope="session")
