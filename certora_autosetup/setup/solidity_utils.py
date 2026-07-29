@@ -392,7 +392,7 @@ def find_libraries_used_by(
     """
     used: set[str] = set()
     for method in methods:
-        if contract_name not in method.get("originatingContracts", []):
+        if contract_name not in method["originatingContracts"]:
             continue
         ref = method.get("contractName")
         if ref in library_name_to_file:

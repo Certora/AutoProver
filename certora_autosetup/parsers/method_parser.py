@@ -40,7 +40,7 @@ class MethodParser:
 
     def get_methods_by_originating_contract(self, contract_name: str) -> List[Dict]:
         """Get all methods whose compilation unit includes ``contract_name``."""
-        return [m for m in self.methods if contract_name in m.get('originatingContracts', [])]
+        return [m for m in self.methods if contract_name in m['originatingContracts']]
 
     def get_methods_by_name(self, method_name: str) -> List[Dict]:
         """Get all methods with a specific name across all contracts."""

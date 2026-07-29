@@ -1725,7 +1725,7 @@ Method signature: {method_signature}
 
         for method in all_methods:
             # Filter to the main contract's compilation unit if specified
-            if main_contract and main_contract not in method.get("originatingContracts", []):
+            if main_contract and main_contract not in method["originatingContracts"]:
                 continue
             method_key = (method["contractName"], method["name"])
 
