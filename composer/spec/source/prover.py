@@ -92,6 +92,16 @@ class NagMarker(TypedDict):
 
 type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort")]
 
+def last_prover_run(
+    l: list[ProverHistoryItem]
+) -> ProverRunLog | None:
+    for i in range(len(l) - 1, -1, -1):
+        it = l[i]
+        if it["sort"] != "run":
+            continue
+        return it
+    return None
+
 def _merge_prover_history(left: list[ProverHistoryItem], right: list[ProverHistoryItem]) -> list[ProverHistoryItem]:
     to_ret = left.copy()
     to_ret.extend(right)
@@ -264,11 +274,10 @@ def get_prover_tool(
             state["curr_spec"]
         )
 
-        if len(state['prover_history']) > 0:
-            last_item = state["prover_history"][-1]
-            if last_item["sort"] == "run" and any(i == "TIMEOUT" for (_,i) in last_item) and last_item["spec_digest"] == spec_hash:
+        if (last_run := last_prover_run(state["prover_history"])) is not None:
+            if any(i == "TIMEOUT" for (_,i) in last_run["prover_results"]) and last_run["spec_digest"] == spec_hash:
                 return "Refusing to re-run prover on identical spec with a known TIMEOUT result; timeouts are not transient " \
-                "errors and will not go away by re-running the tool."
+                    "errors and will not go away by re-running the tool."
 
         conf = state["config"]
         # With a seeded stem, name the spec/conf after it (so on-disk names match the

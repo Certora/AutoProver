@@ -23,7 +23,7 @@ from langchain_core.runnables import Runnable, RunnableLambda
 from composer.spec.types import PropertyFormulation, PropertyType
 from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping, SkippedProperty
 
-from composer.pipeline.core import Delivered
+from composer.pipeline.core import Curtailed, Delivered
 
 from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.source.report import build
@@ -35,8 +35,9 @@ from composer.spec.source.report.grouping import (
 )
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, FormalizedProperty, GaveUpComponent, GroupStatus,
-    Outcome, PropertyGroup, RuleVerdict, SkippedClaim,
+    AutoProverReport, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty,
+    FormalizedProperty, GaveUpComponent, GroupStatus, Outcome, PropertyGroup, RuleVerdict,
+    SkippedClaim,
 )
 from composer.spec.source.report_prover import make_prover_fetcher
 
@@ -101,6 +102,21 @@ def _input(name, unit_file, props, result: GeneratedCVL | None, link : str | Non
     )
 
 
+def _curtailed_input(
+    name, props, result: GeneratedCVL | None, link: str | None = None, detail: str | None = None,
+) -> ReportComponentInput[GeneratedCVL]:
+    """A budget-curtailed component: ``result`` is the partial the author published under lifted
+    gates (quarantined on disk), or ``None`` when the run stopped before anything was published."""
+    partial = (
+        Delivered(
+            deliverable=pathlib.Path(f"autospec_{name}.spec.unverified"),
+            result=result.model_copy(update={"final_link": link}),
+        )
+        if result is not None else None
+    )
+    return ReportComponentInput(name=name, props=props, formalized=Curtailed(partial, detail))
+
+
 def _fp(component, title, refs, desc="d", sort: PropertyType = "safety_property") -> FormalizedProperty:
     return FormalizedProperty(component=component, title=title,
                               sort=sort, description=desc, rule_refs=refs)
@@ -146,7 +162,7 @@ async def test_collect_joins_properties_to_rules_and_verdicts():
         _fake_check("countEqualsSum", NodeStatus.VIOLATED, line=40),
     ]})
 
-    properties, rules, skipped, gave_up, dropped = await collect(
+    properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         [_input("Increment", "autospec_Increment.spec", props, gen)], fetch_verdicts=fetch)
 
     assert [p.title for p in properties] == ["count_increases", "count_eq_sum"]
@@ -157,7 +173,7 @@ async def test_collect_joins_properties_to_rules_and_verdicts():
     assert r.outcome == Outcome.GOOD and r.line == 12 and r.duration_seconds == 1.5
     assert r.prover_link == "L1"
     assert by_ref[("autospec_Increment.spec", "countEqualsSum")].outcome == Outcome.BAD
-    assert skipped == [] and gave_up == [] and dropped == 0
+    assert skipped == [] and gave_up == [] and curtailed == [] and dropped == 0
 
 
 @pytest.mark.asyncio
@@ -166,7 +182,7 @@ async def test_collect_splits_skipped_property_into_gap():
     gen = _gen({"p_done": ["r1"]}, skipped={"p_skip": "needs a ghost"})
     fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
 
-    properties, _rules, skipped, gave_up, _dropped = await collect(
+    properties, _rules, skipped, gave_up, _curtailed, _dropped = await collect(
         [_input("C", "autospec_C.spec", props, gen)], fetch_verdicts=fetch)
 
     assert [p.title for p in properties] == ["p_done"]
@@ -179,11 +195,67 @@ async def test_collect_none_result_is_a_gap():
     """A component with no result (the caller maps both give-up and crash to ``None``) is a
     formalization gap — all its properties unimplemented, no per-property reason."""
     props = [_prop("p1", "d1")]
-    properties, rules, skipped, gave_up, dropped = await collect(
+    properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         [_input("C", "autospec_C.spec", props, None, link=None)], fetch_verdicts=_fetcher({}))
-    assert properties == [] and rules == [] and skipped == [] and dropped == 0
+    assert properties == [] and rules == [] and skipped == [] and curtailed == [] and dropped == 0
     assert [g.component for g in gave_up] == ["C"]
     assert [p.title for p in gave_up[0].properties] == ["p1"]
+
+
+@pytest.mark.asyncio
+async def test_collect_routes_curtailed_component_without_fetching():
+    """A budget-curtailed component contributes nothing to properties/rules; its properties are
+    partitioned by disposition into the appendix record, and its verdicts are never fetched (the
+    fetcher spy would record the call — and its link deliberately maps to a verdict that would
+    otherwise register a rule)."""
+    good = _input("C", "autospec_C.spec", [_prop("p1", "d1")], _gen({"p1": ["r1"]}), link="Lc")
+    cut = _curtailed_input(
+        "D",
+        [_prop("q_drafted", "dq"), _prop("q_skip", "ds"), _prop("q_lost", "dl")],
+        _gen({"q_drafted": ["draft_rule"]}, skipped={"q_skip": "budget exhausted"}),
+        link="Ld",
+    )
+    base = _fetcher({
+        "Lc": [_fake_check("r1", NodeStatus.VERIFIED)],
+        "Ld": [_fake_check("draft_rule", NodeStatus.VERIFIED, file="autospec_D.spec.unverified")],
+    })
+    fetched: list[str] = []
+
+    async def fetch(formalized):
+        fetched.append(formalized.unit_file)
+        return await base(formalized)
+
+    properties, rules, skipped, gave_up, curtailed, dropped = await collect(
+        [good, cut], fetch_verdicts=fetch)
+
+    assert fetched == ["autospec_C.spec"]
+    assert [p.title for p in properties] == ["p1"]
+    assert [r.name for r in rules] == ["r1"]
+    assert skipped == [] and gave_up == [] and dropped == 0
+    (c,) = curtailed
+    assert c.component == "D"
+    assert c.artifact == "autospec_D.spec.unverified"
+    assert c.run_link == "Ld"
+    assert [(d.title, d.units) for d in c.drafted] == [("q_drafted", ["draft_rule"])]
+    assert [(s.title, s.reason) for s in c.skipped] == [("q_skip", "budget exhausted")]
+    assert [p.title for p in c.unattempted] == ["q_lost"]
+
+
+@pytest.mark.asyncio
+async def test_collect_curtailed_without_partial_is_all_unattempted():
+    """A hard budget stop published nothing: no artifact, no run link, every inferred property
+    lands in ``unattempted``."""
+    props = [_prop("p1", "d1"), _prop("p2", "d2")]
+    properties, rules, _s, gave_up, curtailed, _d = await collect(
+        [_curtailed_input("C", props, None, detail="Token cost budget exhausted")],
+        fetch_verdicts=_fetcher({}),
+    )
+    assert properties == [] and rules == [] and gave_up == []
+    (c,) = curtailed
+    assert c.artifact is None and c.run_link is None
+    assert c.detail == "Token cost budget exhausted"
+    assert c.drafted == [] and c.skipped == []
+    assert [p.title for p in c.unattempted] == ["p1", "p2"]
 
 
 @pytest.mark.asyncio
@@ -194,7 +266,7 @@ async def test_collect_drops_and_counts_orphan_rules():
         _fake_check("r1", NodeStatus.VERIFIED),
         _fake_check("sanity_helper", NodeStatus.VERIFIED),  # referenced by nothing
     ]})
-    _props, rules, _skipped, _gave_up, dropped = await collect(
+    _props, rules, _skipped, _gave_up, _curtailed, dropped = await collect(
         [_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)], fetch_verdicts=fetch)
     assert [r.name for r in rules] == ["r1"]
     assert dropped == 1
@@ -204,7 +276,7 @@ async def test_collect_drops_and_counts_orphan_rules():
 async def test_collect_backfills_unknown_for_unproven_referenced_rule():
     gen = _gen({"p1": ["r1"]})
     fetch = _fetcher({"L1": []})  # prover reported no checks
-    properties, rules, _s, _g, dropped = await collect(
+    properties, rules, _s, _g, _c, dropped = await collect(
         [_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)], fetch_verdicts=fetch)
     assert [(r.name, r.outcome, r.spec_file) for r in rules] == [("r1", Outcome.UNKNOWN, "autospec_C.spec")]
     assert properties[0].rule_refs == [("autospec_C.spec", "r1")]
@@ -310,7 +382,7 @@ def test_validate_property_in_two_groups_raises():
     groups = [_pg("g1", [("C", "p1")]), _pg("g2", [("C", "p1")])]
     with pytest.raises(ValidationError, match="multiple groups"):
         validate(properties=props, rules=[_rv("s.spec", "a")], groups=groups,
-                 skipped=[], gave_up=[], dropped_orphan_rules=0)
+                 skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=0)
 
 
 def test_validate_unknown_property_member_raises():
@@ -318,14 +390,14 @@ def test_validate_unknown_property_member_raises():
     groups = [_pg("g", [("C", "ghost")])]
     with pytest.raises(ValidationError, match="don't exist"):
         validate(properties=props, rules=[_rv("s.spec", "a")], groups=groups,
-                 skipped=[], gave_up=[], dropped_orphan_rules=0)
+                 skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=0)
 
 
 def test_validate_property_in_no_group_is_soft():
     props = [_fp("C", "p1", [("s.spec", "a")]), _fp("C", "p2", [("s.spec", "b")])]
     groups = [_pg("g", [("C", "p1")])]
     cov = validate(properties=props, rules=[_rv("s.spec", "a"), _rv("s.spec", "b")],
-                   groups=groups, skipped=[], gave_up=[], dropped_orphan_rules=0)
+                   groups=groups, skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=0)
     assert cov.property_coverage_complete is False
     assert cov.properties_in_no_group == [("C", "p2")]
 
@@ -337,7 +409,7 @@ def test_validate_reports_rules_spanning_groups_as_stat():
     p2 = _fp("C", "p2", [("s.spec", "shared")])
     groups = [_pg("g1", [("C", "p1")]), _pg("g2", [("C", "p2")])]
     cov = validate(properties=[p1, p2], rules=[_rv("s.spec", "shared")], groups=groups,
-                   skipped=[], gave_up=[], dropped_orphan_rules=2)
+                   skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=2)
     assert cov.rules_spanning_multiple_groups == ["shared"]
     assert cov.dropped_orphan_rules == 2
 
@@ -347,9 +419,12 @@ def test_validate_carries_gap_counts():
     sk = [SkippedClaim(component="C", title="s1", sort="safety_property",
                        description="d", reason="r")]
     gu = [GaveUpComponent(component="D", properties=[_prop("x", "d")])]
+    cu = [CurtailedComponent(component="E", unattempted=[_prop("y", "d")])]
     cov = validate(properties=[p1], rules=[_rv("s.spec", "a")], groups=[_pg("g", [("C", "p1")])],
-                   skipped=sk, gave_up=gu, dropped_orphan_rules=3)
+                   skipped=sk, gave_up=gu, curtailed=cu, dropped_orphan_rules=3)
     assert (cov.skipped_count, cov.gave_up_component_count, cov.dropped_orphan_rules) == (1, 1, 3)
+    assert cov.curtailed_component_count == 1
+    assert any("cut short by the run budget" in w for w in cov.warnings)
     assert cov.property_coverage_complete is True
 
 
@@ -433,6 +508,36 @@ def test_render_html_omits_link_column_without_links():
     assert "Prover runs" not in h
 
 
+def test_render_html_budget_appendix():
+    """A curtailed component renders as the budget appendix: status chip, counts-first summary,
+    quarantined artifact path, per-property dispositions, and the footer count."""
+    base = _mini_report()
+    report = base.model_copy(update={
+        "curtailed_components": [CurtailedComponent(
+            component="D",
+            artifact="autospec_D.spec.unverified",
+            drafted=[DraftedProperty(title="q1", sort="safety_property",
+                                     description="drafted claim", units=["rq"])],
+            skipped=[CurtailedSkip(title="q2", sort="safety_property",
+                                   description="skipped claim", reason="budget exhausted")],
+            unattempted=[_prop("q3", "never reached")],
+        )],
+        "coverage": base.coverage.model_copy(update={"curtailed_component_count": 1}),
+    })
+    h = render_html(report)
+    assert "Appendix: cut short by the run budget" in h
+    assert "partial draft published" in h
+    assert "autospec_D.spec.unverified" in h
+    assert "Of 3 inferred properties: 1 drafted but never verified, 1 skipped, 1 never attempted." in h
+    assert "Drafted — unverified" in h and "Not attempted" in h
+    assert "budget exhausted" in h and "never reached" in h
+    assert "1 component(s) were cut short by the run budget" in h  # footer
+
+
+def test_render_html_without_curtailed_has_no_appendix():
+    assert "Appendix: cut short" not in render_html(_mini_report())
+
+
 # ---------------------------------------------------------------------------
 # build orchestrator (async)
 # ---------------------------------------------------------------------------
@@ -506,3 +611,58 @@ async def test_build_surfaces_skipped_and_gave_up_gaps(tmp_path):
     assert [(s.component, s.title) for s in report.skipped] == [("C", "p_skip")]
     assert [g.component for g in report.gave_up_components] == ["D"]
     assert report.coverage.skipped_count == 1 and report.coverage.gave_up_component_count == 1
+
+
+@pytest.mark.asyncio
+async def test_build_curtailed_is_appendixed_not_grouped(tmp_path):
+    """A curtailed component stays out of properties/groups/prover_links and lands in the
+    appendix + coverage count/warning; the delivered component grounds the report as usual."""
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
+    llm = _GroupingStubModel(result=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p1")])]))
+
+    report = await build.build_report(
+        contract_name="C",
+        backend="prover",
+        components=[
+            _input("C", "autospec_C.spec", [_prop("p1", "d1")], gen),
+            _curtailed_input("D", [_prop("q", "d")], _gen({"q": ["rq"]}), link="Lq"),
+        ],
+        llm=llm, fetch_verdicts=fetch,
+    )
+
+    assert {p.key for p in report.properties} == {("C", "p1")}
+    assert all(("D", "q") not in g.members for g in report.groups)
+    (c,) = report.curtailed_components
+    assert c.component == "D" and [d.title for d in c.drafted] == ["q"]
+    assert report.coverage.curtailed_component_count == 1
+    assert any("cut short by the run budget" in w for w in report.coverage.warnings)
+    # The curtailed partial's stale run link stays out of the header map.
+    assert "D" not in report.prover_links
+
+
+@pytest.mark.asyncio
+async def test_build_all_curtailed_skips_the_grouping_call(monkeypatch):
+    """With zero formalized properties there is nothing to group: the grouping LLM must not be
+    consulted (the exploding stub + re-raise mode make a stray call fail loudly), and the report
+    degrades to no groups + a populated appendix."""
+    monkeypatch.setattr(build, "RERAISE_REPORT_FAILURES", True)
+
+    class _ExplodingModel(_GroupingStubModel):
+        def with_structured_output(self, schema, **kwargs):  # type: ignore[override]
+            raise AssertionError("grouping LLM consulted despite no formalized properties")
+
+    report = await build.build_report(
+        contract_name="C",
+        backend="prover",
+        components=[_curtailed_input("C", [_prop("p1", "d1")], None, detail="budget exhausted")],
+        llm=_ExplodingModel(result=GroupingResult(groups=[])),
+        fetch_verdicts=_fetcher({}),
+    )
+
+    assert report.properties == [] and report.groups == [] and report.rules == []
+    (c,) = report.curtailed_components
+    assert c.artifact is None and [p.title for p in c.unattempted] == ["p1"]
+    assert report.coverage.curtailed_component_count == 1
+    assert report.prover_links == {}
