@@ -157,6 +157,7 @@ async def cli_pipeline[P: enum.Enum, H](
     model = get_model()
     text_log, events_log = setup_autoprove_logging(project_root, thread_id)
     print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
+    print(f"Selected run id: {summary.run_id}")
     install_run_summary(summary)
 
     disc_cache_ns: tuple[str, ...] | None = (
@@ -173,7 +174,7 @@ async def cli_pipeline[P: enum.Enum, H](
     )
 
     async with (
-        standard_connections(provider=tiered.provider_kind, embedder=DefaultEmbedder(model)) as conns,
+        standard_connections(provider=tiered.provider_service, embedder=DefaultEmbedder(model)) as conns,
         async_tool_context(),
         thread_logger(conns.store, {
             "root_thread_id": thread_id,

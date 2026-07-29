@@ -42,7 +42,6 @@ class TaskHandle[H]:
     on_start: Callable[[], None] = lambda: None
     on_done: Callable[[], None] = lambda: None
 
-
 class HandlerFactory[P: HasName, H](Protocol):
     def __call__(
         self,
@@ -50,6 +49,21 @@ class HandlerFactory[P: HasName, H](Protocol):
         info: TaskInfo[P]
     ) -> Awaitable[TaskHandle[H]]:
         ...
+
+
+@dataclass(frozen=True)
+class TaskRunner[P: HasName, H]:
+    """A curried version of ``run_task`` with the handler
+     factory and concurrency gate."""
+    factory: HandlerFactory[P, H]
+    semaphore: asyncio.Semaphore | None = None
+
+    async def run[T](
+        self,
+        info: TaskInfo[P],
+        fn: Callable[[], Awaitable[T]] | Callable[[ConversationContextProvider], Awaitable[T]],
+    ) -> T:
+        return await run_task(self.factory, info, fn, semaphore=self.semaphore)
 
 # ---------------------------------------------------------------------------
 # run_task helper

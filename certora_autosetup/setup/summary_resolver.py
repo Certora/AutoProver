@@ -171,6 +171,57 @@ def extract_cvl_ast(source: str) -> Optional[dict]:
     return _ast_extraction(blanked)
 
 
+def toplevel_decl_spans(payload: Optional[dict]) -> List[Tuple[Optional[str], int, int]]:
+    """Every top-level CVL declaration in a parsed AST payload as
+    ``(name, start_line, end_line)``.
+
+    ``name`` is the declaration id (a ``function``'s name, ``None`` for constructs
+    that carry no ``declarationId``). Lines are 0-based and inclusive — ``end`` is the
+    closing-brace line — so ``range(start, end + 1)`` is the whole definition. Reading
+    ``ast["subs"]`` is what lets a caller both expand a reported line to its enclosing
+    block and name the function that block defines, without a line regex.
+    """
+    out: List[Tuple[Optional[str], int, int]] = []
+    if payload is None:
+        return out
+    for sub in (payload.get("ast") or {}).get("subs", []):
+        rng = sub.get("range") or {}
+        start = (rng.get("start") or {}).get("line")
+        end = (rng.get("end") or {}).get("line")
+        if isinstance(start, int) and isinstance(end, int):
+            out.append((sub.get("declarationId"), start, end))
+    return out
+
+
+def expr_summary_entries(payload: Optional[dict]) -> List[Tuple[str, int, int]]:
+    """Every ``methods{}`` entry summarized by a CVL expression (``… => fn(…)``) in a
+    parsed AST payload, as ``(target_function_name, start_line, end_line)``.
+
+    ``target_function_name`` is the applied function on the summary's right-hand side
+    (``ast["importedMethods"][i]["summary"]["exp"]["methodId"]``); lines are 0-based and
+    inclusive, delimiting the entry's exact span. Non-expression summaries (``NONDET``,
+    ``DISPATCHER``, …) carry no applied function and are skipped. Lets a caller comment
+    the entries that dispatch to a given function by span, rather than guessing entry
+    boundaries from ``=>`` substrings.
+    """
+    out: List[Tuple[str, int, int]] = []
+    if payload is None:
+        return out
+    for method in (payload.get("ast") or {}).get("importedMethods", []):
+        summary = method.get("summary") or {}
+        if "SpecCallSummary.Exp" not in summary.get("type", ""):
+            continue
+        method_id = (summary.get("exp") or {}).get("methodId")
+        if not method_id:
+            continue
+        rng = method.get("range") or {}
+        start = (rng.get("start") or {}).get("line")
+        end = (rng.get("end") or {}).get("line")
+        if isinstance(start, int) and isinstance(end, int):
+            out.append((method_id, start, end))
+    return out
+
+
 def parse_methods_entries(spec_path: Path, log: Optional[LogFn] = None) -> List[MethodEntry]:
     """Parse a spec's ``methods{}`` block into internal-method entries via the CVL parser.
 

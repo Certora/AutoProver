@@ -1,0 +1,5 @@
+{% macro input_phrase(and_or=false) %}
+{%- if has_doc %}system/design document{% endif %}
+{%- if has_doc and sort != "greenfield" %} and{% if and_or%}/or{%endif%} {%endif%}
+{%- if sort != "greenfield" %}the implementation{%endif%}
+{% endmacro %}

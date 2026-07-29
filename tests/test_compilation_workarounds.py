@@ -432,3 +432,263 @@ def test_detects_single_line_source_not_found(manager: CompilationWorkaroundMana
 
 def test_ignores_unrelated_source_not_found(manager: CompilationWorkaroundManager) -> None:
     assert manager._has_source_not_found(UNRELATED_OUTPUT) is False
+
+
+# =============================================================================
+# compiler_version_mismatch: wrap-tolerant detection + enabled with global solc
+# =============================================================================
+
+# Verbatim certoraRun output from a real mass-test run: the whole
+# scene was pinned to solc7.3 while every source is ^0.8.0, and solc wrapped the
+# marker phrase ("ParserError: Source \nfile requires different compiler version"),
+# defeating the old single-line substring check.
+WRAPPED_COMPILER_VERSION_MISMATCH = (
+    "Compiling certora/mocks/DummyERC20Impl.sol...\n"
+    "\n"
+    "solc7.3 had an error:\n"
+    "/workspace/project/certora/mocks/DummyERC20Impl.sol:2:1: ParserError: Source \n"
+    "file requires different compiler version (current compiler is \n"
+    "0.7.3+commit.9bfce1f6.Linux.g++) - note that nightly builds are considered to be\n"
+    "strictly less than the released version\n"
+    "pragma solidity ^0.8.0;\n"
+    "^---------------------^\n"
+)
+
+SINGLE_LINE_COMPILER_VERSION_MISMATCH = (
+    "Compiling certora/mocks/DummyERC20Impl.sol...\n"
+    "solc7.3 had an error:\n"
+    "certora/mocks/DummyERC20Impl.sol:2:1: ParserError: Source file requires different compiler version (current compiler is 0.7.3+commit.9bfce1f6.Linux.g++)\n"
+    "pragma solidity ^0.8.0;\n"
+)
+
+MISMATCH_CONTRACTS = [
+    ContractHandle(contract_name="DummyERC20Impl", source_file="certora/mocks/DummyERC20Impl.sol"),
+    ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol"),
+]
+
+
+@pytest.fixture
+def resolve_pragma_offline(monkeypatch):
+    """resolve_pragma_to_version fetches soliditylang.org; pin it for tests."""
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.resolve_pragma_to_version",
+        lambda spec, **kwargs: "0.8.30",
+    )
+
+
+def test_detects_wrapped_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager, resolve_pragma_offline
+) -> None:
+    # Regression: the wrapped marker phrase was missed, so the scene-wide wrong
+    # compiler pin was never repaired and the run died in compilation analysis.
+    result = manager._detect_compiler_version_mismatch(
+        WRAPPED_COMPILER_VERSION_MISMATCH, MISMATCH_CONTRACTS
+    )
+    assert result == ("DummyERC20Impl", "0.8.30")
+
+
+def test_detects_single_line_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager, resolve_pragma_offline
+) -> None:
+    result = manager._detect_compiler_version_mismatch(
+        SINGLE_LINE_COMPILER_VERSION_MISMATCH, MISMATCH_CONTRACTS
+    )
+    assert result == ("DummyERC20Impl", "0.8.30")
+
+
+def test_ignores_unrelated_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager,
+) -> None:
+    assert manager._detect_compiler_version_mismatch(UNRELATED_OUTPUT, MISMATCH_CONTRACTS) is None
+
+
+def test_compiler_mismatch_workaround_fires_with_global_solc(
+    manager, monkeypatch, tmp_path, resolve_pragma_offline
+) -> None:
+    # Regression: `enabled=not solc_already_set` disabled the only recovery path
+    # exactly when a build system pinned a wrong global solc. The workaround must
+    # override the seeded compiler_map entry from the pragma.
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_COMPILER_VERSION_MISMATCH],
+        MISMATCH_CONTRACTS,
+        extra_config={"solc": "solc7.3"},
+    )
+    assert success is True
+    assert fake_run.calls == 2  # failing compile + one recompile after the fix
+    assert compilation_config["compiler_map"]["DummyERC20Impl"] == "solc8.30"
+    assert compilation_config["compiler_map"]["Vault"] == "solc7.3"
+
+
+# =============================================================================
+# Seeding: a precomputed compiler_map with a lingering scalar solc
+# =============================================================================
+#
+# _precompute_compiler_settings can hand the loop a conf that already carries a
+# compiler_map (from Foundry build artifacts) next to the build system's scalar
+# "solc" — certoraRun rejects that pair before invoking any solc, so no output
+# detector can ever catch it (observed in the wild on projects whose foundry.toml
+# pins one solc version while the build artifacts were produced with another).
+# Seeding must fold the scalar into the map (as the default for uncovered
+# contracts) so the very first certoraRun already gets a legal conf.
+
+
+def test_seed_folds_scalar_solc_into_existing_compiler_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    contracts = [
+        ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol"),
+        ContractHandle(
+            contract_name="DummyERC20Impl", source_file="certora/mocks/DummyERC20Impl.sol"
+        ),
+    ]
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [],
+        contracts,
+        extra_config={"solc": "solc8.30", "compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert fake_run.calls == 1  # legal conf from the start — no retry needed
+    assert "solc" not in compilation_config
+    assert compilation_config["compiler_map"] == {
+        "Vault": "solc8.35",
+        "DummyERC20Impl": "solc8.30",
+    }
+    assert "solc" not in updated
+    assert updated["compiler_map"] == compilation_config["compiler_map"]
+
+
+SOLC_NOT_FOUND_OUTPUT = (
+    "attribute/flag 'compiler_map': Solidity executable solc8.35 not found in path\n"
+)
+
+
+def test_solc_fallback_fires_when_pin_is_in_compiler_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # The pin can arrive already folded into compiler_map with no scalar "solc"
+    # (precomputed from build artifacts) — the missing-binary fallback must
+    # still be armed, keyed on the map contents rather than the scalar.
+    monkeypatch.setattr(manager, "_pick_solc_fallback", lambda: "solc8.30")
+    contracts = [ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol")]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert fake_run.calls == 2  # failing compile + one recompile on the fallback
+    # The uniform fallback map collapses back to a scalar on exit.
+    assert compilation_config["solc"] == "solc8.30"
+    assert "compiler_map" not in compilation_config
+
+
+def test_yul_optimizer_rung_respects_project_optimize_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A per-contract solc_optimize_map (foundry compilation_restrictions) with
+    # the optimizer on for EVERY contract: the add-optimizer rung has nothing
+    # left to enable and must not put the scalar next to the map (certoraRun
+    # rejects the pair) — the ladder escalates to relaxing the autofinder
+    # assertion instead.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_YUL_STACK_TOO_DEEP],
+        contracts,
+        extra_config={
+            "solc_optimize_map": {"Foo": "1", "Bar": "200"},
+            "assert_autofinder_success": True,
+        },
+    )
+    assert success is True
+    assert "solc_optimize" not in compilation_config
+    assert compilation_config["solc_optimize_map"] == {"Foo": "1", "Bar": "200"}
+    assert compilation_config["assert_autofinder_success"] is False
+
+
+def test_yul_optimizer_rung_enables_off_entries_in_optimize_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A map entry of "0" (or a missing one) means the optimizer is off for that
+    # contract — exactly the misconfiguration the add-optimizer rung exists to
+    # fix. It must enable those entries in the map (never the scalar, which
+    # cannot legally sit next to it) while keeping explicit project runs
+    # values; only once every entry is on may the ladder escalate.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_YUL_STACK_TOO_DEEP, WRAPPED_YUL_STACK_TOO_DEEP],
+        contracts,
+        extra_config={
+            "solc_optimize_map": {"Foo": "0", "Bar": "1"},
+            "assert_autofinder_success": True,
+        },
+    )
+    assert success is True
+    # Pass 1 enables Foo's optimizer; pass 2 (optimizer on everywhere, error
+    # persists) escalates; the third compile succeeds.
+    assert fake_run.calls == 3
+    assert "solc_optimize" not in compilation_config
+    assert compilation_config["solc_optimize_map"] == {"Foo": "200", "Bar": "1"}
+    assert compilation_config["assert_autofinder_success"] is False
+
+
+# Whole-project solc error with no per-file "Compiling <path>..." progress line: the
+# offending file is named only in the `-->` source-location line. solc hard-wraps the
+# diagnostic, so that line sits a few lines below "CompilerError" (verbatim wrapping).
+BULK_STACK_TOO_DEEP = (
+    "solc8.34 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with `--via-ir` (cli) or the \n"
+    "equivalent `viaIR: true` (standard JSON) while enabling the optimizer. \n"
+    "Otherwise, try removing local variables.\n"
+    "   --> contracts/Foo.sol:352:36:\n"
+)
+
+
+def test_detects_bulk_stack_too_deep_via_source_location(manager: CompilationWorkaroundManager) -> None:
+    # No "Compiling <path>..." line — the file is recovered from `--> <path>:line:col`.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_stack_too_deep_errors(BULK_STACK_TOO_DEEP, contracts) == "Foo"
+
+
+def test_bulk_stack_too_deep_unmapped_path_returns_none(manager: CompilationWorkaroundManager) -> None:
+    # The `-->` file isn't one of the scene contracts, so there is nothing to enable
+    # via_ir for — return None rather than guessing.
+    contracts = [ContractHandle(contract_name="Other", source_file="contracts/Other.sol")]
+    assert manager._detect_stack_too_deep_errors(BULK_STACK_TOO_DEEP, contracts) is None
+
+
+# A per-file "Compiling <path>..." error resolves via that line (Pattern 2), which
+# takes precedence over the `-->` source-location fallback.
+COMPILING_LINE_STACK_TOO_DEEP = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.34 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with `--via-ir`.\n"
+    "   --> lib/somewhere/Inlined.sol:10:5:\n"
+)
+
+
+def test_compiling_line_takes_precedence_over_source_location(manager: CompilationWorkaroundManager) -> None:
+    # The Compiling line names Foo; the `-->` names an unrelated inlined lib file.
+    # Pattern 2 wins, mapping to the contract actually being compiled.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_stack_too_deep_errors(COMPILING_LINE_STACK_TOO_DEEP, contracts) == "Foo"

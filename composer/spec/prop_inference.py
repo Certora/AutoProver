@@ -14,6 +14,7 @@ from langchain_core.messages import AnyMessage, HumanMessage
 from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMessageType
 
 from composer.input.files import Document
+from composer.llm.types import CacheLevel
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
@@ -342,6 +343,11 @@ async def run_property_inference(
     actual_extra_input = [
         *extra_input
     ]
+    def to_cache_level(s: bool) -> CacheLevel:
+        if s:
+            return CacheLevel.SHORT
+        else:
+            return CacheLevel.NONE
     if threat_model is not None:
         actual_extra_input.append(CacheablePropertyGenerationInput(
             "certora:thread_model", "generic", "always",
@@ -351,7 +357,7 @@ async def run_property_inference(
                 "so some of the issues/vulnerabilities/attacks may not be relevant to your analysis. Do *NOT* overfit to this threat model; carefully "
                 "analyze what content of the provided threat model is worth considering vs out of scope. Further, this threat model is just a starting point, "
                 "you should ALSO look for threats *not* mentioned in this document.",
-                threat_model.to_dict(with_cache=cache)
+                threat_model.to_dict(cache_level=to_cache_level(cache))
             ]
         ))
 

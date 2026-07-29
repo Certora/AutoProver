@@ -63,6 +63,19 @@ def _path_from_compiling_line(line: str) -> Optional[str]:
     return line.removeprefix(prefix).removesuffix(suffix)
 
 
+# A solc source-location line, e.g. ``   --> contracts/Foo.sol:120:9:``. It names the
+# offending file in a whole-project (non-autofinder) solc error, where there is no
+# ``Compiling <path>...`` progress line to recover it from.
+_SOURCE_LOCATION_RE = re.compile(r"^\s*-->\s+(?P<path>.+?):\d+:\d+:?\s*$")
+
+
+def _path_from_source_location_line(line: str) -> Optional[str]:
+    """Return ``<path>`` from a solc ``  --> <path>:<line>:<col>:`` source-location
+    line, or None if ``line`` isn't one."""
+    match = _SOURCE_LOCATION_RE.match(line)
+    return match.group("path") if match else None
+
+
 def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
     """Walk backward from ``lines[idx]`` to the nearest preceding plain
     ``Compiling <path>...`` line and return its path, or None if there is none.
@@ -150,13 +163,21 @@ class CompilationWorkaroundManager:
 
     def _seed_compile_maps(self, config: Dict, contracts: List[ContractHandle]) -> None:
         """Promote scalar ``solc``/``solc_via_ir`` into fully-populated maps.
+
+        When a map is already present (e.g. precomputed from build artifacts,
+        or in a user conf fed through fixconf) the scalar still acts as the
+        default for contracts the map doesn't cover, and is then dropped —
+        certoraRun rejects a conf carrying both a map and its scalar.
         """
-        if "compiler_map" not in config:
-            default = config.pop("solc", None) or self.solc_default_version
-            config["compiler_map"] = {c.contract_name: default for c in contracts}
-        if "solc_via_ir_map" not in config:
-            via_ir = config.pop("solc_via_ir", False)
-            config["solc_via_ir_map"] = {c.contract_name: via_ir for c in contracts}
+        default = config.pop("solc", None) or self.solc_default_version
+        config.setdefault("compiler_map", {})
+        for c in contracts:
+            config["compiler_map"].setdefault(c.contract_name, default)
+
+        via_ir = config.pop("solc_via_ir", False)
+        config.setdefault("solc_via_ir_map", {})
+        for c in contracts:
+            config["solc_via_ir_map"].setdefault(c.contract_name, via_ir)
 
     def _normalize_compile_maps(self, config: Dict) -> None:
         """Collapse a uniform compiler_map / solc_via_ir_map back to its scalar if all values are same.
@@ -261,7 +282,13 @@ class CompilationWorkaroundManager:
         """
         # Check if global solc_via_ir is already enabled
         global_via_ir_enabled = updated_config_dict.get("solc_via_ir", False)
-        solc_already_set = "solc" in updated_config_dict
+        # An explicit compiler pin can arrive as the scalar "solc" or already
+        # folded into a compiler_map (e.g. precomputed from build artifacts);
+        # the bare "solc" binary is the environment default and needs no fallback.
+        solc_pinned = compilation_config.get("solc", "solc") != "solc" or any(
+            version != "solc"
+            for version in compilation_config.get("compiler_map", {}).values()
+        )
 
         # Names of the workarounds applied in the current pass over a failed
         # output. Cleared at the top of each pass; detect lambdas below may
@@ -289,7 +316,7 @@ class CompilationWorkaroundManager:
                 name="solc_not_found_fallback",
                 detect_fn=lambda output: self._detect_solc_not_found(output),
                 apply_fn=self._apply_solc_fallback_workaround,
-                enabled=solc_already_set and updated_config_dict.get("solc") != "solc",
+                enabled=solc_pinned,
             ),
             CompilationWorkaround(
                 name="remappings_conflict",
@@ -316,7 +343,12 @@ class CompilationWorkaroundManager:
                 name="compiler_version_mismatch",
                 detect_fn=lambda output: self._detect_compiler_version_mismatch(output, contracts),
                 apply_fn=self._apply_compiler_version_workaround_to_config,
-                enabled=not solc_already_set,
+                # Enabled even when a global solc is configured: the detector
+                # only fires when that compiler provably cannot parse a file
+                # (hard ParserError), and _seed_compile_maps has already
+                # promoted the scalar into compiler_map, so overriding one
+                # contract's entry from its pragma is always safe.
+                enabled=True,
             ),
             CompilationWorkaround(
                 name="stack_too_deep_via_ir",
@@ -358,7 +390,7 @@ class CompilationWorkaroundManager:
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
-                    and "solc_optimize" not in compilation_config
+                    and self._yul_optimizer_pending(compilation_config, contracts)
                     else None
                 ),
                 apply_fn=self._apply_optimizer_for_via_ir,
@@ -367,16 +399,18 @@ class CompilationWorkaroundManager:
             CompilationWorkaround(
                 name="yul_exception_stack_too_deep",
                 # This is the escalation step after yul_exception_add_optimizer:
-                # it must only fire on output produced AFTER the optimizer was
+                # it must only fire once the optimizer is on globally or for
+                # every scene contract (the rung above has nothing left to
+                # enable), and only on output produced AFTER the optimizer was
                 # tried, not in the same pass that just added it (the live
-                # "solc_optimize in config" check would otherwise see the value
-                # the previous workaround set seconds ago and stop asserting
-                # autofinder success without ever testing the optimizer).
+                # config check would otherwise see the value the previous
+                # workaround set seconds ago and stop asserting autofinder
+                # success without ever testing the optimizer).
                 detect_fn=lambda output: (
                     "detected"
                     if self._detect_yul_exception_stack_too_deep(output)
                     and compilation_config.get("assert_autofinder_success", False)
-                    and "solc_optimize" in compilation_config
+                    and not self._yul_optimizer_pending(compilation_config, contracts)
                     and "yul_exception_add_optimizer" not in applied_this_pass
                     else None
                 ),
@@ -596,6 +630,27 @@ class CompilationWorkaroundManager:
                                     self.log(f"Warning: Could not map path '{path_part}' to contract name", "WARNING")
                         break
 
+        # Pattern 3: a whole-project solc error with no per-file "Compiling <path>..."
+        # progress line — the format certoraRun prints when the whole scene is compiled
+        # in one unit (e.g. `solc8.34 had an error:` / `CompilerError: Stack too deep` /
+        # `   --> <path>:<line>:<col>:`). Patterns 1 and 2 recover the file from a
+        # Compiling line, which is absent here, so the offending file is only named in the
+        # `-->` source-location line. Runs last so the per-contract patterns take
+        # precedence when a Compiling line is present.
+        for i, line in enumerate(lines):
+            if not line.startswith("CompilerError: Stack too deep"):
+                continue
+            for j in range(i + 1, min(i + 6, len(lines))):
+                src_path = _path_from_source_location_line(lines[j])
+                if src_path is None:
+                    continue
+                contract_name = self._get_contract_name_from_path(src_path, contracts)
+                if contract_name:
+                    self.log(f"Detected stack-too-deep error for {contract_name} (path: {src_path})")
+                    return contract_name
+                self.log(f"Warning: Could not map path '{src_path}' to contract name", "WARNING")
+                break
+
         return None
 
     def _detect_cancun_opcode_errors(self, output: str, contracts: List[ContractHandle]) -> Optional[str]:
@@ -692,58 +747,69 @@ class CompilationWorkaroundManager:
     def _detect_compiler_version_mismatch(
         self, output: str, contracts: List[ContractHandle]
     ) -> Optional[Tuple[str, str]]:
-        """Detect compiler version mismatch error and extract contract name and required version."""
+        """Detect compiler version mismatch error and extract contract name and required version.
+
+        solc hard-wraps its diagnostic text at a fixed width, so the marker
+        phrase is frequently split across newlines (e.g. "ParserError: Source
+        \\nfile requires different compiler version"). Match it with ``\\s+``
+        between words over the whole output, then map each match back to its
+        line index for the path/pragma context extraction.
+        """
         lines = output.split("\n")
 
-        for i in range(len(lines)):
-            line = lines[i]
+        marker = re.compile(
+            r"ParserError:\s+Source\s+file\s+requires\s+different\s+compiler\s+version"
+        )
+        for match in marker.finditer(output):
+            # Line index of the match start; the error may span several lines,
+            # so context searches below start from where the marker begins.
+            i = output.count("\n", 0, match.start())
 
-            if "ParserError: Source file requires different compiler version" in line:
-                # Try to find file_path from preceding "Compiling ..." line
-                file_path = _find_compiling_path_before(lines, i, max_lookback=15)
+            # Try to find file_path from preceding "Compiling ..." line
+            file_path = _find_compiling_path_before(lines, i, max_lookback=15)
 
-                # Fallback: Extract file_path from arrow line if not found above
-                if not file_path:
-                    for j in range(i + 1, min(i + 10, len(lines))):
-                        if "-->" in lines[j]:
-                            path_parts = []
-                            arrow_line = lines[j].split("-->", 1)
-                            if len(arrow_line) > 1:
-                                path_parts.append(arrow_line[1].strip())
+            # Fallback: Extract file_path from arrow line if not found above
+            if not file_path:
+                for j in range(i + 1, min(i + 10, len(lines))):
+                    if "-->" in lines[j]:
+                        path_parts = []
+                        arrow_line = lines[j].split("-->", 1)
+                        if len(arrow_line) > 1:
+                            path_parts.append(arrow_line[1].strip())
 
-                            for k in range(j + 1, min(j + 5, len(lines))):
-                                stripped = lines[k].strip()
-                                if not stripped or stripped == "|":
-                                    break
-                                path_parts.append(stripped)
-                                if re.search(r":\d+:\d+:\s*$", stripped):
-                                    break
-
-                            full_path = "".join(path_parts)
-                            path_match = re.search(r"^(.+?):\d+:\d+:\s*$", full_path)
-                            if path_match:
-                                file_path = path_match.group(1).strip()
+                        for k in range(j + 1, min(j + 5, len(lines))):
+                            stripped = lines[k].strip()
+                            if not stripped or stripped == "|":
+                                break
+                            path_parts.append(stripped)
+                            if re.search(r":\d+:\d+:\s*$", stripped):
                                 break
 
-                if not file_path:
-                    continue
+                        full_path = "".join(path_parts)
+                        path_match = re.search(r"^(.+?):\d+:\d+:\s*$", full_path)
+                        if path_match:
+                            file_path = path_match.group(1).strip()
+                            break
 
-                # Extract pragma specification from subsequent lines
-                for k in range(i + 1, min(i + 10, len(lines))):
-                    pragma_spec = extract_pragma_spec(lines[k])
-                    if pragma_spec:
-                        version = resolve_pragma_to_version(pragma_spec)
-                        if not version:
-                            self.log(f"Could not resolve pragma '{pragma_spec}' to concrete version", "WARNING")
-                            return None
+            if not file_path:
+                continue
 
-                        contract_name = self._get_contract_name_from_path(file_path, contracts)
-                        if contract_name:
-                            self.log(f"Detected compiler version mismatch for {contract_name}: requires {version}")
-                            return (contract_name, version)
-                        else:
-                            self.log(f"Warning: Could not map path '{file_path}' to contract name", "WARNING")
-                            return None
+            # Extract pragma specification from subsequent lines
+            for k in range(i + 1, min(i + 10, len(lines))):
+                pragma_spec = extract_pragma_spec(lines[k])
+                if pragma_spec:
+                    version = resolve_pragma_to_version(pragma_spec)
+                    if not version:
+                        self.log(f"Could not resolve pragma '{pragma_spec}' to concrete version", "WARNING")
+                        return None
+
+                    contract_name = self._get_contract_name_from_path(file_path, contracts)
+                    if contract_name:
+                        self.log(f"Detected compiler version mismatch for {contract_name}: requires {version}")
+                        return (contract_name, version)
+                    else:
+                        self.log(f"Warning: Could not map path '{file_path}' to contract name", "WARNING")
+                        return None
 
         return None
 
@@ -945,19 +1011,64 @@ class CompilationWorkaroundManager:
             json.dump(compilation_config, f, indent=2)
         return updated_config_dict
 
+    @staticmethod
+    def _optimizer_off(runs: Any) -> bool:
+        """A missing/zero solc_optimize_map entry means the optimizer is off
+        for that contract."""
+        return runs in (None, 0, "0", "")
+
+    def _yul_optimizer_pending(
+        self, config: Dict, contracts: List[ContractHandle]
+    ) -> bool:
+        """True while the add-optimizer rung still has something to enable:
+        no global solc_optimize, and — when a per-contract solc_optimize_map
+        is present — at least one scene contract's entry has the optimizer
+        off. With neither key set, the global rung itself is pending."""
+        if "solc_optimize" in config:
+            return False
+        optimize_map = config.get("solc_optimize_map")
+        if optimize_map is None:
+            return True
+        return any(
+            self._optimizer_off(optimize_map.get(c.contract_name)) for c in contracts
+        )
+
     def _apply_optimizer_for_via_ir(
         self,
         _detect_result: str,
         updated_config_dict: Dict,
         compilation_config: Dict,
         config_file: Path,
-        _contracts: List[ContractHandle],
+        contracts: List[ContractHandle],
     ) -> Dict:
-        """Apply optimizer alongside via-ir to resolve YulException stack-too-deep."""
-        self.log("Detected YulException stack-too-deep with via-ir — adding solc_optimize 200", "WARNING")
+        """Apply optimizer alongside via-ir to resolve YulException stack-too-deep.
 
-        compilation_config["solc_optimize"] = "200"
-        updated_config_dict["solc_optimize"] = "200"
+        With a per-contract solc_optimize_map (foundry compilation_restrictions)
+        only the entries whose optimizer is off are enabled — explicit project
+        runs values are kept, and the scalar is never set next to the map
+        (certoraRun rejects the pair)."""
+        if "solc_optimize_map" in compilation_config:
+            optimize_map = compilation_config["solc_optimize_map"]
+            enabled = [
+                c.contract_name
+                for c in contracts
+                if self._optimizer_off(optimize_map.get(c.contract_name))
+            ]
+            for name in enabled:
+                optimize_map[name] = "200"
+            updated_config_dict["solc_optimize_map"] = optimize_map
+            self.log(
+                "Detected YulException stack-too-deep with via-ir — enabling the "
+                f"optimizer (200 runs) in solc_optimize_map for {enabled}",
+                "WARNING",
+            )
+        else:
+            self.log(
+                "Detected YulException stack-too-deep with via-ir — adding solc_optimize 200",
+                "WARNING",
+            )
+            compilation_config["solc_optimize"] = "200"
+            updated_config_dict["solc_optimize"] = "200"
 
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)

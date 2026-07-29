@@ -57,7 +57,7 @@ from composer.workflow.services import store_context
 from composer.io.run_index import get_run_data
 from composer.spec.source.summarizer import _summary_key, _SummaryCache
 from composer.spec.source.struct_invariant import STRUCTURAL_INV_KEY, Invariants
-from composer.spec.source.pipeline import INV_CVL_KEY
+from composer.spec.source.pipeline import INV_CVL_KEY, AP_PROPERTIES_KEY_NAME
 from composer.spec.prop_inference import (
     _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
     bug_analysis_key_from_digest, agent_round_key, AGENT_RESULT_KEY,
@@ -294,7 +294,7 @@ async def build_tree_inner(
         return
 
     contract_instance = ContractInstance(contract_ind, app=harnessed_app)
-    prop_ctx = root_ctx.child(PROPERTIES_KEY)
+    prop_ctx = root_ctx.child(PROPERTIES_KEY(AP_PROPERTIES_KEY_NAME))
 
     with section("properties"):
         for comp_idx in range(len(contract_instance.contract.components)):

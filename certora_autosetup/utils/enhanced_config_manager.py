@@ -416,12 +416,14 @@ class ConfigManager:
         contracts_added: List[ContractHandle],
     ) -> bool:
         """
-        Update compiler_map and solc_via_ir_map when new contracts are added.
+        Update compiler_map, solc_via_ir_map, and solc_optimize_map when new
+        contracts are added.
 
         Delegates to CompilationWorkaroundManager which handles:
         - Parsing pragma from source files
         - Creating/updating compiler_map entries
         - Creating/updating solc_via_ir_map entries
+        - Creating/updating solc_optimize_map entries
 
         Args:
             conf_object: The config dict to modify in-place
@@ -438,6 +440,7 @@ class ConfigManager:
         for contract in contracts_added:
             modified |= self.update_compiler_map_for_contract(conf_object, contract, ref_maps)
             modified |= self.update_via_ir_map_for_contract(conf_object, contract, ref_maps)
+            modified |= self.update_optimize_map_for_contract(conf_object, contract, ref_maps)
 
         return modified
 
@@ -762,6 +765,31 @@ class ConfigManager:
     # compilation_workarounds.
     # =========================================================================
 
+    # (scalar, per-contract map) conf-key pairs. certoraRun hard-rejects a conf
+    # that sets both members of a pair (certoraContextValidator:
+    # convert_to_compiler_map for solc/compiler_map, check_map_attributes for
+    # the rest), so a map always supersedes its scalar counterpart.
+    SCALAR_TO_MAP_KEYS = (
+        ("solc", "compiler_map"),
+        ("solc_via_ir", "solc_via_ir_map"),
+        ("solc_optimize", "solc_optimize_map"),
+        ("solc_evm_version", "solc_evm_version_map"),
+    )
+
+    @staticmethod
+    def drop_scalars_superseded_by_maps(conf_object: Dict[str, Any]) -> None:
+        """Remove every scalar compile flag whose per-contract map is present.
+
+        Any step that puts a map into a conf must call this (or pop the scalar
+        itself) before the conf reaches certoraRun — the CLI rejects the pair
+        outright ("compiler map flags cannot be set with other compiler
+        flags"), and no compilation workaround can detect that rejection since
+        it happens before any solc invocation.
+        """
+        for scalar_key, map_key in ConfigManager.SCALAR_TO_MAP_KEYS:
+            if map_key in conf_object:
+                conf_object.pop(scalar_key, None)
+
     def _solc_convention(self) -> SolcConvention:
         """Convention this manager emits: derived from the boolean
         convert_solc_to_certora_format flag for symmetry with the rest of
@@ -987,12 +1015,33 @@ class ConfigManager:
 
         return modified
 
+    def update_optimize_map_for_contract(
+        self,
+        conf_object: Dict[str, Any],
+        contract: ContractHandle,
+        reference_maps: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Add a solc_optimize_map entry for a newly-added contract. Mirrors
+        `update_via_ir_map_for_contract` for the optimize map. Only the map form is
+        extended; a scalar `solc_optimize` already applies to every file."""
+        contract_name = contract.contract_name
+        if "solc_optimize_map" not in conf_object:
+            return False
+        if contract_name in conf_object["solc_optimize_map"]:
+            return False
+        ref_optimize_map = (reference_maps or {}).get("solc_optimize_map", {})
+        optimize_value = ref_optimize_map.get(contract_name, "200")
+        conf_object["solc_optimize_map"][contract_name] = optimize_value
+        self.log(f"Added {contract_name} to solc_optimize_map (value={optimize_value})")
+        return True
+
     def sync_compiler_maps_with_files(
         self,
         conf_object: Dict[str, Any],
         convention: Optional[SolcConvention] = None,
     ) -> bool:
-        """Reconcile compiler_map, solc_via_ir_map, and solc_evm_version_map with `files`.
+        """Reconcile compiler_map, solc_via_ir_map, solc_evm_version_map, and
+        solc_optimize_map with `files`.
 
         Invariant: when `compiler_map` is present, every contract in `files`
         has a matching entry. Stale entries (no longer in `files`) get trimmed;
@@ -1069,6 +1118,20 @@ class ConfigManager:
                 self.log(
                     f"Trimmed solc_evm_version_map from {original_len}"
                     f" to {len(conf_object['solc_evm_version_map'])} entries"
+                )
+                modified = True
+
+        if "solc_optimize_map" in conf_object:
+            original_len = len(conf_object["solc_optimize_map"])
+            conf_object["solc_optimize_map"] = {
+                key: value
+                for key, value in conf_object["solc_optimize_map"].items()
+                if self._key_matches_any_contract(key, contracts_in_files)
+            }
+            if len(conf_object["solc_optimize_map"]) != original_len:
+                self.log(
+                    f"Trimmed solc_optimize_map from {original_len}"
+                    f" to {len(conf_object['solc_optimize_map'])} entries"
                 )
                 modified = True
 

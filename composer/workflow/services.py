@@ -1,5 +1,5 @@
 import psycopg
-from typing import Any, Callable, TypedDict, Literal, overload, AsyncContextManager, TYPE_CHECKING, assert_never
+from typing import Any, Callable, TypedDict, Literal, overload, AsyncContextManager, TYPE_CHECKING
 from typing_extensions import TypeVar
 import inspect
 import os
@@ -40,105 +40,12 @@ else:
 
 from composer.input.types import ModelOptions, ModelOptionsBase
 from composer.input.files import FileUploader
-from composer.llm.provider import ProviderKind, CacheLevel
-from composer.llm.registry import get_provider_for, uploader_for, llm_factory, LLMFactory
+from composer.llm.provider import ProviderService
+from composer.llm.registry import get_provider_for
 
 
 T = TypeVar("T")
 
-def _adapt_async(obj: T, pairs: list[tuple[str, str]]) -> T:
-    """
-    Patch async methods to forward to their sync counterparts.
-
-    Args:
-        obj: Object to patch
-        pairs: List of (async_name, sync_name) tuples
-
-    Raises:
-        AttributeError: If method names don't exist on obj
-        TypeError: If async method is not a coroutine or sync method is a coroutine
-        ValueError: If method signatures don't match
-    """
-    for async_name, sync_name in pairs:
-        # Step 1: Fetch attributes
-        try:
-            async_method = getattr(obj, async_name)
-        except AttributeError:
-            raise AttributeError(
-                f"Object {obj} does not have async method '{async_name}'"
-            )
-
-        try:
-            sync_method = getattr(obj, sync_name)
-        except AttributeError:
-            raise AttributeError(
-                f"Object {obj} does not have sync method '{sync_name}'"
-            )
-
-        # Step 2: Verify that async_method is a coroutine function
-        if not inspect.iscoroutinefunction(async_method) and not inspect.isasyncgenfunction(async_method):
-            raise TypeError(
-                f"Method '{async_name}' is not a coroutine function"
-            )
-
-        # Verify that sync_method is NOT a coroutine function
-        if inspect.iscoroutinefunction(sync_method):
-            raise TypeError(
-                f"Method '{sync_name}' is a coroutine function but should be sync"
-            )
-
-        # Get signatures
-        async_sig = inspect.signature(async_method)
-        sync_sig = inspect.signature(sync_method)
-
-        # Compare parameters (names and annotations)
-        async_params = list(async_sig.parameters.values())
-        sync_params = list(sync_sig.parameters.values())
-
-        if len(async_params) != len(sync_params):
-            raise ValueError(
-                f"Parameter count mismatch: {async_name} has {len(async_params)} "
-                f"parameters, {sync_name} has {len(sync_params)}"
-            )
-
-        for async_param, sync_param in zip(async_params, sync_params):
-            if async_param.name != sync_param.name:
-                raise ValueError(
-                    f"Parameter name mismatch: {async_name} has '{async_param.name}', "
-                    f"{sync_name} has '{sync_param.name}'"
-                )
-
-            if async_param.annotation != sync_param.annotation:
-                raise ValueError(
-                    f"Parameter annotation mismatch for '{async_param.name}': "
-                    f"{async_name} has {async_param.annotation}, "
-                    f"{sync_name} has {sync_param.annotation}"
-                )
-
-            if async_param.default != sync_param.default:
-                raise ValueError(
-                    f"Parameter default mismatch for '{async_param.name}': "
-                    f"{async_name} has {async_param.default}, "
-                    f"{sync_name} has {sync_param.default}"
-                )
-
-        # Step 3: Create wrapper that forwards to sync implementation
-        def make_wrapper(sync_fn: Callable) -> Callable:
-            async def async_wrapper(*args, **kwargs):
-                # Call the sync function
-                return sync_fn(*args, **kwargs)
-
-            # Preserve the original signature
-            setattr(async_wrapper, "__signature__", inspect.signature(sync_fn))
-            async_wrapper.__name__ = sync_fn.__name__
-            async_wrapper.__doc__ = sync_fn.__doc__
-
-            return async_wrapper
-
-        # Patch the object
-        new_async_method = make_wrapper(sync_method)
-        setattr(obj, async_name, new_async_method)
-    return obj
 
 # Bound each connect attempt; give getconn a long window to keep retrying so a
 # slow first connection doesn't fail the run.
@@ -314,26 +221,6 @@ async def store_context() -> AsyncIterator[AsyncPostgresStore]:
 
 from typing_extensions import deprecated
 
-@deprecated("Use async code")
-def get_checkpointer() -> PostgresSaver:
-    conn = _get_composer_connection(
-        **_DATABASE_CONFIGS["checkpoint"],
-        autocommit=True,
-        row_factory=dict_row
-    )
-    checkpointer = _adapt_async(
-        PostgresSaver(conn),
-        [("aget", "get"),
-         ("aput", "put"),
-         ("aget_tuple", "get_tuple"),
-         ("alist", "list"),
-         ("adelete_thread", "delete_thread"),
-         ("aput_writes", "put_writes")
-         ]
-    )
-    checkpointer.setup()
-    return checkpointer
-
 async def get_async_checkpointer() -> AsyncPostgresSaver:
     conn =  await _get_async_composer_pool(
         **_DATABASE_CONFIGS["checkpoint"],
@@ -343,17 +230,6 @@ async def get_async_checkpointer() -> AsyncPostgresSaver:
     checkpointer = AsyncPostgresSaver(conn)
     await checkpointer.setup()
     return checkpointer
-
-@deprecated("Use async code")
-def get_store() -> PostgresStore:
-    conn = _get_composer_connection(
-        **_DATABASE_CONFIGS["store"],
-        autocommit=True,
-        row_factory=dict_row
-    )
-    store = PostgresStore(conn)
-    store.setup()
-    return store
 
 async def get_async_store() -> AsyncPostgresStore:
     conn = await _get_async_composer_pool(
@@ -467,7 +343,6 @@ class StandardConnections:
     store: AsyncPostgresStore
     memory: "Callable[[str], BaseTool]"
     uploader: FileUploader
-    provider: ProviderKind
 
 @dataclass
 class IndexedConnections(StandardConnections):
@@ -475,7 +350,7 @@ class IndexedConnections(StandardConnections):
 
 
 def _memory_tool_factory(
-    provider: ProviderKind,
+    provider: ProviderService,
     backend_factory: Callable[[str], AsyncPostgresBackend],
 ) -> Callable[[str], BaseTool]:
     """Wrap a backend factory into a provider-aware tool factory.
@@ -483,36 +358,28 @@ def _memory_tool_factory(
     Closes over the provider so the rest of the codebase only sees
     ``Callable[[ns], BaseTool]`` — the memory tool's shape is the
     factory's secret."""
-    from graphcore.tools.memory import anthropic_async_memory_tool, openai_async_memory_tool
-
-    match provider:
-        case "anthropic":
-            return lambda ns: anthropic_async_memory_tool(backend_factory(ns))
-        case "openai":
-            return lambda ns: openai_async_memory_tool(backend_factory(ns))
-        case _:
-            assert_never(provider)
+    return lambda ns: provider.select_memory_tool(backend_factory(ns))
 
 
 @overload
 def standard_connections(
-    *, provider: ProviderKind,
+    *, provider: ProviderService,
 ) -> AsyncContextManager[StandardConnections]:
     ...
 
 @overload
 def standard_connections(
-    *, provider: ProviderKind, embedder: Embeddings
+    *, provider: ProviderService, embedder: Embeddings
 ) -> AsyncContextManager[IndexedConnections]:
     ...
 
 @asynccontextmanager
 async def standard_connections(
     *,
-    provider: ProviderKind,
+    provider: ProviderService,
     embedder: Embeddings | None = None,
 ) -> AsyncIterator[StandardConnections | IndexedConnections]:
-    uploader = uploader_for(provider)
+    uploader = provider.uploader()
     async with (
         checkpointer_context() as check,
         memory_backend_context() as mem,
@@ -527,7 +394,6 @@ async def standard_connections(
                     store=store,
                     memory=memory,
                     uploader=uploader,
-                    provider=provider,
                 )
                 return
         yield StandardConnections(
@@ -535,5 +401,4 @@ async def standard_connections(
             store=store,
             memory=memory,
             uploader=uploader,
-            provider=provider,
         )

@@ -32,7 +32,7 @@ from graphcore.tools.vfs import FSBackend, Materializer
 from composer.io.multi_job import (
     TaskInfo, HandlerFactory, run_task,
 )
-
+from composer.llm.types import CacheLevel
 from composer.spec.context import (
     WorkflowContext,
     SystemDoc, CacheKey, Properties, ComponentGroup, CVLGeneration,
@@ -238,7 +238,7 @@ async def analyze_single_contract(
                     CacheablePropertyGenerationInput(
                         "certora:system-doc", "generic", "always", lambda cache: [
                             "For reference, the system document describing the entire application is as follows.",
-                            system_doc.content.to_dict(cache)
+                            system_doc.content.to_dict(CacheLevel.SHORT if cache else CacheLevel.NONE)
                         ]
                     )
                     
