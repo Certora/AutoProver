@@ -448,11 +448,22 @@ Diff from {"prior edit" if i > 0 else "project directory"}:
     
 class RevertToEdit(WithAsyncDependencies[Command | str, EditStore], WithInjectedId, WithInjectedState[SourceCVLGenerationExtra]):
     """
-    Call this tool to revert to a prior edit in your history
+    Call this tool to revert to a prior edit in your history, or (with a null
+    edit id) to discard every applied edit and return to the unedited project
+    directory.
     """
-    edit_id: str = Field(description="An edit ID to revert to; it must appear in your history")
+    edit_id: str | None = Field(description="An edit ID to revert to (it must appear in your history), or null to revert to the unedited project directory")
 
     async def run(self) -> str | Command:
+        if self.edit_id is None:
+            if not self.state["version_history"]:
+                return "No edits are applied; the working copy is already the unedited project directory"
+            return tool_state_update(
+                self.tool_call_id,
+                "Reverted to the unedited project directory",
+                vfs={},
+                version_history=[WIPE_HISTORY],
+            )
         if self.edit_id not in self.state["version_history"]:
             return f"{self.edit_id} does not appear in your edit history, nothing to revert to"
         if self.state["version_history"][-1] == self.edit_id:

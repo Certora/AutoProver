@@ -209,11 +209,36 @@ pre.diff {
     background: var(--bg-pre);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 12px 14px;
+    padding: 10px 0;
     overflow-x: auto;
     font-size: 12px;
     line-height: 1.45;
 }
+pre.diff .d-line { display: block; min-height: 1.45em; padding: 0 14px; }
+pre.diff .d-add  { background: var(--ok-bg);  color: var(--ok-fg); }
+pre.diff .d-del  { background: var(--bad-bg); color: var(--bad-fg); }
+pre.diff .d-hunk { background: var(--info-bg); color: var(--info-fg); }
+pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
+.md p { margin: 6px 0; }
+.md ol, .md ul { margin: 6px 0 6px 22px; padding: 0; }
+.md li { margin-bottom: 4px; }
+.md code {
+    background: var(--bg-pre);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+}
+.md pre {
+    background: var(--bg-pre);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-size: 12px;
+}
+.md pre code { background: none; padding: 0; }
+.md-label { font-weight: 600; font-size: 13px; margin: 12px 0 2px; }
 </style>
 </head>
 <body>
@@ -330,12 +355,13 @@ pre.diff {
   <h3>{{ se.component }} ({{ se.applied_edits | length }} edit{{ "s" if se.applied_edits | length != 1 else "" }})</h3>
   {%- for e in se.applied_edits %}
   <h4>Edit {{ loop.index }} — <span class="sort-tag">{{ e.edit_id }}</span></h4>
-  <p>{{ e.executive_summary }}</p>
-  <p><strong>Soundness argument:</strong> {{ e.why_sound }}</p>
+  <div class="md">{{ e.executive_summary | markdown }}</div>
+  <p class="md-label">Soundness argument</p>
+  <div class="md">{{ e.why_sound | markdown }}</div>
   {%- endfor %}
   <details>
     <summary>Cumulative diff from on-disk source</summary>
-    <pre class="diff">{{ se.cumulative_diff }}</pre>
+    <pre class="diff">{{ se.cumulative_diff | diff_html }}</pre>
   </details>
   {%- endfor %}
 </section>
