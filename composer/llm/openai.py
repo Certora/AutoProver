@@ -22,7 +22,7 @@ import openai
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderServiceBase, ProviderSpec
+    ProviderServiceBase, ProviderSpec, compaction_threshold
 )
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
@@ -114,6 +114,23 @@ def _model_parser(model_name: str) -> OpenAIModelFeatures:
 def matches(model: str) -> bool:
     head = model.split("-", 1)[0]
     return head in ("gpt", "chatgpt") or _is_o_series(head)
+
+
+# Prompt capacity to assume. Note that OpenAI's windows don't
+# track the version number (gpt-4o is 128k, gpt-4.1 is 1M, gpt-5 is 400k), so no pivot describes
+# them all and a per-model table would go stale every release. Anything the family plus one `>=`
+# can't place is assumed to hold 200k, which understates gpt-4.1 and overstates gpt-4o.
+_assumed_context_window = 200_000
+_gpt5_context_window = 400_000
+
+# Coincides with `_reasoning_pivot_version` today, but tracks the window rather than reasoning.
+_gpt5_window_pivot_version = (5, 0)
+
+
+def _context_window(features: OpenAIModelFeatures) -> int:
+    if features.family == "gpt" and features.version_tuple >= _gpt5_window_pivot_version:
+        return _gpt5_context_window
+    return _assumed_context_window
 
 
 def _reasoning_effort(thinking_tokens: int) -> Literal["low", "medium", "high"]:
@@ -208,6 +225,10 @@ class OpenAIModelProvider:
     def create(model_name: str, options: ModelConfiguration) -> "OpenAIModelProvider":
         return OpenAIModelProvider(model_name, options, _model_parser(model_name))
 
+    @property
+    def max_prompt_tokens(self) -> int:
+        return compaction_threshold(_context_window(self.features))
+
     def builder_for(
         self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
@@ -219,17 +240,16 @@ class OpenAIModelProvider:
             "store": False,
             "include": ["reasoning.encrypted_content"],
         }
-        
+
         if opts.thinking_tokens is not None and not disable_thinking and self.features.reasoning:
             kwargs["reasoning"] = {
                 "effort": _reasoning_effort(opts.thinking_tokens),
                 "summary": "auto"
             }
-            
+
         return ChatOpenAI(
             model=self.model_name,
             max_completion_tokens=opts.tokens,
-            temperature=1,
             timeout=None,
             max_retries=2,
             **kwargs,

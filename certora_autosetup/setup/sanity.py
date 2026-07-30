@@ -48,7 +48,7 @@ class _SanityArgs:
     thinking_tokens: int = 2048
     tokens: int = 4096
     rag_db: str = field(default_factory=lambda: SANITY_DEFAULT_CONNECTION)
-    model: str = "claude-sonnet-4-6"
+    model: str = "claude-sonnet-5"
     memory_tool: bool = True
     interleaved_thinking: bool = True
     prover_capture_output: bool = False

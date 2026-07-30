@@ -142,7 +142,7 @@ async def get_requirements(
             output_key="reqs",
             tools_list=tools,
             unbound_llm=llm,
-            summary_config=None,
+            summarization=None,
             sys_prompt=system_prompt,
             initial_prompt=initial_prompt
         )[0].compile(checkpointer=check)

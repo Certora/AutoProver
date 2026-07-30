@@ -1448,6 +1448,11 @@ class TypecheckerLoop:
         if not has_compilation_only_in_config:
             current_cmd.append("--compilation_steps_only")
 
+        # certoraRun skips local CVL typechecking when GITHUB_ACTIONS/CI is set
+        # (Util.is_ci_or_git_action); blank them (empty is falsy) so the check runs and
+        # this loop can react to typecheck errors instead of them reaching the cloud unseen.
+        typecheck_env = {**os.environ, "CI": "", "GITHUB_ACTIONS": ""}
+
         for round_num in range(max_rounds):
             self.log(
                 f"Running typechecker (attempt {round_num + 1}/{max_rounds}) with command: {' '.join(current_cmd)}"
@@ -1455,7 +1460,7 @@ class TypecheckerLoop:
 
             # Run the command
             result = subprocess.run(
-                current_cmd, capture_output=True, text=True, check=False
+                current_cmd, capture_output=True, text=True, check=False, env=typecheck_env
             )
 
             # Check for success or ignored filtering errors
