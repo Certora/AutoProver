@@ -57,7 +57,7 @@ class Language:
     name: LanguageTag
     default_forbidden_read: str          # fs-exclusion regex (Cargo layout vs Foundry layout)
     code_explorer_prompt: str            # source-navigation framing ("Rust source" vs "Solidity")
-    failure_modes_partial: str | None = None   # j2 partial of language-level failure modes
+    vulnerability_patterns_partial: str | None = None   # j2 partial of language-level vulnerability patterns
 
 @dataclass(frozen=True)
 class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
@@ -130,7 +130,7 @@ RUST = Language(
     # Cargo/Anchor layout: hide build output, VCS, lockfiles, and the JS side; keep crate sources + tests/.
     default_forbidden_read=r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)",
     code_explorer_prompt=RUST_CODE_EXPLORER_PROMPT,     # "Rust source … instruction handlers, Accounts, PDAs"
-    failure_modes_partial="rust/_failure_modes.j2",     # overflow/underflow, panic!/unwrap/expect, ownership
+    vulnerability_patterns_partial="rust/_vulnerability_patterns.j2",     # overflow/underflow, panic!/unwrap/expect, ownership
 )
 
 SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance] = Ecosystem(
@@ -174,20 +174,21 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
 
 ### Prompt composition — the shared Rust fragment
 
-The `RUST` language facet is chain-independent, so its source conventions and failure-mode
+The `RUST` language facet is chain-independent, so its source conventions and vulnerability-pattern
 fragment are authored once and pulled into the chain's prompts by Jinja `{% include %}`. The
 Solana property template composes the shared Rust fragment with its own platform fragment:
 
 ```jinja
 {# composer/templates/solana/property_prompt.j2 #}
-{% include "rust/_failure_modes.j2"   %}   {# shared: overflow, panics, unwrap, lossy casts #}
-{% include "solana/_failure_modes.j2" %}   {# chain-specific: signer/owner/PDA/CPI checks #}
+{% include "rust/_vulnerability_patterns.j2"   %}   {# shared: overflow, panics, unwrap, lossy casts #}
+{% include "solana/_vulnerability_patterns.j2" %}   {# chain-specific: signer/owner/PDA/CPI checks #}
 ```
 
-`rust/_failure_modes.j2` (the language facet) states language-level failure modes — integer
-overflow/underflow, `panic!`/`unwrap`/`expect` aborts, lossy conversions, unchecked results —
-independent of any chain; `solana/_failure_modes.j2` adds the Solana-native ones. Because the
-Rust facet is factored out this way, it is reusable by any future Rust chain without copying.
+`rust/_vulnerability_patterns.j2` (the language facet) states language-level vulnerability
+patterns — integer overflow/underflow, `panic!`/`unwrap`/`expect` aborts, lossy conversions,
+unchecked results — independent of any chain; `solana/_vulnerability_patterns.j2` adds the
+Solana-native ones. Because the Rust facet is factored out this way, it is reusable by any future
+Rust chain without copying.
 
 ---
 
@@ -249,5 +250,5 @@ async def run_pipeline[..., U, Main](
 | `FeatureUnit` protocol | [composer/spec/system_model.py](../composer/spec/system_model.py) |
 | EVM system model + prompts | [composer/spec/system_model.py](../composer/spec/system_model.py) · `composer/templates/application_analysis_*.j2` · `property_analysis_*.j2` |
 | Solana system model | [composer/spec/solana/model.py](../composer/spec/solana/model.py) |
-| Solana prompts + shared Rust fragment | `composer/templates/solana/*.j2` · `composer/templates/rust/_failure_modes.j2` |
+| Solana prompts + shared Rust fragment | `composer/templates/solana/*.j2` · `composer/templates/rust/_vulnerability_patterns.j2` |
 | fs-exclusion default (EVM) | [composer/spec/util.py](../composer/spec/util.py) |

@@ -77,9 +77,9 @@ class Language:
     name: LanguageTag
     default_forbidden_read: str
     code_explorer_prompt: str
-    # The j2 partial with this language's failure modes (overflow, panics, …). Reserved for
-    # the prompt-fragment split; unused while prompts are still monolithic.
-    failure_modes_partial: str | None = None
+    # The j2 partial with this language's vulnerability patterns (overflow, panics, …). Reserved
+    # for the prompt-fragment split; unused while prompts are still monolithic.
+    vulnerability_patterns_partial: str | None = None
 
 
 @dataclass(frozen=True)
@@ -208,7 +208,7 @@ RUST = Language(
     name="rust",
     default_forbidden_read=RUST_FORBIDDEN_READ,
     code_explorer_prompt=RUST_CODE_EXPLORER_PROMPT,
-    failure_modes_partial="rust/_failure_modes.j2",
+    vulnerability_patterns_partial="rust/_vulnerability_patterns.j2",
 )
 
 
