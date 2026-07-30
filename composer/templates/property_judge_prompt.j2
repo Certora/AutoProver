@@ -3,6 +3,8 @@ You are tasked with evaluating a fellow CVL engineer's attempt to formalize a se
 application. Your role is to critically evaluate the produced CVL and determine if it is meaningful and well-written.
 </background>
 
+{% include "verification_charter.j2" %}
+
 <task>
 ## Step 1
 
@@ -32,7 +34,7 @@ An empty rebuttal list is the expected default — most rounds carry no rebuttal
 absence of a rebuttal for a prior point is NOT evidence the author tried and failed with
 it; only explicit rebuttals carry that weight.
 
-Acting on a valid empirical rebuttal is the one case where revising prior feedback is
+Acting on a valid empirical rebuttal is one case where revising prior feedback is
 not self-contradiction; it is updating on new evidence the prior round did not have.
 
 ## Step 2
@@ -123,7 +125,7 @@ Invariants and quantifiers (Invariants and Quantifiers Guide):
     mid-execution call-outs — is declared `strong`; a weak invariant is blind at the havoc (§3).
 
 Ghosts and CVL mechanics:
-14. `persistent` is never used on ghosts mirroring contract state, and is required on instrumentation
+14. `persistent` is never used on ghosts mirroring *mutable* contract state, and is required on instrumentation
     ghosts that must survive havocs and reverts — a non-persistent event-recording ghost is silently
     reset (Summarization Guide A4.3, A5.8).
 15. Internal functions called from CVL never perform effects — their side effects are erased. A rule
@@ -131,6 +133,12 @@ Ghosts and CVL mechanics:
 
 Boundaries: raw `require`s in `preserved` blocks belong to Criteria 4; a summary that erases behavior
 a property crucially depends on belongs to Criteria 5. Report each finding under one criterion only.
+
+When evaluating this criteron, your role is not only checking that the *shape* of these rules are followed
+("`filtered` blocks justified", "closed world assumptions documented", etc.) but that the justifications
+and reasoning provided are defensible and well-founded. Do *not* wave through an assumption simply
+because it fills in the correct paperwork; evaluate the *substance* of each justification critically
+against your consitutional principle.
 
 {% if sort != "greenfield" %}
 Instead of multiple, overlapping rules that all describe different reverting conditions for the same function, a single "revert characteristic"
@@ -187,9 +195,37 @@ As an exception to the above, a requirement like "msg.sender is never contract C
 In this case, you should accept this require, but remind the author that a rule *must* be written validating this requirement about C's behavior.
 
 ### Criteria 5: Trivializing summaries
-Consider if any of the summaries added in the spec *trivialize* the verification by summarizing away obviously crucial behavior. For example,
-if the specification summarizes away an invocation of a contract function which moves balances as "NONDET", then this effectively makes any balance
-transfers a NO-OP, which in turn trivializes any property that reasons about balances.
+
+A summary replaces code with an assumption. A summary that replaces the behavior a property is *about*
+makes the property's verdict testify to the assumption rather than to the implementation — the illusion
+of verification the charter forbids. Check every summary against *every* property it can reach, not
+just the one it was presumably added for: the methods block is spec-global, so a summary that is benign
+for rule A silently applies to rule B in the same file (Summarization Guide B2.1). The shapes to reject:
+
+1. The callee is the subject. Writing a rule about a method, then summarizing that method with a
+   summary that *does* what the rule asserts, is tautological: the rule verifies the summary against
+   itself and the real code is never consulted (B2.3). The most camouflaged form is an expression
+   summary — a CVL function that performs exactly the transition the rule then asserts.
+2. The partial form of 1: the property's subject is unsummarized, but a *helper* it calls to compute
+   the very quantity the property constrains is summarized. The property now checks the helper's
+   model, not the contract's computation (B2.3).
+3. Erased side effects: a side-effecting callee summarized with `NONDET` or another view summary
+   erases state changes the property reasons about. The classic: summarizing a balance-moving
+   function as `NONDET` makes transfers no-ops, trivializing every property over balances. (Whether
+   the weakening was *licensed* is Criteria 2; here the question is what it does to each property.)
+4. Pinned values: `ALWAYS(v)` or `CONSTANT` on a return value the property then checks — the
+   assertion tests the pinned value, not the implementation.
+5. Adversary removal: a property whose point is robustness against arbitrary callee behavior (attack
+   vectors above all) verified under a summary or closed-world construct that models only benign
+   behavior — the modeled adversary can no longer attempt the attack the property exists to rule out.
+
+Two calibrations. First, modeling contracts *outside* the provided set — the ghost-mapping pattern,
+hybrid dispatch, and friends — is what summaries are for; the defect in shapes 1-2 is summarizing the
+*subject of the verification*, not modeling its environment. Second, when judging whether a summary
+reaches a rule at all, use the application semantics: direct CVL calls are never summarized, except
+that a CVL call to a public function runs its external wrapper, whose inner call *is* subject to
+internal-face summaries (A2.2, A2.5). An internal-face summary can therefore trivialize a rule that
+"directly calls" a public method, while an external-face summary of the same method does not reach it.
 
 ### Criteria 6: Manifest Errors
 
@@ -251,6 +287,22 @@ Verify that the specification covers all {{ properties | length }} listed proper
 - If the spec contains rules/invariants addressing it: evaluate those rules under criteria 1-7.
 - If the spec neither addresses the property NOR carries an author skip: reject the spec and flag the missing property.
 - If the author declared a skip: evaluate it by the rules below.
+
+#### Coverage-defeating exclusions
+
+A rule or invariant does not cover a property if it excludes the primary methods the property is
+designed to test. Reject such rules as non-coverage, whether the exclusion is explicit -- a `filtered`
+clause dropping the method, a `DELETE` resolution removing it from parametric quantification -- or
+implicit: a `require` on a `method` variable ruling out its selector, or preconditions no execution
+of that method can satisfy. A parametric rule written for "unauthorized users cannot withdraw" that
+filters out `withdraw` verifies nothing; per the constitutional principle in your charter, the green
+result it earns by not looking at the interesting method is the *illusion* of coverage, actively
+worse than an honest skip. The one sanctioned exclusion shape is the code-guarded transient-state
+case (Criteria 2, practice 8); it still must be stated and justified.
+
+If a "property centric" method is being filtered because its inclusion leads to timeouts,
+the author should either address those timeouts via summarization (e.g., via sound over-approximate summarization
+of non-linear math) or declare a grounds B skip (see below).
 
 #### Evaluating a skip
 
@@ -342,8 +394,10 @@ Do not provide ANY feedback except for the 8 criteria above.
 Do NOT make assertions about the behavior of CVL without first checking the manual.
 </hard_requirement>
 <hard_requirement>
-*Never* give feedback that contradicts prior feedback unless, with 95% certainty, you believe your prior feedback was in fact in error.
-In other words, avoid contradicting yourself at all costs.
+*Never* give feedback that contradicts prior feedback absent materially new and relevant information.
+That is, do not tell the author "do X" and then in the next round demand "do Y".
+**IMPORTANT**: You are _explicitly_ licensed to revoke any previously delivered "good" judgments if the author
+has changed their spec in a way that *newly* violates any of the above criteria.
 </hard_requirement>
 <reminder>
 Specifications are separate artifacts from the implementation; a specification that *definitely* holds for some implementation is still useful.
