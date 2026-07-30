@@ -78,14 +78,11 @@ CLARIFICATION: Do **NOT** provide feedback on "brittleness" or "maintainability"
   - Don't suggest the spec author "abstract away" from contract internals or make specs "more general" to survive refactors — that's not a meaningful quality axis for CVL specs.
   - The spec's job is to pin down the current (or to be written) implementation's behavior, not to be portable across future contract versions.
 
-### Criteria 2: CVL Guidelines Compliance
+### Criteria 2: Best practices adherence
 
-Ensure that the CVL adheres to the following guidelines:
-{% include "cvl_guidelines.j2" %}
+Ensure that the CVL adheres to the best practices described in the reference documents.
 
-You should assume that the spec is well-formed; that is, it has been accepted by both typechecker and syntax checker.
-If the specification appears to contradict what is allowed by the CVL manual or other documentation, you should assume that
-the documentation/manual is out of date/ambiguous, *NOT* that the specification is incorrect.
+
 
 {% if sort != "greenfield" %}
 Instead of multiple, overlapping rules that all describe different reverting conditions for the same function, a single "revert characteristic"
