@@ -4,7 +4,7 @@ Property generation agent: extracts security properties from application compone
 Parameterized by source availability via AnalysisInput tuple.
 """
 
-from typing import Any, Callable, NotRequired, override, Literal, Sequence
+from typing import Any, Callable, NotRequired, TypedDict, override, Literal, Sequence
 import re
 from difflib import SequenceMatcher
 from pydantic import BaseModel, Field
@@ -19,6 +19,7 @@ from graphcore.tools.schemas import WithImplementation
 
 from composer.input.files import Document
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
 from composer.spec.system_model import FeatureUnit
@@ -49,6 +50,25 @@ class _AgentRoundResult(_BugAnalysisCache):
         "mode) will read this -- not your message history -- to "
         "understand your reasoning. Be specific."
     )
+
+class PropertySystemPromptParams(TypedDict):
+    """Kwargs for the property-extraction agent's system prompt template."""
+    sort: Sort
+
+
+class PropertyInitialPromptParams(TypedDict):
+    """Kwargs for the property-extraction agent's initial prompt template."""
+    context: FeatureUnit
+    backend_guidance: str
+    sort: Sort
+    prior_properties: list[_AgentRoundResult]
+
+
+#: Defaults reproduce the EVM/Solidity prompts; the ecosystem seam
+#: (``composer.pipeline.ecosystem``) supplies its own templates for other chains.
+PROPERTY_SYSTEM_TEMPLATE = TypedTemplate[PropertySystemPromptParams]("property_analysis_system_prompt.j2")
+PROPERTY_INITIAL_TEMPLATE = TypedTemplate[PropertyInitialPromptParams]("property_analysis_prompt.j2")
+
 
 class _AgentRoundWithHistory(_AgentRoundResult):
     agent_conversation: list[AnyMessage]
@@ -105,15 +125,14 @@ def _get_initial_prompt(
     sort: Sort,
     prev_results: list[_AgentRoundResult],
     backend_guidance: str,
-    template: str = "property_analysis_prompt.j2",
+    template: TypedTemplate[PropertyInitialPromptParams] = PROPERTY_INITIAL_TEMPLATE,
 ) -> str:
-    return load_jinja_template(
-        template,
-        context=context,
-        backend_guidance=backend_guidance,
-        sort=sort,
-        prior_properties=prev_results
-    )
+    return template.bind({
+        "context": context,
+        "backend_guidance": backend_guidance,
+        "sort": sort,
+        "prior_properties": prev_results,
+    }).render_to(load_jinja_template)
 
 @tool_display("Ending conversation...", None)
 class Exit(WithImplementation[str]):
@@ -286,8 +305,8 @@ async def _run_bug_round(
     round: int,
     prev: list[_AgentRoundResult],
     backend_guidance: str,
-    system_template: str = "property_analysis_system_prompt.j2",
-    initial_template: str = "property_analysis_prompt.j2",
+    system_template: TypedTemplate[PropertySystemPromptParams] = PROPERTY_SYSTEM_TEMPLATE,
+    initial_template: TypedTemplate[PropertyInitialPromptParams] = PROPERTY_INITIAL_TEMPLATE,
 ) -> _AgentRoundWithHistory:
     round_ctx = ctx.child(agent_round_key(round))
     if (cached := await round_ctx.cache_get(_AgentRoundWithHistory)) is not None:
@@ -313,8 +332,8 @@ async def _run_bug_round(
         get_rough_draft_tools(ST)
     ).with_tools(
         env.analysis_tools
-    ).with_sys_prompt_template(
-        system_template, sort=env.sort
+    ).inject(
+        lambda g: system_template.bind({"sort": env.sort}).render_to(g.with_sys_prompt_template)
     ).compile_async()
 
     flow_input: BugAnalysisInput = BugAnalysisInput(
@@ -349,8 +368,8 @@ async def _run_bug_analysis_inner(
     threat_model: Document | None,
     max_rounds: int,
     backend_guidance: str,
-    system_template: str = "property_analysis_system_prompt.j2",
-    initial_template: str = "property_analysis_prompt.j2",
+    system_template: TypedTemplate[PropertySystemPromptParams] = PROPERTY_SYSTEM_TEMPLATE,
+    initial_template: TypedTemplate[PropertyInitialPromptParams] = PROPERTY_INITIAL_TEMPLATE,
 ) -> _AgentResult:
     if (cached := await agent_component_analysis.cache_get(_AgentResult)) is not None:
         return cached
@@ -401,8 +420,8 @@ async def run_property_inference(
     max_rounds: int = 3,
     backend_guidance: str = CERTORA_BACKEND_GUIDANCE,
     *,
-    system_template: str = "property_analysis_system_prompt.j2",
-    initial_template: str = "property_analysis_prompt.j2",
+    system_template: TypedTemplate[PropertySystemPromptParams] = PROPERTY_SYSTEM_TEMPLATE,
+    initial_template: TypedTemplate[PropertyInitialPromptParams] = PROPERTY_INITIAL_TEMPLATE,
 ) -> list[PropertyFormulation]:
     """
     Extract security properties for a component.

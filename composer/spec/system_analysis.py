@@ -1,4 +1,4 @@
-from typing import NotRequired, Any, Callable
+from typing import NotRequired, Any, Callable, TypedDict
 
 from graphcore.graph import MessagesState, FlowInput
 
@@ -6,13 +6,26 @@ from graphcore.graph import MessagesState, FlowInput
 from composer.spec.context import (
     WorkflowContext, SystemDoc
 )
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.system_model import BaseApplication, ExplicitContract, ExternalActor, ExternalDependency, SolidityIdentifier
-from composer.spec.service_host import ServiceHost
+from composer.spec.service_host import ServiceHost, Sort
 from composer.spec.util import slugify_filename
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 
 DESCRIPTION = "Component analysis"
+
+
+class AnalysisPromptParams(TypedDict):
+    """Kwargs shared by the analysis agent's system and initial prompt templates."""
+    sort: Sort
+    has_doc: bool
+
+
+#: Defaults reproduce the EVM/Solidity prompts; the ecosystem seam
+#: (``composer.pipeline.ecosystem``) supplies its own templates for other chains.
+ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_system.j2")
+ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_prompt.j2")
 
 def _validate_connectivity(
     app: BaseApplication, expected_main_id: SolidityIdentifier | None
@@ -96,8 +109,8 @@ async def run_component_analysis[T: BaseApplication](
     extra_input: list[str | dict],
     expected_main_id: SolidityIdentifier | None = None,
     *,
-    system_template: str = "application_analysis_system.j2",
-    initial_template: str = "application_analysis_prompt.j2",
+    system_template: TypedTemplate[AnalysisPromptParams] = ANALYSIS_SYSTEM_TEMPLATE,
+    initial_template: TypedTemplate[AnalysisPromptParams] = ANALYSIS_INITIAL_TEMPLATE,
     validate: Callable[[BaseApplication, SolidityIdentifier | None], str | None] = _validate_connectivity,
 ) -> T | None:
     """Analyze application components from a system doc and optionally source code.
@@ -124,22 +137,19 @@ async def run_component_analysis[T: BaseApplication](
     ) -> str | None:
         return validate(app, expected_main_id)
 
+    prompt_params: AnalysisPromptParams = {"sort": env.sort, "has_doc": input is not None}
     b = bind_standard(
         builder=env.builder_lite(),
         state_type=AnalysisState,
         validator=_validation_wrapper
     ).with_input(
         AnalysisInput
-    ).with_sys_prompt_template(
-        system_template,
-        sort=env.sort,
-        has_doc=input is not None
+    ).inject(
+        lambda g: system_template.bind(prompt_params).render_to(g.with_sys_prompt_template)
     ).with_tools(
         [memory, *get_rough_draft_tools(AnalysisState), *env.analysis_tools]
-    ).with_initial_prompt_template(
-        initial_template,
-        sort=env.sort,
-        has_doc=input is not None
+    ).inject(
+        lambda g: initial_template.bind(prompt_params).render_to(g.with_initial_prompt_template)
     )
 
     graph = b.compile_async()

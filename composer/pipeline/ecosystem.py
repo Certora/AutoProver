@@ -16,11 +16,23 @@ Solana model + prompts and reuses the shared ``RUST`` language facet. The driver
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, TypedDict
+from typing import Any, Callable, Literal, Mapping, TypedDict
 
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CODE_EXPLORER_SYS_PROMPT
-from composer.spec.system_analysis import _validate_connectivity
+from composer.spec.gen_types import TypedTemplate
+from composer.spec.prop_inference import (
+    PropertyInitialPromptParams,
+    PropertySystemPromptParams,
+    PROPERTY_INITIAL_TEMPLATE,
+    PROPERTY_SYSTEM_TEMPLATE,
+)
+from composer.spec.system_analysis import (
+    AnalysisPromptParams,
+    ANALYSIS_INITIAL_TEMPLATE,
+    ANALYSIS_SYSTEM_TEMPLATE,
+    _validate_connectivity,
+)
 from composer.spec.system_model import (
     AnyApplication,
     BaseApplication,
@@ -44,11 +56,14 @@ ChainTag = Literal["evm", "solana", "soroban"]
 
 
 @dataclass(frozen=True)
-class PromptPair:
-    """A (system prompt, initial prompt) template-name pair for one agent."""
+class PromptPair[SysParams: Mapping[str, Any], InitParams: Mapping[str, Any]]:
+    """A (system prompt, initial prompt) typed-template pair for one agent — see
+    :class:`~composer.spec.gen_types.TypedTemplate`. Two type parameters because a pair's system
+    and initial templates don't always share a kwargs shape (the property-inference system
+    prompt takes just ``sort``; its initial prompt also takes ``context``/``prior_properties``)."""
 
-    system: str
-    initial: str
+    system: TypedTemplate[SysParams]
+    initial: TypedTemplate[InitParams]
 
 
 @dataclass(frozen=True)
@@ -92,9 +107,9 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     #: The pydantic model the analysis phase produces.
     system_model: type[App]
     #: Prompts for the system-analysis agent.
-    analysis_prompts: PromptPair
+    analysis_prompts: PromptPair[AnalysisPromptParams, AnalysisPromptParams]
     #: Prompts for the per-component property-inference agent.
-    property_prompts: PromptPair
+    property_prompts: PromptPair[PropertySystemPromptParams, PropertyInitialPromptParams]
     #: Connectivity/shape validation of the analyzed model (retry feedback on failure).
     #: Typed over ``BaseApplication`` (not ``App``): the validator receives the produced model
     #: and narrows internally (as ``_validate_connectivity`` does), and this keeps it assignable
@@ -170,12 +185,8 @@ EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] =
     name="evm",
     language=SOLIDITY,
     system_model=SourceApplication,
-    analysis_prompts=PromptPair(
-        "application_analysis_system.j2", "application_analysis_prompt.j2"
-    ),
-    property_prompts=PromptPair(
-        "property_analysis_system_prompt.j2", "property_analysis_prompt.j2"
-    ),
+    analysis_prompts=PromptPair(ANALYSIS_SYSTEM_TEMPLATE, ANALYSIS_INITIAL_TEMPLATE),
+    property_prompts=PromptPair(PROPERTY_SYSTEM_TEMPLATE, PROPERTY_INITIAL_TEMPLATE),
     validate_analysis=_validate_connectivity,
     locate_main=main_instance,
     units=_evm_units,
@@ -379,8 +390,14 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
     name="solana",
     language=RUST,
     system_model=SolanaApplication,
-    analysis_prompts=PromptPair("solana/analysis_system.j2", "solana/analysis_prompt.j2"),
-    property_prompts=PromptPair("solana/property_system.j2", "solana/property_prompt.j2"),
+    analysis_prompts=PromptPair(
+        TypedTemplate[AnalysisPromptParams]("solana/analysis_system.j2"),
+        TypedTemplate[AnalysisPromptParams]("solana/analysis_prompt.j2"),
+    ),
+    property_prompts=PromptPair(
+        TypedTemplate[PropertySystemPromptParams]("solana/property_system.j2"),
+        TypedTemplate[PropertyInitialPromptParams]("solana/property_prompt.j2"),
+    ),
     validate_analysis=_solana_validate,
     locate_main=_solana_locate_main,
     units=_solana_units,
