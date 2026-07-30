@@ -63,8 +63,9 @@ class CorePhases[P: enum.Enum](TypedDict):
 
 @dataclass(frozen=True)
 class SystemAnalysisSpec:
-    """The backend's contribution to the shared analysis call. The analyzed type is always
-    SourceApplication (the prover's harnessed lift is its prepare_system, not analysis)."""
+    """The backend's contribution to the shared analysis call. The analyzed type is the
+    ecosystem's ``App`` (SourceApplication for EVM; the prover's harnessed lift is its
+    prepare_system, not analysis)."""
     analysis_key: str
     properties_key: str
     extra_input: list[str | dict] = field(default_factory=list)

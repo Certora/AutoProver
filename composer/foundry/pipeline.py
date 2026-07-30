@@ -32,9 +32,10 @@ from composer.foundry.report import _foundry_verdicts
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun,
     GaveUp, SystemAnalysisSpec,
-    CorePhases, main_instance, CorePipelineResult,
+    CorePhases, CorePipelineResult,
     COMMON_SYSTEM_CACHE_KEY
 )
+from composer.pipeline.ecosystem import main_instance
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.context import (

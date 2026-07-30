@@ -16,7 +16,7 @@ Solana model + prompts and reuses the shared ``RUST`` language facet. The driver
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, TypedDict
 
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CODE_EXPLORER_SYS_PROMPT
@@ -388,6 +388,14 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
 )
 
 
-#: Registry of available ecosystems, keyed by chain tag. Heterogeneous in ``App``/``Main``/``Unit``
-#: (each chain has its own model), hence ``Ecosystem[Any, Any, Any]``.
-ECOSYSTEMS: dict[ChainTag, Ecosystem[Any, Any, Any]] = {"evm": EVM, "solana": SOLANA}
+class Ecosystems(TypedDict):
+    """Registry of available ecosystems, keyed by chain tag. The set is closed (a new chain
+    means a new field here, not a new dict entry), so a ``TypedDict`` gives each entry its own
+    concrete ``Ecosystem[App, Main, Unit]`` instead of erasing all of them to
+    ``Ecosystem[Any, Any, Any]``."""
+
+    evm: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance]
+    solana: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance]
+
+
+ECOSYSTEMS: Ecosystems = {"evm": EVM, "solana": SOLANA}

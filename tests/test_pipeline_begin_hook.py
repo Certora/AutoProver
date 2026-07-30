@@ -17,6 +17,7 @@ import pytest
 
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
+from composer.pipeline.ecosystem import EVM
 from composer.spec.types import PropertyFormulation
 
 pytestmark = pytest.mark.asyncio
@@ -143,7 +144,7 @@ async def _drive(monkeypatch, units: dict[str, list[str]]) -> _Formalizer:
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
     monkeypatch.setattr(core, "_extract_all", fake_extract_all)
     monkeypatch.setattr(core, "build_report", fake_report)
-    await run_pipeline(_Backend(_Prepared(formalizer)), _Run(), max_bug_rounds=1)  # type: ignore[arg-type]
+    await run_pipeline(_Backend(_Prepared(formalizer)), _Run(), max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
     return formalizer
 
 

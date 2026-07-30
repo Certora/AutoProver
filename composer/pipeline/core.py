@@ -27,7 +27,7 @@ from composer.spec.context import (
     WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode
 )
 from composer.spec.system_model import (
-    SourceApplication, FeatureUnit
+    BaseApplication, FeatureUnit
 )
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
@@ -39,10 +39,7 @@ from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
-# The ecosystem seam supplies the domain-specific front half (analyzed model type, prompts,
-# analysis validation, unit enumeration). ``main_instance`` moved here too and is re-exported
-# so existing EVM backends keep doing ``from composer.pipeline.core import main_instance``.
-from composer.pipeline.ecosystem import Ecosystem, EVM, main_instance
+from composer.pipeline.ecosystem import Ecosystem
 from .ptypes import (
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp,
     PipelineRun, SystemAnalysisSpec
@@ -121,7 +118,7 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT, U]: ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -135,7 +132,7 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     def artifact_store(self) -> ArtifactStore[A, FormT]: ...
 
     async def prepare_system(
-        self, analyzed: SourceApplication,
+        self, analyzed: App,
         run: PipelineRun[P, H]
     ) -> PreparedSystem[FormT, U, Main]: ...
 
@@ -177,30 +174,15 @@ def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main](
-    backend: PipelineBackend[P, FormT, H, A, U, Main],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
     run: PipelineRun[P, H],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
-    ecosystem: Ecosystem[Any, Any, Any] = EVM,
+    ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
-    # ``ecosystem`` supplies the domain-specific front half; it defaults to ``EVM``, which
-    # reproduces the previous hardcoded Solidity behavior exactly, so EVM callers (and cli.py)
-    # need pass nothing. Non-EVM backends (e.g. the Rust/Crucible backend) pass ``ecosystem=SOLANA``.
-    #
-    # Its ``[App, Main, Unit]`` params are deliberately erased to ``Any``, not tied to the
-    # backend's — ``Ecosystem`` is INVARIANT (it holds callables that both consume and produce
-    # those types), so ``Ecosystem[SolanaApplication, …]`` and ``Ecosystem[SourceApplication, …]``
-    # are unrelated. At this generic boundary the backend (hence its ``Main``) is itself a free
-    # var, and — by invariance — a concretely-typed argument (the ``EVM`` default, or an explicit
-    # ``SOLANA``) can't unify with a tied ``Main``; the only type accepting both is ``Any``. The
-    # coupling is loose besides: ``prepare_system`` fixes ``analyzed: SourceApplication`` (so a
-    # non-EVM ``App`` can't be tied without making it generic), and the backend's ``U`` isn't the
-    # ecosystem's ``Unit`` (the null backend uses ``FeatureUnit``; whole-program extraction yields
-    # one program-level unit) — which is why the unit list is ``cast`` below, not inferred.
-    # So the backend↔ecosystem pairing is a runtime contract; the caller is trusted to pair them.
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
 
@@ -228,16 +210,10 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
     formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
 
-    # Extraction yields ``FeatureUnit`` batches (the ecosystem is invariant in its unit type and
-    # callers pass a concrete chain, so it can't be tied to the backend's ``U`` at the signature).
-    # The paired backend guarantees these units are its ``U``; widen once, here, honestly.
-    batches: list[_Batch[U]] = cast(
-        "list[_Batch[U]]",
-        await _extract_all(
-            backend.analysis_spec.properties_key,
-            prepared.main, backend.backend_guidance, run,
-            phases["extraction"], interactive, threat_model, max_bug_rounds, ecosystem),
-    )
+    batches: list[_Batch[U]] = await _extract_all(
+        backend.analysis_spec.properties_key,
+        prepared.main, backend.backend_guidance, run,
+        phases["extraction"], interactive, threat_model, max_bug_rounds, ecosystem)
     formalizer = await formalizer_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
@@ -311,17 +287,17 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     return _tally(outcomes)
 
-async def _extract_all[P: enum.Enum, H](
+async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     prop_key: str,
-    # ``main`` stays untyped here: this internal helper drives the type-erased
-    # ``Ecosystem[Any, Any, Any]`` (see run_pipeline), so there is nothing to tie it to.
-    main: Any, backend_guidance: str, run: PipelineRun[P, H],
+    main: Main, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
-    ecosystem: Ecosystem[Any, Any, Any],
-) -> list[_Batch[FeatureUnit]]:
+    # ``App`` stays ``Any`` here: this helper never touches the analyzed-model axis, only
+    # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
+    ecosystem: Ecosystem[Any, Main, U],
+) -> list[_Batch[U]]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
 
-    async def _one(feat: FeatureUnit) -> _Batch[FeatureUnit] | None:
+    async def _one(feat: U) -> _Batch[U] | None:
         feat_ctx = await prop_ctx.child(_component_cache_key(feat), feat.context_tag())
         props = await run.runner(
             TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),

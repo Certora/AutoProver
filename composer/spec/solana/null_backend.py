@@ -147,7 +147,7 @@ class NullSolanaPrepared(PreparedSystem[NullResult, FeatureUnit, SolanaProgramIn
 @dataclass
 class NullSolanaBackend:
     """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, FeatureUnit,
-    SolanaProgramInstance]`` (P, FormT, H, A, Unit, Main) — structural."""
+    SolanaProgramInstance, SolanaApplication]`` (P, FormT, H, A, Unit, Main, App) — structural."""
 
     artifact_store: NullSolanaArtifactStore
     backend_guidance = SOLANA_NULL_GUIDANCE

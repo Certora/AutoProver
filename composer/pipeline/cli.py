@@ -1,4 +1,4 @@
-from typing import Protocol, AsyncIterator, TYPE_CHECKING
+from typing import Protocol, AsyncIterator, TYPE_CHECKING, cast
 import sys
 import pathlib
 import enum
@@ -20,9 +20,10 @@ from composer.pipeline.ptypes import (
     CorePipelineResult
 )
 from composer.spec.artifacts import ArtifactIdentifier
-from composer.spec.system_model import FeatureUnit
+from composer.spec.system_model import FeatureUnit, BaseApplication
 from composer.spec.service_host import ModelProvider
 from composer.spec.system_analysis import SolidityIdentifier
+from composer.pipeline.ecosystem import Ecosystem, EVM
 from .core import PipelineBackend, run_pipeline
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
@@ -114,10 +115,10 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A, U, Main]
+        backend: PipelineBackend[P, FormT, H, A, U, Main, App]
     ) -> CorePipelineResult[FormT]:
         ...
 
@@ -250,9 +251,9 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U, Main]
+                backend: PipelineBackend[P, FormT, H, A, U, Main, App]
             ) -> CorePipelineResult[FormT]:
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
@@ -274,7 +275,12 @@ async def cli_pipeline[P: enum.Enum, H](
                     run=run,
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
-                    threat_model=threat_model
+                    threat_model=threat_model,
+                    # cli_pipeline is the EVM CLI entry point (SolidityIdentifier throughout
+                    # above); App/Main/U are only generic here to admit FoundryBackend and
+                    # ProverBackend (same EVM triple, different FormT/A). Downcast to the
+                    # generic ecosystem parameter rather than widening run_pipeline back to Any.
+                    ecosystem=cast(Ecosystem[App, Main, U], EVM),
                 )
                 ...
 

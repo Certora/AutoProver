@@ -56,9 +56,10 @@ from composer.prover.core import ProverOptions
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun, Delivered, GaveUp,
-    CorePhases, SystemAnalysisSpec, ComponentOutcome, main_instance,
+    CorePhases, SystemAnalysisSpec, ComponentOutcome,
     COMMON_SYSTEM_CACHE_KEY
 )
+from composer.pipeline.ecosystem import main_instance
 
 
 INV_CVL_KEY = CacheKey[None, GeneratedCVL]("invariant-cvl")
@@ -273,7 +274,8 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
 @dataclass
 class ProverBackend:
     """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec,
-    ContractComponentInstance, ContractInstance] (P, FormT, H, A, Unit, Main)."""
+    ContractComponentInstance, ContractInstance, SourceApplication]
+    (P, FormT, H, A, Unit, Main, App)."""
     backend_guidance = CERTORA_BACKEND_GUIDANCE
     core_phases = CorePhases({
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
