@@ -44,7 +44,8 @@ from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_I
 # so existing EVM backends keep doing ``from composer.pipeline.core import main_instance``.
 from composer.pipeline.ecosystem import Ecosystem, EVM, main_instance
 from .ptypes import (
-    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp, PipelineRun, SystemAnalysisSpec
+    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp,
+    PipelineRun, SystemAnalysisSpec
 )
 
 COMMON_SYSTEM_CACHE_KEY = "system-analysis"
@@ -62,6 +63,23 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     members without casts — while the driver stays unit-agnostic."""
     formalized_type: type[FormT]
     backend_tag: ReportBackend
+
+    async def begin(self, jobs: list[BackendJob[U]], run: PipelineRun) -> None:
+        """Called once with **every** unit's properties, after extraction and before the per-unit
+        fan-out. Default: nothing.
+
+        The hook exists for backends with a *shared* artifact that all units build on — Crucible's
+        fixture, and whatever setup module a CVLR backend needs. Such an artifact must be authored
+        from the union of every unit's properties (it is what makes them checkable), and it cannot
+        be authored in ``prepare_formalization`` because that runs concurrently with extraction, so
+        no properties exist yet. This is the only point where both are true: extraction is done, and
+        no unit has been formalized. Doing it inside ``formalize`` instead means the first unit to
+        arrive decides the shared artifact for all of them — harmless at one unit, silently wrong at
+        several (docs/crucible-component-units.md §8.2).
+
+        The prover's peer (``invariants.spec``) is staged in ``prepare_formalization`` and needs
+        nothing here."""
+        return None
 
     @abstractmethod
     async def formalize(
@@ -224,7 +242,11 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     if not batches:
         raise ValueError("No properties extracted from any component.")
 
-    # 4. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
+    # 4. Any shared artifact the units build on is authored HERE — once, from every unit's
+    #    properties — not lazily by whichever unit formalizes first (see ``Formalizer.begin``).
+    await formalizer.begin(cast("list[BackendJob[U]]", batches), run)
+
+    # 5. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
     async def _run(batch: _Batch[U]) -> ComponentOutcome[FormT, U]:
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
@@ -262,7 +284,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     await formalizer.finalize(outcomes, run)
 
-    # 5. Report (shared, backend-agnostic). The driver assembles the per-component inputs; backends
+    # 6. Report (shared, backend-agnostic). The driver assembles the per-component inputs; backends
     # contribute only synthetic extras (prover: structural invariants). Best-effort: a failure here
     # never fails the run.
     inputs = [

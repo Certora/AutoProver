@@ -1,7 +1,7 @@
 """A null Solana backend — records extracted properties without verifying them.
 
 It satisfies the full ``PipelineBackend`` contract over the Solana ecosystem's
-``(SolanaApplication, SolanaProgramInstance, SolanaInstructionInstance)`` triple, but its
+``(SolanaApplication, SolanaProgramInstance, SolanaComponentInstance)`` triple, but its
 ``formalize`` just echoes the extracted properties into a trivial result and its
 ``fetch_verdicts`` returns nothing.
 
@@ -31,7 +31,6 @@ from composer.spec.context import WorkflowContext
 from composer.spec.cvl_generation import SkippedProperty
 from composer.spec.solana.model import (
     SolanaApplication,
-    SolanaInstructionInstance,
     SolanaProgramInstance,
 )
 from composer.spec.source.report.collect import ReportComponentInput, Verdict

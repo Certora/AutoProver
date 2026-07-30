@@ -31,10 +31,13 @@ from composer.spec.system_model import (
     SourceApplication,
 )
 from composer.spec.solana.model import (
+    AuthorityInteraction,
     SolanaApplication,
+    SolanaComponentInstance,
+    SolanaProgram,
     SolanaProgramInstance,
 )
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import FS_FORBIDDEN_READ, slugify_filename
 
 LanguageTag = Literal["solidity", "rust"]
 ChainTag = Literal["evm", "solana", "soroban"]
@@ -99,10 +102,12 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     validate_analysis: Callable[[BaseApplication, SolidityIdentifier | None], str | None]
     #: Locate the target unit (the "main contract"/program) in the analyzed model.
     locate_main: Callable[[App, SourceCode], Main]
-    #: Enumerate the units the extraction phase infers properties for — one batch per unit. EVM
-    #: returns one per component; a whole-program ecosystem (Solana) returns a singleton ``[main]``,
-    #: so all its invariants are inferred + formalized in a single harness + run
-    #: (docs/crucible-unit-granularity.md §3).
+    #: Enumerate the units the extraction phase infers properties for — one batch per unit. Both
+    #: ecosystems return one per **component** of the main contract/program: a named cluster of its
+    #: behavior produced by system analysis (docs/crucible-component-units.md). Note this is on the
+    #: *ecosystem* axis, so every backend paired with a chain inherits the same split — pick it on
+    #: backend-neutral grounds, and let a backend that wants coarser work aggregate in its
+    #: ``Formalizer`` instead.
     units: Callable[[Main], list[Unit]]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
@@ -212,21 +217,72 @@ RUST = Language(
 # ---------------------------------------------------------------------------
 
 
+def _validate_program_components(prog: SolanaProgram) -> list[str]:
+    """One program's :class:`ProgramComponent` checks — the peer of the component half of EVM's
+    ``_validate_connectivity`` (``docs/crucible-component-units.md`` §7.3).
+
+    Name and slug uniqueness mirror EVM directly. The component↔instruction mapping check has no
+    EVM peer and is the one deliberate divergence: EVM's ``external_entry_points`` are prose the
+    prompt renders, while a Solana component's ``instructions`` are *references* that resolve into
+    the program (the unit wrapper turns them back into ``SolanaInstruction`` objects). A dangling
+    name would silently drop an instruction's account/constraint detail from the extraction
+    prompt, and an *unreferenced* instruction is an entry point no property will ever cover — so
+    the mapping is required to be both valid and total. It costs two set operations."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    slug_origin: dict[str, str] = {}
+    for comp in prog.components:
+        if comp.name in seen:
+            errors.append(f"Duplicate component names in {prog.name}: {comp.name}")
+        seen.add(comp.name)
+        slug = slugify_filename(comp.name)
+        if slug in slug_origin:
+            errors.append(
+                f"Components {slug_origin[slug]!r} and {comp.name!r} in {prog.name} both reduce "
+                f"to the filename slug {slug!r} (punctuation and symbols are normalized to "
+                f"underscores); give them names that differ in more than that."
+            )
+        else:
+            slug_origin[slug] = comp.name
+        for ins_name in comp.instructions:
+            if ins_name not in prog.instructions_by_name:
+                errors.append(
+                    f"Component {comp.name!r} of {prog.name} lists an instruction {ins_name!r} "
+                    f"that {prog.name} does not declare."
+                )
+    referenced = {n for comp in prog.components for n in comp.instructions}
+    unassigned = [i.name for i in prog.instructions if i.name not in referenced]
+    if unassigned:
+        errors.append(
+            f"Instruction(s) {', '.join(repr(n) for n in unassigned)} of {prog.name} belong to no "
+            f"component; every instruction must appear in at least one component's `instructions` "
+            f"(an instruction may appear in more than one)."
+        )
+    return errors
+
+
 def _solana_validate(app: BaseApplication, expected_main: SolidityIdentifier | None) -> str | None:
     """Connectivity/shape validation for a ``SolanaApplication`` (retry feedback on failure).
-    Mirrors the EVM ``_validate_connectivity`` structure: unique program identifiers, unique
-    instruction slugs within a program, the expected main program present, CPI targets known."""
+    Mirrors the EVM ``_validate_connectivity`` structure: unique program identifiers and names,
+    unique instruction slugs within a program, unique component names/slugs within a program, the
+    component↔instruction mapping valid and total, component interactions resolving, and the
+    expected main program present."""
     if not isinstance(app, SolanaApplication):
         return None
     errors: list[str] = []
-    known_programs: set[str] = set()
+    known_identifiers: set[str] = set()
+    # Program NAME -> its component names. Keyed by name (not identifier) because that is what an
+    # interaction names, exactly as EVM keys by contract name.
+    known_components: dict[str, set[str]] = {}
+    known_authorities: set[str] = {a.name for a in app.authorities}
     for prog in app.programs:
-        if prog.program_identifier in known_programs:
+        if prog.program_identifier in known_identifiers:
             errors.append(f"Duplicate program identifier: {prog.program_identifier}")
-        known_programs.add(prog.program_identifier)
+        known_identifiers.add(prog.program_identifier)
+        if prog.name in known_components:
+            errors.append(f"Duplicate program names: {prog.name}")
+        known_components.setdefault(prog.name, set()).update(c.name for c in prog.components)
         slug_origin: dict[str, str] = {}
-        from composer.spec.util import slugify_filename
-
         for ins in prog.instructions:
             slug = slugify_filename(ins.name)
             if slug in slug_origin:
@@ -238,16 +294,55 @@ def _solana_validate(app: BaseApplication, expected_main: SolidityIdentifier | N
             # CPI targets may be well-known external programs (SPL Token, System, …)
             # that are not declared in the model; we do not flag those. A future
             # policy can require known_programs | known_authorities | an allowlist.
-    if expected_main is not None and expected_main not in known_programs:
+        errors.extend(_validate_program_components(prog))
+
+    # Interactions, in a second pass so a component may name one declared later (EVM does the same).
+    # Unlike the CPI-target leniency above, these ARE required to resolve: the analysis prompt tells
+    # the model to declare every external actor it interacts with, including SPL Token / System.
+    for prog in app.programs:
+        for comp in prog.components:
+            where = f"Component {comp.name} of {prog.name} interacts with"
+            for inter in comp.interactions:
+                if isinstance(inter, AuthorityInteraction):
+                    if inter.authority not in known_authorities:
+                        errors.append(f"{where} unknown external authority: {inter.authority}")
+                elif inter.program not in known_components:
+                    errors.append(f"{where} an unknown program: {inter.program}")
+                elif inter.component and inter.component not in known_components[inter.program]:
+                    errors.append(
+                        f"{where} unknown component {inter.component} of program {inter.program}"
+                    )
+
+    if expected_main is not None and expected_main not in known_identifiers:
         errors.append(
             f"Expected a program with identifier {expected_main!r}; declared programs: "
-            f"{sorted(known_programs) or '(none)'}."
+            f"{sorted(known_identifiers) or '(none)'}."
         )
     if not errors:
         return None
+
+    # The declared-names reference block (EVM peer): every error above is a name that failed to
+    # resolve, so the retry is far more likely to land if it can see the vocabulary it submitted.
+    def _fmt(items: set[str]) -> str:
+        return ", ".join(sorted(items)) if items else "(none)"
+
+    reference_lines = [
+        f"- Declared programs: {_fmt(set(known_components))}",
+        f"- Declared external authorities: {_fmt(known_authorities)}",
+    ]
+    for prog_name, comps in sorted(known_components.items()):
+        reference_lines.append(f"- Components of {prog_name}: {_fmt(comps)}")
+    reference = (
+        "\n\nFor reference, the names you declared in your submission:\n" + "\n".join(reference_lines)
+    )
+
     if len(errors) == 1:
-        return errors[0]
-    return "Multiple validation errors; fix all before resubmitting:\n" + "\n".join(f"- {e}" for e in errors)
+        return errors[0] + reference
+    return (
+        "Multiple validation errors; fix all before resubmitting:\n"
+        + "\n".join(f"- {e}" for e in errors)
+        + reference
+    )
 
 
 def _solana_locate_main(app: SolanaApplication, source: SourceCode) -> SolanaProgramInstance:
@@ -257,11 +352,16 @@ def _solana_locate_main(app: SolanaApplication, source: SourceCode) -> SolanaPro
     raise ValueError(f"main program {source.contract_name!r} not found in analyzed application")
 
 
-def _solana_units(main: SolanaProgramInstance) -> list[SolanaProgramInstance]:
-    # Whole-program mode: a single unit that IS the program — so all invariants are inferred and
-    # formalized in one harness + run (docs/crucible-unit-granularity.md §3). SolanaProgramInstance
-    # is itself a FeatureUnit, so the driver reads it directly to propose whole-program invariants.
-    return [main]
+def _solana_units(main: SolanaProgramInstance) -> list[SolanaComponentInstance]:
+    # One unit per component of the MAIN program — the exact shape of ``_evm_units`` (which
+    # enumerates the main *contract's* components; siblings are context, not units). Replaces the
+    # whole-program singleton this returned before: one extraction agent for a 62-instruction
+    # program is a hard cap on depth, and the unit was a Crucible cost decision sitting on a
+    # backend-neutral seam. See docs/crucible-component-units.md §2 and §15.
+    return [
+        SolanaComponentInstance(ind=i, _program=main)
+        for i in range(len(main.program.components))
+    ]
 
 
 def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
@@ -272,9 +372,10 @@ def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
     ]
 
 
-# Whole-program mode: ``units`` returns a singleton ``[main]`` (the ``Unit`` type param is
-# ``SolanaProgramInstance``, same as ``Main``). We may support finer-grained units in the future.
-SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaProgramInstance] = Ecosystem(
+# Per-component units, mirroring EVM: ``Main`` is the located program, ``Unit`` is one of its
+# ``ProgramComponent``s. Every Solana backend inherits this split — Crucible today, a CVLR backend
+# later — which is why it is chosen on backend-neutral grounds (docs/crucible-component-units.md §5).
+SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance] = Ecosystem(
     name="solana",
     language=RUST,
     system_model=SolanaApplication,

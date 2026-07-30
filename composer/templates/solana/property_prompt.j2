@@ -1,29 +1,24 @@
 <background>
-You are performing a security review of a Solana program as a whole, to produce **program-level
-invariants** for a coverage-guided fuzzer. The fuzzer drives *random sequences* of the program's
-instructions and checks each property after every action — so the properties you write must hold
-across ANY reachable sequence of actions, not only within a single instruction.
+You are performing a security review of a Solana program in the context of a larger audit effort.
 </background>
 
 <inputs>
-{% include "solana/program_context.j2" %}
+{% include "solana/component_context.j2" %}
 </inputs>
 
-{% with unit_noun = "program" %}{% include "shared/prior_properties.j2" %}{% endwith %}
+{% with unit_noun = "component" %}{% include "shared/prior_properties.j2" %}{% endwith %}
 
 <task>
-Input: {% if sort != "greenfield" %}the Rust/Anchor implementation of a Solana program{% else %}a design document for a Solana program{% endif %}, and a description of its instructions.
-Output: a list of whole-program "security properties" a fuzzer can check after every action.
+Input: {% if sort != "greenfield" %}the Rust/Anchor implementation of a Solana program{% else %}a design document for a Solana program{% endif %}, and a description of one of its components.
+Output: a list of "security properties" for that component.
 
 Follow these steps exactly:
 
 ## Step 1
 
 Analyze the provided {% if sort != "greenfield" %}implementation{% else %}design{% endif %} and formulate a set of security
-properties that are PLAUSIBLE for this program. Prefer **cross-instruction** properties — ones a
-random sequence of actions could violate (conservation, monotonicity, access control that must hold
-no matter what came before) — over ones local to a single call. Each description must be precise and
-concise, and phrased as something checkable against on-chain state after any action.
+properties that are PLAUSIBLE for this program. Each description must be precise and concise, and
+phrased as something checkable against the program's on-chain state.
 
 Security properties fall into three categories:
 
@@ -33,8 +28,7 @@ Security properties fall into three categories:
    Good: "A config PDA's `admin` field is only ever the key that signed the last `set_admin`."
    Bad: "The accounts should be correct" (overly broad).
 
-2. **Safety properties** — concrete statements about what should not be possible in a correct program,
-   over any action sequence.
+2. **Safety properties** — concrete statements about what should not be possible in a correct program.
    These SHOULD include intended-normal-behavior properties, not only immediately-security-critical ones.
    Good: "Only the account stored in `vault.authority` (and it must sign) can ever reduce the vault balance."
    Good: "`initialize` can succeed at most once for a given config PDA, no matter the call order."
@@ -67,8 +61,8 @@ Write a rough-draft list of your properties using the `write_rough_draft` tool.
 
 ## Step 3
 Review your rough draft. For each property, confirm it meets the Step-1 guidelines — a clear
-violation consequence, non-trivial, plausibly verifiable as a whole-program invariant. Drop anything
-you cannot defend.
+violation consequence, non-trivial, plausibly verifiable by the downstream tool. Drop anything you
+cannot defend.
 
 ## Step 4
 Output the results using the result tool.

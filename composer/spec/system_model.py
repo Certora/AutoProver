@@ -1,11 +1,12 @@
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 from pydantic import BaseModel, Field
 from functools import cached_property
 from composer.spec.util import slugify_filename
 from .types import ComponentName, SolidityIdentifier, ContractName
 
 
+@runtime_checkable
 class FeatureUnit(Protocol):
     """The per-unit interface the shared pipeline driver needs, independent of ecosystem.
 

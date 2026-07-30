@@ -41,6 +41,7 @@ Each program the application implements. For each program provide:
 - `description`: the program's role in the application.
 - `account_types`: the account/state types this program owns and derives (PDAs) — name & purpose.
 - `instructions`: the program's instructions (entry points), described below.
+- `components`: the program's capabilities, described below.
 
 #### Instructions
 
@@ -59,6 +60,33 @@ Each instruction (the program's entry points / handlers). For each:
 - `cpis`: cross-program invocations it performs (target program + what it does / signer used).
 - `requirements`: the instruction's behavioral specification, stated as requirements ("The
   instruction must ...").
+
+#### Components
+
+Each program is additionally comprised of "components" which serve to organize related
+functionality. A component is a *capability* of the program — not a single instruction, and not
+the whole program. Each component should be given a short, descriptive `name` and a longer
+`description` of the component. This description should focus on *what* the component does, not
+*how* it does it.
+
+Group instructions by **capability and the account state they share**, not by call order or by
+which file they live in: instructions that read and write the same PDA or state account almost
+always belong to the same component. Administrative/configuration instructions usually form a
+component of their own. (For example, a vault program might have "Deposits & share accounting",
+"Withdrawals", and "Admin & configuration".)
+
+For each component provide:
+
+- `instructions`: the names of the instructions that make up this component. Every instruction
+  you declared for the program **must appear in at least one component**. An instruction may
+  appear in more than one component when it genuinely serves two capabilities.
+- `account_types`: which of the program's declared account/state types this component maintains.
+- `requirements`: any requirements or assumptions on the component's behavior, stated as
+  implementation requirements ("The implementation must ...").
+- `interactions`: a description of this component's interactions, either with components of this
+  or another program in the application, or with an external authority/actor. Each interaction
+  should identify the program+component or the external authority *by name*, and describe the
+  interaction.
 
 ## On Interactions
 

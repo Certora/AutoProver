@@ -133,7 +133,7 @@ RUST = Language(
     failure_modes_partial="rust/_failure_modes.j2",     # overflow/underflow, panic!/unwrap/expect, ownership
 )
 
-SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaProgramInstance] = Ecosystem(
+SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance] = Ecosystem(
     name="solana",
     language=RUST,
     system_model=SolanaApplication,
@@ -141,7 +141,7 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaProgramInstanc
     property_prompts=PromptPair("solana/property_system.j2", "solana/property_prompt.j2"),
     validate_analysis=_solana_validate,
     locate_main=_solana_locate_main,                    # match by program_identifier
-    units=_solana_units,                                # whole-program: a singleton [main]
+    units=_solana_units,                                # one per ProgramComponent of the main program
     analysis_extra_input=_solana_analysis_extra_input,
 )
 ```
@@ -150,14 +150,27 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaProgramInstanc
   `SolanaApplication` is the standalone analog of `SourceApplication`: `SolanaProgram`s with
   their instructions and account constraints (Solana accounts are **passed in**, not owned
   storage), CPI targets, and signers in place of EOA actors. `SolanaProgramInstance` /
-  `SolanaInstructionInstance` are the index-wrapper instances (the latter satisfies
-  `FeatureUnit`).
-- **Whole-program units.** `units` returns a singleton `[main]` — the `Unit` type is
-  `SolanaProgramInstance`, the same as `Main`. All of a program's invariants are inferred over
-  the whole program in a single extraction rather than fanned out per instruction.
+  `SolanaComponentInstance` are the index-wrapper instances (the latter satisfies
+  `FeatureUnit`), mirroring EVM's `ContractInstance` / `ContractComponentInstance`.
+- **Per-component units.** `units` returns one `SolanaComponentInstance` per `ProgramComponent`
+  of the main program — the same shape as `_evm_units`. A component is a *capability* (a named
+  cluster of instructions plus the account state they maintain), produced by system analysis. It
+  is an authoring and attribution scope, not an execution scope: Crucible still fuzzes the whole
+  program in one action sequence, and a symbolic backend would not execute sequences at all.
+  Note `units` is on the **ecosystem** axis, so *every* Solana backend inherits this split —
+  Crucible today, a Certora Solana Prover (CVLR) backend later — which is why it is chosen on
+  backend-neutral grounds rather than to suit a fuzzer's cost model. The full design note,
+  including the per-backend analysis and the measurements, lands with the Crucible backend later
+  in this stack (`docs/crucible-component-units.md`).
 - **Validation** — `_solana_validate` mirrors `_validate_connectivity`'s structure over
-  `SolanaApplication`: unique program identifiers, unique instruction slugs within a program,
-  the expected main program present.
+  `SolanaApplication`: unique program identifiers and names, unique instruction slugs within a
+  program, unique component names/slugs, component interactions resolving to a declared
+  program+component or authority, and the expected main program present. It adds one rule EVM
+  has no peer for: the component→instruction mapping must be **valid and total**. EVM's
+  `external_entry_points` are prose the prompt renders, but a `ProgramComponent`'s `instructions`
+  are *references* the unit wrapper resolves, so a name that doesn't resolve silently drops an
+  instruction's account detail from the extraction prompt — and an instruction no component
+  claims is an entry point no property will ever cover.
 
 ### Prompt composition — the shared Rust fragment
 

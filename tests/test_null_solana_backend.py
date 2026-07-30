@@ -13,7 +13,9 @@ from typing import Any, cast
 import pytest
 
 from composer.spec.solana.model import (
+    ProgramComponent,
     SolanaApplication,
+    SolanaComponentInstance,
     SolanaProgram,
     SolanaProgramInstance,
 )
@@ -36,6 +38,16 @@ def _program_instance() -> SolanaProgramInstance:
         program_identifier="vault",
         description="Holds deposits and releases them to the authority.",
         instructions=[],
+        components=[
+            ProgramComponent(
+                name="Custody",
+                description="Holding deposits and releasing them.",
+                instructions=[],
+                account_types=["Vault"],
+                interactions=[],
+                requirements=[],
+            )
+        ],
     )
     app = SolanaApplication(
         application_type="Vault",
@@ -43,6 +55,11 @@ def _program_instance() -> SolanaProgramInstance:
         components=[program],
     )
     return SolanaProgramInstance(0, app)
+
+
+def _unit() -> SolanaComponentInstance:
+    """The backend's ``Unit`` — a component, not the program (``Main`` is not a ``FeatureUnit``)."""
+    return SolanaComponentInstance(0, _program_instance())
 
 
 def _props() -> list[PropertyFormulation]:
@@ -64,7 +81,7 @@ def _backend(project_root: str) -> NullSolanaBackend:
 
 @pytest.mark.asyncio
 async def test_formalize_echoes_properties_into_result():
-    feat = _program_instance()
+    feat = _unit()
     props = _props()
 
     result = await NullSolanaFormalizer().formalize(
@@ -92,7 +109,7 @@ async def test_formalize_echoes_properties_into_result():
 @pytest.mark.asyncio
 async def test_formalize_with_no_properties_records_empty():
     result = await NullSolanaFormalizer().formalize(
-        "batch", _program_instance(), [], cast(Any, None), cast(Any, None)
+        "batch", _unit(), [], cast(Any, None), cast(Any, None)
     )
     assert isinstance(result, NullResult)
     assert result.property_units() == []
@@ -123,7 +140,7 @@ async def test_prepare_system_locates_main_and_builds_formalizer(tmp_path):
 
 
 def test_to_artifact_id_uses_unit_slug(tmp_path):
-    feat = _program_instance()
+    feat = _unit()
     artifact = _backend(str(tmp_path)).to_artifact_id(feat)
     assert isinstance(artifact, NullArtifact)
     assert artifact.slug == feat.slug

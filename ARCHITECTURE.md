@@ -99,9 +99,8 @@ five steps and never inspects anything backend-specific:
 3. **`prepared.prepare_formalization()` runs concurrently with property extraction.** Neither
    depends on the other, so the prover's expensive AutoSetup/summary/invariant work overlaps
    with per-unit property inference. Property extraction fans out one agent per *unit* —
-   `ecosystem.units(main)` (EVM yields one per contract component; a whole-program ecosystem
-   like Solana yields a single unit that is the program) — bounded by a semaphore
-   (`--max-concurrent`).
+   `ecosystem.units(main)` — one per **component** of the main contract/program in both
+   ecosystems — bounded by a semaphore (`--max-concurrent`).
 4. **Per-unit formalization** (parallel). For each unit's properties, the backend's
    `Formalizer.formalize()` is invoked. Results are cached by the backend's result type.
 5. **Report assembly** (shared, best-effort). The driver collects per-unit verdicts via a
@@ -117,7 +116,8 @@ pattern, code-explorer prompt) with a **chain** and supplies the domain-specific
 steps need: the analyzed-model type (`App`), the analysis/property prompts, model validation, how
 to locate the target `Main`, and `units(main) -> list[Unit]` (the per-unit split the extraction and
 formalization phases iterate). `EVM` binds `(SourceApplication, ContractInstance,
-ContractComponentInstance)`; `SOLANA` binds its own whole-program types. A unit is any
+ContractComponentInstance)`; `SOLANA` binds `(SolanaApplication, SolanaProgramInstance,
+SolanaComponentInstance)`. A unit is any
 `FeatureUnit` ([spec/system_model.py](composer/spec/system_model.py)) — the ecosystem-agnostic
 interface the driver uses for per-unit cache keys, task ids, and labels. The default is `EVM`, so
 Solidity backends pass nothing.
@@ -252,9 +252,10 @@ the authoring agent. A callback protocol streams per-rule outcomes to the UI and
   [cli/console_foundry.py](composer/cli/console_foundry.py), `tui_foundry.py`.
 - **Solana ecosystem** ([composer/spec/solana/](composer/spec/solana/)) — the *front half* for
   Rust/Solana targets: a `SolanaApplication` analysis model, Solana-specific analysis/property
-  prompts ([templates/solana/](composer/templates/solana/)), and whole-program `units()` (one
-  unit per program rather than per component). It plugs into the same driver via the `SOLANA`
-  ecosystem; the matching verification backend (Crucible) lands separately.
+  prompts ([templates/solana/](composer/templates/solana/)), and per-component `units()` — one
+  unit per `ProgramComponent`, the Solana analog of EVM's `ContractComponent`
+  ([docs/ecosystem-abstraction.md](docs/ecosystem-abstraction.md) §4). It plugs into the same
+  driver via the `SOLANA` ecosystem; the matching verification backend (Crucible) lands separately.
 - **NatSpec** ([composer/spec/natspec/](composer/spec/natspec/)) — a *greenfield* workflow
   (its own asyncio orchestrator, not the generic driver) that goes from a design doc to Solidity
   interfaces, stub implementations, and CVL. A semaphore-serialized "semantic registry"
