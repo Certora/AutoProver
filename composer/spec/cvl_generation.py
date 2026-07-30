@@ -8,6 +8,7 @@ Parameterized by:
 
 import hashlib
 from dataclasses import dataclass
+from functools import cache
 from typing import Annotated, Callable, Literal, NotRequired, override, Awaitable, Any, Protocol
 from typing_extensions import TypedDict
 
@@ -405,6 +406,7 @@ def static_tools() -> list[BaseTool]:
         ERC20TokenGuidance.as_tool("erc20_guidance"),
         UnresolvedCallGuidance.as_tool("unresolved_call_guidance"),
     ]
+
 
 
 async def run_cvl_generator[S: CVLGenerationState, C: FeedbackToolContext, I: CVLGenerationInput](

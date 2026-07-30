@@ -1,7 +1,7 @@
 """Anthropic LLM backend: model-name probing, Files-API uploader, and the
 ``ModelProvider`` implementation that mints ``ChatAnthropic`` instances."""
 
-from typing import Literal, TypeGuard, Any, TYPE_CHECKING
+from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
@@ -19,6 +19,7 @@ from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
+    from graphcore.graph import MessagePayloadType
 
 
 # --- model probing ---------------------------------------------------------
@@ -202,7 +203,26 @@ class AnthropicService(ProviderServiceBase):
             AnthropicFileUploader.lazy
         )
 
-
+    @override
+    def cache_marker(self, payload: "MessagePayloadType", cache_level: CacheLevel) -> "MessagePayloadType":
+        if (ttl := level_to_ttl(cache_level)) is None:
+            return super().cache_marker(payload, cache_level)
+        if not isinstance(payload, list):
+            payload = [payload]
+        if not payload:
+            return payload
+        to_mut = payload.copy()
+        last_it = to_mut[-1]
+        if not isinstance(last_it, dict):
+            last_it = cast(dict, {"type": "text", "text": last_it})
+        else:
+            last_it = last_it.copy()
+        last_it["cache_control"] = {
+            "type": "ephemeral",
+            "ttl": ttl
+        }
+        to_mut[-1] = last_it
+        return to_mut
 
 @dataclass
 class AnthropicModelProvider:

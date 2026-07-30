@@ -15,12 +15,13 @@ from functools import cached_property
 from composer.input.files import FileUploader
 from composer.input.types import ModelConfiguration
 from .types import CacheLevel
-from abc import ABC
+from abc import ABC, abstractmethod
 
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
     from graphcore.tools.memory import AsyncPostgresBackend
+    from graphcore.graph import MessagePayloadType
     from langchain_core.tools import BaseTool
 
 class ProviderService(Protocol):
@@ -30,6 +31,9 @@ class ProviderService(Protocol):
         ...
 
     def uploader(self) -> FileUploader:
+        ...
+
+    def cache_marker(self, payload: "MessagePayloadType", cache_level: CacheLevel) -> "MessagePayloadType":
         ...
 
 class ProviderServiceBase(ABC):
@@ -51,6 +55,9 @@ class ProviderServiceBase(ABC):
         self, backend: "AsyncPostgresBackend"
     ) -> "BaseTool":
         return self.mem_fact(backend)
+
+    def cache_marker(self, payload: "MessagePayloadType", cache_level: CacheLevel) -> "MessagePayloadType":
+        return payload
 
 
 class ModelProvider(Protocol):
