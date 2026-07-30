@@ -45,6 +45,7 @@ from composer.spec.system_model import (
 from composer.spec.solana.model import (
     AuthorityInteraction,
     SolanaApplication,
+    SolanaAuthority,
     SolanaComponentInstance,
     SolanaProgram,
     SolanaProgramInstance,
@@ -71,16 +72,7 @@ class Language:
     """The language of the **code being analyzed** — a facet of the ecosystem, shared by every
     chain whose programs are written in it (e.g. the ``rust`` facet is shared by Solana and
     Soroban). It drives how the shared front half *reads* the target's source (fs-exclusion
-    pattern, code-explorer prompt, failure modes).
-
-    This is emphatically **not** the language the AutoProver backend is *implemented* in: a
-    backend implemented as a Rust wheel (:mod:`composer.rustapp`) may analyze Solidity
-    (``echoprover`` → EVM) or Rust (Crucible → Solana). The implementation language is not
-    associated with the ecosystem; only the analyzed-source language is.
-
-    Its members are captured here for the seam; consumers (the entry point's ``forbidden_read``,
-    the ``code_explorer`` prompt) are rewired to read from it in a later phase, when a
-    non-Solidity analyzed language first needs them."""
+    pattern, code-explorer prompt, failure modes)."""
 
     name: LanguageTag
     default_forbidden_read: str
@@ -111,10 +103,7 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     #: Prompts for the per-component property-inference agent.
     property_prompts: PromptPair[PropertySystemPromptParams, PropertyInitialPromptParams]
     #: Connectivity/shape validation of the analyzed model (retry feedback on failure).
-    #: Typed over ``BaseApplication`` (not ``App``): the validator receives the produced model
-    #: and narrows internally (as ``_validate_connectivity`` does), and this keeps it assignable
-    #: to ``run_component_analysis``'s ``validate`` parameter without a contravariance clash.
-    validate_analysis: Callable[[BaseApplication, SolidityIdentifier | None], str | None]
+    validate_analysis: Callable[[App, SolidityIdentifier | None], str | None]
     #: Locate the target unit (the "main contract"/program) in the analyzed model.
     locate_main: Callable[[App, SourceCode], Main]
     #: Enumerate the units the extraction phase infers properties for — one batch per unit. Both
@@ -278,15 +267,14 @@ def _solana_validate(app: BaseApplication, expected_main: SolidityIdentifier | N
     unique instruction slugs within a program, unique component names/slugs within a program, the
     component↔instruction mapping valid and total, component interactions resolving, and the
     expected main program present."""
-    if not isinstance(app, SolanaApplication):
-        return None
     errors: list[str] = []
     known_identifiers: set[str] = set()
     # Program NAME -> its component names. Keyed by name (not identifier) because that is what an
     # interaction names, exactly as EVM keys by contract name.
     known_components: dict[str, set[str]] = {}
-    known_authorities: set[str] = {a.name for a in app.authorities}
-    for prog in app.programs:
+    programs = [c for c in app.components if isinstance(c, SolanaProgram)]
+    known_authorities = {c.name for c in app.components if isinstance(c, SolanaAuthority)}
+    for prog in programs:
         if prog.program_identifier in known_identifiers:
             errors.append(f"Duplicate program identifier: {prog.program_identifier}")
         known_identifiers.add(prog.program_identifier)
@@ -302,15 +290,18 @@ def _solana_validate(app: BaseApplication, expected_main: SolidityIdentifier | N
                     f"reduce to the same filename slug {slug!r}; give them more-distinct names."
                 )
             slug_origin[slug] = ins.name
-            # CPI targets may be well-known external programs (SPL Token, System, …)
-            # that are not declared in the model; we do not flag those. A future
-            # policy can require known_programs | known_authorities | an allowlist.
+            # An instruction may call into another program (Solana's version of one
+            # contract calling another). That target is often a standard program every
+            # app uses (e.g. the token or system program) that the model author never
+            # bothered to declare, so we don't flag undeclared call targets here. A
+            # future policy could require them to match known_programs | known_authorities
+            # | an allowlist.
         errors.extend(_validate_program_components(prog))
 
     # Interactions, in a second pass so a component may name one declared later (EVM does the same).
     # Unlike the CPI-target leniency above, these ARE required to resolve: the analysis prompt tells
     # the model to declare every external actor it interacts with, including SPL Token / System.
-    for prog in app.programs:
+    for prog in programs:
         for comp in prog.components:
             where = f"Component {comp.name} of {prog.name} interacts with"
             for inter in comp.interactions:

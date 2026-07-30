@@ -111,7 +111,7 @@ async def run_component_analysis[T: BaseApplication](
     *,
     system_template: TypedTemplate[AnalysisPromptParams] = ANALYSIS_SYSTEM_TEMPLATE,
     initial_template: TypedTemplate[AnalysisPromptParams] = ANALYSIS_INITIAL_TEMPLATE,
-    validate: Callable[[BaseApplication, SolidityIdentifier | None], str | None] = _validate_connectivity,
+    validate: Callable[[T, SolidityIdentifier | None], str | None] = _validate_connectivity,
 ) -> T | None:
     """Analyze application components from a system doc and optionally source code.
 
@@ -133,7 +133,7 @@ async def run_component_analysis[T: BaseApplication](
     })
 
     def _validation_wrapper(
-        _: Any, app: BaseApplication
+        _: Any, app: T
     ) -> str | None:
         return validate(app, expected_main_id)
 
