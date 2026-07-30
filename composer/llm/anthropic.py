@@ -19,7 +19,7 @@ from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
-    from graphcore.graph import MessagePayloadType
+    from graphcore.graph import RawMessageType
 
 
 # --- model probing ---------------------------------------------------------
@@ -204,25 +204,19 @@ class AnthropicService(ProviderServiceBase):
         )
 
     @override
-    def cache_marker(self, payload: "MessagePayloadType", cache_level: CacheLevel) -> "MessagePayloadType":
+    def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
         if (ttl := level_to_ttl(cache_level)) is None:
             return super().cache_marker(payload, cache_level)
-        if not isinstance(payload, list):
-            payload = [payload]
-        if not payload:
-            return payload
-        to_mut = payload.copy()
-        last_it = to_mut[-1]
-        if not isinstance(last_it, dict):
-            last_it = cast(dict, {"type": "text", "text": last_it})
+        to_ret = payload
+        if not isinstance(to_ret, dict):
+            to_ret = cast(dict, {"type": "text", "text": to_ret})
         else:
-            last_it = last_it.copy()
-        last_it["cache_control"] = {
+            to_ret = to_ret.copy()
+        to_ret["cache_control"] = {
             "type": "ephemeral",
             "ttl": ttl
         }
-        to_mut[-1] = last_it
-        return to_mut
+        return to_ret
 
 @dataclass
 class AnthropicModelProvider:

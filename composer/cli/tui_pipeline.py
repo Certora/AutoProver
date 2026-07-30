@@ -23,7 +23,7 @@ from composer.rag.db import PostgreSQLRAGDatabase
 from composer.rag.models import get_model
 from composer.workflow.services import standard_connections
 from composer.spec.service_host import ModelProvider
-from composer.kb.knowledge_base import DefaultEmbedder, DEFAULT_KB_NS
+from composer.rag.models import DefaultEmbedder
 from composer.spec.services import build_rag_tool_env
 
 from composer.spec.context import (
@@ -178,7 +178,6 @@ async def _main() -> int:
                 ),
                 db=rag,
                 cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
-                kb_ns=DEFAULT_KB_NS,
                 store=conn.indexed_store,
                 recursion_limit=args.recursion_limit,
             )

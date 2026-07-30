@@ -1,20 +1,17 @@
-from typing import Callable, Literal, Annotated, Mapping, TypedDict, TYPE_CHECKING, Protocol
+from typing import Callable, Literal, Annotated, Mapping, TypedDict, TYPE_CHECKING
 from functools import cache
 from importlib.resources import files
 from dataclasses import dataclass
 from pydantic import BaseModel, Field, BeforeValidator
 import yaml
 
+from graphcore.graph import CacheMarker
+
 from composer.templates.loader import load_jinja_template
 from composer.spec.gen_types import TypedTemplate
-from composer.llm.types import CacheLevel
 
 if TYPE_CHECKING:
-    from graphcore.graph import MessagePayloadType
-
-class MessageCacher(Protocol):
-    def cache_marker(self, payload: "MessagePayloadType", cache_level: CacheLevel) -> "MessagePayloadType":
-        ...
+    from graphcore.graph import PromptInput
 
 type _ContextLoader = Callable[[], str]
 
@@ -33,6 +30,7 @@ class KBRecipe(BaseModel):
     file: str
     search_terms: list[str] = Field(default_factory=list)
     note: str | None = Field(default=None)
+    channel: ChannelList
 
 class IndexModel(BaseModel):
     recipes: list[KBRecipe]
@@ -103,7 +101,7 @@ _INDEX = [
 ]
 
 @cache
-def cvl_context_raw() -> "MessagePayloadType":
+def cvl_context_raw() -> list[str]:
     return [
 f"""
 <context-document>
@@ -114,5 +112,11 @@ Title: {s.title}
 """ for s in _INDEX
     ]
 
-def cvl_context(r: MessageCacher, level: CacheLevel) -> "MessagePayloadType":
-    return r.cache_marker(cvl_context_raw(), level)
+def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
+    """The CVL context documents (cache marker on the trailing block; the TTL
+    is whatever the builder's cache manager applies) followed by ``prompt`` —
+    the standard initial-prompt shape for agents whose task is CVL. Goes
+    through the initial prompt rather than ``front_matter`` so the documents
+    survive summarization rebuilds."""
+    rest = prompt if isinstance(prompt, list) else [prompt]
+    return [*cvl_context_raw(), CacheMarker, *rest]

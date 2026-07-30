@@ -170,9 +170,9 @@ class CommonTools:
         lambda p: f"Researching CVL: {p.get('question', '?')}", "Research result",
         short_display_name="CVL research",
     )
-    scan_knowledge_base = ToolDisplay("Scanning knowledge base", "KB scan results")
-    get_knowledge_base_article = ToolDisplay("Reading KB article", "KB article")
-    knowledge_base_contribute = ToolDisplay("Contributing to KB", "KB contribution")
+    get_cvl_recipe = ToolDisplay(
+        lambda p: f"Retrieving CVL recipe: {p.get('id', '?')}", "CVL recipe",
+    )
 
     # -- Grouped display bundles ---------------------------------------------
     # Each corresponds to a capability provider (builder / service).
@@ -200,11 +200,9 @@ class CommonTools:
 
     @staticmethod
     def kb_displays() -> dict[str, "ToolDisplay"]:
-        """Display entries for tools from ``kb_tools()`` (WorkflowServices)."""
+        """Display entries for tools from ``kb_tools()``."""
         return {
-            "scan_knowledge_base": CommonTools.scan_knowledge_base,
-            "get_knowledge_base_article": CommonTools.get_knowledge_base_article,
-            "knowledge_base_contribute": CommonTools.knowledge_base_contribute,
+            "get_cvl_recipe": CommonTools.get_cvl_recipe,
         }
 
     @staticmethod

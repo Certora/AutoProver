@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
     from graphcore.tools.memory import AsyncPostgresBackend
-    from graphcore.graph import MessagePayloadType
+    from graphcore.graph import RawMessageType
     from langchain_core.tools import BaseTool
 
 class ProviderService(Protocol):
@@ -33,7 +33,7 @@ class ProviderService(Protocol):
     def uploader(self) -> FileUploader:
         ...
 
-    def cache_marker(self, payload: "MessagePayloadType", cache_level: CacheLevel) -> "MessagePayloadType":
+    def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
         ...
 
 class ProviderServiceBase(ABC):
@@ -56,7 +56,7 @@ class ProviderServiceBase(ABC):
     ) -> "BaseTool":
         return self.mem_fact(backend)
 
-    def cache_marker(self, payload: "MessagePayloadType", cache_level: CacheLevel) -> "MessagePayloadType":
+    def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
         return payload
 
 

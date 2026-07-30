@@ -26,6 +26,7 @@ from composer.spec.gen_types import TypedTemplate
 from composer.spec.system_model import ContractComponentInstance, ContractName
 from composer.spec.cvl_generation import CVL_JUDGE_KEY, FeedbackToolContext, static_tools, SkippedProperty
 from composer.spec.service_host import ServiceHost
+from composer.kb.kb_context import with_cvl_context
 from composer.ui.tool_display import tool_display, suppress_ack
 from composer.spec.natspec.task_description import Assembler, ConfigurationBuilder
 from composer.spec.natspec.typecheck import TypeChecker
@@ -242,13 +243,14 @@ async def generate_cvl_batch(
         .with_state(NatspecGenerationState)
         .with_context(FeedbackToolContext)
         .with_sys_prompt_template("nosource_property_generation_system_prompt.j2")
-        .inject(
-            lambda b: NoSourceGen.bind({
+        .with_initial_prompt(with_cvl_context(
+            NoSourceGen.bind({
                 "context": component,
                 "properties": props,
                 "sort": env.sort,
-            }).render_to(b.with_initial_prompt_template)
-        ).with_summary_config(_CVLConfig(contract_name, stub_path)).compile_async()
+            }).render_to
+        ))
+        .with_summary_config(_CVLConfig(contract_name, stub_path)).compile_async()
     )
 
     res = await run_cvl_generator(

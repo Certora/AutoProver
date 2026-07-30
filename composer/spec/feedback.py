@@ -21,6 +21,7 @@ from composer.spec.gen_types import TemplateInstantiation, InjectedTemplate, Typ
 from composer.spec.cvl_generation import FeedbackToolContext, Rebuttal, SkippedProperty
 from composer.spec.system_model import ContractComponentInstance
 from composer.spec.util import uniq_thread_id
+from composer.kb.kb_context import with_cvl_context
 
 class PropertyFeedback(BaseModel):
     """
@@ -94,8 +95,8 @@ def property_feedback_judge(
         builder, ST, validator=did_rough_draft_read
     ).with_input(
         SpecJudgeInput
-    ).inject(
-        lambda b: final_prompt.render_to(b.with_initial_prompt_template)
+    ).with_initial_prompt(
+        with_cvl_context(final_prompt.render_to)
     ).inject(
         lambda g: system_prompt.render_to(g.with_sys_prompt_template)
     ).with_tools([*rough_draft_tools, mem, get_cvl(ST), ]).compile_async()

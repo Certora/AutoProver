@@ -27,6 +27,7 @@ from pathlib import Path
 from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
 from composer.spec.service_host import ServiceHost
 from composer.llm.provider import CacheLevel
+from composer.kb.kb_context import with_cvl_context
 
 
 from langgraph.types import Command
@@ -384,8 +385,8 @@ async def batch_cvl_generation(
         FeedbackToolContext
     ).with_sys_prompt_template(
         "property_generation_system_prompt.j2"
-    ).inject(
-        lambda d: bound_template.render_to(d.with_initial_prompt_template)
+    ).with_initial_prompt(
+        with_cvl_context(bound_template.render_to)
     ).with_summary_config(PropertyGenerationConfig()).compile_async()
 
     feedback_env = property_feedback_judge(

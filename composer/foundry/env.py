@@ -1,7 +1,7 @@
 """Env construction for the foundry test author.
 
 Builds an env that swaps the CVL-specific RAG surface (``cvl_research``,
-``cvl_manual_*``, ``scan_knowledge_base``, etc.) for the foundry cheatcode
+``cvl_manual_*``, ``get_cvl_recipe``, etc.) for the foundry cheatcode
 RAG tools, but otherwise reuses the same source-tools machinery the
 autoprove workflow uses — including the indexed ``code_explorer``
 sub-agent — so the analysis and authoring agents can navigate and ask
