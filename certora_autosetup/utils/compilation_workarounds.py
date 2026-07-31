@@ -126,8 +126,13 @@ class CompilationWorkaroundManager:
         solc_default_version: str = DEFAULT_SOLC_VERSION,
         verbose: int = 0,
         solc_convention: SolcConvention = SolcConvention.CERTORA,
+        build_config_dir: Optional[Path] = None,
     ):
         self.project_root = project_root
+        # Where foundry.toml / remappings.txt / package.json are read from. Distinct from
+        # project_root, which anchors the conf and generated harnesses at the run root:
+        # in a monorepo the build config lives in the sub-project owning the contract.
+        self.build_config_dir = build_config_dir or project_root
         self.solc_convention = solc_convention
         self.verbose = verbose
         self._remappings_workaround_applied = False
@@ -1477,6 +1482,7 @@ class CompilationWorkaroundManager:
         3. remappings.txt — often partially auto-generated; may drift
         4. package.json — npm-style fallback
         """
-        # The reactive path runs in the project CWD, so base_dir="." emits relative paths
-        # unchanged and runs forge in CWD.
-        return build_packages_from_remapping_sources(base_dir=Path("."), log_fn=self.log)
+        # Read from the directory that owns the build config (the run root unless the
+        # contract lives in a monorepo sub-project); the helper resolves every relative
+        # target absolute against it, so the emitted paths are valid from the run CWD.
+        return build_packages_from_remapping_sources(base_dir=self.build_config_dir, log_fn=self.log)
