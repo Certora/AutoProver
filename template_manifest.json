@@ -17,6 +17,12 @@
     "template_name": "foundry_property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.kb.kb_context:index_template": {
+    "module": "composer.kb.kb_context",
+    "qualname": "index_template",
+    "template_name": "cvl_kb_index.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.cvl_research:_ResearchSys": {
     "module": "composer.spec.cvl_research",
     "qualname": "_ResearchSys",
