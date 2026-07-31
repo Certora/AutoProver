@@ -752,14 +752,13 @@ class Autosetup:
                         *((path, name) for path, name in parsed_additional),
                     }
                     extra_libs = [
-                        h.to_config_str()
+                        h
                         for h in autosetup.libraries_for_contracts(in_scene_units)
                         if (h.source_file, h.contract_name) not in in_scene_handles
                     ]
                     files_to_include = (
                         [contract_handle.to_config_str()]
                         + autosetup.config.additional_contracts
-                        + extra_libs
                     )
                     props = {"files": files_to_include}
                     autosetup.log(
@@ -767,6 +766,13 @@ class Autosetup:
                         f"--additional-contracts, and {len(extra_libs)} library file(s) used by them"
                     )
                     autosetup.config_manager.update_config_with_properties(enhanced_config.path, props)
+                    # Add the libraries via add_files_to_config so their compiler_map / solc_via_ir_map
+                    # / solc_optimize_map entries are filled; a raw files= write leaves the maps
+                    # unreconciled and certoraRun rejects the unmatched files.
+                    if extra_libs:
+                        autosetup.config_manager.add_files_to_config(
+                            enhanced_config.path, new_contract_files=extra_libs
+                        )
 
                 # Fix the base config with typechecker
                 typechecker_success = await asyncio.to_thread(

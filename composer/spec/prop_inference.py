@@ -4,7 +4,7 @@ Property generation agent: extracts security properties from application compone
 Parameterized by source availability via AnalysisInput tuple.
 """
 
-from typing import Any, Callable, NotRequired, Sequence, Literal
+from typing import Any, Callable, NotRequired, Sequence, Literal, TypedDict
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
 
@@ -15,10 +15,11 @@ from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMes
 
 from composer.input.files import Document
 from composer.llm.types import CacheLevel
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
-from composer.spec.system_model import ContractComponentInstance
+from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.service_host import Sort, ServiceHost
 from composer.io.conversation import ConversationContextProvider
@@ -150,6 +151,32 @@ def _unique_titles_validator(
 
     return validate
 
+@component_context
+class PropertyAnalysisParams(TypedDict):
+    sort: Sort
+    context: ContractComponentInstance
+    prior_properties: list[_AgentRoundResult]
+
+class PropertyAnalysisSystemParams(TypedDict):
+    sort: Sort
+    backend_guidance: str
+
+property_analysis_template = TypedTemplate[PropertyAnalysisParams]("property_analysis_prompt.j2")
+
+property_analysis_system_template = TypedTemplate[PropertyAnalysisSystemParams]("property_analysis_system_prompt.j2")
+
+def _get_initial_prompt(
+    context: ContractComponentInstance,
+    sort: Sort,
+    prev_results: list[_AgentRoundResult],
+) -> str:
+    return property_analysis_template.bind({
+        "context": context,
+        "prior_properties": prev_results,
+        "sort": sort
+    }).render_to(load_jinja_template)
+
+
 def _partition[S](s: Sequence[S], pred: Callable[[S], bool]) -> tuple[list[S], list[S]]:
     a = []
     b = []
@@ -161,6 +188,7 @@ def _partition[S](s: Sequence[S], pred: Callable[[S], bool]) -> tuple[list[S], l
     return a, b
 
 def get_initial_prompt_builder(
+    sort: Sort,
     extra_inputs: Sequence[AnyPropertyGenerationInput],
     component: ContractComponentInstance
 ) -> Callable[[list[_AgentRoundResult]], MessagePayloadType]:
@@ -202,10 +230,10 @@ def get_initial_prompt_builder(
     extend(later_round_prefix, stable_component_always, cache_last=True)
 
     def renderer(prev_results: list[_AgentRoundResult]) -> MessagePayloadType:
-        rendered = load_jinja_template(
-            "property_analysis_prompt.j2",
-            prior_properties=prev_results,
+        rendered = _get_initial_prompt(
+            prev_results=prev_results,
             context=component,
+            sort=sort
         )
         if len(prev_results) == 0:
             # first round
@@ -284,15 +312,16 @@ async def _run_bug_analysis_inner(
         return cached
     
     initial_prompt_builder = get_initial_prompt_builder(
-        extra_inputs=extra_input, component=component
+        extra_inputs=extra_input, component=component, sort=env.sort
     )
 
     prev_rounds : list[_AgentRoundResult] = []
     last_round_convo : list[AnyMessage] | None = None
 
-    system_prompt = load_jinja_template(
-        "property_analysis_system_prompt.j2", sort=env.sort, backend_guidance=backend_guidance
-    )
+    system_prompt = property_analysis_system_template.bind({
+        "sort": env.sort,
+        "backend_guidance": backend_guidance
+    }).render_to(load_jinja_template)
 
     for i in range(0, max_rounds):
         next_result = await _run_bug_round(

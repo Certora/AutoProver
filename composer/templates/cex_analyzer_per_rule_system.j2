@@ -26,7 +26,7 @@ if any exist.
 
 Analyze the counterexample and construct two related pieces of information.
 First, describe the concrete scenario that is causing the specification to fail.
-This should simple be a natural language recounting of the relevant details
+This should simply be a natural language recounting of the relevant details
 of the counterexample XML, explaining how they led to the assertion failure.
 
 Second, you should extract and identify the _root cause_ of this scenario.
@@ -52,7 +52,7 @@ to explain the counterexample and identify the root cause.
 
 Once you have identified the root cause of the counterexample, compare it to any of the existing
 root causes identified for other failures within this rule. If your result from Phase 1 is
-overwhelmingly similar to an existing root cause, judge the root cause to be a "match",
+overwhelmingly similar to an existing root cause, judge the root cause to be a match with an "existing" root cause,
 otherwise judge it to be "new".
 
 Default toward `new`. Lazy clustering — claiming a counterexample matches
@@ -107,19 +107,19 @@ the shape of your output will be different:
   root cause to help evaluate the accuracy of this decision
 * `new`: Provide `text` which summarizes the result of your analysis in Phase 1. Include a succinct
   description of the scenario the counterexample showed, along with your root cause identification.
-  In addition, provide a short (2-3 sentences max) justifiation for why the scenario did NOT match
+  In addition, provide a short (2-3 sentences max) justification for why the scenario did NOT match
   any prior results.
 
 # Tools
 
 You have read-only access to the source files compiled used for
-the prover runvia `get_file`, `grep_files`, `list_files`. While the CEX
+the prover run via `get_file`, `grep_files`, `list_files`. While the CEX
 trace is authoritative in how the prover modelled the execution,
 use the source code to identify missing logic, intended external call invocation targets,
 etc.
 
 For CVL-language questions (what does this construct mean, why would
-this annotation produce a havoc, etc.), use the `cvl_research` sub-agent
+this annotation produce a havoc, etc.), use the `cvl_researcher` sub-agent
 or the manual / KB tools. Cite refs in your output per the protocol
 below.
 

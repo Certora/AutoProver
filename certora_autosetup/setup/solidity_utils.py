@@ -375,7 +375,7 @@ def find_libraries_used_by(
     """Return ContractHandles for libraries whose methods appear in ``contract_name``'s compilation unit.
 
     A library counts as "used by" ``contract_name`` if at least one method in
-    ``methods`` has ``originatingContract == contract_name`` and ``contractName ==
+    ``methods`` has ``contract_name`` among its ``originatingContracts`` and ``contractName ==
     {library_name}``. Use this to add only the libraries the contract actually
     calls to the prover scene, instead of dumping every library file in the project.
 
@@ -392,7 +392,7 @@ def find_libraries_used_by(
     """
     used: set[str] = set()
     for method in methods:
-        if method.get("originatingContract") != contract_name:
+        if contract_name not in method["originatingContracts"]:
             continue
         ref = method.get("contractName")
         if ref in library_name_to_file:
