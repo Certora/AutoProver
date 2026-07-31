@@ -108,7 +108,7 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     locate_main: Callable[[App, SourceCode], Main]
     #: Enumerate the units the extraction phase infers properties for — one batch per unit. Both
     #: ecosystems return one per **component** of the main contract/program: a named cluster of its
-    #: behavior produced by system analysis (docs/crucible-component-units.md). Note this is on the
+    #: behavior produced by system analysis (docs/ecosystem-abstraction.md §4). Note this is on the
     #: *ecosystem* axis, so every backend paired with a chain inherits the same split — pick it on
     #: backend-neutral grounds, and let a backend that wants coarser work aggregate in its
     #: ``Formalizer`` instead.
@@ -225,7 +225,7 @@ RUST = Language(
 
 def _validate_program_components(prog: SolanaProgram) -> list[str]:
     """One program's :class:`ProgramComponent` checks — the peer of the component half of EVM's
-    ``_validate_connectivity`` (``docs/crucible-component-units.md`` §7.3).
+    ``_validate_connectivity`` (``docs/ecosystem-abstraction.md`` §4, "Validation").
 
     Name and slug uniqueness mirror EVM directly. The component↔instruction mapping check has no
     EVM peer and is the one deliberate divergence: EVM's ``external_entry_points`` are prose the
@@ -365,7 +365,7 @@ def _solana_units(main: SolanaProgramInstance) -> list[SolanaComponentInstance]:
     # enumerates the main *contract's* components; siblings are context, not units). Replaces the
     # whole-program singleton this returned before: one extraction agent for a 62-instruction
     # program is a hard cap on depth, and the unit was a Crucible cost decision sitting on a
-    # backend-neutral seam. See docs/crucible-component-units.md §2 and §15.
+    # backend-neutral seam. See docs/ecosystem-abstraction.md §1 (the two axes) and §4.
     return [
         SolanaComponentInstance(ind=i, _program=main)
         for i in range(len(main.program.components))
@@ -382,7 +382,7 @@ def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
 
 # Per-component units, mirroring EVM: ``Main`` is the located program, ``Unit`` is one of its
 # ``ProgramComponent``s. Every Solana backend inherits this split — Crucible today, a CVLR backend
-# later — which is why it is chosen on backend-neutral grounds (docs/crucible-component-units.md §5).
+# later — which is why it is chosen on backend-neutral grounds (docs/ecosystem-abstraction.md §4).
 SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance] = Ecosystem(
     name="solana",
     language=RUST,

@@ -159,9 +159,9 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
   program in one action sequence, and a symbolic backend would not execute sequences at all.
   Note `units` is on the **ecosystem** axis, so *every* Solana backend inherits this split —
   Crucible today, a Certora Solana Prover (CVLR) backend later — which is why it is chosen on
-  backend-neutral grounds rather than to suit a fuzzer's cost model. The full design note,
-  including the per-backend analysis and the measurements, lands with the Crucible backend later
-  in this stack (`docs/crucible-component-units.md`).
+  backend-neutral grounds rather than to suit a fuzzer's cost model. The full design note —
+  the per-backend analysis and the measurements behind this choice — is **not yet in the tree**;
+  it lands with the verification backend later in this stack.
 - **Validation** — `_solana_validate` mirrors `_validate_connectivity`'s structure over
   `SolanaApplication`: unique program identifiers and names, unique instruction slugs within a
   program, unique component names/slugs, component interactions resolving to a declared

@@ -72,7 +72,7 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         no properties exist yet. This is the only point where both are true: extraction is done, and
         no unit has been formalized. Doing it inside ``formalize`` instead means the first unit to
         arrive decides the shared artifact for all of them — harmless at one unit, silently wrong at
-        several (docs/crucible-component-units.md §8.2).
+        several.
 
         The prover's peer (``invariants.spec``) is staged in ``prepare_formalization`` and needs
         nothing here."""

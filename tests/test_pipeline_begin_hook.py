@@ -5,8 +5,8 @@ The hook exists for backends with a *shared* artifact all units build on (Crucib
 future CVLR backend's setup module). Such an artifact must be authored from the union of every
 unit's properties and cannot be authored in ``prepare_formalization`` (which overlaps extraction, so
 no properties exist yet). Doing it lazily inside ``formalize`` instead means the first unit to
-arrive decides the shared artifact for all of them — harmless at one unit, silently wrong at several
-(docs/crucible-component-units.md §8.2). This pins the ordering that makes it correct.
+arrive decides the shared artifact for all of them — harmless at one unit, silently wrong at several.
+This pins the ordering that makes it correct.
 
 Stubs throughout — no LLM, no DB, no backend wheel.
 """

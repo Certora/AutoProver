@@ -14,7 +14,7 @@ import enum
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast, override
+from typing import override
 
 from pydantic import BaseModel, Field
 
@@ -34,7 +34,7 @@ from composer.spec.solana.model import (
     SolanaProgramInstance,
 )
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
-from composer.spec.source.report.schema import ReportBackend, RuleName
+from composer.spec.source.report.schema import RuleName
 from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 from composer.spec.util import ensure_dir
@@ -105,11 +105,13 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
 
 class NullSolanaFormalizer(Formalizer[NullResult, FeatureUnit]):
     def __init__(self) -> None:
-        # Reuses the ``"crucible"`` report backend (the real Solana verifier this null backend
-        # models); its results are all-UNKNOWN, so the label choice is provenance only.
-        # Intermediate (PR1): report/schema.py's ReportBackend literal is still master's
-        # {prover, foundry}; cast the tag until PR3 closes the literal to include "crucible".
-        super().__init__(NullResult, cast(ReportBackend, "crucible"))
+        # The tag is provenance only — it picks the report's outcome labels, and this backend's
+        # results are all-UNKNOWN either way. So borrow ``"prover"``, an existing member of
+        # ``ReportBackend``: the real Solana verifier's own tag is added to that literal by the
+        # backend that introduces it, and until then a value outside the literal is not merely
+        # untyped but unusable — ``AutoProverReport`` is a pydantic model, so it would fail
+        # validation in ``build_report`` and lose the report phase to a swallowed exception.
+        super().__init__(NullResult, "prover")
 
     @override
     async def formalize(

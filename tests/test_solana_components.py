@@ -1,6 +1,6 @@
 """The Solana ecosystem's ``ProgramComponent`` model and its analysis-time validation.
 
-Stage 1 of docs/crucible-component-units.md: a program gains ``components`` — the Solana analog
+Per docs/ecosystem-abstraction.md §4: a program gains ``components`` — the Solana analog
 of EVM's ``ContractComponent`` — and ``_solana_validate`` gains the rules that keep the
 component→instruction mapping honest. ``units`` is still whole-program at this stage, so nothing
 downstream changes; these tests cover the model and the validator in isolation.

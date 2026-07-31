@@ -10,7 +10,7 @@ reusing the EVM field names.
 Programs additionally carry :class:`ProgramComponent`\\ s — the Solana analog of EVM's
 ``ContractComponent``: named *capabilities*, each a semantic cluster of instructions plus the
 account state they maintain. A component **references** its instructions by name; the program's
-flat ``instructions`` list stays authoritative. See ``docs/crucible-component-units.md``.
+flat ``instructions`` list stays authoritative. See ``docs/ecosystem-abstraction.md`` §4.
 
 ``SolanaApplication`` is what the shared analysis phase produces (it is a ``BaseApplication``
 so ``run_component_analysis`` accepts it). ``SolanaProgramInstance`` / ``SolanaComponentInstance``
@@ -126,8 +126,8 @@ class ProgramComponent(BaseModel):
     its EVM peer it **references, it does not own**: ``instructions`` and ``account_types`` are
     lists of *names* resolving into the owning :class:`SolanaProgram`, which stays the single
     source of truth for the rich per-instruction data. An instruction may appear in more than one
-    component when it genuinely serves two capabilities. See ``docs/crucible-component-units.md``
-    §7.1."""
+    component when it genuinely serves two capabilities. See ``docs/ecosystem-abstraction.md``
+    §4."""
 
     name: str = Field(description="A short, concise name of the component")
     description: str = Field(
@@ -221,7 +221,7 @@ class SolanaProgramInstance:
 
     Deliberately **not** a ``FeatureUnit``: ``Main`` and ``Unit`` are different axes, and EVM's main
     is not a unit either. It briefly doubled as the whole-program extraction unit; that is what
-    :class:`SolanaComponentInstance` replaced (docs/crucible-component-units.md §7.2)."""
+    :class:`SolanaComponentInstance` replaced (docs/ecosystem-abstraction.md §4)."""
 
     ind: int
     app: SolanaApplication
@@ -239,7 +239,7 @@ class SolanaComponentInstance:
     index pair (program, component) over the analyzed model rather than a copy of it. The component
     is an authoring and attribution scope, not an execution scope: Crucible still fuzzes the whole
     program in one action sequence, exactly as Foundry's stateful fuzzer calls every function of a
-    contract while its authoring stays per component (docs/crucible-component-units.md §5.2)."""
+    contract while its authoring stays per component (docs/ecosystem-abstraction.md §4)."""
 
     ind: int
     _program: SolanaProgramInstance
