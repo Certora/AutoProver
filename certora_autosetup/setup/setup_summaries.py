@@ -1700,7 +1700,7 @@ Method signature: {method_signature}
             contract_files: Set of Solidity files to analyze
             methods_to_skip: Set of (contract, method) pairs to skip (already marked for
                 summarization by non-LLM step or matched by previous LLM recipes)
-            main_contract: Optional main contract name to filter methods by originatingContract
+            main_contract: Optional main contract name to filter methods to its compilation unit
 
         Returns:
             List of methods that match the criteria, excluding methods in methods_to_skip
@@ -1719,13 +1719,13 @@ Method signature: {method_signature}
 
         mp = self.methods_parser
 
-        # Filter methods by properties and originatingContract
+        # Filter methods by properties and compilation-unit membership
         all_methods = mp.get_all_methods()
         filtered_methods = []
 
         for method in all_methods:
-            # Filter by originating contract if main_contract is specified
-            if main_contract and method.get("originatingContract") != main_contract:
+            # Filter to the main contract's compilation unit if specified
+            if main_contract and main_contract not in method["originatingContracts"]:
                 continue
             method_key = (method["contractName"], method["name"])
 
@@ -2300,7 +2300,7 @@ Method signature: {method_signature}
     ) -> bool:
         """Run all LLM recipes for one compilation unit and emit per-summarized-contract specs.
 
-        Filters methods by ``originatingContract == contract_name``. Each match is appended
+        Filters methods to those whose compilation unit includes ``contract_name``. Each match is appended
         to ``self._methods_per_contract[match["contractName"]]`` and the corresponding
         ``certora/specs/summaries/{contractName}_summaries.spec`` file is (re-)written with
         the full set of methods seen so far for that contract — methods already in
@@ -2308,7 +2308,7 @@ Method signature: {method_signature}
         across iterations doesn't duplicate summaries even when compilation units overlap.
 
         Args:
-            contract_name: Compilation unit to analyze (matched against ``originatingContract``).
+            contract_name: Compilation unit to analyze (matched against ``originatingContracts``).
             contract_files: Solidity source files passed to ``analyze_with_llm``.
             methods_to_skip: ``(contractName, methodName)`` pairs already handled by the
                 non-LLM step or otherwise not to be reanalyzed. Always merged with
@@ -2381,7 +2381,8 @@ Method signature: {method_signature}
         mp = self.methods_parser
 
         self.log(f"Matching summaries for {main_contract}...")
-        # Filter to only methods that originate from this contract (compilation unit)
+        # Methods in this contract's compilation unit. Membership (originatingContracts) rather
+        # than a single attribution, so a shared library inlined into the unit still matches.
         contract_methods = mp.get_methods_by_originating_contract(main_contract)
         matched_functions: Set[str] = set()
         matched_method_tuples: Set[Tuple[str, str]] = set()

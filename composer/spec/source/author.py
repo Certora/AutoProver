@@ -24,7 +24,8 @@ from composer.spec.cvl_generation import (
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
 from composer.spec.types import PropertyFormulation
-from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
+from composer.pipeline.core import GaveUp
+from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
 )
@@ -171,7 +172,9 @@ class ResourceView(TypedDict):
     required: bool
     import_path: str
 
+@component_context
 class PropertyGenParams(TypedDict):
+    sort: Literal["existing"]
     context: ContractComponentInstance | None
     resources: list[ResourceView]
     properties: list[PropertyFormulation]
@@ -620,7 +623,8 @@ async def batch_cvl_generation(
         "resources": resource_views,
         "context": component,
         "properties": props,
-        "contract_name": source.contract_name
+        "contract_name": source.contract_name,
+        "sort": "existing"
     })
 
     titles = [p.title for p in props]
@@ -629,7 +633,7 @@ async def batch_cvl_generation(
         "sort": "existing",
         "context": component,
         "source_editing": editing is not None,
-    }).depends(Properties)
+    })
     if editing is None:
         feedback_suite = property_tools(
             property_feedback_judge(judge_ctx, env, judge_prompt, props)

@@ -26,7 +26,7 @@ from composer.spec.natspec.task_description import (
     InterfaceGenCallParams,
     resolve_extra_input,
 )
-from composer.spec.system_model import NatspecApplication, SolidityIdentifier
+from composer.spec.system_model import NatspecApplication, SolidityIdentifier, ExplicitContract, FromSourceContract, ExistingFromSource
 from composer.spec.util import string_hash, uniq_thread_id
 from composer.spec.service_host import ServiceHost
 
@@ -43,7 +43,7 @@ async def generate_interface[I: InterfaceDeclModel](
     materializer: Assembler,
     description: AgentDescription[InterfaceResult[I], InterfaceGenCallParams],
     *,
-    target_identifiers: set[SolidityIdentifier] | None = None,
+    target_identifiers: set[SolidityIdentifier],
 ) -> InterfaceResult[I]:
     """Generate a Solidity interface from component analysis and system document.
 
@@ -71,12 +71,6 @@ async def generate_interface[I: InterfaceDeclModel](
 
     solc_name = f"solc{solc_version}"
 
-    external_contracts = (
-        target_identifiers
-        if target_identifiers is not None
-        else {c.solidity_identifier for c in summary.contract_components}
-    )
-
     ST = type("ST", (MessagesState,), {
         "__annotations__": {"result": NotRequired[InterfaceResult[I]]}
     })
@@ -91,13 +85,13 @@ async def generate_interface[I: InterfaceDeclModel](
         async def validate_result(self, res: InterfaceResult[I]) -> str | None:
             seen: set[SolidityIdentifier] = set()
             for nm, i in res.name_to_interface.items():
-                if nm not in external_contracts:
+                if nm not in target_identifiers:
                     return f"Invalid entry found; no external contract with solidity identifier {nm} appears in input"
                 if not i.path.endswith(".sol"):
                     return f"Interface path '{i.path}' for {nm} must end in '.sol'."
                 seen.add(nm)
-            if seen != external_contracts:
-                return f"Missing results for contract(s): {external_contracts - seen}"
+            if seen != target_identifiers:
+                return f"Missing results for contract(s): {target_identifiers - seen}"
 
             compile_inputs = [i.path for i in res.name_to_interface.values()]
             try:
@@ -127,13 +121,18 @@ async def generate_interface[I: InterfaceDeclModel](
             return None
 
     target_contracts = [
-        c for c in summary.contract_components if c.solidity_identifier in external_contracts
-    ]
-    existing_contracts = [
-        c for c in summary.contract_components if c.solidity_identifier not in external_contracts
+        c for c in summary.contract_components if c.solidity_identifier in target_identifiers
     ]
 
-    final_prompt = description.prompt.inject(
+    def assert_is(t: FromSourceContract | ExplicitContract) -> ExistingFromSource:
+        assert isinstance(t, ExistingFromSource)
+        return t
+
+    existing_contracts = [
+        assert_is(c) for c in summary.contract_components if c.solidity_identifier not in target_identifiers
+    ]
+
+    final_prompt = description.prompt.bind(
         InterfaceGenCallParams(
             summary=summary,
             target_contracts=target_contracts,

@@ -57,7 +57,7 @@ class Formalizer[FormT: BackendResult](ABC):
     state — never set post-hoc. `FormT: ReportableResult` is what makes the report a core step."""
     formalized_type: type[FormT]
     backend_tag: ReportBackend
-    
+
     @abstractmethod
     async def formalize(
         self,

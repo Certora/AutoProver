@@ -1,11 +1,17 @@
 from typing import Any
-from jinja2 import Environment, FileSystemLoader
 from markdown_it import MarkdownIt
 from markupsafe import Markup, escape
+from typing import Any, TypedDict, NotRequired
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined
 import pathlib
+import os
 
 script_dir = pathlib.Path(__file__).parent
 
+class _UndefinedParams(TypedDict):
+    undefined: NotRequired[type[Undefined]]
+
+_test_mode_undefined : _UndefinedParams = { "undefined": StrictUndefined } if os.environ.get("COMPOSER_STRICT_TEMPLATES") is not None else {}
 
 def _autoescape(template_name: str | None) -> bool:
     # HTML templates (``*.html.j2``) must autoescape interpolated values; prompt templates
@@ -47,7 +53,7 @@ def _diff_html(diff: str) -> Markup:
     return Markup("".join(out))
 
 
-env = Environment(loader=FileSystemLoader(script_dir), autoescape=_autoescape)
+env = Environment(loader=FileSystemLoader(script_dir), autoescape=_autoescape, **_test_mode_undefined)
 env.filters["markdown"] = _markdown
 env.filters["diff_html"] = _diff_html
 
