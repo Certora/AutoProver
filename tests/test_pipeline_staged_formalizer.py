@@ -1,12 +1,13 @@
-"""The driver's ``Formalizer.begin`` hook: called once, with every unit's properties, before any
-unit is formalized.
+"""``StagedFormalizer.begin``: called once, with every unit's properties, before any unit is
+formalized — and what it *returns* is the formalizer the driver then fans out over.
 
-The hook exists for backends with a *shared* artifact all units build on (Crucible's fixture; a
-future CVLR backend's setup module). Such an artifact must be authored from the union of every
+The staged type exists for backends with a *shared* artifact all units build on (Crucible's fixture;
+a future CVLR backend's setup module). Such an artifact must be authored from the union of every
 unit's properties and cannot be authored in ``prepare_formalization`` (which overlaps extraction, so
 no properties exist yet). Doing it lazily inside ``formalize`` instead means the first unit to
 arrive decides the shared artifact for all of them — harmless at one unit, silently wrong at several.
-This pins the ordering that makes it correct.
+These tests pin both halves: that the driver drives the staged type in that order, and that a backend
+returning a plain ``Formalizer`` is never staged at all.
 
 Stubs throughout — no LLM, no DB, no backend wheel.
 """
@@ -49,16 +50,14 @@ class _Result:
 
 
 class _Formalizer:
-    """Records the order of ``begin`` / ``formalize`` calls."""
+    """Records the order of ``begin`` / ``formalize`` calls. ``calls`` is shared with the staged half
+    that built it, so one list holds the whole sequence."""
 
     formalized_type = _Result
     backend_tag = "foundry"
 
-    def __init__(self):
-        self.calls: list[tuple[str, list[str]]] = []
-
-    async def begin(self, jobs, _run):
-        self.calls.append(("begin", [p.title for j in jobs for p in j.props]))
+    def __init__(self, calls: list[tuple[str, list[str]]] | None = None):
+        self.calls = [] if calls is None else calls
 
     async def formalize(self, _label, feat, props, _ctx, _run):
         # A yield point, so a driver that started the fan-out before `begin` finished would
@@ -70,6 +69,18 @@ class _Formalizer:
     def extra_report_inputs(self): return []
     async def fetch_verdicts(self, _inp): return {}
     async def finalize(self, _outcomes, _run): return None
+
+
+class _Staged(core.StagedFormalizer):
+    """The staged half. ``begin`` is the only way to obtain the formalizer, so an artifact authored
+    from every unit's properties cannot be skipped or raced by the fan-out."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, list[str]]] = []
+
+    async def begin(self, jobs, _run):
+        self.calls.append(("begin", [p.title for j in jobs for p in j.props]))
+        return _Formalizer(self.calls)
 
 
 class _Prepared:
@@ -128,9 +139,9 @@ def _prop(title: str) -> PropertyFormulation:
     return PropertyFormulation(title=title, sort="invariant", description="d")
 
 
-async def _drive(monkeypatch, units: dict[str, list[str]]) -> _Formalizer:
-    formalizer = _Formalizer()
-
+async def _drive[F: (_Staged, _Formalizer)](
+    monkeypatch, units: dict[str, list[str]], formalizer: F
+) -> F:
     async def fake_analysis(*_a, **_kw): return "analyzed"
 
     async def fake_extract_all(*_a, **_kw):
@@ -149,22 +160,29 @@ async def _drive(monkeypatch, units: dict[str, list[str]]) -> _Formalizer:
 
 
 async def test_begin_runs_once_before_any_unit_is_formalized(monkeypatch):
-    f = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"], "farms": ["c"]})
-    names = [c[0] for c in f.calls]
+    s = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"], "farms": ["c"]}, _Staged())
+    names = [c[0] for c in s.calls]
     assert names[0] == "begin", f"begin must precede every formalize; got {names}"
     assert names.count("begin") == 1
     assert sorted(names[1:]) == ["formalize:admin", "formalize:deposits", "formalize:farms"]
 
 
 async def test_begin_sees_every_unit_s_properties(monkeypatch):
-    # The point of the hook: the shared artifact is designed around all of them, not around
+    # The point of the staged type: the shared artifact is designed around all of them, not around
     # whichever unit won the race to formalize first.
-    f = await _drive(monkeypatch, {"deposits": ["a", "b"], "admin": ["c"], "farms": ["d"]})
-    assert f.calls[0] == ("begin", ["a", "b", "c", "d"])
+    s = await _drive(monkeypatch, {"deposits": ["a", "b"], "admin": ["c"], "farms": ["d"]}, _Staged())
+    assert s.calls[0] == ("begin", ["a", "b", "c", "d"])
 
 
 async def test_begin_still_runs_for_a_single_unit(monkeypatch):
     # The K=1 case must go down the same path, or the shared artifact would be authored lazily
     # again the moment a second unit appears.
-    f = await _drive(monkeypatch, {"whole-program": ["a", "b"]})
-    assert [c[0] for c in f.calls] == ["begin", "formalize:whole-program"]
+    s = await _drive(monkeypatch, {"whole-program": ["a", "b"]}, _Staged())
+    assert [c[0] for c in s.calls] == ["begin", "formalize:whole-program"]
+
+
+async def test_an_unstaged_formalizer_is_formalized_directly(monkeypatch):
+    # The other arm of the union: a backend with no shared artifact returns the formalizer itself,
+    # and the driver must fan out over exactly that object rather than looking for a staging step.
+    f = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"]}, _Formalizer())
+    assert sorted(c[0] for c in f.calls) == ["formalize:admin", "formalize:deposits"]

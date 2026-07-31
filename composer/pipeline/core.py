@@ -6,6 +6,10 @@ a constructor dependency rather than a call-order convention; there is no half-i
     Backend ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
     (config, source)            (.main: structure)                        (formalize / persist / report)
 
+A backend whose units all build on one *shared* artifact inserts a link: ``prepare_formalization`` returns 
+a :class:`StagedFormalizer`, and its ``begin`` — handed every unit's properties — is what produces the 
+:class:`Formalizer`. 
+
 The driver owns the genuinely-shared steps: system analysis, per-component property extraction, the
 result-type-keyed cache, and (since the report is backend-agnostic) building + persisting the
 property-keyed report. Everything backend-specific — the harnessed lift, autosetup/summaries/
@@ -52,7 +56,8 @@ _log = logging.getLogger(__name__)
 
 @dataclass
 class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
-    """Immutable, fully constructed by prepare_formalization. Carries the prover's
+    """Immutable, fully constructed by whatever produced it — ``prepare_formalization``, or
+    :meth:`StagedFormalizer.begin` for a backend with a shared artifact. Carries the prover's
     config/resources/prover_tool/invariant-results (or nothing, for foundry) as constructor
     state — never set post-hoc. `FormT: ReportableResult` is what makes the report a core step.
 
@@ -61,23 +66,6 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     members without casts — while the driver stays unit-agnostic."""
     formalized_type: type[FormT]
     backend_tag: ReportBackend
-
-    async def begin(self, jobs: Sequence[BackendJob[U]], run: PipelineRun) -> None:
-        """Called once with **every** unit's properties, after extraction and before the per-unit
-        fan-out. Default: nothing.
-
-        The hook exists for backends with a *shared* artifact that all units build on — Crucible's
-        fixture, and whatever setup module a CVLR backend needs. Such an artifact must be authored
-        from the union of every unit's properties (it is what makes them checkable), and it cannot
-        be authored in ``prepare_formalization`` because that runs concurrently with extraction, so
-        no properties exist yet. This is the only point where both are true: extraction is done, and
-        no unit has been formalized. Doing it inside ``formalize`` instead means the first unit to
-        arrive decides the shared artifact for all of them — harmless at one unit, silently wrong at
-        several.
-
-        The prover's peer (``invariants.spec``) is staged in ``prepare_formalization`` and needs
-        nothing here."""
-        return None
 
     @abstractmethod
     async def formalize(
@@ -105,6 +93,36 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         components_to_prover_runs.json). Default: none."""
         return None
 
+
+class StagedFormalizer[FormT: BackendResult, U: FeatureUnit](ABC):
+    """A formalizer that cannot exist yet: returned from ``prepare_formalization`` in place of a
+    :class:`Formalizer` by backends whose units all build on one *shared* artifact — Crucible's
+    fixture, whatever setup module a CVLR backend needs.
+
+    Such an artifact must be authored from the union of every unit's properties (that union is what
+    makes them checkable), which pins it to exactly one point in the run. Not
+    ``prepare_formalization``: that overlaps extraction, so no properties exist there yet. Not lazily
+    on first ``formalize``: whichever unit won the race would decide the artifact all the others are
+    then told to work within — harmless at one unit, silently wrong at several. ``begin`` sits
+    between the two, where extraction is done and no unit has been formalized.
+
+    A separate type rather than a hook on ``Formalizer`` so the types carry the ordering instead of
+    the driver's call sequence: ``begin`` *returns* the formalizer, so the shared artifact arrives as
+    a constructor argument and there is no window in which a formalizer exists without it — the same
+    property the rest of the phase chain has.
+
+    Most backends need none of this and return a ``Formalizer`` directly; the prover's shared peer
+    (``invariants.spec``) is staged in ``prepare_formalization``."""
+
+    @abstractmethod
+    async def begin(
+        self, jobs: Sequence[BackendJob[U]], run: PipelineRun
+    ) -> Formalizer[FormT, U]:
+        """Author the shared artifact from **every** unit's properties, and return the formalizer
+        built around it. Called once, after extraction, before the per-unit fan-out."""
+        ...
+
+
 @dataclass
 class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
     #: The located "main" of the analyzed program — the ecosystem's ``Main`` type (EVM's
@@ -116,7 +134,14 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
     main: Main
 
     @abstractmethod
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[FormT, U]: ...
+    async def prepare_formalization(
+        self, run: PipelineRun
+    ) -> Formalizer[FormT, U] | StagedFormalizer[FormT, U]:
+        """The formalizer — or, for a backend whose units share an artifact, the
+        :class:`StagedFormalizer` that becomes one once every unit's properties are known. Which of
+        the two a backend returns is its own declared signature, so a backend with no shared artifact
+        never mentions staging at all."""
+        ...
 
 
 class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](Protocol):
@@ -207,19 +232,22 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
-    formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
+    staged_task = asyncio.create_task(prepared.prepare_formalization(run))
 
     batches: list[_Batch[U]] = await _extract_all(
         backend.analysis_spec.properties_key,
         prepared.main, backend.backend_guidance, run,
         phases["extraction"], interactive, threat_model, max_bug_rounds, ecosystem)
-    formalizer = await formalizer_task
+    staged = await staged_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
 
-    # 4. Any shared artifact the units build on is authored HERE — once, from every unit's
-    #    properties — not lazily by whichever unit formalizes first (see ``Formalizer.begin``).
-    await formalizer.begin(batches, run)
+    # 4. A backend whose units share an artifact handed back a ``StagedFormalizer`` instead of a
+    #    formalizer: the artifact is authored HERE — once, from every unit's properties — and the
+    #    formalizer it yields is the only one that exists (see :class:`StagedFormalizer`).
+    formalizer = (
+        await staged.begin(batches, run) if isinstance(staged, StagedFormalizer) else staged
+    )
 
     # 5. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
     async def _run(batch: _Batch[U]) -> ComponentOutcome[FormT, U]:

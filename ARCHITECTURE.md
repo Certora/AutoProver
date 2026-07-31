@@ -37,6 +37,9 @@ A handful of decisions shape the whole codebase:
   constructor input to the next: `Backend → PreparedSystem → Formalizer`. The *existence* of
   a `Formalizer` proves that system analysis and preparation already succeeded — ordering is
   a type-level dependency, not a call-order convention, so there is no half-initialized state.
+  A backend whose units all build on one shared artifact adds a link instead of an exception:
+  `prepare_formalization` returns a `StagedFormalizer`, whose `begin` takes every unit's
+  properties and returns the `Formalizer` built around the artifact authored from them.
 - **Agents are graphs; everything is checkpointed.** Every agent is a LangGraph state graph
   built from a reusable framework ([graphcore/](graphcore/)). State, conversations, and
   intermediate results are persisted to Postgres so any run can be resumed, time-traveled,
