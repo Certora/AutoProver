@@ -29,6 +29,7 @@ authored after extraction, when the properties it must make checkable finally ex
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, NotRequired, cast, get_args, override
@@ -47,6 +48,7 @@ from composer.pipeline.core import (
     GaveUp,
     PipelineRun,
     PreparedSystem,
+    StagedFormalizer,
     SystemAnalysisSpec,
 )
 from composer.pipeline.ecosystem import Ecosystem, source_crate_of
@@ -138,8 +140,8 @@ class _LlmInput(FlowInput):
 type _JudgeHook = Callable[[str], Awaitable[tuple[bool, str]]]
 
 # Authors the shared setup artifact for a run, given the properties it must make checkable. Built
-# by :class:`RustPreparedSystem` and called from :meth:`RustFormalizer.begin` — see there for why it
-# runs between extraction and the per-unit fan-out rather than during prep or on first use.
+# by :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for
+# why it runs between extraction and the per-unit fan-out rather than during prep or on first use.
 type SetupAuthor = Callable[[list[PropertyFormulation], PipelineRun], Awaitable[str]]
 
 
@@ -664,7 +666,6 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         context_extra: dict | None = None,
         setup_result: str | None = None,
-        setup_author: "SetupAuthor | None" = None,
         program_crate: dict[str, str] | None = None,
         idl: str | None = None,
     ):
@@ -679,11 +680,11 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # compiled setup artifact under its ``context_key``); the prepared system assembles it.
         self._context_extra = context_extra or {}
         # The compiled setup spec (Crucible's fixture), forwarded to ``finalize`` so a
-        # callout-mode wheel can render the whole deliverable. Authored by ``setup_author`` in
-        # :meth:`begin` — once, before any component is formalized (see :class:`SetupAuthor`) —
-        # then read by every component's ``_context``.
+        # callout-mode wheel can render the whole deliverable, and already present in
+        # ``context_extra`` under its ``context_key`` for every component's ``_context``. A wheel
+        # that declares a ``setup`` step gets here only through :class:`RustStagedFormalizer`, which
+        # authors it first — so this is a plain constructor argument, never filled in later.
         self._setup_result = setup_result
-        self._setup_author = setup_author
         # Where the analyzed source's compilation unit lives (see ``program_crate_json``), carried
         # on every ``AuthorInput`` and mirrored into ``finalize`` — the delivered crate must
         # declare the same dependency the gated builds did. ``idl`` likewise: where workspace prep
@@ -697,33 +698,6 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         """The ``AuthorInput.context`` blob for a component. The program plus whatever the
         prepared system injected (declared args + the setup artifact under its context key)."""
         return {"program": str(run.source.contract_name), **self._context_extra}
-
-    @override
-    async def begin(self, jobs: list[BackendJob[FeatureUnit]], run: PipelineRun) -> None:
-        """Author the shared setup artifact from **every** unit's properties, then inject it into
-        every component's context.
-
-        Two constraints fix this point in the run. It cannot happen in ``prepare_formalization``
-        (which overlaps property extraction, so no properties exist yet), and it cannot happen
-        lazily on first ``formalize`` (whichever unit won the race would decide the artifact the
-        rest are then told to work within — see ``Formalizer.begin`` and
-        docs/crucible-component-units.md §8.2). The driver calls this exactly between the two.
-
-        Properties are de-duplicated by title, keeping first-seen order: the units are disjoint, but
-        two components can legitimately surface the same property, and the artifact's cache identity
-        is built from this list."""
-        if self._setup_author is None:
-            return
-        seen: set[str] = set()
-        union: list[PropertyFormulation] = []
-        for job in jobs:
-            for prop in job.props:
-                if prop.title not in seen:
-                    seen.add(prop.title)
-                    union.append(prop)
-        self._setup_result = await self._setup_author(union, run)
-        key = self._descriptor.setup.context_key if self._descriptor.setup else "setup"
-        self._context_extra[key] = self._setup_result
 
     def _before_formalize(self, feat: FeatureUnit, slugs: list[str]) -> None:
         """Place any crate scaffolding before compile/validate. Base: nothing (the wheel
@@ -915,6 +889,45 @@ class RustPreflight:
         return ctx
 
 
+class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
+    """The formalizer for a wheel that declares a ``setup`` step, before its shared artifact exists.
+
+    ``author`` writes and compiles the artifact from the properties it must make checkable;
+    ``build`` turns that artifact into the :class:`RustFormalizer` (see
+    :meth:`RustPreparedSystem.prepare_formalization`, which closes over everything else the
+    formalizer needs). Splitting it this way means the artifact is never assigned onto a live
+    formalizer — the only formalizer that exists already has it."""
+
+    def __init__(self, author: SetupAuthor, build: Callable[[str], RustFormalizer]):
+        self._author = author
+        self._build = build
+
+    @override
+    async def begin(
+        self, jobs: Sequence[BackendJob[FeatureUnit]], run: PipelineRun
+    ) -> RustFormalizer:
+        """Author the shared setup artifact from **every** unit's properties, and hand back the
+        formalizer built around it.
+
+        Two constraints fix this point in the run. It cannot happen in ``prepare_formalization``
+        (which overlaps property extraction, so no properties exist yet), and it cannot happen
+        lazily on first ``formalize`` (whichever unit won the race would decide the artifact the
+        rest are then told to work within — see :class:`StagedFormalizer` and
+        docs/crucible-component-units.md §8.2). The driver calls this exactly between the two.
+
+        Properties are de-duplicated by title, keeping first-seen order: the units are disjoint, but
+        two components can legitimately surface the same property, and the artifact's cache identity
+        is built from this list."""
+        seen: set[str] = set()
+        union: list[PropertyFormulation] = []
+        for job in jobs:
+            for prop in job.props:
+                if prop.title not in seen:
+                    seen.add(prop.title)
+                    union.append(prop)
+        return self._build(await self._author(union, run))
+
+
 @dataclass
 class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
     """Generic prepared system, descriptor-driven: author the optional shared ``setup`` artifact and
@@ -931,7 +944,12 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
     analyzed: BaseApplication | None = None
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[RustFormalResult, FeatureUnit]:
+    async def prepare_formalization(
+        self, run: PipelineRun
+    ) -> Formalizer[RustFormalResult, FeatureUnit] | StagedFormalizer[RustFormalResult, FeatureUnit]:
+        """A wheel that declares no ``setup`` step gets its formalizer here. One that does gets a
+        :class:`RustStagedFormalizer` instead — this method overlaps property extraction, so the
+        properties its artifact must be authored from do not exist yet."""
         b = self.backend
         descriptor = b.descriptor
         workdir = Path(run.source.project_root)
@@ -942,66 +960,75 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         analyzed_json = self.analyzed.model_dump(mode="json") if self.analyzed is not None else {}
         program_crate = self.preflight.program_crate
         # Every component's context = declared args + the IDL the preflight placed. The shared setup
-        # artifact joins it when the formalizer authors it — deliberately *later*, on first use: this
-        # method runs concurrently with property extraction, so the properties don't exist yet, and
-        # an artifact authored without them can only guess at the surface they need.
+        # artifact joins it in ``build`` below, once it exists.
         context_extra: dict = self.preflight.context(b.declared_args)
+
+        def build(setup_result: str | None) -> RustFormalizer:
+            """The formalizer, around a shared setup artifact that is either already authored or not
+            called for. Threading the artifact through here (rather than assigning it onto a
+            formalizer that already exists) is what keeps :class:`RustFormalizer` constructed once
+            and never mutated."""
+            extra = dict(context_extra)
+            if setup_result is not None:
+                key = descriptor.setup.context_key if descriptor.setup else "setup"
+                extra[key] = setup_result
+            return RustFormalizer(
+                b.module, b.descriptor, sandbox=b.sandbox,
+                command_timeout_s=b.command_timeout_s,
+                command_sem=command_sem, context_extra=extra, setup_result=setup_result,
+                program_crate=program_crate, idl=self.preflight.idl,
+            )
+
+        if descriptor.setup is None:
+            return build(None)
+
+        setup = descriptor.setup
         # The base for the setup artifact's own input; ``author_setup`` adds the properties.
         prep_input = {
             "kind": "setup", "program": program, "program_crate": program_crate,
             "component": analyzed_json, "props": [], "context": context_extra,
         }
-        setup_author: SetupAuthor | None = None
-        if descriptor.setup is not None:
-            setup = descriptor.setup
 
-            async def author_setup(props: list[PropertyFormulation], run: PipelineRun) -> str:
-                # The properties are what the artifact must make checkable, so they are part of both
-                # the prompt and the cache identity.
-                setup_input = {
-                    **prep_input,
-                    "props": [
-                        {"title": p.title, "sort": p.sort, "description": p.description, "slug": s}
-                        for p, s in zip(props, unique_slugs(props))
-                    ],
-                }
-                # Cached like a formalization result (and skipped entirely on a hit): authoring +
-                # compiling this is a full LLM loop, and on a large program the longest single step
-                # of a run — so a re-run after a failure downstream must not pay for it twice. Keyed
-                # by what it is authored *from*, so a changed model, program crate, type source
-                # (crate vs IDL) or property set re-authors it. As with the driver's other caches, a
-                # change to the *prompt* does not invalidate — clear the namespace for that.
-                setup_ctx: WorkflowContext[RustSetupArtifact] = run.ctx.child(
-                    CacheKey(f"{descriptor.name}-setup-{_setup_identity(setup_input)}")
-                )
-                if (hit := await setup_ctx.cache_get(RustSetupArtifact)) is not None:
-                    return hit.source
-                sandbox_dict = await b.sandbox_spec(workdir)
-                emit = make_emitter()
-                fixture = await run.runner(
-                    TaskInfo(
-                        f"{descriptor.name}-setup", setup.label,
-                        cast(Any, b._phase)[setup.phase_key],
-                    ),
-                    lambda: author_and_compile(
-                        b.module, setup_input, env=run.env, sandbox_dict=sandbox_dict,
-                        workdir=workdir, recursion_limit=run.ctx.recursion_limit,
-                        backend_name=descriptor.name, emit=emit, command_sem=command_sem,
-                    ),
-                )
-                if isinstance(fixture, GaveUp):
-                    raise RuntimeError(f"{descriptor.name} setup gave up: {fixture.reason}")
-                await setup_ctx.cache_put(RustSetupArtifact(source=fixture))
-                return fixture
+        async def author_setup(props: list[PropertyFormulation], run: PipelineRun) -> str:
+            # The properties are what the artifact must make checkable, so they are part of both
+            # the prompt and the cache identity.
+            setup_input = {
+                **prep_input,
+                "props": [
+                    {"title": p.title, "sort": p.sort, "description": p.description, "slug": s}
+                    for p, s in zip(props, unique_slugs(props))
+                ],
+            }
+            # Cached like a formalization result (and skipped entirely on a hit): authoring +
+            # compiling this is a full LLM loop, and on a large program the longest single step
+            # of a run — so a re-run after a failure downstream must not pay for it twice. Keyed
+            # by what it is authored *from*, so a changed model, program crate, type source
+            # (crate vs IDL) or property set re-authors it. As with the driver's other caches, a
+            # change to the *prompt* does not invalidate — clear the namespace for that.
+            setup_ctx: WorkflowContext[RustSetupArtifact] = run.ctx.child(
+                CacheKey(f"{descriptor.name}-setup-{_setup_identity(setup_input)}")
+            )
+            if (hit := await setup_ctx.cache_get(RustSetupArtifact)) is not None:
+                return hit.source
+            sandbox_dict = await b.sandbox_spec(workdir)
+            emit = make_emitter()
+            fixture = await run.runner(
+                TaskInfo(
+                    f"{descriptor.name}-setup", setup.label,
+                    cast(Any, b._phase)[setup.phase_key],
+                ),
+                lambda: author_and_compile(
+                    b.module, setup_input, env=run.env, sandbox_dict=sandbox_dict,
+                    workdir=workdir, recursion_limit=run.ctx.recursion_limit,
+                    backend_name=descriptor.name, emit=emit, command_sem=command_sem,
+                ),
+            )
+            if isinstance(fixture, GaveUp):
+                raise RuntimeError(f"{descriptor.name} setup gave up: {fixture.reason}")
+            await setup_ctx.cache_put(RustSetupArtifact(source=fixture))
+            return fixture
 
-            setup_author = author_setup
-
-        return RustFormalizer(
-            b.module, b.descriptor, sandbox=b.sandbox,
-            command_timeout_s=b.command_timeout_s,
-            command_sem=command_sem, context_extra=context_extra, setup_author=setup_author,
-            program_crate=program_crate, idl=self.preflight.idl,
-        )
+        return RustStagedFormalizer(author_setup, build)
 
 
 @dataclass

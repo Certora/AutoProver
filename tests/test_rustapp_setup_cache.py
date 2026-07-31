@@ -1,8 +1,9 @@
 """Tests for the shared setup artifact: when it is authored, from what, and its cache.
 
 Three things are pinned here. **When**: not during ``prepare_formalization`` (which runs
-concurrently with property extraction, so the properties don't exist yet) but in ``Formalizer.begin``
-— after extraction, before the per-unit fan-out. **From what**: the union of *every* unit's
+concurrently with property extraction, so the properties don't exist yet) but in
+``StagedFormalizer.begin`` — after extraction, before the per-unit fan-out, which is also the call
+that produces the formalizer. **From what**: the union of *every* unit's
 properties, not whichever unit happened to formalize first; the artifact is what makes those
 properties checkable, so a multi-component run whose fixture only knew one component's properties
 would tell the rest to work within a surface designed without them
@@ -23,7 +24,9 @@ from composer.pipeline.ptypes import BackendJob
 from composer.spec.types import PropertyFormulation
 
 import composer.rustapp.adapter as adapter
-from composer.rustapp.adapter import RustFormalizer, RustPreparedSystem, _setup_identity
+from composer.rustapp.adapter import (
+    RustFormalizer, RustPreparedSystem, RustStagedFormalizer, _setup_identity
+)
 from composer.rustapp.descriptor import AppDescriptor
 from composer.spec.context import WorkflowContext
 
@@ -96,8 +99,11 @@ def _jobs(*prop_lists: list[PropertyFormulation]) -> list[BackendJob]:
     return [BackendJob(feat=cast(object, f"unit{i}"), props=p) for i, p in enumerate(prop_lists)]
 
 
-async def _prepare(monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None) -> str | None:
-    """Drive prepare→begin with the LLM authoring stubbed, returning the authored fixture."""
+async def _formalizer(
+    monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None
+) -> RustFormalizer:
+    """Drive prepare→begin with the LLM authoring stubbed, returning the formalizer ``begin`` built
+    around the authored fixture."""
     from composer.rustapp.host import build_backend
     from composer.spec.context import SourceCode
     from composer.spec.system_model import SolidityIdentifier
@@ -126,11 +132,20 @@ async def _prepare(monkeypatch, ctx, authored: list[str], tmp_path, *, props=Non
     # point) and hands its outcome forward — here the stubbed "no IDL requested".
     preflight = await backend.preflight(cast(object, run))  # type: ignore[arg-type]
     prepared = RustPreparedSystem("main", backend, preflight)
-    formalizer = cast(RustFormalizer, await prepared.prepare_formalization(run))  # type: ignore[arg-type]
-    # Nothing authored yet: prep runs alongside extraction, so the properties aren't known there.
-    assert formalizer._setup_result is None
-    await formalizer.begin(jobs or _jobs(props if props is not None else PROPS), run)  # type: ignore[arg-type]
-    return formalizer._setup_result
+    before = len(authored)  # callers reuse one list across repeat runs, so count this run's own
+    staged = await prepared.prepare_formalization(run)  # type: ignore[arg-type]
+    # This run has authored nothing yet, and there is no formalizer to inspect — prep runs alongside
+    # extraction, so the properties aren't known here. A wheel that declares a `setup` step gets
+    # the staged type back, and `begin` is the only thing that can turn it into a formalizer.
+    assert isinstance(staged, RustStagedFormalizer)
+    assert len(authored) == before
+    return await staged.begin(jobs or _jobs(props if props is not None else PROPS), run)  # type: ignore[arg-type]
+
+
+async def _prepare(monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None) -> str | None:
+    """As :func:`_formalizer`, narrowed to the authored fixture itself."""
+    f = await _formalizer(monkeypatch, ctx, authored, tmp_path, props=props, jobs=jobs)
+    return f._setup_result
 
 
 def _ctx(store, *, namespace) -> WorkflowContext:
@@ -148,6 +163,15 @@ async def test_the_setup_artifact_is_authored_once_and_then_reused(monkeypatch, 
     # A second run with the same namespace (i.e. `--cache-ns` on both) reuses it: no second LLM loop.
     second = await _prepare(monkeypatch, _ctx(store, namespace=("run-ns",)), authored, tmp_path)
     assert second == FIXTURE and len(authored) == 1
+
+
+async def test_the_artifact_reaches_every_component_under_its_declared_context_key(monkeypatch, tmp_path):
+    # How the fixture actually gets to the components: `begin` builds the formalizer with the
+    # artifact already in the context blob, under the `context_key` the wheel declared ("fixture"
+    # here). This is the seam that used to be an assignment onto a live formalizer.
+    store, authored = _Store(), []
+    f = await _formalizer(monkeypatch, _ctx(store, namespace=None), authored, tmp_path)
+    assert f._context_extra["fixture"] == FIXTURE
 
 
 async def test_the_setup_artifact_is_authored_from_the_extracted_properties(monkeypatch, tmp_path):

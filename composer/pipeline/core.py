@@ -12,9 +12,11 @@ Two links are *overlapped* with the LLM steps they don't depend on, since both a
 extraction. Overlapped is not optional — either failing dooms the run, so :func:`_all_or_none`
 cancels the survivor rather than letting it spend on a run that can no longer complete.
 
-A backend whose units all build on one *shared* artifact inserts a link: ``prepare_formalization`` returns 
-a :class:`StagedFormalizer`, and its ``begin`` — handed every unit's properties — is what produces the 
-:class:`Formalizer`. 
+A backend whose units all build on one *shared* artifact inserts a link rather than a call-order
+convention: ``prepare_formalization`` returns a :class:`StagedFormalizer`, and its ``begin`` — handed
+every unit's properties — is what produces the :class:`Formalizer`. Same rule as the rest of the
+chain, so it needs no new rule: the artifact is a constructor argument to the only object that uses
+it, and no formalizer ever exists without it.
 
 The driver owns the genuinely-shared steps: system analysis, per-component property extraction, the
 result-type-keyed cache, and (since the report is backend-agnostic) building + persisting the
