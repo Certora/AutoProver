@@ -52,10 +52,12 @@ def _diff_html(diff: str) -> Markup:
         out.append(f'<span class="d-line{f" {cls}" if cls else ""}">{escape(line)}</span>')
     return Markup("".join(out))
 
+def _patch_environment_filters(env: Environment):
+    env.filters["markdown"] = _markdown
+    env.filters["diff_html"] = _diff_html    
 
 env = Environment(loader=FileSystemLoader(script_dir), autoescape=_autoescape, **_test_mode_undefined)
-env.filters["markdown"] = _markdown
-env.filters["diff_html"] = _diff_html
+_patch_environment_filters(env)
 
 def load_jinja_template(template_name: str, **kwargs: Any) -> str:
     """Load and render a Jinja template from the script directory"""

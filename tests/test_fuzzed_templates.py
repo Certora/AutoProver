@@ -17,6 +17,7 @@ from composer.spec.system_model import (
     HarnessedApplication, _context_marker_attr,
     BaseApplication, ExplicitContract, ExternalActor, ContractComponent
 )
+from composer.templates.loader import _patch_environment_filters
 from composer.spec.service_host import Sort # defined here? huh?
 import hypothesis.strategies._internal.core as hcore
 
@@ -29,6 +30,7 @@ TEMPLATES_DIR = REPO_ROOT / "composer" / "templates"
 MANIFEST = Manifest.validate_json((REPO_ROOT / "template_manifest.json").read_text())
 
 env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), undefined=StrictUndefined)
+_patch_environment_filters(env)
 
 FUZZABLE = sorted(
     (key, entry) for key, entry in MANIFEST.items()
