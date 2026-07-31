@@ -267,8 +267,14 @@ def _validate_program_components(prog: SolanaProgram) -> list[str]:
     return errors
 
 
-def _solana_validate(app: BaseApplication, expected_main: SolidityIdentifier | None) -> str | None:
+def _solana_validate(app: SolanaApplication, expected_main: SolidityIdentifier | None) -> str | None:
     """Connectivity/shape validation for a ``SolanaApplication`` (retry feedback on failure).
+
+    Typed over ``SolanaApplication``, not ``BaseApplication``: ``Ecosystem.validate_analysis`` is
+    ``Callable[[App, ...]]``, so the seam already guarantees the model came from *this* ecosystem's
+    ``system_model``. An earlier version narrowed at runtime and returned ``None`` for a foreign
+    application; that silently passed a model this function cannot check, and the parameter type is
+    what makes the case unreachable instead.
     Mirrors the EVM ``_validate_connectivity`` structure: unique program identifiers and names,
     unique instruction slugs within a program, unique component names/slugs within a program, the
     component↔instruction mapping valid and total, component interactions resolving, and the

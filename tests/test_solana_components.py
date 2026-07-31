@@ -16,7 +16,6 @@ from composer.spec.solana.model import (
     InterComponentInteraction,
     SolanaApplication,
 )
-from composer.spec.system_model import Application
 
 
 def _raw() -> dict[str, Any]:
@@ -231,10 +230,3 @@ def test_multiple_errors_are_all_reported():
     assert problem is not None
     assert problem.startswith("Multiple validation errors")
     assert "Duplicate component names" in problem and "Pyth" in problem
-
-
-def test_a_non_solana_application_is_not_validated_here():
-    # The validator is typed over BaseApplication and narrows internally (as the EVM one does),
-    # so an application from another ecosystem passes straight through.
-    evm = Application(application_type="AMM", description="not Solana", components=[])
-    assert _solana_validate(evm, "vault") is None
