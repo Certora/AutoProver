@@ -132,7 +132,7 @@ it on the store. The wheel *already* handles `kind=="setup"` in `units` (→ emp
 **Proposal.** Make the setup step declarative on the descriptor:
 
 ```rust
-setup: Option<SetupSpec>   // { phase_key: "build_harness", label: "Build Harness",
+setup: Option<SetupSpec>   // { phase_key: "harness_fixture", label: "Harness Fixture",
                            //   context_key: "fixture" }
 ```
 
@@ -185,7 +185,8 @@ existing shared helpers:
 fn workspace_prep(&self, input: &AuthorInput) -> WorkspacePrep {
     // { files: {relpath: contents},    // e.g. the harness Cargo.toml (deps only the wheel knows)
     //   warm_dirs: [String],           // dirs to `cargo fetch` (unconfined, network)
-    //   build_program: Option<String>  // build this program to its platform binary }
+    //   build_program: Option<String>, // build this program to its platform binary
+    //   idl_dest: Option<String>       // obtain the program's IDL and place it here }
 }
 ```
 
@@ -200,6 +201,12 @@ fn workspace_prep(&self, input: &AuthorInput) -> WorkspacePrep {
 - `build_program` is the shared Solana build capability
   ([solana/build.py](../composer/spec/solana/build.py)); the generic host invokes it lazily when
   the plan requests it (shared ecosystem capability, not app-specific Python).
+- `idl_dest` is the same shape for a *derived input* rather than an artifact: the host resolves the
+  program's IDL (an operator-supplied file, else the build capability's IDL build), writes it there,
+  and reports the path back as the `idl` context key on every later `AuthorInput` — so a wheel that
+  cannot link the program under test can generate its types instead
+  ([crucible-application.md §6.2](./crucible-application.md)). A hard error if it can't be produced:
+  the wheel only asks when it cannot proceed without one.
 
 **Bonus simplification — the cumulative-feature manifest race disappears (item 4).** The reason
 `prepare_component` reserves features *cumulatively* on a shared on-disk `Cargo.toml` is that
@@ -214,6 +221,21 @@ warming needs. This is the last thing keeping the `CrucibleArtifactStore` alive;
 
 **Deletes:** `write_setup_manifest`, `warm_dependencies`, the `build_program` pre-step call, and
 the whole feature-reservation path in `harness.py`.
+
+### 4.1 …and a gate on the plan's result
+
+A plan that *ran* is not a workspace that *builds*: `cargo fetch` resolves a dependency graph and
+compiles nothing, and it is best-effort by design (a failed warm is logged, on the theory that the
+later offline build will surface it). So `workspace_prep` alone leaves the first genuine build of the
+harness crate to the first LLM-authored draft.
+
+`preflight: Option<PreflightSpec>` on the descriptor closes that: when present, the host follows the
+plan with a `kind="preflight"` `compile` whose `spec` is empty — the wheel renders its own skeleton —
+and a failure is terminal. Both steps live in `RustBackend.preflight`, which the driver runs
+concurrently with system analysis, since neither reads the analyzed model. See
+[rust-backend-api.md §3.1](./rust-backend-api.md) for the failure modes this catches and why they are
+not re-authorable, and [crucible-application.md §5.0](./crucible-application.md) for Crucible's
+skeleton.
 
 ---
 
@@ -319,6 +341,7 @@ plan* into the wheel.
 **Descriptor (`AppDescriptor`, mirrored in [descriptor.py](../composer/rustapp/descriptor.py)):**
 
 ```rust
+preflight: Option<PreflightSpec>,  // { phase_key, label }  (§4.1)
 setup: Option<SetupSpec>,          // { phase_key, label, context_key }  (§3.2)
 deliverable_mode: DeliverableMode, // PerComponent | Callout, default PerComponent  (§3.1)
 serialize_toolchain: bool,         // default false  (§3.4)
@@ -329,7 +352,7 @@ component_noun: Option<String>,    // default "component"  (§5.3)
 **New callouts on the `Backend` trait (both pure):**
 
 ```rust
-fn workspace_prep(&self, input) -> WorkspacePrep { default }   // { files, warm_dirs, build_program }  (§4)
+fn workspace_prep(&self, input) -> WorkspacePrep { default }   // { files, warm_dirs, build_program, idl_dest }  (§4)
 fn sandbox_grants(&self, args: &serde_json::Value) -> SandboxGrants { default }  // { extra_ro, extra_env }  (§5.2)
 // finalize's input gains artifact_text / property_units / setup (§3.1) — signature unchanged.
 ```

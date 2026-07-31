@@ -13,7 +13,13 @@ import pytest
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.launcher import LauncherProvider
 from composer.sandbox.policy import NoneProvider
-from composer.sandbox.recipes import rust_build_policy, shared_cargo_ro_paths
+from composer.sandbox.recipes import (
+    rust_build_policy,
+    CARGO_REGISTRY_PROTOCOL,
+    CARGO_REGISTRY_PROTOCOL_VAR,
+    shared_cargo_ro_paths,
+    solana_toolchain_ro_paths,
+)
 
 
 def test_config_default_is_none_and_disabled():
@@ -125,14 +131,73 @@ def test_rust_build_policy_offline_sets_cargo_net_offline(tmp_path):
     """Default (offline) forces every cargo — incl. the one `crucible run` spawns —
     offline via CARGO_NET_OFFLINE; opting out drops it."""
     on = rust_build_policy(tmp_path)
-    assert on.env_allowlist.get("CARGO_NET_OFFLINE") == "1"
+    # Spelled as a bool word: cargo parses this strictly and older versions (a target project
+    # pins its own, e.g. 1.74) reject "1" outright — "provided string was not `true` or `false`".
+    assert on.env_allowlist.get("CARGO_NET_OFFLINE") == "true"
     off = rust_build_policy(tmp_path, offline=False)
     assert "CARGO_NET_OFFLINE" not in off.env_allowlist
 
 
+def test_offline_build_reads_the_index_layout_the_warm_step_writes(tmp_path):
+    """The warm (network, outside the sandbox) and the build (offline, inside it) run under
+    DIFFERENT cargos — the program's own toolchain vs platform-tools' — and cargo flipped its
+    crates.io default from the git index to sparse in 1.70. Sharing CARGO_HOME does not make
+    them agree about the layout *within* it, so both must name the protocol explicitly or a
+    pre-1.70 platform-tools cargo misses the cache a modern warm just filled, and reports it
+    as `no matching package named <some crate> found`.
+
+    This asserts the two halves stay in sync; `test_solana_build` covers the warm side.
+    """
+    from composer.spec.solana.build import warm_cargo_cache  # noqa: F401  (docs the pairing)
+
+    policy = rust_build_policy(tmp_path)
+    assert policy.env_allowlist.get(CARGO_REGISTRY_PROTOCOL_VAR) == CARGO_REGISTRY_PROTOCOL
+    # Pinned even when the caller opts out of offline: the point is that both sides agree on
+    # the layout, which is orthogonal to whether the build may reach the network.
+    online = rust_build_policy(tmp_path, offline=False)
+    assert online.env_allowlist.get(CARGO_REGISTRY_PROTOCOL_VAR) == CARGO_REGISTRY_PROTOCOL
+
+
+def test_rust_build_policy_grants_the_git_config_for_git_dependencies(tmp_path, monkeypatch):
+    # A project with git deps resolves them through libgit2, which opens the global git config
+    # before touching a repo — even offline against an already-warm checkout. Ungranted, cargo
+    # fails the whole metadata read with "'~/.gitconfig' is locked: Permission denied".
+    home = tmp_path / "home"
+    (home / ".config" / "git").mkdir(parents=True)
+    (home / ".gitconfig").write_text("[user]\n\tname = Someone\n")
+    (home / ".config" / "git" / "config").write_text("[core]\n")
+    (home / ".git-credentials").write_text("https://token@github.com\n")
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+
+    pol = rust_build_policy(tmp_path / "wd")
+    assert home / ".gitconfig" in pol.ro_paths
+    assert home / ".config" / "git" / "config" in pol.ro_paths
+    # Config only — the credential store stays out, as ~/.cargo/credentials.toml does.
+    assert home / ".git-credentials" not in pol.ro_paths
+
+
+def test_rust_build_policy_grants_the_selected_solana_toolchain(tmp_path, monkeypatch):
+    # `execvp` skips a binary it may not exec (EACCES) and runs the next match on PATH, so an
+    # ungranted toolchain doesn't fail — it silently swaps for another one. The install root is
+    # granted (not just bin/) because a tarball install keeps platform-tools in a sibling `sdk/`.
+    root = tmp_path / "opt" / "solana-1.18.26"
+    (root / "bin").mkdir(parents=True)
+    exe = root / "bin" / "cargo-build-sbf"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(root / "bin"))
+
+    assert solana_toolchain_ro_paths() == (root,)
+    assert root in rust_build_policy(tmp_path / "wd").ro_paths
+
+    # Nothing on PATH → nothing granted (and no crash).
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert solana_toolchain_ro_paths() == ()
+
+
 def test_config_enabled_policy_is_offline_by_default(tmp_path):
     pol = SandboxConfig(provider="launcher").build_policy(tmp_path)
-    assert pol.env_allowlist.get("CARGO_NET_OFFLINE") == "1"
+    assert pol.env_allowlist.get("CARGO_NET_OFFLINE") == "true"
     pol_net = SandboxConfig(provider="launcher", offline=False).build_policy(tmp_path)
     assert "CARGO_NET_OFFLINE" not in pol_net.env_allowlist
 

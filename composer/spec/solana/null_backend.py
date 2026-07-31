@@ -7,7 +7,7 @@ It satisfies the full ``PipelineBackend`` contract over the Solana ecosystem's
 
 **Role:** a **test double** for the Solana front half (analysis + property extraction)
 without a real verifier — see ``tests/test_solana_gate.py``. Production Solana
-verification is the Crucible fuzzer backend.
+verification is :mod:`composer.crucible` (Crucible fuzzer backend).
 """
 
 import enum
@@ -105,13 +105,9 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
 
 class NullSolanaFormalizer(Formalizer[NullResult, SolanaComponentInstance]):
     def __init__(self) -> None:
-        # The tag is provenance only — it picks the report's outcome labels, and this backend's
-        # results are all-UNKNOWN either way. So borrow ``"prover"``, an existing member of
-        # ``ReportBackend``: the real Solana verifier's own tag is added to that literal by the
-        # backend that introduces it, and until then a value outside the literal is not merely
-        # untyped but unusable — ``AutoProverReport`` is a pydantic model, so it would fail
-        # validation in ``build_report`` and lose the report phase to a swallowed exception.
-        super().__init__(NullResult, "prover")
+        # Reuses the ``"crucible"`` report backend (the real Solana verifier this null backend
+        # models); its results are all-UNKNOWN, so the label choice is provenance only.
+        super().__init__(NullResult, "crucible")
 
     @override
     async def formalize(
@@ -163,8 +159,12 @@ class NullSolanaBackend:
         }
     )
 
+    async def preflight(self, run: PipelineRun[SolanaPhase, None]) -> None:
+        """Nothing to prepare — this backend builds nothing and only records properties."""
+        return None
+
     async def prepare_system(
-        self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None]
+        self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None], preflight: None
     ) -> PreparedSystem[NullResult, SolanaComponentInstance, SolanaProgramInstance]:
         # Use the Solana ecosystem's locate_main so the backend and ecosystem agree on the
         # target program (imported lazily to avoid an import cycle with pipeline.ecosystem).

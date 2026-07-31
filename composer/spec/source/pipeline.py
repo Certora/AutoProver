@@ -275,8 +275,8 @@ AP_PROPERTIES_KEY_NAME = "ap-properties"
 @dataclass
 class ProverBackend:
     """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec,
-    ContractComponentInstance, ContractInstance, SourceApplication]
-    (P, FormT, H, A, Unit, Main, App)."""
+    ContractComponentInstance, ContractInstance, SourceApplication, None]
+    (P, FormT, H, A, Unit, Main, App, Pre)."""
     backend_guidance = CERTORA_BACKEND_GUIDANCE
     core_phases = CorePhases({
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
@@ -289,8 +289,15 @@ class ProverBackend:
     artifact_store: ProverArtifactStore
     _prover_opts: ProverOptions
 
+    async def preflight(self, run: PipelineRun[AutoProvePhase, None]) -> None:
+        """Nothing to do ahead of analysis. The prover's expensive pre-work (AutoSetup, summaries,
+        structural invariants) needs the *harnessed* model, so it stays in ``prepare_formalization``,
+        where it already overlaps property extraction."""
+        return None
+
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
+        preflight: None,
     ) -> PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]:
         sys_desc = await run.runner(
             TaskInfo(HARNESS_TASK_ID, "Harness Creation", AutoProvePhase.HARNESS),

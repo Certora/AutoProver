@@ -49,25 +49,29 @@ either.
 Formalization is the tail of a three-link immutable chain. Each arrow is a method whose
 return type is the input to the next link:
 
-```
- PipelineBackend ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
- (config, analysis spec,            (.main: located main                      (formalize / verdicts /
-  artifact store)                    contract; backend setup)                  report inputs / finalize)
+```text
+ PipelineBackend ──preflight──▶ Pre ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
+ (config, analysis spec,       (backend    (.main: located main                     (formalize / verdicts /
+  artifact store)               pre-work)   contract; backend setup)                  report inputs / finalize)
 ```
 
 The driver ([core.py:230](../composer/pipeline/core.py)) sequences them:
 
 ```python
-# 1. shared: analyze source → SourceApplication (always the same type)
-analyzed = await run.runner(TaskInfo(SYSTEM_ANALYSIS_TASK_ID, ...), lambda: run_component_analysis(...))
+# 1. analysis-independent backend pre-work runs CONCURRENTLY with the shared analysis
+preflight_task = asyncio.create_task(backend.preflight(run))
+analysis_task = asyncio.create_task(run.runner(TaskInfo(SYSTEM_ANALYSIS_TASK_ID, ...), ...))
+await _all_or_none(preflight_task, analysis_task)   # either failure cancels the other
+analyzed = analysis_task.result()
 
 # 2. backend transform: prover lifts to a harnessed app; foundry is identity
-prepared = await backend.prepare_system(analyzed, run)
+prepared = await backend.prepare_system(analyzed, run, preflight_task.result())
 
 # 3. pre-formalization setup runs CONCURRENTLY with property extraction
 formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
-batches = await _extract_all(prepared.main, backend.backend_guidance, run, ...)
-formalizer = await formalizer_task
+extraction_task = asyncio.create_task(_extract_all(prepared.main, ...))
+await _all_or_none(formalizer_task, extraction_task)
+batches, formalizer = extraction_task.result(), formalizer_task.result()
 
 # 4. per-component formalization (parallel), cache-wrapped by the driver
 settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
@@ -76,10 +80,19 @@ settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=Tr
 report = await build_report(..., fetch_verdicts=formalizer.fetch_verdicts)
 ```
 
-The key structural point: `prepare_formalization` is launched as a task *before*
-extraction is awaited. For the CVL backend, that is what overlaps the slow AutoSetup /
-summary / structural-invariant work with per-component property inference — and it falls
-out of the driver generically, so Foundry gets the same overlap with zero extra code.
+The key structural point is the two overlaps, and both fall out of the driver generically. For the
+CVL backend, launching `prepare_formalization` before awaiting extraction is what overlaps the slow
+AutoSetup / summary / structural-invariant work with per-component property inference — so Foundry
+gets the same overlap with zero extra code.
+
+`preflight` is the earlier peer, for pre-work that needs *nothing at all* from the run: Crucible
+builds the program under test and gates a skeleton harness through the real toolchain there, since
+neither reads the analyzed model. Overlapping is not the same as being optional — either side failing
+dooms the run, so `_all_or_none` cancels the survivor rather than letting it keep spending on a run
+that can no longer complete. That is what makes the preflight a *gate*: a broken workspace stops the
+run while it has spent one analysis agent, instead of surfacing as unfixable compiler errors in the
+first authored draft, after the whole extraction phase
+([rust-backend-api.md §3.1](./rust-backend-api.md)).
 
 ---
 
@@ -512,6 +525,7 @@ system analysis, property extraction, caching, and the report, and contributes o
 | Abstraction member | CVL backend | Foundry backend |
 |---|---|---|
 | `FormT` | `GeneratedCVL` | `GeneratedFoundryTest` |
+| `preflight` | none (its pre-work needs the harnessed model) | none (`forge` builds the project already) |
 | `prepare_system` | harness lift + prover tool | identity |
 | `prepare_formalization` | AutoSetup ∥ summaries ∥ invariants | trivial (pre-built formalizer) |
 | `formalize` | author CVL, run prover, revise | author tests, run `forge test` |
@@ -525,8 +539,11 @@ A backend author's checklist:
 1. Define a result type satisfying `FormalResult` + `ReportableResult` (`artifact_text`,
    `commentary`, `property_units()`, `skipped`, `output_link`).
 2. Subclass `ArtifactStore` for the on-disk bundle; define an `ArtifactIdentifier` sum type.
-3. Implement `PipelineBackend` (`prepare_system`, `to_artifact_id`, `backend_guidance`,
-   `core_phases`, `analysis_spec`, `artifact_store`).
+3. Implement `PipelineBackend` (`preflight`, `prepare_system`, `to_artifact_id`,
+   `backend_guidance`, `core_phases`, `analysis_spec`, `artifact_store`). `preflight` returns `None`
+   unless the backend has pre-work that needs nothing from the run — if it must *build* something,
+   that is where the build belongs, so it overlaps system analysis and can fail the run before the
+   model has been spent (Crucible: [rust-backend-api.md §3.1](./rust-backend-api.md)).
 4. Implement `PreparedSystem.prepare_formalization` returning a fully-constructed
    `Formalizer`.
 5. Implement `Formalizer.formalize` + `fetch_verdicts`; override `extra_report_inputs` /
@@ -541,7 +558,8 @@ Putting it together, one run of the CVL backend over a component:
 ```
 run_autoprove_pipeline
 └─ run_pipeline(ProverBackend, run)
-   1. run_component_analysis ──────────────▶ SourceApplication
+   1. ┌ create_task: ProverBackend.preflight ─▶ None   # a building backend puts its build here
+      └ run_component_analysis ─────────────▶ SourceApplication   # concurrent with the above
    2. ProverBackend.prepare_system
         run_harness_creation ─▶ SystemDescriptionHarnessed
         _lift_harnessed       ─▶ HarnessedApplication

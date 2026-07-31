@@ -1,12 +1,15 @@
 """Entry point for the auto-prove multi-agent pipeline TUI."""
 
 import asyncio
+import logging
 
 import composer.bind as _
 
 from composer.diagnostics.timing import RunSummary
 from composer.ui.autoprove_app import AutoProveApp
 from composer.spec.source.autoprove_common import _entry_point
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Main
@@ -29,6 +32,8 @@ async def _main() -> int:
                 app.notify(msg)
                 app._pipeline_done = True
             except Exception as exc:
+                # A toast alone loses the failure the moment it fades — and the traceback with it.
+                _log.exception("pipeline failed")
                 app.notify(f"Pipeline failed: {exc}", severity="error")
                 app._pipeline_done = True
 

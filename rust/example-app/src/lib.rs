@@ -52,8 +52,10 @@ impl Backend for EchoApp {
                 property_suffix: "property_rules".into(),
                 deliverable_primary: None,
             },
-            // A simple per-component wheel: no shared setup, one file per component, no toolchain
-            // confinement/serialization (its compile/validate are pure). All defaults.
+            // A simple per-component wheel: nothing to gate ahead of analysis (there is no
+            // workspace to prepare and `compile` is a no-op), no shared setup, one file per
+            // component, no toolchain confinement/serialization. All defaults.
+            preflight: None,
             setup: None,
             deliverable_mode: autoprover_sdk::DeliverableMode::PerComponent,
             serialize_toolchain: false,

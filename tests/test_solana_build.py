@@ -13,6 +13,7 @@ import pytest
 import composer.spec.solana.build as buildmod
 from composer.sandbox.command import CommandResult
 from composer.sandbox.config import SandboxConfig
+from composer.sandbox.recipes import CARGO_REGISTRY_PROTOCOL, CARGO_REGISTRY_PROTOCOL_VAR
 
 pytestmark = pytest.mark.asyncio
 
@@ -32,8 +33,52 @@ async def test_warm_cargo_cache_runs_unsandboxed_fetch(tmp_path, monkeypatch):
     assert seen["program"] == "cargo" and seen["args"] == ["fetch"]
     assert seen["workdir"] == tmp_path
     assert seen["provider"] is None  # warming must NOT be sandboxed (it needs network)
-    # fetch targets the private per-run CARGO_HOME (same one the offline build reads)
-    assert seen["env_overlay"] == {"CARGO_HOME": str(tmp_path / ".sandbox_cargo")}
+    # fetch targets the private per-run CARGO_HOME (same one the offline build reads), and
+    # pins the index layout it writes there — see the protocol tests below.
+    assert seen["env_overlay"] == {
+        "CARGO_HOME": str(tmp_path / ".sandbox_cargo"),
+        CARGO_REGISTRY_PROTOCOL_VAR: CARGO_REGISTRY_PROTOCOL,
+    }
+
+
+async def test_warm_uses_the_same_cargo_the_sbf_build_will(tmp_path, monkeypatch):
+    """`cargo +solana fetch` — not the ambient cargo.
+
+    Sharing a CARGO_HOME is not enough: the host cargo and platform-tools' cargo can be many
+    releases apart, and they disagree about the layout *within* that home. Warming with the
+    wrong one leaves the offline build unable to see a cache that is sitting right there.
+    """
+    seen = {}
+
+    async def fake_run(program, args, files, *, workdir, timeout_s=600, sem=None,
+                       provider=None, policy=None, env_overlay=None):
+        seen.update(program=program, args=args)
+        return CommandResult(0, "", "")
+
+    monkeypatch.setattr(buildmod, "run_local_command", fake_run)
+    await buildmod.warm_cargo_cache(tmp_path, toolchain=buildmod.SBF_TOOLCHAIN)
+    assert seen["program"] == "cargo"
+    assert seen["args"] == ["+solana", "fetch"]
+
+
+async def test_warm_falls_back_to_the_ambient_cargo_when_the_toolchain_is_absent(
+    tmp_path, monkeypatch
+):
+    """`cargo-build-sbf` creates the `solana` link itself, so it does not exist before the
+    first build on a host. A missing toolchain must degrade to the old behaviour, not abort —
+    warming is best-effort either way."""
+    calls = []
+
+    async def fake_run(program, args, files, *, workdir, timeout_s=600, sem=None,
+                       provider=None, policy=None, env_overlay=None):
+        calls.append(args)
+        # rustup's "toolchain 'solana' is not installed"
+        return CommandResult(1 if args[0].startswith("+") else 0, "", "not installed")
+
+    monkeypatch.setattr(buildmod, "run_local_command", fake_run)
+    res = await buildmod.warm_cargo_cache(tmp_path, toolchain=buildmod.SBF_TOOLCHAIN)
+    assert calls == [["+solana", "fetch"], ["fetch"]], calls
+    assert res.exit_code == 0  # the fallback's result is what the caller sees
 
 
 async def _fake_build_run_factory(calls):

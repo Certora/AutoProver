@@ -17,6 +17,16 @@ from pydantic import BaseModel, Field
 from composer.spec.cvl_generation import SkippedProperty
 
 
+class RustSetupArtifact(BaseModel):
+    """The compiled shared setup artifact (Crucible's fixture), wrapped for the store.
+
+    It is one string, but the typed cache round-trips pydantic models only — and it earns a cache
+    entry: authoring + compiling it is a full LLM loop (on a large program, the longest single step
+    of a run), it is authored once for the whole run, and every component builds on it."""
+
+    source: str
+
+
 class RustFormalResult(BaseModel):
     """A successful Rust formalization. ``units`` holds the property→unit-names
     map as JSON-friendly lists; ``property_units()`` re-tuples it for the
@@ -32,6 +42,13 @@ class RustFormalResult(BaseModel):
     # (unit name -> the Rust ``Verdict`` dict: {outcome, line?, duration_seconds?,
     # unit_file?}). Empty for run-service-backed backends (they use fetch_verdicts).
     verdicts: dict[str, dict] = Field(default_factory=dict)
+    # The distinct validation *targets* this unit's report rows were checked by — the wheel's
+    # ``Unit.target``s, in the order they ran. Several report rows may share one target (Crucible
+    # puts a component's whole property set in one fuzz target), so this is not ``units``' keys.
+    # Mirrored into ``finalize``'s outcome set because a callout-mode wheel assembling one
+    # deliverable needs the real target names: re-deriving them from a display name would put the
+    # slug rule in two languages and smuggle a semantic value through a string.
+    targets: list[str] = Field(default_factory=list)
 
     def property_units(self) -> list[tuple[str, list[str]]]:
         return [(title, list(names)) for title, names in self.units]

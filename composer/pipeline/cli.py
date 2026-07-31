@@ -117,10 +117,10 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+        backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
         ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
@@ -249,9 +249,9 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+                backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
                 ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
                 await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(

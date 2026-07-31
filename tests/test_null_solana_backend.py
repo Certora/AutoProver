@@ -128,7 +128,7 @@ async def test_prepare_system_locates_main_and_builds_formalizer(tmp_path):
     backend = _backend(str(tmp_path))
     run = cast(Any, SimpleNamespace(source=SimpleNamespace(contract_name="vault")))
 
-    prepared = await backend.prepare_system(feat.app, run)
+    prepared = await backend.prepare_system(feat.app, run, await backend.preflight(run))
 
     assert isinstance(prepared, NullSolanaPrepared)
     # prepare_system routes through SOLANA.locate_main, so main is the matched program.

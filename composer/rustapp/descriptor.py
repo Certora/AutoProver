@@ -37,6 +37,22 @@ class DeliverableMode(str, enum.Enum):
     CALLOUT = "callout"
 
 
+class PreflightSpec(BaseModel):
+    """An analysis-independent gate on the prepared workspace, run *concurrently with system
+    analysis* — before a single property exists. The host follows the wheel's ``workspace_prep``
+    with a ``kind="preflight"`` ``compile`` call under ``phase_key``, whose ``spec`` is empty: the
+    wheel renders its own minimal skeleton, since nothing has been authored yet.
+
+    It exists to fail on a *toolchain* problem — an unresolvable dependency graph, a harness that
+    doesn't link, IDL codegen the generator rejects — while the run has spent almost no LLM budget.
+    Such a failure is terminal (the host raises rather than re-authoring: the author does not own
+    the manifest and cannot fix it), which lets the driver cancel the analysis and extraction
+    running alongside. Mirrors the Rust ``PreflightSpec``."""
+
+    phase_key: str
+    label: str
+
+
 class SetupSpec(BaseModel):
     """A shared setup artifact authored once before per-component formalization (Crucible's
     shared fixture). The host runs the author→compile loop for a ``kind="setup"`` input under
@@ -119,6 +135,9 @@ class AppDescriptor(BaseModel):
     rag_db_default: str | None = None
     event_kinds: list[EventKind] = Field(default_factory=list)
     artifact_layout: ArtifactLayout
+    #: Optional preflight gate on the prepared workspace, concurrent with system analysis (see
+    #: :class:`PreflightSpec`).
+    preflight: PreflightSpec | None = None
     #: Optional shared-setup step run before per-component formalization (see :class:`SetupSpec`).
     setup: SetupSpec | None = None
     #: How the source deliverable is written (see :class:`DeliverableMode`).

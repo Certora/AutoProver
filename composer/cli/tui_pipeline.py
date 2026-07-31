@@ -9,6 +9,7 @@ import composer.bind as _
 
 import argparse
 import asyncio
+import logging
 import json
 import pathlib
 import sys
@@ -40,6 +41,8 @@ from composer.ui.tool_display import async_tool_context
 
 from composer.ui.pipeline_app import NatspecPipelineApp
 from composer.cli.natspec_startup import build_mental_model, make_source_factory
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +238,8 @@ async def _main() -> int:
                     )
                     await app.on_pipeline_done(result)
                 except Exception as exc:
+                    # A toast alone loses the failure the moment it fades — and the traceback with it.
+                    _log.exception("pipeline failed")
                     app.notify(f"Pipeline failed: {exc}", severity="error")
                     await app.mount_error(exc)
                     app._pipeline_done = True

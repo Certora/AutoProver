@@ -47,6 +47,8 @@ _COUNTER_PROVER_CONFIG = {
     "solc": "solc",
     "verify": "Counter:certora/specs/sanity-Counter.spec",
     "wait_for_results": "none",
+    "server": "production",
+    "prover_version": "master"
 }
 # AutoSetup's summaries spec, relative to certora/ (the SetupSuccess contract).
 _SUMMARIES_REL = "specs/summaries/Counter_base_summaries.spec"
@@ -190,6 +192,9 @@ async def test_autoprove_dumps_job_info_when_pipeline_crashes(scenario_provider,
             self.artiface_store = store
             
         
+        async def preflight(self, *args, **kwargs):
+            return None
+
         async def prepare_system(
             self, *args, **kwargs
         ):

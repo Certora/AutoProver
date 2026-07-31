@@ -89,7 +89,18 @@ pub trait Backend: Send + Sync + 'static {
 Supporting types:
 
 ```rust
-struct AuthorInput { kind: String, program: String, component: Value, props: Vec<Property>, context: Value }
+struct AuthorInput { kind: String, program: String, program_crate: ProgramCrate,
+                     component: Value, props: Vec<Property>, context: Value }
+
+/// Where the analyzed code lives as a compilation unit, for a wheel that must *depend* on it.
+/// `program` above is only the analysis identifier (the `Name` in `path:Name`) — it is NOT a Cargo
+/// name, and a crate's directory / package / lib names are independent of it and of each other
+/// (lend: `programs/lend`, package `example_lending`). The host resolves this from the main
+/// source file's manifest; read it via `resolved(program)`, which fills any part the host left
+/// empty from the legacy `programs/<program>` convention. `anchor` is the crate's declared
+/// `anchor-lang` requirement — a wheel can only link the crate when it matches its own Anchor
+/// major, so this is what routes Crucible to its IDL path (crucible-application.md §6.2).
+struct ProgramCrate { dir: String, package: String, lib: String, anchor: String }
 struct Prompt      { system: Option<String>, instruction: String }
 struct Failure     { errors: String }                 // compile stderr or judge feedback, fed back to the model
 enum   CompileResult { Ok, Failed { errors: String } }
@@ -108,7 +119,9 @@ struct Sandbox {
 `kind` lets one backend author more than one thing with the same primitives — Crucible's
 program-wide **fixture** (`kind="setup"`) and each unit's **tests** (`kind="component"`) are
 both "author a spec, then `compile` it"; only the component kind has a `validate` step, and
-the fixture's compiled output feeds the components' `context`.
+the fixture's compiled output feeds the components' `context`. A third kind, `kind="preflight"`,
+reuses `compile` alone with an empty `spec` to gate the *prepared workspace* before anything has
+been authored — see §3.1.
 
 ### How `compile`/`validate` reach the sandbox — a shared SDK helper
 
@@ -194,6 +207,54 @@ async def formalize(mod, input, env, sandbox, *, workdir, max_attempts, emit) ->
 `compile`, no validate) to get the fixture → run the `component` artifact through the loop
 above. Two readable `await`s over backend callouts; no state machine.
 
+### 3.1 The preflight — gating the workspace before the model runs
+
+`compile` is called with three `kind`s, not two. The third, `kind="preflight"`, is a **gate on the
+prepared workspace** that runs *concurrently with system analysis* — before a single property
+exists — and it is the only one where the host sends an **empty `spec`**: nothing has been authored
+yet, so the wheel renders its own minimal skeleton (Crucible: `skeleton_fixture.j2` + the existing
+`c_probe` test).
+
+The driver overlaps it, so a backend that builds gets its build for free:
+
+```text
+                    ┌── backend.preflight ──────────────────┐   run_component_analysis
+                    │  workspace_prep: files, cargo fetch,  │   (one agent)
+                    │    build the program, place the IDL   │         │
+                    │  compile(kind="preflight", spec="")   │   _extract_all
+                    └───────────────┬───────────────────────┘   (N agents)
+                                    └─── failure ⇒ both cancelled ┘
+```
+
+Why the gate and not just the prep: `cargo fetch` resolves a dependency graph but **compiles
+nothing**, and its failure is deliberately non-fatal (`warm_cargo_cache` logs and returns, on the
+theory that the offline build will surface it). So before this existed, the first thing that actually
+built the harness crate was the compile of the first LLM-authored draft — at the far end of the
+extraction phase. Everything that can go wrong there is invisible to an authoring agent's revise
+loop, because the agent does not own the manifest:
+
+| Failure | Where it used to appear |
+|---|---|
+| Dependency graph won't co-resolve (e.g. `ahash` under Solana 1.17 vs `libafl 0.15`) | compiler errors in draft #1 |
+| Harness crate won't link (program crate on another Anchor major) | compiler errors in draft #1 |
+| `declare_fuzz_program!` rejects the IDL (unsupported type, missing `metadata.address`) | compiler errors in draft #1 |
+| The `.so` isn't where the fixture is told it is, or won't load into LiteSVM | a mystery panic in `setup()` |
+
+So a preflight failure is **terminal** — the host raises `PreflightFailed` with the wheel's
+extracted diagnostics; there is no re-author — and the driver's `_all_or_none` cancels the analysis
+racing it. Two side benefits: the gate's `--dry-run` proves the built `.so` loads and `setup()` runs
+one iteration, and it leaves `fuzz/<program>/target` warm, so the first *authored* compile builds one
+crate instead of the whole graph.
+
+The task is created with `run.unmetered_runner`, not `run.runner`: the run's semaphore budgets
+concurrent *agents* (`--max-concurrent`), and a multi-minute cargo build charged to it would silently
+take a quarter of the default concurrency away from the analysis it overlaps.
+
+On the backend seam this costs one descriptor field (`preflight: Option<PreflightSpec>` — presence
+opts in; the workspace prep runs either way) and **no new callout**: `compile` already had the right
+shape, and `PipelineBackend.preflight` returns a backend-defined value that the driver carries,
+opaquely, into `prepare_system`.
+
 ## 4. How Crucible implements it
 
 - `units(input)` → one `Unit{ property: title, unit: "c_<slug>" }` per invariant (the current
@@ -216,7 +277,7 @@ above. Two readable `await`s over backend callouts; no state machine.
   `Failed{errors: tail}` if `is_build_error(out)` or nonzero exit, else `Ok`.
 - `validate(input, spec, target, workdir, sandbox)` → `run_confined(sandbox, "crucible", ["run",
   program, target, "--release", "--mode", "explore", "--timeout", n], files={main.rs: fixture+spec},
-  workdir)`. `target` is the fuzz feature (Crucible's single `c_invariants`, shared by every
+  workdir)`. `target` is the fuzz feature (Crucible's per-component `c_<slug>`, shared by every
   invariant — see `docs/crucible-unit-granularity.md`). The run is classified once (`[FUZZ_FINDING]`
   → BAD, exit 0 → GOOD, build markers → `BuildFailed`) and **attributed by the backend** to a
   `Verdict` per report unit the target covers (`ValidateOutcome::Verdicts`): a counterexample is

@@ -42,6 +42,7 @@ from composer.io.thread_logging import default_logging_ns, thread_logger
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import CorePipelineResult
 from composer.rag.models import get_model
+from composer.rustapp.adapter import program_crate_json
 from composer.rustapp.descriptor import ArgDefault, ArgSpec
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
@@ -233,21 +234,32 @@ async def rust_entry_point(
         parser.error(f"Invalid path: {full_path} not under project root {project_root}")
     relative_path = str(full_path.relative_to(project_root))
 
-    # Rust-owned precondition validation (cf. foundry's foundry.toml check).
+    # The ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry for EVM). The design-doc
+    # finder works off these source fields alone, and so does the crate resolution below.
+    forbidden_read = app.ecosystem.language.default_forbidden_read
+    init_source = SourceFields(
+        project_root=str(project_root),
+        contract_name=contract_name,
+        relative_path=relative_path,
+        forbidden_read=forbidden_read,
+    )
+
+    # Rust-owned precondition validation (cf. foundry's foundry.toml check). ``program_crate`` is
+    # the same blob every ``AuthorInput`` carries, so a wheel can check up-front that the code it
+    # will depend on is where the host says it is (Crucible: the program crate must exist).
     declared_args = {d: getattr(args, d) for d in declared_dests}
     err = app.validate_preconditions(
         {
             "project_root": str(project_root),
             "main_contract": args.main_contract,
             "system_doc": args.system_doc or "",
+            "program_crate": program_crate_json(app.ecosystem, init_source),
             **declared_args,
         }
     )
     if err:
         parser.error(err)
 
-    # The ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry for EVM).
-    forbidden_read = app.ecosystem.language.default_forbidden_read
     model = get_model()
 
     thread_id = f"{descriptor.name}_{uuid.uuid4().hex[:12]}"
@@ -279,14 +291,7 @@ async def rust_entry_point(
             lite_model=tiered.lite,
             checkpointer=conns.checkpointer,
         )
-        # The design-doc finder works off the source fields alone; its cache namespace
-        # is doc-independent (keyed by project/contract), so it's built up front.
-        init_source = SourceFields(
-            project_root=str(project_root),
-            contract_name=contract_name,
-            relative_path=relative_path,
-            forbidden_read=forbidden_read,
-        )
+        # The finder's cache namespace is doc-independent (keyed by project/contract).
         disc_cache_ns: tuple[str, ...] | None = (
             _user_ns(
                 args.cache_ns, "discovery",

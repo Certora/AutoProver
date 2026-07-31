@@ -132,6 +132,30 @@ pub struct SetupSpec {
     pub context_key: String,
 }
 
+/// An analysis-independent **preflight** gate on the prepared workspace, run *concurrently with
+/// system analysis* — before a single property exists (`docs/rust-backend-api.md` §3.1).
+///
+/// When a descriptor carries one, the host follows its [`WorkspacePrep`] with a
+/// `kind="preflight"` [`Backend::compile`] call whose `spec` is **empty**: nothing has been
+/// authored yet, so the wheel renders its own minimal skeleton — the smallest artifact that still
+/// exercises everything an authored one will depend on.
+///
+/// The point is to fail on a *toolchain* problem — an unresolvable dependency graph, a harness that
+/// doesn't link, IDL codegen the generator rejects — while the run has spent almost no LLM budget.
+/// Without it, such a problem first surfaces as compiler errors in the first authored draft, which
+/// the author cannot fix: it does not own the manifest, and it burns every re-author attempt
+/// trying. So a preflight failure is **terminal** — the host raises instead of re-authoring, and
+/// the driver cancels the analysis and extraction running alongside it.
+///
+/// Absent → no gate; the workspace prep still runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreflightSpec {
+    /// The descriptor phase key the preflight task is grouped under (a UI-only phase).
+    pub phase_key: String,
+    /// The task label shown in the frontend.
+    pub label: String,
+}
+
 /// How the source deliverable is written to disk. `PerComponent` (the default): the generic
 /// store writes one `{prefix}_{slug}.{ext}` file per component from its `artifact_text`.
 /// `Callout`: the store writes no per-component source; the wheel's `finalize` renders the whole
@@ -168,6 +192,10 @@ pub struct AppDescriptor {
     #[serde(default)]
     pub event_kinds: Vec<EventKind>,
     pub artifact_layout: ArtifactLayout,
+    /// Optional preflight gate on the prepared workspace, run concurrently with system analysis
+    /// (see [`PreflightSpec`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preflight: Option<PreflightSpec>,
     /// Optional shared-setup step run before per-component formalization (see [`SetupSpec`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<SetupSpec>,
@@ -210,14 +238,101 @@ pub struct Property {
     pub slug: String,
 }
 
-/// The input to the authoring/gating callouts for one artifact. `kind` selects what is being
-/// authored ("setup" fixture vs "component" tests); `context` carries backend dependencies
-/// (e.g. the shared fixture source a component builds on). `component`/`context` are opaque
-/// JSON the backend interprets.
+/// Where the code under analysis lives as a compilation unit, for a wheel that must *depend* on
+/// it (Crucible's harness declares the program under test as a path dependency). The host resolves
+/// it from the main source file's manifest (`composer.spec.cargo`) because none of the three parts
+/// follows from `AuthorInput::program`: that is the *analysis* identifier, while a crate's
+/// directory, package name and lib name are independent of each other and of it (a real lending
+/// program we hit had directory `programs/lend`, package `example-lending`, lib `example_lending`).
+///
+/// Every field may be empty — a host that resolved nothing, or one predating this struct. Read it
+/// through [`ProgramCrate::resolved`], which fills the gaps from the old `programs/<program>`
+/// convention, rather than using the fields raw.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProgramCrate {
+    /// The crate directory relative to the project root, forward-slashed (`"."` = the root).
+    #[serde(default)]
+    pub dir: String,
+    /// `[package] name` — the key a dependent's `[dependencies]` must use.
+    #[serde(default)]
+    pub package: String,
+    /// The lib target name — the Rust identifier (`use <lib>::*`) and the built artifact's
+    /// basename (`target/deploy/<lib>.so`). NOT interchangeable with `package`, which may
+    /// contain `-`.
+    #[serde(default)]
+    pub lib: String,
+    /// The crate's declared `anchor-lang` requirement, verbatim (`"0.29.0"`, `"^1.0.1"`, `">=0.31"`;
+    /// workspace inheritance already resolved by the host). Empty when the crate declares none, so
+    /// it is not an Anchor program — or the host couldn't tell.
+    ///
+    /// A *depending* wheel needs this because the dependency is only usable when the program's
+    /// Anchor major matches the one the wheel's own stack links: Anchor's generated
+    /// `InstructionData` / `ToAccountMetas` impls are tied to the exact `anchor-lang` crate that
+    /// generated them, so a program on a different major can't satisfy a harness's trait bounds no
+    /// matter how the versions are pinned.
+    #[serde(default)]
+    pub anchor: String,
+}
+
+impl ProgramCrate {
+    /// This crate with every empty part filled from the pre-`program_crate` convention: the crate
+    /// sits at `programs/<program>` and is named `<program>`. The fallback only holds for a
+    /// workspace whose directory and package names happen to match the analysis identifier, but it
+    /// keeps a host that sends nothing working exactly as before.
+    pub fn resolved(&self, program: &str) -> ProgramCrate {
+        let package =
+            if self.package.is_empty() { program.to_string() } else { self.package.clone() };
+        ProgramCrate {
+            dir: if self.dir.is_empty() { format!("programs/{program}") } else { self.dir.clone() },
+            lib: if self.lib.is_empty() { package.replace('-', "_") } else { self.lib.clone() },
+            package,
+            anchor: self.anchor.clone(),
+        }
+    }
+
+    /// The compatibility unit of the crate's declared `anchor-lang` requirement — the major, or
+    /// `(0, minor)` for a `0.x` release, since Cargo treats a `0.x` minor as a major. `None` when
+    /// no requirement is declared or it isn't a plain version (a git/path dep, say).
+    ///
+    /// Compare it against the wheel's own `anchor-lang` to decide whether depending on the program
+    /// crate is even possible (see the `anchor` field).
+    pub fn anchor_compat(&self) -> Option<(u64, u64)> {
+        anchor_compat_key(&self.anchor)
+    }
+}
+
+/// The `(major, minor-if-0.x)` compatibility unit of a version requirement: leading operators and
+/// whitespace are dropped (`">=0.31"` → `(0, 31)`, `"^1.0.1"` → `(1, 0)`), and anything that isn't
+/// a plain `major[.minor]` is `None`.
+pub fn anchor_compat_key(req: &str) -> Option<(u64, u64)> {
+    let digits = req.trim_start_matches(['^', '~', '=', '>', '<', ' ']);
+    let mut parts = digits.split(['.', ',', ' ', '-', '+']);
+    let major: u64 = parts.next()?.parse().ok()?;
+    let minor: u64 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    Some(if major == 0 { (0, minor) } else { (major, 0) })
+}
+
+/// The input to the authoring/gating callouts for one artifact. `context` carries backend
+/// dependencies (e.g. the shared fixture source a component builds on). `component`/`context` are
+/// opaque JSON the backend interprets.
+///
+/// `kind` selects what is being authored or gated. The host sends three:
+///
+///  * `"preflight"` — nothing is authored; the wheel renders its own skeleton and `compile` gates
+///    the prepared workspace (see [`PreflightSpec`]). `props` is empty and `component` carries
+///    nothing: it runs before analysis has finished.
+///  * `"setup"` — the shared artifact every unit builds on (Crucible's fixture), authored once from
+///    every unit's properties (see [`SetupSpec`]). `component` carries the analyzed model.
+///  * `"component"` — one unit's spec. `component` carries that unit, `context` the setup artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorInput {
     pub kind: String,
+    /// The analysis identifier of the program/contract under test (the `Name` half of the host's
+    /// `path:Name` argument) — a label and a namespace, NOT a Cargo name: see [`ProgramCrate`].
     pub program: String,
+    /// The compilation unit holding the program's source, when the host's language has one.
+    #[serde(default)]
+    pub program_crate: ProgramCrate,
     #[serde(default)]
     pub component: serde_json::Value,
     #[serde(default)]
@@ -268,7 +383,7 @@ pub enum CompileResult {
 
 /// One report row: a property title and its backend-specific unit name (the rule the report keys
 /// by). `target` is the *validation target the host runs* — several report units may share one
-/// target (e.g. Crucible puts every invariant in one `c_invariants` target), so the host runs the
+/// target (e.g. Crucible puts a component's whole property set in one `c_<slug>` target), so the host runs the
 /// target once and the backend attributes the outcome back to each unit. `None` ⇒ the unit is its
 /// own target (one run per unit, the default).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,10 +419,23 @@ pub struct WorkspacePrep {
     /// confined + offline build finds every dep warm in the private `CARGO_HOME`.
     #[serde(default)]
     pub warm_dirs: Vec<String>,
-    /// If set, build this program to its platform binary before formalization, via the host's
-    /// shared build capability (Solana: `cargo-build-sbf` → `target/deploy/<program>.so`).
+    /// If set, build the workspace and expect this artifact, via the host's shared build
+    /// capability (Solana: `cargo-build-sbf` → `target/deploy/<name>.so`). It names the *build
+    /// artifact*, so for Cargo it is the crate's lib target ([`ProgramCrate::lib`]) — not the
+    /// analysis identifier, which need not match it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_program: Option<String>,
+    /// If set, the wheel needs the program's **IDL** and wants it at this workdir-relative path.
+    /// The host obtains it (a user-supplied file, else the build capability's IDL build), writes it
+    /// there, and echoes the path back as the `idl` context key on every later `AuthorInput` — so
+    /// "the key is set" means "the file is in place". A hard error if it can't be produced: the
+    /// wheel only asks when it cannot proceed without one.
+    ///
+    /// This is what lets a harness target a program whose toolchain it can't link against
+    /// ([`ProgramCrate::anchor`]): types generated from the IDL belong to the *wheel's* stack, so
+    /// the program's own dependency graph never enters the harness build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idl_dest: Option<String>,
 }
 
 /// Extra sandbox grants a wheel needs unioned into the host-authored policy (Crucible: the
@@ -550,6 +678,10 @@ pub trait Backend: Send + Sync + 'static {
     }
 
     /// Compile/typecheck the whole spec once (all units share one build). BLOCKING.
+    ///
+    /// Also the preflight gate: for `input.kind == "preflight"` the `spec` is empty and the wheel
+    /// supplies its own skeleton, so one implementation covers "does the authored artifact build"
+    /// and "could *any* artifact build here" (see [`PreflightSpec`]).
     fn compile(
         &self,
         input: &AuthorInput,

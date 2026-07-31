@@ -163,10 +163,17 @@ class FoundryBackend:
 
     foundry_conf: _ForgeRunConfig
 
+    async def preflight(self, run: PipelineRun[FoundryPhase, None]) -> None:
+        """Nothing to do ahead of analysis. Foundry authors `.t.sol` into a project `forge` already
+        builds, so there is no workspace to prepare; the existing project is the precondition (a
+        `forge build` smoke test would be the natural thing to add here)."""
+        return None
+
     async def prepare_system(
         self,
         analyzed: SourceApplication,
-        run: PipelineRun[FoundryPhase, None]
+        run: PipelineRun[FoundryPhase, None],
+        preflight: None,
     ) -> PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]:
         return FoundrySystem(
             main_instance(

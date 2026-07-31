@@ -1,6 +1,7 @@
 """Entry point for the foundry test-generation pipeline TUI."""
 
 import asyncio
+import logging
 from typing import cast
 import pathlib
 
@@ -11,6 +12,8 @@ from composer.foundry.entry import _entry_point
 from composer.foundry.pipeline import FoundryPipelineResult
 from composer.ui.foundry_app import FoundryApp
 from composer.pipeline.ptypes import Delivered
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Main
@@ -40,6 +43,8 @@ async def _main() -> int:
                 app.notify(msg)
                 app._pipeline_done = True
             except Exception as exc:
+                # A toast alone loses the failure the moment it fades — and the traceback with it.
+                _log.exception("pipeline failed")
                 app.notify(f"Pipeline failed: {exc}", severity="error")
                 app._pipeline_done = True
 

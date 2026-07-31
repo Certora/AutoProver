@@ -18,6 +18,7 @@ as the built-in ``main()``s require.
 """
 
 import asyncio
+import logging
 
 import composer.bind as _  # noqa: F401  (side-effecting DI/tape bootstrap; must load first)
 
@@ -29,6 +30,8 @@ from composer.rustapp.frontend import GenericRustApp, GenericRustConsoleHandler
 from composer.rustapp.host import build_application
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import format_verdict_lines, summarize_verdicts
+
+_log = logging.getLogger(__name__)
 
 
 def _event_kinds(app) -> set[str]:
@@ -82,6 +85,8 @@ async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) 
                     msg += f", {len(result.failures)} failures"
                 tui.notify(msg)
             except Exception as exc:  # noqa: BLE001 — surface to the UI, don't crash the loop
+                # A toast alone loses the failure the moment it fades — and the traceback with it.
+                _log.exception("pipeline failed")
                 tui.notify(f"Pipeline failed: {exc}", severity="error")
             finally:
                 tui._pipeline_done = True

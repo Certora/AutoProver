@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Callable, Literal, Mapping, TypedDict
 
-from composer.spec.context import SourceCode
+from composer.spec.cargo import ProgramCrate, resolve_program_crate
+from composer.spec.context import SourceCode, SourceFields
 from composer.spec.code_explorer import CODE_EXPLORER_SYS_PROMPT
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.prop_inference import (
@@ -257,12 +258,44 @@ derivations, signer/owner checks, and cross-program invocations. Quote the exact
 that establish or omit a check; do not speculate about code you have not read.
 """
 
-RUST = Language(
+
+def _rust_source_crate(source: SourceFields) -> ProgramCrate | None:
+    return resolve_program_crate(source.project_root, source.relative_path)
+
+
+@dataclass(frozen=True)
+class RustLanguage(Language):
+    """Rust's language facet, which adds the one convention no other analyzed language shares: the
+    source file belongs to a **crate**, and a backend that declares a dependency on the code under
+    analysis needs that crate's directory and Cargo names.
+
+    Kept off :class:`Language` because it generalizes to nothing — Solidity has no compilation unit
+    to locate (solc takes file paths). Reach it through :func:`source_crate_of`, which yields
+    ``None`` for a language that isn't Rust."""
+
+    #: Locate the crate whose ``Cargo.toml`` owns the main source file. ``None`` when it can't be
+    #: resolved — never raises; the consumer falls back to its own convention.
+    source_crate: Callable[[SourceFields], ProgramCrate | None] = _rust_source_crate
+
+
+RUST = RustLanguage(
     name="rust",
     default_forbidden_read=RUST_FORBIDDEN_READ,
     code_explorer_prompt=RUST_CODE_EXPLORER_PROMPT,
     vulnerability_patterns_partial="rust/_vulnerability_patterns.j2",
 )
+
+
+def source_crate_of(
+    ecosystem: Ecosystem[Any, Any, Any], source: SourceFields
+) -> ProgramCrate | None:
+    """The compilation unit containing the analyzed source, for an ecosystem whose language has one.
+
+    The dispatch lives here (with the language hierarchy) rather than in the consumer, so a generic
+    backend can ask the question without naming a language: ``None`` means "this ecosystem has no
+    such unit, or it couldn't be resolved" — see :class:`RustLanguage`."""
+    language = ecosystem.language
+    return language.source_crate(source) if isinstance(language, RustLanguage) else None
 
 
 # ---------------------------------------------------------------------------
