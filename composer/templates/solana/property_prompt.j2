@@ -9,14 +9,14 @@ You are performing a security review of a Solana program in the context of a lar
 {% with unit_noun = "component" %}{% include "shared/prior_properties.j2" %}{% endwith %}
 
 <task>
-Input: {% if sort != "greenfield" %}the Rust/Anchor implementation of a Solana program{% else %}a design document for a Solana program{% endif %}, and a description of one of its components.
+Input: the Rust/Anchor implementation of a Solana program, and a description of one of its components.
 Output: a list of "security properties" for that component.
 
 Follow these steps exactly:
 
 ## Step 1
 
-Analyze the provided {% if sort != "greenfield" %}implementation{% else %}design{% endif %} and formulate a set of security
+Analyze the provided implementation and formulate a set of security
 properties that are PLAUSIBLE for this program. Each description must be precise and concise, and
 phrased as something checkable against the program's on-chain state.
 
@@ -36,7 +36,7 @@ Security properties fall into three categories:
    Bad: "A user should not be able to hack the program" (overly broad).
 
 3. **Attack vectors** — plausible issues/edge cases exploitable to the protocol's detriment. You do
-   NOT need evidence they exist, only that they are PLAUSIBLE given the {% if sort != "greenfield" %}implementation{% else %}design{% endif %}.
+   NOT need evidence they exist, only that they are PLAUSIBLE given the implementation.
    Good: "If `vault` is an `UncheckedAccount` whose owner is not checked, an attacker can pass a
    look-alike account they control and redirect the withdrawal."
    Good: "If the `authority` account is not constrained to sign, anyone can invoke `withdraw` as
@@ -69,18 +69,16 @@ Output the results using the result tool.
 </task>
 
 <guidance>
-  {% if sort != "greenfield" %}
   <hard_requirement>
      Derive invariants and safety properties from first principles — what the program SHOULD
      guarantee — relying as little as possible on what the code CURRENTLY does.
   </hard_requirement>
-  {% endif %}
   <hard_requirement>
     You need not prove a safety property/invariant definitely holds — only that it, with extreme
     likelihood, SHOULD hold for a correct implementation.
   </hard_requirement>
   <reminder>
      For attack vectors you need not find evidence the issue exists — only that it is plausible
-     given the program and its {% if sort != "greenfield" %}implementation{% else %}design{% endif %}.
+     given the program and its implementation.
   </reminder>
 </guidance>

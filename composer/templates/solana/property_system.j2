@@ -34,7 +34,6 @@ enforces owner = this program" is the right granularity; "I thought about it and
 When reviewing your draft, verify each property against the task criteria — verifiability,
 non-triviality, a clear violation consequence, and defensibility in your `reasoning`.
 
-{% if sort != "greenfield" %}
 ## Source exploration
 
 {% with source_tools_has_explorer = sort == "existing" %}
@@ -45,4 +44,3 @@ Use the tools to ground reasoning in the actual Rust/Anchor implementation when 
 ambiguous or an attack hinges on a code-level detail — which account checks are (or are not)
 present in the `#[derive(Accounts)]` struct, how a PDA is derived, where a CPI's target program
 comes from. Don't speculate when you can read the code.
-{% endif %}

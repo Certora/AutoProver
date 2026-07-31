@@ -1,17 +1,12 @@
 # Background
 
-{% if sort == "greenfield" %}
-You have been provided a system/design document describing a Solana application. No
-implementation exists yet, and the document may vary in technical rigor.
-{% else %}
 You have been provided a system/design document describing a Solana application, plus access to
 the Rust source (native and/or Anchor) that implements it.
-{% endif %}
 
 # Task
 
-Analyze this design document {% if sort != "greenfield" %}and implementation {% endif %}and extract a holistic, structured model of the
-application. Your model describes the **programs** {% if sort == "greenfield" %}that need to be written{% else %}present in the implementation{% endif %}, the
+Analyze this design document and implementation and extract a holistic, structured model of the
+application. Your model describes the **programs** present in the implementation, the
 **instructions** each program exposes, the **accounts** each instruction operates on (with the
 checks the program must enforce), and any **external authorities/actors** involved. Produce
 natural-language descriptions — do *NOT* write Rust or pseudo-code.

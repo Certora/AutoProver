@@ -115,6 +115,11 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     units: Callable[[Main], list[Unit]]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
+    #: Whether ``analysis_prompts``/``property_prompts`` have a ``sort == "greenfield"`` branch.
+    #: Only EVM does (the natspec design-doc-to-Solidity path) — Solana's templates have no
+    #: greenfield content, so ``run_pipeline`` asserts against this rather than silently rendering
+    #: a template that never mentions the mode it was asked for.
+    supports_greenfield: bool
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +183,7 @@ EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] =
     property_prompts=PromptPair(PROPERTY_SYSTEM_TEMPLATE, PROPERTY_INITIAL_TEMPLATE),
     validate_analysis=_validate_connectivity,
     locate_main=main_instance,
+    supports_greenfield=True,
     units=_evm_units,
     analysis_extra_input=_evm_analysis_extra_input,
 )
@@ -391,6 +397,7 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
     ),
     validate_analysis=_solana_validate,
     locate_main=_solana_locate_main,
+    supports_greenfield=False,
     units=_solana_units,
     analysis_extra_input=_solana_analysis_extra_input,
 )

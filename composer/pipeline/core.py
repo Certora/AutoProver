@@ -186,6 +186,10 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
 
+    assert ecosystem.supports_greenfield or run.env.sort != "greenfield", (
+        f"ecosystem {ecosystem.name!r} has no greenfield prompts; got sort='greenfield'"
+    )
+
     # 1. System analysis (shared primitive; the ecosystem supplies the analyzed model type,
     #    prompts, validation, and front-matter — EVM reproduces prior behavior exactly).
     analyzed = await run.runner(
