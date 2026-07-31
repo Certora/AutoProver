@@ -31,11 +31,11 @@ from composer.spec.context import WorkflowContext
 from composer.spec.cvl_generation import SkippedProperty
 from composer.spec.solana.model import (
     SolanaApplication,
+    SolanaComponentInstance,
     SolanaProgramInstance,
 )
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName
-from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 from composer.spec.util import ensure_dir
 
@@ -103,7 +103,7 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
         return ensure_dir(Path(self._project_root) / "certora/solana_null/artifacts")
 
 
-class NullSolanaFormalizer(Formalizer[NullResult, FeatureUnit]):
+class NullSolanaFormalizer(Formalizer[NullResult, SolanaComponentInstance]):
     def __init__(self) -> None:
         # The tag is provenance only — it picks the report's outcome labels, and this backend's
         # results are all-UNKNOWN either way. So borrow ``"prover"``, an existing member of
@@ -117,7 +117,7 @@ class NullSolanaFormalizer(Formalizer[NullResult, FeatureUnit]):
     async def formalize(
         self,
         label: str,
-        feat: FeatureUnit,
+        feat: SolanaComponentInstance,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[NullResult],
         run: PipelineRun,
@@ -136,19 +136,19 @@ class NullSolanaFormalizer(Formalizer[NullResult, FeatureUnit]):
 
 
 @dataclass
-class NullSolanaPrepared(PreparedSystem[NullResult, FeatureUnit, SolanaProgramInstance]):
+class NullSolanaPrepared(PreparedSystem[NullResult, SolanaComponentInstance, SolanaProgramInstance]):
     form: NullSolanaFormalizer
 
     @override
     async def prepare_formalization(
         self, run: PipelineRun
-    ) -> Formalizer[NullResult, FeatureUnit]:
+    ) -> Formalizer[NullResult, SolanaComponentInstance]:
         return self.form
 
 
 @dataclass
 class NullSolanaBackend:
-    """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, FeatureUnit,
+    """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, SolanaComponentInstance,
     SolanaProgramInstance, SolanaApplication]`` (P, FormT, H, A, Unit, Main, App) — structural."""
 
     artifact_store: NullSolanaArtifactStore
@@ -165,12 +165,12 @@ class NullSolanaBackend:
 
     async def prepare_system(
         self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None]
-    ) -> PreparedSystem[NullResult, FeatureUnit, SolanaProgramInstance]:
+    ) -> PreparedSystem[NullResult, SolanaComponentInstance, SolanaProgramInstance]:
         # Use the Solana ecosystem's locate_main so the backend and ecosystem agree on the
         # target program (imported lazily to avoid an import cycle with pipeline.ecosystem).
         from composer.pipeline.ecosystem import SOLANA
 
         return NullSolanaPrepared(SOLANA.locate_main(analyzed, run.source), NullSolanaFormalizer())
 
-    def to_artifact_id(self, c: FeatureUnit) -> NullArtifact:
+    def to_artifact_id(self, c: SolanaComponentInstance) -> NullArtifact:
         return NullArtifact(c.slug)
