@@ -57,7 +57,7 @@ from composer.spec.source.source_env import (
     build_basic_source_tools,
     build_source_tools,
 )
-from composer.spec.system_model import SolidityIdentifier
+from composer.spec.types import SourceIdentifier
 from composer.spec.util import FS_FORBIDDEN_READ
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import llm_factory, standard_connections
@@ -227,7 +227,7 @@ async def rust_entry_point(
 
     project_root = pathlib.Path(args.project_root).resolve()
     main_path, contract_name = args.main_contract.split(":", 1)
-    contract_name = SolidityIdentifier(contract_name)
+    contract_name = SourceIdentifier(contract_name)
     full_path = pathlib.Path(main_path).resolve()
     if not full_path.is_relative_to(project_root):
         parser.error(f"Invalid path: {full_path} not under project root {project_root}")

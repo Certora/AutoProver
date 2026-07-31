@@ -24,7 +24,7 @@ from composer.spec.service_host import ModelProvider, PureServiceHost
 from composer.llm.registry import get_provider_for
 from composer.spec.solana.null_backend import NullSolanaArtifactStore, NullSolanaBackend
 from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
-from composer.spec.system_model import SolidityIdentifier
+from composer.spec.types import RustIdentifier
 from composer.ui.tool_display import async_tool_context
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.workflow.services import standard_connections, llm_factory
@@ -90,7 +90,7 @@ async def test_solana_vault_front_half(pg_container: "PostgresContainer", monkey
         source = SourceCode(
             content=content,
             project_root=str(_SCENARIO),
-            contract_name=SolidityIdentifier("vault"),   # the target program's identifier
+            contract_name=RustIdentifier("vault"),   # the target program's identifier
             relative_path="programs/vault/src/lib.rs",
             forbidden_read=RUST_FORBIDDEN_READ,
         )
