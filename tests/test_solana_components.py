@@ -16,6 +16,11 @@ from composer.spec.solana.model import (
     InterComponentInteraction,
     SolanaApplication,
 )
+from composer.spec.types import RustIdentifier
+
+#: The vault program's Rust identifier — declared by ``_raw()`` below and passed as
+#: ``_solana_validate``'s ``expected_main``, so the two cannot drift apart.
+VAULT_ID = RustIdentifier("vault")
 
 
 def _raw() -> dict[str, Any]:
@@ -26,7 +31,7 @@ def _raw() -> dict[str, Any]:
         "components": [
             {
                 "name": "Vault",
-                "program_identifier": "vault",
+                "program_identifier": VAULT_ID,
                 "description": "Holds per-user deposits in a PDA.",
                 "account_types": ["Vault"],
                 "instructions": [
@@ -110,11 +115,11 @@ def test_interaction_union_discriminates_by_shape():
 
 
 def test_well_formed_application_validates():
-    assert _solana_validate(_app(), "vault") is None
+    assert _solana_validate(_app(), VAULT_ID) is None
 
 
 def test_expected_main_is_still_required():
-    problem = _solana_validate(_app(), "not_the_vault")
+    problem = _solana_validate(_app(), RustIdentifier("not_the_vault"))
     assert problem is not None and "not_the_vault" in problem
 
 
@@ -125,7 +130,7 @@ def test_duplicate_component_names_rejected():
     def dup(raw):
         _components(raw)[1]["name"] = "Deposits"
 
-    problem = _solana_validate(_app(dup), "vault")
+    problem = _solana_validate(_app(dup), VAULT_ID)
     assert problem is not None and "Duplicate component names in Vault: Deposits" in problem
 
 
@@ -134,7 +139,7 @@ def test_component_slug_collision_rejected():
     def collide(raw):
         _components(raw)[1]["name"] = "Deposits!"
 
-    problem = _solana_validate(_app(collide), "vault")
+    problem = _solana_validate(_app(collide), VAULT_ID)
     assert problem is not None and "filename slug" in problem
 
 
@@ -142,7 +147,7 @@ def test_unknown_instruction_reference_rejected():
     def typo(raw):
         _components(raw)[0]["instructions"] = ["initialize", "depsoit"]
 
-    problem = _solana_validate(_app(typo), "vault")
+    problem = _solana_validate(_app(typo), VAULT_ID)
     assert problem is not None
     assert "lists an instruction 'depsoit' that Vault does not declare" in problem
 
@@ -151,7 +156,7 @@ def test_instruction_belonging_to_no_component_rejected():
     def orphan(raw):
         _components(raw)[0]["instructions"] = ["initialize"]  # drops `deposit`
 
-    problem = _solana_validate(_app(orphan), "vault")
+    problem = _solana_validate(_app(orphan), VAULT_ID)
     assert problem is not None and "'deposit'" in problem and "belong to no component" in problem
 
 
@@ -159,7 +164,7 @@ def test_an_instruction_may_serve_two_components():
     def overlap(raw):
         _components(raw)[1]["instructions"] = ["withdraw", "initialize"]
 
-    assert _solana_validate(_app(overlap), "vault") is None
+    assert _solana_validate(_app(overlap), VAULT_ID) is None
 
 
 def test_a_program_with_no_instructions_needs_no_components():
@@ -167,7 +172,7 @@ def test_a_program_with_no_instructions_needs_no_components():
         _program(raw)["instructions"] = []
         _program(raw)["components"] = []
 
-    assert _solana_validate(_app(empty), "vault") is None
+    assert _solana_validate(_app(empty), VAULT_ID) is None
 
 
 # --- validation: interactions --------------------------------------------------------
@@ -191,7 +196,7 @@ def test_unresolvable_interactions_rejected(interaction, expected):
     def point_nowhere(raw):
         _components(raw)[0]["interactions"] = [interaction]
 
-    problem = _solana_validate(_app(point_nowhere), "vault")
+    problem = _solana_validate(_app(point_nowhere), VAULT_ID)
     assert problem is not None and expected in problem
 
 
@@ -203,7 +208,7 @@ def test_a_forward_reference_between_components_is_fine():
             {"program": "Vault", "component": "Withdrawals", "description": "hands off"}
         ]
 
-    assert _solana_validate(_app(forward), "vault") is None
+    assert _solana_validate(_app(forward), VAULT_ID) is None
 
 
 # --- validation: the retry feedback --------------------------------------------------
@@ -213,7 +218,7 @@ def test_feedback_lists_the_declared_names_for_the_retry():
     def typo(raw):
         _components(raw)[0]["instructions"] = ["initialize", "depsoit"]
 
-    problem = _solana_validate(_app(typo), "vault")
+    problem = _solana_validate(_app(typo), VAULT_ID)
     assert problem is not None
     assert "For reference, the names you declared in your submission:" in problem
     assert "- Declared programs: Vault" in problem
@@ -226,7 +231,7 @@ def test_multiple_errors_are_all_reported():
         _components(raw)[1]["name"] = "Deposits"
         _components(raw)[0]["interactions"] = [{"authority": "Pyth", "description": "x"}]
 
-    problem = _solana_validate(_app(two_problems), "vault")
+    problem = _solana_validate(_app(two_problems), VAULT_ID)
     assert problem is not None
     assert problem.startswith("Multiple validation errors")
     assert "Duplicate component names" in problem and "Pyth" in problem

@@ -27,6 +27,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from composer.spec.system_model import BaseApplication
+from composer.spec.types import RustIdentifier
 from composer.spec.util import slugify_filename
 
 #: How an account is expected to be supplied to an instruction. Drives the "missing signer /
@@ -156,7 +157,7 @@ class SolanaProgram(BaseModel):
     name: str = Field(
         description="A short conceptual name for the program, used to refer to it across the system."
     )
-    program_identifier: str = Field(
+    program_identifier: RustIdentifier = Field(
         pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$",
         description="The program's Rust crate/module identifier as it appears in source. A valid "
         "Rust identifier (snake_case).",

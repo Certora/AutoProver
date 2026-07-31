@@ -10,10 +10,14 @@ from typing import TYPE_CHECKING, Protocol, Literal
 # identifier. This is what the *ecosystem-agnostic* seam speaks
 # (``Ecosystem.validate_analysis``, ``run_component_analysis``'s
 # ``expected_main_id``, ``SourceFields.contract_name``).
-# ``SolidityIdentifier``: a ``SourceIdentifier`` that is specifically a Solidity
-# identifier (regex-validated where stored on a pydantic field). EVM-only code —
-# natspec stubs/interfaces, harness generation — uses this narrower type, and it
-# flows into the neutral seam because it *is* a source identifier.
+# ``SolidityIdentifier`` / ``RustIdentifier``: a ``SourceIdentifier`` in a
+# specific source language (each regex-validated where stored on a pydantic
+# field — the Solidity pattern admits ``$``, the Rust one does not).
+# Language-specific code uses the narrower type — natspec stubs/interfaces and
+# harness generation are Solidity-only; a Solana program identifier is a Rust
+# crate/module identifier — and either flows into the neutral seam because it
+# *is* a source identifier. They are **siblings of each other**: a Rust
+# identifier is not a Solidity identifier, and mixing them is a type error.
 # ``ContractName``: the conceptual / design-doc-readable name of a contract.
 # May be a Solidity identifier when the design doc names contracts that way,
 # but allowed to be anything human-readable.
@@ -25,10 +29,12 @@ from typing import TYPE_CHECKING, Protocol, Literal
 if TYPE_CHECKING:
     class SourceIdentifier(str): ...
     class SolidityIdentifier(SourceIdentifier): ...
+    class RustIdentifier(SourceIdentifier): ...
     class ContractName(str): ...
 else:
     SourceIdentifier = str
     SolidityIdentifier = str
+    RustIdentifier = str
     ContractName = str
 
 type UnitName = str
