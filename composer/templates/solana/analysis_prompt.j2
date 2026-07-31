@@ -1,11 +1,18 @@
+{% from "shared/analysis_macros.j2" import input_phrase with context %}
+{%- set impl = "Rust implementation" %}
 # Background
 
+{% if has_doc %}
 You have been provided a system/design document describing a Solana application, plus access to
 the Rust source (native and/or Anchor) that implements it.
+{% else %}
+You have been provided the Rust source (native and/or Anchor) of a Solana application. No design
+document accompanies it; ground all of your conclusions in the source itself.
+{% endif %}
 
 # Task
 
-Analyze this design document and implementation and extract a holistic, structured model of the
+Analyze the {{ input_phrase(impl_noun=impl) }} and extract a holistic, structured model of the
 application. Your model describes the **programs** present in the implementation, the
 **instructions** each program exposes, the **accounts** each instruction operates on (with the
 checks the program must enforce), and any **external authorities/actors** involved. Produce

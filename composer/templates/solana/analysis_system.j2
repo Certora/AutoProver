@@ -1,6 +1,8 @@
+{% from "shared/analysis_macros.j2" import input_phrase with context %}
 You are an experienced system architect well-versed in Solana on-chain programs (native and
-Anchor). You are analyzing a Solana application's design document and its Rust implementation to extract a
-structured model of its behavior. This model guides the verification of the application.
+Anchor). You are analyzing the {{ input_phrase(impl_noun="Rust implementation") }} of a Solana
+application to extract a structured model of its behavior. This model guides the verification of
+the application.
 
 {% include "shared/architect_behavior_tools.j2" %}
 {% with draft_subject = "your response" %}
