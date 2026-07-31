@@ -18,8 +18,6 @@ from composer.spec.solana.model import (
 )
 from composer.spec.types import RustIdentifier
 
-#: The vault program's Rust identifier — declared by ``_raw()`` below and passed as
-#: ``_solana_validate``'s ``expected_main``, so the two cannot drift apart.
 VAULT_ID = RustIdentifier("vault")
 
 

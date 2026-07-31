@@ -5,32 +5,20 @@ from typing import TYPE_CHECKING, Protocol, Literal
 # so they remain distinct at static-check time but pydantic ``Field`` validates
 # them as plain strings.
 #
-# ``SourceIdentifier``: the language-level identifier the analyzed entity is
-# defined under in source — EVM's contract identifier, Solana's program
-# identifier. This is what the *ecosystem-agnostic* seam speaks
-# (``Ecosystem.validate_analysis``, ``run_component_analysis``'s
-# ``expected_main_id``, ``SourceFields.contract_name``).
+# ``SourceIdentifier``: the identifier an entity is defined under in source —
+# EVM's contract identifier, Solana's program identifier. What the
+# ecosystem-agnostic seam speaks.
 # ``SolidityIdentifier`` / ``RustIdentifier``: a ``SourceIdentifier`` in a
-# specific source language (each regex-validated where stored on a pydantic
-# field — the Solidity pattern admits ``$``, the Rust one does not).
-# Language-specific code uses the narrower type — natspec stubs/interfaces and
-# harness generation are Solidity-only; a Solana program identifier is a Rust
-# crate/module identifier — and either flows into the neutral seam because it
-# *is* a source identifier. They are **siblings of each other**: a Rust
-# identifier is not a Solidity identifier, and mixing them is a type error.
-# ``ContractName`` / ``ProgramName``: the conceptual, design-doc-readable name of
-# a top-level entity of the analyzed system — an EVM contract, a Solana program.
-# This is the name the *rest of the analysis refers to it by* (an interaction
-# names its peer this way), as opposed to the identifier it is compiled under;
-# it may coincide with the source identifier when the design doc names the entity
-# that way, but is allowed to be anything human-readable.
+# specific source language (regex-validated where stored on a pydantic field).
+# ``ContractName`` / ``ProgramName``: the conceptual / design-doc-readable name
+# of an EVM contract or a Solana program. May coincide with the source
+# identifier when the design doc names the entity that way, but allowed to be
+# anything human-readable.
 #
-# These are **siblings of ``SourceIdentifier``** under str, not in a subtype
-# relation with it — passing a ``SourceIdentifier`` where a ``ContractName`` is
-# expected (or vice-versa) is a type error, even though both are ``str`` at
-# runtime. They are siblings of each other too, and unlike the identifiers they
-# get no shared base: no ecosystem-agnostic code handles a conceptual name, so
-# there is nothing for a common supertype to serve.
+# ``SolidityIdentifier`` and ``RustIdentifier`` are **siblings** under
+# ``SourceIdentifier``; the conceptual names are siblings of each other and of
+# ``SourceIdentifier``. Passing one where a sibling is expected is a type error,
+# even though all are ``str`` at runtime.
 if TYPE_CHECKING:
     class SourceIdentifier(str): ...
     class SolidityIdentifier(SourceIdentifier): ...

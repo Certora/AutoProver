@@ -90,8 +90,7 @@ class InterComponentInteraction(BaseModel):
     """An interaction with another component of a program this application implements.
 
     The Solana peer of :class:`composer.spec.system_model.ComponentInteraction`; keyed by
-    ``ProgramName`` rather than ``ContractName`` — sibling types, so an interaction cannot name
-    its peer with the wrong ecosystem's conceptual name."""
+    ``ProgramName`` rather than ``ContractName``"""
 
     program: ProgramName = Field(
         description="The conceptual name of the program interacted with (matching the `name` field "
