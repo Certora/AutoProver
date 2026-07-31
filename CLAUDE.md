@@ -8,7 +8,7 @@ with these unless a maintainer says otherwise.
 The routine pass, both parts, ~20s total:
 
 ```bash
-uv run --no-sync pytest tests/ -m "not expensive" -q   # ~10s, 334 tests
+uv run --no-sync pytest tests/ -m "not expensive" -q   # ~10s
 uv run --no-sync pyright                               # ~7s, must report 0 errors
 ```
 
