@@ -14,3 +14,17 @@ classifiers = ["Programming Language :: Rust"]
 module-name = "echoprover"
 # abi3 wheel — one artifact for cp312+.
 features = ["pyo3/extension-module"]
+
+[tool.uv]
+# uv revalidates this path dep on every `uv run` / `uv sync`, but by default only
+# watches `pyproject.toml` — which never changes when you edit Rust. These keys
+# make a source change invalidate the built wheel, so `uv run pytest` recompiles
+# on its own and no manual `maturin develop` step exists.
+cache-keys = [
+    { file = "src/**/*.rs" },
+    { file = "Cargo.toml" },
+    { file = "../autoprover-sdk/src/**/*.rs" },
+    { file = "../autoprover-sdk/Cargo.toml" },
+    { file = "../Cargo.toml" },
+    { file = "../Cargo.lock" },
+]

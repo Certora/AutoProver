@@ -11,6 +11,23 @@ through the generic Python pipeline via PyO3. Design rationale:
 | --- | --- |
 | [`autoprover-sdk`](autoprover-sdk) | The library a Rust application imports: the ABI (serde types), the `Application` / `FormalizeSession` traits, the FFI helpers, and the `export_app!` macro. |
 | [`example-app`](example-app) | The `echoprover` demo — a complete, self-contained application built into a wheel and exercised by `tests/test_rustapp.py`. |
+| [`run-confined`](run-confined) | The command-sandbox launcher (Landlock + seccomp). Not an extension module: it builds as a maturin *bin* wheel, so `uv sync` lands the binary in `.venv/bin`. See [docs/command-sandbox.md](../docs/command-sandbox.md). |
+
+## Building
+
+Nothing here is built by hand. Every crate that ships is a `uv` path dependency in the
+root `pyproject.toml`'s `apps` group (reachable from the default `dev` group), so:
+
+```sh
+uv sync          # builds echoprover + run-confined into the venv
+uv run pytest tests/test_rustapp.py tests/test_sandbox_launcher.py
+```
+
+Each project declares `[tool.uv] cache-keys` over its `.rs` sources, so uv rebuilds a
+crate on the next `uv run` after you edit it — there is no `maturin develop` step. The
+toolchain is pinned in [rust-toolchain.toml](../rust-toolchain.toml) and rustup installs
+it on demand. The container image sets `UV_NO_DEV=1` and so builds none of this (its
+final stage has no cargo).
 
 The Python side is [`composer/rustapp`](../composer/rustapp): it loads a wheel,
 synthesizes the pipeline's phase enum from the descriptor, and drives the Rust
@@ -49,11 +66,11 @@ finalize(outcomes_json) -> str|None
    autoprover_sdk::export_app!(my_app, MyApp);
    ```
 
-4. Add a maturin `pyproject.toml` (`module-name = "my_app"`), then build:
-
-   ```sh
-   cd my-app && maturin develop      # or: maturin build --out dist
-   ```
+4. Add a maturin `pyproject.toml` (`module-name = "my_app"`) with a `[tool.uv]
+   cache-keys` block over its `.rs` sources — copy
+   [example-app/pyproject.toml](example-app/pyproject.toml). Then wire it into the root
+   `pyproject.toml` (one line in the `apps` group, one in `[tool.uv.sources]`) and
+   `uv sync`; there is no separate build command.
 
 5. Ship a CLI. The generic entry point + frontend are synthesized from the
    descriptor — a runnable app is a two-line `main()`:
@@ -77,11 +94,10 @@ finalize(outcomes_json) -> str|None
    result = await run_rust_pipeline("my_app", source_input, ctx, handler_factory, env)
    ```
 
-## Building & testing the demo
+## Testing the demo
 
 ```sh
-cd rust/example-app && maturin develop         # builds & installs the `echoprover` wheel
-cd ../.. && python -m pytest tests/test_rustapp.py
+uv run pytest tests/test_rustapp.py    # `uv sync` already built the echoprover wheel
 ```
 
 ## Notes

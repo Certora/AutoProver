@@ -128,12 +128,16 @@ s3 = [
 apps = [
     { name = "echoprover" },
     { name = "maturin-import-hook" },
+    { name = "run-confined", marker = "sys_platform == 'linux' or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta') or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-certora-cli-beta' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda')" },
 ]
 ci = [
     { name = "pyright" },
 ]
 dev = [
+    { name = "echoprover" },
     { name = "maturin" },
+    { name = "maturin-import-hook" },
+    { name = "run-confined", marker = "sys_platform == 'linux' or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta') or (extra == 'extra-11-ai-composer-certora-cli' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-certora-cli-beta' and extra == 'extra-11-ai-composer-certora-cli-beta-mirror') or (extra == 'extra-11-ai-composer-cpu' and extra == 'extra-11-ai-composer-cuda')" },
 ]
 ragbuild = [
     { name = "beautifulsoup4" },
@@ -200,9 +204,15 @@ provides-extras = ["ml", "s3", "certora-cli", "certora-cli-beta", "certora-cli-b
 apps = [
     { name = "echoprover", editable = "rust/example-app" },
     { name = "maturin-import-hook", specifier = ">=0.3.0" },
+    { name = "run-confined", marker = "sys_platform == 'linux'", directory = "rust/run-confined" },
 ]
 ci = [{ name = "pyright" }]
-dev = [{ name = "maturin", specifier = ">=1.14.1" }]
+dev = [
+    { name = "echoprover", editable = "rust/example-app" },
+    { name = "maturin", specifier = ">=1.14.1" },
+    { name = "maturin-import-hook", specifier = ">=0.3.0" },
+    { name = "run-confined", marker = "sys_platform == 'linux'", directory = "rust/run-confined" },
+]
 ragbuild = [
     { name = "beautifulsoup4", specifier = "==4.13.5" },
     { name = "einops" },
@@ -4421,6 +4431,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/20/53/7c7e784abfa500a2b6b583b147ee4bb5a2b3747a9166bab52fec4b5b5e7d/rpds_py-0.30.0-cp314-cp314t-win32.whl", hash = "sha256:dc824125c72246d924f7f796b4f63c1e9dc810c7d9e2355864b3c3a73d59ade0", size = 211570, upload-time = "2025-11-30T20:24:12.735Z" },
     { url = "https://files.pythonhosted.org/packages/d0/02/fa464cdfbe6b26e0600b62c528b72d8608f5cc49f96b8d6e38c95d60c676/rpds_py-0.30.0-cp314-cp314t-win_amd64.whl", hash = "sha256:27f4b0e92de5bfbc6f86e43959e6edd1425c33b5e69aab0984a72047f2bcf1e3", size = 226532, upload-time = "2025-11-30T20:24:14.634Z" },
 ]
+
+[[package]]
+name = "run-confined"
+version = "0.1.0"
+source = { directory = "rust/run-confined" }
 
 [[package]]
 name = "s3fs"

@@ -1,6 +1,5 @@
 /target
 **/*.rs.bk
-Cargo.lock
 # maturin / local build venvs
 .venv/
 *.whl

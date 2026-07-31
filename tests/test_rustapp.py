@@ -3,8 +3,8 @@
 These drive the ``echoprover`` demo wheel (built from ``rust/example-app``) as a
 :class:`~autoprover_sdk.Backend`: the pure callouts (``descriptor`` / ``units`` /
 ``author_prompt`` / ``compile`` / ``validate``) plus the descriptor synthesis and the
-host wiring. They need the ``echoprover`` wheel importable (``maturin develop`` in
-``rust/example-app``); tests skip cleanly otherwise.
+host wiring. They need the ``echoprover`` wheel importable — ``uv sync`` builds it (the
+``apps`` group, pulled in via ``dev``); tests skip cleanly otherwise.
 
 No Postgres / LLM is required — the callouts are pure (echoprover's ``compile`` is a
 no-op and ``validate`` returns GOOD), which is the point of the passive-service design:
@@ -17,7 +17,7 @@ import pytest
 
 echoprover = pytest.importorskip(
     "echoprover",
-    reason="build the demo wheel first: (cd rust/example-app && maturin develop)",
+    reason="demo wheel not built; run `uv sync` (builds rust/example-app)",
 )
 
 from composer.rustapp.descriptor import AppDescriptor, CoreSlot
