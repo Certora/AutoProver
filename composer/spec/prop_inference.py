@@ -64,8 +64,7 @@ class PropertyInitialPromptParams(TypedDict):
     prior_properties: list[_AgentRoundResult]
 
 
-#: Defaults reproduce the EVM/Solidity prompts; the ecosystem seam
-#: (``composer.pipeline.ecosystem``) supplies its own templates for other chains.
+#: The EVM/Solidity property prompts.
 PROPERTY_SYSTEM_TEMPLATE = TypedTemplate[PropertySystemPromptParams]("property_analysis_system_prompt.j2")
 PROPERTY_INITIAL_TEMPLATE = TypedTemplate[PropertyInitialPromptParams]("property_analysis_prompt.j2")
 
@@ -125,7 +124,7 @@ def _get_initial_prompt(
     sort: Sort,
     prev_results: list[_AgentRoundResult],
     backend_guidance: str,
-    template: TypedTemplate[PropertyInitialPromptParams] = PROPERTY_INITIAL_TEMPLATE,
+    template: TypedTemplate[PropertyInitialPromptParams],
 ) -> str:
     return template.bind({
         "context": context,
@@ -305,8 +304,8 @@ async def _run_bug_round(
     round: int,
     prev: list[_AgentRoundResult],
     backend_guidance: str,
-    system_template: TypedTemplate[PropertySystemPromptParams] = PROPERTY_SYSTEM_TEMPLATE,
-    initial_template: TypedTemplate[PropertyInitialPromptParams] = PROPERTY_INITIAL_TEMPLATE,
+    system_template: TypedTemplate[PropertySystemPromptParams],
+    initial_template: TypedTemplate[PropertyInitialPromptParams],
 ) -> _AgentRoundWithHistory:
     round_ctx = ctx.child(agent_round_key(round))
     if (cached := await round_ctx.cache_get(_AgentRoundWithHistory)) is not None:
@@ -368,8 +367,8 @@ async def _run_bug_analysis_inner(
     threat_model: Document | None,
     max_rounds: int,
     backend_guidance: str,
-    system_template: TypedTemplate[PropertySystemPromptParams] = PROPERTY_SYSTEM_TEMPLATE,
-    initial_template: TypedTemplate[PropertyInitialPromptParams] = PROPERTY_INITIAL_TEMPLATE,
+    system_template: TypedTemplate[PropertySystemPromptParams],
+    initial_template: TypedTemplate[PropertyInitialPromptParams],
 ) -> _AgentResult:
     if (cached := await agent_component_analysis.cache_get(_AgentResult)) is not None:
         return cached
@@ -418,20 +417,17 @@ async def run_property_inference(
     threat_model: Document | None = None,
     refinement: ConversationContextProvider | None = None,
     max_rounds: int = 3,
-    backend_guidance: str = CERTORA_BACKEND_GUIDANCE,
     *,
-    system_template: TypedTemplate[PropertySystemPromptParams] = PROPERTY_SYSTEM_TEMPLATE,
-    initial_template: TypedTemplate[PropertyInitialPromptParams] = PROPERTY_INITIAL_TEMPLATE,
+    backend_guidance: str,
+    system_template: TypedTemplate[PropertySystemPromptParams],
+    initial_template: TypedTemplate[PropertyInitialPromptParams],
 ) -> list[PropertyFormulation]:
     """
     Extract security properties for a component.
 
-    ``backend_guidance`` is inlined verbatim into the property-analysis
-    prompt as the "what's expressible in your downstream verification
-    tool" filter. Defaults to ``CERTORA_BACKEND_GUIDANCE`` so existing
-    callers (the autoprove pipeline) get the same prompt they always had;
-    other backends (e.g. foundry tests) pass their own string describing
-    what's a fit / not a fit for *their* verification surface.
+    ``backend_guidance`` is inlined verbatim into the property-analysis prompt as the "what's
+    expressible in your downstream verification tool" filter — the Certora Prover, foundry
+    tests, each describing what is and isn't a fit for *their* verification surface.
     """
 
     component_analysis = ctx.child(bug_analysis_key(threat_model, refinement is not None))

@@ -273,7 +273,7 @@ class ContractComponentInstance:
         """Filesystem-safe slug for this component, used as an output filename base.
         Slug uniqueness within a contract is guaranteed upstream: component analysis
         rejects any application whose sibling components slugify to the same id (see
-        ``_validate_connectivity``), so no disambiguation is needed here."""
+        ``validate_solidity_connectivity``), so no disambiguation is needed here."""
         return slugify_filename(self.component.name)
 
     # -- FeatureUnit protocol (the ecosystem-agnostic view the driver consumes) ---------

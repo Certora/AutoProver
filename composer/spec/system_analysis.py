@@ -23,14 +23,18 @@ class AnalysisPromptParams(TypedDict):
     has_doc: bool
 
 
-#: Defaults reproduce the EVM/Solidity prompts; the ecosystem seam
-#: (``composer.pipeline.ecosystem``) supplies its own templates for other chains.
+#: The EVM/Solidity analysis prompts.
 ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_system.j2")
 ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_prompt.j2")
 
-def _validate_connectivity(
+def validate_solidity_connectivity(
     app: BaseApplication, expected_main_id: SourceIdentifier | None
 ) -> str | None:
+    """Connectivity/shape validation for the Solidity model *family*: typed over
+    ``BaseApplication`` because it checks only the contract/actor/interaction graph that
+    ``Application``, ``SourceApplication``, ``HarnessedApplication``, and
+    ``FromSourceApplication`` all share. Both callers name it directly; neither can use the
+    other's ``Ecosystem.validate_analysis``, which is narrowed to one ``system_model``."""
     errors: list[str] = []
     known_components: dict[str, set[str]] = {}
     known_external: set[str] = set()
@@ -110,15 +114,11 @@ async def run_component_analysis[T: BaseApplication](
     extra_input: list[str | dict],
     expected_main_id: SourceIdentifier | None = None,
     *,
-    system_template: TypedTemplate[AnalysisPromptParams] = ANALYSIS_SYSTEM_TEMPLATE,
-    initial_template: TypedTemplate[AnalysisPromptParams] = ANALYSIS_INITIAL_TEMPLATE,
-    validate: Callable[[T, SourceIdentifier | None], str | None] = _validate_connectivity,
+    system_template: TypedTemplate[AnalysisPromptParams],
+    initial_template: TypedTemplate[AnalysisPromptParams],
+    validate: Callable[[T, SourceIdentifier | None], str | None],
 ) -> T | None:
-    """Analyze application components from a system doc and optionally source code.
-
-    The prompt templates and connectivity ``validate`` are parameters so the ecosystem
-    (``composer.pipeline.ecosystem``) can supply domain-specific ones; the defaults are the
-    EVM/Solidity values, so existing callers are unaffected."""
+    """Analyze application components from a system doc and optionally source code."""
     if (cached := await child_ctxt.cache_get(ty)) is not None:
         return cached
 

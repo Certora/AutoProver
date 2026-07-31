@@ -1,12 +1,16 @@
 from typing import Any
 
+from composer.pipeline.ecosystem import EvmEcosystem
 from composer.spec.context import (
     WorkflowContext, CacheKey,
     SystemDoc
 )
 from composer.spec.natspec.task_description import MentalModel
 from composer.spec.system_model import NatspecApplication
-from composer.spec.system_analysis import run_component_analysis as wrapped_analysis
+from composer.spec.system_analysis import (
+    run_component_analysis as wrapped_analysis,
+    validate_solidity_connectivity,
+)
 from composer.spec.service_host import ServiceHost
 
 
@@ -22,6 +26,7 @@ async def run_component_analysis[A: NatspecApplication](
     input: SystemDoc,
     tools: ServiceHost,
     mental_model: MentalModel[A, Any, Any],
+    ecosystem: EvmEcosystem,
 ) -> A | None:
     """Analyze application components from a system doc and optionally source code.
 
@@ -34,5 +39,8 @@ async def run_component_analysis[A: NatspecApplication](
         child_ctxt=context.child(source_analysis_key(mental_model)),
         env=tools,
         extra_input=[],
-        input=input
+        input=input,
+        system_template=ecosystem.analysis_prompts.system,
+        initial_template=ecosystem.analysis_prompts.initial,
+        validate=validate_solidity_connectivity,
     )

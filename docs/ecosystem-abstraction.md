@@ -106,7 +106,7 @@ EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] =
     system_model=SourceApplication,
     analysis_prompts=PromptPair("application_analysis_system.j2", "application_analysis_prompt.j2"),
     property_prompts=PromptPair("property_analysis_system_prompt.j2", "property_analysis_prompt.j2"),
-    validate_analysis=_validate_connectivity,
+    validate_analysis=validate_solidity_connectivity,
     locate_main=main_instance,                          # match by solidity_identifier
     units=_evm_units,                                   # one unit per contract component
     analysis_extra_input=_evm_analysis_extra_input,
@@ -162,7 +162,7 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
   backend-neutral grounds rather than to suit a fuzzer's cost model. The full design note —
   the per-backend analysis and the measurements behind this choice — is **not yet in the tree**;
   it lands with the verification backend later in this stack.
-- **Validation** — `_solana_validate` mirrors `_validate_connectivity`'s structure over
+- **Validation** — `_solana_validate` mirrors `validate_solidity_connectivity`'s structure over
   `SolanaApplication`: unique program identifiers and names, unique instruction slugs within a
   program, unique component names/slugs, component interactions resolving to a declared
   program+component or authority, and the expected main program present. It adds one rule EVM
@@ -195,19 +195,20 @@ Rust chain without copying.
 ## 5. Driver integration
 
 `run_pipeline` ([composer/pipeline/core.py](../composer/pipeline/core.py)) takes an
-`ecosystem` and never hardcodes a domain. It defaults to `EVM`, so Solidity backends pass
-nothing; a non-EVM backend passes its ecosystem (e.g. `ecosystem=SOLANA`).
+`ecosystem` and never hardcodes a domain. It is a required keyword argument — every caller names
+its ecosystem (`ecosystem=EVM`, `ecosystem=SOLANA`) rather than inheriting one by omission.
 
 ```python
-async def run_pipeline[..., U, Main](
-    backend: PipelineBackend[P, FormT, H, A, U, Main],
+async def run_pipeline[..., U, Main, App](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
     run: PipelineRun[P, H],
     *, ...,
-    ecosystem: Ecosystem[Any, Any, Any] = EVM,
+    ecosystem: Ecosystem[App, Main, U],
 ):
     analyzed = await run_component_analysis(
         ty=ecosystem.system_model,
-        prompts=ecosystem.analysis_prompts,
+        system_template=ecosystem.analysis_prompts.system,
+        initial_template=ecosystem.analysis_prompts.initial,
         validate=ecosystem.validate_analysis,
         extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input], ...)
     prepared = await backend.prepare_system(analyzed, run)
@@ -216,12 +217,18 @@ async def run_pipeline[..., U, Main](
 ```
 
 - **`run_component_analysis`** ([system_analysis.py](../composer/spec/system_analysis.py)) is
-  generic over the analyzed type and accepts the prompt pair + validation function; the ecosystem
-  supplies all three.
+  generic over the analyzed type and takes the prompt pair + validation function, all three
+  required. Each is domain-specific, so none carries a default.
 - **`run_property_inference`** ([prop_inference.py](../composer/spec/prop_inference.py)) takes the
   ecosystem's property prompt pair and a generic `FeatureUnit`. The "expressible downstream" axis
-  stays backend-owned (`backend_guidance`); the "failure modes in this domain" axis is the
-  ecosystem's prompt.
+  stays backend-owned (`backend_guidance`, from `PipelineBackend`); the "failure modes in this
+  domain" axis is the ecosystem's prompt. Both axes are required keyword arguments.
+- **The natspec pipeline** ([natspec/pipeline.py](../composer/spec/natspec/pipeline.py)) is the
+  other consumer of both primitives. It takes an `EvmEcosystem` for the prompt pairs and is
+  Solidity-only otherwise (solc, CVL, interface/stub generation). Its analyzed model comes from
+  its `MentalModel` — `Application` / `FromSourceApplication`, siblings of `EVM.system_model`
+  under `BaseApplication` rather than subtypes — so `ecosystem.validate_analysis` does not
+  typecheck there and it names `validate_solidity_connectivity` directly.
 - **`_extract_all`** iterates `ecosystem.units(main)`, running one property-inference agent per
   unit — one per component for EVM, one for the whole program for Solana.
 

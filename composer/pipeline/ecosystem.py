@@ -9,10 +9,9 @@ source — Solidity, Rust — shared across chains that use the same language) a
 facet (the platform model + prompts). The language here is that of the *code under analysis*,
 not the language the AutoProver backend is implemented in (see :class:`Language`).
 
-``EVM = SOLIDITY ⊕ evm`` binds the EVM types, prompt templates, ``_validate_connectivity``,
+``EVM = SOLIDITY ⊕ evm`` binds the EVM types, prompt templates, ``validate_solidity_connectivity``,
 ``main_instance``, and unit enumeration into the seam; ``SOLANA = RUST ⊕ solana`` binds the
-Solana model + prompts and reuses the shared ``RUST`` language facet. The driver defaults to
-``EVM``, so Solidity applications pass no ecosystem. See ``docs/ecosystem-abstraction.md``.
+Solana model + prompts and reuses the shared ``RUST`` language facet. See ``docs/ecosystem-abstraction.md``.
 """
 
 from dataclasses import dataclass
@@ -31,7 +30,7 @@ from composer.spec.system_analysis import (
     AnalysisPromptParams,
     ANALYSIS_INITIAL_TEMPLATE,
     ANALYSIS_SYSTEM_TEMPLATE,
-    _validate_connectivity,
+    validate_solidity_connectivity,
 )
 from composer.spec.system_model import (
     AnyApplication,
@@ -122,6 +121,13 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     supports_greenfield: bool
 
 
+#: Names for the two concrete instantiations, so a consumer that is pinned to one chain can say so
+#: without respelling the triple (or erasing it to ``Any``). :class:`Ecosystems` declares the same
+#: pairing; these are what its fields are typed with.
+type EvmEcosystem = Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance]
+type SolanaEcosystem = Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance]
+
+
 # ---------------------------------------------------------------------------
 # main-unit location
 # ---------------------------------------------------------------------------
@@ -176,13 +182,13 @@ SOLIDITY = Language(
     code_explorer_prompt=CODE_EXPLORER_SYS_PROMPT,
 )
 
-EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] = Ecosystem(
+EVM: EvmEcosystem = Ecosystem(
     name="evm",
     language=SOLIDITY,
     system_model=SourceApplication,
     analysis_prompts=PromptPair(ANALYSIS_SYSTEM_TEMPLATE, ANALYSIS_INITIAL_TEMPLATE),
     property_prompts=PromptPair(PROPERTY_SYSTEM_TEMPLATE, PROPERTY_INITIAL_TEMPLATE),
-    validate_analysis=_validate_connectivity,
+    validate_analysis=validate_solidity_connectivity,
     locate_main=main_instance,
     supports_greenfield=True,
     units=_evm_units,
@@ -226,7 +232,7 @@ RUST = Language(
 
 def _validate_program_components(prog: SolanaProgram) -> list[str]:
     """One program's :class:`ProgramComponent` checks — the peer of the component half of EVM's
-    ``_validate_connectivity`` (``docs/ecosystem-abstraction.md`` §4, "Validation").
+    ``validate_solidity_connectivity`` (``docs/ecosystem-abstraction.md`` §4, "Validation").
 
     Name and slug uniqueness mirror EVM directly. The component↔instruction mapping check has no
     EVM peer and is the one deliberate divergence: EVM's ``external_entry_points`` are prose the
@@ -276,7 +282,7 @@ def _solana_validate(app: SolanaApplication, expected_main: SourceIdentifier | N
     ``system_model``. An earlier version narrowed at runtime and returned ``None`` for a foreign
     application; that silently passed a model this function cannot check, and the parameter type is
     what makes the case unreachable instead.
-    Mirrors the EVM ``_validate_connectivity`` structure: unique program identifiers and names,
+    Mirrors the EVM ``validate_solidity_connectivity`` structure: unique program identifiers and names,
     unique instruction slugs within a program, unique component names/slugs within a program, the
     component↔instruction mapping valid and total, component interactions resolving, and the
     expected main program present."""
@@ -390,7 +396,7 @@ def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
 # Per-component units, mirroring EVM: ``Main`` is the located program, ``Unit`` is one of its
 # ``ProgramComponent``s. Every Solana backend inherits this split — Crucible today, a CVLR backend
 # later — which is why it is chosen on backend-neutral grounds (docs/ecosystem-abstraction.md §4).
-SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance] = Ecosystem(
+SOLANA: SolanaEcosystem = Ecosystem(
     name="solana",
     language=RUST,
     system_model=SolanaApplication,
@@ -416,8 +422,8 @@ class Ecosystems(TypedDict):
     concrete ``Ecosystem[App, Main, Unit]`` instead of erasing all of them to
     ``Ecosystem[Any, Any, Any]``."""
 
-    evm: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance]
-    solana: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance]
+    evm: EvmEcosystem
+    solana: SolanaEcosystem
 
 
 ECOSYSTEMS: Ecosystems = {"evm": EVM, "solana": SOLANA}

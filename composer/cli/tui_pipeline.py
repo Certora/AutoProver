@@ -31,6 +31,7 @@ from composer.spec.context import (
     WorkflowContext, SystemDoc,
 )
 from composer.llm.registry import get_provider_for
+from composer.pipeline.ecosystem import EVM
 from composer.spec.natspec.pipeline import run_natspec_pipeline
 from composer.spec.natspec.run_tags import NatspecRunTags
 from composer.spec.util import FS_FORBIDDEN_READ
@@ -228,6 +229,8 @@ async def _main() -> int:
                         handler_factory=app.make_handler,
                         mental_model=mental_model,
                         source_factory=source_factory,
+                        # The only ecosystem natspec can run under; it authors Solidity and CVL.
+                        ecosystem=EVM,
                         max_concurrent=args.max_concurrent,
                         interactive=args.interactive,
                         max_bug_rounds=args.max_bug_rounds,
