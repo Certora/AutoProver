@@ -66,7 +66,7 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     system_model: type[App]                          # the pydantic type analysis produces
     analysis_prompts: PromptPair                      # (system, initial) template names
     property_prompts: PromptPair
-    validate_analysis: Callable[[BaseApplication, SolidityIdentifier | None], str | None]
+    validate_analysis: Callable[[BaseApplication, SourceIdentifier | None], str | None]
     locate_main: Callable[[App, SourceCode], Main]    # find the "main" contract/program
     units: Callable[[Main], list[Unit]]               # split into per-unit extraction items
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]

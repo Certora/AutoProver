@@ -22,7 +22,7 @@ from composer.pipeline.ptypes import (
 from composer.spec.artifacts import ArtifactIdentifier
 from composer.spec.system_model import FeatureUnit, BaseApplication
 from composer.spec.service_host import ModelProvider
-from composer.spec.system_analysis import SolidityIdentifier
+from composer.spec.types import SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem, EVM
 from .core import PipelineBackend, run_pipeline
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
@@ -168,7 +168,7 @@ async def cli_pipeline[P: enum.Enum, H](
 
     init_source = SourceFields(
         relative_path=relative_path,
-        contract_name=SolidityIdentifier(contract_name),
+        contract_name=SourceIdentifier(contract_name),
         forbidden_read=FS_FORBIDDEN_READ,
         project_root=str(project_root)
     )
@@ -276,7 +276,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
                     threat_model=threat_model,
-                    # cli_pipeline is the EVM CLI entry point (SolidityIdentifier throughout
+                    # cli_pipeline is the EVM CLI entry point (Solidity identifiers throughout
                     # above); App/Main/U are only generic here to admit FoundryBackend and
                     # ProverBackend (same EVM triple, different FormT/A). Downcast to the
                     # generic ecosystem parameter rather than widening run_pipeline back to Any.

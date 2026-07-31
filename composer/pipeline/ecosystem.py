@@ -39,9 +39,9 @@ from composer.spec.system_model import (
     ContractComponentInstance,
     ContractInstance,
     FeatureUnit,
-    SolidityIdentifier,
     SourceApplication,
 )
+from composer.spec.types import SourceIdentifier
 from composer.spec.solana.model import (
     AuthorityInteraction,
     SolanaApplication,
@@ -103,7 +103,7 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     #: Prompts for the per-component property-inference agent.
     property_prompts: PromptPair[PropertySystemPromptParams, PropertyInitialPromptParams]
     #: Connectivity/shape validation of the analyzed model (retry feedback on failure).
-    validate_analysis: Callable[[App, SolidityIdentifier | None], str | None]
+    validate_analysis: Callable[[App, SourceIdentifier | None], str | None]
     #: Locate the target unit (the "main contract"/program) in the analyzed model.
     locate_main: Callable[[App, SourceCode], Main]
     #: Enumerate the units the extraction phase infers properties for — one batch per unit. Both
@@ -165,7 +165,8 @@ def _evm_analysis_extra_input(source: SourceCode) -> list[str | dict]:
 #      route to it by detecting the target's source language at the entry point.
 #   3. Loosen the analysis model's Solidity assumptions: contracts are keyed by
 #      ``SolidityIdentifier`` / ``solidity_identifier`` throughout (see ``system_model`` and
-#      ``main_instance``), which would need to become language-neutral.
+#      ``main_instance``), which would need to widen to the language-neutral
+#      ``SourceIdentifier`` the ecosystem seam already speaks.
 # The CVL backend needs the least work — the Certora Prover already accepts Vyper (it verifies
 # compiled bytecode) — while the Foundry backend is Solidity-only by construction (it authors
 # and runs ``.t.sol`` tests), so it would need a separate Vyper story or be left EVM/Solidity-only.
@@ -267,7 +268,7 @@ def _validate_program_components(prog: SolanaProgram) -> list[str]:
     return errors
 
 
-def _solana_validate(app: SolanaApplication, expected_main: SolidityIdentifier | None) -> str | None:
+def _solana_validate(app: SolanaApplication, expected_main: SourceIdentifier | None) -> str | None:
     """Connectivity/shape validation for a ``SolanaApplication`` (retry feedback on failure).
 
     Typed over ``SolanaApplication``, not ``BaseApplication``: ``Ecosystem.validate_analysis`` is

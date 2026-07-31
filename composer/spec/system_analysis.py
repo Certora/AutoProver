@@ -8,7 +8,8 @@ from composer.spec.context import (
 )
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.system_model import BaseApplication, ExplicitContract, ExternalActor, ExternalDependency, SolidityIdentifier
+from composer.spec.system_model import BaseApplication, ExplicitContract, ExternalActor, ExternalDependency
+from composer.spec.types import SourceIdentifier
 from composer.spec.service_host import ServiceHost, Sort
 from composer.spec.util import slugify_filename
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
@@ -28,7 +29,7 @@ ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_anal
 ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_prompt.j2")
 
 def _validate_connectivity(
-    app: BaseApplication, expected_main_id: SolidityIdentifier | None
+    app: BaseApplication, expected_main_id: SourceIdentifier | None
 ) -> str | None:
     errors: list[str] = []
     known_components: dict[str, set[str]] = {}
@@ -107,11 +108,11 @@ async def run_component_analysis[T: BaseApplication](
     input: SystemDoc | None,
     env: ServiceHost,
     extra_input: list[str | dict],
-    expected_main_id: SolidityIdentifier | None = None,
+    expected_main_id: SourceIdentifier | None = None,
     *,
     system_template: TypedTemplate[AnalysisPromptParams] = ANALYSIS_SYSTEM_TEMPLATE,
     initial_template: TypedTemplate[AnalysisPromptParams] = ANALYSIS_INITIAL_TEMPLATE,
-    validate: Callable[[T, SolidityIdentifier | None], str | None] = _validate_connectivity,
+    validate: Callable[[T, SourceIdentifier | None], str | None] = _validate_connectivity,
 ) -> T | None:
     """Analyze application components from a system doc and optionally source code.
 
