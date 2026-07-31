@@ -270,6 +270,13 @@ class SolanaComponentInstance:
         """The program's other components — context, not units, mirroring EVM's ``ommer_contracts``."""
         return [c for i, c in enumerate(self.program.components) if i != self.ind]
 
+    @property
+    def sibling_programs(self) -> list[SolanaProgram]:
+        """The application's other programs — context for cross-program (CPI) reasoning. Indexed off
+        the located program rather than compared by ``program_identifier``, exactly as
+        :attr:`sibling_components` is."""
+        return [p for i, p in enumerate(self.app.programs) if i != self._program.ind]
+
     # -- FeatureUnit protocol -----------------------------------------------------------
     @property
     def display_name(self) -> str:

@@ -64,11 +64,9 @@ state, and may run before, after, or interleaved with this component's.
 {% endfor %}
 {% endif %}
 
-{% set siblings = [] %}
-{% for p in context.app.programs %}{% if p.program_identifier != context.program.program_identifier %}{% set _ = siblings.append(p) %}{% endif %}{% endfor %}
-{% if siblings %}
+{% if context.sibling_programs %}
 Other programs in the application:
-{% for p in siblings %}
+{% for p in context.sibling_programs %}
 * `{{ p.name }}` (`{{ p.program_identifier }}`): {{ p.description }}
 {% endfor %}
 {% endif %}
