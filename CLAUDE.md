@@ -3,6 +3,31 @@
 Guidance for AI coding agents (and humans) working in this repo. Keep changes consistent
 with these unless a maintainer says otherwise.
 
+## Pre-validating a commit
+
+The routine pass, both parts, ~20s total:
+
+```bash
+uv run --no-sync pytest tests/ -m "not expensive" -q   # ~10s, 334 tests
+uv run --no-sync pyright                               # ~7s, must report 0 errors
+```
+
+Expect `N passed, M deselected`. `pyright` needs no arguments — `pyrightconfig.json` already
+names the packages it checks (`tests/` is deliberately not among them, so test stubs may be
+loose). Both flags matter:
+
+- **`-m "not expensive"` — do not omit this.** The `expensive` marker is *registered* in
+  `pyproject.toml` but **not** deselected by `addopts`, so a bare `pytest tests/` runs the
+  expensive tests, and those submit real jobs to the **live Certora cloud prover**. That costs
+  real money and ~6 minutes per test. Never run the suite without this filter unless a
+  maintainer asked for an expensive run specifically.
+- **`--no-sync`.** A bare `uv run` re-syncs first, and a default sync *prunes* this venv:
+  `pytest`/`testcontainers` (group `test`), `pyright` (group `ci`), `sentence-transformers`
+  (group `ragbuild`) and `certora_cli`/`torch` (extras) all live outside uv's default groups, so
+  syncing uninstalls them and the next run dies at collection with `ModuleNotFoundError: No
+  module named 'certora_cli'`. To (re)build the env deliberately, sync everything at once:
+  `uv sync --group test --group ragbuild --extra cpu --extra certora-cli`.
+
 ## Python
 
 ### Do NOT use `from __future__ import annotations`
