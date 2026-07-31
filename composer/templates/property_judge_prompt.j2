@@ -183,7 +183,8 @@ NOTE: portions of the input state may be unconstrained/underconstrained if they 
 
 You may also consider the inverse; over-constraining the input space may cause the prover to miss real bugs. In particular, any constraints in
 `preserved` blocks that are *not* a `requireInvariant` statement (i.e., a *proven* assumption) should be subject to intense scrutiny.
-Justification for such requirements like "X is impossible in a realistic situation/deployment/etc" should not be taken at face value.
+Justification for such requirements like "X is impossible in a realistic situation/deployment/etc" should not be taken at face value;
+do not check that justifications a simply provided, critically evaluate the argument underpinning the justifications.
 
 To reiterate: unless there is overwhelming, verifiable, outside evidence that an assumption is justified, it should be rejected (a `requireInvariant` is considered
 to be a verified assumption).
@@ -206,12 +207,12 @@ for rule A silently applies to rule B in the same file (Summarization Guide B2.1
    summary that *does* what the rule asserts, is tautological: the rule verifies the summary against
    itself and the real code is never consulted (B2.3). The most camouflaged form is an expression
    summary — a CVL function that performs exactly the transition the rule then asserts.
-2. The partial form of 1: the property's subject is unsummarized, but a *helper* it calls to compute
-   the very quantity the property constrains is summarized. The property now checks the helper's
+2. The partial form of item 1 above: the property's subject is unsummarized, but a *helper* it calls to compute
+   the very quantity/behavior the property constrains is summarized. The property now checks the helper's
    model, not the contract's computation (B2.3).
 3. Erased side effects: a side-effecting callee summarized with `NONDET` or another view summary
-   erases state changes the property reasons about. The classic: summarizing a balance-moving
-   function as `NONDET` makes transfers no-ops, trivializing every property over balances. (Whether
+   erases state changes the property reasons about. The classic: summarizing a token balance-moving
+   function as `NONDET` makes transfers no-ops, trivializing every property over token balances. (Whether
    the weakening was *licensed* is Criteria 2; here the question is what it does to each property.)
 4. Pinned values: `ALWAYS(v)` or `CONSTANT` on a return value the property then checks — the
    assertion tests the pinned value, not the implementation.
@@ -220,12 +221,19 @@ for rule A silently applies to rule B in the same file (Summarization Guide B2.1
    behavior — the modeled adversary can no longer attempt the attack the property exists to rule out.
 
 Two calibrations. First, modeling contracts *outside* the provided set — the ghost-mapping pattern,
-hybrid dispatch, and friends — is what summaries are for; the defect in shapes 1-2 is summarizing the
+hybrid dispatch, &c — is what summaries are for; the defect in shapes 1-2 is summarizing the
 *subject of the verification*, not modeling its environment. Second, when judging whether a summary
 reaches a rule at all, use the application semantics: direct CVL calls are never summarized, except
 that a CVL call to a public function runs its external wrapper, whose inner call *is* subject to
 internal-face summaries (A2.2, A2.5). An internal-face summary can therefore trivialize a rule that
 "directly calls" a public method, while an external-face summary of the same method does not reach it.
+
+When evaluating whether a summary targets contracts outside the provided set, recall the guidance from
+section B3.2; if the call target is available in the source tree for an externally invoked contract, including
+that code in the prover input and linking against it is always preferable to a summary. For example,
+if a vault contract under verification invokes `computeCurrentRate()` against the `IRateManager` interface,
+and the source tree contains an implementation `contract RateManager is IRateManager`, linking in `RateManager`
+is the preferred solution over a summary of `computeCurrentRate()`.
 
 ### Criteria 6: Manifest Errors
 
