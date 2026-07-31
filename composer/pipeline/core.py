@@ -18,6 +18,7 @@ import enum
 import logging
 from dataclasses import dataclass
 from typing import Protocol, Any, cast
+from collections.abc import Sequence
 from abc import ABC, abstractmethod
 
 
@@ -61,7 +62,7 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     formalized_type: type[FormT]
     backend_tag: ReportBackend
 
-    async def begin(self, jobs: list[BackendJob[U]], run: PipelineRun) -> None:
+    async def begin(self, jobs: Sequence[BackendJob[U]], run: PipelineRun) -> None:
         """Called once with **every** unit's properties, after extraction and before the per-unit
         fan-out. Default: nothing.
 
@@ -218,7 +219,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     # 4. Any shared artifact the units build on is authored HERE — once, from every unit's
     #    properties — not lazily by whichever unit formalizes first (see ``Formalizer.begin``).
-    await formalizer.begin(cast("list[BackendJob[U]]", batches), run)
+    await formalizer.begin(batches, run)
 
     # 5. Per-component formalization. Caching is core-owned, keyed by the backend's result type.
     async def _run(batch: _Batch[U]) -> ComponentOutcome[FormT, U]:
