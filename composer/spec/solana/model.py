@@ -27,7 +27,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from composer.spec.system_model import BaseApplication
-from composer.spec.types import RustIdentifier
+from composer.spec.types import ComponentName, ProgramName, RustIdentifier
 from composer.spec.util import slugify_filename
 
 #: How an account is expected to be supplied to an instruction. Drives the "missing signer /
@@ -89,14 +89,15 @@ class SolanaInstruction(BaseModel):
 class InterComponentInteraction(BaseModel):
     """An interaction with another component of a program this application implements.
 
-    The Solana peer of :class:`composer.spec.system_model.ComponentInteraction`; keyed by program
-    name rather than contract name."""
+    The Solana peer of :class:`composer.spec.system_model.ComponentInteraction`; keyed by
+    ``ProgramName`` rather than ``ContractName`` — sibling types, so an interaction cannot name
+    its peer with the wrong ecosystem's conceptual name."""
 
-    program: str = Field(
+    program: ProgramName = Field(
         description="The conceptual name of the program interacted with (matching the `name` field "
         "of a program in this application)."
     )
-    component: str | None = Field(
+    component: ComponentName | None = Field(
         description="The specific component within that program interacted with, if identifiable."
     )
     description: str = Field(description="A description of the interaction with that component.")
@@ -130,7 +131,7 @@ class ProgramComponent(BaseModel):
     component when it genuinely serves two capabilities. See ``docs/ecosystem-abstraction.md``
     §4."""
 
-    name: str = Field(description="A short, concise name of the component")
+    name: ComponentName = Field(description="A short, concise name of the component")
     description: str = Field(
         description="A longer description describing *what* this component does, not *how* it does it."
     )
@@ -154,7 +155,7 @@ class ProgramComponent(BaseModel):
 class SolanaProgram(BaseModel):
     """A concrete on-chain program in the system."""
 
-    name: str = Field(
+    name: ProgramName = Field(
         description="A short conceptual name for the program, used to refer to it across the system."
     )
     program_identifier: RustIdentifier = Field(

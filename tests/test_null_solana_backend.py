@@ -29,12 +29,12 @@ from composer.spec.solana.null_backend import (
     SOLANA_NULL_GUIDANCE,
     SolanaPhase,
 )
-from composer.spec.types import PropertyFormulation, RustIdentifier
+from composer.spec.types import ProgramName, PropertyFormulation, RustIdentifier
 
 
 def _program_instance() -> SolanaProgramInstance:
     program = SolanaProgram(
-        name="Vault",
+        name=ProgramName("Vault"),
         program_identifier=RustIdentifier("vault"),
         description="Holds deposits and releases them to the authority.",
         instructions=[],

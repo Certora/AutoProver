@@ -18,24 +18,31 @@ from typing import TYPE_CHECKING, Protocol, Literal
 # crate/module identifier — and either flows into the neutral seam because it
 # *is* a source identifier. They are **siblings of each other**: a Rust
 # identifier is not a Solidity identifier, and mixing them is a type error.
-# ``ContractName``: the conceptual / design-doc-readable name of a contract.
-# May be a Solidity identifier when the design doc names contracts that way,
-# but allowed to be anything human-readable.
+# ``ContractName`` / ``ProgramName``: the conceptual, design-doc-readable name of
+# a top-level entity of the analyzed system — an EVM contract, a Solana program.
+# This is the name the *rest of the analysis refers to it by* (an interaction
+# names its peer this way), as opposed to the identifier it is compiled under;
+# it may coincide with the source identifier when the design doc names the entity
+# that way, but is allowed to be anything human-readable.
 #
-# ``ContractName`` is a **sibling** of ``SourceIdentifier`` under str, not in a
-# subtype relation with it — passing a ``SourceIdentifier`` where a
-# ``ContractName`` is expected (or vice-versa) is a type error, even though both
-# are ``str`` at runtime.
+# These are **siblings of ``SourceIdentifier``** under str, not in a subtype
+# relation with it — passing a ``SourceIdentifier`` where a ``ContractName`` is
+# expected (or vice-versa) is a type error, even though both are ``str`` at
+# runtime. They are siblings of each other too, and unlike the identifiers they
+# get no shared base: no ecosystem-agnostic code handles a conceptual name, so
+# there is nothing for a common supertype to serve.
 if TYPE_CHECKING:
     class SourceIdentifier(str): ...
     class SolidityIdentifier(SourceIdentifier): ...
     class RustIdentifier(SourceIdentifier): ...
     class ContractName(str): ...
+    class ProgramName(str): ...
 else:
     SourceIdentifier = str
     SolidityIdentifier = str
     RustIdentifier = str
     ContractName = str
+    ProgramName = str
 
 type UnitName = str
 
