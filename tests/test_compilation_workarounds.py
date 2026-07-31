@@ -716,7 +716,7 @@ def test_packages_come_from_the_nested_build_config_dir(tmp_path: Path, monkeypa
     # "conf and command are unchanged".
     _no_forge(monkeypatch)
     (tmp_path / "package.json").write_text('{"dependencies": {"ethers": "^6"}}')
-    project = tmp_path / "portal"
+    project = tmp_path / "sub"
     project.mkdir()
     (project / "foundry.toml").write_text(
         '[profile.default]\nremappings = ["@pkg/=node_modules/@pkg/artifacts/src/"]\n'

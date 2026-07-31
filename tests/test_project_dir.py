@@ -18,23 +18,23 @@ from certora_autosetup.utils.project_dir import (
 def test_finds_nested_foundry_project(tmp_path: Path) -> None:
     # The shape that broke: build config one level down, only a package.json at the root.
     (tmp_path / "package.json").write_text('{"dependencies": {"ethers": "^6"}}')
-    project = tmp_path / "portal"
+    project = tmp_path / "sub"
     (project / "src").mkdir(parents=True)
     (project / "foundry.toml").write_text('[profile.default]\nremappings = ["@pkg/=node_modules/@pkg/"]\n')
-    contract = project / "src" / "Portal.sol"
-    contract.write_text("contract Portal {}")
+    contract = project / "src" / "Widget.sol"
+    contract.write_text("contract Widget {}")
 
     assert find_build_config_dir(contract, tmp_path) == project.resolve()
 
 
 def test_accepts_a_contract_path_relative_to_root(tmp_path: Path) -> None:
     # Contract handles carry root-relative paths, which is how autosetup calls this.
-    project = tmp_path / "portal"
+    project = tmp_path / "sub"
     (project / "src").mkdir(parents=True)
     (project / "foundry.toml").write_text("[profile.default]\n")
-    (project / "src" / "Portal.sol").write_text("contract Portal {}")
+    (project / "src" / "Widget.sol").write_text("contract Widget {}")
 
-    assert find_build_config_dir(Path("portal/src/Portal.sol"), tmp_path) == project.resolve()
+    assert find_build_config_dir(Path("sub/src/Widget.sol"), tmp_path) == project.resolve()
 
 
 def test_root_level_project_resolves_to_root(tmp_path: Path) -> None:
@@ -57,11 +57,11 @@ def test_no_build_config_anywhere_falls_back_to_root(tmp_path: Path) -> None:
 def test_nearest_ancestor_wins_over_an_outer_one(tmp_path: Path) -> None:
     # A monorepo may carry a root foundry.toml too; the sub-project's own config governs.
     (tmp_path / "foundry.toml").write_text("[profile.default]\n")
-    project = tmp_path / "packages" / "portal"
+    project = tmp_path / "packages" / "sub"
     (project / "src").mkdir(parents=True)
     (project / "foundry.toml").write_text("[profile.default]\n")
-    contract = project / "src" / "Portal.sol"
-    contract.write_text("contract Portal {}")
+    contract = project / "src" / "Widget.sol"
+    contract.write_text("contract Widget {}")
 
     assert find_build_config_dir(contract, tmp_path) == project.resolve()
 
@@ -106,7 +106,7 @@ def test_describe_returns_none_for_the_root_itself(tmp_path: Path) -> None:
 
 
 def test_describe_returns_the_relative_subdir(tmp_path: Path) -> None:
-    project = tmp_path / "packages" / "portal"
+    project = tmp_path / "packages" / "sub"
     project.mkdir(parents=True)
 
-    assert describe_build_config_dir(project, tmp_path) == str(Path("packages") / "portal")
+    assert describe_build_config_dir(project, tmp_path) == str(Path("packages") / "sub")
