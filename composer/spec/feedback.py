@@ -17,9 +17,9 @@ from composer.spec.types import PropertyFormulation
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.cvl.tools import get_cvl
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
-from composer.spec.gen_types import TemplateInstantiation, InjectedTemplate, TypedTemplate
+from composer.spec.gen_types import TemplateInstantiation, TypedTemplate, ITypedTemplate, PartialTemplate
 from composer.spec.cvl_generation import FeedbackToolContext, Rebuttal, SkippedProperty
-from composer.spec.system_model import ContractComponentInstance
+from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.spec.util import uniq_thread_id
 from composer.diagnostics.budget import BudgetPressureAbort, pressure_abort_monitor
 
@@ -46,6 +46,11 @@ BUDGET_ABORT_FEEDBACK = PropertyFeedback(
 class Properties(TypedDict):
     properties: list[PropertyFormulation]
 
+class FeedbackInputs(Properties):
+    rebuttals: Sequence[Rebuttal]
+    skipped: Sequence[SkippedProperty]
+
+@component_context
 class FeedbackInherentParams(TypedDict):
     context: ContractComponentInstance | None
     # Matches the tri-state on the env-level ``sort``:
@@ -56,7 +61,7 @@ class FeedbackInherentParams(TypedDict):
     #                    has real immutable source.
     sort: Sort
 
-FeedbackTemplate = TypedTemplate[FeedbackInherentParams]("property_judge_prompt.j2")
+FeedbackTemplate = PartialTemplate[FeedbackInherentParams, FeedbackInputs]("property_judge_prompt.j2")
 
 class JudgeSystemParams(TypedDict):
     sort: Sort
@@ -70,7 +75,7 @@ FeedbackSystemTemplate = TypedTemplate[JudgeSystemParams]("property_judge_system
 def property_feedback_judge(
     ctx: WorkflowContext[CVLJudge],
     env: ServiceHost,
-    prompt: InjectedTemplate[Properties] | TemplateInstantiation,
+    prompt: ITypedTemplate[FeedbackInputs],
     props: list[PropertyFormulation],
     *,
     extra_inputs: list[str | dict] | Callable[[], list[str | dict]] | None = None,
@@ -102,19 +107,17 @@ def property_feedback_judge(
 
     mem = ctx.get_memory_tool()
 
-    final_prompt = prompt if isinstance(prompt, TemplateInstantiation) else prompt.inject({"properties": props})
-
-    workflow = bind_standard(
+    staged_workflow = bind_standard(
         builder, ST, validator=did_rough_draft_read
     ).with_input(
         SpecJudgeInput
     ).inject(
-        lambda b: final_prompt.render_to(b.with_initial_prompt_template)
-    ).inject(
         lambda g: system_prompt.render_to(g.with_sys_prompt_template)
-    ).with_tools([*rough_draft_tools, mem, get_cvl(ST), ]).with_monitor(
+    ).with_tools(
+        [*rough_draft_tools, mem, get_cvl(ST), ]
+    ).with_monitor(
         pressure_abort_monitor()
-    ).compile_async()
+    )
 
     async def the_tool(
         cvl: str,
@@ -122,6 +125,14 @@ def property_feedback_judge(
         rebuttals: Sequence[Rebuttal],
         within_tool: str,
     ) -> PropertyFeedback:
+        workflow = staged_workflow.inject(
+            lambda b: prompt.bind({
+                "properties": props,
+                "rebuttals": rebuttals,
+                "skipped": skipped
+            }).render_to(b.with_initial_prompt_template)
+        ).compile_async()
+
         input_parts: list[str | dict] = []
         if extra_inputs:
             if isinstance(extra_inputs, list):
@@ -131,25 +142,6 @@ def property_feedback_judge(
 
         input_parts.append("The proposed CVL file is")
         input_parts.append(cvl)
-        if skipped:
-            input_parts.append("The following properties were explicitly skipped by the author:")
-            for s in skipped:
-                input_parts.append(f"  Property {s.property_title}: {s.reason}")
-        if rebuttals:
-            input_parts.append(
-                "The author has filed the following rebuttals against feedback from "
-                "prior rounds. Evaluate each per the Step 1 rebuttal rule (and the "
-                "Criteria 7 exception for skip-related rebuttals). Empirical evidence "
-                "types (`typecheck_failure`, `counterexample`, `manual_citation`) "
-                "carry near-binding weight; `reasoned` rebuttals are a conversation, "
-                "not a veto."
-            )
-            for i, r in enumerate(rebuttals, 1):
-                input_parts.append(
-                    f"  Rebuttal {i} [{r.evidence_type}]\n"
-                    f"    Addressing: {r.prior_feedback_reference}\n"
-                    f"    Evidence: {r.evidence}"
-                )
         try:
             res = await run_to_completion(
                 workflow,

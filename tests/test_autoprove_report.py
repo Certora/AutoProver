@@ -77,7 +77,8 @@ def _prop(title, desc, *, sort: PropertyType = "safety_property") -> PropertyFor
 
 
 def _gen(mapping: dict[str, list[str]] | None = None,
-         skipped: dict[str, str] | None = None) -> GeneratedCVL:
+         skipped: dict[str, str] | None = None,
+         link: str | None = "L1") -> GeneratedCVL:
     """A successful generation result: ``mapping`` is property_title -> [rule names];
     ``skipped`` is property_title -> reason."""
     return GeneratedCVL(
@@ -86,20 +87,18 @@ def _gen(mapping: dict[str, list[str]] | None = None,
                         for t, rs in (mapping or {}).items()],
         skipped=[SkippedProperty(property_title=t, reason=r)
                  for t, r in (skipped or {}).items()],
+        final_link=link
     )
 
 
-def _input(name, unit_file, props, result: GeneratedCVL | None, link : str | None="L1") -> ReportComponentInput[GeneratedCVL]:
-    """``link`` is the result's prover run link (``GeneratedCVL.final_link``); the prover fetcher
-    keys its verdicts off it. ``None`` (or a ``None`` result) means no run link, so no verdicts."""
-    return ReportComponentInput(
-        name=name,
-        props=props,
-        formalized=Delivered(
-            deliverable=pathlib.Path(unit_file),
-            result=result.model_copy(update={"final_link": link})
-        ) if result is not None else None
-    )
+def _input(
+    name: str,
+    unit_file: str,
+    props: list[PropertyFormulation],
+    result: GeneratedCVL | None
+) -> ReportComponentInput[GeneratedCVL]:
+    return ReportComponentInput(name=name, props=props,
+                                formalized=Delivered(result, pathlib.Path(unit_file)) if result is not None else None)
 
 
 def _curtailed_input(
@@ -196,7 +195,7 @@ async def test_collect_none_result_is_a_gap():
     formalization gap — all its properties unimplemented, no per-property reason."""
     props = [_prop("p1", "d1")]
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
-        [_input("C", "autospec_C.spec", props, None, link=None)], fetch_verdicts=_fetcher({}))
+        [_input("C", "autospec_C.spec", props, None)], fetch_verdicts=_fetcher({}))
     assert properties == [] and rules == [] and skipped == [] and curtailed == [] and dropped == 0
     assert [g.component for g in gave_up] == ["C"]
     assert [p.title for p in gave_up[0].properties] == ["p1"]
@@ -208,7 +207,7 @@ async def test_collect_routes_curtailed_component_without_fetching():
     partitioned by disposition into the appendix record, and its verdicts are never fetched (the
     fetcher spy would record the call — and its link deliberately maps to a verdict that would
     otherwise register a rule)."""
-    good = _input("C", "autospec_C.spec", [_prop("p1", "d1")], _gen({"p1": ["r1"]}), link="Lc")
+    good = _input("C", "autospec_C.spec", [_prop("p1", "d1")], _gen({"p1": ["r1"]}, link="Lc"))
     cut = _curtailed_input(
         "D",
         [_prop("q_drafted", "dq"), _prop("q_skip", "ds"), _prop("q_lost", "dl")],
@@ -300,9 +299,9 @@ async def test_collect_shared_rule_dedupes_and_is_referenced_by_both():
     """An invariant imported into a component spec reports the same source file from
     both runs, so it collapses to one rule that both components' properties reference."""
     comp = _input("Increment", "autospec_Increment.spec", [_prop("c", "component view", sort="invariant")],
-                  _gen({"c": ["countEqualsSum"]}), link="Lc")
+                  _gen({"c": ["countEqualsSum"]}, link="Lc"))
     inv = _input("Structural Invariants", "invariants.spec", [_prop("i", "structural", sort="invariant")],
-                 _gen({"i": ["countEqualsSum"]}), link="Li")
+                 _gen({"i": ["countEqualsSum"]}, link="Li"))
     fetch = _fetcher({
         "Lc": [_fake_check("countEqualsSum", NodeStatus.VERIFIED, file="invariants.spec")],
         "Li": [_fake_check("countEqualsSum", NodeStatus.VERIFIED, file="invariants.spec")],
@@ -315,8 +314,8 @@ async def test_collect_shared_rule_dedupes_and_is_referenced_by_both():
 
 @pytest.mark.asyncio
 async def test_collect_same_name_different_spec_stays_distinct():
-    a = _input("A", "autospec_A.spec", [_prop("pa", "a")], _gen({"pa": ["transferIsSafe"]}), link="La")
-    b = _input("B", "autospec_B.spec", [_prop("pb", "b")], _gen({"pb": ["transferIsSafe"]}), link="Lb")
+    a = _input("A", "autospec_A.spec", [_prop("pa", "a")], _gen({"pa": ["transferIsSafe"]}, link="La"))
+    b = _input("B", "autospec_B.spec", [_prop("pb", "b")], _gen({"pb": ["transferIsSafe"]}, link="Lb"))
     fetch = _fetcher({
         "La": [_fake_check("transferIsSafe", NodeStatus.VERIFIED, file="autospec_A.spec")],
         "Lb": [_fake_check("transferIsSafe", NodeStatus.VIOLATED, file="autospec_B.spec")],
@@ -603,7 +602,7 @@ async def test_build_surfaces_skipped_and_gave_up_gaps(tmp_path):
         backend="prover",
         components=[
             _input("C", "autospec_C.spec", [_prop("p_ok", "d"), _prop("p_skip", "d")], gen),
-            _input("D", "autospec_D.spec", [_prop("q", "d")], None, link=None),
+            _input("D", "autospec_D.spec", [_prop("q", "d")], None),
         ],
         llm=llm, fetch_verdicts=fetch,
     )

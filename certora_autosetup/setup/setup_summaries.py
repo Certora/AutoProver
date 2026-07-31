@@ -1700,7 +1700,7 @@ Method signature: {method_signature}
             contract_files: Set of Solidity files to analyze
             methods_to_skip: Set of (contract, method) pairs to skip (already marked for
                 summarization by non-LLM step or matched by previous LLM recipes)
-            main_contract: Optional main contract name to filter methods by originatingContract
+            main_contract: Optional main contract name to filter methods to its compilation unit
 
         Returns:
             List of methods that match the criteria, excluding methods in methods_to_skip
@@ -1719,13 +1719,13 @@ Method signature: {method_signature}
 
         mp = self.methods_parser
 
-        # Filter methods by properties and originatingContract
+        # Filter methods by properties and compilation-unit membership
         all_methods = mp.get_all_methods()
         filtered_methods = []
 
         for method in all_methods:
-            # Filter by originating contract if main_contract is specified
-            if main_contract and method.get("originatingContract") != main_contract:
+            # Filter to the main contract's compilation unit if specified
+            if main_contract and main_contract not in method["originatingContracts"]:
                 continue
             method_key = (method["contractName"], method["name"])
 
@@ -2300,7 +2300,7 @@ Method signature: {method_signature}
     ) -> bool:
         """Run all LLM recipes for one compilation unit and emit per-summarized-contract specs.
 
-        Filters methods by ``originatingContract == contract_name``. Each match is appended
+        Filters methods to those whose compilation unit includes ``contract_name``. Each match is appended
         to ``self._methods_per_contract[match["contractName"]]`` and the corresponding
         ``certora/specs/summaries/{contractName}_summaries.spec`` file is (re-)written with
         the full set of methods seen so far for that contract — methods already in
@@ -2308,7 +2308,7 @@ Method signature: {method_signature}
         across iterations doesn't duplicate summaries even when compilation units overlap.
 
         Args:
-            contract_name: Compilation unit to analyze (matched against ``originatingContract``).
+            contract_name: Compilation unit to analyze (matched against ``originatingContracts``).
             contract_files: Solidity source files passed to ``analyze_with_llm``.
             methods_to_skip: ``(contractName, methodName)`` pairs already handled by the
                 non-LLM step or otherwise not to be reanalyzed. Always merged with
@@ -2381,27 +2381,18 @@ Method signature: {method_signature}
         mp = self.methods_parser
 
         self.log(f"Matching summaries for {main_contract}...")
-        # Filter to only methods that originate from this contract (compilation unit)
+        # Methods in this contract's compilation unit. Membership (originatingContracts) rather
+        # than a single attribution, so a shared library inlined into the unit still matches.
         contract_methods = mp.get_methods_by_originating_contract(main_contract)
-        # For a `library_names` entry, also consider every library method in the scene. A library
-        # is deduped to a single `originatingContract` that need not be `main_contract`, so an
-        # originating-scoped search alone can miss it. Restricted to `isLibrary` methods, since a
-        # library is always a resolvable CVL receiver while an inherited abstract base is not in
-        # every scene; non-library methods stay originating-scoped. Unioned with `contract_methods`
-        # so the candidate set only grows.
-        library_scene_methods = [m for m in mp.get_all_methods() if m.get("isLibrary")]
         matched_functions: Set[str] = set()
         matched_method_tuples: Set[Tuple[str, str]] = set()
 
         for func_name, func_info in self.function_summaries.items():
             self.log(f"Checking for {func_info['description']} usage...", "DEBUG")
-            candidate_methods = (
-                contract_methods + library_scene_methods if func_info.get("library_names") else contract_methods
-            )
 
             # Match by name (disjunctive - match any name in list)
             if "names" in func_info:
-                for method in candidate_methods:
+                for method in contract_methods:
                     if method["name"] in func_info["names"]:
                         # Optional: require the method to belong to one of library_names
                         if func_info.get("library_names"):
@@ -2422,7 +2413,7 @@ Method signature: {method_signature}
 
             # Match by signature (disjunctive - match any signature in list)
             if "signatures" in func_info and func_name not in matched_functions:
-                for method in candidate_methods:
+                for method in contract_methods:
                     method_sig = f"{method['name']}({','.join(method['fullSignature'])})"
                     if method_sig in func_info["signatures"]:
                         # Optional: require the method to belong to one of library_names

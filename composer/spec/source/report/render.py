@@ -161,7 +161,8 @@ class CurtailedView(TypedDict):
 
 class ReportTemplateParams(TypedDict):
     """The full, typed context of ``autoprove_report.html.j2``."""
-    report: AutoProverReport
+    contract_name: str
+    run_timestamp_utc: str | None
     coverage: CoverageReport
     terms: ReportTerms
     has_links: bool
@@ -303,7 +304,8 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
     unit_labels = _OUTCOME_LABELS[report.backend]
     group_labels = _GROUP_LABELS[report.backend]
     return {
-        "report": report,
+        "contract_name": report.contract_name,
+        "run_timestamp_utc": report.run_timestamp_utc,
         "coverage": report.coverage,
         "terms": _TERMS[report.backend],
         # The link column / runs header only make sense when a backend actually produced run links.

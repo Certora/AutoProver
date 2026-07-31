@@ -16,11 +16,11 @@ This application is comprised of the following components.
 ## Components
 
 {% for c in context.components %}
-### {{ "Contract" if c.sort else "External Actor"}}: {% if c.sort %}{{ contract_label(c) }}{% else %}{{ c.name }}{% endif %}
+### {{ "Contract" if c.sort is defined else "External Actor"}}: {% if c.sort is defined %}{{ contract_label(c) }}{% else %}{{ c.name }}{% endif %}
 
 **Description**: {{ c.description }}
 
-{% if c.sort %}
+{% if c.sort is defined %}
 {% if show_sort %}
 **Sort**: {{ c.sort }} (see below)
 {% endif %}
@@ -33,10 +33,10 @@ This contract is comprised of the following components:
 **Component Name**: {{ sub.name }}
 **Description**: {{ sub.description }}
 
-{% if sub.interactions %}
+{% if sub.interactions is defined %}
 This component interacts with other components in the application or external actors as follows:
 {% for int in sub.interactions %}
-{% if int.contract_name %}
+{% if int.contract_name is defined %}
 * Interaction with component `{{ int.component }}` of `{{ int.contract_name }}`: {{ int.description }}
 {%else%}
 * Interaction with external actor {{ int.external_actor }}: {{ int.description }}

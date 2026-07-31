@@ -1,8 +1,10 @@
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
+from typing_extensions import ReadOnly
 from pydantic import BaseModel, Field
 from functools import cached_property
 from composer.spec.util import slugify_filename
+from composer.spec.service_host import Sort
 from .types import ComponentName, SolidityIdentifier, ContractName
 
 type ContractSort = Literal["dynamic", "singleton", "multiple"]
@@ -190,7 +192,7 @@ class ContractInstance:
     @property
     def contract(self) -> ExplicitContract:
         return self.app.contract_components[self.ind]
-    
+
     @cached_property
     def sibling_contracts(self) -> list[ExplicitContract]:
         to_ret : list[ExplicitContract] = []
@@ -245,3 +247,44 @@ class ContractComponentInstance:
             ind=component_index,
             _contract=ContractInstance(ind=contract_index, app=app),
         )
+
+# The structural shape a template-param TypedDict must have to be marked: a
+# ``sort`` plus a per-component ``context``. Used only as the ``@component_context``
+# bound, so the decorator statically rejects param dicts that don't actually carry
+# these two fields.
+class ComponentContextProtocol(TypedDict):
+    sort: ReadOnly[Sort]
+    context: ReadOnly[ContractComponentInstance | None]
+
+# Dunder attribute stamped on marked classes. A trailing-underscore-pair name so
+# it is never subject to identifier name-mangling.
+_context_marker_attr = "__template_ctxt_params__"
+
+
+def component_context[T: ComponentContextProtocol](t: type[T]) -> type[T]:
+    """Assert a template-param TypedDict conforms to the context-param shape, and
+    mark it for coherent fuzzing. Two roles:
+
+    * **Conformance check.** Python has no native way to declare that a TypedDict
+      "implements" a shape — TypedDict inheritance only *adds* keys, it can't
+      assert that a separately-declared dict (e.g. one that already extends some
+      other params base) matches a protocol. Routing the dict through this
+      decorator, whose parameter is bound ``T: ComponentContextProtocol``, makes
+      the type checker verify at the declaration site that it really carries
+      ``sort: Sort`` and ``context: ContractComponentInstance | None``. The dict is
+      returned unchanged, so this is a purely checked pass-through.
+    * **Runtime marker.** Stamps ``_context_marker_attr`` on the class object (not
+      on instances). The template fuzz test discovers marked classes by this
+      attribute and, for each, draws a ``sort`` and then a ``context`` coherent
+      with it rather than independently — templates read sort-gated,
+      subtype-specific fields off the context, so an incoherent pair renders into a
+      crash (see ``tests/test_fuzzed_templates.py``).
+
+    The marker is an attribute, not an annotation, so it never appears among the
+    TypedDict's keys (``get_type_hints`` / ``__required_keys__`` are untouched).
+    Because TypedDict class attributes are not inherited by derived TypedDicts, each
+    concrete param dict must be decorated directly — marking a base does not
+    propagate.
+    """
+    setattr(t, _context_marker_attr, True)
+    return t

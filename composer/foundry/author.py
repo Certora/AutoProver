@@ -51,8 +51,7 @@ from composer.diagnostics.budget import (
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
-from composer.spec.system_model import ContractComponentInstance
-from composer.spec.tool_env import BasicAgentTools
+from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.spec.service_host import ServiceHost
 from composer.spec.util import uniq_thread_id
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
@@ -634,7 +633,7 @@ address, proceed directly with addressing them.
 # Top-level batch entry
 # ---------------------------------------------------------------------------
 
-
+@component_context
 class FoundryPropertyGenParams(TypedDict):
     """Per-batch render variables for ``foundry_property_generation_prompt.j2``.
     Mirror of ``PropertyGenParams`` in the CVL author, minus ``resources``
@@ -642,6 +641,7 @@ class FoundryPropertyGenParams(TypedDict):
     context: ContractComponentInstance | None
     properties: list[PropertyFormulation]
     contract_name: str
+    sort: Literal["existing"]
 
 
 _FoundryPropertyGenTemplate = TypedTemplate[FoundryPropertyGenParams](
@@ -706,6 +706,7 @@ async def batch_foundry_test_generation(
         "context": component,
         "properties": props,
         "contract_name": contract_name,
+        "sort": "existing"
     })
 
     titles = [p.title for p in props]

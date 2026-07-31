@@ -641,7 +641,7 @@ class SetupProver:
     def _process_method_info(
         self,
         method: Dict,
-        methods_set: set,
+        methods_by_sig: Dict,
         all_methods: List,
         method_counts: Dict,
         originating_contract: str,
@@ -699,7 +699,8 @@ class SetupProver:
             # the per-function defining contract, best emitted upstream by certoraBuild.py from the
             # function node's ``certora_contract_name``, which would also remove this file heuristic.
             "definingContract": self._sole_contract_declared_in(method.get("originalFile", "")),
-            "originatingContract": originating_contract,
+            # Every compilation unit that inlines this method; repeats union their unit here.
+            "originatingContracts": [originating_contract] if originating_contract else [],
             "isLibrary": method.get("isLibrary", False),
             "name": method.get("name", ""),
             "nonpayable": method.get("nonpayable", False)
@@ -731,10 +732,14 @@ class SetupProver:
             tuple(method_info["fullSignature"]),
         )
 
-        # Only add if not already seen
-        if method_signature not in methods_set:
-            methods_set.add(method_signature)
+        # Add on first sight; on a repeat (same method reached via another compilation unit),
+        # union the extra originating unit into the already-kept entry instead of dropping it.
+        existing = methods_by_sig.get(method_signature)
+        if existing is None:
+            methods_by_sig[method_signature] = method_info
             all_methods.append(method_info)
+        elif originating_contract and originating_contract not in existing["originatingContracts"]:
+            existing["originatingContracts"].append(originating_contract)
 
     def _build_declared_contracts_by_file(self) -> Dict[str, Set[str]]:
         """Map each source file (relative path) to the concrete contracts/libraries it declares.
@@ -771,10 +776,10 @@ class SetupProver:
 
     def generate_all_methods_json(self, build_data: Dict) -> None:
         """Extract and write all methods information to all_methods.json."""
-        # Extract all methods from all contracts
-        # Use a set to avoid duplicates during collection, then convert to list
+        # Extract all methods from all contracts. A method reached via multiple compilation units
+        # is kept once (keyed by signature); each unit is unioned into its ``originatingContracts``.
         self._declared_contracts_by_file = self._build_declared_contracts_by_file()
-        methods_set: set = set()
+        methods_by_sig: Dict = {}
         all_methods: list = []
         method_counts: dict = {}  # For calculating overload counts
 
@@ -791,7 +796,7 @@ class SetupProver:
                         for method in contract["allMethods"]:
                             self._process_method_info(
                                 method,
-                                methods_set,
+                                methods_by_sig,
                                 all_methods,
                                 method_counts,
                                 originating_contract,
@@ -806,7 +811,7 @@ class SetupProver:
                                 method = func_data["method"]
                                 self._process_method_info(
                                     method,
-                                    methods_set,
+                                    methods_by_sig,
                                     all_methods,
                                     method_counts,
                                     originating_contract,
