@@ -1,0 +1,46 @@
+# docker-compose.crucible.yml — OVERLAY that swaps the autoprove service onto the
+# Crucible toolchain image so `console-crucible` runs fully in-container.
+#
+# Layered on top of BOTH the base file and the sandbox overlay (Crucible's sandbox
+# provider is fail-closed, so run-confined must be mounted). Always use all three:
+#
+#   # one-time: build the lean base image the crucible image layers onto
+#   docker compose -f scripts/docker-compose.yml --profile autoprove build
+#   # build the sandbox launcher + the crucible toolchain image
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.crucible.yml --profile autoprove build
+#   # setup-db then run
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.crucible.yml --profile autoprove \
+#       run --rm autoprove setup-db
+#   export HOST_UID=$(id -u) HOST_GID=$(id -g) HOST_WORK_DIR=/path/to/projects
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.crucible.yml --profile autoprove \
+#       run --rm autoprove console-crucible /work/<proj> /work/<proj>/src/lib.rs:<prog>
+#
+# This overrides the SAME `autoprove` service the sandbox overlay wires, so the
+# read-only run-confined mount + the run-confined-build ordering carry over
+# automatically. The base image (autoprover-local:latest) must be built first —
+# scripts/Dockerfile.crucible does `FROM ${BASE_IMAGE}`.
+
+services:
+  autoprove:
+    image: autoprover-crucible:latest
+    build:
+      context: ..
+      dockerfile: scripts/Dockerfile.crucible
+      args:
+        # The lean base image this toolchain image layers onto.
+        BASE_IMAGE: autoprover-local:latest
+        # Keep the certora-cli channel consistent with the base build.
+        CERTORA_CLI_PACKAGE: ${CERTORA_CLI_PACKAGE:-certora-cli}
+    environment:
+      # Confine every RunCommand (default provider is fail-closed). run-confined
+      # is supplied by the sandbox overlay at $RUN_CONFINED_BIN.
+      COMPOSER_SANDBOX_PROVIDER: ${COMPOSER_SANDBOX_PROVIDER:-launcher}
+      # The baked-in crucible checkout the harness path-deps resolve against.
+      # (Also set as an image ENV; repeated here so it's visible/overridable.)
+      CRUCIBLE_REPO: ${CRUCIBLE_REPO:-/opt/crucible}

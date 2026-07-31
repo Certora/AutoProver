@@ -8,8 +8,6 @@ all the layer-targeting and isolation behaviors without relying on real
 semantic similarity.
 """
 
-from __future__ import annotations
-
 from typing import Callable
 
 import pytest

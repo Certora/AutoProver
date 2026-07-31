@@ -1,0 +1,8 @@
+# The harness is a NATIVE build against Crucible's pinned stack, unrelated to the toolchain the
+# program under test is built with — and `crucible` forces this channel for its own build. Pinned
+# here because rustup selects a toolchain by *directory*: the harness crate lives inside the target
+# project, so without this file the project's own `rust-toolchain.toml` would win for every other
+# cargo invocation in this directory (dependency warming, or a hand-run `cargo build`), leaving them
+# resolving with a different — usually older — cargo than the one that builds the harness.
+[toolchain]
+channel = "{{ channel }}"

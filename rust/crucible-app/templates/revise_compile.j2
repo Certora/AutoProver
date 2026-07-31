@@ -1,0 +1,13 @@
+
+
+The previous attempt FAILED to build / dry-run. Fix it.
+{% if !errors.is_empty() %}COMPILER ERRORS to fix (extracted):
+{{ errors }}
+
+{% endif %}Prior source:
+```rust
+{{ prev_src }}
+```
+
+Raw build/dry-run output (tail):
+{{ tail }}

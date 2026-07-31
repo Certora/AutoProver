@@ -57,6 +57,10 @@ _OUTCOME_LABELS: dict[ReportBackend, dict[Outcome, str]] = {
         Outcome.GOOD: "Successful test", Outcome.BAD: "Failing test", Outcome.ERROR: "Error",
         Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
     },
+    "crucible": {
+        Outcome.GOOD: "No counterexample", Outcome.BAD: "Counterexample", Outcome.ERROR: "Error",
+        Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
+    },
     # The analysis-only backend never produces a verdict, so UNKNOWN is the label that matters:
     # "Unverified" states why the row is empty, where "Unknown" would read as a failed attempt.
     # The rest are neutral words, present because the table has to be total.
@@ -72,6 +76,10 @@ _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     },
     "foundry": {
         GroupStatus.GOOD: "All tests passing", GroupStatus.BAD: "Has failing test",
+        GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
+    },
+    "crucible": {
+        GroupStatus.GOOD: "No counterexamples", GroupStatus.BAD: "Has counterexample",
         GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
     },
     "none": {
@@ -99,6 +107,10 @@ _TERMS: dict[ReportBackend, ReportTerms] = {
     "foundry": ReportTerms(
         title="Foundry test report", unit_singular="test", unit_plural="tests",
         unit_cap="Test", outcomes_label="Test outcomes",
+    ),
+    "crucible": ReportTerms(
+        title="Crucible fuzzing report", unit_singular="property", unit_plural="properties",
+        unit_cap="Property", outcomes_label="Property outcomes",
     ),
     "none": ReportTerms(
         title="Property report", unit_singular="property", unit_plural="properties",
@@ -171,8 +183,8 @@ _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2
 
 
 def outcome_label(backend: ReportBackend, outcome: Outcome) -> str:
-    """The human word an auditor reads for an ``Outcome`` under a backend (e.g. a ``prover``
-    ``GOOD`` → "Verified", a ``foundry`` ``GOOD`` → "Successful test").
+    """The human word an auditor reads for an ``Outcome`` under a backend (e.g. a
+    ``crucible`` ``GOOD`` → "No counterexample", a ``prover`` ``GOOD`` → "Verified").
 
     The report's HTML render is the primary consumer, but the console/TUI verdict
     rollups reuse this so the same run reads with one vocabulary everywhere — this is

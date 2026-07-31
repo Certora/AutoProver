@@ -1,0 +1,16 @@
+crucible-fuzzer = { path = "{{ cf }}" }
+crucible-test-context = { path = "{{ ctc }}" }
+anchor-lang = "{{ anchor_version }}"
+arbitrary = { version = "1", features = ["derive"] }
+{% if idl %}bytemuck = "1.14"
+crucible-idl-gen = { path = "{{ idl_gen }}" }
+ctor = "0.6"
+ctrlc = "3.4"
+fixed = "1"
+{% else %}ctrlc = "3.4"
+{% endif %}libafl = { version = "{{ libafl_version }}", features = ["std", "cli", "prelude"] }
+libafl_bolts = { version = "{{ libafl_version }}", features = ["std"] }
+{% if !idl %}{{ package }} = { path = "../../{{ crate_dir }}", features = ["no-entrypoint"] }
+{% endif %}solana-keypair = "{{ solana_version }}"
+solana-pubkey = "{{ solana_version }}"
+solana-signer = "{{ solana_version }}"

@@ -169,11 +169,12 @@ class CoverageReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-type ReportBackend = Literal["prover", "foundry", "none"]
+type ReportBackend = Literal["prover", "foundry", "none", "crucible"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
-this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
-vs "Unverified") for a report.json it reads cold. The producers are the CVL prover (``"prover"``),
-Foundry (``"foundry"``), and ``"none"`` — a pipeline that records properties without verifying them
+this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test" vs
+"No counterexample") for a report.json it reads cold. The producers are the CVL prover
+(``"prover"``), Foundry (``"foundry"``), the Rust/Crucible fuzzer (``"crucible"``, hosted by
+``composer.rustapp``), and ``"none"`` — a pipeline that records properties without verifying them
 (the analysis-only null backend, ``composer.spec.solana.null_backend``), whose reports are all
 UNKNOWN and say so. The set is closed: every backend lives in this repo, so a verification backend
 adds its own literal here, plus its wording in ``report/render.py``."""
