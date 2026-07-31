@@ -1,4 +1,4 @@
-from typing import Protocol, AsyncIterator, TYPE_CHECKING, cast
+from typing import Protocol, AsyncIterator, TYPE_CHECKING
 import sys
 import pathlib
 import enum
@@ -23,7 +23,7 @@ from composer.spec.artifacts import ArtifactIdentifier
 from composer.spec.system_model import FeatureUnit, BaseApplication
 from composer.spec.service_host import ModelProvider
 from composer.spec.types import SourceIdentifier
-from composer.pipeline.ecosystem import Ecosystem, EVM
+from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
@@ -118,7 +118,8 @@ class Continuation[P: enum.Enum, H](Protocol):
     async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A, U, Main, App]
+        backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+        ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
 
@@ -253,7 +254,8 @@ async def cli_pipeline[P: enum.Enum, H](
 
             async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U, Main, App]
+                backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+                ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
@@ -276,13 +278,8 @@ async def cli_pipeline[P: enum.Enum, H](
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
                     threat_model=threat_model,
-                    # cli_pipeline is the EVM CLI entry point (Solidity identifiers throughout
-                    # above); App/Main/U are only generic here to admit FoundryBackend and
-                    # ProverBackend (same EVM triple, different FormT/A). Downcast to the
-                    # generic ecosystem parameter rather than widening run_pipeline back to Any.
-                    ecosystem=cast(Ecosystem[App, Main, U], EVM),
+                    ecosystem=ecosystem,
                 )
-                ...
 
             yield (StagedPipeline(
                 conns=conns, llm_models=models, logger=data_logger,

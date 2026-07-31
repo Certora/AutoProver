@@ -37,6 +37,7 @@ from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, backend
 )
 from composer.pipeline.cli import cli_pipeline, user_ns, AtExit
+from composer.pipeline.ecosystem import EVM
 
 _log = logging.getLogger(__name__)
 
@@ -172,6 +173,6 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                 source_input=staged.source,
                 forge_concurrency=args.max_forge_runners
             )
-            return await cont(env, f_backend)
+            return await cont(env, f_backend, EVM)
 
     yield runner
