@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from certora_autosetup.parsers.build_system_detector import BuildSystem, BuildSystemDetector
 from certora_autosetup.utils.logger import logger
+from certora_autosetup.utils.project_dir import rebase
 from certora_autosetup.utils.types import ContractHandle
 from certora_autosetup.parsers.foundry import FoundryContractExtractor
 
@@ -91,8 +92,15 @@ def auto_detect_contracts(
     project_root: Path,
     profile: str | None = None,
     requested_build_system: str | None = None,
+    emit_relative_to: Path | None = None,
 ) -> list[ContractHandle]:
-    """Auto-detect all project contracts via the build system (Foundry/Hardhat)."""
+    """Auto-detect all project contracts via the build system (Foundry/Hardhat).
+
+    Handles come back with source paths relative to *project_root*, because that is how
+    the build system records them. Pass ``emit_relative_to`` when the process CWD is not
+    *project_root* — a monorepo whose build config sits below the repo root — so the
+    returned paths remain usable from the CWD.
+    """
     build_system = BuildSystemDetector.resolve(project_root, requested_build_system)
     if build_system == BuildSystem.UNKNOWN:
         raise ValueError(
@@ -100,7 +108,17 @@ def auto_detect_contracts(
         )
 
     contract_extractor = BuildSystemDetector.get_contract_extractor(build_system, project_root, profile=profile)
-    return contract_extractor.extract_logic_contracts_and_files()
+    handles = contract_extractor.extract_logic_contracts_and_files()
+
+    if emit_relative_to is None or emit_relative_to.resolve() == project_root.resolve():
+        return handles
+    return [
+        ContractHandle(
+            contract_name=h.contract_name,
+            source_file=rebase(h.source_file, project_root, emit_relative_to),
+        )
+        for h in handles
+    ]
 
 
 def deduplicate_contract_handles(handles: list[ContractHandle]) -> list[ContractHandle]:
@@ -132,6 +150,7 @@ def resolve_contract_handles(
     project_root: Path,
     profile: str | None = None,
     requested_build_system: str | None = None,
+    handles_relative_to: Path | None = None,
 ) -> list[ContractHandle]:
     """Resolve inferred contract names using Foundry build artifact compilationTargets.
 
@@ -139,6 +158,10 @@ def resolve_contract_handles(
     the contract name from the filename stem. This can be wrong when the file contains
     a contract with a different name. This function fixes those inferred names by
     looking up the actual contract name from the build artifacts.
+
+    ``handles_relative_to`` names the directory the incoming handles' paths are relative
+    to, when that is not *project_root*. Only the artifact lookup is re-based; the
+    returned handles keep their original paths, since those are what the caller uses.
     """
     build_system = BuildSystemDetector.resolve(project_root, requested_build_system)
     if build_system != BuildSystem.FOUNDRY:
@@ -161,8 +184,12 @@ def resolve_contract_handles(
             resolved.append(handle)
             continue
 
-        # Normalize and look up source path
-        normalized = str(Path(handle.source_file))
+        # Normalize and look up source path. The map is keyed relative to project_root,
+        # so a handle expressed against a different dir has to be re-based to match.
+        lookup = handle.source_file
+        if handles_relative_to is not None and handles_relative_to.resolve() != project_root.resolve():
+            lookup = rebase(lookup, handles_relative_to, project_root)
+        normalized = str(Path(lookup))
         entries_in_file: list[tuple] | None = None
         for src_path, entries in source_map.items():
             if str(Path(src_path)) == normalized:

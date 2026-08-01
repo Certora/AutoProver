@@ -12,6 +12,7 @@ from pathlib import Path
 from certora_autosetup.utils.project_dir import (
     describe_build_config_dir,
     find_build_config_dir,
+    rebase,
 )
 
 
@@ -110,3 +111,35 @@ def test_describe_returns_the_relative_subdir(tmp_path: Path) -> None:
     project.mkdir(parents=True)
 
     assert describe_build_config_dir(project, tmp_path) == str(Path("packages") / "sub")
+
+
+# ---------------------------------------------------------------------------
+# rebase — reinterpreting a build-system-relative path against the run CWD
+# ---------------------------------------------------------------------------
+
+
+def test_rebase_pushes_a_nested_projects_path_down_to_the_root(tmp_path: Path) -> None:
+    # Foundry records compilationTarget relative to its own project dir, so a nested
+    # project reports "src/Widget.sol" while the CWD is the repo root.
+    assert rebase("src/Widget.sol", tmp_path / "sub", tmp_path) == str(Path("sub/src/Widget.sol"))
+
+
+def test_rebase_is_identity_when_the_dirs_match(tmp_path: Path) -> None:
+    assert rebase("src/Widget.sol", tmp_path, tmp_path) == str(Path("src/Widget.sol"))
+
+
+def test_rebase_leaves_absolute_paths_alone(tmp_path: Path) -> None:
+    absolute = str(tmp_path / "src" / "Widget.sol")
+    assert rebase(absolute, tmp_path / "sub", tmp_path) == absolute
+
+
+def test_rebase_handles_a_deeper_nesting(tmp_path: Path) -> None:
+    assert rebase(
+        "contracts/Vault.sol", tmp_path / "packages" / "app", tmp_path
+    ) == str(Path("packages/app/contracts/Vault.sol"))
+
+
+def test_rebase_can_walk_upward(tmp_path: Path) -> None:
+    # Not produced by find_build_config_dir (it is bounded by the run root), but the
+    # helper is pure path math and should not silently mangle the reverse direction.
+    assert rebase("sub/src/Widget.sol", tmp_path, tmp_path / "sub") == str(Path("src/Widget.sol"))

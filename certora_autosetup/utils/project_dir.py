@@ -12,6 +12,7 @@ Anchoring on the main contract's own path fixes this without any new plumbing: t
 that owns a contract is the nearest ancestor of that contract holding a build config.
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +53,22 @@ def find_build_config_dir(contract_path: Path, root: Path) -> Path:
         if current == root:
             return root
         current = current.parent
+
+
+def rebase(rel_path: str, from_dir: Path, to_dir: Path) -> str:
+    """Reinterpret *rel_path* — given relative to *from_dir* — as relative to *to_dir*.
+
+    Pure path arithmetic; nothing is required to exist on disk. Absolute inputs are
+    returned unchanged, since they need no anchor.
+
+    Build systems record source paths relative to their own project dir (Foundry's
+    ``compilationTarget``, for one), so a nested project hands back ``src/Foo.sol``
+    while the process CWD is the repo root and needs ``pkg/portal/src/Foo.sol``.
+    """
+    if Path(rel_path).is_absolute():
+        return rel_path
+    absolute = (from_dir / rel_path).resolve()
+    return os.path.relpath(absolute, to_dir.resolve())
 
 
 def describe_build_config_dir(build_config_dir: Path, root: Path) -> Optional[str]:
