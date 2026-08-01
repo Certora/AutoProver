@@ -32,7 +32,7 @@ class ContractExtractor(ABC):
 
         Args:
             project_root: Root directory of the project
-            manager_class: BuildSystemManager class (FoundryManager or HardhatManager)
+            manager_class: BuildSystemManager class (FoundryManager, HardhatManager, ...)
             profile: Build system profile to use (e.g. Foundry profile name)
         """
         self.project_root = project_root

@@ -96,7 +96,7 @@ def auto_detect_contracts(
     build_system = BuildSystemDetector.resolve(project_root, requested_build_system)
     if build_system == BuildSystem.UNKNOWN:
         raise ValueError(
-            "No build system detected (Foundry or Hardhat). Expected foundry.toml or hardhat.config.{js,ts}"
+            "No build system detected. Expected foundry.toml, hardhat.config.{js,ts} or truffle-config.js"
         )
 
     contract_extractor = BuildSystemDetector.get_contract_extractor(build_system, project_root, profile=profile)

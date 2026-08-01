@@ -16,8 +16,16 @@ from pathlib import Path
 from typing import Optional
 
 # Build config filenames that mark a directory as a project root, in no particular order —
-# presence of any one of them is enough to anchor there.
-BUILD_CONFIG_FILENAMES = ("foundry.toml", "hardhat.config.js", "hardhat.config.ts")
+# presence of any one of them is enough to anchor there. Truffle's two names are here for the
+# same reason as the rest: a Truffle-era monorepo keeps one truffle config per app
+# (`apps/<app>/truffle-config.js`), and the app's node_modules remappings hang off it.
+BUILD_CONFIG_FILENAMES = (
+    "foundry.toml",
+    "hardhat.config.js",
+    "hardhat.config.ts",
+    "truffle-config.js",
+    "truffle.js",
+)
 
 
 def find_build_config_dir(contract_path: Path, root: Path) -> Path:
