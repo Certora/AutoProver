@@ -163,8 +163,9 @@ for a report.json it reads cold."""
 # A `Finding` records a violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) as an audit
 # issue: a ``title``, a ``severity``, and the ``content`` write-up, synthesized from the rule's
 # counterexample analysis and the properties/groups it breaks (see ``report/findings.py``). The field
-# set follows the "Submit Issue" body of the Sherlock Audit Engine API (POST /v1/engagements/{id}/issues)
-# so a finding maps cleanly onto a submission — but the source ``locations`` a submission needs
+# set follows the "Submit Issue" body of the Sherlock Audit Engine API — schema at
+# https://api-audit-engine.sherlock.xyz/v1/docs/public — so a finding maps cleanly onto a submission,
+# but the source ``locations`` a submission needs
 # (``{owner}/{repo}`` / file / line) are NOT produced here: a run knows only local paths and CVL-spec
 # lines, so the submission layer reconstructs locations from the engagement scope + the counterexample.
 # The report-time locator is on ``provenance`` (rule name, spec file, prover-run link).
@@ -232,7 +233,7 @@ class AutoProverReport(BaseModel):
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
     coverage: CoverageReport
-    #: Violated rules surfaced as Sherlock-``IssueIn``-shaped audit issues (one per BAD rule; empty
+    #: Violated rules surfaced as audit issues (one per BAD rule; empty
     #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose
     #: is synthesized at report time — see ``report/findings.py``.
     findings: list[Finding] = Field(default_factory=list)

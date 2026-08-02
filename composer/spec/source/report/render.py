@@ -45,7 +45,7 @@ _GROUP_KIND: dict[GroupStatus, str] = {
     GroupStatus.PARTIAL: "warn",
     GroupStatus.UNKNOWN: "muted",
 }
-# Finding severity (default Sherlock rubric) -> CSS badge kind. Unknown/custom severities render muted.
+# Finding severity -> CSS badge kind. Unknown severities render muted.
 _SEVERITY_KIND: dict[str, str] = {
     "critical": "bad",
     "high": "bad",
@@ -253,7 +253,7 @@ def _group_view(
 
 
 def _finding_view(f: Finding) -> FindingView:
-    """Project a `Finding` into the template shape: the Sherlock fields the page shows, plus a
+    """Project a `Finding` into the template shape: the finding fields the page shows, plus a
     severity->CSS kind and the prover-run link pulled from provenance."""
     prov = f.provenance
     return {

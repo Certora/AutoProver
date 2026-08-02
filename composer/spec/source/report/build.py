@@ -49,7 +49,7 @@ async def build_report[R: ReportableResult](
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
     When ``findings_llm`` is supplied, violated rules are additionally synthesized into
-    Sherlock-``IssueIn``-shaped `Finding`s (best-effort; a synthesis failure yields no findings
+    audit-issue `Finding`s (best-effort; a synthesis failure yields no findings
     rather than failing the report). ``fetch_evidence`` supplies each violation's captured
     counterexample analysis; it is optional."""
     properties, rules, skipped, gave_up, dropped = await collect(

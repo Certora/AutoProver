@@ -514,7 +514,7 @@ async def test_build_surfaces_skipped_and_gave_up_gaps(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# findings (violated rules -> Sherlock IssueIn shape)
+# findings (violated rules -> audit-issue findings)
 # ---------------------------------------------------------------------------
 
 class _FindingStubModel(BaseChatModel):
