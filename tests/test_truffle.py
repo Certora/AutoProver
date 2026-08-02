@@ -151,6 +151,7 @@ def test_nested_truffle_config_anchors_detection(tmp_path: Path) -> None:
     # contracts even though the run root is the repo root.
     app = tmp_path / "apps" / "voting"
     (app / "contracts").mkdir(parents=True)
+    (app / "build" / "contracts").mkdir(parents=True)
     (app / "truffle-config.js").write_text("module.exports = {};")
     contract = app / "contracts" / "Voting.sol"
     contract.write_text("contract Voting {}")

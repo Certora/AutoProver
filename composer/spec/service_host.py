@@ -24,10 +24,10 @@ autoprover pipeline always runs with ``sort="existing"``.
 """
 
 from typing import Literal, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langgraph.types import Checkpointer
-from graphcore.graph import Builder
+from graphcore.graph import Builder, TemplateLoader
 
 from langchain_core.language_models.chat_models import BaseChatModel as LLM
 from langchain_core.tools import BaseTool
@@ -54,6 +54,7 @@ class ModelProvider:
     heavy_model: CoreModelProvider
     lite_model: CoreModelProvider
     checkpointer: Checkpointer
+    _loader: TemplateLoader | None = field(default=None)
 
     def llm_heavy(
         self, *, cache_level: CacheLevel = CacheLevel.SHORT, disable_thinking: bool = False
@@ -83,10 +84,10 @@ class ModelProvider:
         return Builder[None, None, None]().with_llm(
             model.builder_for(cache_level=cache_level, disable_thinking=disable_thinking),
             max_prompt_tokens=model.max_prompt_tokens,
-        ).with_loader(load_jinja_template).with_checkpointer(self.checkpointer)
+        ).with_loader(self._loader or load_jinja_template).with_checkpointer(self.checkpointer)
 
 
-@dataclass
+@dataclass(frozen=True)
 class PureServiceHost:
     """``ServiceHost`` without source tools — the pre-stub natspec phase
     uses this directly. Call :meth:`bind_source_tools` once a usable
@@ -128,7 +129,7 @@ class PureServiceHost:
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class ServiceHost(PureServiceHost):
     """Concrete per-agent environment carrying both tool tuples and the
     workflow ``sort``. The single env type for all per-agent callsites —
