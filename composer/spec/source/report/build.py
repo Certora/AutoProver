@@ -99,9 +99,8 @@ async def build_report[R: ReportableResult](
     if findings_llm is not None:
         try:
             findings = await build_findings(
-                contract_name=contract_name, backend=backend, rules=rules,
-                properties=properties, groups=groups, fetch_evidence=fetch_evidence,
-                llm=findings_llm,
+                contract_name=contract_name, rules=rules, properties=properties, groups=groups,
+                fetch_evidence=fetch_evidence, llm=findings_llm,
             )
         except Exception as e:  # noqa: BLE001
             if RERAISE_REPORT_FAILURES:

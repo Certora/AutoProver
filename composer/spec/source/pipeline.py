@@ -46,7 +46,9 @@ from composer.spec.source.prover import get_prover_tool
 from composer.spec.source.author import batch_cvl_generation
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
-from composer.spec.source.report.collect import ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher
+from composer.spec.source.report.collect import (
+    EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
+)
 from composer.spec.source.report.schema import RuleName
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.task_ids import (
@@ -151,11 +153,15 @@ class ProverRunner(Formalizer[GeneratedCVL]):
         return await self._fetch(inp)
 
     @override
-    async def fetch_evidence(self, link: str | None, rule_name: str) -> RuleEvidence | None:
+    def findings_evidence(self) -> EvidenceFetcher | None:
+        # Prover runs capture per-rule counterexample analysis, so this backend opts into findings.
+        return self._fetch_evidence
+
+    async def _fetch_evidence(self, link: str | None, rule_name: str) -> RuleEvidence | None:
         # The run captured each violated rule's counterexample analysis as it happened; hand the
-        # final-iteration analysis to the report's findings synthesizer. None -> the finding degrades
-        # to property/group text.
-        rec = self._analysis_store.get(rule_name)
+        # final-iteration analysis to the findings synthesizer. None -> the finding degrades to
+        # property/group text.
+        rec = await self._analysis_store.get(rule_name)
         if rec is None:
             return None
         return RuleEvidence(analysis=rec.analysis, counterexample=rec.counterexample)

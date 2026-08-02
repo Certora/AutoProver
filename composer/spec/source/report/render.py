@@ -146,7 +146,9 @@ class FindingView(TypedDict):
     title: str
     severity: str
     severity_kind: str
-    severity_reasoning: str | None
+    impact_level: str | None
+    likelihood_level: str | None
+    risk_reasoning: str | None
     summary: str
     impact: str
     description: str
@@ -258,7 +260,9 @@ def _finding_view(f: Finding) -> FindingView:
         "title": f.title,
         "severity": f.severity,
         "severity_kind": _SEVERITY_KIND.get(f.severity.lower(), "muted"),
-        "severity_reasoning": prov.severity_reasoning if prov else None,
+        "impact_level": prov.impact if prov else None,
+        "likelihood_level": prov.likelihood if prov else None,
+        "risk_reasoning": prov.risk_reasoning if prov else None,
         "summary": f.content.summary,
         "impact": f.content.impact,
         "description": f.content.description,

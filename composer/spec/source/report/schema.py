@@ -160,48 +160,59 @@ for a report.json it reads cold."""
 # ---------------------------------------------------------------------------
 # Findings — violated rules surfaced as audit issues.
 #
-# `Finding` carries the Sherlock Audit Engine "Submit Issue" fields (schema ``IssueIn``,
-# POST /v1/engagements/{id}/issues) that a run can populate at report time: ``title``, ``severity``,
-# and the ``content`` prose. One finding is emitted per violated rule (a `RuleVerdict` with
-# ``outcome == Outcome.BAD``); its prose is synthesized from the rule's counterexample analysis and
-# the property/group it breaks (see ``report/findings.py``). Sherlock length caps are mirrored but
-# not enforced (report.json is lenient — the submission endpoint is the validating gate).
-#
-# ``IssueIn.locations`` is deliberately NOT carried here: a run only knows local paths and CVL-spec
-# lines, not the source ``{owner}/{repo}`` / file / line a Sherlock location needs, so the submission
-# layer reconstructs locations from the engagement scope + the counterexample. The accurate
-# report-time locator lives in ``provenance`` (rule name, spec file, prover-run link).
+# A `Finding` records a violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) as an audit
+# issue: a ``title``, a ``severity``, and the ``content`` write-up, synthesized from the rule's
+# counterexample analysis and the properties/groups it breaks (see ``report/findings.py``). The field
+# set follows the "Submit Issue" body of the Sherlock Audit Engine API (POST /v1/engagements/{id}/issues)
+# so a finding maps cleanly onto a submission — but the source ``locations`` a submission needs
+# (``{owner}/{repo}`` / file / line) are NOT produced here: a run knows only local paths and CVL-spec
+# lines, so the submission layer reconstructs locations from the engagement scope + the counterexample.
+# The report-time locator is on ``provenance`` (rule name, spec file, prover-run link).
 # ---------------------------------------------------------------------------
 
-class IssueContent(BaseModel):
-    """A finding's free-text sections — the ``IssueIn.content`` shape."""
-    summary: str = Field(max_length=2000, description="Short tl;dr of the finding, in one to three sentences.")
-    description: str = Field(max_length=50000, description="Full technical description of the vulnerability and how it manifests.")
-    impact: str = Field(max_length=20000, description="Concrete consequence if exploited (funds at risk, DoS, data exposure, ...).")
-    attack_path: str | None = Field(default=None, max_length=20000, description="Step-by-step exploit path, if applicable.")
-    assumptions_and_uncertainties: str | None = Field(default=None, max_length=10000, description="Assumptions relied on and anything the submitter is unsure about.")
-    proof_of_concept: str | None = Field(default=None, max_length=65536, description="Executable PoC, or the prover counterexample demonstrating the issue.")
-    references: list[str] | None = Field(default=None, description="Supporting links (e.g. the prover run).")
+type SeverityTier = Literal["critical", "high", "medium", "low", "informational"]
+type ImpactLevel = Literal["high", "medium", "low", "none"]
+"""Impact axis. ``none`` marks a property break with no real-world consequence (a specification or
+code-quality observation); it resolves to ``informational`` severity."""
+type LikelihoodLevel = Literal["high", "medium", "low"]
+
+
+class AuthoredContent(BaseModel):
+    """The written sections of a finding. These are what the findings LLM produces, so the field
+    descriptions double as its instructions."""
+    summary: str = Field(description="A one to three sentence summary of the finding.")
+    description: str = Field(description="The full technical explanation of the vulnerability and how it manifests, grounded in the counterexample.")
+    impact: str = Field(description="The concrete consequence if the issue is exploited — funds at risk, denial of service, data exposure, and so on.")
+    attack_path: str | None = Field(default=None, description="The step-by-step path from the counterexample that triggers the issue, when one applies.")
+    assumptions_and_uncertainties: str | None = Field(default=None, description="Assumptions the finding relies on, and anything you are uncertain about.")
+
+
+class IssueContent(AuthoredContent):
+    """A finding's ``content``: the authored sections plus the evidence the report attaches."""
+    proof_of_concept: str | None = None
+    references: list[str] | None = None
 
 
 class FindingProvenance(BaseModel):
-    """Report-only trace from a finding back to the verdict/property that produced it. NOT part of
-    the Sherlock ``IssueIn`` payload — a submitter drops it."""
+    """Report-only trace from a finding back to the verdict that produced it (not part of a
+    submission payload)."""
     rule_name: RuleName
     spec_file: str
     outcome: Outcome
-    group_slug: str | None = None
+    group_slugs: list[str] = Field(default_factory=list)
     prover_link: str | None = None
-    #: The finding-synthesis LLM's justification for the assigned severity (Impact × Likelihood).
-    severity_reasoning: str | None = None
+    impact: ImpactLevel | None = None
+    likelihood: LikelihoodLevel | None = None
+    #: The findings LLM's justification for the assessed impact and likelihood.
+    risk_reasoning: str | None = None
 
 
 class Finding(BaseModel):
-    """A violated rule rendered as an audit issue. ``title``/``severity``/``content`` are the Sherlock
-    ``IssueIn`` fields a run can fill at report time; ``provenance`` is report-only. ``IssueIn.locations``
-    is added by the submission layer (see the module comment), not stored here."""
-    title: str = Field(max_length=200, description="One-line title of the finding.")
-    severity: str = Field(description="Severity tier. Default rubric: critical / high / medium / low / informational.")
+    """A violated rule rendered as an audit issue. ``severity`` is computed from the assessed impact
+    and likelihood (both recorded on ``provenance``); ``content`` holds the write-up. Source
+    ``locations`` are added by the submission layer, not stored here."""
+    title: str
+    severity: SeverityTier
     content: IssueContent
     provenance: FindingProvenance | None = None
 

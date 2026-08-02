@@ -146,7 +146,8 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             backend = ProverBackend(
                 ProverArtifactStore(staged.source.project_root, staged.source.contract_name),
                 make_prover_options(cloud=args.cloud),
-                CexAnalysisStore(),
+                # Same BaseStore the run/report phase use; per-run namespace since keys are rule names.
+                CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
             return await cont(source_env, backend)
     yield callback

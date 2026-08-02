@@ -1,19 +1,24 @@
 Contract: {{ contract_name }}
 
 Violated rule: {{ rule_name }}
-{% if property_description -%}
-Property it formalizes ({{ property_sort }}): {{ property_title }}
-    {{ property_description }}
+
+{% if properties -%}
+Properties this rule formalizes (the counterexample breaks at least one of them — determine which):
+{% for p in properties %}
+  - ({{ p.sort }}) {{ p.title }}: {{ p.description }}
+{%- endfor %}
 {% endif -%}
-{% if group_title -%}
-Audit-level claim it belongs to: {{ group_title }}
-    {{ group_description }}
+{% if groups -%}
+Audit-level claim(s) it belongs to:
+{% for g in groups %}
+  - {{ g.title }}: {{ g.description }}
+{%- endfor %}
 {% endif %}
 {% if analysis -%}
 The prover's counterexample analysis (root cause + suggested fix), produced during the run:
 {{ analysis }}
 {%- else -%}
-(No counterexample analysis was captured for this rule — reason conservatively from the property.)
+(No counterexample analysis was captured for this rule — reason conservatively from the properties.)
 {%- endif %}
 {% if counterexample %}
 Counterexample trace:

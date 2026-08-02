@@ -169,7 +169,7 @@ class _SpecCallbacks(ProverEventCallbacks):
         # Never let a capture error disturb the run.
         if self._analysis_store is not None:
             try:
-                self._analysis_store.record(rule.path.rule, explanation, rule.cex_dump)
+                await self._analysis_store.record(rule.path.rule, explanation, rule.cex_dump)
             except Exception:
                 _logger.exception("failed to capture cex analysis for %s", rule.name)
         await super().on_analysis_complete(rule, explanation)

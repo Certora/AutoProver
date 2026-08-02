@@ -3,48 +3,31 @@ report. A formal-verification rule was VIOLATED: the Certora Prover found a conc
 refuting a property the code was expected to satisfy. A violation is hard evidence the property does
 not hold, so treat this as a real, confirmed issue — not a maybe.
 
-You are given the violated rule, the natural-language property it formalizes, the audit-level claim
-(group) it belongs to, the prover's own root-cause analysis of the counterexample, and — when
-available — the counterexample trace itself.
+You are given the violated rule, the natural-language properties it formalizes, the audit-level
+claim(s) it belongs to, the prover's own root-cause analysis of the counterexample, and — when
+available — the counterexample trace. A single rule may jointly formalize several properties, but the
+counterexample violates one specific behavior: ground the write-up in what the counterexample actually
+shows, and address the property it truly breaks rather than assuming a particular one.
 
-Write the finding as these fields:
-  - title: one line (<= 200 chars), specific to THIS issue — name the broken guarantee, not the rule.
-  - severity: exactly one of `critical`, `high`, `medium`, `low`, `informational`, assigned via the
-    Impact × Likelihood matrix in the SEVERITY CLASSIFICATION section below.
-  - severity_reasoning: 1-3 sentences justifying the severity — state the Impact tier and the
-    Likelihood tier you assessed and the matrix cell they select.
-  - summary: a 1-3 sentence tl;dr.
-  - description: the full technical explanation of the vulnerability and how it manifests, grounded
-    in the supplied analysis and counterexample.
-  - impact: the concrete consequence if exploited.
-  - attack_path: the step-by-step path derived from the counterexample, or null if not applicable.
-  - assumptions_and_uncertainties: anything the finding relies on or you are unsure about, or null.
-
-SEVERITY CLASSIFICATION
-Assess two axes independently, then read the severity off the matrix — do not eyeball it.
+You assess two axes; the report computes the severity from them, so judge each on its own merits.
 
 Impact — what an attacker gains or users lose when the property break is exploited:
-  - High:   direct loss or theft of funds, protocol insolvency, permanent freezing of assets, or
+  - high:   direct loss or theft of funds, protocol insolvency, permanently frozen assets, or
             unauthorized control of privileged functionality.
-  - Medium: limited, conditional, or recoverable value loss; temporary denial of service; incorrect
+  - medium: limited, conditional, or recoverable value loss; temporary denial of service; incorrect
             accounting that does not by itself drain funds.
-  - Low:    no funds at risk; a minor or cosmetic deviation from the intended guarantee.
+  - low:    no funds at risk; a minor deviation from the intended guarantee.
+  - none:   no real-world exploit path at all — a specification or code-quality observation.
 
 Likelihood — how reachable the counterexample is in practice:
-  - High:   exploitable by any actor with no special preconditions or privileged access.
-  - Medium: needs a specific but reachable state, ordering, or non-trivial-yet-feasible setup.
-  - Low:    needs privileged access, an unusual configuration, or a narrow / costly window.
+  - high:   exploitable by any actor with no special preconditions or privileged access.
+  - medium: needs a specific but reachable state, ordering, or non-trivial-yet-feasible setup.
+  - low:    needs privileged access, an unusual configuration, or a narrow / costly window.
 
-  | Likelihood \ Impact | High     | Medium | Low    |
-  | High                | critical | high   | medium |
-  | Medium              | high     | medium | low    |
-  | Low                 | medium   | low    | low    |
+A prover counterexample proves the property CAN be broken, so do not rate a genuine break as impact
+'none' merely because it looks hard to reach — lower the Likelihood instead. Reserve impact 'none' for
+a break with no real-world consequence.
 
-Use `informational` ONLY for a property break with no real-world exploit path — a code-quality or
-specification observation, not a vulnerability. A prover counterexample proves the property CAN be
-broken, so never downgrade a genuine break to `informational` just because it looks hard to reach;
-instead lower the Likelihood tier and let the matrix decide.
-
-Ground every claim in the supplied analysis and counterexample. Do NOT invent addresses, values,
+Ground every claim in the supplied analysis and counterexample. Do not invent addresses, values,
 function names, or exploit steps beyond what the material supports; if the material is thin, keep the
-finding modest rather than fabricating specifics. Return output exactly matching the requested schema.
+finding modest rather than fabricating specifics.

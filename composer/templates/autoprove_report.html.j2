@@ -313,7 +313,7 @@ footer.report-foot {
   </div>
   <p class="finding-summary">{{ f.summary }}</p>
   <dl class="finding-body">
-    {%- if f.severity_reasoning %}<dt>Severity rationale</dt><dd>{{ f.severity_reasoning }}</dd>{% endif %}
+    {%- if f.risk_reasoning %}<dt>Severity rationale</dt><dd>{% if f.impact_level %}Impact {{ f.impact_level }} &times; Likelihood {{ f.likelihood_level }} &mdash; {% endif %}{{ f.risk_reasoning }}</dd>{% endif %}
     <dt>Impact</dt><dd>{{ f.impact }}</dd>
     <dt>Description</dt><dd>{{ f.description }}</dd>
     {%- if f.attack_path %}<dt>Attack path</dt><dd>{{ f.attack_path }}</dd>{% endif %}

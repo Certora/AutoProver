@@ -36,7 +36,7 @@ from composer.spec.prop_inference import run_property_inference
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportComponentInput, RuleEvidence, Verdict
+from composer.spec.source.report.collect import EvidenceFetcher, ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName, ReportBackend
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
@@ -77,9 +77,10 @@ class Formalizer[FormT: BackendResult](ABC):
         off-thread. Foundry: read straight off inp.formalized.result."""
         ...
 
-    async def fetch_evidence(self, link: str | None, rule_name: str) -> RuleEvidence | None:
-        """Per-violated-rule evidence for findings synthesis — the prover returns its captured
-        counterexample analysis for `rule_name`. Default: none (backend produces no findings)."""
+    def findings_evidence(self) -> EvidenceFetcher | None:
+        """The per-rule evidence source for findings synthesis, or None if this backend produces no
+        findings. Returning None is how a backend opts out — the report then builds no findings for
+        it, with no backend-specific branching in the report layer. Default: None."""
         return None
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT]], run: PipelineRun) -> None:
@@ -245,7 +246,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
                 findings_llm=run.env.llm_heavy(),
-                fetch_evidence=formalizer.fetch_evidence,
+                fetch_evidence=formalizer.findings_evidence(),
             ),
             task_info=TaskInfo(REPORT_TASK_ID, label="Report Extraction", phase=backend.core_phases["report"])
         )
