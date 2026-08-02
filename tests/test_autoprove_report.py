@@ -10,7 +10,7 @@ still runs), and inputs are in-memory `GeneratedCVL` (or `None` for a give-up/cr
 which is how a caller hands a gap to the report layer).
 """
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 import pathlib
 
 import pytest
@@ -119,22 +119,21 @@ def _pg(slug, members, status=GroupStatus.GOOD) -> PropertyGroup:
     return PropertyGroup(slug=slug, title="T", description="d", status=status, members=members)
 
 
-class _GroupingStubModel(BaseChatModel):
-    """A `BaseChatModel` whose structured-output binding returns a preset `GroupingResult`.
-    Lets the build tests drive the *real* `call_grouping_llm` — template rendering + the
-    `isinstance` check — without a live model, only stubbing the model's output."""
-    result: GroupingResult
+class _StructuredStubModel(BaseChatModel):
+    """A `BaseChatModel` whose structured-output binding returns a preset object, so tests drive the
+    real caller (template rendering + the `isinstance` check) without a live model."""
+    output: Any
 
     def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
-        result = self.result
-        return RunnableLambda(lambda _messages: result)
+        out = self.output
+        return RunnableLambda(lambda _messages: out)
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
         raise NotImplementedError("stub is structured-output only")
 
     @property
     def _llm_type(self) -> str:
-        return "grouping-stub"
+        return "structured-stub"
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +455,7 @@ def test_artifact_store_write_report_round_trips(tmp_path):
 async def test_build_groups_properties(tmp_path):
     gen = _gen({"p1": ["r1"], "p2": ["r2"]})
     fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED), _fake_check("r2", NodeStatus.VERIFIED)]})
-    llm = _GroupingStubModel(result=GroupingResult(groups=[PropertyGroupDraft(
+    llm = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="d", members=[("C", "p1"), ("C", "p2")])]))
 
     report = await build.build_report(
@@ -475,7 +474,7 @@ async def test_build_groups_properties(tmp_path):
 async def test_build_empty_grouping_falls_back(tmp_path):
     gen = _gen({"p1": ["r1"], "p2": ["r2"]})
     fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED), _fake_check("r2", NodeStatus.VIOLATED)]})
-    llm = _GroupingStubModel(result=GroupingResult(groups=[]))  # empty grouping -> fallback
+    llm = _StructuredStubModel(output=GroupingResult(groups=[]))  # empty grouping -> fallback
 
     report = await build.build_report(
         contract_name="C",
@@ -495,7 +494,7 @@ async def test_build_empty_grouping_falls_back(tmp_path):
 async def test_build_surfaces_skipped_and_gave_up_gaps(tmp_path):
     gen = _gen({"p_ok": ["r1"]}, skipped={"p_skip": "needs a ghost"})
     fetch = _fetcher({"L1": [_fake_check("r1", NodeStatus.VERIFIED)]})
-    llm = _GroupingStubModel(result=GroupingResult(groups=[PropertyGroupDraft(
+    llm = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="d", members=[("C", "p_ok")])]))
 
     report = await build.build_report(
@@ -517,22 +516,6 @@ async def test_build_surfaces_skipped_and_gave_up_gaps(tmp_path):
 # findings (violated rules -> audit-issue findings)
 # ---------------------------------------------------------------------------
 
-class _FindingStubModel(BaseChatModel):
-    """A `BaseChatModel` whose structured-output binding returns a preset `FindingDraft`, so the
-    real `build_findings` (templates + compose) runs without a live model."""
-    draft: FindingDraft
-
-    def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
-        draft = self.draft
-        return RunnableLambda(lambda _messages: draft)
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-        raise NotImplementedError("stub is structured-output only")
-
-    @property
-    def _llm_type(self) -> str:
-        return "finding-stub"
-
 
 def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLevel = "medium",
            title: str = "Reentrancy drains vault") -> FindingDraft:
@@ -544,7 +527,7 @@ def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLe
 
 
 def _evidence(by_rule: dict[str, RuleEvidence]):
-    async def fetch(link, rule_name):
+    async def fetch(rule_name):
         return by_rule.get(rule_name)
     return fetch
 
@@ -553,6 +536,7 @@ def _finding(severity: SeverityTier = "high") -> Finding:
     return Finding(
         title="Reentrancy drains vault", severity=severity,
         content=IssueContent(summary="s", description="d", impact="funds at risk",
+                             assumptions_and_uncertainties="assumes attacker deploys a contract",
                              proof_of_concept="<cex/>"),
         provenance=FindingProvenance(rule_name="r_bad", spec_file="c.spec", outcome=Outcome.BAD,
                                      group_slugs=["g"], prover_link="https://prover.example/run/abc",
@@ -585,7 +569,7 @@ async def test_build_report_synthesizes_one_finding_per_violation():
         _fake_check("r_ok", NodeStatus.VERIFIED, file="autospec_C.spec"),
         _fake_check("r_bad", NodeStatus.VIOLATED, line=42, file="autospec_C.spec"),
     ]})
-    grouping = _GroupingStubModel(result=GroupingResult(groups=[PropertyGroupDraft(
+    grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="gd", members=[("C", "p_good"), ("C", "p_bad")])]))
     evidence = _evidence({"r_bad": RuleEvidence(analysis="root cause X", counterexample="<cex/>")})
 
@@ -594,7 +578,7 @@ async def test_build_report_synthesizes_one_finding_per_violation():
         components=[_input("C", "autospec_C.spec",
                            [_prop("p_good", "d"), _prop("p_bad", "d")], gen)],
         llm=grouping, fetch_verdicts=fetch,
-        findings_llm=_FindingStubModel(draft=_draft()), fetch_evidence=evidence,
+        findings_llm=_StructuredStubModel(output=_draft()), fetch_evidence=evidence,
     )
 
     assert len(report.findings) == 1
@@ -616,7 +600,7 @@ async def test_build_report_no_findings_without_findings_llm():
     """The findings pass is opt-in: omitting ``findings_llm`` leaves findings empty (back-compat)."""
     gen = _gen({"p_bad": ["r_bad"]})
     fetch = _fetcher({"L1": [_fake_check("r_bad", NodeStatus.VIOLATED)]})
-    grouping = _GroupingStubModel(result=GroupingResult(groups=[PropertyGroupDraft(
+    grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="d", members=[("C", "p_bad")])]))
     report = await build.build_report(
         contract_name="C", backend="prover",
@@ -636,7 +620,7 @@ async def test_build_findings_degrades_without_analysis():
     findings = await build_findings(
         contract_name="Vault", rules=rules, properties=props, groups=groups,
         fetch_evidence=_evidence({}),  # fetcher present, but no evidence recorded for r_bad
-        llm=_FindingStubModel(draft=_draft(impact_level="medium", likelihood_level="medium")),
+        llm=_StructuredStubModel(output=_draft(impact_level="medium", likelihood_level="medium")),
     )
     assert len(findings) == 1
     assert findings[0].severity == "medium"               # medium × medium
@@ -652,7 +636,7 @@ async def test_build_findings_empty_without_evidence_fetcher():
     rules = [_rv("c.spec", "r_bad", Outcome.BAD)]
     findings = await build_findings(
         contract_name="V", rules=rules, properties=[], groups=[],
-        fetch_evidence=None, llm=_FindingStubModel(draft=_draft()),
+        fetch_evidence=None, llm=_StructuredStubModel(output=_draft()),
     )
     assert findings == []
 
@@ -681,6 +665,7 @@ def test_render_html_findings_section():
     assert "r_bad" in h and "c.spec" in h         # provenance locator (rule in spec file)
     assert "Severity rationale" in h
     assert "Impact high" in h and "Likelihood medium" in h
+    assert "Assumptions" in h and "assumes attacker deploys a contract" in h
 
 
 def test_render_html_omits_findings_section_when_empty():
@@ -709,7 +694,7 @@ def test_report_round_trips_with_findings(tmp_path):
 @pytest.mark.asyncio
 async def test_spec_callbacks_captures_cex_analysis():
     """The source-pipeline prover callback records each violated rule's analysis into the run-scoped
-    store (under both the bare and pretty-printed rule name) while still emitting the stream event."""
+    store, keyed by the bare rule name, while still emitting the stream event."""
     from langgraph.store.memory import InMemoryStore
     from composer.spec.source.prover import _SpecCallbacks
     from composer.prover.ptypes import RulePath, RuleResult

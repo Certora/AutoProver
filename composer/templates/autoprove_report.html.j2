@@ -317,6 +317,7 @@ footer.report-foot {
     <dt>Impact</dt><dd>{{ f.impact }}</dd>
     <dt>Description</dt><dd>{{ f.description }}</dd>
     {%- if f.attack_path %}<dt>Attack path</dt><dd>{{ f.attack_path }}</dd>{% endif %}
+    {%- if f.assumptions_and_uncertainties %}<dt>Assumptions &amp; uncertainties</dt><dd>{{ f.assumptions_and_uncertainties }}</dd>{% endif %}
   </dl>
 </section>
 {%- endfor %}

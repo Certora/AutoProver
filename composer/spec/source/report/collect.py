@@ -114,9 +114,9 @@ class RuleEvidence:
 
 
 class EvidenceFetcher(Protocol):
-    """Backend hook: given a violated rule's run link + name, return its `RuleEvidence`, or ``None``
-    when the backend has no evidence for that rule. Prover reads the run-scoped CEX-analysis capture."""
-    async def __call__(self, link: str | None, rule_name: str, /) -> RuleEvidence | None:
+    """Backend hook: given a violated rule's name, return its `RuleEvidence`, or ``None`` when the
+    backend has no evidence for that rule. Prover reads the run-scoped CEX-analysis capture."""
+    async def __call__(self, rule_name: str, /) -> RuleEvidence | None:
         ...
 
 

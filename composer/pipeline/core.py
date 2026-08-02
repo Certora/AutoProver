@@ -240,13 +240,15 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         )
         for o in outcomes
     ] + formalizer.extra_report_inputs()
+    findings_evidence = formalizer.findings_evidence()
     try:
         report = await run.runner(
             job=lambda: build_report(
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
-                findings_llm=run.env.llm_heavy(),
-                fetch_evidence=formalizer.findings_evidence(),
+                # Findings only when the backend supplies evidence — skip the heavy model otherwise.
+                findings_llm=run.env.llm_heavy() if findings_evidence else None,
+                fetch_evidence=findings_evidence,
             ),
             task_info=TaskInfo(REPORT_TASK_ID, label="Report Extraction", phase=backend.core_phases["report"])
         )

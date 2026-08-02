@@ -9,7 +9,6 @@ finding is best-effort, so a synthesis failure drops that one finding rather tha
 """
 import asyncio
 import logging
-from typing import Iterable
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -23,6 +22,11 @@ from composer.spec.source.report.schema import (
 )
 
 _log = logging.getLogger(__name__)
+
+#: Cap on concurrent findings-synthesis LLM calls (one per violated rule), so a violation-heavy run
+#: doesn't burst dozens of heavy-model requests at once (which rate limits would turn into dropped
+#: findings).
+_MAX_CONCURRENT_FINDING_CALLS = 8
 
 # Impact × Likelihood -> severity. ``none`` impact (no real-world exploit path) is informational,
 # handled in `severity_for` rather than the table. Low impact caps at ``low`` regardless of likelihood:
@@ -95,12 +99,13 @@ async def build_findings(
 
     async def _one(rule: RuleVerdict) -> Finding | None:
         try:
-            ev = await fetch_evidence(rule.prover_link, rule.name)
+            ev = await fetch_evidence(rule.name)
             # Every rule in the report is referenced by >=1 property (collect drops orphans), so pass
             # ALL of them: the rule may jointly formalize several, and only the counterexample says
             # which one actually broke — that is the LLM's job, not ours to pre-guess.
             props = props_by_ref.get(rule.ref, [])
-            rule_groups = _distinct_groups(group_by_key.get(p.key) for p in props)
+            # A rule's properties may share a group (some may be in none); dedupe by slug, first-seen order.
+            rule_groups = list({g.slug: g for p in props if (g := group_by_key.get(p.key)) is not None}.values())
             user = load_jinja_template(
                 "autoprove_report_findings_prompt.j2",
                 contract_name=contract_name,
@@ -117,20 +122,14 @@ async def build_findings(
             _log.warning("report: finding synthesis failed for rule %r; skipping", rule.name, exc_info=True)
             return None
 
-    findings = await asyncio.gather(*[_one(r) for r in bad])
+    sem = asyncio.Semaphore(_MAX_CONCURRENT_FINDING_CALLS)
+
+    async def _bounded(rule: RuleVerdict) -> Finding | None:
+        async with sem:
+            return await _one(rule)
+
+    findings = await asyncio.gather(*[_bounded(r) for r in bad])
     return [f for f in findings if f is not None]
-
-
-def _distinct_groups(groups: Iterable[PropertyGroup | None]) -> list[PropertyGroup]:
-    """Dedupe a rule's groups by slug, preserving encounter order (several of a rule's properties can
-    live in the same group; some properties may be in none)."""
-    seen: set[str] = set()
-    out: list[PropertyGroup] = []
-    for g in groups:
-        if g is not None and g.slug not in seen:
-            seen.add(g.slug)
-            out.append(g)
-    return out
 
 
 def _compose(

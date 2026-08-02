@@ -157,7 +157,7 @@ class ProverRunner(Formalizer[GeneratedCVL]):
         # Prover runs capture per-rule counterexample analysis, so this backend opts into findings.
         return self._fetch_evidence
 
-    async def _fetch_evidence(self, link: str | None, rule_name: str) -> RuleEvidence | None:
+    async def _fetch_evidence(self, rule_name: str) -> RuleEvidence | None:
         # The run captured each violated rule's counterexample analysis as it happened; hand the
         # final-iteration analysis to the findings synthesizer. None -> the finding degrades to
         # property/group text.

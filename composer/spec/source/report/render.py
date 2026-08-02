@@ -153,6 +153,7 @@ class FindingView(TypedDict):
     impact: str
     description: str
     attack_path: str | None
+    assumptions_and_uncertainties: str | None
     link: LinkView
     rule_name: str | None
     spec_file: str | None
@@ -259,7 +260,7 @@ def _finding_view(f: Finding) -> FindingView:
     return {
         "title": f.title,
         "severity": f.severity,
-        "severity_kind": _SEVERITY_KIND.get(f.severity.lower(), "muted"),
+        "severity_kind": _SEVERITY_KIND.get(f.severity, "muted"),
         "impact_level": prov.impact if prov else None,
         "likelihood_level": prov.likelihood if prov else None,
         "risk_reasoning": prov.risk_reasoning if prov else None,
@@ -267,6 +268,7 @@ def _finding_view(f: Finding) -> FindingView:
         "impact": f.content.impact,
         "description": f.content.description,
         "attack_path": f.content.attack_path,
+        "assumptions_and_uncertainties": f.content.assumptions_and_uncertainties,
         "link": _link_view(prov.prover_link if prov else None),
         "rule_name": prov.rule_name if prov else None,
         "spec_file": prov.spec_file if prov else None,
