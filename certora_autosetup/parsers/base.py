@@ -52,9 +52,8 @@ class ContractExtractor(ABC):
     def project_source_files(self) -> Set[str]:
         """Normalized set of project-local Solidity source paths (excludes
         dependencies, tests, scripts, and certora/ directories)."""
-        # Scanned from the project dir, not the CWD: the artifact paths these are
-        # matched against are project-relative, so scanning elsewhere yields two
-        # different spellings of the same file and nothing intersects.
+        # Scanned from the project dir: these are matched against artifact paths, which
+        # the build system records project-relative, so both sides need the same anchor.
         return {
             str(Path(p)) for p in find_all_solidity_files(
                 include_test_files=False,

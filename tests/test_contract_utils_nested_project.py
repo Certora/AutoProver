@@ -1,17 +1,8 @@
-"""Scene detection must anchor on the contract, not on the process CWD.
+"""Scene detection anchors on the contract, not on the process CWD.
 
-Regression origin: running autosetup from the root of a repo whose Foundry project sits
-one directory down died before the pipeline even started —
-
-    File "certora_autosetup/autosetup/cli.py", line 70, in main
-      contract_handles = auto_detect_contracts(
-    File "certora_autosetup/utils/contract_utils.py", line 98
-    ValueError: No build system detected (Foundry or Hardhat).
-                Expected foundry.toml or hardhat.config.{js,ts}
-
-This is a second, earlier detection site than the one in ``Autosetup.setup_build_system_config``:
-it populates the scene, so it runs before ``Autosetup.run()`` is ever entered. Which of the two
-fires depends on how autosetup is invoked — passing an explicit contract list skips this one.
+``cli.main`` resolves the scene before the pipeline starts, so these cover a repo whose
+Foundry project sits below the directory autosetup was invoked from: detection has to find
+that project, and the handles it returns have to come back in the caller's frame.
 """
 
 from pathlib import Path

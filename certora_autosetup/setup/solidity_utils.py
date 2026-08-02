@@ -63,9 +63,8 @@ def find_all_solidity_files(
         verbose: Whether to log verbose output
         log_func: Optional logging function to use (defaults to print)
         root: Directory to scan, and the anchor the returned paths are relative to.
-            Defaults to the CWD. Pass the build system's project dir when it differs,
-            so the paths line up with the project-relative ones the build artifacts
-            record — otherwise nothing matches and the project looks contract-less.
+            Defaults to the CWD. Pass the build system's project dir to get paths in
+            the same frame as the project-relative ones recorded in build artifacts.
 
     Returns:
         List of Solidity file paths

@@ -1,10 +1,8 @@
 """Tests for locating the build-config directory that owns the contract under analysis.
 
-Regression origin: a monorepo whose Foundry project sat one level down
-(``<pkg>/foundry.toml``) was run from the repo root, where nothing but a root
-``package.json`` existed. Build-system detection reported ``unknown``, the packages list
-was built from that root package.json alone, and solc failed with
-``Source "@pkg/Foo.sol" not found ... Searched the following locations: ""``.
+The interesting layout is a monorepo run from the repo root: the Foundry project sits at
+``<pkg>/foundry.toml`` and the root holds only a ``package.json``, so the owning directory
+has to be found by walking up from the contract rather than by looking where the run began.
 """
 
 from pathlib import Path
@@ -17,11 +15,12 @@ from certora_autosetup.utils.project_dir import (
 
 
 def test_finds_nested_foundry_project(tmp_path: Path) -> None:
-    # The shape that broke: build config one level down, only a package.json at the root.
+    # Build config one level down, only a package.json at the root.
     (tmp_path / "package.json").write_text('{"dependencies": {"ethers": "^6"}}')
     project = tmp_path / "sub"
     (project / "src").mkdir(parents=True)
     (project / "foundry.toml").write_text('[profile.default]\nremappings = ["@pkg/=node_modules/@pkg/"]\n')
+    (project / "out").mkdir()
     contract = project / "src" / "Widget.sol"
     contract.write_text("contract Widget {}")
 
@@ -32,6 +31,7 @@ def test_accepts_a_contract_path_relative_to_root(tmp_path: Path) -> None:
     # Contract handles carry root-relative paths, which is how autosetup calls this.
     project = tmp_path / "sub"
     (project / "src").mkdir(parents=True)
+    (project / "out").mkdir()
     (project / "foundry.toml").write_text("[profile.default]\n")
     (project / "src" / "Widget.sol").write_text("contract Widget {}")
 
@@ -40,6 +40,7 @@ def test_accepts_a_contract_path_relative_to_root(tmp_path: Path) -> None:
 
 def test_root_level_project_resolves_to_root(tmp_path: Path) -> None:
     (tmp_path / "foundry.toml").write_text("[profile.default]\n")
+    (tmp_path / "out").mkdir()
     (tmp_path / "src").mkdir()
     contract = tmp_path / "src" / "Token.sol"
     contract.write_text("contract Token {}")
@@ -55,12 +56,52 @@ def test_no_build_config_anywhere_falls_back_to_root(tmp_path: Path) -> None:
     assert find_build_config_dir(contract, tmp_path) == tmp_path.resolve()
 
 
-def test_nearest_ancestor_wins_over_an_outer_one(tmp_path: Path) -> None:
-    # A monorepo may carry a root foundry.toml too; the sub-project's own config governs.
+def test_nearest_built_ancestor_wins_over_an_outer_one(tmp_path: Path) -> None:
+    # Both carry a config, both were built: the sub-project's own config governs.
     (tmp_path / "foundry.toml").write_text("[profile.default]\n")
+    (tmp_path / "out").mkdir()
     project = tmp_path / "packages" / "sub"
     (project / "src").mkdir(parents=True)
+    (project / "out").mkdir()
     (project / "foundry.toml").write_text("[profile.default]\n")
+    contract = project / "src" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+
+    assert find_build_config_dir(contract, tmp_path) == project.resolve()
+
+
+def test_unbuilt_inner_config_yields_to_the_built_root(tmp_path: Path) -> None:
+    # The Maple shape, and the regression this rule exists to prevent: a vendored
+    # per-package foundry.toml under modules/ that the root build never writes into.
+    # Anchoring there points the extractor at a modules/pool/out that does not exist.
+    (tmp_path / "foundry.toml").write_text("[profile.default]\n")
+    (tmp_path / "out").mkdir()
+    project = tmp_path / "modules" / "pool"
+    (project / "src").mkdir(parents=True)
+    (project / "foundry.toml").write_text("[profile.default]\n")
+    contract = project / "src" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+
+    assert find_build_config_dir(contract, tmp_path) == tmp_path.resolve()
+
+
+def test_no_artifacts_anywhere_falls_back_to_root(tmp_path: Path) -> None:
+    # Nothing was built, so there is no evidence for any nested project: stay at root,
+    # which is exactly where the pre-existing behaviour anchored.
+    project = tmp_path / "lib" / "dependency"
+    (project / "src").mkdir(parents=True)
+    (project / "foundry.toml").write_text("[profile.default]\n")
+    contract = project / "src" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+
+    assert find_build_config_dir(contract, tmp_path) == tmp_path.resolve()
+
+
+def test_honors_a_custom_foundry_out_dir(tmp_path: Path) -> None:
+    project = tmp_path / "sub"
+    (project / "src").mkdir(parents=True)
+    (project / "artefacts").mkdir()
+    (project / "foundry.toml").write_text('[profile.default]\nout = "artefacts"\n')
     contract = project / "src" / "Widget.sol"
     contract.write_text("contract Widget {}")
 
@@ -70,6 +111,7 @@ def test_nearest_ancestor_wins_over_an_outer_one(tmp_path: Path) -> None:
 def test_hardhat_config_also_anchors(tmp_path: Path) -> None:
     project = tmp_path / "app"
     (project / "contracts").mkdir(parents=True)
+    (project / "artifacts").mkdir()
     (project / "hardhat.config.ts").write_text("export default {};")
     contract = project / "contracts" / "Vault.sol"
     contract.write_text("contract Vault {}")
@@ -84,6 +126,7 @@ def test_walk_stops_at_root(tmp_path: Path) -> None:
     root = outer / "repo"
     (root / "src").mkdir(parents=True)
     (outer / "foundry.toml").write_text("[profile.default]\n")
+    (outer / "out").mkdir()
     contract = root / "src" / "Token.sol"
     contract.write_text("contract Token {}")
 
@@ -96,6 +139,7 @@ def test_contract_outside_root_returns_root(tmp_path: Path) -> None:
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "foundry.toml").write_text("[profile.default]\n")
+    (elsewhere / "out").mkdir()
     contract = elsewhere / "Stray.sol"
     contract.write_text("contract Stray {}")
 
