@@ -47,6 +47,12 @@
     "template_name": "property_analysis_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.prop_inference:property_analysis_system_template": {
+    "module": "composer.spec.prop_inference",
+    "qualname": "property_analysis_system_template",
+    "template_name": "property_analysis_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.source.author:_PropertyGenTemplate": {
     "module": "composer.spec.source.author",
     "qualname": "_PropertyGenTemplate",
