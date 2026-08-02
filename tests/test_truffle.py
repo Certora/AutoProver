@@ -1,9 +1,9 @@
 """Tests for Truffle build-system support.
 
-Regression origin: Truffle-era repos (0.4.x/0.5.x, some of them monorepos) ship only a
-`truffle-config.js` / `truffle.js`. Detection reported `unknown`, so the run lost the
-project's pinned solc and — worse — emitted no packages list, leaving every
-`@scope/pkg/contracts/...` import unresolvable.
+Covers the shapes Truffle-era repos (0.4.x/0.5.x) actually ship: both config names,
+`truffle-config.js` and Truffle v4's `truffle.js`; the pinned compiler settings read out of
+them; and the `@scope/pkg/contracts/...` package roots those projects import through, which
+in a monorepo hang off one config per app.
 """
 
 import json

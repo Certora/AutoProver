@@ -3,9 +3,9 @@
 Truffle Manager - Manages Truffle project configuration and artifacts.
 
 Parallel to FoundryManager/HardhatManager. Truffle predates both and is still what many
-0.4.x/0.5.x projects ship (`truffle-config.js`, or `truffle.js` on Truffle v4), so without
-it those repos detect as "unknown build system": their pinned solc is lost and their
-`@scope/pkg/...` imports resolve against nothing.
+0.4.x/0.5.x projects ship: `truffle-config.js`, or `truffle.js` on Truffle v4. Both names
+are recognised, and the compiler settings and `@scope/pkg/...` package roots are read from
+whichever is present.
 """
 
 import json
