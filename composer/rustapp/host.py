@@ -158,8 +158,8 @@ def build_backend(
     return backend_cls(
         module=module,
         descriptor=descriptor,
-        _phase=ph,
-        _core_phases=core,
+        phase=ph,
+        core_phases=core,
         artifact_store=sf(source, descriptor),
         ecosystem=resolve_ecosystem(descriptor),
         command_timeout_s=opts.command_timeout_s,

@@ -242,7 +242,7 @@ async def _main() -> int:
                     _log.exception("pipeline failed")
                     app.notify(f"Pipeline failed: {exc}", severity="error")
                     await app.mount_error(exc)
-                    app._pipeline_done = True
+                    app.mark_pipeline_done()
 
             app.set_work(work)
             await app.run_async()

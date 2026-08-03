@@ -89,13 +89,18 @@ class _Run:
         self.ctx = None
         self.metered: list[str] = []
         self.unmetered: list[str] = []
+        #: Every ``TaskInfo`` the backend built, in order — the phase member matters as much as the
+        #: id (see the phase-tagging test).
+        self.tasks: list[Any] = []
 
     async def runner(self, task_info, job):
         self.metered.append(task_info.task_id)
+        self.tasks.append(task_info)
         return await job()
 
     async def unmetered_runner(self, task_info, job):
         self.unmetered.append(task_info.task_id)
+        self.tasks.append(task_info)
         return await job()
 
 
@@ -230,3 +235,25 @@ async def test_the_build_does_not_spend_an_agent_slot(tmp_path, monkeypatch):
 
     assert run.unmetered == ["crucible-preflight"]
     assert run.metered == []
+
+
+async def test_the_gate_is_tagged_with_the_declared_phase_member(tmp_path, monkeypatch):
+    # The task id comes from the step's kind, and the phase from its declared `phase_key` resolved
+    # against the backend's own synthesized enum. That identity is load-bearing: the frontend looks
+    # up section labels by enum *member*, so a member from any other copy of the enum would land the
+    # task in no section at all. `RustBackend.task_info` is the only thing that resolves it — this is
+    # what callers used to reach into the backend's private field to do.
+    wheel = FakeWheel({"build_program": "example_lending"})
+    _project(tmp_path)
+    _fake_build(monkeypatch, tmp_path)
+    source = _source(tmp_path)
+    backend = build_backend(wheel, _descriptor(), source)
+    run = _Run(source)
+    await backend.preflight(cast(Any, run))
+
+    info = run.tasks[0]
+    assert info.task_id == "crucible-preflight"
+    assert info.label == "Build Preflight"
+    assert info.phase is backend.phase["preflight"]
+    # …and it is the same enum the frontend's labels are keyed by, not a fresh synthesis of it.
+    assert type(info.phase) is backend.phase

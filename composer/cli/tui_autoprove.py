@@ -30,12 +30,12 @@ async def _main() -> int:
                 if result.failures:
                     msg += f", {len(result.failures)} failures"
                 app.notify(msg)
-                app._pipeline_done = True
+                app.mark_pipeline_done()
             except Exception as exc:
                 # A toast alone loses the failure the moment it fades — and the traceback with it.
                 _log.exception("pipeline failed")
                 app.notify(f"Pipeline failed: {exc}", severity="error")
-                app._pipeline_done = True
+                app.mark_pipeline_done()
 
         app.set_work(work)
         await app.run_async()

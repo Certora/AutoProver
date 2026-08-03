@@ -58,8 +58,11 @@ class _Run:
         self.ctx = ctx
         self.env = None
         self.source = None
+        #: Every ``TaskInfo`` the backend built, in order.
+        self.tasks: list = []
 
-    async def runner(self, _task_info, job):
+    async def runner(self, task_info, job):
+        self.tasks.append(task_info)
         return await job()
 
 
@@ -101,7 +104,7 @@ def _jobs(*prop_lists: list[PropertyFormulation]) -> list[BackendJob]:
 
 
 async def _formalizer(
-    monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None
+    monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None, run=None
 ) -> RustFormalizer:
     """Drive prepare→begin with the LLM authoring stubbed, returning the formalizer ``begin`` built
     around the authored fixture."""
@@ -126,8 +129,8 @@ async def _formalizer(
         relative_path="programs/lend/src/lib.rs",
         forbidden_read="",
     )
-    backend = build_backend(object(), _descriptor(), source)
-    run = _Run(ctx)
+    backend = build_backend(object(), _descriptor(), source)  # type: ignore[arg-type]  — no callout
+    run = run or _Run(ctx)
     run.source = source  # type: ignore[assignment]
     # The workspace prep happens in the backend's preflight (concurrently with analysis, before this
     # point) and hands its outcome forward — here the stubbed "no IDL requested".
@@ -173,6 +176,23 @@ async def test_the_artifact_reaches_every_component_under_its_declared_context_k
     store, authored = _Store(), []
     f = await _formalizer(monkeypatch, _ctx(store, namespace=None), authored, tmp_path)
     assert f._context_extra["fixture"] == FIXTURE
+
+
+async def test_the_setup_task_is_tagged_with_the_declared_phase_member(monkeypatch, tmp_path):
+    # The authoring loop runs as its own visible task, tagged with the phase the wheel declared for
+    # it ("build_harness" here) — resolved against the backend's own synthesized enum, since the
+    # frontend keys its section labels by enum member identity. `RustBackend.task_info` is what does
+    # that; the id half comes from the step's kind, not from a string at the call site.
+    store, authored = _Store(), []
+    ctx = _ctx(store, namespace=None)
+    run = _Run(ctx)
+    f = await _formalizer(monkeypatch, ctx, authored, tmp_path, run=run)
+    assert f is not None
+
+    info = run.tasks[0]
+    assert info.task_id == "crucible-setup"
+    assert info.label == "Build Harness"
+    assert info.phase.name == "build_harness"
 
 
 async def test_the_setup_artifact_is_authored_from_the_extracted_properties(monkeypatch, tmp_path):

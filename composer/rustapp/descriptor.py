@@ -7,7 +7,7 @@ field names in lockstep with ``rust/autoprover-sdk/src/lib.rs``.
 """
 
 import enum
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, Field
 
@@ -39,7 +39,22 @@ class DeliverableMode(str, enum.Enum):
     CALLOUT = "callout"
 
 
-class PreflightSpec(BaseModel):
+class StepSpec(BaseModel):
+    """A declared step the host runs as its own visible task: which phase groups it (``phase_key``,
+    a member of the synthesized enum) and what to call it (``label``).
+
+    ``step`` is the step's kind, not wire data — it names the task id the host gives this step
+    (``{app}-{step}``), so the id lives with the declaration rather than being spelled at each call
+    site. Turn a spec into its task with :meth:`composer.rustapp.adapter.RustBackend.task_info`,
+    which is what resolves ``phase_key`` against the enum."""
+
+    step: ClassVar[str]
+
+    phase_key: str
+    label: str
+
+
+class PreflightSpec(StepSpec):
     """An analysis-independent gate on the prepared workspace, run *concurrently with system
     analysis* — before a single property exists. The host follows the wheel's ``workspace_prep``
     with a ``kind="preflight"`` ``compile`` call under ``phase_key``, whose ``spec`` is empty: the
@@ -51,18 +66,17 @@ class PreflightSpec(BaseModel):
     the manifest and cannot fix it), which lets the driver cancel the analysis and extraction
     running alongside. Mirrors the Rust ``PreflightSpec``."""
 
-    phase_key: str
-    label: str
+    step: ClassVar[str] = "preflight"
 
 
-class SetupSpec(BaseModel):
+class SetupSpec(StepSpec):
     """A shared setup artifact authored once before per-component formalization (Crucible's
     shared fixture). The host runs the author→compile loop for a ``kind="setup"`` input under
     ``phase_key`` and threads the compiled spec into each component's context under
     ``context_key``. Mirrors the Rust ``SetupSpec``."""
 
-    phase_key: str
-    label: str
+    step: ClassVar[str] = "setup"
+
     context_key: str
 
 

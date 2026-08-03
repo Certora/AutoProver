@@ -27,12 +27,13 @@ authored after extraction, when the properties it must make checkable finally ex
 """
 
 import asyncio
+import enum
 import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, NotRequired, cast, override
+from typing import Any, Awaitable, Callable, NotRequired, override
 
 from langchain_core.tools import BaseTool
 from pydantic import Field
@@ -57,7 +58,7 @@ from composer.pipeline.core import (
 from composer.pipeline.ecosystem import Ecosystem, source_crate_of
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
-from composer.rustapp.descriptor import AppDescriptor
+from composer.rustapp.descriptor import AppDescriptor, StepSpec
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupArtifact
 from composer.rustapp.wire import (
     AuthorInput,
@@ -1024,10 +1025,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             sandbox_dict = await b.sandbox_spec(workdir)
             emit = make_emitter()
             fixture = await run.runner(
-                TaskInfo(
-                    f"{descriptor.name}-setup", setup.label,
-                    cast(Any, b._phase)[setup.phase_key],
-                ),
+                b.task_info(setup),
                 lambda: author_and_compile(
                     b.module, setup_input, env=run.env, sandbox_dict=sandbox_dict,
                     workdir=workdir, recursion_limit=run.ctx.recursion_limit,
@@ -1055,8 +1053,12 @@ class RustBackend:
 
     module: RustAppModule
     descriptor: AppDescriptor
-    _phase: type
-    _core_phases: CorePhases
+    #: The phase enum synthesized from the descriptor — the *same* class object the frontend's
+    #: ``phase_labels`` are keyed by, since the lookup is by member identity. Public because the
+    #: prepared system and the formalizer need to tag their own tasks with a declared phase; reach
+    #: it through :meth:`task_info` rather than indexing it.
+    phase: type[enum.Enum]
+    core_phases: CorePhases
     artifact_store: ArtifactStore[Any, RustFormalResult]
     ecosystem: Ecosystem[Any, Any, Any]
     # Wall-clock ceiling for a single compile/validate (a first build can be minutes).
@@ -1075,9 +1077,14 @@ class RustBackend:
     def analysis_spec(self) -> SystemAnalysisSpec:
         return SystemAnalysisSpec(self.descriptor.analysis_key, "rust-properties")
 
-    @property
-    def core_phases(self) -> CorePhases:
-        return self._core_phases
+    def task_info(self, spec: StepSpec) -> TaskInfo[enum.Enum]:
+        """The task a declared step runs as: its own id, the wheel's label, and the phase *member*
+        its ``phase_key`` names.
+
+        The one way to turn a declared key into a member. The enum is synthesized per application, so
+        a caller can't name a member statically — and resolving it here keeps the member the driver
+        emits identical to the one the frontend's labels are keyed by."""
+        return TaskInfo(f"{self.descriptor.name}-{spec.step}", spec.label, self.phase[spec.phase_key])
 
     async def preflight(self, run: PipelineRun) -> RustPreflight:
         """Prepare the wheel's workspace and gate it — everything buildable before the program has
@@ -1133,13 +1140,7 @@ class RustBackend:
             return await prep()
         # Unmetered: this is a build, not an agent — it must not spend one of the run's
         # ``--max-concurrent`` agent slots for the whole of system analysis.
-        return await run.unmetered_runner(
-            TaskInfo(
-                f"{descriptor.name}-preflight", descriptor.preflight.label,
-                cast(Any, self._phase)[descriptor.preflight.phase_key],
-            ),
-            prep,
-        )
+        return await run.unmetered_runner(self.task_info(descriptor.preflight), prep)
 
     async def sandbox_spec(self, workdir: Path) -> BackendSpec:
         """The confinement prefix the wheel's blocking callouts prepend, or the trusted empty one."""

@@ -88,7 +88,7 @@ async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) 
                 _log.exception("pipeline failed")
                 tui.notify(f"Pipeline failed: {exc}", severity="error")
             finally:
-                tui._pipeline_done = True
+                tui.mark_pipeline_done()
 
         tui.set_work(work)
         await tui.run_async()
