@@ -184,8 +184,14 @@ class AppDescriptor(BaseModel):
     #: ``COMPOSER_SANDBOX_PROVIDER``). Set by any wheel that runs untrusted native toolchains.
     confine_by_default: bool = False
     #: Human noun for one formalized unit in the console/TUI summary ("instruction" for
-    #: Crucible). ``None`` → "component".
+    #: Crucible). ``None`` → "component"; read it through :meth:`unit_noun`.
     component_noun: str | None = None
+
+    def unit_noun(self, *, plural: bool = False) -> str:
+        """The noun for a formalized unit, with the generic default applied — so no frontend
+        spells the ``or "component"`` fallback (nor the pluralization) itself."""
+        noun = self.component_noun or "component"
+        return f"{noun}s" if plural else noun
 
     def ordered_phases(self) -> list[PhaseSpec]:
         return sorted(self.phases, key=lambda p: (p.order, p.key))

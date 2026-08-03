@@ -135,6 +135,49 @@ def test_entry_argparser_has_positionals_and_declared_flags():
     assert args2.echo_tag == "hi"
 
 
+def test_the_parser_the_entry_point_runs_is_the_one_that_carries_help_text():
+    # ``build_arg_parser`` used to be a hand-copy of the parser ``rust_entry_point`` built inline,
+    # and had already drifted: every help string was missing, so ``--help`` from the introspection
+    # path documented nothing. One definition now, and this asserts the help survives in it.
+    from composer.rustapp.entry import build_arg_parser
+
+    # argparse re-wraps help to the terminal width, so compare on collapsed whitespace.
+    help_text = " ".join(build_arg_parser(host.build_application("echoprover")).format_help().split())
+    # Hyphenated words are what argparse breaks *across* lines, so these fragments avoid them.
+    for expected in (
+        "Project root",
+        "Main contract as path:ContractName",
+        "Path to the design document",
+        "Max concurrent agents",
+        "Cache namespace",
+        "Memory namespace",
+        "Interactively refine extracted properties",
+        "rounds per component",
+        "Max graph iterations",
+    ):
+        assert expected in help_text, expected
+
+
+def test_declared_flags_are_threaded_by_dest_and_nothing_else_is():
+    # What reaches ``validate_preconditions`` / every component's context: the descriptor's own
+    # flags, keyed by the dest argparse gave them — not the host's built-in options.
+    from composer.rustapp.entry import _declared_args, build_arg_parser
+
+    app = host.build_application("echoprover")
+    ns = build_arg_parser(app).parse_args(["/proj", "src/C.sol:C", "doc.md", "--echo-tag", "hi"])
+    assert _declared_args(ns, app.descriptor.args) == {"echo_tag": "hi"}
+
+
+def test_the_unit_noun_defaults_and_pluralizes():
+    desc = AppDescriptor.model_validate_json(echoprover.descriptor())
+    assert desc.component_noun is None  # the demo declares none
+    assert desc.unit_noun() == "component"
+    assert desc.unit_noun(plural=True) == "components"
+    named = desc.model_copy(update={"component_noun": "instruction"})
+    assert named.unit_noun() == "instruction"
+    assert named.unit_noun(plural=True) == "instructions"
+
+
 def test_system_doc_is_optional_with_discovery_phase_fallback():
     from composer.rustapp.entry import _discovery_phase, build_arg_parser
 

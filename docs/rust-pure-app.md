@@ -256,6 +256,10 @@ descriptor already declares `rag_db_default: "crucible_kb"`.
 to no-RAG on failure, exactly as `build_crucible_env` does today); when `None`, the neutral env.
 The `env_builder=` override parameter can stay for exotic cases but Crucible stops needing it.
 
+*Implemented* as the one `entry.build_default_env(..., rag_db=)`, with `rust_entry_point`
+binding `rag_db=descriptor.rag_db_default`. The separate `build_neutral_env` is gone — it was
+that same function with the corpus hard-wired to none.
+
 ### 5.2 Sandbox grants + default confinement
 
 **Today.** `crucible_sandbox` resolves `$CRUCIBLE_REPO`, grants it + `which("crucible")` as

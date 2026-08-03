@@ -11,9 +11,10 @@ foundry entry point — that shell is irreducibly async and is not something Rus
 owns (see ``docs/rust-applications.md`` §4.2). What Rust contributes here is only
 declarative: the arg schema and the ``validate_preconditions`` hook.
 
-The env built here is *neutral*: the standard source-navigation toolset
-(``code_explorer`` + fs tools) with no RAG surface. A backend that wants a RAG
-database can supply its own env builder via ``env_builder=``.
+The env built here is descriptor-driven too: the standard source-navigation toolset
+(``code_explorer`` + fs tools), plus the search tools of the corpus the descriptor
+names in ``rag_db_default`` (none by default). A backend that wants a different tool
+surface entirely can supply its own builder via ``env_builder=``.
 """
 
 import argparse
@@ -26,8 +27,10 @@ import pathlib
 import sys
 import uuid
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Any, AsyncIterator, Awaitable, Callable, cast
 
+from langchain_core.tools import BaseTool
 from langgraph.store.base import BaseStore
 
 from composer.core.user import user_data_ns
@@ -49,6 +52,7 @@ from composer.rustapp.wire import parse_sandbox_grants
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
 from composer.sandbox.config import SandboxConfig
+from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH
 from composer.spec.context import SourceCode, SourceFields, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost, ServiceHost
 from composer.spec.source.design_doc_finder import (
@@ -75,7 +79,7 @@ RustRunner = Callable[
 ]
 
 
-def build_neutral_env(
+def build_default_env(
     *,
     model_provider: ModelProvider,
     project_root: str,
@@ -83,55 +87,36 @@ def build_neutral_env(
     source_question_ns: tuple[str, ...],
     recursion_limit: int,
     forbidden_read: str = FS_FORBIDDEN_READ,
+    rag_db: str | None = None,
 ) -> ServiceHost:
-    """A source-navigation env with no RAG surface — the same ``code_explorer`` +
-    fs tools the built-in backends use for analysis/authoring. ``forbidden_read``
-    is the ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry for EVM)."""
+    """The env for a wheel that supplies no ``env_builder``: the same ``code_explorer`` + fs tools
+    the built-in backends use for analysis/authoring, plus — when the descriptor declares a
+    ``rag_db_default`` and it is passed here as ``rag_db`` — that corpus's RAG search tools
+    (replacing the old per-app ``build_crucible_env``). No ``rag_db`` means no RAG surface.
+
+    ``forbidden_read`` is the ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry
+    for EVM)."""
     basic = build_basic_source_tools(root=project_root, forbidden_read=forbidden_read)
     full = build_source_tools(
         basic, model_provider, store, source_question_ns, recursion_limit=recursion_limit
     )
-    return PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(
-        full
-    )
-
-
-def _default_env_builder(rag_db: str | None) -> EnvBuilder:
-    """The env builder for a wheel that declares no custom ``env_builder``: neutral (source tools
-    only) when the descriptor sets no ``rag_db_default``, otherwise the same source tools plus the
-    declared corpus's RAG search tools (replaces the old per-app ``build_crucible_env``)."""
-    if not rag_db:
-        return build_neutral_env
-
-    def builder(
-        *,
-        model_provider: ModelProvider,
-        project_root: str,
-        store: BaseStore,
-        source_question_ns: tuple[str, ...],
-        recursion_limit: int,
-        forbidden_read: str = FS_FORBIDDEN_READ,
-    ) -> ServiceHost:
+    rag_tools: tuple[BaseTool, ...] = ()
+    if rag_db:
+        # local: rag_env opens the corpus and pulls in the embedding stack, which a wheel that
+        # declares no rag_db_default never needs.
         from composer.tools.rag_env import build_rag_tools
 
-        basic = build_basic_source_tools(root=project_root, forbidden_read=forbidden_read)
-        full = build_source_tools(
-            basic, model_provider, store, source_question_ns, recursion_limit=recursion_limit
-        )
-        return PureServiceHost(
-            models=model_provider, rag_tools=build_rag_tools(rag_db), sort="existing"
-        ).bind_source_tools(full)
-
-    return builder
+        rag_tools = build_rag_tools(rag_db)
+    return PureServiceHost(
+        models=model_provider, rag_tools=rag_tools, sort="existing"
+    ).bind_source_tools(full)
 
 
-def _build_confinement(app: RustApplication, args: dict) -> SandboxConfig:
+def _build_confinement(app: RustApplication, args: dict[str, Any]) -> SandboxConfig:
     """The default command-sandbox config for a wheel that sets ``confine_by_default`` — the
     fail-closed ``launcher`` provider (overridable by ``COMPOSER_SANDBOX_PROVIDER``), with the
     wheel's ``sandbox_grants`` (extra read-only paths / env names) unioned in. Python owns the
     policy; the wheel only *declares* the grants (``docs/rust-pure-app.md`` §5.2)."""
-    from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH
-
     grants = parse_sandbox_grants(app.module.sandbox_grants(json.dumps(args)))
     extra_ro = tuple(pathlib.Path(p) for p in grants.extra_ro)
     extra_env = tuple(grants.extra_env)
@@ -155,12 +140,21 @@ def _root_cache_key(
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
-def _add_declared_args(parser: argparse.ArgumentParser, specs: list[ArgSpec]) -> list[str]:
-    """Add the descriptor's declared flags; return their argparse dests."""
-    dests: list[str] = []
+def _arg_dest(spec: ArgSpec) -> str:
+    """The argparse dest a declared flag lands under (``--echo-tag`` → ``echo_tag``)."""
+    return spec.flag.lstrip("-").replace("-", "_")
+
+
+def _declared_args(args: argparse.Namespace, specs: list[ArgSpec]) -> dict[str, Any]:
+    """The parsed values of the descriptor's declared flags, keyed by dest — what the host threads
+    into ``validate_preconditions`` and every component's ``AuthorInput.context``."""
+    return {d: getattr(args, d) for d in (_arg_dest(s) for s in specs)}
+
+
+def _add_declared_args(parser: argparse.ArgumentParser, specs: list[ArgSpec]) -> None:
+    """Add the descriptor's declared flags to ``parser``."""
     for spec in specs:
-        dest = spec.flag.lstrip("-").replace("-", "_")
-        dests.append(dest)
+        dest = _arg_dest(spec)
         d: ArgDefault = spec.default
         if d.kind == "bool":
             parser.add_argument(
@@ -177,7 +171,32 @@ def _add_declared_args(parser: argparse.ArgumentParser, specs: list[ArgSpec]) ->
                 spec.flag, dest=dest, type=str, default=d.value,
                 required=spec.required, help=spec.help,
             )
-    return dests
+
+
+def build_arg_parser(app: RustApplication) -> argparse.ArgumentParser:
+    """The descriptor-driven argument parser — one definition, used by :func:`rust_entry_point`
+    and exposed for tests / ``--help`` introspection without opening any service."""
+    parser = argparse.ArgumentParser(
+        description=f"{app.descriptor.name} — AutoProver (Rust backend)"
+    )
+    add_protocol_args(parser, ExtendedModelOptions)
+    parser.add_argument(
+        "--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT,
+        help=f"Max graph iterations (default: {DEFAULT_RECURSION_LIMIT})",
+    )
+    parser.add_argument("project_root", help="Project root")
+    parser.add_argument("main_contract", help="Main contract as path:ContractName")
+    parser.add_argument(
+        "system_doc", nargs="?", default=None,
+        help="Path to the design document (text or PDF); auto-discovered if omitted",
+    )
+    parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
+    parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
+    parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
+    parser.add_argument("--interactive", action="store_true", help="Interactively refine extracted properties")
+    parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
+    _add_declared_args(parser, app.descriptor.args)
+    return parser
 
 
 def _discovery_phase(app: RustApplication) -> enum.Enum:
@@ -205,27 +224,9 @@ async def rust_entry_point(
 
     Pass a pre-built :class:`RustApplication` (from :func:`build_application`) so the
     backend and the frontend share one phase enum. ``argv`` overrides ``sys.argv``
-    (useful in tests); ``env_builder`` overrides :func:`build_neutral_env`."""
+    (useful in tests); ``env_builder`` overrides :func:`build_default_env`."""
     descriptor = app.descriptor
-    parser = argparse.ArgumentParser(description=f"{descriptor.name} — AutoProver (Rust backend)")
-    add_protocol_args(parser, ExtendedModelOptions)
-    parser.add_argument(
-        "--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT,
-        help=f"Max graph iterations (default: {DEFAULT_RECURSION_LIMIT})",
-    )
-    parser.add_argument("project_root", help="Project root")
-    parser.add_argument("main_contract", help="Main contract as path:ContractName")
-    parser.add_argument(
-        "system_doc", nargs="?", default=None,
-        help="Path to the design document (text or PDF); auto-discovered if omitted",
-    )
-    parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
-    parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
-    parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
-    parser.add_argument("--interactive", action="store_true", help="Interactively refine extracted properties")
-    parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
-    declared_dests = _add_declared_args(parser, descriptor.args)
-
+    parser = build_arg_parser(app)
     args = parser.parse_args(argv)
 
     project_root = pathlib.Path(args.project_root).resolve()
@@ -249,7 +250,7 @@ async def rust_entry_point(
     # Rust-owned precondition validation (cf. foundry's foundry.toml check). ``program_crate`` is
     # the same blob every ``AuthorInput`` carries, so a wheel can check up-front that the code it
     # will depend on is where the host says it is (Crucible: the program crate must exist).
-    declared_args = {d: getattr(args, d) for d in declared_dests}
+    declared_args = _declared_args(args, descriptor.args)
     err = app.validate_preconditions(
         {
             "project_root": str(project_root),
@@ -349,10 +350,12 @@ async def rust_entry_point(
                 forbidden_read=forbidden_read,
             )
             source_question_ns = _user_ns("source_agent", "cache", root_key)
-            # Descriptor-driven env: neutral, or (if the wheel declares a RAG corpus) the same
-            # source tools plus that corpus's search tools. A wheel can still force its own via
-            # ``env_builder=``.
-            builder = env_builder or _default_env_builder(app.descriptor.rag_db_default)
+            # Descriptor-driven env: source tools, plus (if the wheel declares a RAG corpus) that
+            # corpus's search tools. A wheel can still force its own via ``env_builder=``, which
+            # takes no ``rag_db`` — a custom builder owns its whole tool surface.
+            builder = env_builder or partial(
+                build_default_env, rag_db=app.descriptor.rag_db_default
+            )
             env = builder(
                 model_provider=model_provider,
                 project_root=str(project_root),
@@ -404,21 +407,3 @@ async def rust_entry_point(
             )
 
         yield runner
-
-
-def build_arg_parser(app: RustApplication) -> argparse.ArgumentParser:
-    """Build (but do not run) the descriptor-driven argument parser — exposed for
-    tests and ``--help`` introspection without opening any service."""
-    parser = argparse.ArgumentParser(description=f"{app.descriptor.name} — AutoProver (Rust backend)")
-    add_protocol_args(parser, ExtendedModelOptions)
-    parser.add_argument("--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT)
-    parser.add_argument("project_root")
-    parser.add_argument("main_contract")
-    parser.add_argument("system_doc", nargs="?", default=None)
-    parser.add_argument("--max-concurrent", type=int, default=4)
-    parser.add_argument("--cache-ns", default=None)
-    parser.add_argument("--memory-ns", default=None)
-    parser.add_argument("--interactive", action="store_true")
-    parser.add_argument("--max-bug-rounds", type=int, default=3)
-    _add_declared_args(parser, app.descriptor.args)
-    return parser

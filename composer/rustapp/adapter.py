@@ -31,6 +31,7 @@ import enum
 import json
 import logging
 from collections.abc import Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, NotRequired, override
@@ -42,6 +43,8 @@ from graphcore.tools.schemas import WithAsyncDependencies, WithInjectedId
 from langgraph.graph import MessagesState
 from langgraph.types import Command
 
+from composer.diagnostics.timing import get_current_task_id
+from composer.io.context import push_custom_update
 from composer.io.multi_job import TaskInfo
 from composer.pipeline.core import (
     BackendJob,
@@ -344,8 +347,6 @@ def make_emitter() -> Callable[[str, dict], None]:
     """A ``emit(kind, payload)`` that streams a domain event to the current task's panel.
     Routes out-of-graph (the loop isn't inside a LangGraph run) via ``push_custom_update``,
     keyed by the active ``run_task`` id — the same routing the old ``RealEffects.emit`` used."""
-    from composer.diagnostics.timing import get_current_task_id
-    from composer.io.context import push_custom_update
 
     def emit(kind: str, payload: dict) -> None:
         push_custom_update({"type": kind, **payload}, thread_id=get_current_task_id() or "rust")
@@ -563,10 +564,9 @@ async def _run_blocking(thunk: Callable[[], str], sem: asyncio.Semaphore | None)
     """Run a blocking wheel call (``compile``/``validate`` — they spawn ``run-confined`` and
     release the GIL) off the event loop, serialized by ``sem`` when the backend shares one
     workdir/crate across concurrent units."""
-    if sem is not None:
-        async with sem:
-            return await asyncio.to_thread(thunk)
-    return await asyncio.to_thread(thunk)
+    guard = sem if sem is not None else nullcontext()
+    async with guard:
+        return await asyncio.to_thread(thunk)
 
 
 def _confined_target(root: Path, rel: str) -> Path:
@@ -661,6 +661,8 @@ async def run_workspace_prep(
         return None
     idl_dest = plan.idl_dest
 
+    # local: the generic host stays ecosystem-agnostic at import time — only a workspace prep that
+    # actually asks for the toolchain reaches into the Solana build helpers.
     from composer.spec.solana.build import build_program, idl_with_program_id, warm_cargo_cache
 
     if plan.warm_dirs and sandbox is not None and sandbox.enabled:
@@ -799,17 +801,10 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # ``""`` in ``finalize`` below, because that is the shape the payload promises.
         self._idl = idl
 
-    # -- hooks an application backend may override -------------------------
-
     def _context(self, run: PipelineRun) -> dict[str, Any]:
         """The ``AuthorInput.context`` blob for a component. The program plus whatever the
         prepared system injected (declared args + the setup artifact under its context key)."""
         return {"program": str(run.source.contract_name), **self._context_extra}
-
-    def _before_formalize(self, feat: FeatureUnit, slugs: list[str]) -> None:
-        """Place any crate scaffolding before compile/validate. Base: nothing (the wheel
-        materializes its crate per confined run via the ``files`` map)."""
-        return None
 
     async def _sandbox_spec(self, workdir: Path) -> BackendSpec:
         if self._sandbox is None or not self._sandbox.enabled:
@@ -829,9 +824,10 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     ) -> RustFormalResult | GaveUp:
         workdir = Path(run.source.project_root)
         slugs = unique_slugs(props)
-        self._before_formalize(feat, slugs)
-        # The shared setup artifact is already in ``self._context_extra`` — ``begin`` authored it
-        # from every unit's properties before the driver fanned out.
+        # Nothing to scaffold before the loop: the wheel materializes its crate per confined run
+        # from the ``files`` map, and the shared setup artifact is already in
+        # ``self._context_extra`` — ``begin`` authored it from every unit's properties before the
+        # driver fanned out.
 
         input_json = AuthorInput(
             kind="component",

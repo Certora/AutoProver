@@ -26,27 +26,24 @@ from composer.diagnostics.timing import RunSummary
 from composer.pipeline.core import CorePipelineResult
 from composer.rustapp.entry import EnvBuilder, rust_entry_point
 from composer.rustapp.frontend import GenericRustApp, GenericRustConsoleHandler
-from composer.rustapp.host import build_application
+from composer.rustapp.host import RustApplication, build_application
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import format_verdict_lines, summarize_verdicts
 
 _log = logging.getLogger(__name__)
 
 
-def _event_kinds(app) -> set[str]:
+def _event_kinds(app: RustApplication) -> set[str]:
     return {e.kind for e in app.descriptor.event_kinds}
 
 
-def _notice_kinds(app) -> set[str]:
+def _notice_kinds(app: RustApplication) -> set[str]:
     return {e.kind for e in app.descriptor.event_kinds if e.notice}
 
 
-def _component_label(app) -> str:
-    """The counts-block noun for one formalized unit ("Components" / "Instructions")."""
-    return (app.descriptor.component_noun or "component").capitalize() + "s"
-
-
-def _verdict_lines(app, result: CorePipelineResult[RustFormalResult]) -> list[str]:
+def _verdict_lines(
+    app: RustApplication, result: CorePipelineResult[RustFormalResult]
+) -> list[str]:
     """Per-unit verdict tally + listing when the results carry verdicts; empty otherwise
     (a run-service backend, or a wheel that bakes none)."""
     return format_verdict_lines(
@@ -71,9 +68,9 @@ async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) 
             nonlocal result
             try:
                 result = await pipeline(tui.make_handler)
-                noun = (app_meta.descriptor.component_noun or "component")
                 msg = (
-                    f"{app_meta.name} complete: {result.n_components} {noun}s, "
+                    f"{app_meta.name} complete: {result.n_components} "
+                    f"{app_meta.descriptor.unit_noun(plural=True)}, "
                     f"{result.n_properties} properties"
                 )
                 if tally := summarize_verdicts(
@@ -108,7 +105,9 @@ async def _console_main(module_name: str, *, env_builder: EnvBuilder | None = No
         result = await run(GenericRustConsoleHandler(_event_kinds(app_meta)).make_handler)
         print(f"\n{'=' * 60}")
         print(summary.format())
-        print(f"\n  {_component_label(app_meta)}: {result.n_components}")
+        # The counts-block noun for the formalized units ("Components" / "Instructions").
+        units = app_meta.descriptor.unit_noun(plural=True).capitalize()
+        print(f"\n  {units}: {result.n_components}")
         print(f"  Properties: {result.n_properties}")
         for line in _verdict_lines(app_meta, result):
             print(line)

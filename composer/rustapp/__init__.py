@@ -111,7 +111,7 @@ from composer.rustapp.entry import (
     EnvBuilder,
     RustRunner,
     build_arg_parser,
-    build_neutral_env,
+    build_default_env,
     rust_entry_point,
 )
 from composer.rustapp.frontend import (
@@ -183,7 +183,7 @@ __all__ = [
     "EnvBuilder",
     "RustRunner",
     "build_arg_parser",
-    "build_neutral_env",
+    "build_default_env",
     "rust_entry_point",
     "GenericRustApp",
     "GenericRustConsoleHandler",

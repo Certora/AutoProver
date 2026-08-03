@@ -232,21 +232,22 @@ EVM: EvmEcosystem = Ecosystem(
 #: Cargo/Anchor project layout: hide build output, VCS, lockfiles, and the JS side; keep the
 #: crate sources and `tests/`. A pattern suffices here — unlike the Foundry-shaped
 #: ``fs_forbidden_read``, nothing needs carving back out of an excluded directory.
-RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
-# The pipeline generates hundreds of MB of build/scratch *inside the workdir* mid-run, which the
-# source tools' file-listing would otherwise pull into LLM context and blow the model's window:
-#   • ``.sandbox_cargo``  — the command sandbox's private CARGO_HOME (docs/command-sandbox.md §3);
-#     a build fills it with the *entire* cargo registry (~19.5k files, ~520 MB).
-#   • ``.sandbox_rustup`` — the sandbox's private RUSTUP_HOME; its ``toolchains`` is a symlink to
-#     the shared rustup home, so a naive listing would enumerate the whole Rust toolchain.
-#   • ``.sandbox_tmp``    — the sandbox's private linker TMPDIR.
-#   • nested ``target/``  — cargo build output below the root (e.g. the generated
-#     ``fuzz/<program>/target``, ~4k files, ~900 MB); the top-level ``^target/`` above misses it.
-# These are never source, so they are never readable by the source tools (belt-and-suspenders with
-# each run's own cleanup: a re-run or cached CI workspace can leave them behind).
+#:
+#: The second line covers the hundreds of MB of build/scratch the pipeline generates *inside the
+#: workdir* mid-run, which the source tools' file-listing would otherwise pull into LLM context and
+#: blow the model's window:
+#:   • ``.sandbox_cargo``  — the command sandbox's private CARGO_HOME (docs/command-sandbox.md §3);
+#:     a build fills it with the *entire* cargo registry (~19.5k files, ~520 MB).
+#:   • ``.sandbox_rustup`` — the sandbox's private RUSTUP_HOME; its ``toolchains`` is a symlink to
+#:     the shared rustup home, so a naive listing would enumerate the whole Rust toolchain.
+#:   • ``.sandbox_tmp``    — the sandbox's private linker TMPDIR.
+#:   • nested ``target/``  — cargo build output below the root (e.g. the generated
+#:     ``fuzz/<program>/target``, ~4k files, ~900 MB); the top-level ``^target/`` misses it.
+#: These are never source, so they are never readable by the source tools (belt-and-suspenders with
+#: each run's own cleanup: a re-run or cached CI workspace can leave them behind).
 RUST_FORBIDDEN_READ = (
-    RUST_FORBIDDEN_READ
-    + r"|(^\.sandbox_cargo/.*)|(^\.sandbox_rustup/.*)|(^\.sandbox_tmp/.*)|(.*/target/.*)"
+    r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
+    r"|(^\.sandbox_cargo/.*)|(^\.sandbox_rustup/.*)|(^\.sandbox_tmp/.*)|(.*/target/.*)"
 )
 
 RUST_CODE_EXPLORER_PROMPT = """\
@@ -259,10 +260,6 @@ that establish or omit a check; do not speculate about code you have not read.
 """
 
 
-def _rust_source_crate(source: SourceFields) -> ProgramCrate | None:
-    return resolve_program_crate(source.project_root, source.relative_path)
-
-
 @dataclass(frozen=True)
 class RustLanguage(Language):
     """Rust's language facet, which adds the one convention no other analyzed language shares: the
@@ -273,9 +270,14 @@ class RustLanguage(Language):
     to locate (solc takes file paths). Reach it through :func:`source_crate_of`, which yields
     ``None`` for a language that isn't Rust."""
 
-    #: Locate the crate whose ``Cargo.toml`` owns the main source file. ``None`` when it can't be
-    #: resolved — never raises; the consumer falls back to its own convention.
-    source_crate: Callable[[SourceFields], ProgramCrate | None] = _rust_source_crate
+    def source_crate(self, source: SourceFields) -> ProgramCrate | None:
+        """The crate whose ``Cargo.toml`` owns the main source file. ``None`` when it can't be
+        resolved — never raises; the consumer falls back to its own convention.
+
+        A method, not an injectable field: :func:`source_crate_of` already dispatches on this
+        class, so a variant that resolved crates differently would be a subclass, not a
+        differently-populated instance of this one."""
+        return resolve_program_crate(source.project_root, source.relative_path)
 
 
 RUST = RustLanguage(

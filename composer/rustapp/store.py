@@ -57,7 +57,7 @@ class RustArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
             return super().write_artifact(i, artifact)
         self._write_commentary(i.stem, artifact.commentary)
         self._write_property_map(
-            i.stem, self._property_suffix, {k: v for k, v in artifact.property_units()}
+            i.stem, self._property_suffix, dict(artifact.property_units())
         )
         primary = self._layout.deliverable_primary
         return Path(primary.format(program=self._program) if primary else self._layout.deliverable_dir)
