@@ -33,7 +33,7 @@ from langgraph.types import Command
 from composer.spec.feedback import property_feedback_judge, FeedbackTemplate, Properties
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.budget import (
-    BudgetExceeded, budget_monitor, raise_budget_exceeded,
+    BudgetExceeded, budget_monitor, constraint_sort_to_noun, raise_budget_exceeded
 )
 from .monitor import monitor
 
@@ -343,7 +343,7 @@ _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_pro
 
 _BUDGET_WRAPUP_MESSAGE = """
 <system-alert>
-You have almost exceeded the token cost budget for this task. Wrap up IMMEDIATELY;
+You have almost exceeded the {resource} budget for this task. Wrap up IMMEDIATELY;
 a partial spec is better than going over budget. Concretely:
 
 - The feedback and prover validation requirements on publishing have been lifted. You no
@@ -357,14 +357,14 @@ a partial spec is better than going over budget. Concretely:
 """
 
 
-def _author_monitor() -> "Callable[[SourceCVLGenerationState], MonitorReturn]":
+def _author_monitor() -> Callable[[SourceCVLGenerationState], MonitorReturn]:
     """The author's monitor: budget wrap-up takes precedence; otherwise the
     usual reminders-channel drain. On the (single) turn the budget warning
     fires any pending reminders are dropped — moot, since the warning tells
     the agent to ignore prover/feedback outcomes anyway."""
     b_monitor = budget_monitor(
-        warning_message=_BUDGET_WRAPUP_MESSAGE,
-        state_transformer=lambda _s: {"required_validations": [], "budget_curtailed": True},
+        warning_message=lambda _s, c: _BUDGET_WRAPUP_MESSAGE.format(resource=constraint_sort_to_noun(c)),
+        state_transformer=lambda _s, _c: {"required_validations": [], "budget_curtailed": True},
         on_overbudget=raise_budget_exceeded,
     )
 

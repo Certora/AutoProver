@@ -46,7 +46,7 @@ from composer.spec.cvl_generation import (
 from composer.spec.feedback import BUDGET_ABORT_FEEDBACK, PropertyFeedback
 from composer.diagnostics.budget import (
     BudgetExceeded, BudgetPressureAbort, budget_monitor, budget_pressure,
-    pressure_abort_monitor, raise_budget_exceeded,
+    pressure_abort_monitor, raise_budget_exceeded, constraint_sort_to_noun
 )
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
@@ -650,7 +650,7 @@ _FoundryPropertyGenTemplate = TypedTemplate[FoundryPropertyGenParams](
 
 _BUDGET_WRAPUP_MESSAGE = """
 <system-alert>
-You have almost exceeded the token cost budget for this task. Wrap up IMMEDIATELY;
+You have almost exceeded the {resource} budget for this task. Wrap up IMMEDIATELY;
 a partial test file is better than going over budget. Concretely:
 
 - The forge-test and feedback validation requirements on publishing have been lifted. You
@@ -740,8 +740,8 @@ async def batch_foundry_test_generation(
         .inject(lambda b: bound_template.render_to(b.with_initial_prompt_template))
         .with_summary_config(FoundryGenerationSummaryConfig())
         .with_monitor(budget_monitor(
-            warning_message=_BUDGET_WRAPUP_MESSAGE,
-            state_transformer=lambda _s: {"required_validations": [], "budget_curtailed": True},
+            warning_message=lambda _s, c: _BUDGET_WRAPUP_MESSAGE.format(resource=constraint_sort_to_noun(c)),
+            state_transformer=lambda _s, _c: {"required_validations": [], "budget_curtailed": True},
             on_overbudget=raise_budget_exceeded,
         ))
     )

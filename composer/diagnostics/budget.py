@@ -1,12 +1,14 @@
-from typing import Iterator, Callable, Any, Mapping
-from typing_extensions import TypeVar
+from typing import Iterator, Callable, Any, Mapping, Never, Protocol, Literal, TypedDict, LiteralString
+from typing_extensions import TypeVar, ReadOnly
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+import time
 
 from langgraph.graph import MessagesState
 from graphcore.graph import StateMonitor, MonitorReturn
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AnyMessage
+from .timing import RunSummary, get_run_summary_or_none
 
 StateVar = TypeVar("StateVar", default=MessagesState, bound=MessagesState)
 
@@ -28,6 +30,22 @@ class BudgetPressureAbort(Exception):
     (e.g. a feedback judge) whose output is worthless once the main agent is
     in its wrap-up window. Caught by the tool that launched the agent."""
 
+type ConstraintType = Literal["time", "token"]
+
+class _ConstraintWarnings(TypedDict):
+    time: ReadOnly[str]
+    token: ReadOnly[str]
+
+class ResourceConstraint(Protocol):
+    @property
+    def sort(self) -> ConstraintType:
+        ...
+
+    def overbudget(self) -> bool:
+        ...
+
+    def pressured(self, threshold: float = BUDGET_PRESSURE_THRESHOLD) -> bool:
+        ...
 
 @dataclass
 class BudgetCounter:
@@ -52,6 +70,10 @@ class BudgetCounter:
             return True
         return self.parent.pressured(threshold) if self.parent is not None else False
 
+    @property
+    def sort(self) -> ConstraintType:
+        return "token"
+
 _budget_accumulator = ContextVar[None | BudgetCounter]("_budget_accumulator", default=None)
 
 _cost_centers = ContextVar[None | dict[str, BudgetCounter]]("_cost_centers", default=None)
@@ -62,6 +84,33 @@ _cost_centers = ContextVar[None | dict[str, BudgetCounter]]("_cost_centers", def
 # unbudgeted runs too.
 _cost_center_name = ContextVar[str | None]("_cost_center_name", default=None)
 
+_time_budget = ContextVar[float | None]("_time_budget", default=None)
+
+@dataclass
+class _TimeCounter:
+    budget: float
+
+    summ: RunSummary
+
+    def overbudget(self) -> bool:
+        return self.summ.total_wall_s() > self.budget
+
+    def pressured(self, threshold: float = BUDGET_PRESSURE_THRESHOLD) -> bool:
+        return self.summ.total_wall_s() > self.budget * threshold
+
+    @property
+    def sort(self) -> ConstraintType:
+        return "time"
+
+
+def _get_constraints() -> list[ResourceConstraint]:
+    to_ret : list[ResourceConstraint] = []
+    if (b := _budget_accumulator.get()) is not None:
+        to_ret.append(b)
+    if (t_b := _time_budget.get()) is not None and \
+        (rs := get_run_summary_or_none()) is not None:
+        to_ret.append(_TimeCounter(t_b, rs))
+    return to_ret
 
 def current_cost_center() -> str | None:
     """The name of the innermost named budget scope, or ``None`` outside any (the run
@@ -69,15 +118,40 @@ def current_cost_center() -> str | None:
     budget is installed."""
     return _cost_center_name.get()
 
-
-DEFAULT_BUDGET_PRESSURE_MESSAGE = """
+DEFAULT_RESOURCE_PRESSURE_MESSAGE = """
 <system-alert>
-You have almost exceeded the token cost budget allotted for this task.
+You have almost exceeded the {resource} allotted for this task.
 
 Finish your task in as orderly a fashion as possible; partial/incomplete results are better
 than going over budget.
 </system-alert>
 """
+
+DEFAULT_BUDGET_PRESSURE_MESSAGE = DEFAULT_RESOURCE_PRESSURE_MESSAGE.format(resource="token cost budget")
+
+DEFAULT_TIME_PRESSURE_MESSAGE = DEFAULT_RESOURCE_PRESSURE_MESSAGE.format(resource="time")
+
+_DEFAULT_WARNINGS : _ConstraintWarnings = {
+    "time": DEFAULT_TIME_PRESSURE_MESSAGE,
+    "token": DEFAULT_BUDGET_PRESSURE_MESSAGE
+}
+
+class _WarningState(TypedDict):
+    time: bool
+    token: bool
+
+@contextmanager
+def time_budget(
+    total: float
+) -> Iterator[None]:
+    prev = _time_budget.get()
+    if prev is not None:
+        raise ValueError("Timer already set, nested timings not supported")
+    prev_tok = _time_budget.set(total)
+    try:
+        yield
+    finally:
+        _time_budget.reset(prev_tok)
 
 @contextmanager
 def total_budget(
@@ -160,51 +234,64 @@ def accumulate_cost(
         accum.curr_cost += cost
         accum = accum.parent
 
+def _none_if_empty[
+    T: list[AnyMessage] | dict[str, Any]
+](
+    s: T
+) -> T | None:
+    if not s:
+        return None
+    return s
+
 def budget_monitor(
     *,
     warn_threshold: float = BUDGET_PRESSURE_THRESHOLD,
-    warning_message: str | Callable[[StateVar], str] | None = None,
-    state_transformer: Callable[[StateVar], dict[str, Any]] | None = None,
-    on_overbudget: Callable[[], None] | None = None
+    warning_message: str | Callable[[StateVar, ConstraintType], str] | None = None,
+    state_transformer: Callable[[StateVar, ConstraintType], dict[str, Any]] | None = None,
+    on_overbudget: Callable[[ConstraintType], None] | None = None
 ) -> StateMonitor[StateVar]:
-    accum = _budget_accumulator.get()
-    if accum is None:
+    accum = _get_constraints()
+    if len(accum) == 0:
         return lambda _ign: (None, None)
-    warned = False
+    warned : _WarningState = {
+        "time": False,
+        "token": False
+    }
     def monitor(
         curr_state: StateVar
     ) -> MonitorReturn:
-        nonlocal warned
-        if accum.overbudget() and on_overbudget is not None:
-            on_overbudget()
-        if warned or not accum.pressured(warn_threshold):
-            return (None, None)
-        warned = True
-        msg : str
-        if warning_message is None:
-            msg = DEFAULT_BUDGET_PRESSURE_MESSAGE
-        elif isinstance(warning_message, str):
-            msg = warning_message
-        else:
-            msg = warning_message(curr_state)
-        
-        state_upd = None
-        if state_transformer is not None:
-            state_upd = state_transformer(curr_state)
-        return ([HumanMessage(msg)], state_upd)
-    return monitor 
+        to_ret : list[AnyMessage] = []
+        upd : dict[str, Any] = {}
+        for acc in accum:
+            if acc.overbudget() and on_overbudget is not None:
+                on_overbudget(acc.sort)
+            if not acc.pressured(warn_threshold) or warned[acc.sort]:
+                continue
+            warned[acc.sort] = True
+            
+            if warning_message is None:
+                msg = _DEFAULT_WARNINGS[acc.sort]
+            elif isinstance(warning_message, str):
+                msg = warning_message
+            else:
+                msg = warning_message(curr_state, acc.sort)
+            to_ret.append(HumanMessage(msg))
+            if state_transformer is not None:
+                upd.update(state_transformer(curr_state, acc.sort))
+        return _none_if_empty(to_ret), _none_if_empty(upd)
+    return monitor
 
-def overbudget() -> bool:
-    res = _budget_accumulator.get()
-    if res is None:
-        return False
-    return res.overbudget()
+def constraint_sort_to_noun(s: ConstraintType) -> LiteralString:
+    match s:
+        case "time":
+            return "Time"
+        case "token":
+            return "Token cost"
 
-
-def raise_budget_exceeded() -> None:
+def raise_budget_exceeded(sort: ConstraintType) -> Never:
     """``on_overbudget`` callback for agents that opt into the hard stop."""
     raise BudgetExceeded(
-        "Token cost budget exhausted; the agent was cooperatively terminated."
+        f"{constraint_sort_to_noun(sort)} budget exhausted; the agent was cooperatively terminated."
     )
 
 
@@ -214,10 +301,8 @@ def budget_pressure() -> bool:
     pool, whichever trips first. False when no budget is installed. Use this
     to skip launching work that would only be told to immediately pack it in
     (e.g. further property-extraction rounds)."""
-    res = _budget_accumulator.get()
-    if res is None:
-        return False
-    return res.pressured()
+    res = _get_constraints()
+    return any(r.pressured() for r in res)
 
 
 def pressure_abort_monitor() -> StateMonitor[MessagesState]:

@@ -168,6 +168,12 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
         """Path to a run-budget file (see :func:`parse_budget_file`), or None to run unbudgeted."""
         ...
 
+    @property
+    def time_budget(self) -> float | None:
+        """
+        Time in floating point seconds that autoprover should run. None to run with unlimited, in process timeout
+        """
+
 @dataclass
 class StagedPipeline:
     conns: IndexedConnections
@@ -350,7 +356,8 @@ async def cli_pipeline[P: enum.Enum, H](
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
                     threat_model=threat_model,
-                    budget=budget
+                    budget=budget,
+                    time_budget_s=args.time_budget
                 )
 
             yield (StagedPipeline(

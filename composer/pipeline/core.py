@@ -17,8 +17,9 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Protocol, cast, ContextManager
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 
 from pydantic import BaseModel
 
@@ -44,7 +45,7 @@ from .ptypes import (
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
     Curtailed, Delivered, GaveUp, PipelineRun, SystemAnalysisSpec, RunBudget
 )
-from composer.diagnostics.budget import total_budget, named_budget_or_nop
+from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_budget
 from .plugin_api import PrePropertyInference, PostPropertyInference
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
 
@@ -160,6 +161,18 @@ def extract_task_id(idx: int) -> str:
 def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
+def _budget_context(budget: RunBudget | None) -> ContextManager[None]:
+    if budget is not None:
+        return total_budget(budget.total, cast(dict[str, float], budget.caps))
+    else:
+        return nullcontext()
+
+def _time_context(time_budget_s: float | None) -> ContextManager[None]:
+    if time_budget_s is not None:
+        return time_budget(time_budget_s)
+    else:
+        return nullcontext()
+
 async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier](
     backend: PipelineBackend[P, FormT, H, A],
     run: PipelineRun[P, H],
@@ -167,15 +180,13 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     interactive: bool = False,
     threat_model: Document | None = None,
     max_bug_rounds: int = 3,
-    budget: RunBudget | None = None
+    budget: RunBudget | None = None,
+    time_budget_s : float | None = None
 ) -> CorePipelineResult[FormT]:
-    if budget is not None:
-        with total_budget(budget.total, cast(dict[str, float], budget.caps)):
-            return await _run_pipeline_inner(
-                backend, run, interactive=interactive, 
-                max_bug_rounds=max_bug_rounds, threat_model=threat_model
-            )
-    else:
+    with (
+        _budget_context(budget),
+        _time_context(time_budget_s)
+    ):
         return await _run_pipeline_inner(
             backend, run, interactive=interactive, 
             max_bug_rounds=max_bug_rounds, threat_model=threat_model

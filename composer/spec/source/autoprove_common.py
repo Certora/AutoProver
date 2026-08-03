@@ -51,6 +51,7 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     recursion_limit: int
     max_bug_rounds: int
     budget: str | None
+    time_budget: float | None
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'thread' model (text or pdf) with which to seed the property extraction process")
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
     parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
 
     args = cast(AutoProveArgs, parser.parse_args())
     async with autoprove_executor(args, summary) as runner:
