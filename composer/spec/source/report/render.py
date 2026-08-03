@@ -177,6 +177,25 @@ def outcome_label(backend: ReportBackend, outcome: Outcome) -> str:
     return _OUTCOME_LABELS[backend][outcome]
 
 
+#: One glyph per outcome, for the places a verdict has to scan at a glance rather than read: the
+#: console rollup's per-unit listing and the TUI's notice callouts. Backend-independent, unlike the
+#: labels — a ✓ means the same thing whichever prover produced it.
+_OUTCOME_GLYPHS: dict[Outcome, str] = {
+    Outcome.GOOD: "✓",
+    Outcome.BAD: "✗",
+    Outcome.TIMEOUT: "⧖",
+    Outcome.ERROR: "!",
+    Outcome.UNKNOWN: "?",
+}
+
+
+def outcome_glyph(outcome: Outcome) -> str:
+    """The at-a-glance mark for an ``Outcome``. Lives beside :func:`outcome_label` because it answers
+    the same question — how this outcome reads to a human — and the two were drifting as separate
+    tables in the console rollup and the TUI."""
+    return _OUTCOME_GLYPHS[outcome]
+
+
 def _is_url(link: str) -> bool:
     return link.startswith("http://") or link.startswith("https://")
 

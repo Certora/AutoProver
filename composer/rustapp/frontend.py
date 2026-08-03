@@ -24,6 +24,8 @@ from textual.widgets import Collapsible, RichLog
 from composer.io.event_handler import EventHandler, NullEventHandler
 from composer.io.multi_job import TaskInfo
 from composer.ui.multi_console_handler import MultiJobConsoleHandler
+from composer.spec.source.report.render import outcome_glyph
+from composer.spec.source.report.schema import Outcome
 from composer.ui.multi_job_app import MultiJobApp, MultiJobTaskHandler, TaskHost
 from composer.ui.tool_display import ToolDisplayConfig
 
@@ -37,23 +39,17 @@ def _render_event(payload: dict) -> str:
     return json.dumps(rest) if rest else ""
 
 
-# Glyph for a notice event that carries a neutral ``outcome`` (e.g. a verdict). Mirrors
-# the report/TUI GOOD→✓ / BAD→✗ vocabulary so a result scans at a glance.
-_OUTCOME_GLYPH: dict[str, str] = {
-    "GOOD": "✓",  # ✓
-    "BAD": "✗",  # ✗
-    "TIMEOUT": "⧖",  # ⧖
-    "ERROR": "!",
-    "UNKNOWN": "?",
-}
-
-
 def _notice_headline(payload: dict) -> str:
-    """The persistent-callout headline for a notice event: its one-line rendering,
-    prefixed with an outcome glyph when the payload carries one."""
+    """The persistent-callout headline for a notice event: its one-line rendering, prefixed with an
+    outcome glyph when the payload names one the report knows.
+
+    The glyph table is the report's (``outcome_glyph``), not a copy: a ✓ has to mean the same thing
+    here, in the console rollup and in the HTML. An ``outcome`` this host doesn't recognize just
+    goes unmarked."""
     body = _render_event(payload)
-    glyph = _OUTCOME_GLYPH.get(payload.get("outcome", "")) if isinstance(payload.get("outcome"), str) else None
-    return f"{glyph} {body}" if glyph else body
+    raw = payload.get("outcome")
+    outcome = Outcome.parse(raw) if isinstance(raw, str) else None
+    return f"{outcome_glyph(outcome)} {body}" if outcome is not None else body
 
 
 class GenericRustTaskHandler(MultiJobTaskHandler[None], NullEventHandler):

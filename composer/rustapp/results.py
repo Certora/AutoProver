@@ -17,21 +17,12 @@ from dataclasses import dataclass
 
 from composer.pipeline.core import CorePipelineResult, Delivered
 from composer.rustapp.result import RustFormalResult
-from composer.spec.source.report.render import outcome_label
+from composer.spec.source.report.render import outcome_glyph, outcome_label
 from composer.spec.source.report.schema import Outcome, ReportBackend
 
 # Tally display order — mirrors render.py's ``_OUTCOME_ORDER`` so the console and the HTML report
 # list outcomes in the same sequence.
 _ORDER = [Outcome.GOOD, Outcome.BAD, Outcome.TIMEOUT, Outcome.ERROR, Outcome.UNKNOWN]
-
-# Per-verdict glyph — mirrors the TUI's lifecycle indicators (✓/✗) so a GOOD/BAD scans at a glance.
-_GLYPH: dict[Outcome, str] = {
-    Outcome.GOOD: "✓",
-    Outcome.BAD: "✗",
-    Outcome.TIMEOUT: "⧖",
-    Outcome.ERROR: "!",
-    Outcome.UNKNOWN: "?",
-}
 
 
 @dataclass(frozen=True)
@@ -101,6 +92,7 @@ def format_verdict_lines(summary: VerdictSummary, *, indent: str = "  ") -> list
     lines = [f"{indent}Verdicts:     {summary.tally}"]
     for v in summary.verdicts:
         lines.append(
-            f"{indent}  {_GLYPH[v.outcome]} {v.name} — {outcome_label(summary.backend_tag, v.outcome)}"
+            f"{indent}  {outcome_glyph(v.outcome)} {v.name} — "
+            f"{outcome_label(summary.backend_tag, v.outcome)}"
         )
     return lines

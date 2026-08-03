@@ -20,12 +20,27 @@ ChainTag = Literal["evm", "solana", "soroban"]
 
 
 class CoreSlot(str, enum.Enum):
-    """Which driver-tagged core phase a declared phase fills."""
+    """Which host-tagged step a declared phase groups.
+
+    A phase with no slot is UI-only (cf. autoprove's harness/autosetup). The four the *driver* runs
+    are :meth:`required` and every application must map them; the rest are optional steps the host
+    runs around it, which fall back to a sensible phase when unclaimed."""
 
     ANALYSIS = "analysis"
     EXTRACTION = "extraction"
     FORMALIZATION = "formalization"
     REPORT = "report"
+    #: Design-doc discovery, which the *entry point* runs before the pipeline (only when the doc
+    #: wasn't passed on the command line). Optional: unclaimed, the task is grouped under the first
+    #: declared phase. A wheel that wants it in a section of its own claims this slot rather than
+    #: relying on a phase key the host would have to recognize by name.
+    DISCOVERY = "discovery"
+
+    @classmethod
+    def required(cls) -> tuple["CoreSlot", ...]:
+        """The slots every application must fill — the four steps the shared driver itself runs, and
+        therefore tags every run with."""
+        return (cls.ANALYSIS, cls.EXTRACTION, cls.FORMALIZATION, cls.REPORT)
 
 
 class DeliverableMode(str, enum.Enum):

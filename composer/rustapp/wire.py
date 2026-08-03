@@ -30,9 +30,6 @@ from composer.spec.source.report.schema import Outcome
 
 _log = logging.getLogger(__name__)
 
-_KNOWN_OUTCOMES: frozenset[str] = frozenset(o.value for o in Outcome)
-
-
 # ---------------------------------------------------------------------------
 # Outbound — what the host sends into a callout.
 # ---------------------------------------------------------------------------
@@ -205,7 +202,7 @@ class Verdict(BaseModel):
 
         The label is a diagnostic, and a wheel emitting one we've never heard of is version skew —
         not a corrupt payload. Losing one row's wording beats losing the run's results."""
-        if isinstance(value, str) and value not in _KNOWN_OUTCOMES:
+        if isinstance(value, str) and Outcome.parse(value) is None:
             _log.warning("wheel reported unknown outcome %r; recording UNKNOWN", value)
             return Outcome.UNKNOWN
         return value

@@ -109,10 +109,11 @@ def build_phase_enum(descriptor: AppDescriptor) -> type[enum.Enum]:
 def build_core_phases(
     descriptor: AppDescriptor, phase: type[enum.Enum]
 ) -> CorePhases:
-    """Map the descriptor's core-slot declarations onto the synthesized enum. Every
-    slot must be filled — the driver tags all four."""
+    """Map the descriptor's core-slot declarations onto the synthesized enum. Every *required*
+    slot must be filled — the driver tags all four (the optional ones fall back; see
+    :class:`CoreSlot`)."""
     slot_to_key = descriptor.core_slot_map()
-    missing = [s.value for s in CoreSlot if s not in slot_to_key]
+    missing = [s.value for s in CoreSlot.required() if s not in slot_to_key]
     if missing:
         raise ValueError(
             f"descriptor {descriptor.name!r} is missing core phase(s): {missing}. "

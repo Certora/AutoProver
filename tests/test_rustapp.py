@@ -49,9 +49,11 @@ def test_descriptor_parses_and_maps_core_phases():
     # rather than inventing a vocabulary the report can't render. Anything outside the set now fails
     # here, at descriptor load, instead of later when the formalizer is constructed.
     assert desc.backend_tag == "prover"
-    # All four core slots are mapped, plus a UI-only "solving" phase.
+    # Every *required* slot is mapped, plus a UI-only "solving" phase. The optional DISCOVERY slot is
+    # left unclaimed, which is the common case: the design-doc task then groups under the first phase.
     slots = desc.core_slot_map()
-    assert set(slots) == set(CoreSlot)
+    assert set(slots) == set(CoreSlot.required())
+    assert CoreSlot.DISCOVERY not in slots
     keys = [p.key for p in desc.ordered_phases()]
     assert keys == ["analysis", "extraction", "solving", "formalization", "report"]
 

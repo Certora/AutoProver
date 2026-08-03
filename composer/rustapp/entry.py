@@ -18,6 +18,7 @@ database can supply its own env builder via ``env_builder=``.
 
 import argparse
 import asyncio
+import enum
 import hashlib
 import json
 import os
@@ -43,7 +44,7 @@ from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import CorePipelineResult
 from composer.rag.models import get_model
 from composer.rustapp.adapter import program_crate_of
-from composer.rustapp.descriptor import ArgDefault, ArgSpec
+from composer.rustapp.descriptor import ArgDefault, ArgSpec, CoreSlot
 from composer.rustapp.wire import parse_sandbox_grants
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
@@ -179,15 +180,16 @@ def _add_declared_args(parser: argparse.ArgumentParser, specs: list[ArgSpec]) ->
     return dests
 
 
-def _discovery_phase(app: RustApplication) -> Any:
-    """The phase to tag the design-doc-discovery task with: a descriptor phase keyed
-    ``discover_design_doc`` if the app declares one (a dedicated UI section), else the
-    first ordered phase (so a generic wheel still groups it somewhere sensible)."""
-    ordered = app.descriptor.ordered_phases()
-    key = "discover_design_doc"
-    if any(p.key == key for p in ordered):
-        return app.phase[key]
-    return app.phase[ordered[0].key]
+def _discovery_phase(app: RustApplication) -> enum.Enum:
+    """The phase to tag the design-doc-discovery task with: the phase claiming
+    :attr:`CoreSlot.DISCOVERY`, else the first ordered phase (so a wheel that doesn't care still
+    groups it somewhere sensible).
+
+    Claimed by slot rather than by a phase *key* the host recognizes: the descriptor already has a
+    mechanism for "this declared phase fills that role", and a magic key would be a convention a
+    wheel author has to know to spell exactly right — with no error if they didn't."""
+    key = app.descriptor.core_slot_map().get(CoreSlot.DISCOVERY)
+    return app.phase[key or app.descriptor.ordered_phases()[0].key]
 
 
 @asynccontextmanager

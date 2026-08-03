@@ -39,6 +39,11 @@ pub enum CoreSlot {
     Extraction,
     Formalization,
     Report,
+    /// Design-doc discovery, which the host's entry point runs *before* the pipeline (and only when
+    /// the doc wasn't given on the command line). Unlike the four above it is optional: claim it to
+    /// give that task a section of its own, or leave it and the host groups the task under the first
+    /// declared phase.
+    Discovery,
 }
 
 /// One task-grouping phase. `key` becomes the synthesized `enum.Enum` member

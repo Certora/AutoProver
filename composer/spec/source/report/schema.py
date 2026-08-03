@@ -55,6 +55,19 @@ class Outcome(str, Enum):
     TIMEOUT = "TIMEOUT"
     UNKNOWN = "UNKNOWN"
 
+    @classmethod
+    def parse(cls, raw: str) -> "Outcome | None":
+        """``raw`` as an outcome, or ``None`` when it names none.
+
+        For values arriving from outside this repo — a backend wheel's JSON, a ``report.json`` read
+        cold — where an unrecognized label is version skew rather than a bug, and the caller decides
+        what to do about it (record UNKNOWN, drop a glyph). For a value we produced ourselves,
+        ``Outcome(raw)`` and its ValueError remain the right thing."""
+        try:
+            return cls(raw)
+        except ValueError:
+            return None
+
 
 class GroupStatus(str, Enum):
     """Aggregated outcome for a `PropertyGroup`, rolled up from the `Outcome` of the rules its

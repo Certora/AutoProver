@@ -10,6 +10,8 @@ import asyncio
 from typing import Any, cast
 
 from composer.rustapp.frontend import GenericRustTaskHandler, _notice_headline
+from composer.spec.source.report.render import outcome_glyph
+from composer.spec.source.report.schema import Outcome
 from composer.ui.tool_display import ToolDisplayConfig
 
 
@@ -20,6 +22,20 @@ def test_notice_headline_prefixes_outcome_glyph():
 
 def test_notice_headline_without_outcome_is_plain_line():
     assert _notice_headline({"line": "building…"}) == "building…"
+
+
+def test_notice_headline_glyphs_come_from_the_reports_own_table():
+    # One table, not a copy: a ✓ must mean the same thing in the callout, the console rollup and the
+    # HTML report. The TUI used to keep its own string-keyed dict beside the rollup's enum-keyed one.
+    assert all(
+        _notice_headline({"outcome": o.value, "line": "x"}) == f"{outcome_glyph(o)} x"
+        for o in Outcome
+    )
+
+
+def test_an_outcome_the_host_does_not_know_goes_unmarked():
+    # A wheel emitting a label from a newer SDK loses its glyph, not its line.
+    assert _notice_headline({"outcome": "FLAKY", "line": "odd"}) == "odd"
 
 
 class _RecordingHandler(GenericRustTaskHandler):
