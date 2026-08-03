@@ -38,11 +38,23 @@ class ProgramCrate:
     #: (Cargo's default). This — not the package name — is the Rust identifier (``use <lib>::*``)
     #: and the compiled artifact's basename.
     lib: str
-    #: The crate's declared ``anchor-lang`` requirement, verbatim (workspace inheritance resolved);
-    #: ``""`` when it declares none. A dependent can only link the crate if this matches its own
-    #: Anchor major — Anchor's generated trait impls belong to the exact ``anchor-lang`` that
-    #: generated them — so it decides whether a harness can depend on the crate at all.
-    anchor: str = ""
+    #: The crate's declared ``anchor-lang`` requirement, verbatim (workspace inheritance resolved).
+    #: ``None`` when there is nothing to compare — the crate declares no ``anchor-lang``, or declares
+    #: it without a version (a git/path dep). A dependent can only link the crate if this matches its
+    #: own Anchor major — Anchor's generated trait impls belong to the exact ``anchor-lang`` that
+    #: generated them — so it decides whether a harness can depend on the crate at all, and "unknown"
+    #: has to be distinguishable from a version rather than being spelled as one.
+    anchor: str | None = None
+
+    def program_names(self) -> set[str]:
+        """The names a *project* might call this program, normalized for comparison.
+
+        Anchor's ``[programs.<cluster>]`` key is the program name, which projects spell as the crate
+        directory, the package, or the lib — the three are independent, so all three are candidates
+        (see :func:`composer.spec.solana.build.resolve_program_id`)."""
+        return {
+            n.replace("-", "_") for n in (Path(self.dir).name, self.package, self.lib) if n
+        }
 
 
 def resolve_program_crate(project_root: str | Path, relative_path: str) -> ProgramCrate | None:
@@ -98,25 +110,26 @@ def _table_name(table: object) -> str | None:
     return None
 
 
-def _dep_req(data: dict, dep: str, crate_dir: Path, root: Path) -> str:
-    """``dep``'s version requirement as declared in ``data``'s ``[dependencies]``, or ``""``.
+def _dep_req(data: dict, dep: str, crate_dir: Path, root: Path) -> str | None:
+    """``dep``'s version requirement as declared in ``data``'s ``[dependencies]``, or ``None``.
 
     Handles the three spellings a member crate uses: a bare string, a table with ``version``, and
     ``{ workspace = true }`` — which is resolved through the workspace root's
-    ``[workspace.dependencies]``. A git/path dependency has no version requirement, so it reads as
-    ``""`` (unknown) rather than a version we'd compare wrongly."""
+    ``[workspace.dependencies]``. ``None`` means there is no requirement to compare: the dependency
+    is absent, or is a git/path dep that states no version. Deliberately not ``""`` — a caller
+    comparing versions must not receive something that looks like one."""
     spec = (data.get("dependencies") or {}).get(dep)
     if isinstance(spec, str):
         return spec
     if not isinstance(spec, dict):
-        return ""
+        return None
     if spec.get("workspace") is True:
         inherited = _workspace_deps(crate_dir, root).get(dep)
         if isinstance(inherited, str):
             return inherited
         spec = inherited if isinstance(inherited, dict) else {}
     version = spec.get("version")
-    return version if isinstance(version, str) else ""
+    return version if isinstance(version, str) else None
 
 
 def _workspace_deps(crate_dir: Path, root: Path) -> dict:

@@ -13,7 +13,8 @@ import pytest
 
 import composer.spec.solana.build as buildmod
 from composer.rustapp.adapter import run_workspace_prep
-from composer.rustapp.wire import AuthorInput, ProgramCrate
+from composer.rustapp.wire import AuthorInput, ProgramCrate as WireCrate
+from composer.spec.cargo import ProgramCrate
 from composer.spec.solana.build import BuiltProgram
 
 pytestmark = pytest.mark.asyncio
@@ -21,7 +22,10 @@ pytestmark = pytest.mark.asyncio
 #: The program id. An IDL must name the program's address; these fakes carry it except where a
 #: test is specifically about filling it in.
 ADDR = "LendvUkXRmuDKxGCCFJra9uxWMdMooPEmJk3qp7Tg1Z"
+#: The resolved crate the host carries, and the wire copy derived from it — the prep needs both:
+#: the wheel is sent the wire shape, while the IDL normalization reads the real names.
 CRATE = ProgramCrate(dir="programs/lend", package="example_lending", lib="example_lending")
+WIRE_CRATE = WireCrate(dir=CRATE.dir, package=CRATE.package, lib=CRATE.lib)
 
 
 class FakeWheel:
@@ -58,8 +62,9 @@ async def _prep(wheel, root: Path, context: dict | None = None) -> str | None:
     return await run_workspace_prep(
         wheel,
         AuthorInput(
-            kind="preflight", program="vault", program_crate=CRATE, context=context or {}
+            kind="preflight", program="vault", program_crate=WIRE_CRATE, context=context or {}
         ),
+        crate=CRATE,
         workdir=root, sandbox=None, command_timeout_s=60,
     )
 

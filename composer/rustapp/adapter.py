@@ -56,6 +56,7 @@ from composer.pipeline.core import (
     SystemAnalysisSpec,
 )
 from composer.pipeline.ecosystem import Ecosystem, source_crate_of
+from composer.spec.cargo import ProgramCrate as CargoCrate
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, StepSpec
@@ -277,9 +278,9 @@ async def run_llm_agent(
     env: ServiceHost, prompt: Prompt, *, recursion_limit: int, backend_name: str = "rust",
     turn_label: str = "authoring", judge: "_JudgeHook | None" = None,
     memory_tool: BaseTool | None = None, exclude_tools: frozenset[str] = frozenset(),
-) -> str:
-    """Run one bounded, tool-enabled turn and return its final text. ``turn_label``
-    names the turn's role ("authoring" / "judge") for the UI/log panel.
+) -> str | None:
+    """Run one bounded, tool-enabled turn and return its final text, or ``None`` if the turn ended
+    without one. ``turn_label`` names the turn's role ("authoring" / "judge") for the UI/log panel.
 
     Binds the env's tool belt (source navigation + RAG search over the backend's
     knowledge base) and a result tool, and runs an agent to completion — so the
@@ -328,7 +329,11 @@ async def run_llm_agent(
         description=f"{backend_name} {turn_label} turn",
     )
     result = res.get("result")
-    return result if isinstance(result, str) else json.dumps(result)
+    # ``result`` is ``NotRequired``: the agent may end its turn without ever calling the result tool
+    # (it ran out of recursion, or just stopped). ``None`` says so. It used to be JSON-dumped, which
+    # handed the caller the literal string "null" as if it were the authored artifact — a draft that
+    # then went to the toolchain and spent an attempt on a build nobody could have fixed.
+    return result if isinstance(result, str) else None
 
 
 # ---------------------------------------------------------------------------
@@ -412,14 +417,24 @@ def _parse_judge(reply: str) -> Review:
     return Rejected(reply) if reply.strip().upper().startswith("REJECT") else Accepted(reply)
 
 
+#: What the next authoring turn is told when the previous one produced no artifact at all. It is a
+#: failure like any other — it costs an attempt — but the toolchain never sees it, because there is
+#: nothing to build.
+_NO_ARTIFACT = (
+    "The previous attempt ended without calling the `result` tool, so it produced no artifact. "
+    "Explore less and finalize: call `result` with your complete artifact source."
+)
+
+
 async def _author_turn(
     module: RustAppModule, input_json: str, failure: Failure | None, *, env: ServiceHost,
     recursion_limit: int, backend_name: str, judge: "_JudgeHook | None" = None,
     memory_tool: BaseTool | None = None,
-) -> str:
+) -> str | None:
     """One authoring turn: render the backend's prompt (with any prior failure as revise
-    context), run the tool-enabled LLM agent, and strip a code fence off the result. When
-    ``judge`` is given, the author reviews and self-revises in-session (docs/crucible-judge-in-loop.md (PR3))."""
+    context), run the tool-enabled LLM agent, and strip a code fence off the result. ``None`` when
+    the agent ended its turn without producing one. When ``judge`` is given, the author reviews and
+    self-revises in-session (docs/crucible-judge-in-loop.md (PR3))."""
     prompt = parse_prompt(
         module.author_prompt(input_json, failure.model_dump_json() if failure is not None else None)
     )
@@ -427,7 +442,7 @@ async def _author_turn(
         env, prompt, recursion_limit=recursion_limit, backend_name=backend_name,
         judge=judge, memory_tool=memory_tool,
     )
-    return _strip_fence(reply)
+    return _strip_fence(reply) if reply is not None else None
 
 
 # The review sub-agent gets the program API + fixture in its prompt and shares the run memory, so
@@ -455,6 +470,11 @@ async def _judge_turn(
         backend_name=backend_name, turn_label="judge", memory_tool=memory_tool,
         exclude_tools=_JUDGE_EXCLUDE_TOOLS,
     )
+    if reply is None:
+        # A reviewer that never stated a verdict has not rejected anything. Same reasoning as an
+        # unparseable reply (see :func:`_parse_judge`): it is an advisory gate, so it fails open.
+        _log.warning("%s: judge turn ended without a verdict; treating as accepted", backend_name)
+        return Accepted()
     review = _parse_judge(reply)
     accepted = isinstance(review, Accepted)
     if emit is not None:
@@ -509,9 +529,16 @@ async def author_and_compile(
         spec = await _author_turn(
             module, input_json, failure, env=env, recursion_limit=recursion_limit, backend_name=backend_name
         )
+        if spec is None:
+            _log.warning("%s: authoring turn produced no artifact; retrying", backend_name)
+            failure = Failure(draft="", errors=_NO_ARTIFACT)
+            continue
         result = parse_compile(
             await _run_blocking(
-                lambda: module.compile(input_json, spec, str(workdir), sandbox_json), command_sem
+                # ``spec=spec`` binds this attempt's draft (the name is rebound each round), the
+                # same capture the per-target ``validate`` loop makes.
+                lambda spec=spec: module.compile(input_json, spec, str(workdir), sandbox_json),
+                command_sem,
             )
         )
         if not isinstance(result, CompileOk):
@@ -563,11 +590,22 @@ def program_crate_of(
     ``source.contract_name``, which is only the analysis identifier. Every field is empty when the
     language has no such unit (Solidity) or it couldn't be resolved, in which case the wheel applies
     its own convention.
+
+    This is the seam: the resolver's own :class:`composer.spec.cargo.ProgramCrate` is the type
+    everything on the Python side passes around (its ``anchor`` is ``None`` when unknown), and it is
+    flattened into the wire shape — where "unknown" has to be an empty string, because that is what
+    the Rust struct's ``#[serde(default)]`` fields are — only here, on the way out.
     """
-    crate = source_crate_of(ecosystem, source)
+    return wire_crate(source_crate_of(ecosystem, source))
+
+
+def wire_crate(crate: CargoCrate | None) -> ProgramCrate:
+    """The wire form of a resolved crate; all-empty when nothing was resolved."""
     if crate is None:
         return ProgramCrate()
-    return ProgramCrate(dir=crate.dir, package=crate.package, lib=crate.lib, anchor=crate.anchor)
+    return ProgramCrate(
+        dir=crate.dir, package=crate.package, lib=crate.lib, anchor=crate.anchor or ""
+    )
 
 
 def _setup_identity(input: AuthorInput) -> str:
@@ -593,6 +631,7 @@ async def run_workspace_prep(
     module: RustAppModule,
     input: AuthorInput,
     *,
+    crate: CargoCrate | None,
     workdir: Path,
     sandbox: SandboxConfig | None,
     command_timeout_s: int,
@@ -607,7 +646,11 @@ async def run_workspace_prep(
     Network stays Python-owned and the posture is unchanged: fetches run *unconfined* (a fetch
     executes no untrusted code), the code-executing build runs *confined + offline*
     (``build_program`` handles both). The wheel supplies only file contents + which dirs/program —
-    never a command line."""
+    never a command line.
+
+    ``crate`` is the *resolved* crate the wire ``input.program_crate`` was flattened from — the IDL
+    normalization needs the program's real names, and reconstructing them from the wire copy would
+    mean reading back fields whose emptiness no longer says whether anything was resolved."""
     plan = parse_workspace_prep(module.workspace_prep(input.model_dump_json()))
     for rel, contents in plan.files.items():
         target = _confined_target(workdir, rel)
@@ -660,12 +703,7 @@ async def run_workspace_prep(
     # Normalized on the way in: an IDL must name the program's address, and the one `anchor idl
     # build` emits for a pre-0.30 program doesn't (see ``idl_with_program_id``).
     dest.write_text(
-        idl_with_program_id(
-            idl_src.read_text(), project_root=workdir,
-            # ``build.py`` speaks the wire dict (it is shared with the non-Rust Solana path); the
-            # typed crate is the host's, so it serializes here rather than there.
-            crate=input.program_crate.model_dump(),
-        )
+        idl_with_program_id(idl_src.read_text(), project_root=workdir, crate=crate)
     )
     _log.info("harness IDL: %s -> %s", idl_src, idl_dest)
     return idl_dest
@@ -756,7 +794,10 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # declare the same dependency the gated builds did. ``idl`` likewise: where workspace prep
         # placed the program's IDL, when the wheel asked for one instead of a crate dependency.
         self._program_crate = program_crate or ProgramCrate()
-        self._idl = idl or ""
+        # ``None`` = prep placed no IDL (so the wheel depends on the program's crate directly), which
+        # is a different fact from "it placed one at the empty path". The wire form flattens it to
+        # ``""`` in ``finalize`` below, because that is the shape the payload promises.
+        self._idl = idl
 
     # -- hooks an application backend may override -------------------------
 
@@ -827,6 +868,13 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name,
                 judge=judge_hook, memory_tool=memory_tool,
             )
+            if spec is None:
+                _log.warning(
+                    "%s: authoring turn for %s produced no artifact; retrying",
+                    self._descriptor.name, label,
+                )
+                failure = Failure(draft="", errors=_NO_ARTIFACT)
+                continue
 
             # Each report unit declares the *target* that validates it (its own name by default;
             # e.g. Crucible shares one `c_<component>` target across that component's units). Run each
@@ -921,7 +969,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         payload = FinalizeInput(
             program=str(run.source.contract_name),
             program_crate=self._program_crate,
-            idl=self._idl,
+            idl=self._idl or "",
             components=components,
             setup=self._setup_result,
         )
@@ -1160,8 +1208,10 @@ class RustBackend:
         descriptor = self.descriptor
         workdir = Path(run.source.project_root)
         # Resolved once per run and carried on every AuthorInput from here on: the wheel renders its
-        # crate from this, so prep, every gated build, and the deliverable name one dependency.
-        program_crate = program_crate_of(self.ecosystem, run.source)
+        # crate from this, so prep, every gated build, and the deliverable name one dependency. The
+        # resolved value travels as itself; the wire copy is derived from it, never the other way.
+        crate = source_crate_of(self.ecosystem, run.source)
+        program_crate = wire_crate(crate)
         # Declared args are in scope from the start: prep may need one (Crucible reads
         # ``program_idl`` when deciding how to source the program's types).
         prep_input = AuthorInput(
@@ -1171,7 +1221,7 @@ class RustBackend:
 
         async def prep() -> RustPreflight:
             idl = await run_workspace_prep(
-                self.module, prep_input, workdir=workdir,
+                self.module, prep_input, crate=crate, workdir=workdir,
                 sandbox=self.sandbox, command_timeout_s=self.command_timeout_s,
             )
             result = RustPreflight(program_crate=program_crate, idl=idl)

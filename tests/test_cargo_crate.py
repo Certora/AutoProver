@@ -56,9 +56,10 @@ def test_reads_the_anchor_requirement_through_workspace_inheritance(tmp_path):
     [
         ('anchor-lang = "1.0.1"', "1.0.1"),                                  # bare string
         ('anchor-lang = { version = "^0.31", features = ["x"] }', "^0.31"),   # table
-        ("", ""),                                                            # not an Anchor program
-        ('anchor-lang = { git = "https://x/anchor" }', ""),                  # no version to compare
-        ("anchor-lang = { workspace = true }", ""),                          # nothing to inherit
+        # Nothing to compare reads as None, never as a version-shaped "" — see `_dep_req`.
+        ("", None),                                                          # not an Anchor program
+        ('anchor-lang = { git = "https://x/anchor" }', None),                # no version to compare
+        ("anchor-lang = { workspace = true }", None),                        # nothing to inherit
     ],
 )
 def test_anchor_requirement_spellings(tmp_path, dependencies, expected):

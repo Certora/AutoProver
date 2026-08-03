@@ -11,9 +11,13 @@ So after a fixed number of rounds the draft goes forward with the concerns recor
 and the fuzzer still judge it; only the *reviewer* stops being able to block.
 """
 
-from typing import cast
+import json
+import pathlib
+from typing import Any, cast
 
 import pytest
+
+from composer.pipeline.core import GaveUp
 
 from composer.rustapp.adapter import (
     MAX_REVIEW_ROUNDS,
@@ -119,3 +123,57 @@ def test_prose_with_no_leading_verdict_is_taken_as_an_acceptance():
     # unparseable reply lets the draft through instead of burning a revise round on a verdict nobody
     # stated. Pinned so flipping it has to be a deliberate edit to this test.
     assert isinstance(_parse_judge("I read the fixture and the properties."), Accepted)
+
+
+# ---------------------------------------------------------------------------
+# A turn that produced nothing. `run_llm_agent` returns None when the agent ended without ever
+# calling the result tool — it used to be JSON-dumped, so the caller received the literal string
+# "null" and treated it as the authored artifact.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_authoring_turn_with_no_artifact_costs_an_attempt_but_never_reaches_the_toolchain(
+    monkeypatch,
+):
+    from composer.rustapp import adapter
+    from composer.rustapp.wire import AuthorInput
+
+    compiled: list[str] = []
+
+    class _Wheel:
+        def author_prompt(self, _input_json, failure_json):
+            self.last_failure = failure_json
+            return '{"instruction": "author it"}'
+
+        def compile(self, _input_json, spec, _workdir, _sandbox_json):
+            compiled.append(spec)
+            return '{"status": "ok"}'
+
+        def judge_prompt(self, _input_json, _spec):
+            return None
+
+    wheel = _Wheel()
+    turns = 0
+
+    async def no_result(*_a, **_kw) -> str | None:
+        nonlocal turns
+        turns += 1
+        return None  # the agent explored and stopped without calling `result`
+
+    monkeypatch.setattr(adapter, "run_llm_agent", no_result)
+    outcome = await adapter.author_and_compile(
+        cast(Any, wheel),
+        AuthorInput(kind="setup", program="vault"),
+        env=cast(Any, None), sandbox_dict={"argv_prefix": [], "timeout_s": 1},
+        workdir=pathlib.Path("/nonexistent"), recursion_limit=4, backend_name="t",
+        emit=lambda *_a: None, max_attempts=2,
+    )
+
+    # Every attempt is spent, and the loop gives up — but nothing was ever handed to `compile`,
+    # because there was no draft to build. ("null" used to be.)
+    assert isinstance(outcome, GaveUp)
+    assert turns == 2
+    assert compiled == []
+    # …and the next turn is told what went wrong, rather than being asked to revise a draft of "null".
+    assert "without calling the `result` tool" in json.loads(wheel.last_failure)["errors"]

@@ -10,10 +10,11 @@ import json
 import pytest
 
 import composer.spec.solana.build as buildmod
+from composer.spec.cargo import ProgramCrate
 
 ADDR = "LendvUkXRmuDKxGCCFJra9uxWMdMooPEmJk3qp7Tg1Z"
 STAGING = "StgXLspartwQUuGWdydvyicgYwZxH8gX43iy3xtBWJs"
-CRATE = {"dir": "programs/lend", "package": "example_lending", "lib": "example_lending"}
+CRATE = ProgramCrate(dir="programs/lend", package="example_lending", lib="example_lending")
 
 
 def _crate_src(root, *sources: str) -> None:
@@ -71,3 +72,17 @@ def test_idl_with_program_id_refuses_to_guess(tmp_path):
         buildmod.idl_with_program_id("{}", project_root=tmp_path, crate=CRATE)
     with pytest.raises(ValueError, match="not valid JSON"):
         buildmod.idl_with_program_id("{oops", project_root=tmp_path, crate=CRATE)
+
+
+def test_an_unresolved_crate_is_not_a_crate_named_dot(tmp_path):
+    # The resolver yields None when the layout has no crate; the program-id lookup used to receive a
+    # dict and paper that over with `crate.get("dir", ".")`, i.e. scan the root as if it were the
+    # crate and match against a set of empty names. `None` says it plainly, and the fallback (scan
+    # the root's own sources) is stated once, here.
+    (tmp_path / "Anchor.toml").write_text(f'[programs.localnet]\nlend = "{ADDR}"\n')
+    # No names to match, so the Anchor.toml entry is not claimed…
+    assert buildmod.resolve_program_id(tmp_path, None) is None
+    # …but a lone declare_id! at the root is still found.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "lib.rs").write_text(f'declare_id!("{STAGING}");\n')
+    assert buildmod.resolve_program_id(tmp_path, None) == STAGING

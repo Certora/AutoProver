@@ -17,6 +17,7 @@ from pathlib import Path
 
 from composer.sandbox.command import CommandResult, run_local_command
 from composer.sandbox.config import SandboxConfig
+from composer.spec.cargo import ProgramCrate
 from composer.sandbox.recipes import CARGO_REGISTRY_PROTOCOL, CARGO_REGISTRY_PROTOCOL_VAR
 
 _log = logging.getLogger(__name__)
@@ -51,28 +52,28 @@ class BuiltProgram:
     idl_path: Path | None
 
 
-def resolve_program_id(project_root: str | Path, crate: dict) -> str | None:
+def resolve_program_id(project_root: str | Path, crate: ProgramCrate | None) -> str | None:
     """The program's on-chain address, from ``Anchor.toml``'s ``[programs.<cluster>]`` table keyed by
     any of the crate's names, else a lone ``declare_id!`` in its source.
 
-    ``crate`` is a ``composer.spec.cargo.ProgramCrate`` blob (``dir``/``package``/``lib``): Anchor's
-    key is the *program* name, which projects spell as the directory, the package,
-    or the lib. Returns ``None`` when there is no manifest entry and the source declares several ids
-    (a real program's `staging` id was feature-gated behind the real one) — guessing between them would produce
-    a harness that calls a program that isn't there.
+    ``crate`` is the resolved :class:`~composer.spec.cargo.ProgramCrate`, or ``None`` when the layout
+    yielded none — then there are no names to match against and only the root's own sources to scan.
+    Returns ``None`` when there is no manifest entry and the source declares several ids (a real
+    program's ``staging`` id was feature-gated behind the real one) — guessing between them would
+    produce a harness that calls a program that isn't there.
     """
     root = Path(project_root)
-    names = {n.replace("-", "_") for n in (Path(crate.get("dir", ".")).name,
-                                          crate.get("package", ""), crate.get("lib", "")) if n}
+    names = crate.program_names() if crate is not None else set()
     if found := _anchor_toml_program_id(root / "Anchor.toml", names):
         return found
 
-    sources = sorted((root / crate.get("dir", ".") / "src").rglob("*.rs"))
+    crate_dir = crate.dir if crate is not None else "."
+    sources = sorted((root / crate_dir / "src").rglob("*.rs"))
     ids = {m for f in sources for m in _DECLARE_ID.findall(_read_or_empty(f))}
     if len(ids) == 1:
         return ids.pop()
     if ids:
-        _log.warning("%s declares %d program ids %s; not guessing", crate.get("dir"), len(ids), sorted(ids))
+        _log.warning("%s declares %d program ids %s; not guessing", crate_dir, len(ids), sorted(ids))
     return None
 
 
@@ -103,7 +104,9 @@ def _read_or_empty(path: Path) -> str:
         return ""
 
 
-def idl_with_program_id(idl_text: str, *, project_root: str | Path, crate: dict) -> str:
+def idl_with_program_id(
+    idl_text: str, *, project_root: str | Path, crate: ProgramCrate | None
+) -> str:
     """``idl_text`` with the program's address filled in, if it carries none.
 
     An IDL must name the program it describes — a harness derives the id it sends instructions to
