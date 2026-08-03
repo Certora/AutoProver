@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import certora_autosetup.utils.remappings as remappings_mod
 from certora_autosetup.utils.compilation_workarounds import CompilationWorkaroundManager
 from certora_autosetup.utils.types import ContractHandle
 
@@ -692,3 +693,50 @@ def test_compiling_line_takes_precedence_over_source_location(manager: Compilati
     # Pattern 2 wins, mapping to the contract actually being compiled.
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     assert manager._detect_stack_too_deep_errors(COMPILING_LINE_STACK_TOO_DEEP, contracts) == "Foo"
+
+
+# ---------------------------------------------------------------------------
+# Build-config directory for a monorepo sub-project
+# ---------------------------------------------------------------------------
+
+
+def _no_forge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulate `forge` not being installed (the CI reality)."""
+
+    def fake_run(*_args, **_kwargs):
+        raise FileNotFoundError("forge")
+
+    monkeypatch.setattr(remappings_mod.subprocess, "run", fake_run)
+
+
+def test_packages_come_from_the_nested_build_config_dir(tmp_path: Path, monkeypatch) -> None:
+    # Regression: the workaround read remapping sources from the run root, so a repo
+    # whose Foundry project sits one level down yielded only the root package.json deps.
+    # It then recomputed the identical list on the retry and gave up with
+    # "conf and command are unchanged".
+    _no_forge(monkeypatch)
+    (tmp_path / "package.json").write_text('{"dependencies": {"ethers": "^6"}}')
+    project = tmp_path / "sub"
+    project.mkdir()
+    (project / "foundry.toml").write_text(
+        '[profile.default]\nremappings = ["@pkg/=node_modules/@pkg/artifacts/src/"]\n'
+    )
+
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    packages = manager._build_packages_from_remapping_sources()
+
+    keys = {p.split("=", 1)[0] for p in packages}
+    assert "@pkg/" in keys, "nested foundry.toml remapping must reach the packages list"
+    # Paths are absolute against the build config dir, so they stay valid from the run root.
+    assert f"@pkg/={project / 'node_modules/@pkg/artifacts/src'}/" in packages
+
+
+def test_build_config_dir_defaults_to_project_root(tmp_path: Path, monkeypatch) -> None:
+    # Root-level projects keep today's behaviour without the caller passing anything.
+    _no_forge(monkeypatch)
+    (tmp_path / "foundry.toml").write_text('[profile.default]\nremappings = ["@oz/=lib/oz/"]\n')
+
+    manager = CompilationWorkaroundManager(project_root=tmp_path)
+
+    assert manager.build_config_dir == tmp_path
+    assert f"@oz/={tmp_path / 'lib/oz'}/" in manager._build_packages_from_remapping_sources()

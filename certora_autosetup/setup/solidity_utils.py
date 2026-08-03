@@ -51,7 +51,8 @@ def find_all_solidity_files(
     include_dependencies: bool = False,
     include_certora: bool = False,
     verbose: bool = False,
-    log_func=None
+    log_func=None,
+    root: Optional[Path] = None,
 ) -> List[str]:
     """Find all Solidity files in the current project.
 
@@ -61,6 +62,9 @@ def find_all_solidity_files(
         include_certora: Whether to include files in certora directories
         verbose: Whether to log verbose output
         log_func: Optional logging function to use (defaults to print)
+        root: Directory to scan, and the anchor the returned paths are relative to.
+            Defaults to the CWD. Pass the build system's project dir to get paths in
+            the same frame as the project-relative ones recorded in build artifacts.
 
     Returns:
         List of Solidity file paths
@@ -69,12 +73,14 @@ def find_all_solidity_files(
         log_func = lambda msg, level="INFO": _logger.log(msg, level)
 
     solidity_files = []
+    if root is None:
+        root = Path.cwd()
 
     # Common directories to search for Solidity files
     search_dirs = [
-        Path.cwd(),
-        Path.cwd() / "contracts",
-        Path.cwd() / "src"
+        root,
+        root / "contracts",
+        root / "src"
     ]
 
     # Find all .sol files, excluding system directories from traversal
@@ -83,17 +89,17 @@ def find_all_solidity_files(
             all_sol_files = []
 
             # Walk through directory and exclude hidden directories from traversal
-            for root, dirs, files in os.walk(search_dir):
+            for walk_root, dirs, files in os.walk(search_dir):
                 # Remove hidden directories and certora dir from dirs list to prevent os.walk from entering them
                 dirs[:] = [d for d in dirs if not d.startswith('.') and (include_certora or d != 'certora')]
 
                 # Add .sol files from this directory
                 for file in files:
                     if file.endswith('.sol'):
-                        # Store relative path from current working directory
-                        abs_path = Path(root) / file
+                        # Store path relative to the scanned root
+                        abs_path = Path(walk_root) / file
                         try:
-                            rel_path = abs_path.relative_to(Path.cwd())
+                            rel_path = abs_path.relative_to(root)
                             all_sol_files.append(rel_path)
                         except ValueError:
                             # If file is outside cwd, store absolute path
