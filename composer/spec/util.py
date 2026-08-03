@@ -61,7 +61,37 @@ def temp_certora_file(
     finally:
         os.unlink(tgt)
 
-FS_FORBIDDEN_READ = r"(^lib/.*)|(^\.certora_internal.*)|(^\.git.*)|(^test/.*)|(^emv-.*)|(.*\.json$)|(^node_modules/.*(?<!\.sol)$)"
+# Matches at any depth, for path components that occur nested as readily as they do
+# at the project root: a package's own dependency tree, a submodule's ``.git``, a
+# sub-project's ``.certora_internal``.
+_ANY_DEPTH = r"(?:.*/)?"
+
+# Paths the agent's source tools (``list_files`` / ``get_file`` / ``grep_files``) may
+# not read, as a single ``re.fullmatch`` alternation over project-root-relative POSIX
+# paths. Each alternative therefore has to match a whole path, not a prefix of one.
+FS_FORBIDDEN_READ = "|".join([
+    # A dependency tree's Solidity stays readable: the conf's ``packages`` remappings
+    # resolve into it, so it is part of the verification target's source. The rest of
+    # the tree (its JS, docs, lockfiles) is not.
+    rf"{_ANY_DEPTH}node_modules/.*(?<!\.sol)",
+    # Deliberately root-only, unlike the rule above. A dependency keeps its own
+    # transitive Solidity under nested ``lib/`` and ``test/`` directories, and the
+    # conf remaps into those, so matching these at any depth would hide source the
+    # agent has to be able to read.
+    r"lib/.*",
+    r"test/.*",
+    r"emv-.*",
+    rf"{_ANY_DEPTH}\.certora_internal.*",
+    rf"{_ANY_DEPTH}\.git.*",
+    # Machine-generated output. Beyond being unreadable, a minified bundle or packed
+    # data blob holds its content on very few very long lines — a single line can span
+    # megabytes — and a content grep reports whole matching lines.
+    r".*\.json",
+    rf"{_ANY_DEPTH}dist/.*",
+    r".*[.\-_](?:min|bundle)\.js",
+    r".*\.map",
+    r".*\.dat",
+])
 
 def uniq_thread_id(prefix: str) -> str:
     suff = uuid.uuid4().hex[:16]
