@@ -14,10 +14,16 @@ not the language the AutoProver backend is implemented in (see :class:`Language`
 Solana model + prompts and reuses the shared ``RUST`` language facet. See ``docs/ecosystem-abstraction.md``.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Callable, Literal, Mapping, TypedDict
 
+from composer.sandbox.recipes import (
+    SANDBOX_CARGO_DIR,
+    SANDBOX_RUSTUP_DIR,
+    SANDBOX_TMP_DIR,
+)
 from composer.spec.cargo import ProgramCrate, resolve_program_crate
 from composer.spec.context import SourceCode, SourceFields
 from composer.spec.code_explorer import CODE_EXPLORER_SYS_PROMPT
@@ -245,9 +251,18 @@ EVM: EvmEcosystem = Ecosystem(
 #:     ``fuzz/<program>/target``, ~4k files, ~900 MB); the top-level ``^target/`` misses it.
 #: These are never source, so they are never readable by the source tools (belt-and-suspenders with
 #: each run's own cleanup: a re-run or cached CI workspace can leave them behind).
-RUST_FORBIDDEN_READ = (
-    r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
-    r"|(^\.sandbox_cargo/.*)|(^\.sandbox_rustup/.*)|(^\.sandbox_tmp/.*)|(.*/target/.*)"
+RUST_FORBIDDEN_READ = "|".join(
+    (
+        r"(^target/.*)",
+        r"(^\.git.*)",
+        r"(^node_modules/.*)",
+        r"(.*\.lock$)",
+        *(
+            rf"(^{re.escape(d)}/.*)"
+            for d in (SANDBOX_CARGO_DIR, SANDBOX_RUSTUP_DIR, SANDBOX_TMP_DIR)
+        ),
+        r"(.*/target/.*)",
+    )
 )
 
 RUST_CODE_EXPLORER_PROMPT = """\

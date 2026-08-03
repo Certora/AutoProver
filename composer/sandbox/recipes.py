@@ -45,6 +45,16 @@ DEFAULT_ENV_PASSTHROUGH: tuple[str, ...] = (
 CARGO_REGISTRY_PROTOCOL_VAR = "CARGO_REGISTRIES_CRATES_IO_PROTOCOL"
 CARGO_REGISTRY_PROTOCOL = "sparse"
 
+#: Names of the private, per-run scratch directories a sandboxed build gets *under the workdir*
+#: (see :func:`sandbox_cargo_home`, :func:`sandbox_rustup_home`, and the ``TMPDIR`` redirect in
+#: :func:`rust_build_policy` for why each one is private rather than shared). Named constants
+#: because consumers outside this module must agree on the spellings — notably
+#: ``composer.pipeline.ecosystem.RUST_FORBIDDEN_READ``, which hides them from the source tools'
+#: file listing so the hundreds of MB they hold never reach the model's context.
+SANDBOX_CARGO_DIR = ".sandbox_cargo"
+SANDBOX_RUSTUP_DIR = ".sandbox_rustup"
+SANDBOX_TMP_DIR = ".sandbox_tmp"
+
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads
 # ``/etc/passwd`` / ``/etc/nsswitch.conf``; it holds no AutoProver secret (those are
@@ -83,7 +93,7 @@ def sandbox_cargo_home(workdir: str | Path) -> Path:
     a shared *read-only* index/cache to avoid re-download is a deferred optimization
     (command-sandbox.md §11 item 5).
     """
-    return Path(workdir).resolve() / ".sandbox_cargo"
+    return Path(workdir).resolve() / SANDBOX_CARGO_DIR
 
 
 def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
@@ -120,7 +130,7 @@ def sandbox_rustup_home(workdir: str | Path) -> Path:
     host dev flow the shared ``RUSTUP_HOME`` is writable so the gap never showed; a
     shared read-only home (the container image's baked toolchain) is what surfaced it.
     """
-    return Path(workdir).resolve() / ".sandbox_rustup"
+    return Path(workdir).resolve() / SANDBOX_RUSTUP_DIR
 
 
 def solana_toolchain_ro_paths(binary: str = "cargo-build-sbf") -> tuple[Path, ...]:
@@ -223,7 +233,7 @@ def rust_build_policy(
     # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
     # work without granting the shared /tmp (which may hold host/other-run secrets and
     # would defeat the escape test). Created here so $TMPDIR points at an existing dir.
-    sandbox_tmp = wd / ".sandbox_tmp"
+    sandbox_tmp = wd / SANDBOX_TMP_DIR
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     for var in ("TMPDIR", "TMP", "TEMP"):
         env[var] = str(sandbox_tmp)

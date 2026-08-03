@@ -13,7 +13,11 @@ import pytest
 import composer.spec.solana.build as buildmod
 from composer.sandbox.command import CommandResult
 from composer.sandbox.config import SandboxConfig
-from composer.sandbox.recipes import CARGO_REGISTRY_PROTOCOL, CARGO_REGISTRY_PROTOCOL_VAR
+from composer.sandbox.recipes import (
+    CARGO_REGISTRY_PROTOCOL,
+    CARGO_REGISTRY_PROTOCOL_VAR,
+    SANDBOX_CARGO_DIR,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,7 +32,7 @@ async def test_warm_cargo_cache_runs_unsandboxed_fetch(tmp_path, monkeypatch):
         return CommandResult(0, "", "")
 
     monkeypatch.setattr(buildmod, "run_local_command", fake_run)
-    res = await buildmod.warm_cargo_cache(tmp_path, cargo_home=tmp_path / ".sandbox_cargo")
+    res = await buildmod.warm_cargo_cache(tmp_path, cargo_home=tmp_path / SANDBOX_CARGO_DIR)
     assert res.exit_code == 0
     assert seen["program"] == "cargo" and seen["args"] == ["fetch"]
     assert seen["workdir"] == tmp_path
@@ -36,7 +40,7 @@ async def test_warm_cargo_cache_runs_unsandboxed_fetch(tmp_path, monkeypatch):
     # fetch targets the private per-run CARGO_HOME (same one the offline build reads), and
     # pins the index layout it writes there — see the protocol tests below.
     assert seen["env_overlay"] == {
-        "CARGO_HOME": str(tmp_path / ".sandbox_cargo"),
+        "CARGO_HOME": str(tmp_path / SANDBOX_CARGO_DIR),
         CARGO_REGISTRY_PROTOCOL_VAR: CARGO_REGISTRY_PROTOCOL,
     }
 
