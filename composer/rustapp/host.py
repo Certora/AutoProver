@@ -37,6 +37,7 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ServiceHost
+from composer.tools.rag_env import validate_rag_db
 
 #: Build an artifact store for a run from the source + descriptor.
 StoreFactory = Callable[[SourceCode, AppDescriptor], ArtifactStore[Any, RustFormalResult]]
@@ -276,6 +277,10 @@ def build_application(
     module = load_module(module_name)
     descriptor = load_descriptor(module)
     ecosystem = resolve_ecosystem(descriptor)
+    # Both of the descriptor's registry references are resolved up-front, before the run spends
+    # anything: an unknown ecosystem or an unregistered RAG corpus is a wheel bug, not something to
+    # discover mid-run (an unavailable corpus, in contrast, degrades — see ``rag_env``).
+    validate_rag_db(descriptor.rag_db_default)
     phase = build_phase_enum(descriptor)
     core = build_core_phases(descriptor, phase)
     ordered = descriptor.ordered_phases()

@@ -256,11 +256,11 @@ async def run_llm_agent(
     prompt can pull in framework docs / read the program. Must run inside a
     ``with_handler`` scope (the caller wraps it in ``run.runner``).
 
-    When ``judge`` is given, the turn becomes an in-loop-review author (docs/crucible-judge-in-loop.md):
+    When ``judge`` is given, the turn becomes an in-loop-review author (docs/crucible-judge-in-loop.md (PR3)):
     a ``request_review`` tool runs the judge in-session and ``result`` is gated on an accepted draft,
     so the author self-revises against feedback. ``memory_tool`` (when given) is added to the belt so
     facts persist across turns/components. ``exclude_tools`` drops named tools from the belt (used to
-    clamp the review sub-agent's exploration — docs/crucible-judge-cost.md §3)."""
+    clamp the review sub-agent's exploration — docs/crucible-judge-cost.md (PR3) §3)."""
     tools = [t for t in (getattr(env, "all_tools", None) or env.rag_tools) if t.name not in exclude_tools]
     if memory_tool is not None:
         tools.append(memory_tool)
@@ -364,7 +364,7 @@ async def _author_turn(
 ) -> str:
     """One authoring turn: render the backend's prompt (with any prior failure as revise
     context), run the tool-enabled LLM agent, and strip a code fence off the result. When
-    ``judge`` is given, the author reviews and self-revises in-session (docs/crucible-judge-in-loop.md)."""
+    ``judge`` is given, the author reviews and self-revises in-session (docs/crucible-judge-in-loop.md (PR3))."""
     prompt = json.loads(
         module.author_prompt(input_json, json.dumps(failure) if failure is not None else None)
     )
@@ -378,7 +378,7 @@ async def _author_turn(
 # The review sub-agent gets the program API + fixture in its prompt and shares the run memory, so
 # it doesn't need the expensive `code_explorer` exploration sub-agent — direct file reads
 # (`get_file`/`grep`) cover its spot-checks. Dropping it is the bulk of the review cost
-# (docs/crucible-judge-cost.md §3): each `code_explorer` call is itself a multi-call sub-agent.
+# (docs/crucible-judge-cost.md (PR3) §3): each `code_explorer` call is itself a multi-call sub-agent.
 _JUDGE_EXCLUDE_TOOLS = frozenset({"code_explorer"})
 
 
@@ -745,7 +745,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
 
         # When the wheel supplies a judge for this input, it runs in-loop: a `request_review` tool
         # inside the author session, which self-revises against feedback and can only finalize an
-        # accepted draft (docs/crucible-judge-in-loop.md). The author and judge share the run
+        # accepted draft (docs/crucible-judge-in-loop.md (PR3)). The author and judge share the run
         # memory across components. Probe the pure callout — `judge_prompt` returns None exactly
         # when there is no judge for this kind, so no review machinery is bound then.
         has_judge = self._module.judge_prompt(input_json, "") is not None
@@ -774,7 +774,10 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             prop_of = {u["unit"]: u["property"] for u in units}
 
             verdicts: dict[str, dict] = {}
-            property_units: list[tuple[str, list[str]]] = []
+            # Grouped by property, not appended as singletons: two units checking the same property
+            # are two unit names under ONE report row — as singletons they would be two rows with
+            # the same key, and the store's ``dict()`` of this list would silently keep the last.
+            units_by_prop: dict[str, list[str]] = {}
             build_failed: str | None = None
             for target in targets:
                 res = json.loads(
@@ -791,7 +794,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 for unit, verdict in res["verdicts"]:
                     verdicts[unit] = verdict
                     prop = prop_of.get(unit, unit)
-                    property_units.append((prop, [unit]))
+                    units_by_prop.setdefault(prop, []).append(unit)
                     detail = verdict.get("detail")
                     line = f'{prop}: {verdict.get("outcome")}'
                     emit(
@@ -804,7 +807,8 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 emit("build_output", {"line": _first_line(build_failed) or "build failed; revising"})
                 continue
             return RustFormalResult(
-                artifact_text=spec, units=property_units, verdicts=verdicts, targets=targets
+                artifact_text=spec, units=list(units_by_prop.items()),
+                verdicts=verdicts, targets=targets,
             )
 
         return GaveUp(
@@ -913,7 +917,7 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         (which overlaps property extraction, so no properties exist yet), and it cannot happen
         lazily on first ``formalize`` (whichever unit won the race would decide the artifact the
         rest are then told to work within — see :class:`StagedFormalizer` and
-        docs/crucible-component-units.md §8.2). The driver calls this exactly between the two.
+        docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two.
 
         Properties are de-duplicated by title, keeping first-seen order: the units are disjoint, but
         two components can legitimately surface the same property, and the artifact's cache identity

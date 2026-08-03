@@ -7,7 +7,7 @@ that produces the formalizer. **From what**: the union of *every* unit's
 properties, not whichever unit happened to formalize first; the artifact is what makes those
 properties checkable, so a multi-component run whose fixture only knew one component's properties
 would tell the rest to work within a surface designed without them
-(docs/crucible-component-units.md §8.2). **Caching**: authoring it is a full LLM loop, on a large
+(docs/crucible-component-units.md (PR3) §8.2). **Caching**: authoring it is a full LLM loop, on a large
 program the longest single step of a run, so a re-run after something failed downstream must not pay
 for it again. Like the driver's other caches it only stores when the run has a cache namespace
 (``--cache-ns``); without one every step is recomputed, by design.

@@ -30,7 +30,7 @@ import enum
 import logging
 from dataclasses import dataclass
 from typing import Protocol, Any, cast
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from abc import ABC, abstractmethod
 
 
@@ -197,17 +197,32 @@ async def _all_or_none(*tasks: asyncio.Task[Any]) -> None:
     Extraction" while minutes of LLM work went into a run that could no longer complete).
 
     The first failure in argument order is re-raised with its traceback intact; the others are
-    discarded. Nothing is cancelled when every task succeeds."""
+    discarded. A task cancelled by anyone else counts as a failure — whatever cancelled it has
+    already doomed the run. Nothing is cancelled when every task succeeds."""
     if not tasks:
         return
-    await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    except BaseException:
+        # We are being cancelled (or the driver is being torn down): ``asyncio.wait`` does not touch
+        # the tasks it was waiting on, so returning here would leave them running detached — a
+        # ten-minute cargo build outliving the run that started it, still writing into its workdir.
+        await _discard(tasks)
+        raise
     for i, task in enumerate(tasks):
-        if task.done() and task.exception() is not None:
-            others = (*tasks[:i], *tasks[i + 1 :])
-            for other in others:
-                other.cancel()
-            await asyncio.gather(*others, return_exceptions=True)  # discard secondary outcomes
+        # ``exception()`` raises on a cancelled task and on a pending one, so both are ruled out
+        # before asking: after FIRST_EXCEPTION the survivors may still be running.
+        if task.done() and (task.cancelled() or task.exception() is not None):
+            await _discard((*tasks[:i], *tasks[i + 1 :]))
             await task  # re-raise the first failure
+
+
+async def _discard(tasks: Iterable[asyncio.Task[Any]]) -> None:
+    """Cancel every task and swallow whatever it ends up raising — used once the run's fate is
+    already decided by another task, so these outcomes can no longer matter."""
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # ---- shared helpers (the de-duplicated cache keys + batch) -------------------

@@ -53,6 +53,12 @@ class RustFormalResult(BaseModel):
     def property_units(self) -> list[tuple[str, list[str]]]:
         return [(title, list(names)) for title, names in self.units]
 
+    def unit_titles(self) -> dict[str, str]:
+        """``units`` inverted: unit name -> the property title it checks. For display, where the
+        property's own words ("Balance never overflows") read better than the backend's unit name
+        (``rule_balance_never_overflows``). A unit absent here has no title to show."""
+        return {unit: title for title, names in self.units for unit in names}
+
     @classmethod
     def from_formalized(cls, formalized: dict) -> "RustFormalResult":
         """Build from a Rust ``Formalized`` dict (the payload of ``Command::Publish``)."""

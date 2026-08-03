@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from composer.spec.source.report.schema import ReportBackend
+
 #: Ecosystem/chain tag. Mirrors ``composer.pipeline.ecosystem.ChainTag`` (kept local so this
 #: ABI-mirror module stays decoupled from the pipeline); the host resolves it against the
 #: ecosystem registry.
@@ -127,7 +129,11 @@ class AppDescriptor(BaseModel):
     #: host resolves it against ``composer.pipeline.ecosystem.ECOSYSTEMS``. Defaults to
     #: ``"evm"`` so wheels built before this field existed keep working.
     ecosystem: ChainTag = "evm"
-    backend_tag: str
+    #: Which report vocabulary this backend's results are rendered with. Typed (rather than a free
+    #: ``str`` validated later by ``as_report_backend``) so a wheel declaring a tag the report
+    #: doesn't know fails in ``model_validate_json`` — at descriptor load, before the run starts —
+    #: instead of at formalizer construction. The set is closed; see ``ReportBackend``.
+    backend_tag: ReportBackend
     backend_guidance: str
     analysis_key: str
     phases: list[PhaseSpec]

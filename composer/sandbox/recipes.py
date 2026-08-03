@@ -252,7 +252,12 @@ def rust_build_policy(
     rustup_home.mkdir(parents=True, exist_ok=True)
     tc_link = rustup_home / "toolchains"
     shared_toolchains = rustup / "toolchains"
-    if not tc_link.exists() and shared_toolchains.is_dir():
+    # `exists()` follows the link, so a STALE link — a workdir left over from a run whose shared
+    # rustup home has since moved — reads as absent, and `symlink_to` on it would raise
+    # FileExistsError. Ask about the link itself, and re-point it.
+    if tc_link.is_symlink() and tc_link.resolve() != shared_toolchains.resolve():
+        tc_link.unlink()
+    if not (tc_link.is_symlink() or tc_link.exists()) and shared_toolchains.is_dir():
         tc_link.symlink_to(shared_toolchains)
     src_settings = rustup / "settings.toml"
     if src_settings.is_file() and not (rustup_home / "settings.toml").exists():

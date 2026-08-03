@@ -42,7 +42,10 @@ def _component_input(*titles: str) -> str:
 def test_descriptor_parses_and_maps_core_phases():
     desc = AppDescriptor.model_validate_json(echoprover.descriptor())
     assert desc.name == "echoprover"
-    assert desc.backend_tag == "echoprover"
+    # A tag from the closed ``ReportBackend`` set: the demo borrows the prover's outcome wording
+    # rather than inventing a vocabulary the report can't render. Anything outside the set now fails
+    # here, at descriptor load, instead of later when the formalizer is constructed.
+    assert desc.backend_tag == "prover"
     # All four core slots are mapped, plus a UI-only "solving" phase.
     slots = desc.core_slot_map()
     assert set(slots) == set(CoreSlot)

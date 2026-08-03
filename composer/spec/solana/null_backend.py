@@ -7,7 +7,8 @@ It satisfies the full ``PipelineBackend`` contract over the Solana ecosystem's
 
 **Role:** a **test double** for the Solana front half (analysis + property extraction)
 without a real verifier — see ``tests/test_solana_gate.py``. Production Solana
-verification is :mod:`composer.crucible` (Crucible fuzzer backend).
+verification is the Crucible fuzzer backend — a Rust wheel hosted by
+:mod:`composer.rustapp`.
 """
 
 import enum

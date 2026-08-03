@@ -49,7 +49,7 @@ except ImportError:
 def _external_pg_url() -> str | None:
     """Admin DSN of an already-running postgres to use INSTEAD of testcontainers.
 
-    Set by the containerized test flow (docs/crucible-demo.md) so DB-backed tests
+    Set by the containerized test flow (docs/crucible-demo.md (PR3)) so DB-backed tests
     run inside the crucible container against the compose `postgres` service — no
     docker-in-docker. Must be a superuser DSN (tests CREATE ROLE/DATABASE)."""
     return os.environ.get("COMPOSER_TEST_PG_URL") or None

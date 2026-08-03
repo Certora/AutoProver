@@ -75,18 +75,28 @@ def summarize_verdicts(
 ) -> VerdictSummary:
     """Extract the per-unit verdicts baked into a completed run's ``outcomes``.
 
-    Only *delivered* units carry a verdict; give-ups / exceptions are already surfaced in
-    ``result.failures`` and skipped here. Each delivered unit bakes a single verdict, so we
-    read the one entry (falling back to UNKNOWN if a delivered result somehow carries none)."""
+    One row per *unit*, not per component: ``units()`` is one unit per property, so a component
+    with five properties bakes five verdicts and contributes five rows (reading only the first
+    would report one check where five ran). Rows are named by the property title the unit checks,
+    falling back to the unit name.
+
+    Only *delivered* components carry verdicts; give-ups / exceptions are already surfaced in
+    ``result.failures`` and skipped here. A delivered component that bakes none at all (a
+    run-service-backed wheel, which reports through ``fetch_verdicts`` instead) still contributes
+    one UNKNOWN row, so the listing accounts for every delivered component."""
     verdicts: list[UnitVerdict] = []
     for o in result.outcomes:
         if not isinstance(o.result, Delivered):
             continue
-        baked = o.result.result.verdicts
-        outcome = (
-            _parse_outcome(next(iter(baked.values()))["outcome"]) if baked else Outcome.UNKNOWN
+        formalized = o.result.result
+        if not formalized.verdicts:
+            verdicts.append(UnitVerdict(o.feat.display_name, Outcome.UNKNOWN))
+            continue
+        titles = formalized.unit_titles()
+        verdicts.extend(
+            UnitVerdict(titles.get(unit, unit), _parse_outcome(baked["outcome"]))
+            for unit, baked in formalized.verdicts.items()
         )
-        verdicts.append(UnitVerdict(o.feat.display_name, outcome))
     return VerdictSummary(verdicts, backend_tag)
 
 

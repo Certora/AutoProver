@@ -190,6 +190,37 @@ async def test_an_analysis_failure_stops_the_preflight_build(monkeypatch):
     assert preflight.cancelled and not preflight.finished
 
 
+async def test_cancelling_the_run_cancels_the_steps_it_was_waiting_on(monkeypatch):
+    # The other direction of "one fate": when the *caller* goes away (Ctrl-C, an enclosing timeout),
+    # the overlapped steps must go with it. ``asyncio.wait`` does not touch the tasks it waits on, so
+    # without the driver cancelling them itself they keep running detached — a multi-minute cargo
+    # build outliving the run that started it, still writing into its workdir.
+    analysis = _Step(30, None, "analyzed")
+    preflight = _Step(30, None, PREFLIGHT_RESULT)
+
+    async def fake_analysis(*_a, **_kw):
+        return await analysis.run()
+
+    async def fake_extract_all(*_a, **_kw):
+        return []
+
+    monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
+    monkeypatch.setattr(core, "_extract_all", fake_extract_all)
+    driver = asyncio.create_task(
+        run_pipeline(  # type: ignore[arg-type]
+            _Backend(_Prepared(_Step(0, None)), preflight), _Run(),
+            max_bug_rounds=1, ecosystem=ECOSYSTEM,
+        )
+    )
+    await asyncio.sleep(0.05)  # both overlapped steps are now in flight
+    driver.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await driver
+
+    assert analysis.cancelled and not analysis.finished
+    assert preflight.cancelled and not preflight.finished
+
+
 async def test_the_preflight_result_is_handed_to_prepare_system(monkeypatch):
     # The backend's prep travels forward as a value, so a backend can build on it as immutable state
     # instead of stashing it on itself between the two calls.

@@ -1,7 +1,7 @@
 """Probe: run ONLY the Solana system-analysis phase against a real program and print the
 ``ProgramComponent`` grouping it produces.
 
-This is the tool docs/crucible-component-units.md §13 staging step 1 calls for — *"ship the model
+This is the tool docs/crucible-component-units.md (PR3) §13 staging step 1 calls for — *"ship the model
 + prompt + validation, then read the groupings that come back on real programs"*. It stops after
 analysis (no property extraction, no backend), so it costs one agent run rather than a full front
 half, and it exercises exactly the three things stage 1 added: the model, the prompt section, and
