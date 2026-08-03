@@ -1,15 +1,15 @@
 """Tests for the driver's two overlaps — the build-shaped steps run alongside the LLM steps that
-don't depend on them, and share their fate.
+don't depend on them.
 
 ``run_pipeline`` overlaps twice (``composer/pipeline/core.py``):
 
 * ``backend.preflight`` (Crucible's program build + harness-skeleton build) with **system analysis**;
 * ``prepared.prepare_formalization`` (the prover's autosetup) with **property extraction**.
 
-Neither side of either pair needs the other — but either failing dooms the run, so neither may be
-left spending after the other has failed. A setup failure used to sit unobserved behind the whole
-extraction phase (many minutes of LLM work) and surface only once it was over, which reads as "the
-run just stopped after Property Extraction".
+Neither side of either pair needs the other. The preflight is additionally a *gate*: it is the cheap
+side of its pair, so the driver awaits it first and a failure there cancels the analysis agent racing
+it, rather than letting an agent spend on a run that can no longer complete. Nothing else is
+cancelled — the second pair is awaited in turn.
 
 Stubs throughout — no LLM, no DB, no backend wheel.
 """
@@ -176,25 +176,24 @@ async def test_a_preflight_failure_stops_system_analysis(monkeypatch):
     assert not extract.finished and not extract.cancelled
 
 
-async def test_an_analysis_failure_stops_the_preflight_build(monkeypatch):
-    # Symmetric: the preflight is a multi-minute cargo build — no reason to keep paying for it once
-    # analysis has failed and nothing will be authored against it.
+async def test_an_analysis_failure_lets_the_preflight_finish(monkeypatch):
+    # Not symmetric: the gate is the cheap side of the pair, so there is nothing to save by
+    # cancelling it. It is awaited to completion and the analysis failure is what ends the run.
     boom = RuntimeError("system analysis blew up")
-    preflight = _Step(30, None, PREFLIGHT_RESULT)
+    preflight = _Step(0.02, None, PREFLIGHT_RESULT)
     seen = await _drive(
         monkeypatch, prep=_Step(0, None), extract=_Step(0, None),
         analysis=_Step(0.01, boom), preflight=preflight,
     )
 
     assert seen["raised"] is boom
-    assert preflight.cancelled and not preflight.finished
+    assert preflight.finished and not preflight.cancelled
 
 
 async def test_cancelling_the_run_cancels_the_steps_it_was_waiting_on(monkeypatch):
-    # The other direction of "one fate": when the *caller* goes away (Ctrl-C, an enclosing timeout),
-    # the overlapped steps must go with it. ``asyncio.wait`` does not touch the tasks it waits on, so
-    # without the driver cancelling them itself they keep running detached — a multi-minute cargo
-    # build outliving the run that started it, still writing into its workdir.
+    # When the *caller* goes away (Ctrl-C, an enclosing timeout), both overlapped steps must go with
+    # it: the awaited one comes along for free, but the analysis the driver is not sitting on would
+    # keep running detached — a multi-minute agent outliving the run that started it.
     analysis = _Step(30, None, "analyzed")
     preflight = _Step(30, None, PREFLIGHT_RESULT)
 
@@ -233,27 +232,26 @@ async def test_the_preflight_result_is_handed_to_prepare_system(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_a_setup_failure_stops_extraction_instead_of_waiting_it_out(monkeypatch):
+async def test_a_setup_failure_ends_the_run_once_extraction_is_done(monkeypatch):
+    # This pair is only overlapped, not gated: extraction runs to completion, and setup's failure is
+    # then reported as itself — not as a downstream "no properties extracted", which is what an
+    # entirely *unobserved* setup failure would look like.
     boom = RuntimeError("cargo-build-sbf failed (exit 101)")
-    extract = _Step(30, None)
+    extract = _Step(0.03, None)
     seen = await _drive(monkeypatch, prep=_Step(0.01, boom), extract=extract)
 
-    # The failure that ends the run is setup's own — reported as itself, not as a timeout or as a
-    # downstream "no properties extracted" (which is what an unobserved setup failure looks like).
     assert seen["raised"] is boom
-    # …and extraction did not run to completion after setup had already doomed the run.
-    assert extract.cancelled and not extract.finished
+    assert extract.finished and not extract.cancelled
 
 
-async def test_an_extraction_failure_stops_setup_too(monkeypatch):
-    # Symmetric: setup is a build (Crucible) or an autosetup run (the prover) — no reason to keep
-    # paying for it once extraction has failed.
+async def test_an_extraction_failure_ends_the_run_with_its_own_error(monkeypatch):
+    # The other direction: extraction is awaited first, so its failure is what surfaces.
     boom = RuntimeError("extraction blew up")
-    prep = _Step(30, None)
-    seen = await _drive(monkeypatch, prep=prep, extract=_Step(0, boom))
+    prep = _Step(0, None)
+    seen = await _drive(monkeypatch, prep=prep, extract=_Step(0.01, boom))
 
     assert seen["raised"] is boom
-    assert not prep.finished
+    assert prep.finished
 
 
 async def test_both_succeeding_still_reaches_the_drivers_own_checks(monkeypatch):

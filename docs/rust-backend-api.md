@@ -241,10 +241,10 @@ loop, because the agent does not own the manifest:
 | The `.so` isn't where the fixture is told it is, or won't load into LiteSVM | a mystery panic in `setup()` |
 
 So a preflight failure is **terminal** — the host raises `PreflightFailed` with the wheel's
-extracted diagnostics; there is no re-author — and the driver's `_all_or_none` cancels the analysis
-racing it. Two side benefits: the gate's `--dry-run` proves the built `.so` loads and `setup()` runs
-one iteration, and it leaves `fuzz/<program>/target` warm, so the first *authored* compile builds one
-crate instead of the whole graph.
+extracted diagnostics; there is no re-author — and the driver cancels the analysis racing it. Two
+side benefits: the gate's `--dry-run` proves the built `.so` loads and `setup()` runs one iteration,
+and it leaves `fuzz/<program>/target` warm, so the first *authored* compile builds one crate instead
+of the whole graph.
 
 The task is created with `run.unmetered_runner`, not `run.runner`: the run's semaphore budgets
 concurrent *agents* (`--max-concurrent`), and a multi-minute cargo build charged to it would silently

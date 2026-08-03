@@ -61,17 +61,21 @@ The driver ([core.py:230](../composer/pipeline/core.py)) sequences them:
 # 1. analysis-independent backend pre-work runs CONCURRENTLY with the shared analysis
 preflight_task = asyncio.create_task(backend.preflight(run))
 analysis_task = asyncio.create_task(run.runner(TaskInfo(SYSTEM_ANALYSIS_TASK_ID, ...), ...))
-await _all_or_none(preflight_task, analysis_task)   # either failure cancels the other
-analyzed = analysis_task.result()
+try:
+    preflight = await preflight_task          # the gate: cheap side first…
+except BaseException:
+    analysis_task.cancel()                    # …and its failure cancels the analysis racing it
+    await asyncio.gather(analysis_task, return_exceptions=True)
+    raise
+analyzed = await analysis_task
 
 # 2. backend transform: prover lifts to a harnessed app; foundry is identity
-prepared = await backend.prepare_system(analyzed, run, preflight_task.result())
+prepared = await backend.prepare_system(analyzed, run, preflight)
 
 # 3. pre-formalization setup runs CONCURRENTLY with property extraction
 formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
-extraction_task = asyncio.create_task(_extract_all(prepared.main, ...))
-await _all_or_none(formalizer_task, extraction_task)
-batches, formalizer = extraction_task.result(), formalizer_task.result()
+batches = await _extract_all(prepared.main, ...)
+formalizer = await formalizer_task            # only overlapped; neither side is cancelled
 
 # 4. per-component formalization (parallel), cache-wrapped by the driver
 settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
@@ -87,12 +91,12 @@ gets the same overlap with zero extra code.
 
 `preflight` is the earlier peer, for pre-work that needs *nothing at all* from the run: Crucible
 builds the program under test and gates a skeleton harness through the real toolchain there, since
-neither reads the analyzed model. Overlapping is not the same as being optional — either side failing
-dooms the run, so `_all_or_none` cancels the survivor rather than letting it keep spending on a run
-that can no longer complete. That is what makes the preflight a *gate*: a broken workspace stops the
-run while it has spent one analysis agent, instead of surfacing as unfixable compiler errors in the
-first authored draft, after the whole extraction phase
-([rust-backend-api.md §3.1](./rust-backend-api.md)).
+neither reads the analyzed model. It is also the *cheap* side of its pair, which is why the driver
+awaits it first and cancels the analysis on failure rather than the other way round: the agent racing
+it would otherwise keep spending on a run that can no longer complete. That is what makes the
+preflight a *gate*: a broken workspace stops the run while it has spent one analysis agent, instead
+of surfacing as unfixable compiler errors in the first authored draft, after the whole extraction
+phase ([rust-backend-api.md §3.1](./rust-backend-api.md)).
 
 ---
 

@@ -9,8 +9,9 @@ a constructor dependency rather than a call-order convention; there is no half-i
 
 Two links are *overlapped* with the LLM steps they don't depend on, since both are usually builds:
 ``preflight`` runs alongside system analysis, and ``prepare_formalization`` alongside property
-extraction. Overlapped is not optional — either failing dooms the run, so :func:`_all_or_none`
-cancels the survivor rather than letting it spend on a run that can no longer complete.
+extraction. ``preflight`` is additionally a *gate*: it is the cheap side of its pair, so it is
+awaited first and a failure there cancels the analysis agent racing it rather than letting it spend
+on a run that can no longer complete. The second pair is simply awaited in turn.
 
 A backend whose units all build on one *shared* artifact inserts a link rather than a call-order
 convention: ``prepare_formalization`` returns a :class:`StagedFormalizer`, and its ``begin`` — handed
@@ -30,7 +31,7 @@ import enum
 import logging
 from dataclasses import dataclass
 from typing import Protocol, Any, cast
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from abc import ABC, abstractmethod
 
 
@@ -170,8 +171,7 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
         harness crate, compiles the program to sBPF, and gates a wheel-authored skeleton harness
         through the real toolchain; none of that reads the analyzed model, so serializing it behind
         analysis buys nothing, while running it alongside means a broken dependency graph or an
-        unbuildable program surfaces before the run has spent meaningfully on the model. A failure
-        here cancels the analysis racing it (see :func:`_all_or_none`).
+        unbuildable program surfaces before the run has spent meaningfully on the model.
 
         ``Pre`` is opaque to the driver — it only carries the result to ``prepare_system``, so a
         backend can hand its own prep forward as immutable state rather than stashing it on itself.
@@ -185,44 +185,6 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     ) -> PreparedSystem[FormT, U, Main]: ...
 
     def to_artifact_id(self, c: U) -> A: ...
-
-
-async def _all_or_none(*tasks: asyncio.Task[Any]) -> None:
-    """Await every task, or cancel all of them at the first failure.
-
-    Steps overlap in this driver because neither needs the other — never because either is optional.
-    So they share one fate: once one has doomed the run, no survivor may be left spending. Waiting
-    them out instead hides the real failure behind the longest step (a setup failure used to surface
-    only after the entire extraction phase, reading as "the run just stopped after Property
-    Extraction" while minutes of LLM work went into a run that could no longer complete).
-
-    The first failure in argument order is re-raised with its traceback intact; the others are
-    discarded. A task cancelled by anyone else counts as a failure — whatever cancelled it has
-    already doomed the run. Nothing is cancelled when every task succeeds."""
-    if not tasks:
-        return
-    try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
-    except BaseException:
-        # We are being cancelled (or the driver is being torn down): ``asyncio.wait`` does not touch
-        # the tasks it was waiting on, so returning here would leave them running detached — a
-        # ten-minute cargo build outliving the run that started it, still writing into its workdir.
-        await _discard(tasks)
-        raise
-    for i, task in enumerate(tasks):
-        # ``exception()`` raises on a cancelled task and on a pending one, so both are ruled out
-        # before asking: after FIRST_EXCEPTION the survivors may still be running.
-        if task.done() and (task.cancelled() or task.exception() is not None):
-            await _discard((*tasks[:i], *tasks[i + 1 :]))
-            await task  # re-raise the first failure
-
-
-async def _discard(tasks: Iterable[asyncio.Task[Any]]) -> None:
-    """Cancel every task and swallow whatever it ends up raising — used once the run's fate is
-    already decided by another task, so these outcomes can no longer matter."""
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # ---- shared helpers (the de-duplicated cache keys + batch) -------------------
@@ -314,39 +276,39 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             ),
         )
     )
-    await _all_or_none(preflight_task, analysis_task)
-    analyzed = analysis_task.result()
+    try:
+        preflight = await preflight_task
+    except BaseException:
+        analysis_task.cancel()
+        await asyncio.gather(analysis_task, return_exceptions=True)
+        raise
+    analyzed = await analysis_task
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
     
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
-    prepared = await backend.prepare_system(analyzed, run, preflight_task.result())
+    prepared = await backend.prepare_system(analyzed, run, preflight)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.
     staged_task = asyncio.create_task(prepared.prepare_formalization(run))
 
-    extraction_task = asyncio.create_task(
-        _extract_all(
-            backend.analysis_spec.properties_key,
-            prepared.main,
-            backend.backend_guidance,
-            run,
-            phases["extraction"],
-            interactive,
-            threat_model,
-            max_bug_rounds,
-            ecosystem,
-            plugin_manager.bind_phase(
-                phases.get("extraction_plugin") or phases["extraction"],
-                "Property Extraction"
-            )
+    batches: list[_Batch[U]] = await _extract_all(
+        backend.analysis_spec.properties_key,
+        prepared.main,
+        backend.backend_guidance,
+        run,
+        phases["extraction"],
+        interactive,
+        threat_model,
+        max_bug_rounds,
+        ecosystem,
+        plugin_manager.bind_phase(
+            phases.get("extraction_plugin") or phases["extraction"],
+            "Property Extraction"
         )
     )
-    await _all_or_none(staged_task, extraction_task)
-
-    batches: list[_Batch[U]] = extraction_task.result()
-    staged = staged_task.result()
+    staged = await staged_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
 
