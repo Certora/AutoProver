@@ -138,9 +138,32 @@ class _LlmInput(FlowInput):
     pass
 
 
-# A callable that reviews a candidate artifact: ``(draft) -> (accepted, feedback)``. The host
-# builds it (see :func:`_make_judge_hook`) around the wheel's ``judge_prompt``.
-type _JudgeHook = Callable[[str], Awaitable[tuple[bool, str]]]
+@dataclass(frozen=True)
+class Accepted:
+    """The reviewer accepted the draft. ``feedback`` is whatever it said while accepting — often
+    empty, and never something the author has to act on."""
+
+    feedback: str = ""
+
+
+@dataclass(frozen=True)
+class Rejected:
+    """The reviewer rejected the draft. ``feedback`` is what to revise against, and is the only
+    thing the next authoring turn gets told about the rejection — so it is never empty."""
+
+    feedback: str
+
+
+#: One review's verdict. Two types rather than ``(bool, str)``: the string means different things on
+#: either side of that bool (a revise instruction vs an aside), and the pair had a third meaning too
+#: — ``(True, "")`` doubled as "this wheel declares no judge". Absence is now ``None``, which the
+#: callers read as "nothing to review", so no verdict has to stand in for it.
+type Review = Accepted | Rejected
+
+# Reviews a candidate artifact. The host builds it (see :func:`_make_judge_hook`) around the wheel's
+# ``judge_prompt``; it only exists when the wheel declared a judge for that input, so unlike
+# :func:`_judge_turn` it always produces a verdict.
+type _JudgeHook = Callable[[str], Awaitable[Review]]
 
 # Authors the shared setup artifact for a run, given the properties it must make checkable. Built
 # by :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for
@@ -202,22 +225,23 @@ def _review_gate(
 
 
 def _budgeted(judge: "_JudgeHook", budget: _ReviewBudget) -> "_JudgeHook":
-    """``judge``, counted against ``budget`` — and on the last round, accepting whatever it got.
+    """``judge``, counted against ``budget`` — and on the last round, relenting.
 
-    The verdict is reported honestly in the feedback: the author is told the draft is going forward
-    *with* the open concerns, which is also what lands in the transcript for a human reading it."""
+    Relenting is a real :class:`Accepted`, not a rejection dressed up as one: the author's gate opens
+    and the draft goes forward. What it carries is the honest reason — the open concerns, labelled as
+    unresolved — which is what the author reads and what lands in the transcript for a human."""
 
-    async def reviewed(draft: str) -> tuple[bool, str]:
+    async def reviewed(draft: str) -> Review:
         budget.used += 1
-        ok, feedback = await judge(draft)
-        if ok or not budget.spent:
-            return ok, feedback
+        review = await judge(draft)
+        if isinstance(review, Accepted) or not budget.spent:
+            return review
         _log.warning(
             "review budget spent (%d rounds) with the draft still rejected; submitting as-is",
             budget.used,
         )
-        return True, (
-            f"{feedback}\n\nNo review rounds left ({budget.used} used) — this draft is being "
+        return Accepted(
+            f"{review.feedback}\n\nNo review rounds left ({budget.used} used) — this draft is being "
             "submitted with the concerns above unresolved. Call `result` with it now."
         )
 
@@ -237,12 +261,15 @@ class _RequestReview(WithInjectedId, WithAsyncDependencies[Command, "_JudgeHook"
     @override
     async def run(self) -> Command:
         with self.tool_deps() as judge:
-            ok, feedback = await judge(self.draft)
-        verdict = "ACCEPTED" if ok else "REJECTED"
-        content = f"Review {verdict}.\n\n{feedback}" if feedback else f"Review {verdict}."
+            review = await judge(self.draft)
+        accepted = isinstance(review, Accepted)
+        verdict = "ACCEPTED" if accepted else "REJECTED"
+        content = (
+            f"Review {verdict}.\n\n{review.feedback}" if review.feedback else f"Review {verdict}."
+        )
         return tool_state_update(
             tool_call_id=self.tool_call_id, content=content,
-            reviewed_text=self.draft, review_ok=ok,
+            reviewed_text=self.draft, review_ok=accepted,
         )
 
 
@@ -358,16 +385,31 @@ def _first_line(s: str) -> str:
     return next((ln for ln in s.splitlines() if ln.strip()), "").strip()
 
 
-def _parse_judge(review: str) -> tuple[bool, str]:
-    """Interpret a judge reply as (accept, feedback). Accepts a JSON ``{accept, feedback}`` (what
-    the Crucible judge emits) or a plain reply led by ``ACCEPT`` / ``REJECT``."""
+#: What a rejection with nothing to revise against is reported as. A judge that says "no" and gives
+#: no reason would otherwise send the author into a revise round with an empty instruction; saying so
+#: at least tells it (and a human reading the transcript) what happened.
+_UNEXPLAINED_REJECTION = (
+    "The reviewer rejected the draft without giving a reason. Re-read the task's criteria and "
+    "strengthen whatever you are least sure of."
+)
+
+
+def _parse_judge(reply: str) -> Review:
+    """Interpret a judge's reply as a verdict. A JSON ``{accept, feedback}`` (what the Crucible judge
+    emits) is authoritative; otherwise the reply is read as prose led by ``ACCEPT`` / ``REJECT``.
+
+    NOTE: prose that leads with neither is taken as an **acceptance** — the reviewer is an advisory
+    gate in front of the compile/validate gates that actually decide, so an unparseable reply lets
+    the draft through rather than burning a revise round on a verdict nobody stated. Flipping that
+    default is a policy decision, not a cleanup."""
     try:
-        obj = json.loads(review)
-        if isinstance(obj, dict):
-            return bool(obj.get("accept")), str(obj.get("feedback", ""))
+        obj = json.loads(reply)
     except (json.JSONDecodeError, ValueError):
-        pass
-    return (not review.strip().upper().startswith("REJECT")), review
+        obj = None
+    if isinstance(obj, dict):
+        feedback = str(obj.get("feedback", ""))
+        return Accepted(feedback) if obj.get("accept") else Rejected(feedback or _UNEXPLAINED_REJECTION)
+    return Rejected(reply) if reply.strip().upper().startswith("REJECT") else Accepted(reply)
 
 
 async def _author_turn(
@@ -399,39 +441,46 @@ async def _judge_turn(
     module: RustAppModule, input_json: str, spec: str, *, env: ServiceHost, recursion_limit: int,
     backend_name: str, emit: Callable[[str, dict], None] | None = None,
     memory_tool: BaseTool | None = None,
-) -> tuple[bool, str]:
-    """Optional LLM review of a spec: ``(accept, feedback)``. ``(True, "")`` when the backend
-    declares no judge (``judge_prompt`` → ``None``, the default). When a review actually runs,
-    emit a ``judge`` event carrying the verdict so the frontend surfaces accept/reject."""
+) -> Review | None:
+    """One optional LLM review of a spec. ``None`` — *no verdict*, not a favourable one — when the
+    backend declares no judge for this input (``judge_prompt`` → ``None``, the default).
+
+    When a review does run, emit a ``judge`` event carrying the verdict so the frontend surfaces
+    accept/reject."""
     jp = module.judge_prompt(input_json, spec)
     if not jp:
-        return True, ""
-    review = await run_llm_agent(
+        return None
+    reply = await run_llm_agent(
         env, parse_prompt(jp), recursion_limit=recursion_limit,
         backend_name=backend_name, turn_label="judge", memory_tool=memory_tool,
         exclude_tools=_JUDGE_EXCLUDE_TOOLS,
     )
-    ok, feedback = _parse_judge(review)
+    review = _parse_judge(reply)
+    accepted = isinstance(review, Accepted)
     if emit is not None:
         emit("judge", {
-            "line": "reviewer accepted the tests" if ok
-            else f"reviewer rejected — revising: {_first_line(feedback)}",
-            "outcome": (Outcome.GOOD if ok else Outcome.BAD).value,
+            "line": "reviewer accepted the tests" if accepted
+            else f"reviewer rejected — revising: {_first_line(review.feedback)}",
+            "outcome": (Outcome.GOOD if accepted else Outcome.BAD).value,
         })
-    return ok, feedback
+    return review
 
 
 def _make_judge_hook(
     module: RustAppModule, input_json: str, *, env: ServiceHost, recursion_limit: int,
     backend_name: str, emit: Callable[[str, dict], None] | None, memory_tool: BaseTool | None,
 ) -> "_JudgeHook":
-    """Wrap the wheel's judge as a ``(draft) -> (accepted, feedback)`` callable for the in-loop
-    ``request_review`` tool. Reuses :func:`_judge_turn` so the verdict event still fires."""
-    async def judge(draft: str) -> tuple[bool, str]:
-        return await _judge_turn(
+    """Wrap the wheel's judge as a ``(draft) -> Review`` callable for the in-loop ``request_review``
+    tool. Reuses :func:`_judge_turn` so the verdict event still fires."""
+    async def judge(draft: str) -> Review:
+        review = await _judge_turn(
             module, input_json, draft, env=env, recursion_limit=recursion_limit,
             backend_name=backend_name, emit=emit, memory_tool=memory_tool,
         )
+        # This hook is only built for an input the wheel *did* declare a judge for, and
+        # ``judge_prompt`` is pure — so "no verdict" can't happen here. If it somehow did, a review
+        # that isn't running must not be what keeps the author from finalizing.
+        return review if review is not None else Accepted()
     return judge
 
 
@@ -469,12 +518,15 @@ async def author_and_compile(
             failure = Failure(draft=spec, errors=result.errors)
             emit("build_output", {"line": _first_line(result.errors) or "build failed; revising"})
             continue
-        ok, feedback = await _judge_turn(
+        review = await _judge_turn(
             module, input_json, spec, env=env, recursion_limit=recursion_limit,
             backend_name=backend_name, emit=emit,
         )
-        if not ok:
-            failure = Failure(draft=spec, errors=feedback, kind=FailureKind.JUDGE)
+        # No judge (``None``) and an accepting one both mean "nothing left to fix" — only an actual
+        # rejection sends this back for a revise, and it is flagged as a *judge* failure so the next
+        # prompt frames it as review feedback rather than as compiler errors.
+        if isinstance(review, Rejected):
+            failure = Failure(draft=spec, errors=review.feedback, kind=FailureKind.JUDGE)
             continue
         return spec
     return GaveUp(reason=f"{backend_name}: did not pass compile/judge in {max_attempts} attempts")
