@@ -24,7 +24,6 @@ import composer.bind as _  # noqa: F401  (side-effecting DI/tape bootstrap; must
 
 from composer.diagnostics.timing import RunSummary
 from composer.pipeline.core import CorePipelineResult
-from composer.rustapp.adapter import as_report_backend
 from composer.rustapp.entry import EnvBuilder, rust_entry_point
 from composer.rustapp.frontend import GenericRustApp, GenericRustConsoleHandler
 from composer.rustapp.host import build_application
@@ -51,7 +50,7 @@ def _verdict_lines(app, result: CorePipelineResult[RustFormalResult]) -> list[st
     """Per-unit verdict tally + listing when the results carry verdicts; empty otherwise
     (a run-service backend, or a wheel that bakes none)."""
     return format_verdict_lines(
-        summarize_verdicts(result, as_report_backend(app.descriptor.backend_tag))
+        summarize_verdicts(result, app.descriptor.backend_tag)
     )
 
 
@@ -78,7 +77,7 @@ async def _tui_main(module_name: str, *, env_builder: EnvBuilder | None = None) 
                     f"{result.n_properties} properties"
                 )
                 if tally := summarize_verdicts(
-                    result, as_report_backend(app_meta.descriptor.backend_tag)
+                    result, app_meta.descriptor.backend_tag
                 ).tally:
                     msg += f" — {tally}"
                 if result.failures:

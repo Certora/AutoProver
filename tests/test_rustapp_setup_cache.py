@@ -28,6 +28,7 @@ from composer.rustapp.adapter import (
     RustFormalizer, RustPreparedSystem, RustStagedFormalizer, _setup_identity
 )
 from composer.rustapp.descriptor import AppDescriptor
+from composer.rustapp.wire import AuthorInput, ProgramCrate, Property
 from composer.spec.context import WorkflowContext
 
 pytestmark = pytest.mark.asyncio
@@ -108,8 +109,8 @@ async def _formalizer(
     from composer.spec.context import SourceCode
     from composer.spec.system_model import SolidityIdentifier
 
-    async def fake_author_and_compile(_module, input_dict, **_kw):
-        authored.append(input_dict)
+    async def fake_author_and_compile(_module, input, **_kw):
+        authored.append(input)
         return FIXTURE
 
     async def fake_prep(_module, _input, **_kw):
@@ -179,8 +180,8 @@ async def test_the_setup_artifact_is_authored_from_the_extracted_properties(monk
     # so the fixture can expose an action per instruction they exercise instead of guessing.
     store, authored = _Store(), []
     await _prepare(monkeypatch, _ctx(store, namespace=None), authored, tmp_path)
-    assert [p["title"] for p in authored[0]["props"]] == ["no overflow"]
-    assert authored[0]["kind"] == "setup"
+    assert [p.title for p in authored[0].props] == ["no overflow"]
+    assert authored[0].kind == "setup"
 
 
 async def test_the_artifact_is_authored_from_every_unit_s_properties(monkeypatch, tmp_path):
@@ -196,7 +197,7 @@ async def test_the_artifact_is_authored_from_every_unit_s_properties(monkeypatch
         jobs=_jobs(deposits, admin, farms),
     )
     assert len(authored) == 1, "the shared artifact is authored once, not once per unit"
-    assert [p["title"] for p in authored[0]["props"]] == [
+    assert [p.title for p in authored[0].props] == [
         "deposit_conserves", "only_admin_sets_fee", "stake_matches_position"
     ]
 
@@ -211,7 +212,7 @@ async def test_a_property_two_components_share_is_carried_once(monkeypatch, tmp_
         monkeypatch, _ctx(store, namespace=None), authored, tmp_path,
         jobs=_jobs([shared], [shared, other]),
     )
-    assert [p["title"] for p in authored[0]["props"]] == ["solvency", "only_admin"]
+    assert [p.title for p in authored[0].props] == ["solvency", "only_admin"]
 
 
 async def test_a_different_property_set_authors_a_different_artifact(monkeypatch, tmp_path):
@@ -236,25 +237,31 @@ async def test_without_a_cache_namespace_nothing_is_stored(monkeypatch, tmp_path
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestWarning")
 def test_the_setup_key_covers_what_it_is_authored_from_and_not_run_knobs():
-    base = {
-        "program": "example_lending",
-        "program_crate": {"dir": "programs/lend", "lib": "example_lending"},
-        "component": {"programs": [{"name": "example_lending"}]},
-        "props": [{"title": "no overflow", "sort": "invariant", "description": "d"}],
-        "context": {"fuzz_timeout": 30, "idl": "fuzz/x/idls/example_lending.json"},
-    }
+    base = AuthorInput(
+        kind="setup",
+        program="example_lending",
+        program_crate=ProgramCrate(dir="programs/lend", lib="example_lending"),
+        component={"programs": [{"name": "example_lending"}]},
+        props=[Property(title="no overflow", sort="invariant", description="d")],
+        context={"fuzz_timeout": 30, "idl": "fuzz/x/idls/example_lending.json"},
+    )
     same = _setup_identity(base)
 
+    def varied(**update) -> str:
+        return _setup_identity(base.model_copy(update=update))
+
     # A fuzz budget doesn't change what gets authored — keying on it would discard the artifact.
-    assert _setup_identity({**base, "context": {**base["context"], "fuzz_timeout": 900}}) == same
+    assert varied(context={**base.context, "fuzz_timeout": 900}) == same
     # Everything the prompt is built from does.
-    assert _setup_identity({**base, "program": "other"}) != same
-    assert _setup_identity({**base, "component": {"programs": []}}) != same
-    assert _setup_identity({**base, "program_crate": {"dir": "programs/other"}}) != same
+    assert varied(program="other") != same
+    assert varied(component={"programs": []}) != same
+    assert varied(program_crate=ProgramCrate(dir="programs/other")) != same
     # …including the properties: they are what the fixture is designed around.
-    assert _setup_identity({**base, "props": []}) != same
+    assert varied(props=[]) != same
     # …including which source the types come from: crate deps and IDL generation differ.
-    assert _setup_identity({**base, "context": {"fuzz_timeout": 30}}) != same
-    # Stable across dict ordering (the analyzed model arrives as JSON).
-    reordered = json.loads(json.dumps({k: base[k] for k in reversed(list(base))}))
-    assert _setup_identity(reordered) == same
+    assert varied(context={"fuzz_timeout": 30}) != same
+    # Stable across key ordering *within* the opaque blobs — the analyzed model arrives as JSON, and
+    # the wire model fixes the order of everything else.
+    model = {"programs": [{"name": "example_lending"}], "extra": {"a": 1, "b": 2}}
+    reordered = json.loads(json.dumps({k: model[k] for k in reversed(list(model))}))
+    assert varied(component=model) == varied(component=reordered)

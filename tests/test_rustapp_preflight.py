@@ -162,10 +162,10 @@ async def test_the_resolved_program_crate_is_carried_forward(tmp_path, monkeypat
 
     # Resolved from the source file's manifest — none of it follows from the analysis identifier
     # ("vault"), and the gated build, every authoring turn and the deliverable must all agree on it.
-    assert result.program_crate["dir"] == CRATE_DIR
-    assert result.program_crate["package"] == "example-lending"
-    assert result.program_crate["lib"] == "example_lending"
-    assert wheel.compiles[0][0]["program_crate"] == result.program_crate
+    assert result.program_crate.dir == CRATE_DIR
+    assert result.program_crate.package == "example-lending"
+    assert result.program_crate.lib == "example_lending"
+    assert wheel.compiles[0][0]["program_crate"] == result.program_crate.model_dump()
 
 
 async def test_a_placed_idl_reaches_the_gate_that_builds_against_it(tmp_path, monkeypatch):

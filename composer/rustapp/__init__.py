@@ -18,8 +18,14 @@ This package is the Python side of the seam described in
     author_prompt(input_json, failure_json|None) -> str
     judge_prompt(input_json, spec) -> str|None
     compile(input_json, spec, workdir, sandbox_json) -> str      # BLOCKING (run-confined)
-    validate(input_json, spec, unit, workdir, sandbox_json) -> str  # BLOCKING (run-confined)
+    validate(input_json, spec, target, workdir, sandbox_json) -> str  # BLOCKING (run-confined)
+    workspace_prep(input_json) -> str           # the declarative prep plan the host executes
+    sandbox_grants(args_json) -> str            # extra grants for the host-authored policy
     finalize(outcomes_json) -> str|None
+
+Every one of those strings is a model in :mod:`composer.rustapp.wire` (the runtime ABI) or
+:mod:`composer.rustapp.descriptor` (the declarative one) — that is where the JSON shape lives, and
+:class:`composer.rustapp.wire.RustAppModule` is the surface above as a type.
 
 The host loads that module, synthesizes the pipeline's phase enum from the
 descriptor, and wraps the module in a :class:`PipelineBackend` whose ``formalize``
@@ -53,6 +59,27 @@ from composer.rustapp.descriptor import (
     SetupSpec,
 )
 from composer.rustapp.result import RustArtifact, RustFormalResult
+from composer.rustapp.wire import (
+    AuthorInput,
+    CompileFailed,
+    CompileOk,
+    CompileResult,
+    Failure,
+    FailureKind,
+    FinalizeComponent,
+    FinalizeInput,
+    ProgramCrate,
+    Prompt,
+    Property,
+    RustAppModule,
+    SandboxGrants,
+    Unit,
+    ValidateBuildFailed,
+    ValidateOutcome,
+    ValidateVerdicts,
+    Verdict,
+    WorkspacePrep,
+)
 from composer.rustapp.adapter import (
     PreflightFailed,
     RustBackend,
@@ -60,9 +87,9 @@ from composer.rustapp.adapter import (
     RustPreflight,
     RustPreparedSystem,
     RustStagedFormalizer,
-    as_report_backend,
     author_and_compile,
     make_emitter,
+    program_crate_of,
     unique_slugs,
 )
 from composer.rustapp.store import RustArtifactStore
@@ -111,15 +138,34 @@ __all__ = [
     "SetupSpec",
     "RustArtifact",
     "RustFormalResult",
+    "AuthorInput",
+    "CompileFailed",
+    "CompileOk",
+    "CompileResult",
+    "Failure",
+    "FailureKind",
+    "FinalizeComponent",
+    "FinalizeInput",
+    "ProgramCrate",
+    "Prompt",
+    "Property",
+    "RustAppModule",
+    "SandboxGrants",
+    "Unit",
+    "ValidateBuildFailed",
+    "ValidateOutcome",
+    "ValidateVerdicts",
+    "Verdict",
+    "WorkspacePrep",
     "PreflightFailed",
     "RustBackend",
     "RustFormalizer",
     "RustPreflight",
     "RustPreparedSystem",
     "RustStagedFormalizer",
-    "as_report_backend",
     "author_and_compile",
     "make_emitter",
+    "program_crate_of",
     "unique_slugs",
     "RustArtifactStore",
     "RustApplication",

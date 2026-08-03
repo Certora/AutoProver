@@ -3,8 +3,10 @@
 ``RustFormalResult`` is a plain pydantic model — the design's rule is that the
 result stays Python-native so the driver's type-keyed cache
 (``cache_get(formalizer.formalized_type)`` / ``cache_put``) round-trips it
-unchanged. Rust returns its fields as JSON (a ``Formalized``); the adapter
-validates them into this model. It satisfies both ``FormalResult``
+unchanged. It is assembled by the adapter's loop from what the wheel published
+(the wheel has no result type of its own: it answers per target, and the host
+accumulates), so the only wire type in here is the per-unit
+:class:`~composer.rustapp.wire.Verdict`. It satisfies both ``FormalResult``
 (``artifact_text`` / ``commentary`` / ``property_units()``) and
 ``ReportableResult`` (``skipped`` / ``property_units()`` / ``output_link``)
 structurally.
@@ -14,6 +16,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
+from composer.rustapp.wire import Verdict
 from composer.spec.cvl_generation import SkippedProperty
 
 
@@ -38,10 +41,10 @@ class RustFormalResult(BaseModel):
     units: list[tuple[str, list[str]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
     output_link: str | None = None
-    # Per-unit verdicts baked in at formalize time by a self-contained backend
-    # (unit name -> the Rust ``Verdict`` dict: {outcome, line?, duration_seconds?,
-    # unit_file?}). Empty for run-service-backed backends (they use fetch_verdicts).
-    verdicts: dict[str, dict] = Field(default_factory=dict)
+    # Per-unit verdicts baked in at formalize time by a self-contained backend (unit name -> the
+    # wheel's :class:`~composer.rustapp.wire.Verdict`, validated at the seam). Empty for
+    # run-service-backed backends (they use fetch_verdicts).
+    verdicts: dict[str, Verdict] = Field(default_factory=dict)
     # The distinct validation *targets* this unit's report rows were checked by — the wheel's
     # ``Unit.target``s, in the order they ran. Several report rows may share one target (Crucible
     # puts a component's whole property set in one fuzz target), so this is not ``units``' keys.
@@ -58,18 +61,6 @@ class RustFormalResult(BaseModel):
         property's own words ("Balance never overflows") read better than the backend's unit name
         (``rule_balance_never_overflows``). A unit absent here has no title to show."""
         return {unit: title for title, names in self.units for unit in names}
-
-    @classmethod
-    def from_formalized(cls, formalized: dict) -> "RustFormalResult":
-        """Build from a Rust ``Formalized`` dict (the payload of ``Command::Publish``)."""
-        return cls(
-            commentary=formalized.get("commentary", ""),
-            artifact_text=formalized.get("artifact_text", ""),
-            units=[(t, list(u)) for t, u in formalized.get("property_units", [])],
-            skipped=[SkippedProperty(**s) for s in formalized.get("skipped", [])],
-            output_link=formalized.get("output_link"),
-            verdicts=dict(formalized.get("verdicts", {})),
-        )
 
 
 @dataclass(frozen=True)

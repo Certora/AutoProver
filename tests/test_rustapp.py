@@ -22,6 +22,9 @@ echoprover = pytest.importorskip(
 
 from composer.rustapp.descriptor import AppDescriptor, CoreSlot
 from composer.rustapp.result import RustFormalResult
+from composer.rustapp.wire import Verdict
+from composer.spec.cvl_generation import SkippedProperty
+from composer.spec.source.report.schema import Outcome
 
 
 def _component_input(*titles: str) -> str:
@@ -82,20 +85,22 @@ def test_validate_returns_a_good_verdict():
 
 
 def test_result_round_trips_through_cache_serialization():
-    # The driver caches by model_dump/validate; ensure that survives.
-    res = RustFormalResult.from_formalized(
-        {
-            "commentary": "c",
-            "artifact_text": "spec",
-            "property_units": [("p", ["rule_p"])],
-            "skipped": [{"property_title": "q", "reason": "n/a"}],
-            "output_link": "local://x",
-        }
+    # The driver caches by model_dump/validate, so everything the loop accumulates has to survive
+    # that — including the nested per-unit verdicts the wheel published.
+    res = RustFormalResult(
+        commentary="c",
+        artifact_text="spec",
+        units=[("p", ["rule_p"])],
+        skipped=[SkippedProperty(property_title="q", reason="n/a")],
+        output_link="local://x",
+        verdicts={"rule_p": Verdict(outcome=Outcome.BAD, line=7, detail="counterexample")},
     )
     reloaded = RustFormalResult.model_validate_json(res.model_dump_json())
     assert reloaded.property_units() == [("p", ["rule_p"])]
     assert reloaded.artifact_text == "spec"
     assert reloaded.skipped[0].property_title == "q"
+    assert reloaded.verdicts["rule_p"].outcome is Outcome.BAD
+    assert reloaded.verdicts["rule_p"].detail == "counterexample"
 
 
 # ---------------------------------------------------------------------------

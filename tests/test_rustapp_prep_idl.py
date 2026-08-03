@@ -13,6 +13,7 @@ import pytest
 
 import composer.spec.solana.build as buildmod
 from composer.rustapp.adapter import run_workspace_prep
+from composer.rustapp.wire import AuthorInput, ProgramCrate
 from composer.spec.solana.build import BuiltProgram
 
 pytestmark = pytest.mark.asyncio
@@ -20,7 +21,7 @@ pytestmark = pytest.mark.asyncio
 #: The program id. An IDL must name the program's address; these fakes carry it except where a
 #: test is specifically about filling it in.
 ADDR = "LendvUkXRmuDKxGCCFJra9uxWMdMooPEmJk3qp7Tg1Z"
-CRATE = {"dir": "programs/lend", "package": "example_lending", "lib": "example_lending"}
+CRATE = ProgramCrate(dir="programs/lend", package="example_lending", lib="example_lending")
 
 
 class FakeWheel:
@@ -56,7 +57,9 @@ def _fake_build(monkeypatch, root: Path, *, emits_idl: bool, address: str | None
 async def _prep(wheel, root: Path, context: dict | None = None) -> str | None:
     return await run_workspace_prep(
         wheel,
-        {"kind": "preflight", "program": "vault", "program_crate": CRATE, "context": context or {}},
+        AuthorInput(
+            kind="preflight", program="vault", program_crate=CRATE, context=context or {}
+        ),
         workdir=root, sandbox=None, command_timeout_s=60,
     )
 

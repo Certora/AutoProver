@@ -10,7 +10,7 @@ use std::path::Path;
 
 use autoprover_sdk::{
     AppDescriptor, ArtifactLayout, AuthorInput, Backend, CompileResult, CoreSlot, EventKind,
-    Failure, PhaseSpec, Prompt, Sandbox, Unit, ValidateOutcome, Verdict,
+    Failure, Outcome, PhaseSpec, Prompt, Sandbox, Unit, ValidateOutcome, Verdict,
 };
 
 struct EchoApp;
@@ -112,7 +112,9 @@ impl Backend for EchoApp {
         _sandbox: &Sandbox,
     ) -> ValidateOutcome {
         // Self-contained: any well-formed spec builds; the (own-target) unit "passes".
-        ValidateOutcome::Verdicts { verdicts: vec![(unit.to_string(), Verdict::with_outcome("GOOD"))] }
+        ValidateOutcome::Verdicts {
+            verdicts: vec![(unit.to_string(), Verdict::with_outcome(Outcome::Good))],
+        }
     }
 }
 

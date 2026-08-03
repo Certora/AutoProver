@@ -17,6 +17,7 @@ by the frontend and the pipeline.
 import asyncio
 import enum
 import importlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, cast
 
@@ -32,6 +33,7 @@ from composer.rustapp.adapter import RustBackend
 from composer.rustapp.descriptor import AppDescriptor, CoreSlot
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.store import RustArtifactStore
+from composer.rustapp.wire import CALLOUTS, RustAppModule
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import SandboxConfig
 from composer.spec.artifacts import ArtifactStore
@@ -59,12 +61,25 @@ class BackendOptions:
     declared_args: dict[str, Any] = field(default_factory=dict)
 
 
-def load_module(module_name: str) -> Any:
-    """Import a Rust application's compiled module by name (e.g. ``"echoprover"``)."""
-    return importlib.import_module(module_name)
+def load_module(module_name: str) -> RustAppModule:
+    """Import a Rust application's compiled module by name (e.g. ``"echoprover"``).
+
+    The cast is the one honest dynamic boundary in the host — nothing about ``import_module`` can be
+    checked statically. So every callout the host will call is verified *here* instead: a module that
+    isn't an AutoProver wheel, or is one built against an older SDK, fails at load with the missing
+    names listed rather than with an ``AttributeError`` several phases into a run."""
+    module = importlib.import_module(module_name)
+    missing = [name for name in CALLOUTS if not callable(getattr(module, name, None))]
+    if missing:
+        raise TypeError(
+            f"{module_name!r} is not a complete AutoProver application module: it exports no "
+            f"{', '.join(missing)}. Rebuild the wheel against the current autoprover-sdk "
+            "(`export_app!` exports every callout)."
+        )
+    return cast(RustAppModule, module)
 
 
-def load_descriptor(module: Any) -> AppDescriptor:
+def load_descriptor(module: RustAppModule) -> AppDescriptor:
     """Parse a module's ``descriptor()`` JSON into an :class:`AppDescriptor`."""
     return AppDescriptor.model_validate_json(module.descriptor())
 
@@ -121,7 +136,7 @@ def _default_store(source: SourceCode, descriptor: AppDescriptor) -> RustArtifac
 
 
 def build_backend(
-    module: Any,
+    module: RustAppModule,
     descriptor: AppDescriptor,
     source: SourceCode,
     *,
@@ -222,7 +237,7 @@ class RustApplication:
     """
 
     descriptor: AppDescriptor
-    module: Any
+    module: RustAppModule
     ecosystem: Ecosystem[Any, Any, Any]
     phase: type[enum.Enum]
     core_phases: CorePhases
@@ -240,10 +255,11 @@ class RustApplication:
     def header_text(self) -> str:
         return self.descriptor.header_text
 
-    def validate_preconditions(self, args: dict) -> str | None:
-        """Delegate to the Rust precondition hook; return an error string or None."""
-        import json
+    def validate_preconditions(self, args: dict[str, Any]) -> str | None:
+        """Delegate to the Rust precondition hook; return an error string or None.
 
+        ``args`` is the CLI's own parsed arguments, not an ``AuthorInput`` — a free-form blob the
+        wheel matched against its own declared flags, so it stays a dict."""
         return self.module.validate_preconditions(json.dumps(args))
 
     def make_backend(self, source: SourceCode) -> RustBackend:

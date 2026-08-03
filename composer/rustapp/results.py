@@ -63,13 +63,6 @@ class VerdictSummary:
         )
 
 
-def _parse_outcome(raw: str) -> Outcome:
-    try:
-        return Outcome(raw)
-    except ValueError:
-        return Outcome.UNKNOWN
-
-
 def summarize_verdicts(
     result: CorePipelineResult[RustFormalResult], backend_tag: ReportBackend
 ) -> VerdictSummary:
@@ -94,7 +87,7 @@ def summarize_verdicts(
             continue
         titles = formalized.unit_titles()
         verdicts.extend(
-            UnitVerdict(titles.get(unit, unit), _parse_outcome(baked["outcome"]))
+            UnitVerdict(titles.get(unit, unit), baked.outcome)
             for unit, baked in formalized.verdicts.items()
         )
     return VerdictSummary(verdicts, backend_tag)

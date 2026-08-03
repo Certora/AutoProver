@@ -1,28 +1,39 @@
 """The tool-enabled authoring turn's prompt handling (no wheel / LLM needed).
 
-The backend owns the prompt: its author/judge prompt payload carries the ``instruction``
-and may define its own ``system`` prompt; otherwise a neutral, backend-agnostic default
-applies (no language/domain leak — the trigger for this was the old prompt hardcoding
-"Rust-based"). Lives in ``composer.rustapp.adapter`` (merged from the former ``_llm_agent``).
+The backend owns the prompt: its author/judge prompt payload carries the ``instruction`` and may
+define its own ``system`` prompt; otherwise a neutral, backend-agnostic default applies (no
+language/domain leak — the trigger for this was the old prompt hardcoding "Rust-based").
+
+The payload is a :class:`composer.rustapp.wire.Prompt`, parsed at the seam, so the shape is checked
+where it crosses rather than read key-by-key later: a wheel that sends no ``instruction`` fails here
+with the field named, where the host used to quietly prompt the agent with a JSON dump of whatever
+it did send.
 """
 
-from composer.rustapp.adapter import _DEFAULT_SYS_PROMPT, _split_prompt
+import pytest
+from pydantic import ValidationError
+
+from composer.rustapp.adapter import _DEFAULT_SYS_PROMPT
+from composer.rustapp.wire import Prompt, parse_prompt
 
 
-def test_bare_string_is_the_instruction_with_default_system():
-    assert _split_prompt("do the thing") == (None, "do the thing")
+def test_instruction_is_taken_as_sent():
+    assert parse_prompt('{"instruction": "author X"}').instruction == "author X"
 
 
-def test_dict_instruction_extracted_cleanly():
-    # Not JSON-wrapped (the old behavior dumped the whole dict as the prompt).
-    assert _split_prompt({"instruction": "author X"}) == (None, "author X")
+def test_no_system_prompt_declared_means_the_host_default_applies():
+    # ``None`` is the signal the turn falls back to _DEFAULT_SYS_PROMPT.
+    assert parse_prompt('{"instruction": "author X"}').system is None
 
 
 def test_backend_may_define_its_own_system_prompt():
-    assert _split_prompt({"system": "you are a fuzz author", "instruction": "author X"}) == (
-        "you are a fuzz author",
-        "author X",
-    )
+    prompt = parse_prompt('{"system": "you are a fuzz author", "instruction": "author X"}')
+    assert prompt == Prompt(system="you are a fuzz author", instruction="author X")
+
+
+def test_a_payload_with_no_instruction_is_rejected_at_the_seam():
+    with pytest.raises(ValidationError, match="instruction"):
+        parse_prompt('{"system": "you are a fuzz author"}')
 
 
 def test_default_system_prompt_is_backend_agnostic():

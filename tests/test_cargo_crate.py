@@ -8,7 +8,8 @@ the program under test (Crucible) must get the first two from the manifest, neve
 import pytest
 
 from composer.pipeline.ecosystem import EVM, SOLANA
-from composer.rustapp.adapter import program_crate_json
+from composer.rustapp.adapter import program_crate_of
+from composer.rustapp.wire import ProgramCrate as WireCrate
 from composer.spec.cargo import ProgramCrate, resolve_program_crate
 from composer.spec.context import SourceFields
 from composer.spec.system_model import SolidityIdentifier
@@ -118,16 +119,17 @@ def _source(root, relative_path: str) -> SourceFields:
     )
 
 
-def test_the_author_input_blob_comes_from_the_ecosystems_language_facet(tmp_path):
+def test_the_author_input_field_comes_from_the_ecosystems_language_facet(tmp_path):
     _member(
         tmp_path, "lend", '[package]\nname = "example_lending"\n\n[dependencies]\nanchor-lang = "0.29.0"\n'
     )
-    # Rust (Solana) resolves the crate; the blob is what every AuthorInput carries.
-    assert program_crate_json(SOLANA, _source(tmp_path, "programs/lend/src/lib.rs")) == {
-        "dir": "programs/lend", "package": "example_lending", "lib": "example_lending",
-        "anchor": "0.29.0",
-    }
+    # Rust (Solana) resolves the crate; this is what every AuthorInput carries.
+    assert program_crate_of(SOLANA, _source(tmp_path, "programs/lend/src/lib.rs")) == WireCrate(
+        dir="programs/lend", package="example_lending", lib="example_lending", anchor="0.29.0"
+    )
     # Solidity has no compilation unit to locate, and an unresolvable Rust layout is not fatal —
-    # both yield an empty blob, and the wheel falls back to its own convention.
-    assert program_crate_json(EVM, _source(tmp_path, "programs/lend/src/lib.rs")) == {}
-    assert program_crate_json(SOLANA, _source(tmp_path, "nowhere/src/lib.rs")) == {}
+    # both yield an all-empty crate, which the wheel reads through its own ``resolved()`` fallback.
+    # Empty strings rather than absent keys: the Rust struct defaults every field, so the two
+    # deserialize identically.
+    assert program_crate_of(EVM, _source(tmp_path, "programs/lend/src/lib.rs")) == WireCrate()
+    assert program_crate_of(SOLANA, _source(tmp_path, "nowhere/src/lib.rs")) == WireCrate()

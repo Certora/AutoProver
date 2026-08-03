@@ -465,11 +465,33 @@ pub enum ValidateOutcome {
     Verdicts { verdicts: Vec<(String, Verdict)> },
 }
 
-/// A per-unit outcome (mirrors `composer…report.collect.Verdict`). `outcome` is one of
-/// GOOD | BAD | ERROR | TIMEOUT | UNKNOWN.
+/// What checking one unit concluded — the report's backend-agnostic vocabulary (mirrors
+/// `composer…report.schema.Outcome`), which every backend's native status maps into. The
+/// human-facing wording ("No counterexample" vs "Verified") is picked at render time from the
+/// application's `backend_tag`, so a backend never spells it out here.
+///
+/// An enum rather than a free string: the host validates this field against the same closed set, so
+/// a typo that used to reach a report row and read there as an unexplained `UNKNOWN` now doesn't
+/// compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Outcome {
+    /// The property holds.
+    Good,
+    /// The property is violated — `Verdict::detail` should carry the counterexample.
+    Bad,
+    /// The check errored out without reaching a verdict.
+    Error,
+    /// The check ran out of time without reaching a verdict.
+    Timeout,
+    /// No conclusive result.
+    Unknown,
+}
+
+/// A per-unit outcome (mirrors `composer…report.collect.Verdict`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Verdict {
-    pub outcome: String,
+    pub outcome: Outcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -484,11 +506,15 @@ pub struct Verdict {
 }
 
 impl Verdict {
-    pub fn with_outcome(outcome: impl Into<String>) -> Self {
-        Verdict {
-            outcome: outcome.into(), line: None, duration_seconds: None, unit_file: None,
-            detail: None,
-        }
+    /// A bare verdict: just the outcome, no diagnostics. Set the fields you have on the result.
+    pub fn with_outcome(outcome: Outcome) -> Self {
+        Verdict { outcome, line: None, duration_seconds: None, unit_file: None, detail: None }
+    }
+
+    /// A failing verdict carrying its explanation — the shape a backend almost always wants for a
+    /// `Bad` or an `Error`, since a bare one gives a reader no clue why.
+    pub fn detailed(outcome: Outcome, detail: impl Into<String>) -> Self {
+        Verdict { detail: Some(detail.into()), ..Verdict::with_outcome(outcome) }
     }
 }
 
@@ -807,11 +833,9 @@ pub fn ffi_validate(
     let sandbox: Sandbox = parse(sandbox_json, "Sandbox").unwrap_or_default();
     let outcome = match parse::<AuthorInput>(input_json, "AuthorInput") {
         Ok(input) => b.validate(&input, spec, unit, std::path::Path::new(workdir), &sandbox),
-        Err(e) => {
-            let mut v = Verdict::with_outcome("ERROR");
-            v.detail = Some(e);
-            ValidateOutcome::Verdicts { verdicts: vec![(unit.to_string(), v)] }
-        }
+        Err(e) => ValidateOutcome::Verdicts {
+            verdicts: vec![(unit.to_string(), Verdict::detailed(Outcome::Error, e))],
+        },
     };
     serde_json::to_string(&outcome).unwrap_or_default()
 }

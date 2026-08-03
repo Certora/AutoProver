@@ -189,8 +189,8 @@ async def formalize(mod, input, env, sandbox, *, workdir, max_attempts, emit) ->
                       verdicts={u.unit: v for u, v in results})
 ```
 
-- The **author system prompt is already backend-definable** (`_llm_agent._split_prompt`), so
-  `Prompt.system` drops in.
+- The **author system prompt is backend-definable**: the host parses this payload as
+  `composer.rustapp.wire.Prompt`, and a `system` of `None` means "use the host's neutral default".
 - **RAG is unchanged**: the host builds the author's knowledge-base search tools as it does
   today (Crucible's external `crucible_kb`, imported from the committed
   `rust/crucible-app/crucible_kb.rag.json` via `composer.scripts.rag_import`) and passes them in

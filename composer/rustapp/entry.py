@@ -42,8 +42,9 @@ from composer.io.thread_logging import default_logging_ns, thread_logger
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import CorePipelineResult
 from composer.rag.models import get_model
-from composer.rustapp.adapter import program_crate_json
+from composer.rustapp.adapter import program_crate_of
 from composer.rustapp.descriptor import ArgDefault, ArgSpec
+from composer.rustapp.wire import parse_sandbox_grants
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
 from composer.sandbox.config import SandboxConfig
@@ -128,12 +129,11 @@ def _build_confinement(app: RustApplication, args: dict) -> SandboxConfig:
     fail-closed ``launcher`` provider (overridable by ``COMPOSER_SANDBOX_PROVIDER``), with the
     wheel's ``sandbox_grants`` (extra read-only paths / env names) unioned in. Python owns the
     policy; the wheel only *declares* the grants (``docs/rust-pure-app.md`` §5.2)."""
-    from composer.sandbox.config import SandboxConfig
     from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH
 
-    grants = json.loads(app.module.sandbox_grants(json.dumps(args)))
-    extra_ro = tuple(pathlib.Path(p) for p in grants.get("extra_ro", []))
-    extra_env = tuple(grants.get("extra_env", []))
+    grants = parse_sandbox_grants(app.module.sandbox_grants(json.dumps(args)))
+    extra_ro = tuple(pathlib.Path(p) for p in grants.extra_ro)
+    extra_env = tuple(grants.extra_env)
     provider = os.environ.get("COMPOSER_SANDBOX_PROVIDER", "launcher")
     return SandboxConfig(
         provider=provider,
@@ -253,7 +253,7 @@ async def rust_entry_point(
             "project_root": str(project_root),
             "main_contract": args.main_contract,
             "system_doc": args.system_doc or "",
-            "program_crate": program_crate_json(app.ecosystem, init_source),
+            "program_crate": program_crate_of(app.ecosystem, init_source).model_dump(),
             **declared_args,
         }
     )

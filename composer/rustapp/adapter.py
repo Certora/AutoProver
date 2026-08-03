@@ -30,10 +30,11 @@ import asyncio
 import json
 import logging
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, NotRequired, cast, get_args, override
+from typing import Any, Awaitable, Callable, NotRequired, cast, override
 
+from langchain_core.tools import BaseTool
 from pydantic import Field
 from graphcore.graph import FlowInput, tool_state_update
 from graphcore.tools.schemas import WithAsyncDependencies, WithInjectedId
@@ -43,7 +44,9 @@ from langgraph.types import Command
 from composer.io.multi_job import TaskInfo
 from composer.pipeline.core import (
     BackendJob,
+    ComponentOutcome,
     CorePhases,
+    Delivered,
     Formalizer,
     GaveUp,
     PipelineRun,
@@ -56,12 +59,35 @@ from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupArtifact
+from composer.rustapp.wire import (
+    AuthorInput,
+    CompileOk,
+    Failure,
+    FailureKind,
+    FinalizeComponent,
+    FinalizeInput,
+    ProgramCrate,
+    Prompt,
+    Property,
+    RustAppModule,
+    ValidateBuildFailed,
+    parse_compile,
+    parse_files,
+    parse_prompt,
+    parse_units,
+    parse_validate,
+    parse_workspace_prep,
+)
+# The wheel's per-unit verdict and the *report's* per-unit verdict are different types with the same
+# name (``fetch_verdicts`` maps one to the other), so the wire one is aliased here.
+from composer.rustapp.wire import Verdict as WireVerdict
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import CacheKey, SourceFields, WorkflowContext
+from composer.spec.service_host import ServiceHost
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.ui.tool_display import tool_display
-from composer.spec.source.report.schema import Outcome, ReportBackend, RuleName
+from composer.spec.source.report.schema import Outcome, RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import PropertyFormulation
 from composer.spec.util import slugify_filename, string_hash, uniq_thread_id
@@ -70,19 +96,6 @@ _log = logging.getLogger(__name__)
 
 # Author→compile revise budget (was the Rust sessions' SETUP/PC_MAX_ATTEMPTS).
 DEFAULT_MAX_ATTEMPTS = 7
-
-# Derived from the ReportBackend literal so the two can't drift (single source of truth).
-_REPORT_BACKENDS: frozenset[str] = frozenset(get_args(ReportBackend.__value__))
-
-
-def as_report_backend(tag: str) -> ReportBackend:
-    """Validate a wheel's free-form ``backend_tag`` against the closed report set."""
-    if tag not in _REPORT_BACKENDS:
-        raise ValueError(
-            f"unknown report backend_tag {tag!r}; expected one of {sorted(_REPORT_BACKENDS)}"
-        )
-    return cast(ReportBackend, tag)
-
 
 # ---------------------------------------------------------------------------
 # The LLM authoring turn — the Rust backend's binding of the shared agent primitive
@@ -101,17 +114,6 @@ _DEFAULT_SYS_PROMPT = (
     "When done, call the `result` tool with your complete final answer as a single "
     "string — the artifact source only, with no surrounding prose or code fences."
 )
-
-
-def _split_prompt(messages: Any) -> tuple[str | None, str]:
-    """Split a backend prompt payload into ``(system, instruction)``.
-
-    The payload is a bare instruction string, or a dict carrying ``instruction`` and
-    (optionally) a backend-defined ``system`` prompt. ``system`` is ``None`` when the
-    backend doesn't supply one (the caller falls back to :data:`_DEFAULT_SYS_PROMPT`)."""
-    if isinstance(messages, dict):
-        return messages.get("system"), messages.get("instruction") or json.dumps(messages)
-    return None, messages
 
 
 # NOTE: `bind_standard` introspects this state class's ``__annotations__`` at runtime to
@@ -244,9 +246,9 @@ class _RequestReview(WithInjectedId, WithAsyncDependencies[Command, "_JudgeHook"
 
 
 async def run_llm_agent(
-    env: Any, messages: Any, *, recursion_limit: int, backend_name: str = "rust",
-    turn_label: str = "authoring", judge: "_JudgeHook | None" = None, memory_tool: Any = None,
-    exclude_tools: frozenset[str] = frozenset(),
+    env: ServiceHost, prompt: Prompt, *, recursion_limit: int, backend_name: str = "rust",
+    turn_label: str = "authoring", judge: "_JudgeHook | None" = None,
+    memory_tool: BaseTool | None = None, exclude_tools: frozenset[str] = frozenset(),
 ) -> str:
     """Run one bounded, tool-enabled turn and return its final text. ``turn_label``
     names the turn's role ("authoring" / "judge") for the UI/log panel.
@@ -261,10 +263,10 @@ async def run_llm_agent(
     so the author self-revises against feedback. ``memory_tool`` (when given) is added to the belt so
     facts persist across turns/components. ``exclude_tools`` drops named tools from the belt (used to
     clamp the review sub-agent's exploration — docs/crucible-judge-cost.md (PR3) §3)."""
-    tools = [t for t in (getattr(env, "all_tools", None) or env.rag_tools) if t.name not in exclude_tools]
+    tools = [t for t in env.all_tools if t.name not in exclude_tools]
     if memory_tool is not None:
         tools.append(memory_tool)
-    system, instruction = _split_prompt(messages)
+    system = prompt.system
     doc = "Your complete final answer as a single string (e.g. the authored source file)."
     if judge is None:
         builder = bind_standard(env.builder_heavy(), _LlmState, doc=doc)
@@ -286,7 +288,7 @@ async def run_llm_agent(
         builder
         .with_input(_LlmInput)
         .with_sys_prompt(system or _DEFAULT_SYS_PROMPT)
-        .with_initial_prompt(instruction)
+        .with_initial_prompt(prompt.instruction)
         .with_tools(tools)
         .compile_async()
     )
@@ -342,6 +344,15 @@ def unique_slugs(props: list[PropertyFormulation]) -> list[str]:
     return slugs
 
 
+def _properties(props: list[PropertyFormulation], slugs: list[str]) -> list[Property]:
+    """The wire form of the properties one artifact must make checkable, each with the host-assigned
+    slug that names its unit (see :func:`unique_slugs`)."""
+    return [
+        Property(title=p.title, sort=p.sort, description=p.description, slug=s)
+        for p, s in zip(props, slugs)
+    ]
+
+
 def _first_line(s: str) -> str:
     return next((ln for ln in s.splitlines() if ln.strip()), "").strip()
 
@@ -359,14 +370,15 @@ def _parse_judge(review: str) -> tuple[bool, str]:
 
 
 async def _author_turn(
-    module: Any, input_json: str, failure: dict | None, *, env: Any, recursion_limit: int,
-    backend_name: str, judge: "_JudgeHook | None" = None, memory_tool: Any = None,
+    module: RustAppModule, input_json: str, failure: Failure | None, *, env: ServiceHost,
+    recursion_limit: int, backend_name: str, judge: "_JudgeHook | None" = None,
+    memory_tool: BaseTool | None = None,
 ) -> str:
     """One authoring turn: render the backend's prompt (with any prior failure as revise
     context), run the tool-enabled LLM agent, and strip a code fence off the result. When
     ``judge`` is given, the author reviews and self-revises in-session (docs/crucible-judge-in-loop.md (PR3))."""
-    prompt = json.loads(
-        module.author_prompt(input_json, json.dumps(failure) if failure is not None else None)
+    prompt = parse_prompt(
+        module.author_prompt(input_json, failure.model_dump_json() if failure is not None else None)
     )
     reply = await run_llm_agent(
         env, prompt, recursion_limit=recursion_limit, backend_name=backend_name,
@@ -383,8 +395,9 @@ _JUDGE_EXCLUDE_TOOLS = frozenset({"code_explorer"})
 
 
 async def _judge_turn(
-    module: Any, input_json: str, spec: str, *, env: Any, recursion_limit: int, backend_name: str,
-    emit: Callable[[str, dict], None] | None = None, memory_tool: Any = None,
+    module: RustAppModule, input_json: str, spec: str, *, env: ServiceHost, recursion_limit: int,
+    backend_name: str, emit: Callable[[str, dict], None] | None = None,
+    memory_tool: BaseTool | None = None,
 ) -> tuple[bool, str]:
     """Optional LLM review of a spec: ``(accept, feedback)``. ``(True, "")`` when the backend
     declares no judge (``judge_prompt`` → ``None``, the default). When a review actually runs,
@@ -393,7 +406,7 @@ async def _judge_turn(
     if not jp:
         return True, ""
     review = await run_llm_agent(
-        env, json.loads(jp), recursion_limit=recursion_limit,
+        env, parse_prompt(jp), recursion_limit=recursion_limit,
         backend_name=backend_name, turn_label="judge", memory_tool=memory_tool,
         exclude_tools=_JUDGE_EXCLUDE_TOOLS,
     )
@@ -402,14 +415,14 @@ async def _judge_turn(
         emit("judge", {
             "line": "reviewer accepted the tests" if ok
             else f"reviewer rejected — revising: {_first_line(feedback)}",
-            "outcome": "GOOD" if ok else "BAD",
+            "outcome": (Outcome.GOOD if ok else Outcome.BAD).value,
         })
     return ok, feedback
 
 
 def _make_judge_hook(
-    module: Any, input_json: str, *, env: Any, recursion_limit: int, backend_name: str,
-    emit: Callable[[str, dict], None] | None, memory_tool: Any,
+    module: RustAppModule, input_json: str, *, env: ServiceHost, recursion_limit: int,
+    backend_name: str, emit: Callable[[str, dict], None] | None, memory_tool: BaseTool | None,
 ) -> "_JudgeHook":
     """Wrap the wheel's judge as a ``(draft) -> (accepted, feedback)`` callable for the in-loop
     ``request_review`` tool. Reuses :func:`_judge_turn` so the verdict event still fires."""
@@ -422,10 +435,10 @@ def _make_judge_hook(
 
 
 async def author_and_compile(
-    module: Any,
-    input_dict: dict,
+    module: RustAppModule,
+    input: AuthorInput,
     *,
-    env: Any,
+    env: ServiceHost,
     sandbox_dict: BackendSpec,
     workdir: Path,
     recursion_limit: int,
@@ -439,29 +452,28 @@ async def author_and_compile(
     that have no report units to validate — e.g. Crucible's shared setup fixture (a compile-only
     gate). The component path fuses the build gate into ``validate`` instead (see
     :meth:`RustFormalizer.formalize`)."""
-    input_json = json.dumps(input_dict)
+    input_json = input.model_dump_json()
     sandbox_json = json.dumps(sandbox_dict)
-    failure: dict | None = None
+    failure: Failure | None = None
     for _ in range(max_attempts):
         spec = await _author_turn(
             module, input_json, failure, env=env, recursion_limit=recursion_limit, backend_name=backend_name
         )
-        result = json.loads(
+        result = parse_compile(
             await _run_blocking(
                 lambda: module.compile(input_json, spec, str(workdir), sandbox_json), command_sem
             )
         )
-        if result.get("status") != "ok":
-            errors = result.get("errors", "")
-            failure = {"draft": spec, "errors": errors}
-            emit("build_output", {"line": _first_line(errors) or "build failed; revising"})
+        if not isinstance(result, CompileOk):
+            failure = Failure(draft=spec, errors=result.errors)
+            emit("build_output", {"line": _first_line(result.errors) or "build failed; revising"})
             continue
         ok, feedback = await _judge_turn(
             module, input_json, spec, env=env, recursion_limit=recursion_limit,
             backend_name=backend_name, emit=emit,
         )
         if not ok:
-            failure = {"draft": spec, "errors": feedback, "kind": "judge"}
+            failure = Failure(draft=spec, errors=feedback, kind=FailureKind.JUDGE)
             continue
         return spec
     return GaveUp(reason=f"{backend_name}: did not pass compile/judge in {max_attempts} attempts")
@@ -487,23 +499,25 @@ def _confined_target(root: Path, rel: str) -> Path:
     return root / p
 
 
-def program_crate_json(
+def program_crate_of(
     ecosystem: Ecosystem[Any, Any, Any], source: SourceFields
-) -> dict[str, str]:
-    """The ``AuthorInput.program_crate`` blob — where the code under analysis lives as a
+) -> ProgramCrate:
+    """The ``AuthorInput.program_crate`` field — where the code under analysis lives as a
     compilation unit and what it is called — resolved by the ecosystem's language facet.
 
     A wheel that must *depend on* the analyzed code (Crucible's harness path-depends on the program
     under test) reads this instead of deriving a directory or package name from
-    ``source.contract_name``, which is only the analysis identifier. Empty when the language has no
-    such unit (Solidity) or it couldn't be resolved, in which case the wheel applies its own
-    convention.
+    ``source.contract_name``, which is only the analysis identifier. Every field is empty when the
+    language has no such unit (Solidity) or it couldn't be resolved, in which case the wheel applies
+    its own convention.
     """
     crate = source_crate_of(ecosystem, source)
-    return asdict(crate) if crate is not None else {}
+    if crate is None:
+        return ProgramCrate()
+    return ProgramCrate(dir=crate.dir, package=crate.package, lib=crate.lib, anchor=crate.anchor)
 
 
-def _setup_identity(prep_input: dict) -> str:
+def _setup_identity(input: AuthorInput) -> str:
     """A cache key for the shared setup artifact: a hash of what it is authored *from*.
 
     Exactly the inputs the wheel renders the artifact from — the program and its crate, the analyzed
@@ -513,18 +527,18 @@ def _setup_identity(prep_input: dict) -> str:
     reason.
     """
     material = {
-        "program": prep_input.get("program"),
-        "program_crate": prep_input.get("program_crate"),
-        "idl": bool((prep_input.get("context") or {}).get("idl")),
-        "component": prep_input.get("component"),
-        "props": prep_input.get("props"),
+        "program": input.program,
+        "program_crate": input.program_crate.model_dump(),
+        "idl": bool(input.context.get("idl")),
+        "component": input.component,
+        "props": [p.model_dump() for p in input.props],
     }
     return string_hash(json.dumps(material, sort_keys=True, default=str))
 
 
 async def run_workspace_prep(
-    module: Any,
-    input_dict: dict,
+    module: RustAppModule,
+    input: AuthorInput,
     *,
     workdir: Path,
     sandbox: SandboxConfig | None,
@@ -541,40 +555,38 @@ async def run_workspace_prep(
     executes no untrusted code), the code-executing build runs *confined + offline*
     (``build_program`` handles both). The wheel supplies only file contents + which dirs/program —
     never a command line."""
-    plan = json.loads(module.workspace_prep(json.dumps(input_dict)))
-    for rel, contents in (plan.get("files") or {}).items():
+    plan = parse_workspace_prep(module.workspace_prep(input.model_dump_json()))
+    for rel, contents in plan.files.items():
         target = _confined_target(workdir, rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(contents)
 
-    warm_dirs = plan.get("warm_dirs") or []
-    build_prog = plan.get("build_program")
-    idl_dest = plan.get("idl_dest")
-    if not warm_dirs and not build_prog and not idl_dest:
+    if not plan.needs_toolchain:
         return None
+    idl_dest = plan.idl_dest
 
     from composer.spec.solana.build import build_program, idl_with_program_id, warm_cargo_cache
 
-    if warm_dirs and sandbox is not None and sandbox.enabled:
+    if plan.warm_dirs and sandbox is not None and sandbox.enabled:
         # Warm into the SAME private CARGO_HOME the confined offline build will read.
         from composer.sandbox.recipes import sandbox_cargo_home
 
         cargo_home = sandbox_cargo_home(str(workdir))
-        for d in warm_dirs:
+        for d in plan.warm_dirs:
             await warm_cargo_cache(
                 _confined_target(workdir, d), cargo_home=cargo_home, timeout_s=command_timeout_s
             )
 
     # An operator-supplied IDL wins over building one — for a program whose own toolchain isn't
     # installed (the usual reason the wheel wants an IDL at all), `anchor idl build` can't run.
-    supplied = (input_dict.get("context") or {}).get("program_idl") or None
+    supplied = input.context.get("program_idl") or None
     idl_src = Path(supplied) if (idl_dest and supplied) else None
     if idl_src is not None and not idl_src.is_file():
         raise RuntimeError(f"--program-idl: no such file: {idl_src}")
 
-    if build_prog:
+    if plan.build_program:
         built = await build_program(
-            str(workdir), build_prog, with_idl=bool(idl_dest) and idl_src is None,
+            str(workdir), plan.build_program, with_idl=bool(idl_dest) and idl_src is None,
             timeout_s=command_timeout_s, sandbox=sandbox,
         )
         if idl_dest and idl_src is None:
@@ -597,7 +609,9 @@ async def run_workspace_prep(
     dest.write_text(
         idl_with_program_id(
             idl_src.read_text(), project_root=workdir,
-            crate=input_dict.get("program_crate") or {},
+            # ``build.py`` speaks the wire dict (it is shared with the non-Rust Solana path); the
+            # typed crate is the host's, so it serializes here rather than there.
+            crate=input.program_crate.model_dump(),
         )
     )
     _log.info("harness IDL: %s -> %s", idl_src, idl_dest)
@@ -616,8 +630,8 @@ class PreflightFailed(RuntimeError):
 
 
 async def run_preflight_gate(
-    module: Any,
-    input_dict: dict,
+    module: RustAppModule,
+    input: AuthorInput,
     *,
     workdir: Path,
     sandbox_dict: BackendSpec,
@@ -630,19 +644,18 @@ async def run_preflight_gate(
     analysis), so the wheel renders the smallest artifact that still exercises what an authored one
     will depend on. Raises :class:`PreflightFailed` with the compiler diagnostics the wheel
     extracted; there is no retry."""
-    result = json.loads(
+    result = parse_compile(
         await asyncio.to_thread(
-            module.compile, json.dumps(input_dict), "", str(workdir), json.dumps(sandbox_dict)
+            module.compile, input.model_dump_json(), "", str(workdir), json.dumps(sandbox_dict)
         )
     )
-    if result.get("status") == "ok":
+    if isinstance(result, CompileOk):
         return
-    errors = result.get("errors", "")
-    emit("build_output", {"line": _first_line(errors) or "preflight build failed"})
+    emit("build_output", {"line": _first_line(result.errors) or "preflight build failed"})
     raise PreflightFailed(
         "the prepared workspace does not build (or its skeleton does not run), before anything has "
         "been authored — a toolchain, dependency or program-build problem, not something the run "
-        f"can author its way around:\n{errors}"
+        f"can author its way around:\n{result.errors}"
     )
 
 
@@ -657,19 +670,19 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
 
     def __init__(
         self,
-        module: Any,
+        module: RustAppModule,
         descriptor: AppDescriptor,
         *,
         sandbox: SandboxConfig | None = None,
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
         command_sem: asyncio.Semaphore | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
-        context_extra: dict | None = None,
+        context_extra: dict[str, Any] | None = None,
         setup_result: str | None = None,
-        program_crate: dict[str, str] | None = None,
+        program_crate: ProgramCrate | None = None,
         idl: str | None = None,
     ):
-        super().__init__(RustFormalResult, as_report_backend(descriptor.backend_tag))
+        super().__init__(RustFormalResult, descriptor.backend_tag)
         self._module = module
         self._descriptor = descriptor
         self._sandbox = sandbox
@@ -685,16 +698,16 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # that declares a ``setup`` step gets here only through :class:`RustStagedFormalizer`, which
         # authors it first — so this is a plain constructor argument, never filled in later.
         self._setup_result = setup_result
-        # Where the analyzed source's compilation unit lives (see ``program_crate_json``), carried
+        # Where the analyzed source's compilation unit lives (see ``program_crate_of``), carried
         # on every ``AuthorInput`` and mirrored into ``finalize`` — the delivered crate must
         # declare the same dependency the gated builds did. ``idl`` likewise: where workspace prep
         # placed the program's IDL, when the wheel asked for one instead of a crate dependency.
-        self._program_crate = program_crate or {}
+        self._program_crate = program_crate or ProgramCrate()
         self._idl = idl or ""
 
     # -- hooks an application backend may override -------------------------
 
-    def _context(self, run: PipelineRun) -> dict:
+    def _context(self, run: PipelineRun) -> dict[str, Any]:
         """The ``AuthorInput.context`` blob for a component. The program plus whatever the
         prepared system injected (declared args + the setup artifact under its context key)."""
         return {"program": str(run.source.contract_name), **self._context_extra}
@@ -726,22 +739,18 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # The shared setup artifact is already in ``self._context_extra`` — ``begin`` authored it
         # from every unit's properties before the driver fanned out.
 
-        input_dict = {
-            "kind": "component",
-            "program": str(run.source.contract_name),
-            "program_crate": self._program_crate,
-            "component": feat.feature_json(),
-            "props": [
-                {"title": p.title, "sort": p.sort, "description": p.description, "slug": s}
-                for p, s in zip(props, slugs)
-            ],
-            "context": self._context(run),
-        }
-        input_json = json.dumps(input_dict)
+        input_json = AuthorInput(
+            kind="component",
+            program=str(run.source.contract_name),
+            program_crate=self._program_crate,
+            component=feat.feature_json(),
+            props=_properties(props, slugs),
+            context=self._context(run),
+        ).model_dump_json()
         sandbox_dict = await self._sandbox_spec(workdir)
         sandbox_json = json.dumps(sandbox_dict)
         emit = make_emitter()
-        units = json.loads(self._module.units(input_json))
+        units = parse_units(self._module.units(input_json))
 
         # When the wheel supplies a judge for this input, it runs in-loop: a `request_review` tool
         # inside the author session, which self-revises against feedback and can only finalize an
@@ -758,7 +767,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # Fused author → validate loop: validate's build IS the compile gate (no separate dry-run
         # per component — that ~2×'d the e2e). The units share one build, so a BuildFailed from any
         # unit re-authors the whole spec.
-        failure: dict | None = None
+        failure: Failure | None = None
         for _ in range(self._max_attempts):
             spec = await _author_turn(
                 self._module, input_json, failure, env=run.env,
@@ -770,17 +779,17 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             # e.g. Crucible shares one `c_<component>` target across that component's units). Run each
             # DISTINCT target once; the backend returns a verdict per unit it covers — it owns
             # attribution (how a failure maps to units), the host records verbatim.
-            targets = list(dict.fromkeys(u.get("target") or u["unit"] for u in units))
-            prop_of = {u["unit"]: u["property"] for u in units}
+            targets = list(dict.fromkeys(u.target_or_unit() for u in units))
+            prop_of = {u.unit: u.property for u in units}
 
-            verdicts: dict[str, dict] = {}
+            verdicts: dict[str, WireVerdict] = {}
             # Grouped by property, not appended as singletons: two units checking the same property
             # are two unit names under ONE report row — as singletons they would be two rows with
             # the same key, and the store's ``dict()`` of this list would silently keep the last.
             units_by_prop: dict[str, list[str]] = {}
-            build_failed: str | None = None
+            build_failed: ValidateBuildFailed | None = None
             for target in targets:
-                res = json.loads(
+                res = parse_validate(
                     await _run_blocking(
                         lambda target=target, spec=spec: self._module.validate(
                             input_json, spec, target, str(workdir), sandbox_json
@@ -788,23 +797,25 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                         self._command_sem,
                     )
                 )
-                if res.get("kind") == "build_failed":
-                    build_failed = res.get("errors", "")
+                if isinstance(res, ValidateBuildFailed):
+                    build_failed = res
                     break
-                for unit, verdict in res["verdicts"]:
+                for unit, verdict in res.verdicts:
                     verdicts[unit] = verdict
                     prop = prop_of.get(unit, unit)
                     units_by_prop.setdefault(prop, []).append(unit)
-                    detail = verdict.get("detail")
-                    line = f'{prop}: {verdict.get("outcome")}'
+                    line = f"{prop}: {verdict.outcome.value}"
                     emit(
                         "verdict",
-                        {"outcome": verdict.get("outcome"), "name": prop,
-                         "line": f"{line} — {detail}" if detail else line},
+                        {"outcome": verdict.outcome.value, "name": prop,
+                         "line": f"{line} — {verdict.detail}" if verdict.detail else line},
                     )
             if build_failed is not None:
-                failure = {"draft": spec, "errors": build_failed}
-                emit("build_output", {"line": _first_line(build_failed) or "build failed; revising"})
+                failure = Failure(draft=spec, errors=build_failed.errors)
+                emit(
+                    "build_output",
+                    {"line": _first_line(build_failed.errors) or "build failed; revising"},
+                )
                 continue
             return RustFormalResult(
                 artifact_text=spec, units=list(units_by_prop.items()),
@@ -824,45 +835,47 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             return {}
         return {
             unit: Verdict(
-                outcome=Outcome(v["outcome"]),
-                line=v.get("line"),
-                duration_seconds=v.get("duration_seconds"),
-                unit_file=v.get("unit_file") or formalized.unit_file,
-                message=v.get("detail"),
+                outcome=v.outcome,
+                line=v.line,
+                duration_seconds=v.duration_seconds,
+                unit_file=v.unit_file or formalized.unit_file,
+                message=v.detail,
             )
             for unit, v in formalized.result.verdicts.items()
         }
 
     @override
-    async def finalize(self, outcomes, run: PipelineRun) -> None:
-        from composer.pipeline.core import Delivered
-
-        components = []
-        for o in outcomes:
-            res = o.result
-            entry: dict = {"name": o.feat.display_name, "delivered": isinstance(res, Delivered)}
-            if isinstance(res, Delivered):
-                # A callout-mode wheel renders the whole deliverable from these (Crucible: folds
-                # each section into the shared crate, keyed by its property_units feature).
-                entry["unit_file"] = res.unit_file
-                entry["run_link"] = res.run_link
-                entry["artifact_text"] = res.result.artifact_text
-                entry["property_units"] = res.result.property_units()
-                # The harness fn / spec unit each row was validated by — what a callout-mode
-                # wheel keys its deliverable sections and declared features on.
-                entry["targets"] = list(res.result.targets)
-            components.append(entry)
-        payload = {
-            "program": str(run.source.contract_name),
-            "program_crate": self._program_crate,
-            "idl": self._idl,
-            "components": components,
-            "setup": self._setup_result,
-        }
-        raw = await asyncio.to_thread(self._module.finalize, json.dumps(payload))
+    async def finalize(
+        self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]], run: PipelineRun
+    ) -> None:
+        components = [
+            FinalizeComponent(name=o.feat.display_name, delivered=False)
+            if not isinstance(o.result, Delivered)
+            # A callout-mode wheel renders the whole deliverable from these (Crucible: folds each
+            # section into the shared crate, keyed by its property_units feature) — including the
+            # targets each row was validated by, which its sections and declared features key on.
+            else FinalizeComponent(
+                name=o.feat.display_name,
+                delivered=True,
+                unit_file=o.result.unit_file,
+                run_link=o.result.run_link,
+                artifact_text=o.result.result.artifact_text,
+                property_units=o.result.result.property_units(),
+                targets=list(o.result.result.targets),
+            )
+            for o in outcomes
+        ]
+        payload = FinalizeInput(
+            program=str(run.source.contract_name),
+            program_crate=self._program_crate,
+            idl=self._idl,
+            components=components,
+            setup=self._setup_result,
+        )
+        raw = await asyncio.to_thread(self._module.finalize, payload.model_dump_json())
         if not raw:
             return
-        files: dict[str, str] = json.loads(raw)
+        files = parse_files(raw)
         root = Path(run.source.project_root)
         for rel, contents in files.items():
             target = _confined_target(root, rel)
@@ -880,10 +893,10 @@ class RustPreflight:
     Carried rather than recomputed so the gated preflight build, every authoring turn, and the
     delivered artifact all name the same dependency."""
 
-    program_crate: dict[str, str]
+    program_crate: ProgramCrate
     idl: str | None
 
-    def context(self, declared_args: dict[str, Any]) -> dict:
+    def context(self, declared_args: dict[str, Any]) -> dict[str, Any]:
         """The ``AuthorInput.context`` blob for everything downstream: the run's declared args plus
         the placed IDL. The ``idl`` key is present only when the file is in place, which is the
         signal the wheel reads to decide how it sources the program's types."""
@@ -965,17 +978,17 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         program_crate = self.preflight.program_crate
         # Every component's context = declared args + the IDL the preflight placed. The shared setup
         # artifact joins it in ``build`` below, once it exists.
-        context_extra: dict = self.preflight.context(b.declared_args)
+        context_extra: dict[str, Any] = self.preflight.context(b.declared_args)
 
-        def build(setup_result: str | None) -> RustFormalizer:
+        def build(setup_result: str | None, context_key: str = "") -> RustFormalizer:
             """The formalizer, around a shared setup artifact that is either already authored or not
             called for. Threading the artifact through here (rather than assigning it onto a
             formalizer that already exists) is what keeps :class:`RustFormalizer` constructed once
-            and never mutated."""
+            and never mutated. ``context_key`` is the declared key to inject it under — always
+            supplied together with the artifact, so there is no fallback key to invent."""
             extra = dict(context_extra)
             if setup_result is not None:
-                key = descriptor.setup.context_key if descriptor.setup else "setup"
-                extra[key] = setup_result
+                extra[context_key] = setup_result
             return RustFormalizer(
                 b.module, b.descriptor, sandbox=b.sandbox,
                 command_timeout_s=b.command_timeout_s,
@@ -988,21 +1001,15 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
 
         setup = descriptor.setup
         # The base for the setup artifact's own input; ``author_setup`` adds the properties.
-        prep_input = {
-            "kind": "setup", "program": program, "program_crate": program_crate,
-            "component": analyzed_json, "props": [], "context": context_extra,
-        }
+        prep_input = AuthorInput(
+            kind="setup", program=program, program_crate=program_crate,
+            component=analyzed_json, context=context_extra,
+        )
 
         async def author_setup(props: list[PropertyFormulation], run: PipelineRun) -> str:
             # The properties are what the artifact must make checkable, so they are part of both
             # the prompt and the cache identity.
-            setup_input = {
-                **prep_input,
-                "props": [
-                    {"title": p.title, "sort": p.sort, "description": p.description, "slug": s}
-                    for p, s in zip(props, unique_slugs(props))
-                ],
-            }
+            setup_input = prep_input.with_props(_properties(props, unique_slugs(props)))
             # Cached like a formalization result (and skipped entirely on a hit): authoring +
             # compiling this is a full LLM loop, and on a large program the longest single step
             # of a run — so a re-run after a failure downstream must not pay for it twice. Keyed
@@ -1032,7 +1039,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             await setup_ctx.cache_put(RustSetupArtifact(source=fixture))
             return fixture
 
-        return RustStagedFormalizer(author_setup, build)
+        return RustStagedFormalizer(
+            author_setup, lambda artifact: build(artifact, setup.context_key)
+        )
 
 
 @dataclass
@@ -1044,7 +1053,7 @@ class RustBackend:
     Subclass (or replace via ``backend_cls``) when the app needs non-generic prep — e.g.
     Crucible's shared fixture + harness crate."""
 
-    module: Any
+    module: RustAppModule
     descriptor: AppDescriptor
     _phase: type
     _core_phases: CorePhases
@@ -1093,14 +1102,13 @@ class RustBackend:
         workdir = Path(run.source.project_root)
         # Resolved once per run and carried on every AuthorInput from here on: the wheel renders its
         # crate from this, so prep, every gated build, and the deliverable name one dependency.
-        program_crate = program_crate_json(self.ecosystem, run.source)
+        program_crate = program_crate_of(self.ecosystem, run.source)
         # Declared args are in scope from the start: prep may need one (Crucible reads
         # ``program_idl`` when deciding how to source the program's types).
-        prep_input = {
-            "kind": "preflight", "program": str(run.source.contract_name),
-            "program_crate": program_crate, "component": {}, "props": [],
-            "context": dict(self.declared_args),
-        }
+        prep_input = AuthorInput(
+            kind="preflight", program=str(run.source.contract_name),
+            program_crate=program_crate, context=dict(self.declared_args),
+        )
 
         async def prep() -> RustPreflight:
             idl = await run_workspace_prep(
@@ -1113,7 +1121,7 @@ class RustBackend:
                 # path, the file it placed — so it must see the reported `idl` context key.
                 await run_preflight_gate(
                     self.module,
-                    {**prep_input, "context": result.context(self.declared_args)},
+                    prep_input.with_context(result.context(self.declared_args)),
                     workdir=workdir,
                     sandbox_dict=await self.sandbox_spec(workdir),
                     emit=make_emitter(),
