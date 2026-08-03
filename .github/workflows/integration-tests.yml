@@ -51,15 +51,16 @@ jobs:
           sudo chmod +x /usr/local/bin/solc8.29
           solc8.29 --version
 
-      - name: async runners
-        run: |
-          uv pip install pytest-xdist
-
       - name: run autoprover integration tests
         run: |
           uv run pytest -n 3 -m 'expensive' tests
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
+      - name: run template fuzz tests
+        run: |
+          uv run pytest -n 2 -m 'fuzz' tests
+        env:
+          HYPOTHESIS_PROFILE: extended
 
       # Fires ONLY if a step above failed. The whole point of the file.
       - name: Notify Slack on failure

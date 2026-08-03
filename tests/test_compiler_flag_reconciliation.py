@@ -269,3 +269,35 @@ def test_update_optimize_map_noop_when_already_present(tmp_path: Path) -> None:
         conf, ContractHandle(contract_name="Sample_1", source_file="certora/harnesses/Sample_1.sol")
     ) is False
     assert conf["solc_optimize_map"] == {"Sample_1": "22300"}
+
+
+def test_update_via_ir_map_adds_new_contract_with_default(tmp_path: Path) -> None:
+    # A via-ir map covering existing files but not a newly-added library file must gain an entry,
+    # else certoraRun rejects the library as "not matched in solc_via_ir_map".
+    mgr = _config_manager(tmp_path)
+    conf = {"solc_via_ir_map": {"Sample": True}}
+    added = mgr.update_via_ir_map_for_contract(
+        conf, ContractHandle(contract_name="Sample_1", source_file="lib/dep/Sample_1.sol")
+    )
+    assert added is True
+    assert conf["solc_via_ir_map"]["Sample_1"] is True
+
+
+def test_update_via_ir_map_prefers_reference_value(tmp_path: Path) -> None:
+    mgr = _config_manager(tmp_path)
+    conf = {"solc_via_ir_map": {"Sample": True}}
+    mgr.update_via_ir_map_for_contract(
+        conf,
+        ContractHandle(contract_name="Sample_1", source_file="lib/dep/Sample_1.sol"),
+        reference_maps={"solc_via_ir_map": {"Sample_1": False}},
+    )
+    assert conf["solc_via_ir_map"]["Sample_1"] is False
+
+
+def test_update_via_ir_map_noop_when_already_present(tmp_path: Path) -> None:
+    mgr = _config_manager(tmp_path)
+    conf = {"solc_via_ir_map": {"Sample_1": True}}
+    assert mgr.update_via_ir_map_for_contract(
+        conf, ContractHandle(contract_name="Sample_1", source_file="lib/dep/Sample_1.sol")
+    ) is False
+    assert conf["solc_via_ir_map"] == {"Sample_1": True}

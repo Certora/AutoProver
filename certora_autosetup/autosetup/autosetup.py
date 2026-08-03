@@ -51,6 +51,7 @@ from certora_autosetup.utils.paths import (
 from certora_autosetup.utils.contract_utils import split_contract_spec
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager, FileContent, ProverJobSpec
 from certora_autosetup.utils.llm_util import get_ledger_rows
+from certora_autosetup.utils.project_dir import describe_build_config_dir, find_build_config_dir
 from certora_autosetup.utils.scope import Scope
 from certora_autosetup.utils.types import ContractHandle, ContractInfo
 
@@ -142,6 +143,9 @@ class Autosetup:
         self.bytes_mappings: List[tuple[ContractHandle, List[str]]] = []
         # Set during run()
         self.main_contract_handle: Optional[ContractHandle] = None
+        # Directory owning the main contract's build config; resolved in
+        # setup_build_system_config(). Equals the run root for a root-level project.
+        self.build_config_dir: Path = Path.cwd()
 
     def log(self, message: str, level: str = "INFO"):
         logger.log(message, level, COMPONENT)
@@ -265,6 +269,7 @@ class Autosetup:
         self.setup_build_system_config()
         self.setup_prover.build_system = self.build_system
         self.setup_prover.build_system_config = self.build_system_config
+        self.setup_prover.build_config_dir = self.build_config_dir
 
         # Check full-pipeline cache before running
         result_path = Path(DIR_CERTORA_INTERNAL) / FILE_AUTOSETUP_RESULT
@@ -376,8 +381,21 @@ class Autosetup:
         4. Stores the config in self.build_system_config (polymorphic)
         """
         try:
+            # A monorepo keeps its build config next to the sources it governs, so anchor
+            # detection on the main contract rather than on the run root.
+            run_root = Path.cwd()
+            if self.main_contract_handle is not None:
+                self.build_config_dir = find_build_config_dir(
+                    Path(self.main_contract_handle.source_file), run_root
+                )
+                nested = describe_build_config_dir(self.build_config_dir, run_root)
+                if nested:
+                    self.log(
+                        f"Build config for {self.main_contract_handle.contract_name} lives in {nested}/"
+                    )
+
             # Auto-detect or use explicit build system from init parameter
-            detected = BuildSystemDetector.resolve(Path.cwd(), self.config.requested_build_system)
+            detected = BuildSystemDetector.resolve(self.build_config_dir, self.config.requested_build_system)
             if self.config.requested_build_system is None or self.config.requested_build_system == 'auto':
                 self.log(f"Auto-detected build system: {detected.value}")
             else:
@@ -396,12 +414,11 @@ class Autosetup:
                 def is_file_in_scope(self, file_path):
                     return True
 
-            project_root = Path.cwd()
             scope = MinimalScope()
 
             # Get appropriate manager class and create instance
             ManagerClass = BuildSystemDetector.get_manager_class(detected)
-            manager: BuildSystemManager = ManagerClass(project_root, scope)  # type: ignore
+            manager: BuildSystemManager = ManagerClass(self.build_config_dir, scope)  # type: ignore
 
             # Auto-detect and parse config (polymorphic - returns FoundryConfig or HardhatConfig)
             self.log(f"Auto-detecting {detected.value} configuration...")
@@ -791,14 +808,13 @@ class Autosetup:
                         *((path, name) for path, name in parsed_additional),
                     }
                     extra_libs = [
-                        h.to_config_str()
+                        h
                         for h in autosetup.libraries_for_contracts(in_scene_units)
                         if (h.source_file, h.contract_name) not in in_scene_handles
                     ]
                     files_to_include = (
                         [contract_handle.to_config_str()]
                         + autosetup.config.additional_contracts
-                        + extra_libs
                     )
                     props = {"files": files_to_include}
                     autosetup.log(
@@ -806,6 +822,13 @@ class Autosetup:
                         f"--additional-contracts, and {len(extra_libs)} library file(s) used by them"
                     )
                     autosetup.config_manager.update_config_with_properties(enhanced_config.path, props)
+                    # Add the libraries via add_files_to_config so their compiler_map / solc_via_ir_map
+                    # / solc_optimize_map entries are filled; a raw files= write leaves the maps
+                    # unreconciled and certoraRun rejects the unmatched files.
+                    if extra_libs:
+                        autosetup.config_manager.add_files_to_config(
+                            enhanced_config.path, new_contract_files=extra_libs
+                        )
 
                 # Fix the base config with typechecker
                 typechecker_success = await asyncio.to_thread(
