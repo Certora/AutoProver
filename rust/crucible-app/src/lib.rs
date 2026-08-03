@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use autoprover_sdk::{
     run_confined, AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, AuthorInput, Backend,
     CommandOutput, CompileResult, CoreSlot, DeliverableMode, EventKind, Failure, FailureKind,
-    PhaseSpec, PreflightSpec, ProgramCrate, Prompt, Sandbox, SandboxGrants, SetupSpec, Unit,
-    ValidateOutcome, Verdict, WorkspacePrep,
+    Outcome, PhaseSpec, PreflightSpec, ProgramCrate, Prompt, Sandbox, SandboxGrants, SetupSpec,
+    Unit, ValidateOutcome, Verdict, WorkspacePrep,
 };
 
 use askama::Template;
@@ -710,11 +710,11 @@ fn attribute_finding(covered: &[Unit], detail: Option<String>) -> ValidateOutcom
             .iter()
             .map(|u| {
                 if all_bad || named.contains(u.unit.as_str()) {
-                    let mut v = Verdict::with_outcome("BAD");
+                    let mut v = Verdict::with_outcome(Outcome::Bad);
                     v.detail = detail.clone();
                     (u.unit.clone(), v)
                 } else {
-                    (u.unit.clone(), Verdict::with_outcome("GOOD"))
+                    (u.unit.clone(), Verdict::with_outcome(Outcome::Good))
                 }
             })
             .collect(),
@@ -1104,7 +1104,7 @@ impl Backend for CrucibleApp {
         // The backend owns attribution — it maps ONE run to a verdict per covered unit.
         let covered: Vec<Unit> =
             self.units(input).into_iter().filter(|u| u.target_or_unit() == unit).collect();
-        let all = |o: &str, detail: Option<String>| -> ValidateOutcome {
+        let all = |o: Outcome, detail: Option<String>| -> ValidateOutcome {
             ValidateOutcome::Verdicts {
                 verdicts: covered
                     .iter()
@@ -1129,16 +1129,16 @@ impl Backend for CrucibleApp {
                     // explored space. If it can't be attributed, mark all BAD (never hide it).
                     attribute_finding(&covered, finding_detail(&combined))
                 } else if out.exit_code == 0 {
-                    all("GOOD", None) // ran to the budget with no violation = every invariant held
+                    all(Outcome::Good, None) // ran to the budget with no violation = every invariant held
                 } else if is_build_error(&combined) {
                     // Shared build; re-author the whole spec (docs/rust-backend-api.md).
                     ValidateOutcome::BuildFailed { errors: build_errors(&out) }
                 } else {
                     // Non-zero exit with no build markers and no finding — capture the tail.
-                    all("ERROR", Some(build_errors(&out)))
+                    all(Outcome::Error, Some(build_errors(&out)))
                 }
             }
-            Err(e) => all("ERROR", Some(e)),
+            Err(e) => all(Outcome::Error, Some(e)),
         }
     }
 
