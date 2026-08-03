@@ -49,15 +49,13 @@ _RAG_PORT = os.environ.get("CERTORA_AI_COMPOSER_PGPORT", "5432")
 DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
-CRUCIBLE_DEFAULT_CONNECTION: str = f"postgresql://crucible_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 
-# Logical knowledge-base tag -> default DB connection, for the generic RAG importer
-# (composer.scripts.rag_import). The tag is the one a manifest carries (== a wheel's
-# `rag_db_default`), so import target and runtime search tools resolve by one name. Only corpora
-# on the JSON-manifest path live here; the CVL/Foundry builders still use their constants above.
-KNOWLEDGE_BASES: dict[str, str] = {
-    "crucible_kb": CRUCIBLE_DEFAULT_CONNECTION,
-}
+# Logical knowledge-base tag -> default DB connection, for corpora imported from a committed
+# manifest. The tag is the one the manifest carries (== a wheel's `rag_db_default`), so the import
+# target and the runtime search tools resolve by one name — see `composer.tools.rag_env`, which
+# requires both halves before a tag is usable. Empty until the first such corpus lands with the
+# application that declares it; the CVL/Foundry builders keep using their constants above.
+KNOWLEDGE_BASES: dict[str, str] = {}
 
 
 type _RagHeader = str | None

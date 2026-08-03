@@ -1,15 +1,22 @@
 """Descriptor-driven RAG toolset selection for Rust applications.
 
-A wheel declares ``rag_db_default`` in its :class:`AppDescriptor` (e.g. ``"crucible_kb"``); the
-generic env builder looks that tag up here and binds the corresponding corpus's search tools onto
-the author's env — the same wiring the old ``build_crucible_env`` did, now selected by tag rather
-than hard-coded per application.
+A wheel declares ``rag_db_default`` in its :class:`AppDescriptor`; the generic env builder looks
+that tag up here and binds the corresponding corpus's search tools onto the author's env — the same
+wiring the old ``build_crucible_env`` did, now selected by tag rather than hard-coded per
+application.
 
 Like the ecosystem registry, this maps a declarative tag → a concrete toolset; it is not an
 application fork (the tool classes live in ``composer/tools/<corpus>_rag.py``, shared, exactly as
 ``foundry_rag`` is). The tag's *connection* is not repeated here: it comes from
-``composer.rag.db.KNOWLEDGE_BASES``, the same map the RAG importer targets, so a corpus is imported
-and searched under one name.
+``composer.rag.db.KNOWLEDGE_BASES``, the same map the corpus importer targets, so a corpus is
+imported and searched under one name.
+
+**No corpus is registered yet.** Both halves of the first one — a ``composer/tools/<corpus>_rag.py``
+and its ``KNOWLEDGE_BASES`` connection — land with the application that declares it, so until then
+every tag is unregistered and any wheel naming one fails at descriptor load. That is the intended
+resting state, not a gap: a half-registration (a tag whose tools module doesn't exist) would pass
+:func:`validate_rag_db` and then be swallowed by the degrade path below, which is exactly the
+confusion the two failure modes are separated to avoid.
 
 Two failure modes, deliberately opposite:
 
@@ -38,15 +45,10 @@ _log = logging.getLogger(__name__)
 type _ToolsFactory = Callable[["ComposerRAGDB"], "Iterable[BaseTool]"]
 
 
-def _crucible_tools(db: "ComposerRAGDB") -> "Iterable[BaseTool]":
-    from composer.tools.crucible_rag import get_tools
-
-    return get_tools(db)
-
-
-_FACTORIES: dict[str, _ToolsFactory] = {
-    "crucible_kb": _crucible_tools,
-}
+#: Registered corpora, by tag. An entry is added together with the ``composer/tools/<corpus>_rag.py``
+#: it imports and the ``KNOWLEDGE_BASES`` connection it needs — all three at once, or the tag
+#: validates and then silently produces no tools.
+_FACTORIES: dict[str, _ToolsFactory] = {}
 
 
 def validate_rag_db(rag_db: str | None) -> None:
@@ -59,9 +61,10 @@ def validate_rag_db(rag_db: str | None) -> None:
     from composer.rag.db import KNOWLEDGE_BASES
 
     if rag_db not in _FACTORIES or rag_db not in KNOWLEDGE_BASES:
+        known = sorted(_FACTORIES.keys() & KNOWLEDGE_BASES.keys())
         raise ValueError(
             f"the application declares rag_db_default={rag_db!r}, which is not a registered RAG "
-            f"corpus (known: {sorted(_FACTORIES.keys() & KNOWLEDGE_BASES.keys())}). Register the "
+            f"corpus ({f'known: {known}' if known else 'none is registered yet'}). Register the "
             "tag in composer.rag.db.KNOWLEDGE_BASES (its connection) and composer.tools.rag_env "
             "(its search tools)."
         )
