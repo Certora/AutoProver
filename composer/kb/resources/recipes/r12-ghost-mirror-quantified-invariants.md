@@ -44,19 +44,3 @@ invariant setInvariant()
 
 The pattern generalizes to linked lists and any storage-resident structure:
 one ghost per quantified field, one hook pair per ghost.
-
-**Form of the invariant.** The quantified (`forall`) form above is the
-default for data-structure invariants: one `requireInvariant` imports the full
-universal statement, and the Prover's quantifier grounding handles the
-instantiation. Fall back to the **parameterized form** — one invariant per
-quantified variable, with explicit `preserved` blocks supplying the needed
-instantiations — when the invariant body must call view functions or access
-storage (both barred under quantifiers), or when grounding fails on the
-quantified form. The fallback's discipline, on this example: two invariants
-`A(mathint i)` / `B(bytes32 v)`; only `remove` needs `preserved` blocks,
-carrying `requireInvariant A(ghostLength - 1)` (the swap-and-pop relocation
-witness) and `requireInvariant B(w)`. Declare the index parameter `mathint`:
-at length zero the instantiation `A(-1)` is vacuously true, where a
-`require_uint256(ghostLength - 1)` cast would silently prune the empty-set
-executions instead. The fallback's cost is exactly that every needed
-instantiation must be identified by hand and maintained across refactors.
