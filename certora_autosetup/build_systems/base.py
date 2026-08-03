@@ -29,8 +29,7 @@ class BuildSystemConfig(ABC):
     optimizer: Optional[bool] = None
     optimizer_runs: int = 200
     via_ir: Optional[bool] = None
-    # Declared EVM target (foundry `evm_version`, hardhat `settings.evmVersion`);
-    # None means each solc's own default.
+    # Declared EVM target; None means each solc's own default.
     evm_version: Optional[str] = None
 
     # Common source configuration

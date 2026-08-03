@@ -201,7 +201,9 @@ class CompilationWorkaroundManager:
             self._evm_version_seeded = True
 
     def _normalize_compile_maps(self, config: Dict) -> None:
-        """Collapse a uniform compiler_map / solc_via_ir_map back to its scalar if all values are same.
+        """Collapse a uniform compiler_map / solc_via_ir_map — and, when it was
+        seeded from a declared scalar, solc_evm_version_map — back to its scalar
+        if all values are the same.
         """
         cmap = config.get("compiler_map")
         if isinstance(cmap, dict) and cmap and len(set(cmap.values())) == 1:

@@ -54,6 +54,20 @@ def test_v5_config_pins_solc_and_paths(manager: TruffleManager, tmp_path: Path) 
     assert config.optimizer_runs == 10000
     assert config.src == "contracts"
     assert config.get_artifact_directory() == "build/contracts"
+    assert config.evm_version is None
+
+
+def test_v5_config_evm_version_is_honored(manager: TruffleManager, tmp_path: Path) -> None:
+    config_data = {
+        **V5_CONFIG,
+        "compilers": {
+            "solc": {"version": "0.5.17", "settings": {"evmVersion": "istanbul"}}
+        },
+    }
+    config = manager._extract_config_from_json(config_data, tmp_path)
+
+    assert config.evm_version == "istanbul"
+    assert config.to_certora_dict()["solc_evm_version"] == "istanbul"
 
 
 def test_v4_config_has_no_version_to_pin(manager: TruffleManager, tmp_path: Path) -> None:

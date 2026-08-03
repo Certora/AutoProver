@@ -214,6 +214,7 @@ class TruffleManager(BuildSystemManager):
             solc_version=self._parse_solc_version(solc_block.get("version")),
             optimizer=bool(optimizer_settings.get("enabled", False)),
             optimizer_runs=int(optimizer_settings.get("runs", 200)),
+            evm_version=settings.get("evmVersion"),
             src=self._relative_to_config(config_data.get("contracts_directory"), config_dir, "contracts"),
             contracts_build_directory=self._relative_to_config(
                 config_data.get("contracts_build_directory"), config_dir, "build/contracts"
