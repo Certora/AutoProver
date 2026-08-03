@@ -95,11 +95,11 @@ struct AuthorInput { kind: String, program: String, program_crate: ProgramCrate,
 /// Where the analyzed code lives as a compilation unit, for a wheel that must *depend* on it.
 /// `program` above is only the analysis identifier (the `Name` in `path:Name`) — it is NOT a Cargo
 /// name, and a crate's directory / package / lib names are independent of it and of each other
-/// (lend: `programs/lend`, package `example_lending`). The host resolves this from the main
-/// source file's manifest; read it via `resolved(program)`, which fills any part the host left
-/// empty from the legacy `programs/<program>` convention. `anchor` is the crate's declared
-/// `anchor-lang` requirement — a wheel can only link the crate when it matches its own Anchor
-/// major, so this is what routes Crucible to its IDL path (crucible-application.md §6.2).
+/// (lend: `programs/lend`, package `example_lending`). The host fills it in from the chain's
+/// registered crate resolver, if there is one; read it via `resolved(program)`, which fills any part
+/// the host left empty from the legacy `programs/<program>` convention. `anchor` is the crate's
+/// declared `anchor-lang` requirement — a wheel can only link the crate when it matches its own
+/// Anchor major, so this is what routes Crucible to its IDL path (crucible-application.md §6.2).
 struct ProgramCrate { dir: String, package: String, lib: String, anchor: String }
 struct Prompt      { system: Option<String>, instruction: String }
 struct Failure     { errors: String }                 // compile stderr or judge feedback, fed back to the model
@@ -227,7 +227,7 @@ The driver overlaps it, so a backend that builds gets its build for free:
 ```
 
 Why the gate and not just the prep: `cargo fetch` resolves a dependency graph but **compiles
-nothing**, and its failure is deliberately non-fatal (`warm_cargo_cache` logs and returns, on the
+nothing**, and its failure is deliberately non-fatal (the warm step logs and returns, on the
 theory that the offline build will surface it). So before this existed, the first thing that actually
 built the harness crate was the compile of the first LLM-authored draft — at the far end of the
 extraction phase. Everything that can go wrong there is invisible to an authoring agent's revise

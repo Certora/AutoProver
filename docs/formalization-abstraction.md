@@ -131,7 +131,7 @@ driver only ever holds it as an opaque `FormT`; it never reads a field.
 @dataclass
 class Formalizer[FormT: BackendResult](ABC):
     formalized_type: type[FormT]      # the concrete result class — the cache get/put key
-    backend_tag: ReportBackend        # "prover" | "foundry", stamped into the report
+    backend_tag: ReportBackend        # "prover" | "foundry" | "none", stamped into the report
 
     @abstractmethod
     async def formalize(self, label, feat, props, ctx, run) -> FormT | GaveUp: ...

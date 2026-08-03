@@ -31,7 +31,7 @@ PHASES = [
 def _app(*, claims_discovery: bool) -> RustApplication:
     descriptor = AppDescriptor.model_validate(
         {
-            "name": "app", "header_text": "h", "ecosystem": "solana", "backend_tag": "crucible",
+            "name": "app", "header_text": "h", "ecosystem": "solana", "backend_tag": "prover",
             "backend_guidance": "g", "analysis_key": "k",
             "phases": [
                 *PHASES,

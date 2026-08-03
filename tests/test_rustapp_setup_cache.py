@@ -69,10 +69,10 @@ class _Run:
 def _descriptor() -> AppDescriptor:
     return AppDescriptor.model_validate(
         {
-            "name": "crucible",
+            "name": "demoprover",
             "header_text": "h",
             "ecosystem": "solana",
-            "backend_tag": "crucible",
+            "backend_tag": "prover",
             "backend_guidance": "g",
             "analysis_key": "k",
             "phases": [
@@ -190,7 +190,7 @@ async def test_the_setup_task_is_tagged_with_the_declared_phase_member(monkeypat
     assert f is not None
 
     info = run.tasks[0]
-    assert info.task_id == "crucible-setup"
+    assert info.task_id == "demoprover-setup"
     assert info.label == "Build Harness"
     assert info.phase.name == "build_harness"
 

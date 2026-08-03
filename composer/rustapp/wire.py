@@ -54,9 +54,9 @@ class Property(BaseModel):
 class ProgramCrate(BaseModel):
     """Where the analyzed code lives as a compilation unit, for a wheel that must *depend* on it.
 
-    Built from :class:`composer.spec.cargo.ProgramCrate` (the resolver's own type) at the seam —
-    every field empty when the host resolved nothing, which the wheel reads through its
-    ``ProgramCrate::resolved`` fallback."""
+    Filled in by the chain's registered resolver (:func:`composer.rustapp.toolchain.source_crate`) —
+    every field empty when there is none, when the language has no such unit, or when the layout
+    couldn't be read, which the wheel reads through its ``ProgramCrate::resolved`` fallback."""
 
     dir: str = ""
     package: str = ""
@@ -236,8 +236,8 @@ class WorkspacePrep(BaseModel):
     #: Project-relative manifest dirs to ``cargo fetch`` (unconfined, network) so a later confined +
     #: offline build finds every dep warm.
     warm_dirs: list[str] = Field(default_factory=list)
-    #: The build artifact to produce via the shared build capability (for Cargo, the crate's *lib*
-    #: target — not the analysis identifier).
+    #: The build artifact the chain's :class:`~composer.rustapp.toolchain.WorkspaceToolchain` should
+    #: produce (for Cargo, the crate's *lib* target — not the analysis identifier).
     build_program: str | None = None
     #: Where the wheel wants the program's IDL, workdir-relative. The host obtains it, writes it
     #: there, and echoes the path back as the ``idl`` context key.

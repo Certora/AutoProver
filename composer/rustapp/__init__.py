@@ -80,6 +80,14 @@ from composer.rustapp.wire import (
     Verdict,
     WorkspacePrep,
 )
+from composer.rustapp.toolchain import (
+    SOURCE_CRATES,
+    SourceCrateResolver,
+    WORKSPACE_TOOLCHAINS,
+    WorkspaceToolchain,
+    source_crate,
+    workspace_toolchain,
+)
 from composer.rustapp.adapter import (
     PreflightFailed,
     RustBackend,
@@ -88,6 +96,7 @@ from composer.rustapp.adapter import (
     RustPreparedSystem,
     RustStagedFormalizer,
     author_and_compile,
+    confined_target,
     make_emitter,
     program_crate_of,
     unique_slugs,
@@ -157,6 +166,12 @@ __all__ = [
     "ValidateVerdicts",
     "Verdict",
     "WorkspacePrep",
+    "SOURCE_CRATES",
+    "SourceCrateResolver",
+    "WORKSPACE_TOOLCHAINS",
+    "WorkspaceToolchain",
+    "source_crate",
+    "workspace_toolchain",
     "PreflightFailed",
     "RustBackend",
     "RustFormalizer",
@@ -164,6 +179,7 @@ __all__ = [
     "RustPreparedSystem",
     "RustStagedFormalizer",
     "author_and_compile",
+    "confined_target",
     "make_emitter",
     "program_crate_of",
     "unique_slugs",

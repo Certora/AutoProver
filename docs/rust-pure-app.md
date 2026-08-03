@@ -190,20 +190,24 @@ fn workspace_prep(&self, input: &AuthorInput) -> WorkspacePrep {
 }
 ```
 
-- The host writes `files` (path-confined via `confined_join`), runs `warm_cargo_cache` on each
-  `warm_dirs` (**unconfined, network** — a fetch runs no untrusted code), and, if
-  `build_program` is set, calls the shared `build_program` capability (which itself warms the
-  *program* crate then builds it **confined + offline**).
+- The host writes `files` itself (path-confined via `confined_join`) — that half is the same in
+  every ecosystem — and hands the rest of the plan to the chain's registered **workspace toolchain**
+  ([toolchain.py](../composer/rustapp/toolchain.py)): `cargo fetch` each `warm_dirs`
+  (**unconfined, network** — a fetch runs no untrusted code), build `build_program` **confined +
+  offline**, place the IDL at `idl_dest`.
 - **Posture unchanged and Python-owned end to end**: fetches unconfined, code-executing builds
   confined+offline. The wheel touches no command line — it contributes only file *contents* and
   declarative intent (which dirs, which program). Strictly within the existing trust model; no
   new capability.
-- `build_program` is the shared Solana build capability
-  ([solana/build.py](../composer/spec/solana/build.py)); the generic host invokes it lazily when
-  the plan requests it (shared ecosystem capability, not app-specific Python).
-- `idl_dest` is the same shape for a *derived input* rather than an artifact: the host resolves the
-  program's IDL (an operator-supplied file, else the build capability's IDL build), writes it there,
-  and reports the path back as the `idl` context key on every later `AuthorInput` — so a wheel that
+- The toolchain half is *registered, not imported*: driving `cargo-build-sbf`, reading `Anchor.toml`
+  and knowing what an IDL must carry is knowledge about the ecosystem under analysis, not about
+  implementing a backend in Rust, so the framework declares the seam and the application that first
+  needs it registers the implementation for its chain (one implementation per chain, shared by every
+  wheel targeting it). With none registered, a files-only plan works and a plan that asks for a build
+  fails loudly rather than silently skipping it.
+- `idl_dest` is the same shape for a *derived input* rather than an artifact: the toolchain resolves
+  the program's IDL (an operator-supplied file, else its own IDL build), writes it there, and the
+  host reports the path back as the `idl` context key on every later `AuthorInput` — so a wheel that
   cannot link the program under test can generate its types instead
   ([crucible-application.md §6.2](./crucible-application.md)). A hard error if it can't be produced:
   the wheel only asks when it cannot proceed without one.
@@ -329,7 +333,7 @@ byte-identical deliverable + report to today, at parity runtime (the e2e Vault g
 | Seam | New capability | Who controls argv | Who authors policy | Net |
 |---|---|---|---|---|
 | §3.1 finalize deliverable | writes files under project root | — (host writes, path-confined via `confined_join`) | n/a | same as today's store |
-| §4 workspace_prep | warm dirs + build a program | — (host runs the shared `warm_cargo_cache` / `build_program`; wheel supplies only file *contents* + which dirs/program) | **Python** `SandboxConfig` | **identical** to today (fetch unconfined, build confined+offline) |
+| §4 workspace_prep | warm dirs + build a program | — (host writes the files, the chain's registered workspace toolchain warms/builds; wheel supplies only file *contents* + which dirs/program) | **Python** `SandboxConfig` | **identical** to today (fetch unconfined, build confined+offline) |
 | §5.2 sandbox_grants | adds `extra_ro`/`extra_env` | n/a (data) | Python unions into its policy | same grants, now wheel-declared |
 
 No seam gives the *LLM* argv control, and no seam lets the *wheel* invent a sandbox policy. §4 is
@@ -396,10 +400,11 @@ Crucible port that proves the seam.
    deliverable." A separate `render_deliverables(results) -> {relpath: contents}` is clearer at
    the cost of one more callout. *Leaning: reuse `finalize`, revisit if a second app wants both.*
 2. **Where the Solana build capability lives.** `workspace_prep`'s `build_program` routes to the
-   shared `composer.spec.solana.build.build_program` — so the generic host gains one lazy import
-   of an ecosystem-specific helper. Acceptable (it's shared, not app-specific, and gated on the
-   plan), but the cleaner long-term home is a `build` capability on the `Ecosystem` itself.
-   *Leaning: lazy import now; promote to the ecosystem seam if a second ecosystem needs it.*
+   chain's registered `WorkspaceToolchain` — a tag → implementation map in the framework, filled in
+   by the application that needs it. Acceptable (it's shared per chain, not app-specific, and gated
+   on the plan), but the cleaner long-term home may be a `build` capability on the `Ecosystem`
+   itself. *Leaning: the registry now — the front-half `Ecosystem` describes what analysis needs,
+   and a workspace build is not that; promote if a second consumer appears outside `rustapp`.*
 3. **Per-run `Cargo.toml` materialization vs. a stable on-disk crate.** Materializing the
    manifest per confined run (§4) is what removes the feature-race, but it means the on-disk
    crate between runs is whatever the last run wrote. Since the *authoritative* crate is produced

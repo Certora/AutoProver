@@ -58,12 +58,12 @@ from composer.pipeline.core import (
     StagedFormalizer,
     SystemAnalysisSpec,
 )
-from composer.pipeline.ecosystem import Ecosystem, source_crate_of
-from composer.spec.cargo import ProgramCrate as CargoCrate
+from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, StepSpec
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupArtifact
+from composer.rustapp.toolchain import source_crate, workspace_toolchain
 from composer.rustapp.wire import (
     AuthorInput,
     CompileOk,
@@ -569,10 +569,14 @@ async def _run_blocking(thunk: Callable[[], str], sem: asyncio.Semaphore | None)
         return await asyncio.to_thread(thunk)
 
 
-def _confined_target(root: Path, rel: str) -> Path:
+def confined_target(root: Path, rel: str) -> Path:
     """Join a wheel-supplied relative path under ``root``, rejecting absolute paths / ``..``
     traversal — mirrors the Rust ``confined_join`` so host-written deliverable/prep files stay
-    inside the project (the wheel is trusted, but defense-in-depth is cheap)."""
+    inside the project (the wheel is trusted, but defense-in-depth is cheap).
+
+    Public because the toolchain half of a workspace prep lives outside this module
+    (:class:`~composer.rustapp.toolchain.WorkspaceToolchain`) and its writes — the IDL it places —
+    must be confined exactly as the host's own are."""
     p = Path(rel)
     if p.is_absolute() or ".." in p.parts:
         raise ValueError(f"unsafe file path {rel!r}: absolute or traverses outside the workdir")
@@ -583,29 +587,21 @@ def program_crate_of(
     ecosystem: Ecosystem[Any, Any, Any], source: SourceFields
 ) -> ProgramCrate:
     """The ``AuthorInput.program_crate`` field — where the code under analysis lives as a
-    compilation unit and what it is called — resolved by the ecosystem's language facet.
+    compilation unit and what it is called — from the chain's registered resolver
+    (:func:`composer.rustapp.toolchain.source_crate`).
 
     A wheel that must *depend on* the analyzed code (Crucible's harness path-depends on the program
     under test) reads this instead of deriving a directory or package name from
     ``source.contract_name``, which is only the analysis identifier. Every field is empty when the
-    language has no such unit (Solidity) or it couldn't be resolved, in which case the wheel applies
-    its own convention.
+    chain has no resolver, when the language has no such unit (Solidity), or when the layout
+    couldn't be read — all three mean the same thing to the wheel, which then applies its own
+    convention (the SDK's ``ProgramCrate::resolved``).
 
-    This is the seam: the resolver's own :class:`composer.spec.cargo.ProgramCrate` is the type
-    everything on the Python side passes around (its ``anchor`` is ``None`` when unknown), and it is
-    flattened into the wire shape — where "unknown" has to be an empty string, because that is what
-    the Rust struct's ``#[serde(default)]`` fields are — only here, on the way out.
+    Takes the whole ecosystem rather than its ``name`` because that is what a caller with a
+    configured application has in hand (see ``composer.rustapp.entry``), and the chain is the only
+    part of it this question turns on.
     """
-    return wire_crate(source_crate_of(ecosystem, source))
-
-
-def wire_crate(crate: CargoCrate | None) -> ProgramCrate:
-    """The wire form of a resolved crate; all-empty when nothing was resolved."""
-    if crate is None:
-        return ProgramCrate()
-    return ProgramCrate(
-        dir=crate.dir, package=crate.package, lib=crate.lib, anchor=crate.anchor or ""
-    )
+    return source_crate(ecosystem.name, source)
 
 
 def _setup_identity(input: AuthorInput) -> str:
@@ -631,84 +627,42 @@ async def run_workspace_prep(
     module: RustAppModule,
     input: AuthorInput,
     *,
-    crate: CargoCrate | None,
-    workdir: Path,
+    chain: ChainTag,
+    source: SourceFields,
     sandbox: SandboxConfig | None,
     command_timeout_s: int,
 ) -> str | None:
     """Execute the wheel's pure ``workspace_prep`` plan (``docs/rust-pure-app.md`` §4): write the
-    declared files (path-confined), then — only when a sandbox is enabled, so a later
-    confined+offline build finds its deps warm — ``cargo fetch`` each ``warm_dirs``, build the named
-    program via the shared Solana build capability, and place the program's IDL if the wheel asked
-    for one (``idl_dest``). Returns where the IDL was placed (workdir-relative), else ``None`` —
-    the caller reports that back to the wheel as the ``idl`` context key.
+    declared files (path-confined) under ``source.project_root``, then hand anything further the
+    plan asks for — warm these manifest dirs, build this program, place its IDL — to ``chain``'s
+    registered :class:`~composer.rustapp.toolchain.WorkspaceToolchain`. Returns where the IDL was
+    placed (relative to the project root), else ``None`` — the caller reports that back to the wheel
+    as the ``idl`` context key.
 
-    Network stays Python-owned and the posture is unchanged: fetches run *unconfined* (a fetch
-    executes no untrusted code), the code-executing build runs *confined + offline*
-    (``build_program`` handles both). The wheel supplies only file contents + which dirs/program —
-    never a command line.
+    The split is the seam: writing files is the same in every ecosystem, while warming/building
+    means driving *the analyzed project's* toolchain, which only something that knows the chain can
+    do (see the toolchain module for why the framework carries no implementation). Either way the
+    wheel supplies only file contents + which dirs/program, never a command line, so the network
+    posture stays Python-owned.
 
-    ``crate`` is the *resolved* crate the wire ``input.program_crate`` was flattened from — the IDL
-    normalization needs the program's real names, and reconstructing them from the wire copy would
-    mean reading back fields whose emptiness no longer says whether anything was resolved."""
+    The whole ``source`` goes through rather than just its root: an implementation resolves its own
+    project facts from it (Solana reads the crate that owns ``relative_path`` to fill in an IDL's
+    program id), which is knowledge the framework would otherwise have to hold a shape for."""
+    workdir = Path(source.project_root)
     plan = parse_workspace_prep(module.workspace_prep(input.model_dump_json()))
     for rel, contents in plan.files.items():
-        target = _confined_target(workdir, rel)
+        target = confined_target(workdir, rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(contents)
 
     if not plan.needs_toolchain:
         return None
-    idl_dest = plan.idl_dest
-
-    # local: the generic host stays ecosystem-agnostic at import time — only a workspace prep that
-    # actually asks for the toolchain reaches into the Solana build helpers.
-    from composer.spec.solana.build import build_program, idl_with_program_id, warm_cargo_cache
-
-    if plan.warm_dirs and sandbox is not None and sandbox.enabled:
-        # Warm into the SAME private CARGO_HOME the confined offline build will read.
-        from composer.sandbox.recipes import sandbox_cargo_home
-
-        cargo_home = sandbox_cargo_home(str(workdir))
-        for d in plan.warm_dirs:
-            await warm_cargo_cache(
-                _confined_target(workdir, d), cargo_home=cargo_home, timeout_s=command_timeout_s
-            )
-
-    # An operator-supplied IDL wins over building one — for a program whose own toolchain isn't
-    # installed (the usual reason the wheel wants an IDL at all), `anchor idl build` can't run.
-    supplied = input.context.get("program_idl") or None
-    idl_src = Path(supplied) if (idl_dest and supplied) else None
-    if idl_src is not None and not idl_src.is_file():
-        raise RuntimeError(f"--program-idl: no such file: {idl_src}")
-
-    if plan.build_program:
-        built = await build_program(
-            str(workdir), plan.build_program, with_idl=bool(idl_dest) and idl_src is None,
-            timeout_s=command_timeout_s, sandbox=sandbox,
-        )
-        if idl_dest and idl_src is None:
-            idl_src = built.idl_path
-
-    if not idl_dest:
-        return None
-    if idl_src is None:
-        raise RuntimeError(
-            "the harness must generate the program's types from its IDL (it cannot link the "
-            "program's crate directly), but no IDL could be produced: `anchor idl build` did not "
-            "emit one, which usually means the program's own anchor CLI version isn't installed. "
-            "Supply one with --program-idl <file> — any Anchor IDL format, including the pre-0.30 "
-            "layout."
-        )
-    dest = _confined_target(workdir, idl_dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    # Normalized on the way in: an IDL must name the program's address, and the one `anchor idl
-    # build` emits for a pre-0.30 program doesn't (see ``idl_with_program_id``).
-    dest.write_text(
-        idl_with_program_id(idl_src.read_text(), project_root=workdir, crate=crate)
+    idl = await workspace_toolchain(chain)(
+        plan, input, source=source, sandbox=sandbox, timeout_s=command_timeout_s
     )
-    _log.info("harness IDL: %s -> %s", idl_src, idl_dest)
-    return idl_dest
+    if idl is not None:
+        _log.info("workspace prep placed the program's IDL at %s", idl)
+    return idl
 
 
 class PreflightFailed(RuntimeError):
@@ -975,7 +929,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         files = parse_files(raw)
         root = Path(run.source.project_root)
         for rel, contents in files.items():
-            target = _confined_target(root, rel)
+            target = confined_target(root, rel)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(contents)
 
@@ -1188,8 +1142,9 @@ class RustBackend:
 
         Two steps, both *declared* by the wheel and executed here (``docs/rust-pure-app.md`` §4):
 
-        1. :func:`run_workspace_prep` — place the crate's build files, warm its dependencies, build
-           the program, place its IDL. Already the run's slowest non-LLM step.
+        1. :func:`run_workspace_prep` — place the crate's build files, and (through the ecosystem's
+           :class:`~composer.rustapp.toolchain.WorkspaceToolchain`) warm its dependencies, build the
+           program, place its IDL. Already the run's slowest non-LLM step.
         2. :func:`run_preflight_gate`, when the descriptor declares a ``preflight`` — build a
            skeleton artifact *the wheel authors itself* through the real toolchain, in the real
            sandbox. This is what turns step 1 from "we placed a manifest" into "this workspace
@@ -1199,15 +1154,13 @@ class RustBackend:
            authoring agent cannot fix because it does not own the manifest.
 
         Neither step reads the analyzed model or any property, which is what makes the overlap safe.
-        A failure raises (:class:`PreflightFailed` from the gate, or the build capability's own
+        A failure raises (:class:`PreflightFailed` from the gate, or the workspace toolchain's own
         error), and the driver cancels the analysis racing it."""
         descriptor = self.descriptor
         workdir = Path(run.source.project_root)
         # Resolved once per run and carried on every AuthorInput from here on: the wheel renders its
-        # crate from this, so prep, every gated build, and the deliverable name one dependency. The
-        # resolved value travels as itself; the wire copy is derived from it, never the other way.
-        crate = source_crate_of(self.ecosystem, run.source)
-        program_crate = wire_crate(crate)
+        # crate from this, so prep, every gated build, and the deliverable name one dependency.
+        program_crate = program_crate_of(self.ecosystem, run.source)
         # Declared args are in scope from the start: prep may need one (Crucible reads
         # ``program_idl`` when deciding how to source the program's types).
         prep_input = AuthorInput(
@@ -1217,7 +1170,7 @@ class RustBackend:
 
         async def prep() -> RustPreflight:
             idl = await run_workspace_prep(
-                self.module, prep_input, crate=crate, workdir=workdir,
+                self.module, prep_input, chain=self.ecosystem.name, source=run.source,
                 sandbox=self.sandbox, command_timeout_s=self.command_timeout_s,
             )
             result = RustPreflight(program_crate=program_crate, idl=idl)

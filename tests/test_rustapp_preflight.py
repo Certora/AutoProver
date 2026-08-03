@@ -10,8 +10,8 @@ an authoring agent cannot fix (it does not own the manifest) and would consume e
 revise attempts.
 
 So: the wheel renders its own skeleton, the host builds it through the same ``compile`` callout the
-authored artifacts use, and a failure is terminal. Fake wheel, fake build capability — no toolchain,
-no LLM.
+authored artifacts use, and a failure is terminal. Fake wheel, fake workspace toolchain — no
+toolchain, no LLM.
 """
 
 import json
@@ -20,17 +20,20 @@ from typing import Any, cast
 
 import pytest
 
-import composer.spec.solana.build as buildmod
 from composer.rustapp.adapter import PreflightFailed, RustPreflight
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.host import build_backend
+from composer.rustapp.toolchain import SOURCE_CRATES, WORKSPACE_TOOLCHAINS
+from composer.rustapp.wire import ProgramCrate
 from composer.spec.context import SourceCode
-from composer.spec.solana.build import BuiltProgram
 from composer.spec.system_model import SolidityIdentifier
 
 pytestmark = pytest.mark.asyncio
 
 CRATE_DIR = "programs/lend"
+#: What the chain's registered resolver reports for this project. Framework-side these are opaque
+#: strings — resolving them from a Cargo manifest is the registered resolver's business.
+CRATE = ProgramCrate(dir=CRATE_DIR, package="example-lending", lib="example_lending")
 IDL_DEST = "fuzz/vault/idls/example_lending.json"
 ADDR = "LendvUkXRmuDKxGCCFJra9uxWMdMooPEmJk3qp7Tg1Z"
 
@@ -56,10 +59,10 @@ class FakeWheel:
 
 def _descriptor(*, with_preflight: bool = True) -> AppDescriptor:
     body: dict = {
-        "name": "crucible",
+        "name": "demoprover",
         "header_text": "h",
         "ecosystem": "solana",
-        "backend_tag": "crucible",
+        "backend_tag": "prover",
         "backend_guidance": "g",
         "analysis_key": "k",
         "phases": [
@@ -115,31 +118,32 @@ def _source(root: Path) -> SourceCode:
 
 
 def _project(root: Path) -> None:
-    """The minimum Cargo layout the crate resolver reads."""
+    """Just the source file the analysis identifier points at."""
     (root / CRATE_DIR / "src").mkdir(parents=True)
     (root / CRATE_DIR / "src" / "lib.rs").write_text("// program")
-    (root / CRATE_DIR / "Cargo.toml").write_text(
-        '[package]\nname = "example-lending"\n\n[lib]\nname = "example_lending"\n\n'
-        '[dependencies]\nanchor-lang = "1.0.1"\n'
-    )
-    (root / "Cargo.toml").write_text('[workspace]\nmembers = ["programs/lend"]\n')
 
 
-def _fake_build(monkeypatch, root: Path, *, emits_idl: bool = True):
-    async def fake_build_program(project_root, program, *, with_idl=False, **_kw):
-        idl = None
-        if with_idl and emits_idl:
-            idl = Path(project_root) / "target" / "idl" / f"{program}.json"
-            idl.parent.mkdir(parents=True, exist_ok=True)
-            idl.write_text(json.dumps({"metadata": {"address": ADDR}}))
-        return BuiltProgram(program=program, so_path=root / "x.so", idl_path=idl)
+def _fake_chain(monkeypatch):
+    """Register a fake crate resolver + workspace toolchain for the chain the descriptor names — the
+    seams the real Solana ones are registered at (``composer.rustapp.toolchain``). The toolchain does
+    what any implementation must: place the IDL where the plan asked and report the path back."""
 
-    monkeypatch.setattr(buildmod, "build_program", fake_build_program)
+    async def fake_prepare(plan, _input, *, source, sandbox, timeout_s):
+        assert plan.build_program  # what these plans all ask for
+        if plan.idl_dest is None:
+            return None
+        dest = Path(source.project_root) / plan.idl_dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps({"metadata": {"address": ADDR}}))
+        return plan.idl_dest
+
+    monkeypatch.setitem(SOURCE_CRATES, "solana", lambda _source: CRATE)
+    monkeypatch.setitem(WORKSPACE_TOOLCHAINS, "solana", fake_prepare)
 
 
 async def _preflight(monkeypatch, tmp_path, wheel, *, with_preflight=True, declared=None):
     _project(tmp_path)
-    _fake_build(monkeypatch, tmp_path)
+    _fake_chain(monkeypatch)
     source = _source(tmp_path)
     backend = build_backend(wheel, _descriptor(with_preflight=with_preflight), source)
     backend.declared_args = declared or {}
@@ -165,11 +169,9 @@ async def test_the_resolved_program_crate_is_carried_forward(tmp_path, monkeypat
     wheel = FakeWheel({"build_program": "example_lending"})
     result, _run = await _preflight(monkeypatch, tmp_path, wheel)
 
-    # Resolved from the source file's manifest — none of it follows from the analysis identifier
+    # Whatever the chain's resolver reported — none of it follows from the analysis identifier
     # ("vault"), and the gated build, every authoring turn and the deliverable must all agree on it.
-    assert result.program_crate.dir == CRATE_DIR
-    assert result.program_crate.package == "example-lending"
-    assert result.program_crate.lib == "example_lending"
+    assert result.program_crate == CRATE
     assert wheel.compiles[0][0]["program_crate"] == result.program_crate.model_dump()
 
 
@@ -233,7 +235,7 @@ async def test_the_build_does_not_spend_an_agent_slot(tmp_path, monkeypatch):
     wheel = FakeWheel({"build_program": "example_lending"})
     _result, run = await _preflight(monkeypatch, tmp_path, wheel)
 
-    assert run.unmetered == ["crucible-preflight"]
+    assert run.unmetered == ["demoprover-preflight"]
     assert run.metered == []
 
 
@@ -245,14 +247,14 @@ async def test_the_gate_is_tagged_with_the_declared_phase_member(tmp_path, monke
     # what callers used to reach into the backend's private field to do.
     wheel = FakeWheel({"build_program": "example_lending"})
     _project(tmp_path)
-    _fake_build(monkeypatch, tmp_path)
+    _fake_chain(monkeypatch)
     source = _source(tmp_path)
     backend = build_backend(wheel, _descriptor(), source)
     run = _Run(source)
     await backend.preflight(cast(Any, run))
 
     info = run.tasks[0]
-    assert info.task_id == "crucible-preflight"
+    assert info.task_id == "demoprover-preflight"
     assert info.label == "Build Preflight"
     assert info.phase is backend.phase["preflight"]
     # …and it is the same enum the frontend's labels are keyed by, not a fresh synthesis of it.

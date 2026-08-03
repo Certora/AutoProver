@@ -83,14 +83,7 @@ Common surface, resolved once at sandbox-config time and expressed as Landlock r
   (the `cargo` / `cargo-*` shims on `PATH`). The home **root is not granted**, so
   `credentials.toml` / private-registry tokens stay unreadable. Offline registry contents live in
   the private per-run `CARGO_HOME` under the workdir (§11 item 5), warmed *outside* (§5).
-- **Solana platform-tools** — cargo-build-sbf's sBPF rust toolchain — read+exec. Granted at all
-  three places they can live: `~/.cache/solana`, `~/.local/share/solana`, and the **install tree of
-  the `cargo-build-sbf` on `PATH`** (a tarball install keeps them in a sibling `sdk/`, and that
-  binary must itself be executable here — `execvp` silently falls through to the next `PATH` match on
-  `EACCES`, so an ungranted toolchain doesn't fail, it gets *substituted*).
-- **The global git config** (`~/.gitconfig`, `~/.config/git/config`) — read-only, for a program with
-  git dependencies: libgit2 opens it before touching any repo, even offline against a warm checkout.
-  The credential stores (`~/.git-credentials`, a helper's) stay ungranted.
+- **Solana platform-tools** — cargo-build-sbf's sBPF rust toolchain — read+exec.
 - **The `crucible` binary** and libs it dlopens — read+exec.
 - **The crucible checkout** (`$CRUCIBLE_REPO/crates/…`) — the path deps — read-only.
 - **System runtime** — `/usr`, `/bin`, `/lib`, `/lib64` — read+exec (needed for the toolchain's own
@@ -181,7 +174,7 @@ step. This also closes the build-time supply-chain vector: with offline + a pre-
 malicious `build.rs` cannot pull a payload at build time.
 
 **Implementation (step 4).** "Offline inside" is one env var, not per-tool flags: the policy sets
-**`CARGO_NET_OFFLINE=true`** in the child env, which forces *every* cargo invocation offline — including
+**`CARGO_NET_OFFLINE=1`** in the child env, which forces *every* cargo invocation offline — including
 the nested `cargo` that `crucible run` spawns to build the harness — so we never thread `--offline`
 through each tool ([recipes.py](../composer/sandbox/recipes.py), `offline=True` default). "Fetch
 outside" is [`warm_cargo_cache`](../composer/spec/solana/build.py) — a `cargo fetch` run *unsandboxed*
@@ -430,7 +423,7 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    (which adds the crucible checkout + binary to `extra_ro`). Integration-tested: `run_local_command`
    under the launcher denies out-of-workdir reads and network while allowing the workdir + toolchain.
 4. **Offline prep (§5)** — *done*: `warm_cargo_cache` (a `cargo fetch` run outside the sandbox,
-   network on) warms the registry, and the policy sets `CARGO_NET_OFFLINE=true` so the confined build —
+   network on) warms the registry, and the policy sets `CARGO_NET_OFFLINE=1` so the confined build —
    and the nested cargo `crucible run` spawns — run offline. Wired into `build_program`; the
    harness-dir warm is `CrucibleArtifactStore.warm_dependencies`, called from `prepare_formalization`
    after the manifest is placed when a sandbox is on. `CARGO_HOME` is granted rw (the crucible policy)

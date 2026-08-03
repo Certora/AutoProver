@@ -162,9 +162,9 @@ These are the same steps any new backend takes ([application-abstraction.md](./a
 1. Add a wrapper `run_<rust>_pipeline` that constructs the adapter backend and calls the
    generic `run_pipeline` — mirror [foundry/pipeline.py](../composer/foundry/pipeline.py),
    the simplest reference backend, plus a `[project.scripts]` CLI entry.
-2. Widen the `ReportBackend` literal — currently a closed `Literal["prover","foundry"]`
+2. Widen the `ReportBackend` literal — currently a closed `Literal["prover","foundry","none"]`
    at [report/schema.py](../composer/spec/source/report/collect.py) — to include the new
-   backend tag.
+   backend tag, and give it its wording in [report/render.py](../composer/spec/source/report/render.py).
 
 ### 3.3 GIL and errors
 

@@ -18,7 +18,9 @@ from composer.rustapp.results import format_verdict_lines, summarize_verdicts
 from composer.rustapp.wire import Verdict
 from composer.spec.source.report.schema import Outcome
 
-BACKEND = "crucible"
+#: Any report backend does — the point of these tests is that the rollup reads its wording out of
+#: the report's own per-backend table rather than spelling outcomes itself.
+BACKEND = "prover"
 
 
 @dataclass
@@ -48,7 +50,7 @@ def _result(*outcomes: ComponentOutcome) -> CorePipelineResult[RustFormalResult]
 
 def test_every_unit_of_a_component_gets_a_row():
     # A component with several properties bakes several verdicts. Reporting only the first read as
-    # "1 No counterexample" for a component where three checks ran — and hid the failing one.
+    # "1 Verified" for a component where three checks ran — and hid the failing one.
     result = _result(
         ComponentOutcome(
             _Feat("increment"), [],
@@ -63,7 +65,7 @@ def test_every_unit_of_a_component_gets_a_row():
         ("rule_c_prop", Outcome.GOOD),
     ]
     assert summary.counts == {Outcome.GOOD: 2, Outcome.BAD: 1}
-    assert summary.tally == "2 No counterexample, 1 Counterexample"
+    assert summary.tally == "2 Verified, 1 Violated"
 
 
 def test_rows_are_named_by_property_title_falling_back_to_the_unit():
@@ -104,9 +106,9 @@ def test_the_listing_uses_the_reports_own_wording():
     )
     lines = format_verdict_lines(summarize_verdicts(result, BACKEND))
 
-    assert lines[0] == "  Verdicts:     1 No counterexample, 1 Timeout"
+    assert lines[0] == "  Verdicts:     1 Verified, 1 Timeout"
     assert lines[1:] == [
-        "    ✓ rule_a_prop — No counterexample",
+        "    ✓ rule_a_prop — Verified",
         "    ⧖ rule_b_prop — Timeout",
     ]
 
