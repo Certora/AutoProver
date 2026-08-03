@@ -29,7 +29,3 @@ storage context:
 ```
 
 `exclude` lists extension functions to leave out of the routing.
-
----
-
-# 3. EVM-level facts

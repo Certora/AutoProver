@@ -681,7 +681,7 @@ A summary trades fidelity for tractability, so the decision is always relative
 to a property: *is the behavior about to be erased load-bearing for this
 property, and does the replacement preserve it in the sound direction?* There
 is no property-independent answer to "should `f` be summarized" — and the
-methods block is **spec-global**: a summary that is benign for rule A silently
+methods block is **spec-global**: a summary that is benign for rule A 
 applies to rule B in the same file. Re-ask the question per rule the summary
 will touch.
 
@@ -728,7 +728,7 @@ will touch.
 
 ### B2.4 Summaries of the verified contract's own surface rewrite the theorem
 
-`DELETE` and aggressive summarization of `currentContract`'s own methods change
+`DELETE` and aggressive summarization of `currentContract`'s own (interal) methods change
 what "for all methods `f`" ranges over in parametric rules and what an
 invariant is preserved against. The verified statement gets weaker, and the
 introduction of a trust assumption or excluded function is never highlighted
@@ -773,7 +773,8 @@ signature scoping is genuinely intended.
 
 ### B3.4 Rungs 3–4 — model: spec-backed, then axiomatized
 
-If resolution is impossible or defeats the purpose (the code is the timeout),
+If resolution is impossible or defeats the purpose (e.g., the linked,
+executable code causes a timeout),
 model: first preference, a summary backed by a separately verified spec of the
 callee (B2.2 case 3); otherwise a CVL model — ghost-mapping state (A5.4),
 ghost functions for deterministic math, revert modeling where failure handling
@@ -872,7 +873,7 @@ open/closed-world spectrum:
    entry covering the whole interface, far narrower than per-signature
    `DISPATCHER` entries).
 
-Rules for this agent: (a) when the receiver is unresolved but the selector is
+Rules for application: (a) when the receiver is unresolved but the selector is
 known, prefer the hybrid CVL dispatch (recipe 4) over `DISPATCHER(true)`
 unless the closed-world assumption is explicitly acceptable to the user; (b)
 when generating any closed-world construct (`DISPATCHER(true)`, optimistic

@@ -16,7 +16,3 @@ rule ownerNeverChanges(env e, method f, calldataarg args) {
     assert before == currentContract.OWNER;
 }
 ```
-
----
-
-# 2. Delegation patterns

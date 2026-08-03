@@ -30,6 +30,8 @@
            withdraw@withrevert(e, args);
            g_reverted = lastReverted;
        } else {
+           // sound simulation only if no explicit `fallback` in target contract;
+           // simulates the fallback behavior immediate reverting.
            g_reverted = true;
        }
    }

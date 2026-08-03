@@ -10,7 +10,7 @@ topics; recipes-index entries marked `see` point at sections here.
 ## 1. The proof shape: induction
 
 Proving invariant `I` checks, for every method `m` of every provided contract:
-`assume I; m(); assert I` — plus a base case in which the constructor runs
+`require I; m(); assert I` — plus a base case in which the constructor runs
 from an empty state and `I` is asserted after it.
 
 **Strengthening the inductive hypothesis.** The induction step starts from an
@@ -33,7 +33,7 @@ inductive, and the strengthening conjoins the reachable-configuration facts —
 often a disjunction of the legal states — that exclude it.
 
 **`preserved` blocks.** A `preserved` block inserts *additional* prestate
-requirements after the `assume I`. The invariant itself is always assumed;
+requirements after the `require I`. The invariant itself is always assumed;
 requiring `I` manually in its own preserved block is redundant. Forms:
 
 ```cvl

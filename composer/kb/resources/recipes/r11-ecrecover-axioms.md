@@ -31,7 +31,3 @@ rule signatureUnique {
 
 Each axiom is an assumption about the cryptography; the pack is the standard,
 stated form of that assumption.
-
----
-
-# 4. Quantified invariants

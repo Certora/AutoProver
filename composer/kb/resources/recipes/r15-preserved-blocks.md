@@ -23,6 +23,6 @@ invariant failing on the base case takes its assumptions from a dedicated
 `preserved constructor()` block.
 
 A `preserved` block adds prestate requirements *on top of* the invariant being
-proved: the check is `assume I; m(); assert I`, with the block's contents
-inserted after the `assume I`. The invariant itself is always assumed —
-requiring `I` manually in its own preserved block is redundant.
+proved: the check is `require I; m(); assert I`, with the block's contents
+inserted after the `require I`. The invariant itself is always assumed via
+`require` — requiring `I` manually in its own preserved block is redundant.

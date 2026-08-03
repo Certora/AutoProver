@@ -68,6 +68,7 @@ behind the recipes index.
   body does not trigger the hook again.
 - Hooks do not fire during a `reset_storage` command; ghost mirrors are stale
   after a reset and are re-established explicitly.
+- Hooks do *not* fire during on a rollback of storage at a revert.
 
 ## Signature syntax
 

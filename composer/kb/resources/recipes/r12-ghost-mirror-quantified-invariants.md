@@ -7,8 +7,8 @@ mapping, or set — and quantifier bodies can contain no storage accesses, no
 contract calls, and no `require_*`/`assert_*` casts.
 
 For *unquantified* reads of contract state, direct storage access is preferred
-and no mirroring is needed; this pattern earns its cost exactly because
-storage cannot appear under a quantifier.
+and no mirroring is needed; this pattern is necessary primarily when accessing
+storage cannot be performed under a quantifier.
 
 **Formula:** mirror the data structure into ghosts via storage hooks, and
 quantify over the ghosts. Hooks keep ghost and storage synchronized in both

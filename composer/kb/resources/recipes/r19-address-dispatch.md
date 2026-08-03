@@ -16,4 +16,6 @@ different dispatch:
 The dispatch is a chain over `x == <ProvidedContract>.address` whose final
 branch is `assume false`: **the address is assumed to be one of the provided
 contracts.** This is a closed-world assumption; any rule using address-calls
-states it.
+states it. If no `foo` exists anywhere in the scene, i.e., there are no branches
+of the dispatcher beyond the terminal `assume false`, the prover typechecker will
+throw an error.
