@@ -278,6 +278,7 @@ class HardhatManager(BuildSystemManager):
             optimizer = False
             optimizer_runs = 200
             via_ir = False
+            evm_version = None
         elif isinstance(solidity, dict):
             # Hardhat config structure: {"compilers": [{"version": "0.8.28", "settings": {...}}], ...}
             # Or simple format: {"version": "0.8.28", "settings": {...}}
@@ -309,11 +310,13 @@ class HardhatManager(BuildSystemManager):
             optimizer = optimizer_settings.get("enabled", False)
             optimizer_runs = optimizer_settings.get("runs", 200)
             via_ir = settings.get("viaIR", False)
+            evm_version = settings.get("evmVersion")
         else:
             solc_version = None
             optimizer = False
             optimizer_runs = 200
             via_ir = False
+            evm_version = None
 
         # Extract and process paths
         paths = config_data.get("paths", {})
@@ -340,6 +343,7 @@ class HardhatManager(BuildSystemManager):
             optimizer=optimizer,
             optimizer_runs=optimizer_runs,
             via_ir=via_ir,
+            evm_version=evm_version,
             src=src,
             artifacts=artifacts,
             cache=cache,

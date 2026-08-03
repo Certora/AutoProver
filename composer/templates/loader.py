@@ -2,11 +2,18 @@ from typing import Any
 from markdown_it import MarkdownIt
 from markupsafe import Markup, escape
 from typing import Any, TypedDict, NotRequired
+
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined
+from jinja2.loaders import BaseLoader
 import pathlib
 import os
 
+from graphcore.graph import TemplateLoader
+
 script_dir = pathlib.Path(__file__).parent
+
+base_loader = FileSystemLoader(script_dir)
+
 
 class _UndefinedParams(TypedDict):
     undefined: NotRequired[type[Undefined]]
@@ -55,6 +62,14 @@ def _diff_html(diff: str) -> Markup:
 def _patch_environment_filters(env: Environment):
     env.filters["markdown"] = _markdown
     env.filters["diff_html"] = _diff_html    
+
+def make_loader(jinja_loader: BaseLoader) -> TemplateLoader:
+    my_env = Environment(loader=jinja_loader, autoescape=_autoescape)
+    _patch_environment_filters(my_env)
+    def load(template_name: str, **kwargs: Any) -> str:
+        template = my_env.get_template(template_name)
+        return template.render(**kwargs)
+    return load
 
 env = Environment(loader=FileSystemLoader(script_dir), autoescape=_autoescape, **_test_mode_undefined)
 _patch_environment_filters(env)
