@@ -67,7 +67,7 @@ class SourceExplicitContract(ExplicitContract):
     """
     A concrete contract type in the system.
     """
-    path: str = Field("The relative path to the file which defines the contract type this represents")
+    path: str = Field(description="The relative path to the file which defines the contract type this represents")
 
 class HarnessDefinition(BaseModel):
     path: str
