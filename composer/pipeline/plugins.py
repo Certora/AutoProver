@@ -83,14 +83,7 @@ PLUGIN_ENTRY_POINT_GROUP = "certora.autoprove.plugins"
 
 
 def _applies(scope: PluginScope[Any], unit_type: type) -> bool:
-    """Whether a plugin declaring ``scope`` applies to a run over ``unit_type``.
-
-    Extension point for backend-specific plugins: add the ``ForBackend`` case here (see
-    :data:`~composer.pipeline.plugin_api.PluginScope`) — it would take the backend as a second
-    argument and additionally require ``isinstance(backend, scope.backend)``. Forgetting it is a
-    type error rather than a silent no-match: the match below is exhaustive over the scope union
-    today, so a new variant makes falling off the end reachable and the declared ``bool`` return
-    unsatisfied."""
+    """Whether a plugin declaring ``scope`` applies to a run over ``unit_type``."""
     match scope:
         case AnyEcosystem():
             return True
@@ -135,8 +128,7 @@ def manifest_digest(manifest: list[str]) -> str | None:
 
 @dataclass
 class PluginManager[P: enum.Enum, U: FeatureUnit]:
-    """The plugins that apply to this run, already narrowed to ones whose hooks accept ``U`` — so
-    the driver hands them its units directly, with no narrowing at the call site."""
+    """The plugins that apply to this run, already narrowed to ones whose hooks accept ``U``."""
 
     _plugins: dict[str, PipelinePlugin[U]]
     _run: PipelineRun[P, Any]
@@ -174,10 +166,7 @@ async def load_plugins[P: enum.Enum, U: FeatureUnit](
     """Initialize the installed plugins that apply to a run over ``unit_type``.
 
     Inapplicable plugins are dropped *before* ``initialize``, so a plugin for another ecosystem
-    never acquires its resources during this run.
-
-    Extension point for backend-specific plugins: take the backend here too and forward it to
-    ``_applies`` — ``run_pipeline`` already holds it."""
+    never acquires its resources during this run."""
     loaders: dict[str, PipelinePluginLoader[U]] = {}
     for name, loader in _declared_loaders():
         if not _applies(loader.scope, unit_type):

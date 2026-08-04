@@ -254,11 +254,6 @@ async def cli_pipeline[P: enum.Enum, H](
                 backend: PipelineBackend[P, FormT, H, A, U, Main, App],
                 ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
-                # Written here, not where the cache root is computed above: the plugin manifest
-                # that parameterizes the per-component keys is the *applicable* one, which needs
-                # the ecosystem's unit type — and the ecosystem only arrives with this call. The
-                # tag must agree with ``PluginManager.plugin_digest`` or ``cache-autoprove``
-                # rehydrates the wrong per-component namespaces from it.
                 await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
                     cache_root=list(cache_root) if cache_root is not None else None,
                     contract_name=str(contract_name),

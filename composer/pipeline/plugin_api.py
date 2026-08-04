@@ -69,17 +69,7 @@ class _PluginEnvironment(Environment):
         return template
 
 class PipelinePlugin[U: FeatureUnit](ABC):
-    """A pipeline plugin, parameterized by the unit type its hooks accept.
-
-    ``U`` is what makes a plugin ecosystem-agnostic or ecosystem-specific, and it needs no
-    enforcement machinery: because ``U`` appears only in *parameter* position on the hooks below,
-    ``PipelinePlugin`` is contravariant in it. So a ``PipelinePlugin[FeatureUnit]`` — one whose
-    hooks accept any unit — is assignable wherever a ``PipelinePlugin[ContractComponentInstance]``
-    is wanted, while the reverse is a type error. "Agnostic plugins run everywhere, specific ones
-    only in their own ecosystem" is what the variance already says.
-
-    The *runtime* half of that (which plugins to load for a given run) is the loader's ``scope``;
-    see :data:`PluginScope`."""
+    """A pipeline plugin, parameterized by the unit type its hooks accept."""
 
     NAME: str
 
@@ -144,8 +134,7 @@ class ForEcosystem[U: FeatureUnit]:
     ``Ecosystem.unit_type`` is that unit (or a subclass of it).
 
     The unit type is carried as a *value* because narrowing happens at the entry-point boundary,
-    where nothing static survives — and ``FeatureUnit`` is deliberately not ``@runtime_checkable``,
-    so the check cannot be made against the protocol and has to compare concrete types."""
+    where nothing static survives."""
 
     unit: type[U]
 
@@ -168,12 +157,7 @@ class PipelinePluginLoader[U: FeatureUnit](ABC):
     """Declares a plugin's :data:`PluginScope` and builds it.
 
     Scope lives here rather than on the plugin so the host can skip a plugin that doesn't apply
-    *without* running ``initialize`` — which is where a plugin is documented to acquire its DB
-    pools and subprocesses.
-
-    Because ``scope`` and ``initialize`` share ``U``, a mismatch between the two is a type error at
-    the declaration site: a loader that says ``ForEcosystem(SolanaComponentInstance)`` cannot yield
-    a ``PipelinePlugin[ContractComponentInstance]``."""
+    *without* running ``initialize``"""
 
     @property
     @abstractmethod

@@ -133,8 +133,7 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     #: Runtime witness of ``Unit``, matched against a plugin's
     #: :data:`~composer.pipeline.plugin_api.PluginScope` to decide whether that plugin applies to
     #: this ecosystem's runs. A value rather than just the type parameter because the matching
-    #: happens at the entry-point boundary, where nothing static survives — and ``FeatureUnit`` is
-    #: deliberately not ``@runtime_checkable``, so the check compares concrete types.
+    #: happens at the entry-point boundary, where nothing static survives.
     unit_type: type[Unit]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
