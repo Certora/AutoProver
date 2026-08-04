@@ -25,8 +25,10 @@ loose). Both flags matter:
   `pytest`/`testcontainers` (group `test`), `pyright` (group `ci`), `sentence-transformers`
   (group `ragbuild`) and `certora_cli`/`torch` (extras) all live outside uv's default groups, so
   syncing uninstalls them and the next run dies at collection with `ModuleNotFoundError: No
-  module named 'certora_cli'`. To (re)build the env deliberately, sync everything at once:
-  `uv sync --group test --group ragbuild --extra cpu --extra certora-cli`.
+  module named 'certora_cli'`. To (re)build the env deliberately, sync everything at once —
+  every non-default group the two commands above need, `ci` (pyright) included, or the sync
+  that fixes one of them breaks the other:
+  `uv sync --group test --group ci --group ragbuild --extra cpu --extra certora-cli`.
 
 ## Python
 
