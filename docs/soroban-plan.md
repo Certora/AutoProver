@@ -121,14 +121,16 @@ The two existing axes cover this cleanly:
 - **New backend: `SorobanProverBackend`.** A Python `PipelineBackend` implementing the three phase
   objects, modeled directly on `ProverBackend` / `ProverPrepared` / `ProverRunner`. This is
   WS-4/WS-5/WS-6.
-- **Shared, unchanged:** the driver, caching, the property loop, source tools, the report
-  skeleton, the sandbox, prover submission/polling.
+- **Shared, near-unchanged:** the driver, caching, the property loop, source tools, the report
+  skeleton, the sandbox, prover submission/polling. The one driver change we do want is the
+  **preflight** link at the head of the phase chain (WS-0) — everything else the backend
+  contributes through the existing phase objects.
 
 Where the analogy to EVM holds, copy it. Where it does not, §4.
 
 ---
 
-## 4. The four structural differences (where the risk is)
+## 4. The structural differences (where the risk is)
 
 These are the reasons this is not "the CVL backend with different templates," and they should
 drive sequencing.
@@ -186,12 +188,61 @@ rule until sanity checking says otherwise. Rule-sanity/vacuity checking must be 
 and a vacuous rule must be reported as *not verified*, not as a pass. The judge (WS-8) needs to
 know this too.
 
+### 4.5 The run must be gated on a build before it starts
+
+Nothing has to build before a CVL run: the prover backend's first act reads the analyzed model.
+Here, a great deal must build, and the reasons it might not are numerous and entirely
+model-independent — a missing `wasm32-unknown-unknown` target, an unfetchable `cvlr` git
+dependency, `soroban-sdk` ↔ `cvlr` version skew, a crate that isn't a `cdylib`, an unexpected
+workspace shape, a `certora` feature that doesn't wire up. Every one of them is detectable by a
+single build of a **trivial injected rule**:
+
+```rust
+#[rule] fn sanity(e: Env) { cvlr_satisfy!(true); }
+```
+
+which is Crucible's "gate a skeleton harness through the real toolchain," and which validates the
+entire WS-4 setup story before a single property exists. Finding any of it *after* analysis,
+extraction, and authoring is the worst available ordering. So the build belongs in a **preflight**
+(WS-0): gated ahead of the run, and overlapped with system analysis, which genuinely parallelizes
+(analysis is LLM-bound, the build is CPU/network-bound).
+
+Preflight is also the natural carrier for the state §4.1 forces us to establish anyway — the
+staged working copy, the resolved contract crate, the toolchain facts, the build command, the conf
+skeleton — established once and carried forward rather than recomputed by every authoring turn.
+
+The two alternatives are both worse. Building inside `prepare_system` runs after analysis and
+loses the gate entirely. Building in the `run_soroban_pipeline` wrapper before `run_pipeline`
+keeps the gate but loses the overlap and sits outside the driver's `TaskInfo` / phase /
+cancellation reporting — minutes of dead air with no phase to show for it.
+
 ---
 
 ## 5. Workstreams
 
 Sizes are T-shirts relative to each other, not calendar estimates. "Depends on" is hard
 ordering; anything else can run in parallel.
+
+### WS-0 — Lift the `preflight` seam to master · **S** · depends on: nothing
+
+A fourth link at the head of the driver's phase chain —
+`Backend ──preflight──▶ Pre ──prepare_system──▶ …` — with two properties: it runs *concurrently
+with system analysis* (it reads nothing analysis produces), and it is a **gate** — awaited first,
+so a failure cancels the analysis agent racing it instead of letting the run spend on a model it
+can no longer use. `Pre` is opaque to the driver and carried forward to `prepare_system`.
+
+This exists on `eric/crucible-app` (commit `3e70413`, "pipeline: the preflight gates") and is the
+piece of that branch the Soroban backend most wants, for reasons §4.5 spells out.
+
+- **Deliverables:** the `Pre` type parameter, `preflight()` on `PipelineBackend`, and the
+  gate-and-cancel ordering in [composer/pipeline/core.py](../composer/pipeline/core.py) — roughly
+  90 lines plus the doc section. `PipelineBackend` is a `Protocol` on master, so the prover,
+  foundry, and null-Solana backends each grow a trivial `async def preflight(...) -> None`.
+- **Lift the seam, not the machinery:** leave `PreflightSpec`, `AuthorKind="preflight"`, and the
+  wheel-declared preflight in `rustapp/descriptor.py` / `wire.py` where they are — that is
+  plumbing for a backend *authored in Rust*, which this one is not (§6.2).
+- **Sequencing:** its own PR, and an independent one. Nothing in M1 needs it (the null backend
+  builds nothing); WS-3/WS-4 need it at M2. So it can land early and blocks nothing.
 
 ### WS-1 — Soroban system model · **L** · depends on: nothing
 
@@ -228,7 +279,7 @@ Bind WS-1 into an `Ecosystem`: analysis prompt pair, property prompt pair, `loca
 - **Milestone value:** this alone gives a demoable "AutoProver reads a Soroban contract and
   proposes properties" with no prover work at all.
 
-### WS-3 — Build + toolchain capability · **L** · depends on: nothing
+### WS-3 — Build + toolchain capability · **L** · depends on: nothing (WS-0 to wire it in)
 
 The `source → wasm` capability, the peer of `composer/spec/solana/build.py` on the crucible
 branch and reusing its crate-resolution helper (`composer/spec/cargo.py`).
@@ -236,8 +287,11 @@ branch and reusing its crate-resolution helper (`composer/spec/cargo.py`).
 - **Deliverables:** crate/manifest resolution for Soroban layouts (workspace vs single crate,
   which crate is the contract); a build function producing the release wasm under the confined
   policy; toolchain provisioning (`wasm32-unknown-unknown` target, pinned toolchain, `rustfilt`)
-  including a check-and-explain preflight; the split fetch/build step for the `cvlr` git deps;
-  build-error capture shaped for LLM consumption.
+  that checks and explains rather than failing opaquely; the split fetch/build step for the `cvlr`
+  git deps; build-error capture shaped for LLM consumption.
+- **Where it runs:** this capability is backend-agnostic, but its first caller is the backend's
+  `preflight` (WS-0), which builds the injected sanity rule and gates the run on it (§4.5). The
+  authoring loop (WS-5) then calls the same capability per revision, warm.
 - **Risks:** network access for git deps inside a confined build; `soroban-sdk` version ↔ `cvlr`
   version compatibility (we do not control either release cadence); build wall-clock.
 - **Gate:** a fixture Soroban contract builds to wasm in CI, sandboxed, offline after fetch.
@@ -254,7 +308,12 @@ what `certora_autosetup` does for EVM, but far smaller and mostly deterministic.
 - **Recommendation:** template these deterministically, with an LLM fallback only for the
   crate-shape cases templates can't handle (unusual workspaces, existing `certora` module, no
   `cdylib`). Every mutation must be idempotent and reversible.
-- **Open:** whether to hand the prover a `build_script` or a pre-built `files:` wasm (§8 D2).
+- **Where it runs:** in `preflight` (WS-0), ahead of and concurrent with system analysis — none of
+  it reads the analyzed model, and the sanity-rule build that proves it worked is the run's gate
+  (§4.5). What preflight establishes (working copy, contract crate, toolchain facts, build command,
+  conf skeleton) is what it hands forward as `Pre`.
+- **Open:** whether to hand the prover a `build_script` or a pre-built `files:` wasm (§8 D2); and
+  how far setup should go to *repair* a project before failing the run (§8 D8).
 
 ### WS-5 — Rule authoring loop · **L** · depends on: WS-2, WS-3, WS-4
 
@@ -358,6 +417,7 @@ longer "reserved") and [ARCHITECTURE.md](../ARCHITECTURE.md); write an operator-
 
 | Thing | Where | Why it matters here |
 |---|---|---|
+| The `preflight` phase link — gated, overlapped with analysis, carries `Pre` forward | branch commit `3e70413`, `composer/pipeline/core.py` | WS-0; §4.5 is the whole argument. Take the seam only, not `PreflightSpec`/`wire.py` |
 | `RUST` language facet, `rust/_vulnerability_patterns.j2` | already on master | WS-2 gets its language half free |
 | Confined Rust build policy, private `CARGO_HOME`, split fetch/build | already on master (`composer/sandbox/recipes.py`, `docs/command-sandbox.md`) | WS-3's security story is solved |
 | Crate/manifest resolution | branch: `composer/spec/cargo.py` | WS-3 |
@@ -390,12 +450,13 @@ Each milestone is demoable on its own, which is what makes them useful for split
 |---|---|---|---|
 | **M0** | Spike (days, one person) | Hand-run the tutorial project through `certoraSorobanProver`; drive it via `run_soroban_prover` from our code; parse the results | The back-half plumbing is as reusable as it looks. Kills the biggest unknown before anyone builds on it |
 | **M1** | Front half | WS-1, WS-2, WS-10 (front-half gate) | AutoProver models a Soroban contract and proposes properties, verified against a null backend |
-| **M2** | Build + setup | WS-3, WS-4, WS-11 | We can take an arbitrary Soroban repo and make it Sunbeam-runnable, reproducibly and sandboxed |
+| **M2** | Build + setup | WS-0, WS-3, WS-4, WS-11 | We can take an arbitrary Soroban repo and make it Sunbeam-runnable, reproducibly and sandboxed — gated by a sanity-rule build before the run spends anything |
 | **M3** | First verified rule | WS-5, WS-6, WS-7 | End-to-end: property → CVLR rule → compiles → prover run → verdict |
 | **M4** | Production quality | WS-8, WS-9, remaining WS-10, WS-12 | Vacuity-aware verdicts, counterexample triage, timeout handling, docs |
 
 M0 gates everything. M1 and M2 are independent of each other and can run in parallel by
-different people; M3 needs both.
+different people; M3 needs both. WS-0 is the one item that touches shared driver code, so it
+wants to land as its own early PR rather than riding along with M2's Soroban-specific work.
 
 ---
 
@@ -422,6 +483,13 @@ different people; M3 needs both.
   contract code beyond a spec module, which raises the stakes on D4.
 - **D7 — Multi-contract Soroban systems.** Single main contract in v1 (see §10) — confirm that's
   acceptable for the target design partners.
+- **D8 — Preflight failure: repair or fail? (WS-0/WS-4).** On the crucible branch a preflight
+  failure cancels the analysis racing it and raises. But several Soroban preflight failures are
+  exactly what WS-4 exists to fix — no `cdylib`, no `certora` feature, an incompatible `cvlr` pin —
+  so hard-failing would reject projects we could have set up, while repairing inside preflight
+  makes the gate slower and its failure semantics fuzzier. Where the boundary falls between
+  "repair and retry" and "fail with an explanation" is **open**, and it needs a call before WS-4
+  finishes. Note it interacts with D4: repair means more mutation of the user's crate.
 
 ---
 
@@ -429,7 +497,7 @@ different people; M3 needs both.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| `cvlr` / `cvlr-soroban` are git-dependency crates outside our release control; `soroban-sdk` version skew | Builds break for reasons unrelated to us | Pin known-good combinations; a compatibility check in WS-3's preflight; fail with an actionable message rather than a raw cargo error |
+| `cvlr` / `cvlr-soroban` are git-dependency crates outside our release control; `soroban-sdk` version skew | Builds break for reasons unrelated to us | Pin known-good combinations; catch it in the preflight gate (§4.5) before the run spends, and fail with an actionable message rather than a raw cargo error |
 | Cold wasm builds are minutes, and the authoring loop rebuilds | Wall-clock and cost blow up | Warm shared `target/`; per-component feature sealing so a rebuild is incremental; cap revise rounds |
 | Vacuous rules reported as passes (§4.4) | We deliver false assurance — the worst possible failure | Rule sanity on by default; vacuity is a *not verified* verdict; judge checks the assume set |
 | Sunbeam docs are thin; most real knowledge is in tutorials and verified projects | Authoring agent hallucinates macros/APIs | WS-7 curated corpus; compile loop catches the rest |
