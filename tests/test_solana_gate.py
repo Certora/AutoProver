@@ -27,7 +27,7 @@ from composer.spec.source.source_env import build_basic_source_tools, build_sour
 from composer.spec.types import RustIdentifier
 from composer.ui.tool_display import async_tool_context
 from composer.rustapp.frontend import GenericRustConsoleHandler
-from composer.workflow.services import standard_connections, llm_factory
+from composer.workflow.services import standard_connections
 from composer.kb.knowledge_base import DefaultEmbedder
 
 from tests.conftest import needs_postgres, MockSentenceTransformer

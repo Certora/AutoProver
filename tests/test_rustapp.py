@@ -199,12 +199,15 @@ def test_frontend_labels_and_backend_phases_share_one_enum():
     # the backend's core_phases) must be the SAME enum members the frontend's
     # phase_labels are keyed by, or label lookup silently misses.
     from composer.input.files import InMemoryTextFile
+    from composer.llm.anthropic import AnthropicRenderer
     from composer.spec.context import SourceCode
     from composer.spec.system_model import SolidityIdentifier
 
     app = host.build_application("echoprover")
     source = SourceCode(
-        content=InMemoryTextFile(basename="doc.md", string_contents="doc", provider="test"),
+        content=InMemoryTextFile(
+            basename="doc.md", string_contents="doc", renderer=AnthropicRenderer()
+        ),
         project_root="/tmp/echo-proj",
         contract_name=SolidityIdentifier("C"),
         relative_path="src/C.sol",

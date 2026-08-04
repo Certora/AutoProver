@@ -33,6 +33,8 @@ from typing import Any, AsyncIterator, Awaitable, Callable, cast
 from langchain_core.tools import BaseTool
 from langgraph.store.base import BaseStore
 
+from graphcore.tools.vfs import GlobalExcludeArg
+
 from composer.core.user import user_data_ns
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.diagnostics.timing import RunSummary, install_run_summary
@@ -65,9 +67,9 @@ from composer.spec.source.source_env import (
     build_source_tools,
 )
 from composer.spec.types import SourceIdentifier
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 from composer.ui.tool_display import async_tool_context
-from composer.workflow.services import llm_factory, standard_connections
+from composer.workflow.services import standard_connections
 from composer.llm.registry import get_provider_for
 
 # A caller-supplied env builder, for backends that want a custom tool/RAG surface.
@@ -86,7 +88,7 @@ def build_default_env(
     store: BaseStore,
     source_question_ns: tuple[str, ...],
     recursion_limit: int,
-    forbidden_read: str = FS_FORBIDDEN_READ,
+    forbidden_read: GlobalExcludeArg = fs_forbidden_read,
     rag_db: str | None = None,
 ) -> ServiceHost:
     """The env for a wheel that supplies no ``env_builder``: the same ``code_explorer`` + fs tools
@@ -276,7 +278,7 @@ async def rust_entry_point(
     discovery_phase = _discovery_phase(app)
 
     async with (
-        standard_connections(provider=tiered.provider_kind, embedder=DefaultEmbedder(model)) as conns,
+        standard_connections(provider=tiered.provider_service, embedder=DefaultEmbedder(model)) as conns,
         async_tool_context(),
         thread_logger(
             conns.store,
