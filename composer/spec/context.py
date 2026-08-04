@@ -7,6 +7,7 @@ WorkspaceContext has been factored into WorkflowContext: workflow-specific data
 be passed explicitly to agents that need it.
 """
 
+from graphcore.tools.vfs import GlobalExcludeArg
 from dataclasses import dataclass
 from typing import Annotated, Callable, overload, Awaitable
 
@@ -44,7 +45,7 @@ class SourceFields:
     project_root: str
     contract_name: SolidityIdentifier
     relative_path: str
-    forbidden_read: str
+    forbidden_read: GlobalExcludeArg
 
 @dataclass
 class SourceCode(SystemDoc, SourceFields):

@@ -39,7 +39,7 @@ from composer.spec.source.design_doc_finder import (
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 import hashlib
 
 
@@ -169,7 +169,7 @@ async def cli_pipeline[P: enum.Enum, H](
     init_source = SourceFields(
         relative_path=relative_path,
         contract_name=SolidityIdentifier(contract_name),
-        forbidden_read=FS_FORBIDDEN_READ,
+        forbidden_read=fs_forbidden_read,
         project_root=str(project_root)
     )
 

@@ -29,7 +29,7 @@ from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.io.thread_logging import RunDataLogger
 
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 from composer.io.multi_job import HandlerFactory
 
 _logger = logging.getLogger(__name__)
@@ -134,7 +134,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             source_env = build_source_env(
                 models=staged.llm_models,
                 db=rag_db,
-                forbidden_read=FS_FORBIDDEN_READ,
+                forbidden_read=fs_forbidden_read,
                 kb_ns=DEFAULT_KB_NS,
                 root=staged.source.project_root,
                 store=staged.conns.indexed_store,
