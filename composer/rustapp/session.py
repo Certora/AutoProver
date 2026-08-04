@@ -392,12 +392,17 @@ def _emit_verdict(deps: GateDeps, check: Check, verdict: WireVerdict) -> None:
     # so this needs nothing else. Several titles when one check discharges several properties.
     name = ", ".join(check.properties) or check.name
     line = f"{name}: {verdict.outcome.value}"
+    # First line only: a backend may put follow-on diagnostics (e.g. Crucible's reproducing action
+    # sequence) on later lines, and those belong in the report, not smeared across the live
+    # one-line-per-verdict view. The backend puts the deciding signal first — see `crucible_app`'s
+    # `finding_detail`. The full ``detail`` still reaches the report verbatim.
+    head = _first_line(verdict.detail) if verdict.detail else ""
     deps.emit(
         "verdict",
         {
             "outcome": verdict.outcome.value,
             "name": name,
-            "line": f"{line} — {verdict.detail}" if verdict.detail else line,
+            "line": f"{line} — {head}" if head else line,
         },
     )
 

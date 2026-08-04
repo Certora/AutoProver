@@ -675,20 +675,161 @@ fn is_build_error(out: &str) -> bool {
     out.contains("could not compile") || out.contains("error[") || out.contains("Build failed")
 }
 
-/// Pull the human-readable finding out of a `crucible run` log so a `BAD` verdict explains
-/// itself. Crucible prints `[FUZZ_FINDING] crash:<id> reproduces:<bool> summary:<msg>`, where
-/// `<msg>` is the failed `fuzz_assert_*` message (with the actual vs expected values). Returns
-/// `crash <id>: <msg>`, or the raw marker line if the summary can't be parsed, or None.
-fn finding_detail(out: &str) -> Option<String> {
-    let line = out.lines().find(|l| l.contains("[FUZZ_FINDING]"))?.trim();
-    match line.split_once("summary:") {
-        Some((head, summary)) if !summary.trim().is_empty() => {
-            let crash =
-                head.split_whitespace().find_map(|t| t.strip_prefix("crash:")).unwrap_or("?");
-            Some(format!("crash {crash}: {}", summary.trim()))
+/// One action in a crash's reproducing sequence, as Crucible records it in
+/// `crash_<id>.meta.json`. `success` is whether the *instruction* succeeded, which is the field
+/// that makes a finding triageable: a violation whose action failed cannot have been caused by
+/// the state transition the property is scoped to.
+#[derive(serde::Deserialize)]
+struct CrashAction {
+    name: String,
+    #[serde(default)]
+    success: bool,
+    #[serde(default)]
+    error_code: Option<i64>,
+}
+
+impl std::fmt::Display for CrashAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The code is shown only on failure: Crucible sometimes reports `success: true` *with* an
+        // `error_code` (seen on the klend run), and rendering that as `OK(3007)` reads like a bug
+        // in this formatter rather than the upstream inconsistency it is.
+        match (self.success, self.error_code) {
+            (false, Some(c)) => write!(f, "{} -> FAIL({c})", self.name),
+            (false, None) => write!(f, "{} -> FAIL", self.name),
+            (true, _) => write!(f, "{} -> OK", self.name),
         }
-        _ => Some(line.to_string()),
     }
+}
+
+/// The reproducing sequence Crucible writes next to a crash payload. `iteration` is the fuzzer
+/// iteration the violation fired on: `0` means nothing had been mutated yet, so the violation is
+/// in the *post-setup fixture state*.
+#[derive(serde::Deserialize)]
+struct CrashRepro {
+    #[serde(default)]
+    iteration: u64,
+    #[serde(default)]
+    actions: Vec<CrashAction>,
+}
+
+/// Why a counterexample looks like a *harness* bug rather than a program bug — the two smells
+/// that are decidable from the crash metadata alone. Absent when the violation followed a
+/// successful state transition, i.e. when the finding looks genuine and deserves a human.
+///
+/// An enum rather than a bool-plus-string: each variant carries exactly the evidence that
+/// justifies it, so a reader gets the specific smell instead of an unexplained "suspect".
+enum HarnessSuspicion {
+    /// Fired on iteration 0 — before the fuzzer changed anything. The fixture's own initial
+    /// state violates the invariant, so no program behaviour is implicated.
+    InitialState,
+    /// Fired on an action that did not succeed. A property scoped to "after a successful X"
+    /// cannot be refuted by an X that reverted; the assertion is running outside its
+    /// precondition (or over state the failed action never created).
+    ViolatingActionFailed(String),
+}
+
+impl std::fmt::Display for HarnessSuspicion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InitialState => write!(
+                f,
+                "the violation fired on iteration 0, before the fuzzer changed any state — so \
+                 the post-setup FIXTURE state already violates this invariant, and no program \
+                 behaviour is implicated. Assert only after the action the property is scoped \
+                 to, or exclude the fixture state the property does not cover."
+            ),
+            Self::ViolatingActionFailed(a) => write!(
+                f,
+                "the action it fired on did not succeed ({a}) — the state transition this \
+                 property is scoped to never happened, so the assertion is running outside its \
+                 precondition (or over state that action failed to create). Gate the assertion \
+                 on the action succeeding, and skip uninitialized accounts."
+            ),
+        }
+    }
+}
+
+/// Where Crucible may have left `crash_<id>.meta.json`, relative to the run's workdir: its
+/// default flat output dir, then the per-test layout `tmin`/`show` use.
+fn crash_meta_paths(workdir: &Path, program: &str, unit: &str, crash_id: &str) -> Vec<PathBuf> {
+    let file = format!("{crash_id}.meta.json");
+    vec![
+        workdir.join("output").join(&file),
+        workdir.join("fuzz").join(program).join("crashes").join(unit).join(&file),
+    ]
+}
+
+impl CrashRepro {
+    /// Read the sequence recorded for `crash_id`. Best-effort by design — a finding must still
+    /// report when the metadata is missing or in a shape we don't know; it just reports without
+    /// its sequence rather than failing the run.
+    fn read(workdir: &Path, program: &str, unit: &str, crash_id: &str) -> Option<Self> {
+        crash_meta_paths(workdir, program, unit, crash_id)
+            .iter()
+            .find_map(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+    }
+
+    /// The smell, if the metadata shows one. `iteration == 0` is checked first because it is the
+    /// stronger statement: nothing was mutated at all, so the sequence is irrelevant.
+    fn suspicion(&self) -> Option<HarnessSuspicion> {
+        if self.iteration == 0 {
+            return Some(HarnessSuspicion::InitialState);
+        }
+        // The violation fires on the LAST executed action — Crucible stops the sequence there.
+        match self.actions.last() {
+            Some(a) if !a.success => Some(HarnessSuspicion::ViolatingActionFailed(a.to_string())),
+            _ => None,
+        }
+    }
+
+    /// The sequence as report text. Kept off the first line so the live console view stays
+    /// one line per verdict (see `composer.rustapp.adapter`).
+    fn render_sequence(&self) -> String {
+        let head = format!(
+            "reproducing sequence (iteration {}, {} action(s)):",
+            self.iteration,
+            self.actions.len()
+        );
+        let body = self
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(i, a)| format!("  {}. {a}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if body.is_empty() { head } else { format!("{head}\n{body}") }
+    }
+}
+
+/// Pull the human-readable finding out of a `crucible run` log so a `BAD` verdict explains
+/// itself, and enrich it with the crash's reproducing sequence and any harness-bug smell.
+/// Crucible prints `[FUZZ_FINDING] crash:<id> reproduces:<bool> summary:<msg>`, where `<msg>` is
+/// the failed `fuzz_assert_*` message.
+///
+/// The **first line** is the summary plus, when present, a `SUSPECT HARNESS BUG` marker — the
+/// signal that decides whether a human should look at all. The sequence follows on later lines.
+/// Both reach the report as the rule's `message`; the console shows the first line.
+fn finding_detail(out: &str, workdir: &Path, program: &str, unit: &str) -> Option<String> {
+    let line = out.lines().find(|l| l.contains("[FUZZ_FINDING]"))?.trim();
+    let Some((head, summary)) = line.split_once("summary:") else {
+        return Some(line.to_string());
+    };
+    if summary.trim().is_empty() {
+        return Some(line.to_string());
+    }
+    let crash = head.split_whitespace().find_map(|t| t.strip_prefix("crash:")).unwrap_or("?");
+    let mut detail = format!("crash {crash}: {}", summary.trim());
+
+    let Some(repro) = CrashRepro::read(workdir, program, unit, crash) else {
+        return Some(detail);
+    };
+    if let Some(smell) = repro.suspicion() {
+        detail.push_str(&format!(" — SUSPECT HARNESS BUG (likely not a program bug): {smell}"));
+    }
+    detail.push('\n');
+    detail.push_str(&repro.render_sequence());
+    Some(detail)
 }
 
 /// Attribute a shared-target counterexample across the covered report units. Crucible tags each
@@ -1127,7 +1268,10 @@ impl Backend for CrucibleApp {
                     // A crash refutes ONE invariant — pin BAD to the property the finding names
                     // (each assertion is tagged `[<title>]`), holding the rest GOOD over the
                     // explored space. If it can't be attributed, mark all BAD (never hide it).
-                    attribute_finding(&covered, finding_detail(&combined))
+                    attribute_finding(
+                        &covered,
+                        finding_detail(&combined, workdir, program, unit),
+                    )
                 } else if out.exit_code == 0 {
                     all(Outcome::Good, None) // ran to the budget with no violation = every invariant held
                 } else if is_build_error(&combined) {
@@ -1802,6 +1946,41 @@ Error: Build failed
     }
 
     #[test]
+    fn the_author_is_told_to_interpolate_the_operands_into_every_assertion_message() {
+        // A custom message REPLACES `fuzz_assert*`'s built-in operand dump, so a message without
+        // the values yields an untriageable counterexample. On the klend run this is why
+        // "total supply exceeds deposit_limit" needed an hour and a rebuild to explain.
+        let app = CrucibleApp;
+        let input = component_input("withdraw_queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
+        let s = app.author_prompt(&input, None).instruction;
+        let norm = s.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert!(norm.contains("INTERPOLATE THE OPERAND VALUES"), "{norm}");
+        // The *reason* has to be in the prompt, not just the rule — the macro behaviour is the
+        // non-obvious part, and a rule without it reads as style advice.
+        assert!(norm.contains("operand dump is DISCARDED"), "{norm}");
+        // And the worked contrast, so "include the values" is unambiguous.
+        assert!(norm.contains("total_supply={} exceeds deposit_limit={}"), "{norm}");
+    }
+
+    #[test]
+    fn the_judge_rejects_untriageable_messages_and_precondition_scope_errors() {
+        // The two harness defects that produced BOTH of klend's false counterexamples. Catching
+        // them at the judge is cheaper than reporting them as findings a human must triage.
+        let app = CrucibleApp;
+        let input = component_input("withdraw_queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
+        let jp = app.judge_prompt(&input, "fn c_withdraw_queue() {}").expect("judge");
+        let norm = jp.instruction.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert!(norm.contains("Diagnosable failure messages"), "{norm}");
+        assert!(norm.contains("Precondition scope"), "{norm}");
+        // The zeroed-account trap: an Option-returning read is not a guard, because a zeroed
+        // account deserializes into a default struct rather than failing.
+        assert!(norm.contains("DEFAULT struct"), "{norm}");
+        assert!(norm.contains("iteration 0"), "{norm}");
+    }
+
+    #[test]
     fn finalize_emits_one_section_and_one_feature_per_component() {
         // The deliverable is ONE crate holding every component's fn, declaring exactly the
         // features the gated builds selected — read off the hosts' mirrored `targets`, not
@@ -1863,3 +2042,189 @@ Error: Build failed
         assert_eq!(main_rs.matches("fn c_a()").count(), 1, "{main_rs}");
     }
 }
+
+#[cfg(test)]
+mod crash_triage {
+    //! A `BAD` verdict must carry enough to triage it without rebuilding the harness: the
+    //! reproducing sequence, and a flag when the metadata alone shows the counterexample is a
+    //! harness defect rather than a program bug.
+    //!
+    //! The two `meta.json` bodies below are the REAL ones from the klend run of 2026-08-03, where
+    //! both counterexamples turned out to be harness bugs and manual triage cost an hour. They are
+    //! the regression cases.
+    use super::*;
+
+    /// `crash_ad707f0d6fef8cca` — `deposit_limit_not_exceeded`. Fired at iteration 0 on an action
+    /// that failed: the fixture seeded 1000 liquidity into reserves left at `deposit_limit = 0`,
+    /// so the invariant was false before the fuzzer did anything.
+    const KLEND_INITIAL_STATE: &str = r#"{
+        "test_name": "c_liquidity_supply_ctoken_exchange",
+        "iteration": 0,
+        "seed": 1785812846177550995,
+        "actions": [
+            {"name": "mark_deleveraging_unauthorized", "params": {}, "success": false,
+             "error_code": 3007}
+        ]
+    }"#;
+
+    /// `crash_492173e388336c5d` — `reserve_lending_market_immutable`, after `tmin`. The violating
+    /// `clone_reserve_config` FAILED, so reserve C was never initialized and its zeroed
+    /// `lending_market` (all-zero pubkey) was compared against the real market key.
+    const KLEND_ACTION_FAILED: &str = r#"{
+        "test_name": "c_reserve_lifecycle_configuration",
+        "iteration": 4211,
+        "actions": [
+            {"name": "update_lending_market_owner", "params": {}, "success": true},
+            {"name": "clone_reserve_config", "params": {}, "success": false, "error_code": 3002}
+        ]
+    }"#;
+
+    fn repro(json: &str) -> CrashRepro {
+        serde_json::from_str(json).expect("parse crash meta")
+    }
+
+    /// A workdir with `output/<crash>.meta.json` in it. Named per-test so cases can't collide.
+    fn workdir_with_meta(tag: &str, crash_id: &str, meta: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("crucible_triage_{tag}"));
+        let out = dir.join("output");
+        std::fs::create_dir_all(&out).expect("mkdir");
+        std::fs::write(out.join(format!("{crash_id}.meta.json")), meta).expect("write meta");
+        dir
+    }
+
+    fn finding_line(crash_id: &str, summary: &str) -> String {
+        format!("[FUZZ_FINDING] crash:{crash_id} reproduces:true summary:{summary}")
+    }
+
+    #[test]
+    fn iteration_zero_is_the_fixtures_own_state_not_a_program_bug() {
+        let s = repro(KLEND_INITIAL_STATE).suspicion();
+        assert!(matches!(s, Some(HarnessSuspicion::InitialState)), "expected InitialState");
+    }
+
+    #[test]
+    fn a_violation_on_a_failed_action_is_outside_the_propertys_precondition() {
+        match repro(KLEND_ACTION_FAILED).suspicion() {
+            Some(HarnessSuspicion::ViolatingActionFailed(a)) => {
+                // The action string carries the evidence: which action, and its error code.
+                assert_eq!(a, "clone_reserve_config -> FAIL(3002)");
+            }
+            other => panic!("expected ViolatingActionFailed, got {}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn a_violation_after_a_successful_action_is_left_alone() {
+        // The case that must NOT be flagged — a real counterexample deserves a human, and crying
+        // "suspect harness" over every finding would make the flag worthless.
+        let genuine = r#"{"iteration": 91, "actions": [
+            {"name": "deposit_reserve_liquidity", "params": {}, "success": true}
+        ]}"#;
+        assert!(repro(genuine).suspicion().is_none());
+    }
+
+    #[test]
+    fn an_empty_sequence_is_not_flagged_as_a_failed_action() {
+        // `actions: []` must not panic or invent a smell; iteration 0 still flags on its own.
+        let empty = r#"{"iteration": 5, "actions": []}"#;
+        assert!(repro(empty).suspicion().is_none());
+        let empty_at_zero = r#"{"iteration": 0, "actions": []}"#;
+        assert!(matches!(
+            repro(empty_at_zero).suspicion(),
+            Some(HarnessSuspicion::InitialState)
+        ));
+    }
+
+    #[test]
+    fn an_error_code_on_a_successful_action_is_not_rendered() {
+        // Crucible emitted `success: true` alongside `error_code: 3007` on the klend run. Showing
+        // it would read as a formatter bug; the code only carries meaning on a failure.
+        let contradictory = r#"{"iteration": 3, "actions": [
+            {"name": "flash_borrow_and_repay", "params": {}, "success": true, "error_code": 3007}
+        ]}"#;
+        assert!(repro(contradictory).render_sequence().ends_with("1. flash_borrow_and_repay -> OK"));
+    }
+
+    #[test]
+    fn the_sequence_renders_one_numbered_action_per_line() {
+        let r = repro(KLEND_ACTION_FAILED).render_sequence();
+        assert_eq!(
+            r,
+            "reproducing sequence (iteration 4211, 2 action(s)):\n  \
+             1. update_lending_market_owner -> OK\n  2. clone_reserve_config -> FAIL(3002)"
+        );
+    }
+
+    #[test]
+    fn the_detail_leads_with_the_summary_and_the_suspicion_then_the_sequence() {
+        let wd = workdir_with_meta("lead", "crash_ad70", KLEND_INITIAL_STATE);
+        let out = finding_line("crash_ad70", "[deposit_limit_not_exceeded] total supply exceeds");
+        let detail = finding_detail(&out, &wd, "kamino_lending", "c_liquidity_supply_ctoken_exchange")
+            .expect("detail");
+
+        let (first, rest) = detail.split_once('\n').expect("multi-line detail");
+        // The console shows only this line, so the deciding signal has to be on it.
+        assert!(first.starts_with("crash crash_ad70: [deposit_limit_not_exceeded]"), "{first}");
+        assert!(first.contains("SUSPECT HARNESS BUG"), "{first}");
+        assert!(first.contains("iteration 0"), "{first}");
+        // …and the sequence follows, for the report.
+        assert!(rest.starts_with("reproducing sequence (iteration 0, 1 action(s)):"), "{rest}");
+        assert!(rest.contains("mark_deleveraging_unauthorized -> FAIL(3007)"), "{rest}");
+    }
+
+    #[test]
+    fn a_genuine_finding_gets_its_sequence_but_no_suspicion_marker() {
+        let meta = r#"{"iteration": 91, "actions": [
+            {"name": "deposit_reserve_liquidity", "params": {}, "success": true}
+        ]}"#;
+        let wd = workdir_with_meta("genuine", "crash_beef", meta);
+        let out = finding_line("crash_beef", "[conservation] vault drifted");
+        let detail = finding_detail(&out, &wd, "p", "c_u").expect("detail");
+
+        assert!(!detail.contains("SUSPECT HARNESS BUG"), "{detail}");
+        assert!(detail.contains("reproducing sequence (iteration 91, 1 action(s)):"), "{detail}");
+    }
+
+    #[test]
+    fn a_finding_still_reports_when_the_metadata_is_missing() {
+        // Best-effort enrichment: no crash file (or an unreadable one) must not lose the finding,
+        // and must not change the one-line shape the report relied on before this existed.
+        let out = finding_line("0001", "[balance never overflows] expected 100, got 0");
+        let missing = std::env::temp_dir().join("crucible_triage_does_not_exist");
+        let detail = finding_detail(&out, &missing, "p", "c_u").expect("detail");
+        assert_eq!(detail, "crash 0001: [balance never overflows] expected 100, got 0");
+    }
+
+    #[test]
+    fn unparsable_metadata_degrades_to_the_bare_finding() {
+        let wd = workdir_with_meta("garbage", "crash_bad", "{ not json");
+        let out = finding_line("crash_bad", "[p] boom");
+        assert_eq!(
+            finding_detail(&out, &wd, "p", "c_u").expect("detail"),
+            "crash crash_bad: [p] boom"
+        );
+    }
+
+    #[test]
+    fn the_per_test_crashes_layout_is_also_searched() {
+        // `crucible tmin`/`show` keep crashes under fuzz/<program>/crashes/<test>/ rather than the
+        // flat output dir, so a minimized crash is still found.
+        let dir = std::env::temp_dir().join("crucible_triage_layout");
+        let nested = dir.join("fuzz").join("kamino_lending").join("crashes").join("c_unit");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        std::fs::write(nested.join("crash_x.meta.json"), KLEND_INITIAL_STATE).expect("write");
+
+        let detail =
+            finding_detail(&finding_line("crash_x", "[p] boom"), &dir, "kamino_lending", "c_unit")
+                .expect("detail");
+        assert!(detail.contains("SUSPECT HARNESS BUG"), "{detail}");
+    }
+
+    #[test]
+    fn a_marker_line_without_a_summary_is_passed_through_unchanged() {
+        let raw = "[FUZZ_FINDING] crash:0001 reproduces:true";
+        let missing = std::env::temp_dir().join("crucible_triage_nosummary");
+        assert_eq!(finding_detail(raw, &missing, "p", "c_u").as_deref(), Some(raw));
+    }
+}
+
