@@ -17,6 +17,30 @@
     "template_name": "foundry_property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.pipeline.ecosystem:SOLANA_ANALYSIS_SYSTEM_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_ANALYSIS_SYSTEM_TEMPLATE",
+    "template_name": "solana/analysis_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOLANA_ANALYSIS_INITIAL_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_ANALYSIS_INITIAL_TEMPLATE",
+    "template_name": "solana/analysis_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOLANA_PROPERTY_SYSTEM_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_PROPERTY_SYSTEM_TEMPLATE",
+    "template_name": "solana/property_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOLANA_PROPERTY_INITIAL_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_PROPERTY_INITIAL_TEMPLATE",
+    "template_name": "solana/property_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.cvl_research:_ResearchSys": {
     "module": "composer.spec.cvl_research",
     "qualname": "_ResearchSys",
@@ -41,16 +65,16 @@
     "template_name": "nosource_property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.prop_inference:property_analysis_template": {
+  "composer.spec.prop_inference:PROPERTY_SYSTEM_TEMPLATE": {
     "module": "composer.spec.prop_inference",
-    "qualname": "property_analysis_template",
-    "template_name": "property_analysis_prompt.j2",
+    "qualname": "PROPERTY_SYSTEM_TEMPLATE",
+    "template_name": "property_analysis_system_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.prop_inference:property_analysis_system_template": {
+  "composer.spec.prop_inference:PROPERTY_INITIAL_TEMPLATE": {
     "module": "composer.spec.prop_inference",
-    "qualname": "property_analysis_system_template",
-    "template_name": "property_analysis_system_prompt.j2",
+    "qualname": "PROPERTY_INITIAL_TEMPLATE",
+    "template_name": "property_analysis_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.source.author:_PropertyGenTemplate": {
@@ -93,6 +117,18 @@
     "module": "composer.spec.source.summarizer",
     "qualname": "_SummarizationTemplate",
     "template_name": "cvl_setup_summarization_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.system_analysis:ANALYSIS_SYSTEM_TEMPLATE": {
+    "module": "composer.spec.system_analysis",
+    "qualname": "ANALYSIS_SYSTEM_TEMPLATE",
+    "template_name": "application_analysis_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.system_analysis:ANALYSIS_INITIAL_TEMPLATE": {
+    "module": "composer.spec.system_analysis",
+    "qualname": "ANALYSIS_INITIAL_TEMPLATE",
+    "template_name": "application_analysis_prompt.j2",
     "ty_sort": "TypedTemplate"
   }
 }

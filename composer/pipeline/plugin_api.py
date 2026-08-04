@@ -1,11 +1,12 @@
 from typing import AsyncContextManager, Protocol, Callable, Awaitable, Any
+from dataclasses import dataclass
 from functools import cached_property
 from abc import ABC, abstractmethod
 from graphcore.graph import TemplateLoader
 from jinja2.loaders import BaseLoader, PackageLoader, ChoiceLoader, PrefixLoader
 
 from composer.templates.loader import base_loader, load_jinja_template, _autoescape
-from composer.spec.system_model import ContractComponentInstance
+from composer.spec.system_model import FeatureUnit
 from composer.pipeline.ptypes import PipelineRun
 from composer.spec.context import WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
@@ -67,7 +68,9 @@ class _PluginEnvironment(Environment):
             return prefix + template
         return template
 
-class PipelinePlugin(ABC):
+class PipelinePlugin[U: FeatureUnit](ABC):
+    """A pipeline plugin, parameterized by the unit type its hooks accept."""
+
     NAME: str
 
     def plugin_loader(self) -> BaseLoader | None:
@@ -100,23 +103,69 @@ class PipelinePlugin(ABC):
 
     async def property_inference_input_hook(
         self,
-        comp: ContractComponentInstance,
+        comp: U,
         run: PluginContext[PrePropertyInference]
     ) -> AnyPropertyGenerationInput | None:
         return None
 
     async def post_process_property_inference(
         self,
-        comp: ContractComponentInstance,
+        comp: U,
         run: PluginContext[PostPropertyInference],
         props: list[PropertyFormulation]
     ) -> list[PropertyFormulation]:
         return props
 
 
-class PipelinePluginLoader(ABC):
+# ---------------------------------------------------------------------------
+# Scope — which runs a plugin applies to
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AnyEcosystem:
+    """The plugin's hooks accept :class:`~composer.spec.system_model.FeatureUnit`, so it runs on
+    every ecosystem. Carries no unit type: there is nothing to match against."""
+
+
+@dataclass(frozen=True)
+class ForEcosystem[U: FeatureUnit]:
+    """The plugin's hooks accept one ecosystem's concrete unit, so it runs only on runs whose
+    ``Ecosystem.unit_type`` is that unit (or a subclass of it).
+
+    The unit type is carried as a *value* because narrowing happens at the entry-point boundary,
+    where nothing static survives."""
+
+    unit: type[U]
+
+
+#: What a loader declares to say which runs its plugin applies to. A sum type rather than
+#: predicates or flags, so each variant carries exactly the fields its own matching needs —
+#: :class:`AnyEcosystem` has no unit to match, :class:`ForEcosystem` has one.
+#:
+#: Extension point for backend-specific plugins: add a ``ForBackend[U]`` variant here carrying
+#: both the ``unit`` and the backend type (``backend: type[PipelineBackend[..., U, ...]]``), and a
+#: matching case in ``composer.pipeline.plugins._applies`` that additionally does
+#: ``isinstance(backend, scope.backend)``. That needs the backend threaded into ``load_plugins``
+#: alongside ``unit_type``; ``run_pipeline`` already holds it, so the plumbing is one parameter.
+#: Checking the unit *as well as* the backend would be deliberate redundancy — it turns a
+#: mis-paired declaration into a startup no-match rather than a mid-run ``AttributeError``.
+type PluginScope[U: FeatureUnit] = AnyEcosystem | ForEcosystem[U]
+
+
+class PipelinePluginLoader[U: FeatureUnit](ABC):
+    """Declares a plugin's :data:`PluginScope` and builds it.
+
+    Scope lives here rather than on the plugin so the host can skip a plugin that doesn't apply
+    *without* running ``initialize``"""
+
+    @property
+    @abstractmethod
+    def scope(self) -> PluginScope[U]:
+        ...
+
     @abstractmethod
     def initialize(
         self
-    ) -> AsyncContextManager[PipelinePlugin]:
+    ) -> AsyncContextManager[PipelinePlugin[U]]:
         ...

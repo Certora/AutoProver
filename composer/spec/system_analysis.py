@@ -1,4 +1,4 @@
-from typing import NotRequired, Any
+from typing import NotRequired, Any, Callable, TypedDict
 
 from graphcore.graph import MessagesState, FlowInput
 
@@ -6,17 +6,35 @@ from graphcore.graph import MessagesState, FlowInput
 from composer.spec.context import (
     WorkflowContext, SystemDoc
 )
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.system_model import BaseApplication, ExplicitContract, ExternalActor, ExternalDependency, SolidityIdentifier
-from composer.spec.service_host import ServiceHost
+from composer.spec.system_model import BaseApplication, ExplicitContract, ExternalActor, ExternalDependency
+from composer.spec.types import SourceIdentifier
+from composer.spec.service_host import ServiceHost, Sort
 from composer.spec.util import slugify_filename
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 
 DESCRIPTION = "Component analysis"
 
-def _validate_connectivity(
-    app: BaseApplication, expected_main_id: SolidityIdentifier | None
+
+class AnalysisPromptParams(TypedDict):
+    """Kwargs shared by the analysis agent's system and initial prompt templates."""
+    sort: Sort
+    has_doc: bool
+
+
+#: The EVM/Solidity analysis prompts.
+ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_system.j2")
+ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_prompt.j2")
+
+def validate_solidity_connectivity(
+    app: BaseApplication, expected_main_id: SourceIdentifier | None
 ) -> str | None:
+    """Connectivity/shape validation for the Solidity model *family*: typed over
+    ``BaseApplication`` because it checks only the contract/actor/interaction graph that
+    ``Application``, ``SourceApplication``, ``HarnessedApplication``, and
+    ``FromSourceApplication`` all share. Both callers name it directly; neither can use the
+    other's ``Ecosystem.validate_analysis``, which is narrowed to one ``system_model``."""
     errors: list[str] = []
     known_components: dict[str, set[str]] = {}
     known_external: set[str] = set()
@@ -94,7 +112,11 @@ async def run_component_analysis[T: BaseApplication](
     input: SystemDoc | None,
     env: ServiceHost,
     extra_input: list[str | dict],
-    expected_main_id: SolidityIdentifier | None = None,
+    expected_main_id: SourceIdentifier | None = None,
+    *,
+    system_template: TypedTemplate[AnalysisPromptParams],
+    initial_template: TypedTemplate[AnalysisPromptParams],
+    validate: Callable[[T, SourceIdentifier | None], str | None],
 ) -> T | None:
     """Analyze application components from a system doc and optionally source code."""
     if (cached := await child_ctxt.cache_get(ty)) is not None:
@@ -112,26 +134,23 @@ async def run_component_analysis[T: BaseApplication](
     })
 
     def _validation_wrapper(
-        _: Any, app: BaseApplication
+        _: Any, app: T
     ) -> str | None:
-        return _validate_connectivity(app, expected_main_id)
+        return validate(app, expected_main_id)
 
+    prompt_params: AnalysisPromptParams = {"sort": env.sort, "has_doc": input is not None}
     b = bind_standard(
         builder=env.builder_lite(),
         state_type=AnalysisState,
         validator=_validation_wrapper
     ).with_input(
         AnalysisInput
-    ).with_sys_prompt_template(
-        "application_analysis_system.j2",
-        sort=env.sort,
-        has_doc=input is not None
+    ).inject(
+        lambda g: system_template.bind(prompt_params).render_to(g.with_sys_prompt_template)
     ).with_tools(
         [memory, *get_rough_draft_tools(AnalysisState), *env.analysis_tools]
-    ).with_initial_prompt_template(
-        "application_analysis_prompt.j2",
-        sort=env.sort,
-        has_doc=input is not None
+    ).inject(
+        lambda g: initial_template.bind(prompt_params).render_to(g.with_initial_prompt_template)
     )
 
     graph = b.compile_async()

@@ -8,6 +8,9 @@ their own Jinja templates. Plugins
 are discovered from the installed environment — the host needs no
 configuration to pick one up.
 
+A plugin declares which runs it applies to: every ecosystem, or one in
+particular. See [Scope](#scope--which-runs-a-plugin-applies-to).
+
 ## Shipping a plugin
 
 Register a **loader class** under the entry-point group
@@ -24,12 +27,16 @@ unique across the installed environment — a duplicate name fails the whole
 pipeline at startup. Renaming it invalidates cached work (see
 [Cache-key effects](#cache-key-effects)).
 
-The loader:
+The loader declares the plugin's **scope** — which runs it applies to — and builds it:
 
 ```python
-class MyPluginLoader(PipelinePluginLoader):
+class MyPluginLoader(PipelinePluginLoader[ContractComponentInstance]):
+    @property
+    def scope(self) -> PluginScope[ContractComponentInstance]:
+        return ForEcosystem(ContractComponentInstance)
+
     @asynccontextmanager
-    async def initialize(self) -> AsyncIterator[PipelinePlugin]:
+    async def initialize(self) -> AsyncIterator[PipelinePlugin[ContractComponentInstance]]:
         async with open_my_resources() as res:
             yield MyPlugin(res)
 ```
@@ -45,23 +52,63 @@ Contract:
   exited when the pipeline returns *or raises*. Any resource the plugin's
   hooks or tools touch (DB pools, subprocesses, caches) must be acquired here
   and remain valid exactly while the scope is open.
+* `initialize()` is **not called at all** on a run the scope excludes, so an
+  inapplicable plugin never acquires resources.
 * An exception from `initialize()` (either side of the `yield`) fails the run.
 
 The plugin class:
 
 ```python
-class MyPlugin(PipelinePlugin):
+class MyPlugin(PipelinePlugin[ContractComponentInstance]):
     NAME = "My Plugin"          # display name (task labels); the entry-point
                                 # name, not NAME, is the identity
 ```
+
+## Scope — which runs a plugin applies to
+
+A plugin's hooks receive a **unit**: the per-component item the extraction
+phase iterates. Each ecosystem has its own concrete unit type (EVM's
+`ContractComponentInstance`, Solana's `SolanaComponentInstance`), all of which
+satisfy the `FeatureUnit` protocol. The type parameter on `PipelinePlugin` says
+which of those your hooks accept, and the loader's `scope` says which runs the
+host should load you for. The two must agree — and because they share the type
+parameter, a mismatch is a type error in *your* package, at the declaration
+site.
+
+Two scopes:
+
+```python
+AnyEcosystem()                          # hooks take FeatureUnit; runs everywhere
+ForEcosystem(ContractComponentInstance) # hooks take that unit; runs only on EVM
+```
+
+* **Ecosystem-agnostic** — declare `PipelinePlugin[FeatureUnit]` and
+  `AnyEcosystem()`. Your hooks may use only what `FeatureUnit` offers
+  (`display_name`, `slug`, `unit_index`, `cache_material()`, `context_tag()`,
+  `feature_json()`). This is the widest scope and the least you can assume.
+* **Ecosystem-specific** — declare the concrete unit in both places. Your hooks
+  get that type and can read its members directly.
+
+An agnostic plugin is usable wherever a specific one is (its hooks accept
+strictly more), so `PipelinePlugin` is *contravariant* in its unit parameter.
+You don't need to do anything to get that; it is why the same declaration works
+on every ecosystem.
+
+Backend-specific scoping (prover vs. foundry vs. a Rust backend) is not
+implemented yet; `PluginScope` is the sum type it would extend.
 
 ## Hooks
 
 ### `property_inference_input_hook(comp, run) -> AnyPropertyGenerationInput | None`
 
-Called once per **functional component** of the main contract, per plugin,
-*before* that component's property-inference agent runs. Return extra input
-for the inference prompt, or `None` to contribute nothing for this component.
+Called once per **functional component** of the main contract/program, per
+plugin, *before* that component's property-inference agent runs. Return extra
+input for the inference prompt, or `None` to contribute nothing for this
+component.
+
+`comp` is the unit type your plugin declared — the concrete one under
+`ForEcosystem`, or `FeatureUnit` under `AnyEcosystem`. See
+[Scope](#scope--which-runs-a-plugin-applies-to).
 
 Invocation model:
 
@@ -199,13 +246,20 @@ inputs (sorted by `uid`). Rounds after the first drop the `initial` groups.
 
 ## Cache-key effects
 
-The host folds the **installed plugin manifest** (sorted entry-point names)
-into every per-component cache key:
+The host folds the **applicable plugin manifest** — sorted entry-point names of
+the installed plugins whose scope admits this run — into every per-component
+cache key:
 
-* Installing, removing, or renaming *any* plugin changes the digest and
-  invalidates all per-component inference/CVL cache entries — for every
-  plugin, not just the changed one.
-* The manifest is recorded in the run's `cache_root` tags.
+* Installing, removing, or renaming any *applicable* plugin changes the digest
+  and invalidates all per-component inference/CVL cache entries — for every
+  applicable plugin, not just the changed one.
+* A plugin scoped to another ecosystem does **not** perturb these keys: it never
+  contributed to them. So installing a Solana-scoped plugin leaves EVM runs'
+  cached work intact, and vice versa.
+* When no plugin applies the digest is absent entirely, leaving per-component
+  keys byte-identical to a build with no plugins installed.
+* The manifest is recorded in the run's `cache_root` tags — the *applicable*
+  one, so `cache-autoprove` rehydrates the same namespaces the run wrote.
 * The per-plugin namespace handed to the hook (`run.ctx`) is keyed by
   *(component digest, plugin name)* and is **not** part of the component key
   — its contents are the plugin's own to version and invalidate.
@@ -233,13 +287,17 @@ plugin's `PluginContext` resolve `with_sys_prompt_template(...)` /
 ## Checklist
 
 1. `pyproject.toml`: entry point in `certora.autoprove.plugins`.
-2. Loader: trivial `__init__`, resources in `initialize()`, yield the plugin.
-3. Plugin: set `NAME`; implement `property_inference_input_hook` and/or
+2. Pick the unit type — `FeatureUnit` for ecosystem-agnostic, a concrete unit
+   (e.g. `ContractComponentInstance`) otherwise — and use it as the type
+   parameter on *both* the loader and the plugin.
+3. Loader: trivial `__init__`, `scope` returning `AnyEcosystem()` or
+   `ForEcosystem(<that unit>)`, resources in `initialize()`, yield the plugin.
+4. Plugin: set `NAME`; implement `property_inference_input_hook` and/or
    `post_process_property_inference`.
-4. Cache expensive work under `run.ctx`; run it via `run.runner`.
-5. Return `None` for "nothing to contribute"; never raise for recoverable
+5. Cache expensive work under `run.ctx`; run it via `run.runner`.
+6. Return `None` for "nothing to contribute"; never raise for recoverable
    conditions.
-6. Choose `uid`/`sort`/`when` per the placement rules; use the cacheable
+7. Choose `uid`/`sort`/`when` per the placement rules; use the cacheable
    variant for large payloads that deserve a prompt-cache breakpoint.
-7. Templates in `templates/` next to the plugin class; reference host
+8. Templates in `templates/` next to the plugin class; reference host
    templates with the `autoprover/` prefix.
