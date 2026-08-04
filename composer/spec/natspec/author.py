@@ -16,23 +16,24 @@ from composer.spec.cvl_generation import (
     FeedbackToolContext, check_completion, CVLGenerationExtra
 )
 
-
+from composer.spec.service_host import Sort
 from composer.spec.context import (
     WorkflowContext, CVLGeneration, SystemDoc
 )
 from composer.spec.types import PropertyFormulation
 from composer.spec.feedback import property_feedback_judge, Properties, FeedbackTemplate
 from composer.spec.gen_types import TypedTemplate
-from composer.spec.system_model import ContractComponentInstance, ContractName
+from composer.spec.system_model import ContractComponentInstance, ContractName, component_context
 from composer.spec.cvl_generation import CVL_JUDGE_KEY, FeedbackToolContext, static_tools, SkippedProperty
 from composer.spec.service_host import ServiceHost
 from composer.ui.tool_display import tool_display, suppress_ack
 from composer.spec.natspec.task_description import Assembler, ConfigurationBuilder
 from composer.spec.natspec.typecheck import TypeChecker
 
+@component_context
 class SourceGenerationParams(Properties):
     context: ContractComponentInstance
-    sort: Literal["greenfield", "existing", "update"]
+    sort: Sort
 
 NoSourceGen = TypedTemplate[SourceGenerationParams]("nosource_property_generation_prompt.j2")
 
@@ -223,7 +224,7 @@ async def generate_cvl_batch(
         ctx=ctx.child(CVL_JUDGE_KEY), env=env, prompt=FeedbackTemplate.bind({
             "context": component,
             "sort": env.sort,
-        }).depends(Properties), props=props, extra_inputs=stub_feedback_extras
+        }), props=props, extra_inputs=stub_feedback_extras
     )
 
     g = (

@@ -126,7 +126,7 @@ async def generate_stub[S: StubDeclarationModel](
                 )
             return None
 
-    final_prompt = description.prompt.inject(
+    final_prompt = description.prompt.bind(
         StubGenCallParams(
             solidity_identifier=solidity_identifier,
             interface_name=interface_name,

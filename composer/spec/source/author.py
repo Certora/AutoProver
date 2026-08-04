@@ -19,18 +19,18 @@ from composer.spec.cvl_generation import (
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.types import PropertyFormulation
 from composer.pipeline.core import GaveUp
-from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier
+from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
 from langgraph.graph import MessagesState
 from langgraph.runtime import get_runtime
 from pathlib import Path
 from composer.spec.gen_types import CVLResource, TypedTemplate, import_statement_for
 from composer.spec.service_host import ServiceHost
-from composer.workflow.services import CacheLevel
+from composer.llm.provider import CacheLevel
 
 
 from langgraph.types import Command
-from composer.spec.feedback import property_feedback_judge, FeedbackTemplate
+from composer.spec.feedback import property_feedback_judge, FeedbackTemplate, Properties
 from composer.ui.tool_display import tool_display
 
 from graphcore.graph import FlowInput
@@ -151,7 +151,9 @@ class ResourceView(TypedDict):
     required: bool
     import_path: str
 
+@component_context
 class PropertyGenParams(TypedDict):
+    sort: Literal["existing"]
     context: ContractComponentInstance | None
     resources: list[ResourceView]
     properties: list[PropertyFormulation]
@@ -361,7 +363,8 @@ async def batch_cvl_generation(
         "resources": resource_views,
         "context": component,
         "properties": props,
-        "contract_name": source.contract_name
+        "contract_name": source.contract_name,
+        "sort": "existing"
     })
 
     # use "cache=long" to account for very long prover runs.
@@ -391,7 +394,7 @@ async def batch_cvl_generation(
     feedback_env = property_feedback_judge(
         ctx.child(CVL_JUDGE_KEY), env, FeedbackTemplate.bind({
             "sort": "existing",
-            "context": component
+            "context": component,
         }), props
     )
 

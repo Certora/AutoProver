@@ -2,11 +2,11 @@ from typing import Annotated, Literal, Protocol
 from pydantic import BaseModel, Field, Discriminator
 
 class ImportSpec(BaseModel):
-    spec_file: str = Field("The (relative) path to the spec file to import")
+    spec_file: str = Field(description="The (relative) path to the spec file to import")
 
 class ContractImport(BaseModel):
-    contract_name: str = Field("The name of the contract to import (e.g. ERCTokenA)")
-    as_name: str = Field("The CVL identifier to bind to, e.g. 'tokenA'")
+    contract_name: str = Field(description="The name of the contract to import (e.g. ERCTokenA)")
+    as_name: str = Field(description="The CVL identifier to bind to, e.g. 'tokenA'")
 
 class MappingType(BaseModel):
     """
@@ -329,7 +329,7 @@ class FunctionDef(BaseModel):
     block: CodeBlock = Field(description="The body of the function.")
 
 class MethodWithoutReturn(BaseModel):
-    host_contract: str | None = Field("The host contract *type* of the method (*NOT* the using alias), or None, if the contract under verification should be used")
+    host_contract: str | None = Field(description="The host contract *type* of the method (*NOT* the using alias), or None, if the contract under verification should be used")
     name: str = Field(description="The name of the method")
     params: list["NamedVMParam"] = Field(description="The formal arguments to the method")
 
@@ -368,7 +368,7 @@ class Invariant(BaseModel):
     Invariant declaration
     """
     type: Literal["invariant"]
-    name: str = Field("The name of the invariant")
+    name: str = Field(description="The name of the invariant")
     invariant_params: list[TypeAndId] = Field(description="The (non-deterministically chosen) arguments to the invariant.")
     invariant_expression: Expression = Field(description="The expression to show is invariant. Should be boolean typed.")
     filter: FilteredBlock | None = Field(description="The filter for the invariant. The `method_param` name can be arbitrarily chosen, it is always bound" \

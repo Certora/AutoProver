@@ -32,6 +32,7 @@ from graphcore.tools.vfs import FSBackend, Materializer
 from composer.io.multi_job import (
     TaskInfo, HandlerFactory, run_task,
 )
+from composer.llm.types import CacheLevel
 from composer.pipeline.ecosystem import EvmEcosystem
 
 from composer.spec.context import (
@@ -40,7 +41,9 @@ from composer.spec.context import (
     Contract
 )
 from composer.spec.util import string_hash
-from composer.spec.prop_inference import CERTORA_BACKEND_GUIDANCE, run_property_inference
+from composer.spec.prop_inference import (
+    CERTORA_BACKEND_GUIDANCE, CacheablePropertyGenerationInput, run_property_inference
+)
 from composer.spec.types import PropertyFormulation
 from composer.spec.natspec.interface_gen import generate_interface, DESCRIPTION as INTERFACE_GEN_DESC
 from composer.spec.natspec.stub_gen import generate_stub
@@ -239,13 +242,18 @@ async def analyze_single_contract(
                 feat_ctx, services.env, feat,
                 refinement=conv if interactive else None,
                 extra_input=[
-                    "For reference, the system document describing the entire application is as follows.",
-                    system_doc.content.to_dict(),
+                    CacheablePropertyGenerationInput(
+                        "certora:system-doc", "generic", "always", lambda cache: [
+                            "For reference, the system document describing the entire application is as follows.",
+                            system_doc.content.to_dict(CacheLevel.SHORT if cache else CacheLevel.NONE)
+                        ]
+                    )
+                    
                 ],
                 max_rounds=services.max_bug_rounds,
                 backend_guidance=CERTORA_BACKEND_GUIDANCE,
                 system_template=services.ecosystem.property_prompts.system,
-                initial_template=services.ecosystem.property_prompts.initial,
+                render_initial=services.ecosystem.property_prompts.render_initial,
             ),
             semaphore,
         )

@@ -32,11 +32,11 @@ from composer.spec.context import (
     WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode
 )
 from composer.spec.system_model import (
-    BaseApplication, FeatureUnit
+    BaseApplication, ContractComponentInstance, FeatureUnit
 )
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
-from composer.spec.prop_inference import run_property_inference
+from composer.spec.prop_inference import run_property_inference, AnyPropertyGenerationInput
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
@@ -49,6 +49,8 @@ from .ptypes import (
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp,
     PipelineRun, SystemAnalysisSpec
 )
+from .plugin_api import PrePropertyInference, PostPropertyInference
+from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
 
 COMMON_SYSTEM_CACHE_KEY = "system-analysis"
 
@@ -174,10 +176,16 @@ def PROPERTIES_KEY(nm: str):
 class _Batch[U: FeatureUnit](BackendJob[U]):
     feat_ctx: WorkflowContext[ComponentGroup]
 
-def _component_cache_key(c: FeatureUnit) -> CacheKey[Properties, ComponentGroup]:
+def _component_digest(c: FeatureUnit) -> str:
     # ``cache_material`` is the ecosystem-agnostic view of what identifies a unit; EVM's
     # implementation reproduces the previous inline key (app JSON | ind | contract ind) exactly.
-    return CacheKey(string_hash(c.cache_material()))
+    return string_hash(c.cache_material())
+
+def _component_cache_key(c: FeatureUnit, plugin_digest: str | None) -> CacheKey[Properties, ComponentGroup]:
+    raw_digest = _component_digest(c)
+    if plugin_digest is not None:
+        raw_digest += f"-{plugin_digest}"
+    return CacheKey(raw_digest)
 
 
 def _batch_cache_key[FormT: BackendResult](
@@ -193,10 +201,26 @@ def extract_task_id(idx: int) -> str:
 def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
-# ---- the driver --------------------------------------------------------------
 async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
     backend: PipelineBackend[P, FormT, H, A, U, Main, App],
     run: PipelineRun[P, H],
+    *,
+    interactive: bool = False,
+    threat_model: Document | None = None,
+    max_bug_rounds: int = 3,
+    ecosystem: Ecosystem[App, Main, U],
+) -> CorePipelineResult[FormT]:
+    async with load_plugins(run) as plugins:
+        return await run_pipeline_inner(
+            backend, run, plugins, interactive=interactive, threat_model=threat_model,
+            max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
+        )
+
+# ---- the driver --------------------------------------------------------------
+async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+    run: PipelineRun[P, H],
+    plugin_manager: PluginManager[P],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
@@ -226,7 +250,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     )
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
-
+    
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
     prepared = await backend.prepare_system(analyzed, run)
 
@@ -236,8 +260,19 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     batches: list[_Batch[U]] = await _extract_all(
         backend.analysis_spec.properties_key,
-        prepared.main, backend.backend_guidance, run,
-        phases["extraction"], interactive, threat_model, max_bug_rounds, ecosystem)
+        prepared.main,
+        backend.backend_guidance,
+        run,
+        phases["extraction"],
+        interactive,
+        threat_model,
+        max_bug_rounds,
+        ecosystem,
+        plugin_manager.bind_phase(
+            phases.get("extraction_plugin") or phases["extraction"],
+            "Property Extraction"
+        )
+    )
     staged = await staged_task
     if not batches:
         raise ValueError("No properties extracted from any component.")
@@ -314,6 +349,17 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 
     return _tally(outcomes)
 
+def _pre_property_cache_key(feat: FeatureUnit, plugin: str) -> CacheKey[Properties, PrePropertyInference]:
+    key = f"{_component_digest(feat)}-{string_hash(plugin)}-pre"
+    return CacheKey(key)
+
+def _post_property_cache_key(feat: FeatureUnit, plugin: str, curr_props: list[PropertyFormulation]) -> CacheKey[Properties, PostPropertyInference]:
+    props = string_hash("|".join(
+        p.model_dump_json() for p in curr_props
+    ))
+    key = f"{_component_digest(feat)}-{string_hash(plugin)}-{props}"
+    return CacheKey(key)
+
 async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     prop_key: str,
     main: Main, backend_guidance: str, run: PipelineRun[P, H],
@@ -321,20 +367,75 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     # ``App`` stays ``Any`` here: this helper never touches the analyzed-model axis, only
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],
+    plugins: PluginPhaseManager[P],
 ) -> list[_Batch[U]]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
 
+    # Plugin hooks are typed on the EVM unit — see ``Ecosystem.plugin_unit``. An ecosystem with no
+    # EVM view of its units has nothing to hand them, so for it neither the plugin phases run nor
+    # the plugin digest applies (it would otherwise perturb every unit's cache key for plugins
+    # that never touched the unit).
+    to_plugin_unit = ecosystem.plugin_unit
+    plugin_digest = plugins.plugin_digest if to_plugin_unit is not None else None
+
+    async def _pre_plugin_inputs(feat: ContractComponentInstance) -> list[AnyPropertyGenerationInput]:
+        async def run_one(runner: PluginPhaseRunner[P]) -> AnyPropertyGenerationInput | None:
+            ctxt = await prop_ctx.child(
+                _pre_property_cache_key(feat, runner.plugin_id), {"plugin-name": runner.plugin_id}
+            )
+            return await runner.plugin.property_inference_input_hook(
+                feat, runner.bind(str(feat.unit_index), ctxt)
+            )
+
+        got = await asyncio.gather(*[
+            run_one(r) for r in plugins.runners(
+                sub_phase_id="pre-inference", sub_phase_label="Property Pre-Inference"
+            )
+        ])
+        return [t for t in got if t is not None]
+
+    async def _post_plugin_props(
+        feat: ContractComponentInstance, props: list[PropertyFormulation]
+    ) -> list[PropertyFormulation]:
+        accum = props
+        for runner in plugins.runners(
+            sub_phase_id="post-inference", sub_phase_label="Property Post-Process", sorted_run=True
+        ):
+            ctxt = await prop_ctx.child(
+                _post_property_cache_key(feat, runner.plugin_id, accum),
+                {
+                    "plugin-name": runner.plugin_id,
+                    "props": [p.model_dump() for p in accum],
+                },
+            )
+            accum = await runner.plugin.post_process_property_inference(
+                feat, runner.bind(str(feat.unit_index), ctxt), accum
+            )
+        return accum
+
     async def _one(feat: U) -> _Batch[U] | None:
-        feat_ctx = await prop_ctx.child(_component_cache_key(feat), feat.context_tag())
+        plugin_feat = to_plugin_unit(feat) if to_plugin_unit is not None else None
+        pre_input = await _pre_plugin_inputs(plugin_feat) if plugin_feat is not None else []
+
+        feat_ctx = await prop_ctx.child(
+            _component_cache_key(feat, plugin_digest),
+            {**feat.context_tag(), "plugins": plugins.plugin_manifest},
+        )
         props = await run.runner(
             TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),
             lambda conv: run_property_inference(
                 feat_ctx, run.env, feat, refinement=conv if interactive else None,
                 threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance,
+                extra_input=pre_input,
                 system_template=ecosystem.property_prompts.system,
-                initial_template=ecosystem.property_prompts.initial),
+                render_initial=ecosystem.property_prompts.render_initial,
+            ),
         )
-        return _Batch(feat, props, feat_ctx) if props else None
+        if not props:
+            return None
+
+        accum = await _post_plugin_props(plugin_feat, props) if plugin_feat is not None else props
+        return _Batch(feat, accum, feat_ctx) if accum else None
 
     got = await asyncio.gather(*[_one(u) for u in ecosystem.units(main)])
     return [b for b in got if b is not None]
