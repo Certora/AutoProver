@@ -206,7 +206,7 @@ async def test_each_component_gets_its_own_extraction_batch(monkeypatch):
         interactive=False, threat_model=None, max_rounds=1, ecosystem=eco,
         # The granularity claim is about the *unit* axis, so this drives the phase with no
         # plugins in the way — the hooks a plugin adds are covered by test_plugin_scope.py.
-        plugins=PluginManager.without_plugins(run).bind_phase(None, "Property Extraction"),
+        plugins=PluginManager({}, run).bind_phase(None, "Property Extraction"),
     )
 
     assert [b.feat.display_name for b in batches] == ["Deposits", "Admin"]
