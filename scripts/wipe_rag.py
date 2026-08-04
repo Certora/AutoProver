@@ -37,7 +37,7 @@ composer_dir = str(pathlib.Path(__file__).parent.parent.absolute())
 if composer_dir not in sys.path:
     sys.path.append(composer_dir)
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, sql
 
 from composer.rag.db import DEFAULT_CONNECTION
 
@@ -50,7 +50,6 @@ from composer.rag.db import DEFAULT_CONNECTION
 _TABLES = (
     "manual_section_code_refs",
     "manual_sections",
-    "code_refs",
     "documents",
 )
 
@@ -79,15 +78,39 @@ def _confirm(conn_string: str) -> bool:
 async def _wipe(conn_string: str) -> None:
     async with await AsyncConnection.connect(conn_string, autocommit=False) as conn:
         async with conn.cursor() as cur:
-            # One TRUNCATE statement covering all tables — CASCADE handles
-            # the documents → code_refs and manual_sections →
-            # manual_section_code_refs FK chains; RESTART IDENTITY resets
-            # the SERIAL counters.
-            target = ", ".join(_TABLES)
-            print(f"TRUNCATE TABLE {target} RESTART IDENTITY CASCADE")
+            # Narrow the allowlist to what this connection can actually see before
+            # naming anything in the statement. TRUNCATE takes no IF EXISTS, so a
+            # single name the schema does not define fails the whole wipe — and the
+            # set of RAG tables has changed before now. Intersecting keeps the
+            # allowlist's guarantee (nothing outside it is ever truncated) without
+            # coupling the script to one revision of the schema.
             await cur.execute(
-                f"TRUNCATE TABLE {target} RESTART IDENTITY CASCADE"
+                """
+                SELECT c.relname FROM pg_catalog.pg_class c
+                WHERE c.relkind = 'r'
+                  AND pg_catalog.pg_table_is_visible(c.oid)
+                  AND c.relname = ANY(%s)
+                """,
+                (list(_TABLES),),
             )
+            present = {row[0] for row in await cur.fetchall()}
+            missing = [t for t in _TABLES if t not in present]
+            if missing:
+                print(f"Not defined in this schema, skipping: {', '.join(missing)}")
+            ordered = [t for t in _TABLES if t in present]
+            if not ordered:
+                print("No RAG tables found for this connection; nothing to wipe.")
+                return
+            # One statement for all of them — CASCADE handles the
+            # manual_sections → manual_section_code_refs FK chain, and RESTART
+            # IDENTITY resets the SERIAL counters so the next build starts at id=1.
+            # Composed rather than interpolated: table names belong in the statement
+            # as identifiers, and the resolved list is not a literal.
+            statement = sql.SQL(
+                "TRUNCATE TABLE {} RESTART IDENTITY CASCADE"
+            ).format(sql.SQL(", ").join(sql.Identifier(t) for t in ordered))
+            print(f"TRUNCATE TABLE {', '.join(ordered)} RESTART IDENTITY CASCADE")
+            await cur.execute(statement)
         await conn.commit()
     print()
     print("Done. RAG tables are empty.")

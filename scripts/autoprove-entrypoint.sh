@@ -49,6 +49,14 @@ if [[ "${1:-}" == "setup-db" ]]; then
     psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres \
         -v ON_ERROR_STOP=1 -f "$init_sql"
   fi
+  # ragbuild appends, and manual_sections has a UNIQUE constraint over its header
+  # path, so populating a schema that already holds rows dies on parts_unique. Empty
+  # the tables first so setup-db is re-runnable — the content is derived entirely from
+  # the baked CVL HTML, so there is nothing here to preserve. Same wipe-then-rebuild
+  # ordering refresh_rag.sh uses, and the same --skip-confirmation rationale: the wipe
+  # is immediately followed by a rebuild, not a standalone destructive op.
+  echo "[autoprove] emptying rag_db tables at ${RAG_CONN} ..."
+  python "$AUTOPROVE_HOME/wipe_rag.py" --skip-confirmation --conn-string "$RAG_CONN"
   echo "[autoprove] populating rag_db at ${RAG_CONN} ..."
   python -m composer.scripts.ragbuild \
       --output "$RAG_CONN" \

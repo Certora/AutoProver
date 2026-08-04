@@ -49,6 +49,15 @@ _TERMINAL_STATUSES = frozenset({
 # Avoid requesting Brotli — aiohttp's brotli support is often broken/missing.
 _NO_BROTLI_HEADERS = {"Accept-Encoding": "gzip, deflate"}
 
+# Results archives run to hundreds of megabytes on a large scene, so the bound that
+# matters is "has the transfer stalled", not "how long has it taken". `sock_read` is
+# rearmed on every chunk, so a slow-but-progressing download runs to completion while a
+# genuinely dead connection still fails in bounded time. An overall `total` deadline
+# cannot tell those two apart and aborts the download mid-stream.
+_RESULTS_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(
+    total=None, connect=60, sock_read=180
+)
+
 
 @dataclass
 class CloudJob:
@@ -210,7 +219,7 @@ async def cloud_results(
 
         try:
             async with aiohttp.ClientSession(headers=_NO_BROTLI_HEADERS) as session:
-                async with session.get(full_url, timeout=aiohttp.ClientTimeout(total=300)) as resp:
+                async with session.get(full_url, timeout=_RESULTS_DOWNLOAD_TIMEOUT) as resp:
                     resp.raise_for_status()
                     with open(tmp_path, "wb") as f:
                         async for chunk in resp.content.iter_chunked(8192):
