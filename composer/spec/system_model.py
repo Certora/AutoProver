@@ -1,11 +1,49 @@
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import Literal, Protocol, TypedDict
 from typing_extensions import ReadOnly
 from pydantic import BaseModel, Field
 from functools import cached_property
 from composer.spec.util import slugify_filename
 from composer.spec.service_host import Sort
 from .types import ComponentName, SolidityIdentifier, ContractName
+
+
+class FeatureUnit(Protocol):
+    """The per-unit interface the shared pipeline driver needs, independent of ecosystem.
+
+    Each ecosystem's unit wrapper (EVM's :class:`ContractComponentInstance`, Solana's
+    instruction instance, …) satisfies it; ecosystem-specific code — prompts, backends,
+    formalizers — works with the concrete unit type. This keeps the driver's per-unit cache
+    keys, task ids, labels, and context tags ecosystem-agnostic."""
+
+    @property
+    def display_name(self) -> str:
+        """Human label for tasks / report rows."""
+        ...
+
+    @property
+    def slug(self) -> str:
+        """Filesystem-safe slug used as an artifact-id base."""
+        ...
+
+    @property
+    def unit_index(self) -> int:
+        """Stable per-run index used in task ids."""
+        ...
+
+    def cache_material(self) -> str:
+        """Stable string identifying this unit, hashed into its per-unit cache key."""
+        ...
+
+    def context_tag(self) -> dict[str, object]:
+        """The tag persisted alongside this unit's workflow context."""
+        ...
+
+    def feature_json(self) -> dict[str, object]:
+        """The unit's semantic content as a JSON-able dict, for a backend that
+        marshals it across a boundary (e.g. a Rust wheel's ``FormalizeInput.component``).
+        The shape is ecosystem-specific; the paired backend knows how to read it."""
+        ...
 
 type ContractSort = Literal["dynamic", "singleton", "multiple"]
 
@@ -94,7 +132,10 @@ class SourceExternalActor(ExternalActor):
 
 type SystemComponent = ExternalActor | ExplicitContract
 
-class BaseApplication[T : SystemComponent](BaseModel):
+# Bound is ``BaseModel`` (not ``SystemComponent``) so non-EVM ecosystems can parameterize it
+# with their own component unions (e.g. Solana's programs/authorities); the EVM subclasses below
+# still pin the concrete ``SystemComponent`` union.
+class BaseApplication[T : BaseModel](BaseModel):
     application_type: str = Field(description="A concise, description of the type of application (AMM/Liquidity Provider/etc.)")
     description: str = Field(description="A description of the application's main functionality (2 - 3 sentences max)")
     components : list[T] = Field(description="The system components (explicit contract & external actors) that comprise this application")
@@ -233,8 +274,30 @@ class ContractComponentInstance:
         """Filesystem-safe slug for this component, used as an output filename base.
         Slug uniqueness within a contract is guaranteed upstream: component analysis
         rejects any application whose sibling components slugify to the same id (see
-        ``_validate_connectivity``), so no disambiguation is needed here."""
+        ``validate_solidity_connectivity``), so no disambiguation is needed here."""
         return slugify_filename(self.component.name)
+
+    # -- FeatureUnit protocol (the ecosystem-agnostic view the driver consumes) ---------
+    @property
+    def display_name(self) -> str:
+        return self.component.name
+
+    @property
+    def slug(self) -> str:
+        return self.slugified_name
+
+    @property
+    def unit_index(self) -> int:
+        return self.ind
+
+    def cache_material(self) -> str:
+        return "|".join([self.app.model_dump_json(), str(self.ind), str(self._contract.ind)])
+
+    def context_tag(self) -> dict[str, object]:
+        return {"component": self.component.model_dump()}
+
+    def feature_json(self) -> dict[str, object]:
+        return self.component.model_dump(mode="json")
 
     @staticmethod
     def from_app(
@@ -252,9 +315,15 @@ class ContractComponentInstance:
 # ``sort`` plus a per-component ``context``. Used only as the ``@component_context``
 # bound, so the decorator statically rejects param dicts that don't actually carry
 # these two fields.
+#
+# ``context`` is the ``FeatureUnit`` protocol, not one ecosystem's unit: each ecosystem
+# declares its own param dict naming its *concrete* unit (EVM's
+# ``ContractComponentInstance``, Solana's ``SolanaComponentInstance``), and each conforms
+# here. ``ReadOnly`` is what makes that widening sound — a read-only item is covariant, so
+# a dict whose ``context`` is one concrete unit satisfies a protocol asking for any.
 class ComponentContextProtocol(TypedDict):
     sort: ReadOnly[Sort]
-    context: ReadOnly[ContractComponentInstance | None]
+    context: ReadOnly[FeatureUnit | None]
 
 # Dunder attribute stamped on marked classes. A trailing-underscore-pair name so
 # it is never subject to identifier name-mangling.
@@ -271,14 +340,16 @@ def component_context[T: ComponentContextProtocol](t: type[T]) -> type[T]:
       other params base) matches a protocol. Routing the dict through this
       decorator, whose parameter is bound ``T: ComponentContextProtocol``, makes
       the type checker verify at the declaration site that it really carries
-      ``sort: Sort`` and ``context: ContractComponentInstance | None``. The dict is
+      ``sort: Sort`` and a ``context`` that is some ``FeatureUnit``. The dict is
       returned unchanged, so this is a purely checked pass-through.
     * **Runtime marker.** Stamps ``_context_marker_attr`` on the class object (not
       on instances). The template fuzz test discovers marked classes by this
-      attribute and, for each, draws a ``sort`` and then a ``context`` coherent
-      with it rather than independently — templates read sort-gated,
-      subtype-specific fields off the context, so an incoherent pair renders into a
-      crash (see ``tests/test_fuzzed_templates.py``).
+      attribute and, for each, reads the *declared* ``context`` type and draws a unit
+      of it coherent with the drawn ``sort`` rather than independently — templates
+      read sort-gated, subtype-specific fields off the context, so an incoherent pair
+      renders into a crash (see ``tests/test_fuzzed_templates.py``). This is why each
+      ecosystem's param dict must name its concrete unit type: the ``FeatureUnit``
+      protocol is not something the fuzzer can construct.
 
     The marker is an attribute, not an annotation, so it never appears among the
     TypedDict's keys (``get_type_hints`` / ``__required_keys__`` are untouched).

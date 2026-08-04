@@ -31,10 +31,12 @@ from composer.foundry.artifacts import FoundryArtifactStore
 from composer.foundry.report import _foundry_verdicts
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun,
-    Curtailed, GaveUp, SystemAnalysisSpec,
-    CorePhases, main_instance, CorePipelineResult,
+    GaveUp, SystemAnalysisSpec,
+    CorePhases, CorePipelineResult,
     COMMON_SYSTEM_CACHE_KEY
 )
+from composer.pipeline.ptypes import Curtailed
+from composer.pipeline.ecosystem import main_instance
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import Formalized, Verdict
 from composer.spec.context import (
@@ -78,7 +80,7 @@ assert no overflow are uninteresting. Properties implied by the type
 system (a uint256 being non-negative, etc.) are also uninteresting.
 """
 from composer.spec.system_model import (
-    ContractComponentInstance, SourceApplication,
+    ContractComponentInstance, ContractInstance, SourceApplication,
 )
 
 from composer.io.multi_job import HandlerFactory
@@ -106,7 +108,7 @@ class FoundryPhase(enum.Enum):
     TEST_GENERATION = "test_generation"
     REPORT = "report"
 
-class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
+class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstance]):
     def __init__(self, conf: _ForgeRunConfig):
         super().__init__(GeneratedFoundryTest, "foundry")
         self.conf = conf
@@ -138,11 +140,11 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest]):
         return await _foundry_verdicts(formalized)
 
 @dataclass
-class FoundrySystem(PreparedSystem[GeneratedFoundryTest]):
+class FoundrySystem(PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]):
     form: FoundryFormalizer
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedFoundryTest]:
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedFoundryTest, ContractComponentInstance]:
         return self.form
 
 @dataclass
@@ -166,7 +168,7 @@ class FoundryBackend:
         self,
         analyzed: SourceApplication,
         run: PipelineRun[FoundryPhase, None]
-    ) -> PreparedSystem[GeneratedFoundryTest]:
+    ) -> PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]:
         return FoundrySystem(
             main_instance(
                 analyzed, run.source
