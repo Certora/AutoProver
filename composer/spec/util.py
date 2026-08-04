@@ -81,21 +81,19 @@ _NON_SOLIDITY_DIRS = frozenset({"node_modules", "lib", "test", "dist"})
 # blob holds its content on very few very long lines — a single line can span megabytes
 # — and a content grep reports whole matching lines.
 _GENERATED_SUFFIXES = frozenset({".json", ".map", ".dat"})
-_BUNDLE_MARKERS = ("min", "bundle")
-_BUNDLE_SEPARATORS = (".", "-", "_")
+
+# Every separator/marker pairing a bundle name is written with in practice, so that
+# ``str.endswith`` can take the whole tuple in one call: ``.min`` / ``-min`` / ``_min``
+# and the same three for ``bundle``.
+_BUNDLE_STEM_SUFFIXES = tuple(
+    sep + marker for sep in (".", "-", "_") for marker in ("min", "bundle")
+)
 
 
 def _is_generated_bundle(path: PurePath) -> bool:
     """``vendor.min.js`` / ``app-bundle.js`` / ``app_bundle.js``, but not a hand-written
     ``bundle.js``: the marker has to be a suffix of the name, not the whole of it."""
-    if path.suffix != ".js":
-        return False
-    stem = path.stem
-    return any(
-        stem.endswith(sep + marker)
-        for sep in _BUNDLE_SEPARATORS
-        for marker in _BUNDLE_MARKERS
-    )
+    return path.suffix == ".js" and path.stem.endswith(_BUNDLE_STEM_SUFFIXES)
 
 
 def fs_forbidden_read(path: PurePath) -> bool:
