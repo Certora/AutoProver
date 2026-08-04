@@ -84,8 +84,18 @@ lamport-delta assertion on a signer/fee-payer that ignores the fee (e.g.
 `depositor_before - amount == depositor_after`) is a false oracle: it FAILS on a correct
 program. Flag it — exact-delta assertions belong on non-signer accounts (the receiving PDA),
 or must subtract the fee / assert a bound.
-- Ties back to C3: confirm the reachable state space actually includes the property's danger
-region under the available `action_*` sequences.
+- Diagnosable failure messages: a custom message REPLACES the macro's built-in operand dump, so
+every message must interpolate the values it compares (`"…total_supply={} exceeds limit={}",
+total, limit`) plus, inside a loop, the account key. A bare `"[title] invariant violated"`
+produces a counterexample nobody can triage without rebuilding and re-running the harness. Flag it.
+- Precondition scope (the false-POSITIVE trap, the mirror of C1's false-negatives):
+`#[invariant_test]` runs after EVERY action, including ones that FAILED. An assertion for a
+property scoped to "after a successful X" must be gated on that transition actually happening, and
+must SKIP accounts the sequence never initialized — a zeroed account deserializes into a DEFAULT
+struct (all-zero pubkeys, version 0), so an `Option`-returning read that only fails on a
+deserialization error is NOT a sufficient guard; test a discriminator/version/non-default key.
+An invariant that is already false in the post-setup FIXTURE state reports as a program bug on
+iteration 0, and is always a harness defect, never a finding. Flag both shapes.
 
 ## Criterion 8 — Coverage and redundancy
 - Every listed property must have a correctly-named test fn. A property "addressed" only by tests
