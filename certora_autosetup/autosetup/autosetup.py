@@ -652,6 +652,7 @@ class Autosetup:
 
         base_prover_args = {
             "quiet": "",  # Add quiet flag for base
+            "destructiveOptimizations": "twostage",
         }
 
         # Prepare base-specific properties
