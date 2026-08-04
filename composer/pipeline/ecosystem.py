@@ -21,10 +21,11 @@ from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CODE_EXPLORER_SYS_PROMPT
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.prop_inference import (
-    PropertyInitialPromptParams,
+    InitialPromptRenderer,
     PropertySystemPromptParams,
-    PROPERTY_INITIAL_TEMPLATE,
     PROPERTY_SYSTEM_TEMPLATE,
+    _AgentRoundResult,
+    render_evm_property_prompt,
 )
 from composer.spec.system_analysis import (
     AnalysisPromptParams,
@@ -32,6 +33,7 @@ from composer.spec.system_analysis import (
     ANALYSIS_SYSTEM_TEMPLATE,
     validate_solidity_connectivity,
 )
+from composer.spec.service_host import Sort
 from composer.spec.system_model import (
     AnyApplication,
     BaseApplication,
@@ -39,8 +41,10 @@ from composer.spec.system_model import (
     ContractInstance,
     FeatureUnit,
     SourceApplication,
+    component_context,
 )
 from composer.spec.types import SourceIdentifier
+from composer.templates.loader import load_jinja_template
 from composer.spec.solana.model import (
     AuthorityInteraction,
     SolanaApplication,
@@ -59,11 +63,25 @@ ChainTag = Literal["evm", "solana", "soroban"]
 class PromptPair[SysParams: Mapping[str, Any], InitParams: Mapping[str, Any]]:
     """A (system prompt, initial prompt) typed-template pair for one agent — see
     :class:`~composer.spec.gen_types.TypedTemplate`. Two type parameters because a pair's system
-    and initial templates don't always share a kwargs shape (the property-inference system
-    prompt takes just ``sort``; its initial prompt also takes ``context``/``prior_properties``)."""
+    and initial templates don't always share a kwargs shape."""
 
     system: TypedTemplate[SysParams]
     initial: TypedTemplate[InitParams]
+
+
+@dataclass(frozen=True)
+class PropertyPrompts[Unit: FeatureUnit]:
+    """The property-inference agent's prompts — a :class:`PromptPair` whose initial half is a
+    renderer rather than a template.
+
+    The system prompt is a plain typed template: its params (``sort`` + ``backend_guidance``)
+    carry no unit, so one declaration serves every ecosystem. The initial prompt's params *do*
+    carry one, and the fuzzer cannot construct the ``FeatureUnit`` protocol — so each ecosystem
+    declares its own param dict naming its concrete unit and hands over a bound renderer. See
+    :data:`~composer.spec.prop_inference.InitialPromptRenderer`."""
+
+    system: TypedTemplate[PropertySystemPromptParams]
+    render_initial: InitialPromptRenderer[Unit]
 
 
 @dataclass(frozen=True)
@@ -100,7 +118,7 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     #: Prompts for the system-analysis agent.
     analysis_prompts: PromptPair[AnalysisPromptParams, AnalysisPromptParams]
     #: Prompts for the per-component property-inference agent.
-    property_prompts: PromptPair[PropertySystemPromptParams, PropertyInitialPromptParams]
+    property_prompts: PropertyPrompts[Unit]
     #: Connectivity/shape validation of the analyzed model (retry feedback on failure).
     validate_analysis: Callable[[App, SourceIdentifier | None], str | None]
     #: Locate the target unit (the "main contract"/program) in the analyzed model.
@@ -112,6 +130,13 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     #: backend-neutral grounds, and let a backend that wants coarser work aggregate in its
     #: ``Formalizer`` instead.
     units: Callable[[Main], list[Unit]]
+    #: The EVM view of a unit, for the pipeline plugins (``composer.pipeline.plugin_api``) —
+    #: whose hooks are typed on ``ContractComponentInstance``, so today they only have something
+    #: to say about EVM. EVM supplies the identity; an ecosystem with no EVM view supplies
+    #: ``None``, and ``run_pipeline`` skips its plugin phases (and leaves its unit cache keys
+    #: free of the plugin digest) rather than handing a hook a unit it cannot read. Widening the
+    #: plugin API to ``FeatureUnit`` is what retires this field.
+    plugin_unit: Callable[[Unit], ContractComponentInstance] | None
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
     #: Whether ``analysis_prompts``/``property_prompts`` have a ``sort == "greenfield"`` branch.
@@ -187,11 +212,13 @@ EVM: EvmEcosystem = Ecosystem(
     language=SOLIDITY,
     system_model=SourceApplication,
     analysis_prompts=PromptPair(ANALYSIS_SYSTEM_TEMPLATE, ANALYSIS_INITIAL_TEMPLATE),
-    property_prompts=PromptPair(PROPERTY_SYSTEM_TEMPLATE, PROPERTY_INITIAL_TEMPLATE),
+    property_prompts=PropertyPrompts(PROPERTY_SYSTEM_TEMPLATE, render_evm_property_prompt),
     validate_analysis=validate_solidity_connectivity,
     locate_main=main_instance,
     supports_greenfield=True,
     units=_evm_units,
+    # EVM's unit *is* what the plugin hooks are typed on, so the view is the identity.
+    plugin_unit=lambda u: u,
     analysis_extra_input=_evm_analysis_extra_input,
 )
 
@@ -393,6 +420,38 @@ def _solana_analysis_extra_input(source: SourceCode) -> list[str | dict]:
     ]
 
 
+@component_context
+class SolanaPropertyPromptParams(TypedDict):
+    """Kwargs for the Solana property-extraction agent's initial prompt template. The EVM peer is
+    ``EvmPropertyPromptParams``; they differ only in the concrete ``context`` type, which is the
+    whole reason each ecosystem declares its own (see :class:`PropertyPrompts`)."""
+    context: SolanaComponentInstance
+    sort: Sort
+    prior_properties: list[_AgentRoundResult]
+
+
+#: The Solana prompts. Bound to top-level names (rather than inlined into the prompt pairs below)
+#: because ``composer.meta.templates`` discovers templates by an AST scan for top-level
+#: ``NAME = TypedTemplate[...](...)`` assignments — an inlined declaration is invisible to it and
+#: so missing from ``template_manifest.json`` (see ``tests/test_template_manifest.py``).
+SOLANA_ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("solana/analysis_system.j2")
+SOLANA_ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("solana/analysis_prompt.j2")
+SOLANA_PROPERTY_SYSTEM_TEMPLATE = TypedTemplate[PropertySystemPromptParams]("solana/property_system.j2")
+SOLANA_PROPERTY_INITIAL_TEMPLATE = TypedTemplate[SolanaPropertyPromptParams]("solana/property_prompt.j2")
+
+
+def _render_solana_property_prompt(
+    context: SolanaComponentInstance,
+    sort: Sort,
+    prior_properties: list[_AgentRoundResult],
+) -> str:
+    return SOLANA_PROPERTY_INITIAL_TEMPLATE.bind({
+        "context": context,
+        "sort": sort,
+        "prior_properties": prior_properties,
+    }).render_to(load_jinja_template)
+
+
 # Per-component units, mirroring EVM: ``Main`` is the located program, ``Unit`` is one of its
 # ``ProgramComponent``s. Every Solana backend inherits this split — Crucible today, a CVLR backend
 # later — which is why it is chosen on backend-neutral grounds (docs/ecosystem-abstraction.md §4).
@@ -401,17 +460,17 @@ SOLANA: SolanaEcosystem = Ecosystem(
     language=RUST,
     system_model=SolanaApplication,
     analysis_prompts=PromptPair(
-        TypedTemplate[AnalysisPromptParams]("solana/analysis_system.j2"),
-        TypedTemplate[AnalysisPromptParams]("solana/analysis_prompt.j2"),
+        SOLANA_ANALYSIS_SYSTEM_TEMPLATE, SOLANA_ANALYSIS_INITIAL_TEMPLATE
     ),
-    property_prompts=PromptPair(
-        TypedTemplate[PropertySystemPromptParams]("solana/property_system.j2"),
-        TypedTemplate[PropertyInitialPromptParams]("solana/property_prompt.j2"),
+    property_prompts=PropertyPrompts(
+        SOLANA_PROPERTY_SYSTEM_TEMPLATE, _render_solana_property_prompt
     ),
     validate_analysis=_solana_validate,
     locate_main=_solana_locate_main,
     supports_greenfield=False,
     units=_solana_units,
+    # No EVM view of a Solana component, so the (EVM-typed) plugin hooks don't run here.
+    plugin_unit=None,
     analysis_extra_input=_solana_analysis_extra_input,
 )
 

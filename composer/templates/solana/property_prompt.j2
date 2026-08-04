@@ -51,10 +51,8 @@ When reasoning about attack vectors and the checks each account requires, consid
 
 {% include "solana/_vulnerability_patterns.j2" %}
 
-{{ backend_guidance }}
-
 NB: you do **NOT** need to formalize the properties yourself; limit your analysis to properties that
-can reasonably be formalized by the downstream verification tool.
+can reasonably be formalized by the downstream verification tool, as described in your system prompt.
 
 ## Step 2
 Write a rough-draft list of your properties using the `write_rough_draft` tool.

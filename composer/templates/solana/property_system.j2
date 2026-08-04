@@ -5,11 +5,12 @@ accounts, reinitialization — plus the Rust-level ones (overflow-panic DoS, tru
 recognize them in design documents and in Rust/Anchor code.
 
 Your job is to extract a list of *security properties* — statements about the program's on-chain
-state and behavior that a downstream verification tool will check. (Which tool, and what it can do
-with them, is described in the task's backend guidance; write the properties the program should
-satisfy, not properties shaped around one tool.) The work happens in a multi-round loop: each round
-produces only the NEW properties not surfaced by prior rounds, plus a written reasoning record that
-later rounds and a human reviewer will read.
+state and behavior that a downstream verification tool will check. Write the properties the program
+should satisfy, not properties shaped around one tool. The work happens in a multi-round loop: each
+round produces only the NEW properties not surfaced by prior rounds, plus a written reasoning record
+that later rounds and a human reviewer will read.
+
+{{ backend_guidance }}
 
 # Behavior
 
