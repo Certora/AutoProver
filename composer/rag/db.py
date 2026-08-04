@@ -50,9 +50,10 @@ DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG
 SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 
-# Logical knowledge-base tag -> default DB connection, for corpora imported from a committed
-# manifest. The tag is the one the manifest carries (== a wheel's `rag_db_default`), so the import
-# target and the runtime search tools resolve by one name — see `composer.tools.rag_env`, which
+# Logical knowledge-base tag -> default DB connection, for corpora ingested by the generic importer
+# (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's
+# `rag_db_default`), so the import target and the runtime search tools resolve by one name — see
+# `composer.tools.rag_env`, which
 # requires both halves before a tag is usable. Empty until the first such corpus lands with the
 # application that declares it; the CVL/Foundry builders keep using their constants above.
 KNOWLEDGE_BASES: dict[str, str] = {}

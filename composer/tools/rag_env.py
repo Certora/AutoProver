@@ -8,8 +8,8 @@ application.
 Like the ecosystem registry, this maps a declarative tag → a concrete toolset; it is not an
 application fork (the tool classes live in ``composer/tools/<corpus>_rag.py``, shared, exactly as
 ``foundry_rag`` is). The tag's *connection* is not repeated here: it comes from
-``composer.rag.db.KNOWLEDGE_BASES``, the same map the corpus importer targets, so a corpus is
-imported and searched under one name.
+``composer.rag.db.KNOWLEDGE_BASES``, the same map the corpus importer
+(:mod:`composer.scripts.rag_import`) targets, so a corpus is imported and searched under one name.
 
 **No corpus is registered yet.** Both halves of the first one — a ``composer/tools/<corpus>_rag.py``
 and its ``KNOWLEDGE_BASES`` connection — land with the application that declares it, so until then
