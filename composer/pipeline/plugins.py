@@ -106,7 +106,7 @@ def _declared_loaders() -> Iterable[tuple[str, PipelinePluginLoader[Any]]]:
         yield ep.name, loader()
 
 
-def applicable_plugin_manifest(unit_type: type) -> list[str]:
+def applicable_plugin_manifest[U: FeatureUnit](unit_type: type[U]) -> list[str]:
     """Sorted names of the installed plugins that apply to a run over ``unit_type`` — the manifest
     ``load_plugins`` will end up initializing, computable without initializing anything.
 
