@@ -108,12 +108,7 @@ class StagedFormalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     then told to work within — harmless at one unit, silently wrong at several. ``begin`` sits
     between the two, where extraction is done and no unit has been formalized.
 
-    A separate type rather than a hook on ``Formalizer`` so the types carry the ordering instead of
-    the driver's call sequence: ``begin`` *returns* the formalizer, so the shared artifact arrives as
-    a constructor argument and there is no window in which a formalizer exists without it — the same
-    property the rest of the phase chain has.
-
-    Most backends need none of this and return a ``Formalizer`` directly; the prover's shared peer
+    Some backends need none of this and return a ``Formalizer`` directly; the prover's shared peer
     (``invariants.spec``) is staged in ``prepare_formalization``."""
 
     @abstractmethod
