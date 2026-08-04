@@ -42,7 +42,7 @@ from composer.spec.solana.build import build_program
 from composer.spec.source.source_env import build_basic_source_tools, build_source_tools
 from composer.spec.system_model import SolidityIdentifier
 from composer.ui.tool_display import async_tool_context
-from composer.workflow.services import llm_factory, standard_connections
+from composer.workflow.services import standard_connections
 
 from tests.conftest import MockSentenceTransformer, needs_postgres
 from tests.conftest import _MEMORIES_DDL, _RAG_DB, _VECTOR_DBS, _db_url

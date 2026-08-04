@@ -17,6 +17,7 @@ import types
 
 import pytest
 
+from composer.pipeline.plugins import PluginManager
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
@@ -190,14 +191,22 @@ async def test_each_component_gets_its_own_extraction_batch(monkeypatch):
     monkeypatch.setattr(core, "run_property_inference", fake_rpi)
 
     eco = types.SimpleNamespace(
-        property_prompts=types.SimpleNamespace(system="s.j2", initial="i.j2"),
+        # ``render_initial`` is the ecosystem's bound initial-prompt renderer; the patched
+        # ``run_property_inference`` above never calls it, so it only has to exist.
+        property_prompts=types.SimpleNamespace(
+            system="s.j2", render_initial=lambda **_kw: "i"
+        ),
         units=lambda main: [_FakeUnit("Deposits", 0), _FakeUnit("Admin", 1)],
     )
 
+    run = _Run()
     batches = await core._extract_all(
         prop_key="test-properties",
-        main=object(), backend_guidance="", run=_Run(), phase=None,
+        main=object(), backend_guidance="", run=run, phase=None,
         interactive=False, threat_model=None, max_rounds=1, ecosystem=eco,
+        # The granularity claim is about the *unit* axis, so this drives the phase with no
+        # plugins in the way — the hooks a plugin adds are covered by test_plugin_scope.py.
+        plugins=PluginManager.without_plugins(run).bind_phase(None, "Property Extraction"),
     )
 
     assert [b.feat.display_name for b in batches] == ["Deposits", "Admin"]

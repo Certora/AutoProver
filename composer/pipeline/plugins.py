@@ -133,6 +133,14 @@ class PluginManager[P: enum.Enum, U: FeatureUnit]:
     _plugins: dict[str, PipelinePlugin[U]]
     _run: PipelineRun[P, Any]
 
+    @classmethod
+    def without_plugins(cls, run: PipelineRun[P, Any]) -> "PluginManager[P, U]":
+        """A manager over no plugins — what :func:`load_plugins` yields when nothing installed
+        applies to this run's unit type. Named so a caller that wants the plugin-free pipeline
+        (a test driving a phase helper directly) can say so, rather than depending on the
+        ambient entry points happening to be empty."""
+        return cls({}, run)
+
     @cached_property
     def plugin_digest(self) -> None | str:
         return manifest_digest(self.plugin_manifest)
