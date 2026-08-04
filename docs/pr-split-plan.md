@@ -72,13 +72,15 @@ The generic wheel host, built on the command-sandbox seam **already upstream**
   `composer/templates/rust/*`, the driver's `preflight` phase
   (`composer/pipeline/{core,ptypes}.py`), the shared cargo/Solana build capabilities
   (`composer/spec/cargo.py`, `composer/spec/solana/build.py`), the descriptor-driven RAG
-  seam `composer/tools/rag_env.py` (the corpus modules themselves are PR 3), and the
+  seam `composer/tools/rag_env.py` + the generic JSON-manifest RAG mechanism
+  (`composer/rag/import_format.py`, `composer/scripts/rag_import.py`, `tests/test_rag_import.py`
+  — corpus-free; the corpus modules and registry entries are PR 3), and the
   `rust_build_policy` grants those need (`composer/sandbox/recipes.py`)
 - **Consumes (upstream, not in this PR):** `composer/sandbox/{policy,command,config}.py`
   — the seam + `none` provider from #73. `rustapp` reads `SandboxConfig.backend_spec`,
   whose master shape is `{argv_prefix, timeout_s}` (async; `config.BackendSpec`), and
   the SDK just prepends `argv_prefix` (see `docs/rust-backend-api.md`).
-- **Docs:** `rust-applications.md`, `rust-formalization-backends.md`
+- **Docs:** `rust-applications.md`, `rust-formalization-backends.md`, `rag-import-format.md`
 - **Gate:** `test_rustapp` (echoprover decider round-trip; sandbox is a passthrough here)
 - **Depends on:** PR 1 (+ the sandbox seam on `master`)
 
@@ -89,9 +91,10 @@ The generic wheel host, built on the command-sandbox seam **already upstream**
 The Solana verification application, wiring PRs 1–2 and the upstream sandbox together.
 
 - **Code:** `composer/crucible/*`, `rust/crucible-app`, `test_scenarios/solana_vault`,
-  crucible RAG (committed manifest `rust/crucible-app/crucible_kb.rag.json` + shared
-  `composer/scripts/rag_import.py` + `composer/rag/import_format.py`, `composer/tools/crucible_rag.py`,
-  `composer/rag/db.py`), `ReportBackend` "crucible" + render labels + `as_report_backend`,
+  crucible RAG — the committed manifest `rust/crucible-app/crucible_kb.rag.json`,
+  `composer/tools/crucible_rag.py`, and the two registry entries (`composer/rag/db.py`,
+  `composer/tools/rag_env.py`); the importer that reads the manifest is PR 2's —
+  `ReportBackend` "crucible" + render labels + `as_report_backend`,
   **sandbox default → `launcher` for crucible** (fail-closed; the launcher itself is
   upstream). Also carries the one remaining crucible-specific tweak to the upstream
   sandbox: `scripts/docker-compose.sandbox.yml` (un-gated `run-confined-build` for the
@@ -131,7 +134,8 @@ the earlier PR, final form in the owning PR**:
 | `composer/rustapp/adapter.py` | PR 2: casts the backend tag (`cast(ReportBackend, tag)`) | PR 3: swap to `as_report_backend` |
 | `pyproject.toml` + `uv.lock` | PR 2: `apps` group + `[tool.uv.sources]` omit `crucible_app` (its crate lands in PR 3), so `uv sync`/`uv run` resolve | PR 3: re-add `crucible_app` |
 | `composer/sandbox/recipes.py` | PR 2: **the whole `rust_build_policy` delta** — `sandbox_rustup_home`, the `PATH` `cargo-build-sbf` install tree, `~/.gitconfig`, the pinned registry protocol | — |
-| `composer/tools/rag_env.py` + `composer/rag/db.py` | PR 2: the tag→toolset seam that `rustapp/entry.py` imports; an absent corpus module degrades to no RAG (its documented contract) | PR 3: `composer/tools/crucible_rag.py`, the corpus itself |
+| `composer/tools/rag_env.py` + `composer/rag/db.py` | PR 2: the tag→toolset seam that `rustapp/entry.py` imports, with **both registries empty** — an unregistered tag raises at descriptor load, which is the resting state, not a gap | PR 3: `composer/tools/crucible_rag.py` + the `crucible_kb` entry in each registry, together |
+| `docs/rag-import-format.md` | PR 2: the mechanism (format, importer, registry), described corpus-free | PR 3: §7's "first adopter: Crucible" — the committed manifest, the container wiring, regeneration |
 
 **Discovered during execution** (the split is more entangled than first sketched): `rustapp`
 references the `"crucible"` report backend, its `outcome_label` wording, and `Verdict.message`,
@@ -146,8 +150,12 @@ delta, and it belongs wholly to PR 2, so no sandbox file needs intermediate/fina
 so `eric/rust`'s framework files went stale against `eric/crucible-app`'s copies of the same
 files. They were reconciled by lifting the framework half back down to `eric/rust` and
 rebasing `eric/crucible-app` on the result — which is what moved `recipes.py`, the `preflight`
-phase, `spec/cargo.py`, `spec/solana/build.py`, and the RAG seam into the PR 2 rows above.
-`eric/crucible-app` now differs from `eric/rust` in crucible-owned files only.
+phase, `spec/cargo.py`, `spec/solana/build.py`, and the RAG seam into the PR 2 rows above. The
+generic RAG *importer* moved down the same way afterwards: `import_format.py` and `rag_import.py`
+are corpus-agnostic by construction (the former has no RAG-stack imports at all), so they belong
+with the `rag_env` seam in PR 2, leaving PR 3 with the manifest, the tools module and the two
+registry entries. `eric/crucible-app` now differs from `eric/rust` in crucible-owned files only,
+plus the one doc row above.
 
 ## Invariant held during execution
 
