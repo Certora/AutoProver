@@ -259,7 +259,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     # Tools available in greenfield: memory, write_rough_draft,
     # read_rough_draft, result. ``env.analysis_tools`` is empty in
     # greenfield, so no source/rag tools here.
-    # Validator: ``_validate_connectivity`` — checks unique names and
+    # Validator: ``validate_solidity_connectivity`` — checks unique names and
     # resolved component references. No did_read gate.
 
     # P1.1 — exercise the `memory` tool once. The memory backend constrains
@@ -272,7 +272,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
 
     # P1.2 — emit the Application via the result tool. One ExplicitContract
     # (Counter) with one ContractComponent (Increment). No external actors,
-    # no interactions — this keeps ``_validate_connectivity`` happy and the
+    # no interactions — this keeps ``validate_solidity_connectivity`` happy and the
     # per-component phases will each run exactly once.
     #
     # NOTE: ExplicitContract requires both ``name`` (ContractName) and

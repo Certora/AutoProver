@@ -220,7 +220,7 @@ rule incrementOther_credits_target_when_distinct {
 #
 # Shape must satisfy pydantic validation of
 # ``composer.spec.system_model.SourceApplication`` AND the
-# ``_validate_connectivity`` validator: unique names + all referenced
+# ``validate_solidity_connectivity`` validator: unique names + all referenced
 # components / external actors exist. One SourceExplicitContract ("Counter")
 # with one ContractComponent ("Increment"), no interactions, no external
 # actors — minimal valid shape.
@@ -399,7 +399,7 @@ _SYSTEM_ANALYSIS_TAPE: list[BaseMessage] = [
     # Tools available: memory, write_rough_draft, read_rough_draft,
     #   source_tools = list_files, get_file, grep_files, code_explorer,
     #                  code_document_ref.
-    # Validator: _validate_connectivity (graph wellformedness only; no
+    # Validator: validate_solidity_connectivity (graph wellformedness only; no
     #   did_read requirement — we can hit `result` at any time once the
     #   application shape is correct).
 
@@ -482,7 +482,7 @@ _SYSTEM_ANALYSIS_TAPE: list[BaseMessage] = [
         _tc("read_rough_draft"),
     ),
 
-    # P1.5 — emit the SourceApplication. Satisfies _validate_connectivity
+    # P1.5 — emit the SourceApplication. Satisfies validate_solidity_connectivity
     # (unique names, no dangling interaction references since there are no
     # interactions).
     _ai(

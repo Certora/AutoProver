@@ -20,9 +20,13 @@ from composer.pipeline.ptypes import (
     CorePipelineResult
 )
 from composer.spec.artifacts import ArtifactIdentifier
+from composer.spec.system_model import FeatureUnit, BaseApplication
 from composer.spec.service_host import ModelProvider
-from composer.spec.system_analysis import SolidityIdentifier
+from composer.spec.types import SourceIdentifier
+from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
+from .plugins import applicable_plugin_manifest
+from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.llm.registry import get_provider_for
@@ -37,7 +41,7 @@ from composer.spec.source.design_doc_finder import (
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 import hashlib
 
 
@@ -113,10 +117,11 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A]
+        backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+        ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
 
@@ -166,8 +171,8 @@ async def cli_pipeline[P: enum.Enum, H](
 
     init_source = SourceFields(
         relative_path=relative_path,
-        contract_name=SolidityIdentifier(contract_name),
-        forbidden_read=FS_FORBIDDEN_READ,
+        contract_name=SourceIdentifier(contract_name),
+        forbidden_read=fs_forbidden_read,
         project_root=str(project_root)
     )
 
@@ -236,11 +241,6 @@ async def cli_pipeline[P: enum.Enum, H](
                 await conns.uploader.get_document(pathlib.Path(threat_path))
                 if (threat_path := args.threat_model) is not None else None
             )
-            await data_logger("cache_root", {
-                "cache_root": list(cache_root) if cache_root is not None else None,
-                "contract_name": str(contract_name),
-                "memory_ns": memory_ns,
-            })
             full_source = SourceCode(
                 content=system_doc_doc,
                 contract_name=init_source.contract_name,
@@ -249,10 +249,19 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A]
+                backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+                ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
+                await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
+                    cache_root=list(cache_root) if cache_root is not None else None,
+                    contract_name=str(contract_name),
+                    memory_ns=memory_ns,
+                    plugins=applicable_plugin_manifest(ecosystem.unit_type),
+                    threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
+                    interactive=args.interactive,
+                ).model_dump())
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
                     thread_id=thread_id,
@@ -273,9 +282,9 @@ async def cli_pipeline[P: enum.Enum, H](
                     run=run,
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
-                    threat_model=threat_model
+                    threat_model=threat_model,
+                    ecosystem=ecosystem,
                 )
-                ...
 
             yield (StagedPipeline(
                 conns=conns, llm_models=models, logger=data_logger,

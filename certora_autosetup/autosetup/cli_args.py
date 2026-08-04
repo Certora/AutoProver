@@ -112,7 +112,7 @@ Default Behavior: By default, all configurations must be successfully submitted.
 
     parser.add_argument(
         '--build-system',
-        choices=['auto', 'foundry', 'hardhat'],
+        choices=['auto', 'foundry', 'hardhat', 'truffle'],
         default='auto',
         help='Specify build system to use (default: auto - detect from project structure)'
     )

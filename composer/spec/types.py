@@ -1,25 +1,36 @@
 from typing import TYPE_CHECKING, Protocol, Literal
 
-# Nominal ``str`` subtypes for the two distinct contract-identity fields.
-# Both phantom-typed (TYPE_CHECKING-only subclass; ``str`` at runtime) so they
-# remain distinct at static-check time but pydantic ``Field`` validates them
-# as plain strings.
+# Nominal ``str`` subtypes for the distinct identity fields of an analyzed
+# system. All phantom-typed (TYPE_CHECKING-only subclasses; ``str`` at runtime)
+# so they remain distinct at static-check time but pydantic ``Field`` validates
+# them as plain strings.
 #
-# ``SolidityIdentifier``: a Solidity contract identifier (regex-validated where
-# stored on a pydantic field).
-# ``ContractName``: the conceptual / design-doc-readable name of a contract.
-# May be a Solidity identifier when the design doc names contracts that way,
-# but allowed to be anything human-readable.
+# ``SourceIdentifier``: the identifier an entity is defined under in source —
+# EVM's contract identifier, Solana's program identifier. What the
+# ecosystem-agnostic seam speaks.
+# ``SolidityIdentifier`` / ``RustIdentifier``: a ``SourceIdentifier`` in a
+# specific source language (regex-validated where stored on a pydantic field).
+# ``ContractName`` / ``ProgramName``: the conceptual / design-doc-readable name
+# of an EVM contract or a Solana program. May coincide with the source
+# identifier when the design doc names the entity that way, but allowed to be
+# anything human-readable.
 #
-# The two are **siblings under str**, not in a subtype relation with each
-# other — passing a ``SolidityIdentifier`` where ``ContractName`` is expected
-# (or vice-versa) is a type error, even though both are ``str`` at runtime.
+# ``SolidityIdentifier`` and ``RustIdentifier`` are **siblings** under
+# ``SourceIdentifier``; the conceptual names are siblings of each other and of
+# ``SourceIdentifier``. Passing one where a sibling is expected is a type error,
+# even though all are ``str`` at runtime.
 if TYPE_CHECKING:
-    class SolidityIdentifier(str): ...
+    class SourceIdentifier(str): ...
+    class SolidityIdentifier(SourceIdentifier): ...
+    class RustIdentifier(SourceIdentifier): ...
     class ContractName(str): ...
+    class ProgramName(str): ...
 else:
+    SourceIdentifier = str
     SolidityIdentifier = str
+    RustIdentifier = str
     ContractName = str
+    ProgramName = str
 
 type UnitName = str
 
@@ -56,10 +67,24 @@ type PropertyType = Literal["attack_vector", "safety_property", "invariant"]
 invariant. Shared so every layer (inference, report, grouping) addresses the
 same vocabulary instead of redeclaring the literal."""
 
-class PropertyFormulation(BaseModel):
+class UntitledPropertyFormulation(BaseModel):
+    sort: PropertyType = Field(description="The type of property you are describing.")
+    description: str = Field(description="The description of the property")
+
+    @property
+    def sort_description(self) -> str:
+        match self.sort:
+            case "attack_vector":
+                return "Attack Vector"
+            case "invariant":
+                return "Invariant"
+            case "safety_property":
+                return "Safety Property"
+
+class PropertyFormulation(UntitledPropertyFormulation):
     """
     A property or invariant that must hold for the component
     """
     title: str = Field(description="A short, descriptive snake_case identifier for the property (e.g. 'total_supply_preserved'). Must be unique within the batch of properties.")
-    sort: PropertyType = Field(description="The type of property you are describing.")
-    description: str = Field(description="The description of the property")
+    
+

@@ -15,7 +15,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@932cf73faad68266f5dd8b4d6943e82d2b3130ae",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@c8b3ae5615c648d47978006ae9d70ac4e6a2add4",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -136,6 +136,7 @@ tui-foundry = "composer.cli.tui_foundry:main"
 autoprove-report-render = "composer.spec.source.report.render:main"
 tui-natspec = "composer.cli.tui_pipeline:main"
 cache-natspec = "composer.cli.cache_natspec:main"
+cache-autoprove = "composer.cli.cache_autoprove:main"
 console-codegen = "composer.cli.console_codegen:main"
 tui-codegen = "composer.cli.tui_codegen:main"
 # certora_autosetup entry points
@@ -173,6 +174,9 @@ certora_autosetup = [
     "**/*.template.sol",
     "**/*.j2",
     "**/*.json",
+    # Node.js config extractors (hardhat/truffle) run as scripts out of the installed
+    # package, so the wheel has to carry them.
+    "**/*.js",
 ]
 
 

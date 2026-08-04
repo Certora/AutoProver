@@ -416,14 +416,15 @@ class ConfigManager:
         contracts_added: List[ContractHandle],
     ) -> bool:
         """
-        Update compiler_map, solc_via_ir_map, and solc_optimize_map when new
-        contracts are added.
+        Update compiler_map, solc_via_ir_map, solc_optimize_map, and
+        solc_evm_version_map when new contracts are added.
 
         Delegates to CompilationWorkaroundManager which handles:
         - Parsing pragma from source files
         - Creating/updating compiler_map entries
         - Creating/updating solc_via_ir_map entries
         - Creating/updating solc_optimize_map entries
+        - Creating/updating solc_evm_version_map entries
 
         Args:
             conf_object: The config dict to modify in-place
@@ -441,6 +442,7 @@ class ConfigManager:
             modified |= self.update_compiler_map_for_contract(conf_object, contract, ref_maps)
             modified |= self.update_via_ir_map_for_contract(conf_object, contract, ref_maps)
             modified |= self.update_optimize_map_for_contract(conf_object, contract, ref_maps)
+            modified |= self.update_evm_version_map_for_contract(conf_object, contract, ref_maps)
 
         return modified
 
@@ -1035,6 +1037,35 @@ class ConfigManager:
         self.log(f"Added {contract_name} to solc_optimize_map (value={optimize_value})")
         return True
 
+    def update_evm_version_map_for_contract(
+        self,
+        conf_object: Dict[str, Any],
+        contract: ContractHandle,
+        reference_maps: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Add a solc_evm_version_map entry for a newly-added contract. Mirrors
+        `update_optimize_map_for_contract` for the EVM-version map. Only the map
+        form is extended; a scalar `solc_evm_version` already applies to every
+        file. Unlike the optimize map there is no fixed default value: fall back
+        to the reference scalar, then to the map's most common value."""
+        contract_name = contract.contract_name
+        if "solc_evm_version_map" not in conf_object:
+            return False
+        evm_map = conf_object["solc_evm_version_map"]
+        if contract_name in evm_map:
+            return False
+        reference_maps = reference_maps or {}
+        evm_value = (
+            reference_maps.get("solc_evm_version_map", {}).get(contract_name)
+            or reference_maps.get("solc_evm_version")
+            or (Counter(evm_map.values()).most_common(1)[0][0] if evm_map else None)
+        )
+        if evm_value is None:
+            return False
+        evm_map[contract_name] = evm_value
+        self.log(f"Added {contract_name} to solc_evm_version_map (value={evm_value})")
+        return True
+
     def sync_compiler_maps_with_files(
         self,
         conf_object: Dict[str, Any],
@@ -1120,6 +1151,27 @@ class ConfigManager:
                     f" to {len(conf_object['solc_evm_version_map'])} entries"
                 )
                 modified = True
+            # Extend: the prover requires the map to cover every file, and a map
+            # entry cannot say "use this solc's default" — fill contracts newly
+            # injected into files (mocks/harnesses) with the declared scalar from
+            # the reference conf, else the map's most common value.
+            evm_map = conf_object["solc_evm_version_map"]
+            if evm_map:
+                fill = (
+                    self.reference_compiler_maps.get("solc_evm_version")
+                    or Counter(evm_map.values()).most_common(1)[0][0]
+                )
+                added = 0
+                for handle in contracts_in_files:
+                    if not any(handle.matches_map_key(key) for key in evm_map):
+                        evm_map[handle.contract_name] = fill
+                        added += 1
+                if added > 0:
+                    self.log(
+                        f"Filled {added} missing solc_evm_version_map entry/entries "
+                        f"with '{fill}' so files and the map stay consistent"
+                    )
+                    modified = True
 
         if "solc_optimize_map" in conf_object:
             original_len = len(conf_object["solc_optimize_map"])
