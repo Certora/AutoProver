@@ -53,6 +53,7 @@ from composer.pipeline.core import (
     Delivered,
     Formalizer,
     GaveUp,
+    PipelineBackend,
     PipelineRun,
     PreparedSystem,
     StagedFormalizer,
@@ -1093,10 +1094,15 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
 
 
 @dataclass
-class RustBackend:
-    """A :class:`PipelineBackend` backed by a Rust wheel. Structurally satisfies the protocol —
-    the driver never imports it. Ecosystem-agnostic: it locates the main and marshals units
-    through the resolved ``ecosystem`` + the ``FeatureUnit`` protocol.
+class RustBackend(
+    PipelineBackend[
+        enum.Enum, RustFormalResult, Any, RustArtifact, FeatureUnit, Any, BaseApplication,
+        RustPreflight,
+    ]
+):
+    """A :class:`PipelineBackend` backed by a Rust wheel. Ecosystem-agnostic: it locates the main
+    and marshals units through the resolved ``ecosystem`` + the ``FeatureUnit`` protocol, so its
+    unit / main / app axes stay open (``Any``) where a single-ecosystem backend would pin them.
 
     Subclass (or replace via ``backend_cls``) when the app needs non-generic prep — e.g.
     Crucible's shared fixture + harness crate."""
@@ -1108,8 +1114,9 @@ class RustBackend:
     #: prepared system and the formalizer need to tag their own tasks with a declared phase; reach
     #: it through :meth:`task_info` rather than indexing it.
     phase: type[enum.Enum]
-    core_phases: CorePhases
-    artifact_store: ArtifactStore[Any, RustFormalResult]
+    #: The four core slots of :attr:`phase`, as the driver's own mapping.
+    phase_map: CorePhases
+    store: ArtifactStore[Any, RustFormalResult]
     ecosystem: Ecosystem[Any, Any, Any]
     # Wall-clock ceiling for a single compile/validate (a first build can be minutes).
     command_timeout_s: int = DEFAULT_TIMEOUT_S
@@ -1120,12 +1127,24 @@ class RustBackend:
     declared_args: dict[str, Any] = field(default_factory=dict)
 
     @property
+    @override
     def backend_guidance(self) -> str:
         return self.descriptor.backend_guidance
 
     @property
+    @override
     def analysis_spec(self) -> SystemAnalysisSpec:
         return SystemAnalysisSpec(self.descriptor.analysis_key, "rust-properties")
+
+    @property
+    @override
+    def core_phases(self) -> CorePhases:
+        return self.phase_map
+
+    @property
+    @override
+    def artifact_store(self) -> ArtifactStore[Any, RustFormalResult]:
+        return self.store
 
     def task_info(self, spec: StepSpec) -> TaskInfo[enum.Enum]:
         """The task a declared step runs as: its own id, the wheel's label, and the phase *member*
@@ -1136,6 +1155,7 @@ class RustBackend:
         emits identical to the one the frontend's labels are keyed by."""
         return TaskInfo(f"{self.descriptor.name}-{spec.step}", spec.label, self.phase[spec.phase_key])
 
+    @override
     async def preflight(self, run: PipelineRun) -> RustPreflight:
         """Prepare the wheel's workspace and gate it — everything buildable before the program has
         been analyzed, run concurrently with system analysis (``docs/rust-backend-api.md`` §3.1).
@@ -1199,6 +1219,7 @@ class RustBackend:
             return await self.sandbox.backend_spec(workdir, timeout_s=self.command_timeout_s)
         return {"argv_prefix": [], "timeout_s": self.command_timeout_s}
 
+    @override
     async def prepare_system(
         self, analyzed: BaseApplication, run: PipelineRun, preflight: RustPreflight
     ) -> PreparedSystem[RustFormalResult, FeatureUnit, Any]:
@@ -1206,6 +1227,7 @@ class RustBackend:
             self.ecosystem.locate_main(analyzed, run.source), self, preflight, analyzed
         )
 
+    @override
     def to_artifact_id(self, c: FeatureUnit) -> RustArtifact:
         return RustArtifact(
             c.slug,

@@ -24,8 +24,8 @@ The pipeline has two kinds of work:
 
 The **formalization abstraction** is the seam between the two. It lets the driver in
 [composer/pipeline/core.py](../composer/pipeline/core.py) own all the shared work while
-delegating every backend-specific decision through a small, typed protocol. The CVL and
-Foundry backends are two implementations of that protocol; the driver never imports
+delegating every backend-specific decision through a small, typed contract. The CVL and
+Foundry backends are two implementations of that contract; the driver never imports
 either.
 
 ### Design goals
@@ -102,7 +102,7 @@ phase ([rust-backend-api.md §3.1](./rust-backend-api.md)).
 
 ## 3. The contract
 
-Three protocols + two abstract bases define the entire seam. All live in
+Two protocols + three abstract bases define the entire seam. All live in
 [composer/pipeline/core.py](../composer/pipeline/core.py) and
 [composer/spec/types.py](../composer/spec/types.py).
 
@@ -193,16 +193,35 @@ The prover implementation lives in
 
 ```python
 @dataclass
-class ProverBackend:   # PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec]
-    backend_guidance = CERTORA_BACKEND_GUIDANCE
-    core_phases = CorePhases({"analysis": ..., "extraction": ..., "formalization": AutoProvePhase.CVL_GEN})
-    analysis_spec = SystemAnalysisSpec("source-analysis")
-    artifact_store: ProverArtifactStore
+class ProverBackend(PipelineBackend[
+    AutoProvePhase, GeneratedCVL, None, SpecIdentity, ContractComponentInstance,
+    ContractInstance, SourceApplication, None,
+]):
+    _store: ProverArtifactStore
     _prover_opts: ProverOptions
+
+    @property
+    @override
+    def backend_guidance(self) -> str: return CERTORA_BACKEND_GUIDANCE
+
+    @property
+    @override
+    def core_phases(self) -> CorePhases[AutoProvePhase]:
+        return CorePhases({"analysis": ..., "extraction": ..., "formalization": AutoProvePhase.CVL_GEN})
+
+    @property
+    @override
+    def artifact_store(self) -> ProverArtifactStore: return self._store
 ```
 
-So `FormT = GeneratedCVL`, the artifact id type `A = ComponentSpec`, and the phase enum is
-`AutoProvePhase`.
+So `FormT = GeneratedCVL`, the artifact id type `A = SpecIdentity`, and the phase enum is
+`AutoProvePhase` — written down in the `class` line, and checked there.
+
+The four non-method members are **read-only properties** on the base, which is what lets this
+backend narrow one: the driver only needs `ArtifactStore[SpecIdentity, GeneratedCVL]`, while
+`ProverPrepared` needs the `ProverArtifactStore` this returns (for `write_component_runs`). A
+mutable attribute would be invariant, so overriding it with a narrower field would not typecheck; a
+backend that has nothing to narrow just returns a constant.
 
 ### 4.1 `prepare_system` — harness lift
 
@@ -212,7 +231,7 @@ async def prepare_system(self, analyzed: SourceApplication, run) -> PreparedSyst
     harnessed = _lift_harnessed(analyzed, sys_desc)             # SourceApplication → HarnessedApplication
     prover_tool = get_prover_tool(run.env.llm_heavy(), run.source.contract_name,
                                   run.source.project_root, prover_opts=self._prover_opts)
-    return ProverPrepared(main_instance(harnessed, run.source), self.artifact_store,
+    return ProverPrepared(main_instance(harnessed, run.source), self._store,
                           sys_desc, harnessed, prover_tool, self._prover_opts, analyzed)
 ```
 
@@ -521,7 +540,7 @@ fails loud.
 
 ## 9. Extending: what a new backend must provide
 
-To add a backend you implement the protocol and the three phase objects — nothing in the
+To add a backend you subclass `PipelineBackend` and implement the three phase objects — nothing in the
 driver changes. The Foundry backend
 ([composer/foundry/pipeline.py](../composer/foundry/pipeline.py)) is the proof: it reuses
 system analysis, property extraction, caching, and the report, and contributes only:
@@ -543,8 +562,9 @@ A backend author's checklist:
 1. Define a result type satisfying `FormalResult` + `ReportableResult` (`artifact_text`,
    `commentary`, `property_units()`, `skipped`, `output_link`).
 2. Subclass `ArtifactStore` for the on-disk bundle; define an `ArtifactIdentifier` sum type.
-3. Implement `PipelineBackend` (`preflight`, `prepare_system`, `to_artifact_id`,
-   `backend_guidance`, `core_phases`, `analysis_spec`, `artifact_store`). `preflight` returns `None`
+3. Subclass `PipelineBackend`, naming its eight type arguments, and implement `preflight`,
+   `prepare_system`, `to_artifact_id`, `backend_guidance`, `core_phases`, `analysis_spec`,
+   `artifact_store`. `preflight` returns `None`
    unless the backend has pre-work that needs nothing from the run — if it must *build* something,
    that is where the build belongs, so it overlaps system analysis and can fail the run before the
    model has been spent (Crucible: [rust-backend-api.md §3.1](./rust-backend-api.md)).

@@ -1,6 +1,6 @@
 """A null Solana backend — records extracted properties without verifying them.
 
-It satisfies the full ``PipelineBackend`` contract over the Solana ecosystem's
+It implements the full ``PipelineBackend`` contract over the Solana ecosystem's
 ``(SolanaApplication, SolanaProgramInstance, SolanaComponentInstance)`` triple, but its
 ``formalize`` just echoes the extracted properties into a trivial result and its
 ``fetch_verdicts`` returns nothing.
@@ -23,6 +23,7 @@ from composer.pipeline.core import (
     CorePhases,
     Formalizer,
     GaveUp,
+    PipelineBackend,
     PipelineRun,
     PreparedSystem,
     SystemAnalysisSpec,
@@ -145,26 +146,47 @@ class NullSolanaPrepared(PreparedSystem[NullResult, SolanaComponentInstance, Sol
 
 
 @dataclass
-class NullSolanaBackend:
-    """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, SolanaComponentInstance,
-    SolanaProgramInstance, SolanaApplication]`` (P, FormT, H, A, Unit, Main, App) — structural."""
+class NullSolanaBackend(
+    PipelineBackend[
+        SolanaPhase, NullResult, None, NullArtifact, SolanaComponentInstance,
+        SolanaProgramInstance, SolanaApplication, None,
+    ]
+):
+    _store: NullSolanaArtifactStore
 
-    artifact_store: NullSolanaArtifactStore
-    backend_guidance = SOLANA_NULL_GUIDANCE
-    analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
-    core_phases = CorePhases(
-        {
-            "analysis": SolanaPhase.ANALYSIS,
-            "extraction": SolanaPhase.EXTRACTION,
-            "formalization": SolanaPhase.FORMALIZATION,
-            "report": SolanaPhase.REPORT,
-        }
-    )
+    @property
+    @override
+    def artifact_store(self) -> NullSolanaArtifactStore:
+        return self._store
 
+    @property
+    @override
+    def backend_guidance(self) -> str:
+        return SOLANA_NULL_GUIDANCE
+
+    @property
+    @override
+    def analysis_spec(self) -> SystemAnalysisSpec:
+        return SystemAnalysisSpec("solana-analysis", "solana-properties")
+
+    @property
+    @override
+    def core_phases(self) -> CorePhases[SolanaPhase]:
+        return CorePhases(
+            {
+                "analysis": SolanaPhase.ANALYSIS,
+                "extraction": SolanaPhase.EXTRACTION,
+                "formalization": SolanaPhase.FORMALIZATION,
+                "report": SolanaPhase.REPORT,
+            }
+        )
+
+    @override
     async def preflight(self, run: PipelineRun[SolanaPhase, None]) -> None:
         """Nothing to prepare — this backend builds nothing and only records properties."""
         return None
 
+    @override
     async def prepare_system(
         self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None], preflight: None
     ) -> PreparedSystem[NullResult, SolanaComponentInstance, SolanaProgramInstance]:
@@ -174,5 +196,6 @@ class NullSolanaBackend:
 
         return NullSolanaPrepared(SOLANA.locate_main(analyzed, run.source), NullSolanaFormalizer())
 
+    @override
     def to_artifact_id(self, c: SolanaComponentInstance) -> NullArtifact:
         return NullArtifact(c.slug)

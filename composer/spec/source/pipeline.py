@@ -44,7 +44,9 @@ from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.autosetup import SetupSuccess
 from composer.spec.source.prover import get_prover_tool
 from composer.spec.source.author import batch_cvl_generation
-from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
+from composer.spec.source.artifacts import (
+    ProverArtifactStore, ComponentSpec, InvariantSpec, SpecIdentity,
+)
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import ReportComponentInput, Verdict, VerdictFetcher
 from composer.spec.source.report.schema import RuleName
@@ -55,7 +57,7 @@ from composer.spec.source.task_ids import (
 from composer.prover.core import ProverOptions
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.pipeline.core import (
-    Formalizer, PreparedSystem, PipelineRun, Delivered, GaveUp,
+    Formalizer, PipelineBackend, PreparedSystem, PipelineRun, Delivered, GaveUp,
     CorePhases, SystemAnalysisSpec, ComponentOutcome,
     COMMON_SYSTEM_CACHE_KEY
 )
@@ -273,28 +275,48 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
 AP_PROPERTIES_KEY_NAME = "ap-properties"
 
 @dataclass
-class ProverBackend:
-    """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec,
-    ContractComponentInstance, ContractInstance, SourceApplication, None]
-    (P, FormT, H, A, Unit, Main, App, Pre)."""
-    backend_guidance = CERTORA_BACKEND_GUIDANCE
-    core_phases = CorePhases({
-        "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
-        "extraction": AutoProvePhase.BUG_ANALYSIS,
-        "formalization": AutoProvePhase.CVL_GEN,
-        "report": AutoProvePhase.REPORT
-    })
-    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, AP_PROPERTIES_KEY_NAME)
-
-    artifact_store: ProverArtifactStore
+class ProverBackend(
+    PipelineBackend[
+        AutoProvePhase, GeneratedCVL, None, SpecIdentity, ContractComponentInstance,
+        ContractInstance, SourceApplication, None,
+    ]
+):
+    _store: ProverArtifactStore
     _prover_opts: ProverOptions
 
+    @property
+    @override
+    def backend_guidance(self) -> str:
+        return CERTORA_BACKEND_GUIDANCE
+
+    @property
+    @override
+    def analysis_spec(self) -> SystemAnalysisSpec:
+        return SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, AP_PROPERTIES_KEY_NAME)
+
+    @property
+    @override
+    def core_phases(self) -> CorePhases[AutoProvePhase]:
+        return CorePhases({
+            "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
+            "extraction": AutoProvePhase.BUG_ANALYSIS,
+            "formalization": AutoProvePhase.CVL_GEN,
+            "report": AutoProvePhase.REPORT
+        })
+
+    @property
+    @override
+    def artifact_store(self) -> ProverArtifactStore:
+        return self._store
+
+    @override
     async def preflight(self, run: PipelineRun[AutoProvePhase, None]) -> None:
         """Nothing to do ahead of analysis. The prover's expensive pre-work (AutoSetup, summaries,
         structural invariants) needs the *harnessed* model, so it stays in ``prepare_formalization``,
         where it already overlaps property extraction."""
         return None
 
+    @override
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
         preflight: None,
@@ -310,9 +332,10 @@ class ProverBackend:
         )
         return ProverPrepared(
             main_instance(harnessed, run.source),
-            self.artifact_store, sys_desc, harnessed, prover_tool,
+            self._store, sys_desc, harnessed, prover_tool,
             self._prover_opts, analyzed,
         )
 
+    @override
     def to_artifact_id(self, c: ContractComponentInstance) -> ComponentSpec:
         return ComponentSpec(c.slugified_name)

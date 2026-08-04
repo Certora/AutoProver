@@ -18,8 +18,8 @@
 ## 1. Problem & motivation
 
 The formalization seam ([formalization-abstraction.md §3](./formalization-abstraction.md))
-is deliberately narrow: a backend is any object that structurally satisfies the
-`PipelineBackend` protocol and hands the generic driver three immutable phase objects
+is deliberately narrow: a backend is any object that implements the
+`PipelineBackend` contract and hands the generic driver three immutable phase objects
 (`PipelineBackend → PreparedSystem → Formalizer`). The driver in
 [composer/pipeline/core.py](../composer/pipeline/core.py) never imports a concrete
 backend — it moves opaque `FormT` values around and never reads a field.
@@ -30,8 +30,8 @@ whole-backend reimplementation that only borrows the shared analysis/extraction/
 machinery. **PyO3** is the bridge — it lets a Rust crate expose functions and classes
 that Python can call as if they were native.
 
-The seam being structural (a `Protocol`, not a base class you must subclass) is what makes
-this tractable: nothing in the driver needs to know a backend is "really" Rust. The
+The seam being an eight-parameter generic base with three methods is what makes this
+tractable: nothing in the driver needs to know a backend is "really" Rust. The
 question is entirely about the **boundary** — what crosses it, in which direction, and
 synchronously or not.
 
@@ -99,12 +99,14 @@ from Rust via GIL-bound attribute access is verbose and brittle.
 > into its own `serde` structs and never touches Python objects directly.
 > `PropertyFormulation` and the result models are trivially JSON-able.
 
-### 2.4 It is a `Protocol`, not a base class
+### 2.4 The backend is a Python object, not necessarily Python logic
 
-Neither `ProverBackend` nor `FoundryBackend` inherits from `PipelineBackend` — they match
-by shape. So the "backend" the driver sees can be a **thin Python adapter** that
-implements the protocol and delegates to the Rust extension. That adapter is where all the
-async-wrapping, marshalling, and pydantic-construction live.
+`PipelineBackend` is an abstract base class — every backend (`ProverBackend`,
+`FoundryBackend`, `RustBackend`) subclasses it and names its own type arguments — but it
+demands only three async/sync methods and four read-only members. So the "backend" the
+driver sees can be a **thin Python adapter** that satisfies the base class and delegates to
+the Rust extension. That adapter is where all the async-wrapping, marshalling, and
+pydantic-construction live.
 
 ---
 
@@ -114,7 +116,7 @@ async-wrapping, marshalling, and pydantic-construction live.
 ┌─────────────────────────────────────────────────────────────────┐
 │ composer/pipeline/core.py  (generic driver — UNCHANGED)          │
 └───────────────┬─────────────────────────────────────────────────┘
-                │ holds an opaque PipelineBackend[...]  (structural)
+                │ holds an opaque PipelineBackend[...]
                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ composer/rustbackend/adapter.py   (thin PYTHON adapter)          │

@@ -30,7 +30,7 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Protocol, Any, cast
+from typing import Any, cast
 from collections.abc import Sequence
 from abc import ABC, abstractmethod
 
@@ -150,19 +150,45 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
-    @property
-    def backend_guidance(self) -> str: ...
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](ABC):
+    """What the driver needs from a backend, and the only thing it knows about one.
+
+    Each backend names its own eight type arguments in its ``class`` line: that is what ties its
+    result / artifact-id / unit / app axes to one another, and it is checked where the backend is
+    *defined* rather than only where it is handed to :func:`run_pipeline`.
+
+    Every member the driver reads is declared **read-only**. The driver only ever reads them, and
+    read-only is what lets a backend derive one (the Rust backend reads its guidance off the wheel's
+    descriptor) or narrow one (the prover's store is a ``ProverArtifactStore``, whose extra
+    ``write_component_runs`` its own prepared system needs) — a mutable attribute would be invariant,
+    so a backend holding constructor state exposes it through the accessor instead of overriding it
+    with a field."""
 
     @property
-    def analysis_spec(self) -> SystemAnalysisSpec: ...
+    @abstractmethod
+    def backend_guidance(self) -> str:
+        """Backend-specific direction for property extraction — what this verifier can check."""
+        ...
 
     @property
-    def core_phases(self) -> CorePhases[P]: ...
+    @abstractmethod
+    def analysis_spec(self) -> SystemAnalysisSpec:
+        """The backend's contribution to the shared system-analysis call."""
+        ...
 
     @property
-    def artifact_store(self) -> ArtifactStore[A, FormT]: ...
+    @abstractmethod
+    def core_phases(self) -> CorePhases[P]:
+        """The backend's own phase enum, mapped onto the four phases the driver tags tasks with."""
+        ...
 
+    @property
+    @abstractmethod
+    def artifact_store(self) -> ArtifactStore[A, FormT]:
+        """Where the driver persists each unit's properties, deliverable, and the run's report."""
+        ...
+
+    @abstractmethod
     async def preflight(self, run: PipelineRun[P, H]) -> Pre:
         """Whatever the backend can do before it knows anything about the program — run
         *concurrently with system analysis*, and awaited before :meth:`prepare_system`.
@@ -178,12 +204,14 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
         ``None`` for a backend with nothing to do ahead of time."""
         ...
 
+    @abstractmethod
     async def prepare_system(
         self, analyzed: App,
         run: PipelineRun[P, H],
         preflight: Pre,
     ) -> PreparedSystem[FormT, U, Main]: ...
 
+    @abstractmethod
     def to_artifact_id(self, c: U) -> A: ...
 
 
