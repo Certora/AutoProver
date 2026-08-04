@@ -39,7 +39,7 @@ from composer.llm.anthropic import AnthropicRenderer, _get_service
 from composer.input.files import InMemoryTextFile
 from composer.spec.context import WorkflowContext, SourceFields
 from composer.spec.service_host import ModelProvider
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 from composer.templates.loader import load_jinja_template
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.ui.autoprove_console import AutoProveConsoleHandler
@@ -110,7 +110,7 @@ def _source(
         project_root=project_root,
         contract_name=cast(Any, contract_name),
         relative_path=relative_path,
-        forbidden_read=FS_FORBIDDEN_READ,
+        forbidden_read=fs_forbidden_read,
     )
 
 
@@ -198,7 +198,7 @@ async def test_finder_graph_selects_the_design_doc(tmp_path):
     (tmp_path / "design.md").write_text("# Design\nThe counter must never decrease.\n")
     (tmp_path / "README.md").write_text("# Build\nRun `forge build`.\n")
 
-    tools = build_basic_source_tools(str(tmp_path), FS_FORBIDDEN_READ).base_source_tools
+    tools = build_basic_source_tools(str(tmp_path), fs_forbidden_read).base_source_tools
 
     # Script: inventory -> read the design doc -> submit the result.
     responses: list[BaseMessage] = [
@@ -232,7 +232,7 @@ async def test_finder_graph_can_read_a_pdf_via_read_document(tmp_path):
     user message) and the graph completes with that file selected."""
     (tmp_path / "spec.pdf").write_bytes(b"%PDF-1.4 the protocol specification")
 
-    tools = list(build_basic_source_tools(str(tmp_path), FS_FORBIDDEN_READ).base_source_tools)
+    tools = list(build_basic_source_tools(str(tmp_path), fs_forbidden_read).base_source_tools)
     tools.append(read_document_tool(cast(Any, _StubUploader()), str(tmp_path)))
 
     responses: list[BaseMessage] = [
@@ -266,7 +266,7 @@ async def test_read_document_keeps_tool_results_adjacent_under_parallel_calls(tm
     (tmp_path / "spec.pdf").write_bytes(b"%PDF-1.4 the spec")
     (tmp_path / "README.md").write_text("# Build\nrun make\n")
 
-    tools = list(build_basic_source_tools(str(tmp_path), FS_FORBIDDEN_READ).base_source_tools)
+    tools = list(build_basic_source_tools(str(tmp_path), fs_forbidden_read).base_source_tools)
     tools.append(read_document_tool(cast(Any, _StubUploader()), str(tmp_path)))
 
     responses: list[BaseMessage] = [

@@ -15,6 +15,7 @@ Solana model + prompts and reuses the shared ``RUST`` language facet. See ``docs
 """
 
 from dataclasses import dataclass
+from pathlib import PurePath
 from typing import Any, Callable, Literal, Mapping, TypedDict
 
 from composer.spec.context import SourceCode
@@ -53,7 +54,7 @@ from composer.spec.solana.model import (
     SolanaProgram,
     SolanaProgramInstance,
 )
-from composer.spec.util import FS_FORBIDDEN_READ, slugify_filename
+from composer.spec.util import fs_forbidden_read, slugify_filename
 
 LanguageTag = Literal["solidity", "rust"]
 ChainTag = Literal["evm", "solana", "soroban"]
@@ -89,10 +90,13 @@ class Language:
     """The language of the **code being analyzed** — a facet of the ecosystem, shared by every
     chain whose programs are written in it (e.g. the ``rust`` facet is shared by Solana and
     Soroban). It drives how the shared front half *reads* the target's source (fs-exclusion
-    pattern, code-explorer prompt, failure modes)."""
+    rule, code-explorer prompt, failure modes)."""
 
     name: LanguageTag
-    default_forbidden_read: str
+    #: What the agent's source tools withhold: either a predicate over the project-root-relative
+    #: path (Solidity's ``fs_forbidden_read``, whose carve-outs don't fit a regex) or a plain
+    #: exclusion pattern where one suffices. Both shapes are what ``GlobalExcludeArg`` accepts.
+    default_forbidden_read: str | Callable[[PurePath], bool]
     code_explorer_prompt: str
     # The j2 partial with this language's vulnerability patterns (overflow, panics, …). Reserved
     # for the prompt-fragment split; unused while prompts are still monolithic.
@@ -201,7 +205,7 @@ def _evm_analysis_extra_input(source: SourceCode) -> list[str | dict]:
 # and runs ``.t.sol`` tests), so it would need a separate Vyper story or be left EVM/Solidity-only.
 SOLIDITY = Language(
     name="solidity",
-    default_forbidden_read=FS_FORBIDDEN_READ,
+    default_forbidden_read=fs_forbidden_read,
     code_explorer_prompt=CODE_EXPLORER_SYS_PROMPT,
 )
 
@@ -225,7 +229,8 @@ EVM: EvmEcosystem = Ecosystem(
 # ---------------------------------------------------------------------------
 
 #: Cargo/Anchor project layout: hide build output, VCS, lockfiles, and the JS side; keep the
-#: crate sources and `tests/`. (Contrast the Foundry-shaped ``FS_FORBIDDEN_READ``.)
+#: crate sources and `tests/`. A pattern suffices here — unlike the Foundry-shaped
+#: ``fs_forbidden_read``, nothing needs carving back out of an excluded directory.
 RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
 # NOTE: the confined-build scratch dirs (``.sandbox_cargo`` / ``.sandbox_rustup`` /
 # ``.sandbox_tmp`` and nested ``target/``) are also excluded, but that extension lives with the

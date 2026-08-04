@@ -96,7 +96,7 @@ backends run against it unchanged.
 ```python
 SOLIDITY = Language(
     name="solidity",
-    default_forbidden_read=FS_FORBIDDEN_READ,          # Foundry layout: lib/, test/, .sol carve-out
+    default_forbidden_read=fs_forbidden_read,          # Foundry layout: lib/, test/, .sol carve-out
     code_explorer_prompt=CODE_EXPLORER_SYS_PROMPT,
 )
 
