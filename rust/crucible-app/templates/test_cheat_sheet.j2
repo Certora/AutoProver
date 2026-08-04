@@ -1,11 +1,16 @@
 
-Write ONE Crucible `#[invariant_test]` function holding ALL of this component's properties (no
-fixture — it already exists as `Fixture`):
+Write ONE invariant function holding ALL of this component's properties (no fixture — it already
+exists as `Fixture`):
 
-- `#[invariant_test] fn {{ harness_fn }}(fixture: &mut Fixture) { ... }` — named EXACTLY that —
+- `pub fn {{ harness_fn }}(fixture: &mut Fixture) { ... }` — named EXACTLY that, and `pub` —
   runs AFTER EACH fuzzed action. Put EVERY listed property's checks in this one fn (conservation,
   solvency, bounds, access control, …). One fn = one build = one fuzz run for this component.
   The fuzzer drives the WHOLE program, so the sequence interleaves other components' actions too.
+- Do NOT write `#[invariant_test]` yourself. Your code is placed inside a private, feature-gated
+  module and the host generates the `#[invariant_test]` entry point that calls your fn (the macro
+  expands `fn main()` next to itself, so it has to sit at the crate root, outside your module).
+  Helper items are welcome — `impl Fixture { ... }` blocks, free fns, consts — and because the
+  module is gated, a name you choose can never clash with another component's.
 - Assert against ON-CHAIN state, not local mirrors:
     let acct = fixture.ctx.read_anchor_account::<SomeState>(&fixture.some_pda).unwrap();
     fuzz_assert_le!(acct.balance, cap, "message");   // fuzz_assert_{eq,ne,lt,le,gt,ge}
