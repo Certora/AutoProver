@@ -1,0 +1,106 @@
+{% from "shared/analysis_macros.j2" import input_phrase with context %}
+{%- set impl = "Rust implementation" %}
+# Background
+
+{% if has_doc %}
+You have a Soroban/Stellar design document and its Rust source.
+{% else %}
+You have Soroban/Stellar Rust source only. Ground conclusions in the source.
+{% endif %}
+
+{% include "soroban/_platform_model.j2" %}
+
+# Task
+
+Analyze the {{ input_phrase(impl_noun=impl) }} and extract a structured model:
+implemented **contracts**, exposed **functions**, owned **storage entries** with
+storage kind, performed **auth checks**, calls, and external actors. Use
+natural language; do not write Rust or pseudo-code.
+
+## Application Description
+
+Provide an "Application Type" — a broad category (e.g. "AMM", "Lending market", "Vault",
+"Token", "Escrow") — and a short (2–3 sentence) description that refines it. Then a list of
+"System Components": each is either a **Contract** or an **External Authority**.
+
+### External Authorities
+
+Any actor the app relies on but does not implement: admin, off-chain signer, oracle,
+DEX, SEP-41 token, or SAC. For SACs, record issuer `mint`, `clawback`, and
+`set_authorized` powers as assumptions.
+
+### Contracts
+
+For each contract this app implements, provide:
+
+- `name`: a short label (e.g. "Vault", "Pool", "Governor").
+- `contract_identifier`: the `#[contract]` type or crate/module identifier, matching
+  `[a-zA-Z_][a-zA-Z0-9_]*`.
+- `contract_id`: the deployed contract address (StrKey, `C…`) if the implementation pins one, else
+  null.
+- `description`: the contract's role in the application.
+- `storage_entries`: the storage this contract owns, described below.
+- `functions`: the contract's entry points, described below.
+- `components`: the contract's feature groups, described below.
+
+#### Storage entries
+
+One entry per logical value read or written:
+
+- `key`: source spelling, e.g. a `DataKey` variant such as `Balance(Address)` or
+  a `Symbol`.
+- `durability`: storage kind, either `instance`, `persistent`, or `temporary`,
+  as actually used at the call site.
+- `value_type`: the stored type.
+- `description`: what the entry means and who may change it.
+
+Record the actual storage kind even when it looks wrong.
+
+#### Functions
+
+For each `#[contractimpl]` entry point:
+
+- `name`: the function's snake_case name.
+- `description`: what it does behaviorally (not how).
+- `args`: its arguments (name & type), excluding `env`.
+- `returns`: its return type, or null.
+- `auth`: each `require_auth` / `require_auth_for_args`, naming the authorized
+  address argument or stored address (for example, "admin from `DataKey::Admin`").
+  If there is no auth, record an empty list.
+- `storage`: the storage this function touches. Each entry gives the `key`,
+  `durability` storage kind, and `access` (`read`, `write`, `remove`, or
+  `extend_ttl`).
+- `calls`: cross-contract calls. Name the target or how its address is
+  obtained, what is called, and whether failures are handled (`try_*`) or abort.
+- `events`: the events it publishes, if any.
+- `errors`: `#[contracterror]` variants, `panic_with_error!`, and unhandled aborts
+  such as `unwrap`, overflow, or failed conversions.
+- `requirements`: the function's behavioral specification, stated as requirements ("The function
+  must ...").
+
+#### Components
+
+Components group contract features. A component is broader than one function
+and narrower than the whole contract. Describe what it does.
+
+Group functions by feature and shared storage, not file layout or call order.
+Admin and settings functions usually form their own component.
+
+For each component provide:
+
+- `functions`: the names of the functions that make up this component. Every function you declared
+  for the contract **must appear in at least one component**. A function may appear in more than
+  one component when it genuinely serves two features.
+- `storage_keys`: which of the contract's declared storage entries this component maintains.
+- `requirements`: any requirements or assumptions on the component's behavior, stated as
+  implementation requirements ("The implementation must ...").
+- `interactions`: how this component uses other components, contracts, or
+  external actors. Name the other contract/component or external actor.
+
+## On Interactions
+
+List contracts and external actors as fully as the inputs allow. Do not guess how
+external actors work internally. A call into another contract from this app is an
+internal contract/component interaction, not an external actor.
+
+{% include "shared/analysis_memory.j2" %}

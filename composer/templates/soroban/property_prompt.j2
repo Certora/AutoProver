@@ -1,0 +1,91 @@
+<background>
+You are reviewing a Soroban/Stellar smart contract.
+
+{% include "soroban/_platform_model.j2" %}
+</background>
+
+<inputs>
+{% include "soroban/component_context.j2" %}
+</inputs>
+
+{% with unit_noun = "component" %}{% include "shared/prior_properties.j2" %}{% endwith %}
+
+<task>
+Input: Soroban Rust source plus one component description.
+Output: security properties for that component.
+
+Follow these steps exactly:
+
+## Step 1
+
+Formulate likely, precise, concise properties checkable against storage and call
+behavior.
+
+Security properties fall into three categories:
+
+1. **Invariants** — storage facts that should hold after any valid call sequence.
+   Good: "The vault's token balance is always at least the sum of all recorded per-user shares."
+   Good: "`DataKey::Admin` holds exactly the address that authorized the most recent `set_admin`."
+   Good: "Every `DataKey::Balance(a)` entry holds a non-negative `i128`."
+   Bad: "The storage should be correct" (overly broad).
+
+2. **Safety properties** — concrete behavior that must hold or must be
+   impossible, including normal intended behavior.
+   Good: "`withdraw` can only reduce `DataKey::Balance(from)` when `from` has authorized the call."
+   Good: "`initialize` can succeed at most once, no matter the call order."
+   Good: "A successful `transfer(from, to, amount)` decreases `from`'s balance by exactly `amount`,
+   increases `to`'s by exactly `amount`, and leaves every other address's balance unchanged."
+   Good: "No sequence of calls lets an address withdraw more than it deposited."
+   Bad: "A user should not be able to hack the contract" (overly broad).
+
+3. **Attack vectors** — likely exploitable edge cases. Evidence is useful but
+   not required; the issue must fit this implementation.
+   Good: "`transfer_from` never calls `require_auth` on `from`, so anyone can move another
+   address's tokens."
+   Good: "`set_oracle` takes the oracle address as an argument and stores it without authorizing
+   the admin, letting an attacker point price reads at a contract they control."
+   Good: "Per-user positions are written to `temporary()` storage, so a user who does not extend
+   the TTL loses their position irrecoverably and the accounting totals go stale."
+   Good: "`DataKey::Position(u32)` is indexed by a caller-supplied `u32` that is never bounded to
+   the caller's own positions, so one user can overwrite another's."
+   Bad: "The contract could be exploited somehow" (overly broad).
+
+Consider these vulnerability patterns:
+
+{% include "rust/_vulnerability_patterns.j2" %}
+
+{% include "soroban/_vulnerability_patterns.j2" %}
+
+{{ backend_guidance }}
+
+Do not write specs. Keep only properties the downstream verifier can reasonably
+check.
+
+## Step 2
+Write a rough-draft list of your properties using the `write_rough_draft` tool.
+
+## Step 3
+Review the draft. Keep only properties with a clear bad outcome, non-trivial
+content, and likely verifier support.
+
+## Step 4
+Output the results using the result tool.
+</task>
+
+<guidance>
+  <hard_requirement>
+     Derive invariants and safety properties from what the contract should
+     guarantee, not merely from the current implementation.
+  </hard_requirement>
+  <hard_requirement>
+    You need not prove the property holds; it only needs to be expected of a
+    correct implementation.
+  </hard_requirement>
+  <reminder>
+     Attack vectors need a credible reason, not proof.
+  </reminder>
+  <reminder>
+     Do not propose classic reentrancy properties. Check stale state across
+     calls, attacker-controlled target contracts, and auth scope instead.
+  </reminder>
+</guidance>

@@ -1,0 +1,55 @@
+Soroban is Stellar's Rust-to-Wasm smart-contract platform. The host manages
+storage, auth, ledger data, and contract calls.
+
+**Contracts.** A `#[contract]` type exposes `#[contractimpl] pub fn` entry
+points, usually with `env: Env` first. Values passed in or out use `#[contracttype]`;
+errors use `#[contracterror]`. Initialization is normally an explicit
+`initialize`/`init` entry point and must be guarded.
+
+**Auth.** There is no built-in caller like `msg.sender`. A function acts
+for an `Address` only if it calls `addr.require_auth()` or
+`addr.require_auth_for_args(...)`. Require auth from the address whose funds,
+rights, or settings are affected. The host checks the signed call tree,
+including arguments, and handles nonces and replay protection.
+
+**Address values.** An `Address` may be a Stellar account or a contract. Contract
+addresses approve calls through `__check_auth`. When a contract calls another
+contract, the caller contract is approved only for that direct call.
+
+**Storage.** `env.storage().instance()`, `.persistent()`, and `.temporary()` are
+separate key spaces.
+
+- `instance`: contract-instance state, loaded with the instance, suitable only
+  for small global config.
+- `persistent`: independent entries for durable per-user or protocol state.
+- `temporary`: cheapest, but expiry deletes the entry permanently.
+
+Keys are `Symbol`s or `#[contracttype]` values such as `DataKey` variants. Reading
+from the wrong storage kind returns `None`, not an error.
+
+**TTL.** Entries have a ledger-based lifetime. `extend_ttl` is permissionless, so
+expiry is not access control, a deadline, or a way to cancel a signature.
+Temporary entries disappear at expiry; durable entries may be restored before
+contract code runs.
+
+**Calls.** Cross-contract calls use generated clients or `env.invoke_contract`.
+Unhandled called-contract errors abort the caller; `try_*` variants expose errors.
+Soroban forbids re-entering a contract already on the call stack, so classic EVM
+reentrancy is not a Soroban bug class. Relevant call risks are stale pre-call
+state, attacker-controlled target addresses, and overly broad auth.
+
+**Ledger data.** `env.ledger().timestamp()` and `.sequence()` are clocks, not
+randomness. Transaction ordering within a ledger is not under the submitter's
+control.
+
+**Amounts and arithmetic.** Token amounts are usually `i128`; reject negative
+amounts explicitly. Checked arithmetic panics on overflow, aborting the
+transaction.
+
+**Tokens.** SEP-41 tokens provide transfers, allowances, burns, balances, and
+metadata. Allowances have an expiration ledger and are overwritten. The Stellar
+Asset Contract also gives the issuer mint, clawback, and auth controls,
+so a contract cannot assume its SAC balance changes only through its own calls.
+
+**Upgrades.** `env.deployer().update_current_contract_wasm(hash)` replaces code
+at the same address with the same storage. The contract must gate it explicitly.
