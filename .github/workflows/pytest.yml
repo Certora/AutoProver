@@ -27,4 +27,4 @@ jobs:
 
       - name: Run pytest
         run: |
-          uv run pytest -m 'not expensive' tests/
+          COMPOSER_STRICT_TEMPLATES=1 uv run pytest -m 'not expensive' tests/

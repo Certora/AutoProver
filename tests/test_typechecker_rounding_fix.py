@@ -112,13 +112,34 @@ function mulDivDirectionalSummary(uint256 x, uint256 y, uint256 denominator, Mat
 """
 
 # The directional function block above spans 0-based lines 9..16 — what the
-# CVL AST reports for it (ast["subs"][0].range). Canned so the cheap suite
-# never shells out to the jar (no JDK in cheap CI).
-CANNED_AST = {"ast": {"subs": [
-    {"declarationId": "mulDivDirectionalSummary",
-     "range": {"start": {"line": 9, "charByteOffset": 0},
-               "end": {"line": 16, "charByteOffset": 1}}},
-]}}
+# CVL AST reports for it (ast["subs"][0].range). The methods{} entries (0-based
+# lines 3..6) appear under ast["importedMethods"], each an expression summary
+# (`=> fn(...)`) whose target is exp.methodId and whose range delimits the entry.
+# Canned so the cheap suite never shells out to the jar (no JDK in cheap CI).
+def _exp_entry(target: str, line: int) -> dict:
+    return {
+        "summary": {
+            "type": "spec.cvlast.SpecCallSummary.Exp",
+            "exp": {"type": "spec.cvlast.CVLExp.UnresolvedApplyExp", "methodId": target},
+        },
+        "range": {"start": {"line": line, "charByteOffset": 4},
+                  "end": {"line": line, "charByteOffset": 200}},
+    }
+
+
+CANNED_AST = {"ast": {
+    "subs": [
+        {"declarationId": "mulDivDirectionalSummary",
+         "range": {"start": {"line": 9, "charByteOffset": 0},
+                   "end": {"line": 16, "charByteOffset": 1}}},
+    ],
+    "importedMethods": [
+        _exp_entry("mulDivDownSummary", 3),
+        _exp_entry("mulDivDirectionalSummary", 4),
+        _exp_entry("averageSummary", 5),
+        _exp_entry("sqrtSummaryDown", 6),
+    ],
+}}
 
 
 @pytest.fixture
@@ -258,3 +279,109 @@ def test_block_expansion_uses_ast_ranges(loop, monkeypatch) -> None:
     # Nothing reported -> the parser is never consulted.
     monkeypatch.setattr(tl, "extract_cvl_ast", lambda source: pytest.fail("must not parse"))
     assert TypecheckerLoop._expand_to_function_blocks(lines, set()) == set()
+
+
+# ---------------------------------------------------------------------------
+# Unresolvable Rounding (no requalification suggestion) -> disable directional
+# ---------------------------------------------------------------------------
+
+# No valid qualifier exists, so the typechecker offers NO "Did you mean": the
+# enum's only declarer is a library (OZ `Math`) that is inlined / duplicated
+# across compiled units, so `Math.Rounding` is not a usable enum type and no
+# scene contract re-declares it. Distinct wording ("not a valid enum type")
+# from the ambiguous case ("not a valid type. Did you mean ...").
+UNRESOLVABLE_ENUM_CONSTANT_ERROR = (
+    "CRITICAL: [main] ERROR ALWAYS - Error in spec file (OZ_Math-HarnessV5.spec:12:21): "
+    'could not type expression "Math.Rounding.Ceil", message: In enum constant '
+    "Math.Rounding.Ceil, Math.Rounding is not a valid enum type"
+)
+
+
+def test_parse_unresolvable_enum_constant_error(loop) -> None:
+    matches = loop._parse_typechecker_errors(UNRESOLVABLE_ENUM_CONSTANT_ERROR)
+    assert ("OZ_Math-HarnessV5.spec", "12", "ROUNDING_UNRESOLVABLE", "Math") in matches
+    # Must NOT be mis-parsed as the (requalifiable) ambiguous case — that path has
+    # no suggestion to act on and would never converge.
+    assert not any(m[2] == "ROUNDING_AMBIGUOUS" for m in matches)
+
+
+def test_ambiguous_error_is_not_parsed_as_unresolvable(loop) -> None:
+    # The ambiguous error ("... not a valid type. Did you mean ...") must stay on
+    # the requalify path and never be treated as unresolvable.
+    matches = loop._parse_typechecker_errors(AMBIGUOUS_ENUM_CONSTANT_ERROR)
+    assert not any(m[2] == "ROUNDING_UNRESOLVABLE" for m in matches)
+
+
+def test_disable_directional_when_unresolvable(loop, tmp_path, canned_ast) -> None:
+    # The directional summary — its methods{} entry AND the function it calls — is
+    # commented out; the summaries on the other lines are left untouched.
+    spec = tmp_path / "OZ_Math-HarnessV5.spec"
+    spec.write_text(SPEC_BEFORE)
+    errors = [("12", "ROUNDING_UNRESOLVABLE", "Math")]
+    callback = loop._create_rounding_disable_directional_callback(errors, keep_intermediate=False)
+    callback(spec, lambda s: s, lambda s: s)
+    lines = spec.read_text().splitlines()
+    # 4-arg directional methods entry (0-based line 4) disabled...
+    assert lines[4].startswith("// AUTO-DISABLED (unresolvable Math.Rounding):")
+    # ...and the mulDivDirectionalSummary function block (AST range 9..16) disabled.
+    assert lines[9].startswith("// AUTO-DISABLED (unresolvable Math.Rounding):")
+    # The plain summaries survive untouched.
+    assert lines[3].lstrip().startswith(
+        "function Math.mulDiv(uint256 x, uint256 y, uint256 denominator) internal"
+    )
+    assert lines[5].lstrip().startswith("function Math.average")
+    assert lines[6].lstrip().startswith("function Math.sqrt")
+    # No ACTIVE (non-comment) line still references the enum.
+    assert not any(
+        "Math.Rounding" in l and not l.lstrip().startswith("//") for l in lines
+    )
+
+
+# A methods{} entry wrapped across several lines, plus a decoy comment that names
+# the summary function next to a `=>`. The AST reports the entry's full span and the
+# real dispatch target, so the whole entry is commented and the decoy is left alone —
+# neither of which a per-line `"=>" in line and fn in line` scan could get right.
+MULTILINE_SPEC = """methods {
+    function Foo.mulDiv(
+        uint256 x, MathX.Rounding rounding
+    ) internal returns (uint256)
+        => mulDivDirectionalSummary(x, rounding);
+    function Foo.plain(uint256 a) internal => plainSummary(a);
+}
+
+// mulDivDirectionalSummary is only mentioned here => in prose, not a real entry
+
+function mulDivDirectionalSummary(uint256 x, MathX.Rounding rounding) returns uint256 {
+    return x;
+}
+"""
+
+MULTILINE_AST = {"ast": {
+    "subs": [
+        {"declarationId": "mulDivDirectionalSummary",
+         "range": {"start": {"line": 10, "charByteOffset": 0},
+                   "end": {"line": 12, "charByteOffset": 1}}},
+    ],
+    "importedMethods": [
+        # The directional entry wraps 0-based lines 1..4.
+        _exp_entry("mulDivDirectionalSummary", 1) | {
+            "range": {"start": {"line": 1, "charByteOffset": 4},
+                      "end": {"line": 4, "charByteOffset": 50}}},
+        _exp_entry("plainSummary", 5),
+    ],
+}}
+
+
+def test_disable_directional_multiline_entry_and_decoy(loop, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(tl, "extract_cvl_ast", lambda source: MULTILINE_AST)
+    spec = tmp_path / "OZ_Math-Foo.spec"
+    spec.write_text(MULTILINE_SPEC)
+    # The enum reference is reported inside the directional function block (line 11).
+    errors = [("11", "ROUNDING_UNRESOLVABLE", "MathX")]
+    callback = loop._create_rounding_disable_directional_callback(errors, keep_intermediate=False)
+    callback(spec, lambda s: s, lambda s: s)
+    lines = spec.read_text().splitlines()
+    disabled = [i for i, l in enumerate(lines) if "AUTO-DISABLED" in l]
+    # Every line of the wrapped entry (1..4) and the function block (10..12); the
+    # `plainSummary` entry (5) and the prose decoy (8) are untouched.
+    assert disabled == [1, 2, 3, 4, 10, 11, 12]

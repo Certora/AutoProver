@@ -47,7 +47,7 @@ load_dotenv()
 # instead of referencing this constant directly — that helper consults the
 # PREAUDIT_ANTHROPIC_MODEL env var first, so operators can override per-run without
 # editing code. This value is the fallback when the env var is unset.
-_DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+_DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
 
 
 def default_anthropic_model() -> str:
@@ -57,8 +57,7 @@ def default_anthropic_model() -> str:
     Resolved from PREAUDIT_ANTHROPIC_MODEL env var at call time so test fixtures that
     `patch.dict(os.environ, ...)` take effect and operators can swap models
     on a per-run basis without code changes. Falls back to
-    `_DEFAULT_ANTHROPIC_MODEL` (currently Sonnet 4.5) when the env var is
-    unset.
+    `_DEFAULT_ANTHROPIC_MODEL` when the env var is unset.
     """
     return os.environ.get(ANTHROPIC_MODEL_ENV, _DEFAULT_ANTHROPIC_MODEL)
 

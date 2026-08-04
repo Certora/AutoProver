@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import certora_autosetup.utils.remappings as remappings_mod
 from certora_autosetup.utils.compilation_workarounds import CompilationWorkaroundManager
 from certora_autosetup.utils.types import ContractHandle
 
@@ -295,23 +296,48 @@ def test_cached_autofinder_failure_is_exclusive(manager, monkeypatch, tmp_path) 
 
 
 def test_yul_ladder_escalates_across_passes(manager, monkeypatch, tmp_path) -> None:
-    # The YulException escalation must span two recompiles: pass 1 only adds
-    # the optimizer (trying to succeed WITH autofinders); only when the
-    # exception SURVIVES that recompile does the last resort stop asserting
-    # autofinder success — keeping the compile settings.
+    # The YulException escalation must span three recompiles: pass 1 only adds
+    # the optimizer (trying to succeed WITH autofinders), pass 2 falls back to
+    # solc's default Yul steps (strict_solc_optimizer — the finder-friendly
+    # substitute steps give less stack relief); only when the exception SURVIVES
+    # both does the last resort stop asserting autofinder success — keeping the
+    # compile settings.
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, updated, config, fake_run = _run_loop(
         manager,
         monkeypatch,
         tmp_path,
-        [SINGLE_LINE_YUL_STACK_TOO_DEEP, SINGLE_LINE_YUL_STACK_TOO_DEEP],
+        [SINGLE_LINE_YUL_STACK_TOO_DEEP] * 3,
+        contracts,
+        extra_config={"assert_autofinder_success": True},
+    )
+    assert success is True
+    assert fake_run.calls == 4
+    assert config["solc_optimize"] == "200"
+    assert config["strict_solc_optimizer"] is True
+    assert updated["assert_autofinder_success"] is False
+
+
+def test_yul_strict_steps_tried_before_relaxing_autofinders(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # Real case (observed in the wild): the finder-friendly substitute Yul
+    # steps themselves cause the stack-too-deep, and solc's default pipeline
+    # compiles fine — the ladder must reach strict_solc_optimizer WITHOUT
+    # giving up on the autofinder assertion.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SINGLE_LINE_YUL_STACK_TOO_DEEP] * 2,
         contracts,
         extra_config={"assert_autofinder_success": True},
     )
     assert success is True
     assert fake_run.calls == 3
-    assert config["solc_optimize"] == "200"
-    assert updated["assert_autofinder_success"] is False
+    assert config["strict_solc_optimizer"] is True
+    assert config["assert_autofinder_success"] is True
 
 
 # Verbatim-shaped solc output for a feature that exists only on the via-ir
@@ -344,10 +370,11 @@ def test_via_ir_added_out_of_necessity(manager, monkeypatch, tmp_path) -> None:
 
 
 def test_yul_last_resort_keeps_compile_settings(manager, monkeypatch, tmp_path) -> None:
-    # One output carries a plain stack-too-deep for Foo AND a YulException with
-    # the optimizer already present (e.g. supplied by the project's foundry
-    # config): the pass applies via-ir for Foo and relaxes the autofinder
-    # assertion, but via-ir and the optimizer must survive — the source itself may not compile
+    # Pass 1 carries a plain stack-too-deep for Foo AND a YulException with the
+    # optimizer already present (e.g. supplied by the project's foundry config):
+    # the pass applies via-ir for Foo and the strict-steps fallback; when the
+    # exception survives, pass 2 relaxes the autofinder assertion, but via-ir
+    # and the optimizer must survive — the source itself may not compile
     # without them (seen in the wild: "Require with a custom error is only
     # available using the via-ir pipeline").
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
@@ -356,13 +383,14 @@ def test_yul_last_resort_keeps_compile_settings(manager, monkeypatch, tmp_path) 
         manager,
         monkeypatch,
         tmp_path,
-        [combined],
+        [combined, SINGLE_LINE_YUL_STACK_TOO_DEEP],
         contracts,
         extra_config={"assert_autofinder_success": True, "solc_optimize": "200"},
     )
     assert success is True
-    assert fake_run.calls == 2
+    assert fake_run.calls == 3
     assert updated["solc_via_ir"] is True
+    assert config["strict_solc_optimizer"] is True
     assert config["assert_autofinder_success"] is False
     assert config["solc_optimize"] == "200"
 
@@ -381,14 +409,15 @@ def test_via_ir_after_yul_last_resort_stays_per_contract(manager, monkeypatch, t
         tmp_path,
         [
             SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 1: add optimizer
-            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 2: last resort (assertion relaxed)
-            PERSISTENT_STACK_TOO_DEEP_OUTPUT,  # pass 3: via-ir for Foo only
+            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 2: solc default Yul steps
+            SINGLE_LINE_YUL_STACK_TOO_DEEP,   # pass 3: last resort (assertion relaxed)
+            PERSISTENT_STACK_TOO_DEEP_OUTPUT,  # pass 4: via-ir for Foo only
         ],
         contracts,
         extra_config={"assert_autofinder_success": True},
     )
     assert success is True
-    assert fake_run.calls == 4
+    assert fake_run.calls == 5
     assert updated["solc_via_ir_map"] == {"Foo": True, "Bar": False}
     assert "solc_via_ir" not in updated
     assert config["assert_autofinder_success"] is False
@@ -432,3 +461,446 @@ def test_detects_single_line_source_not_found(manager: CompilationWorkaroundMana
 
 def test_ignores_unrelated_source_not_found(manager: CompilationWorkaroundManager) -> None:
     assert manager._has_source_not_found(UNRELATED_OUTPUT) is False
+
+
+# =============================================================================
+# compiler_version_mismatch: wrap-tolerant detection + enabled with global solc
+# =============================================================================
+
+# Verbatim certoraRun output from a real mass-test run: the whole
+# scene was pinned to solc7.3 while every source is ^0.8.0, and solc wrapped the
+# marker phrase ("ParserError: Source \nfile requires different compiler version"),
+# defeating the old single-line substring check.
+WRAPPED_COMPILER_VERSION_MISMATCH = (
+    "Compiling certora/mocks/DummyERC20Impl.sol...\n"
+    "\n"
+    "solc7.3 had an error:\n"
+    "/workspace/project/certora/mocks/DummyERC20Impl.sol:2:1: ParserError: Source \n"
+    "file requires different compiler version (current compiler is \n"
+    "0.7.3+commit.9bfce1f6.Linux.g++) - note that nightly builds are considered to be\n"
+    "strictly less than the released version\n"
+    "pragma solidity ^0.8.0;\n"
+    "^---------------------^\n"
+)
+
+SINGLE_LINE_COMPILER_VERSION_MISMATCH = (
+    "Compiling certora/mocks/DummyERC20Impl.sol...\n"
+    "solc7.3 had an error:\n"
+    "certora/mocks/DummyERC20Impl.sol:2:1: ParserError: Source file requires different compiler version (current compiler is 0.7.3+commit.9bfce1f6.Linux.g++)\n"
+    "pragma solidity ^0.8.0;\n"
+)
+
+MISMATCH_CONTRACTS = [
+    ContractHandle(contract_name="DummyERC20Impl", source_file="certora/mocks/DummyERC20Impl.sol"),
+    ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol"),
+]
+
+
+@pytest.fixture
+def resolve_pragma_offline(monkeypatch):
+    """resolve_pragma_to_version fetches soliditylang.org; pin it for tests."""
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.resolve_pragma_to_version",
+        lambda spec, **kwargs: "0.8.30",
+    )
+
+
+def test_detects_wrapped_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager, resolve_pragma_offline
+) -> None:
+    # Regression: the wrapped marker phrase was missed, so the scene-wide wrong
+    # compiler pin was never repaired and the run died in compilation analysis.
+    result = manager._detect_compiler_version_mismatch(
+        WRAPPED_COMPILER_VERSION_MISMATCH, MISMATCH_CONTRACTS
+    )
+    assert result == ("DummyERC20Impl", "0.8.30")
+
+
+def test_detects_single_line_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager, resolve_pragma_offline
+) -> None:
+    result = manager._detect_compiler_version_mismatch(
+        SINGLE_LINE_COMPILER_VERSION_MISMATCH, MISMATCH_CONTRACTS
+    )
+    assert result == ("DummyERC20Impl", "0.8.30")
+
+
+def test_ignores_unrelated_compiler_version_mismatch(
+    manager: CompilationWorkaroundManager,
+) -> None:
+    assert manager._detect_compiler_version_mismatch(UNRELATED_OUTPUT, MISMATCH_CONTRACTS) is None
+
+
+def test_compiler_mismatch_workaround_fires_with_global_solc(
+    manager, monkeypatch, tmp_path, resolve_pragma_offline
+) -> None:
+    # Regression: `enabled=not solc_already_set` disabled the only recovery path
+    # exactly when a build system pinned a wrong global solc. The workaround must
+    # override the seeded compiler_map entry from the pragma.
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_COMPILER_VERSION_MISMATCH],
+        MISMATCH_CONTRACTS,
+        extra_config={"solc": "solc7.3"},
+    )
+    assert success is True
+    assert fake_run.calls == 2  # failing compile + one recompile after the fix
+    assert compilation_config["compiler_map"]["DummyERC20Impl"] == "solc8.30"
+    assert compilation_config["compiler_map"]["Vault"] == "solc7.3"
+
+
+# =============================================================================
+# Seeding: a precomputed compiler_map with a lingering scalar solc
+# =============================================================================
+#
+# _precompute_compiler_settings can hand the loop a conf that already carries a
+# compiler_map (from Foundry build artifacts) next to the build system's scalar
+# "solc" — certoraRun rejects that pair before invoking any solc, so no output
+# detector can ever catch it (observed in the wild on projects whose foundry.toml
+# pins one solc version while the build artifacts were produced with another).
+# Seeding must fold the scalar into the map (as the default for uncovered
+# contracts) so the very first certoraRun already gets a legal conf.
+
+
+def test_seed_folds_scalar_solc_into_existing_compiler_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    contracts = [
+        ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol"),
+        ContractHandle(
+            contract_name="DummyERC20Impl", source_file="certora/mocks/DummyERC20Impl.sol"
+        ),
+    ]
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [],
+        contracts,
+        extra_config={"solc": "solc8.30", "compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert fake_run.calls == 1  # legal conf from the start — no retry needed
+    assert "solc" not in compilation_config
+    assert compilation_config["compiler_map"] == {
+        "Vault": "solc8.35",
+        "DummyERC20Impl": "solc8.30",
+    }
+    assert "solc" not in updated
+    assert updated["compiler_map"] == compilation_config["compiler_map"]
+
+
+SOLC_NOT_FOUND_OUTPUT = (
+    "attribute/flag 'compiler_map': Solidity executable solc8.35 not found in path\n"
+)
+
+
+def test_solc_fallback_fires_when_pin_is_in_compiler_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # The pin can arrive already folded into compiler_map with no scalar "solc"
+    # (precomputed from build artifacts) — the missing-binary fallback must
+    # still be armed, keyed on the map contents rather than the scalar.
+    monkeypatch.setattr(manager, "_pick_solc_fallback", lambda: "solc8.30")
+    contracts = [ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol")]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert fake_run.calls == 2  # failing compile + one recompile on the fallback
+    # The uniform fallback map collapses back to a scalar on exit.
+    assert compilation_config["solc"] == "solc8.30"
+    assert "compiler_map" not in compilation_config
+
+
+def test_yul_optimizer_rung_respects_project_optimize_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A per-contract solc_optimize_map (foundry compilation_restrictions) with
+    # the optimizer on for EVERY contract: the add-optimizer rung has nothing
+    # left to enable and must not put the scalar next to the map (certoraRun
+    # rejects the pair) — the ladder escalates past it: solc's default Yul
+    # steps first, then relaxing the autofinder assertion.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_YUL_STACK_TOO_DEEP, WRAPPED_YUL_STACK_TOO_DEEP],
+        contracts,
+        extra_config={
+            "solc_optimize_map": {"Foo": "1", "Bar": "200"},
+            "assert_autofinder_success": True,
+        },
+    )
+    assert success is True
+    assert fake_run.calls == 3
+    assert "solc_optimize" not in compilation_config
+    assert compilation_config["solc_optimize_map"] == {"Foo": "1", "Bar": "200"}
+    assert compilation_config["strict_solc_optimizer"] is True
+    assert compilation_config["assert_autofinder_success"] is False
+
+
+def test_yul_optimizer_rung_enables_off_entries_in_optimize_map(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A map entry of "0" (or a missing one) means the optimizer is off for that
+    # contract — exactly the misconfiguration the add-optimizer rung exists to
+    # fix. It must enable those entries in the map (never the scalar, which
+    # cannot legally sit next to it) while keeping explicit project runs
+    # values; only once every entry is on may the ladder escalate (to solc's
+    # default Yul steps — the autofinder assertion survives that step).
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [WRAPPED_YUL_STACK_TOO_DEEP, WRAPPED_YUL_STACK_TOO_DEEP],
+        contracts,
+        extra_config={
+            "solc_optimize_map": {"Foo": "0", "Bar": "1"},
+            "assert_autofinder_success": True,
+        },
+    )
+    assert success is True
+    # Pass 1 enables Foo's optimizer; pass 2 (optimizer on everywhere, error
+    # persists) escalates to solc's default Yul steps; the third compile
+    # succeeds with the autofinder assertion intact.
+    assert fake_run.calls == 3
+    assert "solc_optimize" not in compilation_config
+    assert compilation_config["solc_optimize_map"] == {"Foo": "200", "Bar": "1"}
+    assert compilation_config["strict_solc_optimizer"] is True
+    assert compilation_config["assert_autofinder_success"] is True
+
+
+# Whole-project solc error with no per-file "Compiling <path>..." progress line: the
+# offending file is named only in the `-->` source-location line. solc hard-wraps the
+# diagnostic, so that line sits a few lines below "CompilerError" (verbatim wrapping).
+BULK_STACK_TOO_DEEP = (
+    "solc8.34 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with `--via-ir` (cli) or the \n"
+    "equivalent `viaIR: true` (standard JSON) while enabling the optimizer. \n"
+    "Otherwise, try removing local variables.\n"
+    "   --> contracts/Foo.sol:352:36:\n"
+)
+
+
+def test_detects_bulk_stack_too_deep_via_source_location(manager: CompilationWorkaroundManager) -> None:
+    # No "Compiling <path>..." line — the file is recovered from `--> <path>:line:col`.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_stack_too_deep_errors(BULK_STACK_TOO_DEEP, contracts) == "Foo"
+
+
+def test_bulk_stack_too_deep_unmapped_path_returns_none(manager: CompilationWorkaroundManager) -> None:
+    # The `-->` file isn't one of the scene contracts, so there is nothing to enable
+    # via_ir for — return None rather than guessing.
+    contracts = [ContractHandle(contract_name="Other", source_file="contracts/Other.sol")]
+    assert manager._detect_stack_too_deep_errors(BULK_STACK_TOO_DEEP, contracts) is None
+
+
+# A per-file "Compiling <path>..." error resolves via that line (Pattern 2), which
+# takes precedence over the `-->` source-location fallback.
+COMPILING_LINE_STACK_TOO_DEEP = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.34 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with `--via-ir`.\n"
+    "   --> lib/somewhere/Inlined.sol:10:5:\n"
+)
+
+
+def test_compiling_line_takes_precedence_over_source_location(manager: CompilationWorkaroundManager) -> None:
+    # The Compiling line names Foo; the `-->` names an unrelated inlined lib file.
+    # Pattern 2 wins, mapping to the contract actually being compiled.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_stack_too_deep_errors(COMPILING_LINE_STACK_TOO_DEEP, contracts) == "Foo"
+
+
+# ---------------------------------------------------------------------------
+# Build-config directory for a monorepo sub-project
+# ---------------------------------------------------------------------------
+
+
+def _no_forge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulate `forge` not being installed (the CI reality)."""
+
+    def fake_run(*_args, **_kwargs):
+        raise FileNotFoundError("forge")
+
+    monkeypatch.setattr(remappings_mod.subprocess, "run", fake_run)
+
+
+def test_packages_come_from_the_nested_build_config_dir(tmp_path: Path, monkeypatch) -> None:
+    # Regression: the workaround read remapping sources from the run root, so a repo
+    # whose Foundry project sits one level down yielded only the root package.json deps.
+    # It then recomputed the identical list on the retry and gave up with
+    # "conf and command are unchanged".
+    _no_forge(monkeypatch)
+    (tmp_path / "package.json").write_text('{"dependencies": {"ethers": "^6"}}')
+    project = tmp_path / "sub"
+    project.mkdir()
+    (project / "foundry.toml").write_text(
+        '[profile.default]\nremappings = ["@pkg/=node_modules/@pkg/artifacts/src/"]\n'
+    )
+
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    packages = manager._build_packages_from_remapping_sources()
+
+    keys = {p.split("=", 1)[0] for p in packages}
+    assert "@pkg/" in keys, "nested foundry.toml remapping must reach the packages list"
+    # Paths are absolute against the build config dir, so they stay valid from the run root.
+    assert f"@pkg/={project / 'node_modules/@pkg/artifacts/src'}/" in packages
+
+
+def test_build_config_dir_defaults_to_project_root(tmp_path: Path, monkeypatch) -> None:
+    # Root-level projects keep today's behaviour without the caller passing anything.
+    _no_forge(monkeypatch)
+    (tmp_path / "foundry.toml").write_text('[profile.default]\nremappings = ["@oz/=lib/oz/"]\n')
+
+    manager = CompilationWorkaroundManager(project_root=tmp_path)
+
+    assert manager.build_config_dir == tmp_path
+    assert f"@oz/={tmp_path / 'lib/oz'}/" in manager._build_packages_from_remapping_sources()
+
+
+# =============================================================================
+# Declared EVM version: seeding, invalid-version drop, cancun reconciliation
+# =============================================================================
+#
+# A project-declared EVM version (foundry `evm_version` / hardhat `evmVersion`)
+# reaches the conf as scalar `solc_evm_version`. solc rejects a version it does
+# not know with the uniform "Invalid EVM version requested." text — the
+# invalid_evm_version workaround drops the setting on that signal (global per
+# conf: the prover requires solc_evm_version_map to cover every file and a map
+# entry cannot express "use this solc's default").
+
+INVALID_EVM_VERSION_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.17 had an error:\n"
+    "Invalid EVM version requested.\n"
+)
+
+# solc hard-wraps diagnostics; the detector must survive the phrase split
+# across a newline like the other wrap-sensitive detectors.
+WRAPPED_INVALID_EVM_VERSION_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.17 had an error:\n"
+    "Invalid EVM\n"
+    "version requested.\n"
+)
+
+CANCUN_MCOPY_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.22 had an error:\n"
+    'DeclarationError: Function "mcopy" not found\n'
+)
+
+
+def test_detects_invalid_evm_version_only_with_live_key(
+    manager: CompilationWorkaroundManager,
+) -> None:
+    assert (
+        manager._detect_invalid_evm_version(
+            INVALID_EVM_VERSION_OUTPUT, {"solc_evm_version": "paris"}
+        )
+        == "detected"
+    )
+    assert (
+        manager._detect_invalid_evm_version(
+            WRAPPED_INVALID_EVM_VERSION_OUTPUT, {"solc_evm_version_map": {"Foo": "paris"}}
+        )
+        == "detected"
+    )
+    # No EVM version in the live conf -> nothing to drop, never fires.
+    assert manager._detect_invalid_evm_version(INVALID_EVM_VERSION_OUTPUT, {}) is None
+    assert (
+        manager._detect_invalid_evm_version(UNRELATED_OUTPUT, {"solc_evm_version": "paris"})
+        is None
+    )
+
+
+def test_invalid_evm_version_dropped_and_compiles(manager, monkeypatch, tmp_path) -> None:
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [INVALID_EVM_VERSION_OUTPUT],
+        contracts,
+        extra_config={"solc_evm_version": "unknownfork"},
+    )
+    assert success is True
+    assert fake_run.calls == 2  # failing compile + one recompile after the drop
+    for config in (compilation_config, updated):
+        assert "solc_evm_version" not in config
+        assert "solc_evm_version_map" not in config
+
+
+def test_declared_evm_version_round_trips_through_seeding(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # An unrelated failure/fix cycle must not lose the declared version: it is
+    # seeded into a total map for the workarounds and collapsed back to the
+    # scalar on finalize.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [UNNAMED_RETURN_WARNING_OUTPUT],
+        contracts,
+        extra_config={"solc_evm_version": "paris"},
+    )
+    assert success is True
+    assert compilation_config["solc_evm_version"] == "paris"
+    assert "solc_evm_version_map" not in compilation_config
+    assert updated["solc_evm_version"] == "paris"
+
+
+def test_cancun_overrides_one_contract_keeps_declared_for_rest(
+    manager, monkeypatch, tmp_path
+) -> None:
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, updated, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [CANCUN_MCOPY_OUTPUT],
+        contracts,
+        extra_config={"solc_evm_version": "paris"},
+    )
+    assert success is True
+    assert compilation_config["solc_evm_version_map"] == {"Foo": "cancun", "Bar": "paris"}
+    assert "solc_evm_version" not in compilation_config
+    assert updated["solc_evm_version_map"] == {"Foo": "cancun", "Bar": "paris"}
+
+
+def test_unseeded_cancun_map_not_promoted_to_scalar(manager, monkeypatch, tmp_path) -> None:
+    # Without a declared version the cancun entry is a partial, single-contract
+    # map; collapsing it to a global scalar would force cancun on every file.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [CANCUN_MCOPY_OUTPUT],
+        contracts,
+    )
+    assert success is True
+    assert compilation_config["solc_evm_version_map"] == {"Foo": "cancun"}
+    assert "solc_evm_version" not in compilation_config

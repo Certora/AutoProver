@@ -1,11 +1,11 @@
 import pathlib
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from langchain_core.tools import BaseTool
 
 from graphcore.tools.vfs import DirBackend, FSBackend, Materializer, fs_tools_layered
 
-from composer.spec.gen_types import TypedTemplate
+from composer.spec.gen_types import PartialTemplate
 from composer.spec.system_model import Application, FromSourceApplication
 from composer.spec.natspec.models import (
     InterfaceResult,
@@ -19,9 +19,8 @@ from composer.spec.natspec.task_description import (
 class PathChoosingConf(TypedDict):
     agent_chooses_path: bool
 
-_InterfaceTemplate = TypedTemplate[PathChoosingConf]("interface_generation_prompt.j2")
-_StubTemplate = TypedTemplate[PathChoosingConf]("stub_generation_prompt.j2")
-
+_InterfaceTemplate = PartialTemplate[PathChoosingConf, InterfaceGenCallParams]("interface_generation_prompt.j2")
+_StubTemplate = PartialTemplate[PathChoosingConf, StubGenCallParams]("stub_generation_prompt.j2")
 
 def build_mental_model(
     *,
@@ -34,10 +33,10 @@ def build_mental_model(
     agent_chooses_path = source_root is not None
     interface_prompt = _InterfaceTemplate.bind(
         {"agent_chooses_path": agent_chooses_path}
-    ).depends(InterfaceGenCallParams)
+    )
     stub_prompt = _StubTemplate.bind(
         {"agent_chooses_path": agent_chooses_path}
-    ).depends(StubGenCallParams)
+    )
 
     if source_root is not None:
         return MentalModel(

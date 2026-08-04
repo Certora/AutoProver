@@ -288,6 +288,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
             lambda: get_invariant_formulation(run.ctx, run.source, run.env, self._harnessed),
         )
 
+AP_PROPERTIES_KEY_NAME = "ap-properties"
 
 @dataclass
 class ProverBackend:
@@ -299,7 +300,7 @@ class ProverBackend:
         "formalization": AutoProvePhase.CVL_GEN,
         "report": AutoProvePhase.REPORT
     })
-    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "ap-properties")
+    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, AP_PROPERTIES_KEY_NAME)
 
     artifact_store: ProverArtifactStore
     _prover_opts: ProverOptions

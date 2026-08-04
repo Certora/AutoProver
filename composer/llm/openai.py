@@ -14,15 +14,18 @@ signal and are ignored.
 from typing import Literal, TypeGuard, Any, TYPE_CHECKING
 import io
 from dataclasses import dataclass, field
+from functools import cache
 import asyncio
 
 import openai
 
-from composer.input.files import _UploaderBase
+from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderKind, CacheLevel, _ListIter, NoSuchElementError,
+    ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from .types import CacheLevel
+from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -67,7 +70,7 @@ def _parse_gpt_version(token: str) -> tuple[int, int]:
     return (int(token), 0)
 
 def _model_parser(model_name: str) -> OpenAIModelFeatures:
-    stream = _ListIter(model_name.split("-"))
+    stream = ListIter(model_name.split("-"))
     parsing: Literal["family", "version", "tier"] = "family"
     try:
         head = stream.next()
@@ -113,6 +116,23 @@ def matches(model: str) -> bool:
     return head in ("gpt", "chatgpt") or _is_o_series(head)
 
 
+# Prompt capacity to assume. Note that OpenAI's windows don't
+# track the version number (gpt-4o is 128k, gpt-4.1 is 1M, gpt-5 is 400k), so no pivot describes
+# them all and a per-model table would go stale every release. Anything the family plus one `>=`
+# can't place is assumed to hold 200k, which understates gpt-4.1 and overstates gpt-4o.
+_assumed_context_window = 200_000
+_gpt5_context_window = 400_000
+
+# Coincides with `_reasoning_pivot_version` today, but tracks the window rather than reasoning.
+_gpt5_window_pivot_version = (5, 0)
+
+
+def _context_window(features: OpenAIModelFeatures) -> int:
+    if features.family == "gpt" and features.version_tuple >= _gpt5_window_pivot_version:
+        return _gpt5_context_window
+    return _assumed_context_window
+
+
 def _reasoning_effort(thinking_tokens: int) -> Literal["low", "medium", "high"]:
     """Map a thinking-token budget onto OpenAI's three-step effort knob."""
     if thinking_tokens <= 2048:
@@ -121,18 +141,38 @@ def _reasoning_effort(thinking_tokens: int) -> Literal["low", "medium", "high"]:
         return "medium"
     return "high"
 
+class OpenAIService(ProviderServiceBase):
+    def __init__(self):
+        from graphcore.tools.memory import openai_async_memory_tool
+        super().__init__(
+            openai_async_memory_tool,
+            OpenAIFileUploader.lazy
+        )
+
+@dataclass
+class OpenAIRenderer:
+    def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        to_ret : dict[str, Any] = {"type": "text", "text": text}
+        return to_ret
+    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        return {
+            "type": "file",
+            "file": {
+                "file_id": file_id,
+            },
+        }
 
 # --- Files API uploader ----------------------------------------------------
 
 @dataclass
-class OpenAIFileUploader(_UploaderBase):
+class OpenAIFileUploader(UploaderBase):
     """``FileUploader`` impl backed by OpenAI's Files API
     (``purpose="user_data"``)."""
 
     client: openai.AsyncOpenAI
     uploaded: dict[str, str] | None = None
     _seed_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    provider: ProviderKind = "openai"
+    renderer: ContentRenderer = field(default_factory=OpenAIRenderer)
 
     async def _ensure_seeded(self) -> dict[str, str]:
         """Seed the dedup cache from the account's existing user-data uploads on
@@ -162,6 +202,10 @@ class OpenAIFileUploader(_UploaderBase):
     def lazy() -> "OpenAIFileUploader":
         """A lazily-seeding uploader — no account file-list until first upload."""
         return OpenAIFileUploader(client=openai.AsyncOpenAI())
+    
+@cache
+def _openai_service():
+    return OpenAIService()
 
 
 # --- ModelProvider ---------------------------------------------------------
@@ -175,14 +219,18 @@ class OpenAIModelProvider:
     model_name: str
     options: ModelConfiguration
     features: OpenAIModelFeatures
-    provider: ProviderKind = "openai"
+    provider: OpenAIService = field(default_factory=_openai_service)
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "OpenAIModelProvider":
         return OpenAIModelProvider(model_name, options, _model_parser(model_name))
 
+    @property
+    def max_prompt_tokens(self) -> int:
+        return compaction_threshold(_context_window(self.features))
+
     def builder_for(
-        self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
+        self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_openai import ChatOpenAI
 
@@ -192,18 +240,22 @@ class OpenAIModelProvider:
             "store": False,
             "include": ["reasoning.encrypted_content"],
         }
-        
+
         if opts.thinking_tokens is not None and not disable_thinking and self.features.reasoning:
             kwargs["reasoning"] = {
                 "effort": _reasoning_effort(opts.thinking_tokens),
                 "summary": "auto"
             }
-            
+
         return ChatOpenAI(
             model=self.model_name,
             max_completion_tokens=opts.tokens,
-            temperature=1,
             timeout=None,
             max_retries=2,
             **kwargs,
         )
+
+OPEN_AI_SPEC = ProviderSpec(
+    matches=matches,
+    build=OpenAIModelProvider.create
+)
