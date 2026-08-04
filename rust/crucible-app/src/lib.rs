@@ -167,6 +167,44 @@ struct JudgeSystem;
 #[template(path = "probe_fn.j2", escape = "none")]
 struct ProbeFn;
 
+/// One component's authored tests, wrapped in its feature-gated module plus the generated
+/// `#[invariant_test]` entry that delegates into it. See the template for why the `#[cfg]` (not the
+/// module) is what isolates sections, and why the entry cannot live inside the module.
+#[derive(Template)]
+#[template(path = "section_module.j2", escape = "none")]
+struct SectionModule<'a> {
+    /// The component's harness fn name, which is also its Cargo feature (`c_<slug>`).
+    feature: &'a str,
+    module: &'a str,
+    body: &'a str,
+}
+
+impl<'a> SectionModule<'a> {
+    /// Wrap `body` — an authored section — for harness fn `feature`.
+    ///
+    /// Two normalizations are applied to the authored source first, both anchored on the known fn
+    /// name rather than by parsing Rust, because the wrapper cannot work without them:
+    ///
+    /// * **Any `#[invariant_test]` on the authored fn is dropped.** The prompt asks for a bare
+    ///   `pub fn`, but a model that adds the attribute anyway would expand `fn main()` *inside* the
+    ///   module, where it is not a binary entry point — a confusing link error rather than a
+    ///   compile error the revise loop could act on.
+    /// * **The authored fn is made `pub`.** It is called from the crate root, so a private fn is
+    ///   `E0603`. Cheaper to fix here than to spend a revise round on it.
+    fn wrap(feature: &str, body: &str) -> String {
+        let module = format!("section_{feature}");
+        let body = body.replace("#[invariant_test]\n", "").replace("#[invariant_test]", "");
+        let body = if body.contains(&format!("pub fn {feature}")) {
+            body
+        } else {
+            body.replace(&format!("fn {feature}"), &format!("pub fn {feature}"))
+        };
+        SectionModule { feature, module: &module, body: body.trim(), }
+            .render()
+            .expect("render section_module")
+    }
+}
+
 /// The wheel-authored fixture the **preflight** gate builds (`docs/crucible-application.md` §5.0) —
 /// no LLM involved. `crate_id` names both the module the program's types come from and the `.so`
 /// basename, exactly as in an authored fixture, so the preflight proves the same two paths resolve.
@@ -1194,8 +1232,12 @@ impl Backend for CrucibleApp {
             }
             "setup" => (format!("{spec}{}", probe()), "c_probe".to_string()),
             _ => {
+                // Same shape the deliverable gets (`finalize`): the section sealed behind its
+                // feature. Assembling it differently here is what let a green gate ship a crate
+                // that did not build — see docs/crucible-component-units.md and the e2e gate.
                 let fixture = ctx_str(input, "fixture");
-                (format!("{fixture}\n\n{spec}"), harness_fn(input))
+                let fname = harness_fn(input);
+                (format!("{fixture}\n\n{}", SectionModule::wrap(&fname, spec)), fname)
             }
         };
         let files = hspec.files(&main_rs, std::slice::from_ref(&feature));
@@ -1229,8 +1271,12 @@ impl Backend for CrucibleApp {
         let program = &input.program;
         let fixture = ctx_str(input, "fixture");
         let timeout = ctx_u64(input, "fuzz_timeout", 30);
-        let files = HarnessSpec::of(input)
-            .files(&format!("{fixture}\n\n{spec}"), std::slice::from_ref(&unit.to_string()));
+        // Wrapped exactly as `compile` and `finalize` do it — one shape for the gate and the
+        // deliverable, so what is fuzzed is what ships.
+        let files = HarnessSpec::of(input).files(
+            &format!("{fixture}\n\n{}", SectionModule::wrap(unit, spec)),
+            std::slice::from_ref(&unit.to_string()),
+        );
         let args = vec![
             "run".to_string(),
             program.clone(),
@@ -1348,21 +1394,28 @@ impl Backend for CrucibleApp {
             return BTreeMap::new();
         }
 
-        // Emit each distinct section once. Normally every component contributes its own fn and the
-        // sections already differ; the guard is for two targets that resolved to the same authored
-        // source, which would otherwise write that harness fn twice and fail to compile. (The gated
-        // builds never see this: `compile`/`validate` assemble fixture + spec directly, and only
-        // this render folds the whole outcome set into one crate.)
-        let mut body_parts: Vec<&str> = Vec::new();
-        for text in sections.values() {
-            if !body_parts.contains(&text.as_str()) {
-                body_parts.push(text);
+        // One feature-gated module per DISTINCT authored body, wrapped exactly as the gated builds
+        // wrap it. Because only one feature is ever enabled, two components' same-named helpers can
+        // no longer collide — which is what made a green run deliver a crate that compiled for no
+        // feature at all (see `SectionModule` and docs/crucible-component-units.md).
+        //
+        // The dedupe survives for the case it was written for: two targets that resolved to the same
+        // authored source. Wrapping that body twice would emit a second entry delegating to a fn the
+        // source never defines, so it is wrapped once, under the first target — and only the features
+        // we actually emit an entry for get declared, since a feature whose `main()` does not exist
+        // is a link error rather than a usable fuzz target.
+        let mut wrapped: Vec<String> = Vec::new();
+        let mut features: Vec<String> = Vec::new();
+        let mut seen: Vec<&str> = Vec::new();
+        for (feature, text) in &sections {
+            if seen.contains(&text.as_str()) {
+                continue;
             }
+            seen.push(text);
+            wrapped.push(SectionModule::wrap(feature, text));
+            features.push(feature.clone());
         }
-        let body = body_parts.join("\n\n");
-        // Declare exactly the features that gate a delivered `main()` — one per component, which is
-        // what `crucible run <program> <fn>` selects.
-        let features: Vec<String> = sections.keys().cloned().collect();
+        let body = wrapped.join("\n");
         let authored = format!(
             "{}\n\n{}{}",
             fixture.trim_end(),
@@ -2044,6 +2097,130 @@ Error: Build failed
 }
 
 #[cfg(test)]
+mod section_isolation {
+    //! Each component's authored tests are sealed behind their Cargo feature, so two components
+    //! can define same-named helpers without interfering. This is the fix for the klend run of
+    //! 2026-08-03, where two components each emitted an ungated
+    //! `impl Fixture { fn read_token_balance }` and the delivered crate compiled for **no**
+    //! feature — while all 14 gated builds had passed, because each assembled only its own section.
+    use super::*;
+
+    /// Two components' sections, each with its own same-named private helper — verbatim the shape
+    /// that collided (`E0592 duplicate definitions with name read_token_balance`).
+    const SEC_A: &str = "pub fn c_a(fixture: &mut Fixture) { let _ = fixture.read_token_balance(); }\n\
+                         impl Fixture { fn read_token_balance(&self) -> u64 { 1 } }";
+    const SEC_B: &str = "pub fn c_b(fixture: &mut Fixture) { let _ = fixture.read_token_balance(); }\n\
+                         impl Fixture { fn read_token_balance(&self) -> u64 { 2 } }";
+
+    /// Rendered source with `//` comment lines dropped. The section template *explains* the
+    /// `#[cfg]`/`#[invariant_test]` mechanics in prose, so counting tokens over the raw render
+    /// would count the documentation too.
+    fn code_only(s: &str) -> String {
+        s.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n")
+    }
+
+    fn delivered(components: serde_json::Value) -> String {
+        let outcomes = serde_json::json!({
+            "program": "lending",
+            "setup": "struct Fixture {}",
+            "program_crate": { "dir": "p", "lib": "lending_program", "package": "lending_program" },
+            "idl": "",
+            "components": components,
+        });
+        CrucibleApp
+            .finalize(&outcomes)
+            .get("fuzz/lending/src/main.rs")
+            .expect("main.rs")
+            .clone()
+    }
+
+    #[test]
+    fn a_section_is_gated_and_its_entry_point_delegates_into_it() {
+        let out = SectionModule::wrap("c_a", SEC_A);
+        assert!(out.contains("#[cfg(feature = \"c_a\")]\nmod section_c_a {"), "{out}");
+        assert!(out.contains("use super::*;"), "{out}");
+        // The entry is ours, at crate root, gated on the same feature, delegating in.
+        assert!(
+            out.contains(
+                "#[cfg(feature = \"c_a\")]\n#[invariant_test]\nfn c_a(fixture: &mut Fixture) {\n    \
+                 section_c_a::c_a(fixture)\n}"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_authored_invariant_test_attribute_is_dropped() {
+        // A model that adds the attribute anyway would expand `fn main()` INSIDE the module, which
+        // is not a binary entry point — a link error rather than something the revise loop can fix.
+        let out = code_only(&SectionModule::wrap("c_a", &format!("#[invariant_test]\n{SEC_A}")));
+        assert_eq!(out.matches("#[invariant_test]").count(), 1, "only the generated one:\n{out}");
+        // …and the one that remains is the generated entry, not inside the module.
+        let (module, entry) = out.split_once("\n}\n").expect("module then entry");
+        assert!(!module.contains("#[invariant_test]"), "{module}");
+        assert!(entry.contains("#[invariant_test]"), "{entry}");
+    }
+
+    #[test]
+    fn the_authored_fn_is_made_visible_to_the_generated_entry() {
+        // Called from the crate root, so a private fn is E0603. Cheaper than a revise round.
+        let out = SectionModule::wrap("c_a", "fn c_a(fixture: &mut Fixture) {}");
+        assert!(out.contains("pub fn c_a(fixture: &mut Fixture)"), "{out}");
+    }
+
+    #[test]
+    fn an_already_public_fn_is_left_alone() {
+        let out = SectionModule::wrap("c_a", SEC_A);
+        assert_eq!(out.matches("pub fn c_a").count(), 1, "no double-pub:\n{out}");
+        assert!(!out.contains("pub pub"), "{out}");
+    }
+
+    #[test]
+    fn two_components_may_define_the_same_helper_name() {
+        let main_rs = delivered(serde_json::json!([
+            { "name": "A", "delivered": true, "targets": ["c_a"], "artifact_text": SEC_A },
+            { "name": "B", "delivered": true, "targets": ["c_b"], "artifact_text": SEC_B },
+        ]));
+        let code = code_only(&main_rs);
+        // Both helpers are present in the source…
+        assert_eq!(code.matches("fn read_token_balance").count(), 2, "{code}");
+        // …each sealed in its own gated module, so they never coexist in a build.
+        assert!(code.contains("#[cfg(feature = \"c_a\")]\nmod section_c_a {"), "{code}");
+        assert!(code.contains("#[cfg(feature = \"c_b\")]\nmod section_c_b {"), "{code}");
+        // One gated entry per feature, so exactly one `fn main()` exists in any build.
+        assert_eq!(code.matches("#[invariant_test]").count(), 2, "{code}");
+    }
+
+    #[test]
+    fn the_gate_and_the_deliverable_assemble_the_same_shape() {
+        // The whole reason a green gate could ship a broken crate: the two used to differ. A gated
+        // build's main.rs must be the deliverable restricted to one section — `compile`/`validate`
+        // and `finalize` now go through the same `SectionModule::wrap`, and this pins that.
+        let gate_section = SectionModule::wrap("c_a", SEC_A);
+        let main_rs = delivered(serde_json::json!([
+            { "name": "A", "delivered": true, "targets": ["c_a"], "artifact_text": SEC_A },
+        ]));
+        assert!(
+            main_rs.contains(gate_section.trim()),
+            "gate shape absent from deliverable:\n{main_rs}"
+        );
+    }
+
+    #[test]
+    fn a_body_shared_by_two_targets_is_wrapped_once_and_declares_one_feature() {
+        // Wrapping it twice would emit an entry delegating to a fn the source never defines, and
+        // declaring a feature with no `main()` is a link error, not a usable fuzz target.
+        let code = code_only(&delivered(serde_json::json!([
+            { "name": "A", "delivered": true, "targets": ["c_a", "c_b"], "artifact_text": SEC_A },
+        ])));
+        assert_eq!(code.matches("mod section_").count(), 1, "{code}");
+        // `c_b` is not emitted at all — and since the declared feature list is built in the same
+        // loop as the wrapped sections, it is not declared either.
+        assert!(!code.contains("c_b"), "undeliverable target reached the crate:\n{code}");
+    }
+}
+
+#[cfg(test)]
 mod crash_triage {
     //! A `BAD` verdict must carry enough to triage it without rebuilding the harness: the
     //! reproducing sequence, and a flag when the metadata alone shows the counterexample is a
@@ -2227,4 +2404,5 @@ mod crash_triage {
         assert_eq!(finding_detail(raw, &missing, "p", "c_u").as_deref(), Some(raw));
     }
 }
+
 
