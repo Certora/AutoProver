@@ -212,8 +212,13 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
     built = await build_program(_SCENARIO, _PROGRAM, timeout_s=590)
     assert built.so_path.is_file(), built.so_path
 
+    # Built BEFORE the connections: `standard_connections` takes the resolved provider
+    # service (it asks it for an uploader and the memory tool), not a provider name.
+    _tiered = get_provider_for(tiered=cast(Any, args))
     async with (
-        standard_connections(provider="anthropic", embedder=DefaultEmbedder(MockSentenceTransformer())) as conns,
+        standard_connections(
+            provider=_tiered.provider_service, embedder=DefaultEmbedder(MockSentenceTransformer())
+        ) as conns,
         async_tool_context(),
     ):
         content = await conns.uploader.get_document(_SCENARIO / "system.md")
@@ -223,7 +228,6 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             contract_name=SolidityIdentifier(_PROGRAM),
             relative_path=f"programs/{_PROGRAM}/src/lib.rs", forbidden_read=RUST_FORBIDDEN_READ,
         )
-        _tiered = get_provider_for(tiered=cast(Any, args))
         model_provider = ModelProvider(
             heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
