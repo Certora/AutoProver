@@ -15,6 +15,15 @@
 #   # The design-doc path is optional; omit it to auto-discover one from the project:
 #   docker compose -f scripts/docker-compose.yml --profile autoprove run --rm autoprove \
 #       console-autoprove --cloud /work/<proj> /work/<proj>/src/X.sol:X
+#
+# Host sizing: `autoprove` is deliberately left uncapped, so its ceiling is whatever the
+# Docker VM has. A pipeline run loads the embedding model, holds a scene in memory, and
+# streams down prover result archives that reach hundreds of megabytes, alongside the
+# postgres service and anything else already running on the same VM. Below roughly 12 GiB
+# it contends for memory with itself; on Apple Silicon the images are linux/amd64 and run
+# under emulation, which makes that contention markedly worse. Raise it in Docker Desktop
+# under Settings -> Resources (or `colima start --memory`) rather than here — a compose
+# limit can only ever lower what a service gets.
 name: composer_db
 
 services:
