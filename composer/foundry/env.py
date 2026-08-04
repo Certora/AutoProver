@@ -19,6 +19,7 @@ The resulting env satisfies four protocols the foundry workflow consumes:
 """
 
 
+from graphcore.tools.vfs import GlobalExcludeArg
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 
@@ -36,7 +37,7 @@ def build_foundry_env(
     *,
     model_provider: ModelProvider,
     project_root: str,
-    forbidden_read: str,
+    forbidden_read: GlobalExcludeArg,
     rag_db: ComposerRAGDB,
     store: BaseStore,
     source_question_ns: tuple[str, ...],

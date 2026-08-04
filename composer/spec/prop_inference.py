@@ -17,9 +17,10 @@ from composer.input.files import Document
 from composer.llm.types import CacheLevel
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
-from composer.spec.system_model import ContractComponentInstance, component_context
+from composer.spec.system_model import ContractComponentInstance, FeatureUnit, component_context
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.service_host import Sort, ServiceHost
 from composer.io.conversation import ConversationContextProvider
@@ -61,6 +62,50 @@ class _AgentRoundResult(_BugAnalysisCache):
         "mode) will read this -- not your message history -- to "
         "understand your reasoning. Be specific."
     )
+
+class PropertySystemPromptParams(TypedDict):
+    """Kwargs for the property-extraction agent's system prompt template.
+
+    ``backend_guidance`` lives here, not on the initial prompt: it is fixed for the whole
+    run, so putting it in the (rendered-once) system prompt keeps it inside the cached
+    prefix instead of re-sending it with every round's initial prompt."""
+    sort: Sort
+    backend_guidance: str
+
+
+#: Renders the property-extraction agent's per-round initial prompt for one ecosystem's unit
+#: type. A *renderer* rather than a ``TypedTemplate``, because the initial prompt's params carry
+#: the unit: each ecosystem declares its own param dict naming its concrete unit (so the template
+#: fuzzer can construct one — see :func:`~composer.spec.system_model.component_context`), and only
+#: code that knows that concrete type can bind the template. This agent stays generic over
+#: ``FeatureUnit`` and just asks for the string.
+type InitialPromptRenderer[U: FeatureUnit] = Callable[[U, Sort, list[_AgentRoundResult]], str]
+
+
+@component_context
+class EvmPropertyPromptParams(TypedDict):
+    """Kwargs for the EVM property-extraction agent's initial prompt template."""
+    context: ContractComponentInstance
+    sort: Sort
+    prior_properties: list[_AgentRoundResult]
+
+
+#: The EVM/Solidity property prompts.
+PROPERTY_SYSTEM_TEMPLATE = TypedTemplate[PropertySystemPromptParams]("property_analysis_system_prompt.j2")
+PROPERTY_INITIAL_TEMPLATE = TypedTemplate[EvmPropertyPromptParams]("property_analysis_prompt.j2")
+
+
+def render_evm_property_prompt(
+    context: ContractComponentInstance,
+    sort: Sort,
+    prior_properties: list[_AgentRoundResult],
+) -> str:
+    return PROPERTY_INITIAL_TEMPLATE.bind({
+        "context": context,
+        "sort": sort,
+        "prior_properties": prior_properties,
+    }).render_to(load_jinja_template)
+
 
 class _AgentRoundWithHistory(_AgentRoundResult):
     agent_conversation: list[AnyMessage]
@@ -151,32 +196,6 @@ def _unique_titles_validator(
 
     return validate
 
-@component_context
-class PropertyAnalysisParams(TypedDict):
-    sort: Sort
-    context: ContractComponentInstance
-    prior_properties: list[_AgentRoundResult]
-
-class PropertyAnalysisSystemParams(TypedDict):
-    sort: Sort
-    backend_guidance: str
-
-property_analysis_template = TypedTemplate[PropertyAnalysisParams]("property_analysis_prompt.j2")
-
-property_analysis_system_template = TypedTemplate[PropertyAnalysisSystemParams]("property_analysis_system_prompt.j2")
-
-def _get_initial_prompt(
-    context: ContractComponentInstance,
-    sort: Sort,
-    prev_results: list[_AgentRoundResult],
-) -> str:
-    return property_analysis_template.bind({
-        "context": context,
-        "prior_properties": prev_results,
-        "sort": sort
-    }).render_to(load_jinja_template)
-
-
 def _partition[S](s: Sequence[S], pred: Callable[[S], bool]) -> tuple[list[S], list[S]]:
     a = []
     b = []
@@ -187,10 +206,11 @@ def _partition[S](s: Sequence[S], pred: Callable[[S], bool]) -> tuple[list[S], l
             b.append(t)
     return a, b
 
-def get_initial_prompt_builder(
+def get_initial_prompt_builder[U: FeatureUnit](
     sort: Sort,
     extra_inputs: Sequence[AnyPropertyGenerationInput],
-    component: ContractComponentInstance
+    component: U,
+    render_initial: InitialPromptRenderer[U],
 ) -> Callable[[list[_AgentRoundResult]], MessagePayloadType]:
     # Order priority (to facilitate caching)
     # Generic-always -> generic-first -> component-always -> component-first -> initial-prompt
@@ -230,11 +250,7 @@ def get_initial_prompt_builder(
     extend(later_round_prefix, stable_component_always, cache_last=True)
 
     def renderer(prev_results: list[_AgentRoundResult]) -> MessagePayloadType:
-        rendered = _get_initial_prompt(
-            prev_results=prev_results,
-            context=component,
-            sort=sort
-        )
+        rendered = render_initial(component, sort, prev_results)
         if len(prev_results) == 0:
             # first round
             return [*first_round_prefix, rendered]
@@ -300,25 +316,27 @@ async def _run_bug_round(
     return to_ret
 
 
-async def _run_bug_analysis_inner(
+async def _run_bug_analysis_inner[U: FeatureUnit](
     agent_component_analysis: WorkflowContext[_AgentResult],
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: U,
     extra_input: Sequence[AnyPropertyGenerationInput],
     max_rounds: int,
     backend_guidance: str,
+    system_template: TypedTemplate[PropertySystemPromptParams],
+    render_initial: InitialPromptRenderer[U],
 ) -> _AgentResult:
     if (cached := await agent_component_analysis.cache_get(_AgentResult)) is not None:
         return cached
-    
+
     initial_prompt_builder = get_initial_prompt_builder(
-        extra_inputs=extra_input, component=component, sort=env.sort
+        extra_inputs=extra_input, component=component, sort=env.sort, render_initial=render_initial
     )
 
     prev_rounds : list[_AgentRoundResult] = []
     last_round_convo : list[AnyMessage] | None = None
 
-    system_prompt = property_analysis_system_template.bind({
+    system_prompt = system_template.bind({
         "sort": env.sort,
         "backend_guidance": backend_guidance
     }).render_to(load_jinja_template)
@@ -344,25 +362,27 @@ async def _run_bug_analysis_inner(
     await agent_component_analysis.cache_put(to_ret)
     return to_ret
 
-async def run_property_inference(
+async def run_property_inference[U: FeatureUnit](
     ctx: WorkflowContext[ComponentGroup],
     env: ServiceHost,
-    component: ContractComponentInstance,
+    component: U,
     extra_input : Sequence[AnyPropertyGenerationInput] = tuple(),
     threat_model: Document | None = None,
     refinement: ConversationContextProvider | None = None,
     max_rounds: int = 3,
-    backend_guidance: str = CERTORA_BACKEND_GUIDANCE,
+    *,
+    backend_guidance: str,
+    system_template: TypedTemplate[PropertySystemPromptParams],
+    render_initial: InitialPromptRenderer[U],
 ) -> list[PropertyFormulation]:
     """
     Extract security properties for a component.
 
-    ``backend_guidance`` is inlined verbatim into the property-analysis
-    prompt as the "what's expressible in your downstream verification
-    tool" filter. Defaults to ``CERTORA_BACKEND_GUIDANCE`` so existing
-    callers (the autoprove pipeline) get the same prompt they always had;
-    other backends (e.g. foundry tests) pass their own string describing
-    what's a fit / not a fit for *their* verification surface.
+    ``backend_guidance`` is inlined verbatim into the property-analysis *system* prompt as the
+    "what's expressible in your downstream verification tool" filter — the Certora Prover, foundry
+    tests, each describing what is and isn't a fit for *their* verification surface. It lives in
+    the system prompt (rendered once) rather than the per-round initial prompt so it stays inside
+    the cached prefix.
     """
 
     component_analysis = ctx.child(bug_analysis_key(threat_model, refinement is not None))
@@ -398,6 +418,8 @@ async def run_property_inference(
         actual_extra_input,
         max_rounds=max_rounds,
         backend_guidance=backend_guidance,
+        system_template=system_template,
+        render_initial=render_initial,
     )
     if refinement is None:
         to_ret = agent_attempt.items

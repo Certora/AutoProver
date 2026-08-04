@@ -33,13 +33,17 @@ from composer.io.multi_job import (
     TaskInfo, HandlerFactory, run_task,
 )
 from composer.llm.types import CacheLevel
+from composer.pipeline.ecosystem import EvmEcosystem
+
 from composer.spec.context import (
     WorkflowContext,
     SystemDoc, CacheKey, Properties, ComponentGroup, CVLGeneration,
     Contract
 )
 from composer.spec.util import string_hash
-from composer.spec.prop_inference import run_property_inference, CacheablePropertyGenerationInput
+from composer.spec.prop_inference import (
+    CERTORA_BACKEND_GUIDANCE, CacheablePropertyGenerationInput, run_property_inference
+)
 from composer.spec.types import PropertyFormulation
 from composer.spec.natspec.interface_gen import generate_interface, DESCRIPTION as INTERFACE_GEN_DESC
 from composer.spec.natspec.stub_gen import generate_stub
@@ -166,6 +170,9 @@ class PipelineServices:
     env: ServiceHost
     mental_model: MentalModel
     file_registry: FileRegistry
+    # Consumed for its prompt pairs only; pinned to EVM because everything else in this pipeline
+    # is Solidity-only (solc, CVL, stub/interface generation).
+    ecosystem: EvmEcosystem
     # When True, the bug-analysis step opens a per-component conversation
     # channel via the TUI's switcher so the user can refine the extracted
     # property list interactively. Parallel components each get their own
@@ -244,6 +251,9 @@ async def analyze_single_contract(
                     
                 ],
                 max_rounds=services.max_bug_rounds,
+                backend_guidance=CERTORA_BACKEND_GUIDANCE,
+                system_template=services.ecosystem.property_prompts.system,
+                render_initial=services.ecosystem.property_prompts.render_initial,
             ),
             semaphore,
         )
@@ -406,6 +416,7 @@ async def run_natspec_pipeline[A: NatspecApplication, I: InterfaceDeclModel, S: 
     mental_model: MentalModel[A, I, S],
     source_factory: ToolGenerator,
     *,
+    ecosystem: EvmEcosystem,
     max_concurrent: int = 4,
     interactive: bool = False,
     max_bug_rounds: int = 3,
@@ -435,6 +446,7 @@ async def run_natspec_pipeline[A: NatspecApplication, I: InterfaceDeclModel, S: 
         store: BaseStore for shared artifacts and caching.
         handler_factory: Creates per-task ``(IOHandler, EventHandler)``
             pairs.  Called once per top-level agent invocation.
+        ecosystem: Supplies the analysis and property prompt pairs.
         max_concurrent: Maximum concurrent LLM agents.
     """
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -451,7 +463,7 @@ async def run_natspec_pipeline[A: NatspecApplication, I: InterfaceDeclModel, S: 
     summary = await run_task(
         handler_factory,
         TaskInfo("component-analysis", SYSTEM_DESC, Phase.COMPONENT_ANALYSIS),
-        lambda: run_component_analysis(ctx, system_doc, curr_env, mental_model),
+        lambda: run_component_analysis(ctx, system_doc, curr_env, mental_model, ecosystem),
     )
     if summary is None:
         raise ValueError("Component analysis produced no result — is the system doc empty?")
@@ -557,6 +569,7 @@ async def run_natspec_pipeline[A: NatspecApplication, I: InterfaceDeclModel, S: 
         factory=handler_factory,
         mental_model=mental_model,
         file_registry=file_registry,
+        ecosystem=ecosystem,
         interactive=interactive,
         max_bug_rounds=max_bug_rounds,
     )

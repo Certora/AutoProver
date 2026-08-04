@@ -1,0 +1,22 @@
+{#- The analysis agent's *input phrase*: names what it was actually handed — the design document,
+    the implementation, or both. The design document is optional (``run_component_analysis``
+    takes ``input: SystemDoc | None`` and passes ``has_doc`` accordingly), so every sentence that
+    refers to the inputs has to stay true when there is no document; this macro is the single
+    place that decides how to say it.
+
+    Callers supply the leading article ("the {{ input_phrase() }}"), so the branches are
+    article-free. ``impl_noun`` names the implementation in the ecosystem's own terms —
+    "implementation" for Solidity, "Rust implementation" for Solana.
+
+    IMPORT WITH CONTEXT: {% raw %}{% from "shared/analysis_macros.j2" import input_phrase with context %}{% endraw %}
+    The branches read ``has_doc``/``sort`` off the render params, and a plain import gives the
+    macro only the environment globals — leaving both Undefined, which silently renders the
+    no-document phrasing for every caller. -#}
+{% macro input_phrase(and_or=false, impl_noun="implementation") -%}
+{%- if has_doc -%}
+system/design document
+{%- if sort != "greenfield" %} and{% if and_or %}/or{% endif %} the {{ impl_noun }}{% endif -%}
+{%- else -%}
+{{ impl_noun }}
+{%- endif -%}
+{%- endmacro %}

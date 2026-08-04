@@ -6,7 +6,7 @@ from langgraph.store.base import BaseStore
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from graphcore.graph import Builder
-from graphcore.tools.vfs import fs_tools
+from graphcore.tools.vfs import GlobalExcludeArg, fs_tools
 
 from composer.spec.tool_env import BaseSourceTools
 from composer.spec.services import build_rag_tool_env, RAGInputs
@@ -22,7 +22,7 @@ class _BaseSourceTools():
 
 def build_basic_source_tools(
     root: str,
-    forbidden_read: str,
+    forbidden_read: GlobalExcludeArg,
 ) -> BaseSourceTools:
     return _BaseSourceTools(
         tuple(fs_tools(fs_layer=root, forbidden_read=forbidden_read, cache_listing=False))
@@ -74,7 +74,7 @@ def build_source_tools(
 
 class SourceParams(RAGInputs):
     root: str
-    forbidden_read: str
+    forbidden_read: GlobalExcludeArg
     source_question_ns: tuple[str, ...]
 
 
