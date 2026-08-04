@@ -205,7 +205,9 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
-    async with load_plugins(run) as plugins:
+    # Only the plugins whose hooks accept this ecosystem's unit are loaded (and only those pay
+    # their ``initialize`` cost); the driver below can hand them its units unconditionally.
+    async with load_plugins(run, ecosystem.unit_type) as plugins:
         return await run_pipeline_inner(
             backend, run, plugins, interactive=interactive, threat_model=threat_model,
             max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
@@ -215,7 +217,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
 async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
     backend: PipelineBackend[P, FormT, H, A, U, Main, App],
     run: PipelineRun[P, H],
-    plugin_manager: PluginManager[P],
+    plugin_manager: PluginManager[P, U],
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
@@ -362,19 +364,12 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     # ``App`` stays ``Any`` here: this helper never touches the analyzed-model axis, only
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],
-    plugins: PluginPhaseManager[P],
+    plugins: PluginPhaseManager[P, U],
 ) -> list[_Batch[U]]:
     prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
 
-    # Plugin hooks are typed on the EVM unit — see ``Ecosystem.plugin_unit``. An ecosystem with no
-    # EVM view of its units has nothing to hand them, so for it neither the plugin phases run nor
-    # the plugin digest applies (it would otherwise perturb every unit's cache key for plugins
-    # that never touched the unit).
-    to_plugin_unit = ecosystem.plugin_unit
-    plugin_digest = plugins.plugin_digest if to_plugin_unit is not None else None
-
-    async def _pre_plugin_inputs(feat: ContractComponentInstance) -> list[AnyPropertyGenerationInput]:
-        async def run_one(runner: PluginPhaseRunner[P]) -> AnyPropertyGenerationInput | None:
+    async def _pre_plugin_inputs(feat: U) -> list[AnyPropertyGenerationInput]:
+        async def run_one(runner: PluginPhaseRunner[P, U]) -> AnyPropertyGenerationInput | None:
             ctxt = await prop_ctx.child(
                 _pre_property_cache_key(feat, runner.plugin_id), {"plugin-name": runner.plugin_id}
             )
@@ -390,7 +385,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
         return [t for t in got if t is not None]
 
     async def _post_plugin_props(
-        feat: ContractComponentInstance, props: list[PropertyFormulation]
+        feat: U, props: list[PropertyFormulation]
     ) -> list[PropertyFormulation]:
         accum = props
         for runner in plugins.runners(
@@ -409,11 +404,10 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
         return accum
 
     async def _one(feat: U) -> _Batch[U] | None:
-        plugin_feat = to_plugin_unit(feat) if to_plugin_unit is not None else None
-        pre_input = await _pre_plugin_inputs(plugin_feat) if plugin_feat is not None else []
+        pre_input = await _pre_plugin_inputs(feat)
 
         feat_ctx = await prop_ctx.child(
-            _component_cache_key(feat, plugin_digest),
+            _component_cache_key(feat, plugins.plugin_digest),
             {**feat.context_tag(), "plugins": plugins.plugin_manifest},
         )
         props = await run.runner(
@@ -429,7 +423,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
         if not props:
             return None
 
-        accum = await _post_plugin_props(plugin_feat, props) if plugin_feat is not None else props
+        accum = await _post_plugin_props(feat, props)
         return _Batch(feat, accum, feat_ctx) if accum else None
 
     got = await asyncio.gather(*[_one(u) for u in ecosystem.units(main)])

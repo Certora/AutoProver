@@ -1,8 +1,16 @@
 """Cache & Memory Explorer for the Auto-Prove pipeline.
 
 Browses the cache + memory namespaces produced by the ``cli_pipeline``
-drivers (``tui-autoprove`` / ``console-autoprove`` / the foundry
-entries). Wired as ``cache-autoprove`` in ``pyproject.toml``.
+drivers. Wired as ``cache-autoprove`` in ``pyproject.toml``.
+
+**Prover runs only** (``tui-autoprove`` / ``console-autoprove``). The key set
+here is the prover backend's: the per-component subtree is read from
+``PROPERTIES_KEY(AP_PROPERTIES_KEY_NAME)``, and the harness/autosetup-config/
+structural-invariant nodes have no peer in another backend. A foundry run
+writes its components under ``"foundry-properties"`` instead, so pointing this
+at one finds an empty tree rather than failing. Both backends do share the
+EVM ecosystem, so it is the *backend* axis that is pinned here, not the unit
+type.
 
 Usage::
 
@@ -50,7 +58,7 @@ from composer.pipeline.core import (
     COMMON_SYSTEM_CACHE_KEY, PROPERTIES_KEY,
     _component_cache_key, _batch_cache_key, _pre_property_cache_key,
 )
-from composer.pipeline.plugins import installed_plugin_manifest, manifest_digest
+from composer.pipeline.plugins import applicable_plugin_manifest, manifest_digest
 from composer.pipeline.run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.core.user import get_uid
 from composer.workflow.services import store_context
@@ -473,8 +481,14 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
     if memory_ns:
         memory_ns = get_uid() + "/" + memory_ns
 
+    # The manifest is selected on the *unit* type, and every run this explorer reconstructs is an
+    # EVM one — so a plugin scoped to another ecosystem never contributed to these namespaces and
+    # must not be hashed into them. EVM is the right axis here rather than the backend: the prover
+    # and foundry backends both pair with it, so this stays correct if the explorer ever grows
+    # foundry support (see the module docstring — today it reconstructs prover keys only).
     plugins: list[str] = (
-        sorted(args.plugins) if args.plugins is not None else installed_plugin_manifest()
+        sorted(args.plugins) if args.plugins is not None
+        else applicable_plugin_manifest(ContractComponentInstance)
     )
     tm_digest = (
         file_digest(pathlib.Path(args.threat_model))

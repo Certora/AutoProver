@@ -130,13 +130,12 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     #: backend-neutral grounds, and let a backend that wants coarser work aggregate in its
     #: ``Formalizer`` instead.
     units: Callable[[Main], list[Unit]]
-    #: The EVM view of a unit, for the pipeline plugins (``composer.pipeline.plugin_api``) —
-    #: whose hooks are typed on ``ContractComponentInstance``, so today they only have something
-    #: to say about EVM. EVM supplies the identity; an ecosystem with no EVM view supplies
-    #: ``None``, and ``run_pipeline`` skips its plugin phases (and leaves its unit cache keys
-    #: free of the plugin digest) rather than handing a hook a unit it cannot read. Widening the
-    #: plugin API to ``FeatureUnit`` is what retires this field.
-    plugin_unit: Callable[[Unit], ContractComponentInstance] | None
+    #: Runtime witness of ``Unit``, matched against a plugin's
+    #: :data:`~composer.pipeline.plugin_api.PluginScope` to decide whether that plugin applies to
+    #: this ecosystem's runs. A value rather than just the type parameter because the matching
+    #: happens at the entry-point boundary, where nothing static survives — and ``FeatureUnit`` is
+    #: deliberately not ``@runtime_checkable``, so the check compares concrete types.
+    unit_type: type[Unit]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
     #: Whether ``analysis_prompts``/``property_prompts`` have a ``sort == "greenfield"`` branch.
@@ -217,8 +216,7 @@ EVM: EvmEcosystem = Ecosystem(
     locate_main=main_instance,
     supports_greenfield=True,
     units=_evm_units,
-    # EVM's unit *is* what the plugin hooks are typed on, so the view is the identity.
-    plugin_unit=lambda u: u,
+    unit_type=ContractComponentInstance,
     analysis_extra_input=_evm_analysis_extra_input,
 )
 
@@ -469,8 +467,7 @@ SOLANA: SolanaEcosystem = Ecosystem(
     locate_main=_solana_locate_main,
     supports_greenfield=False,
     units=_solana_units,
-    # No EVM view of a Solana component, so the (EVM-typed) plugin hooks don't run here.
-    plugin_unit=None,
+    unit_type=SolanaComponentInstance,
     analysis_extra_input=_solana_analysis_extra_input,
 )
 
