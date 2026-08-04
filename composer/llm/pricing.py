@@ -45,7 +45,8 @@ _OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
 
 
 # Pricing tables transcribed from Anthropic + OpenAI rate cards.
-# Sources should be re-checked when new model families ship.
+# Sources should be re-checked when new model families ship or 
+# their costs update.
 _PRICING: list[tuple[str, ModelPricing]] = [
     ("claude-fable-5", ModelPricing(short=PriceTier(10.00, 50.00, 1.00, 12.50, 20.0))),
 
@@ -58,19 +59,34 @@ _PRICING: list[tuple[str, ModelPricing]] = [
     # claude-opus-4.5 / 4.6 / 4.7 share a rate card; older 4 / 4.1
     # are pricier. Matching by prefix-of-prefix so "claude-opus-4-7"
     # and "claude-opus-4-7-20260301" both hit the right entry.
+    ("claude-opus-4-8", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
     ("claude-opus-4-7", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
     ("claude-opus-4-6", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
     ("claude-opus-4-5", ModelPricing(short=PriceTier(5.00, 25.00, 0.50, 6.25, 10.00))),
-    ("claude-opus-4-1", ModelPricing(short=PriceTier(15.00, 75.00, 1.50, 18.75, 30.00))),
-    ("claude-opus-4",   ModelPricing(short=PriceTier(15.00, 75.00, 1.50, 18.75, 30.00))),
+    # o7 to retired models, they went to a datacenter upstate
+    # ("claude-opus-4-1", ModelPricing(short=PriceTier(15.00, 75.00, 1.50, 18.75, 30.00))),
+    # ("claude-opus-4",   ModelPricing(short=PriceTier(15.00, 75.00, 1.50, 18.75, 30.00))),
 
     ("claude-sonnet-5",   ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
 
     ("claude-sonnet-4-6", ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
     ("claude-sonnet-4-5", ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
-    ("claude-sonnet-4",   ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
+    # ("claude-sonnet-4",   ModelPricing(short=PriceTier(3.00, 15.00, 0.30, 3.75, 6.00))),
 
     ("claude-haiku-4-5", ModelPricing(short=PriceTier(1.00, 5.00, 0.10, 1.25, 2.00))),
+
+    ("gpt-5.6-terra", ModelPricing(
+        short=PriceTier(2.00, 12.00, 0.20, 2.50, 2.50),
+        long=PriceTier(4.00, 18.00, 0.40, 5.00, 5.00),
+    )),
+    ("gpt-5.6-luna", ModelPricing(
+        short=PriceTier(0.20, 1.20, 0.02, 0.25, 0.25),
+        long=PriceTier(0.40, 1.80, 0.04, 0.50, 0.50),
+    )),
+    ("gpt-5.6", ModelPricing(
+        short=PriceTier(5.00, 30.00, 0.50, 6.25, 6.25),
+        long=PriceTier(10.00, 45.00, 1.00, 12.50, 12.50),
+    )),
 
     # ---- OpenAI ----
     # gpt-5.5 / 5.4 publish short (≤272K input) and long (>272K) tiers.

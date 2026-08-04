@@ -75,10 +75,10 @@ class CostAccumulator(AsyncCallbackHandler):
 
         # thinking_tokens are a subset of total_output_tokens and bill at the
         # output rate, so they need no separate term here.
-        per_mtok = (
+        raw_cost_pre_scale = (
             fresh_input * tier.input
             + cache_read * tier.cache_read
             + cache_write * cache_write_rate
             + usage["total_output_tokens"] * tier.output
         )
-        return per_mtok / 1_000_000
+        return raw_cost_pre_scale / 1_000_000
