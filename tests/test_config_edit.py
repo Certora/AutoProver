@@ -11,6 +11,7 @@ from langgraph.graph import MessagesState
 from composer.spec.source.author import (
     ConfigEditTool, AddFile, RemoveFile, AddLink, RemoveLink,
 )
+from composer.spec.system_model import SolidityIdentifier
 from composer.spec.source.prover import ProverStateExtra
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
@@ -37,7 +38,7 @@ TOOL = ConfigEditTool.as_tool(_EDIT)
 
 
 def _add_file(path: str, contract_name: str | None = None) -> dict:
-    return AddFile(type="add_file", file_path=path, contract_name=contract_name).model_dump()
+    return AddFile(type="add_file", file_path=path, contract_name=SolidityIdentifier(contract_name) if contract_name else None).model_dump()
 
 
 def _remove_file(path: str) -> dict:
@@ -45,11 +46,11 @@ def _remove_file(path: str) -> dict:
 
 
 def _add_link(src: str, field: str, tgt: str) -> dict:
-    return AddLink(type="add_link", source_contract_name=src, link_field_name=field, target_contract_name=tgt).model_dump()
+    return AddLink(type="add_link", source_contract_name=SolidityIdentifier(src), link_field_name=field, target_contract_name=SolidityIdentifier(tgt)).model_dump()
 
 
 def _remove_link(src: str, field: str) -> dict:
-    return RemoveLink(type="remove_link", source_contract_name=src, link_field_name=field).model_dump()
+    return RemoveLink(type="remove_link", source_contract_name=SolidityIdentifier(src), link_field_name=field).model_dump()
 
 
 def _edit(*edits: dict) -> ToolCallDict:
@@ -71,7 +72,7 @@ def _scenario(
     if links is not None:
         config["link"] = links
     return Scenario(ConfigTestState, TOOL).init(
-        config=config, rule_skips={},
+        config=config, rule_skips={}, reminders_channel=[]
     )
 
 

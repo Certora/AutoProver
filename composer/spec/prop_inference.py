@@ -24,6 +24,7 @@ from composer.spec.system_model import ContractComponentInstance, FeatureUnit, c
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.spec.service_host import Sort, ServiceHost
 from composer.io.conversation import ConversationContextProvider
+from composer.diagnostics.budget import budget_monitor, budget_pressure
 from composer.templates.loader import load_jinja_template
 from composer.spec.prop_refinement import user_property_refinement
 
@@ -293,6 +294,8 @@ async def _run_bug_round(
         env.analysis_tools
     ).with_sys_prompt(
         system_prompt
+    ).with_monitor(
+        budget_monitor()
     ).compile_async()
 
     flow_input: BugAnalysisInput = BugAnalysisInput(
@@ -342,6 +345,11 @@ async def _run_bug_analysis_inner[U: FeatureUnit](
     }).render_to(load_jinja_template)
 
     for i in range(0, max_rounds):
+        # Under budget pressure a fresh round would be told to pack it in on
+        # its first monitor tick — don't bother launching it. Round 0 always
+        # runs (the loop's invariants require at least one round's history).
+        if i > 0 and budget_pressure():
+            break
         next_result = await _run_bug_round(
             env, agent_component_analysis, i, initial_prompt_builder, prev_rounds, system_prompt
         )

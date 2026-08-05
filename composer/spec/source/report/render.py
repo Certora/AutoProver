@@ -3,7 +3,9 @@
 Single self-contained page (inline CSS, no external assets): a header with outcome counts, one
 section per high-level `PropertyGroup` (status badge + description + a rule table whose per-rule
 descriptions are the in-group property claims that pull each rule in), a formalization-gaps section
-(declined properties + components that gave up), and a coverage footer. The HTML is built by
+(declined properties + components that gave up), an appendix for components the run budget cut
+short (counts-first summary per component, collapsed per-property breakdown), and a coverage
+footer. The HTML is built by
 ``autoprove_report.html.j2``; this module only assembles the render context — no markup here. The
 template's parameters are typed by `ReportTemplateParams` and rendered through the `TypedTemplate`
 infra, so a context/template drift is a type error.
@@ -26,8 +28,9 @@ from typing import TypedDict
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, FormalizedProperty, GaveUpComponent, GroupStatus, Outcome,
-    PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim,
+    AutoProverReport, CoverageReport, CurtailedComponent, FormalizedProperty, GaveUpComponent,
+    GroupStatus, Outcome, PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict,
+    SkippedClaim,
 )
 
 
@@ -134,6 +137,28 @@ class GroupView(TypedDict):
     rows: list[RowView]
 
 
+class CurtailedRowView(TypedDict):
+    """One property row in a curtailed component's per-property breakdown. ``units`` (drafted
+    rows) and ``note`` (skip reason) feed the Notes cell; both empty renders an em-dash."""
+    description: str
+    sort: str
+    label: str
+    kind: str
+    units: list[str]
+    note: str | None
+
+
+class CurtailedView(TypedDict):
+    component: str
+    status_label: str
+    status_kind: str
+    summary: str
+    artifact: str | None
+    link: LinkView
+    detail: str | None
+    rows: list[CurtailedRowView]
+
+
 class ReportTemplateParams(TypedDict):
     """The full, typed context of ``autoprove_report.html.j2``."""
     contract_name: str
@@ -147,6 +172,7 @@ class ReportTemplateParams(TypedDict):
     groups: list[GroupView]
     skipped: list[SkippedClaim]
     gave_up: list[GaveUpComponent]
+    curtailed: list[CurtailedView]
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
@@ -228,6 +254,50 @@ def _group_view(
     }
 
 
+def _plural(n: int, singular: str, plural: str) -> str:
+    return f"{n} {singular if n == 1 else plural}"
+
+
+def _curtailed_view(c: CurtailedComponent) -> CurtailedView:
+    """One appendix card: a counts-first summary sentence, then a per-property breakdown row per
+    inferred property (disposition badge + the declared units / skip reason as notes)."""
+    total = len(c.drafted) + len(c.skipped) + len(c.unattempted)
+    parts: list[str] = []
+    if c.drafted:
+        parts.append(f"{len(c.drafted)} drafted but never verified")
+    if c.skipped:
+        parts.append(f"{len(c.skipped)} skipped")
+    if c.unattempted:
+        parts.append(f"{len(c.unattempted)} never attempted")
+    summary = f"Of {_plural(total, 'inferred property', 'inferred properties')}: {', '.join(parts)}."
+
+    rows: list[CurtailedRowView] = []
+    for d in c.drafted:
+        rows.append({"description": d.description, "sort": d.sort,
+                     "label": "Drafted — unverified", "kind": "warn",
+                     "units": d.units, "note": None})
+    for s in c.skipped:
+        rows.append({"description": s.description, "sort": s.sort,
+                     "label": "Skipped", "kind": "muted",
+                     "units": [], "note": s.reason})
+    for p in c.unattempted:
+        rows.append({"description": p.description, "sort": p.sort,
+                     "label": "Not attempted", "kind": "muted",
+                     "units": [], "note": None})
+
+    published = c.artifact is not None
+    return {
+        "component": c.component,
+        "status_label": "partial draft published" if published else "nothing published",
+        "status_kind": "warn" if published else "bad",
+        "summary": summary,
+        "artifact": c.artifact,
+        "link": _link_view(c.run_link),
+        "detail": c.detail,
+        "rows": rows,
+    }
+
+
 def _build_context(report: AutoProverReport) -> ReportTemplateParams:
     props_by_key = {p.key: p for p in report.properties}
     rules_by_ref = {r.ref: r for r in report.rules}
@@ -252,6 +322,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         ],
         "skipped": report.skipped,
         "gave_up": report.gave_up_components,
+        "curtailed": [_curtailed_view(c) for c in report.curtailed_components],
     }
 
 

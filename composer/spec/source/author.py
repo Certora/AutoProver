@@ -1,4 +1,4 @@
-from typing import NotRequired, override, Literal, Annotated
+from typing import Callable, NotRequired, override, Literal, Annotated
 from typing_extensions import TypedDict
 import json
 
@@ -18,7 +18,7 @@ from composer.spec.cvl_generation import (
 )
 from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.types import PropertyFormulation
-from composer.pipeline.core import GaveUp
+from composer.pipeline.core import Curtailed, GaveUp
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY
 from langgraph.graph import MessagesState
@@ -32,11 +32,19 @@ from composer.llm.provider import CacheLevel
 from langgraph.types import Command
 from composer.spec.feedback import property_feedback_judge, FeedbackTemplate, Properties
 from composer.ui.tool_display import tool_display
+from composer.diagnostics.budget import (
+    BudgetExceeded, budget_monitor, constraint_sort_to_noun, raise_budget_exceeded
+)
+from .monitor import monitor
 
-from graphcore.graph import FlowInput
+from graphcore.graph import FlowInput, MonitorReturn
 
 class SourceAuthorExtra(TypedDict):
     failed: bool | None
+    #: Stamped True by the budget monitor's state transformer when the wrap-up alert fires (the
+    #: same update that lifts the validation gates), so the published result is known to be a
+    #: budget-curtailed partial rather than a validated delivery.
+    budget_curtailed: bool
 
 class SourceCVLGenerationExtra(CVLGenerationExtra, ProverStateExtra, SourceAuthorExtra):
     pass
@@ -47,7 +55,7 @@ class SourceCVLGenerationInput(SourceCVLGenerationExtra, FlowInput):
 class SourceCVLGenerationState(SourceCVLGenerationExtra, MessagesState):
     result: NotRequired[str]
 
-type BatchGeneratedCVLResult = GeneratedCVL | GaveUp
+type BatchGeneratedCVLResult = GeneratedCVL | Curtailed[GeneratedCVL] | GaveUp
 
 @tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to fail", None)
 class ExpectRuleFailure(WithAsyncImplementation[Command], WithInjectedId):
@@ -333,6 +341,41 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
 
+_BUDGET_WRAPUP_MESSAGE = """
+<system-alert>
+You have almost exceeded the {resource} budget for this task. Wrap up IMMEDIATELY;
+a partial spec is better than going over budget. Concretely:
+
+- The feedback and prover validation requirements on publishing have been lifted. You no
+  longer need approval from the feedback judge — ignore any pending or future feedback,
+  including a judge response saying it was terminated.
+- Do NOT start new prover runs or research.
+- Delete any rules/invariants that do not currently work.
+- Skip (`record_skip`) every property you have not gotten to work, citing budget exhaustion.
+- Then publish what remains via the `result` tool.
+</system-alert>
+"""
+
+
+def _author_monitor() -> Callable[[SourceCVLGenerationState], MonitorReturn]:
+    """The author's monitor: budget wrap-up takes precedence; otherwise the
+    usual reminders-channel drain. On the (single) turn the budget warning
+    fires any pending reminders are dropped — moot, since the warning tells
+    the agent to ignore prover/feedback outcomes anyway."""
+    b_monitor = budget_monitor(
+        warning_message=lambda _s, c: _BUDGET_WRAPUP_MESSAGE.format(resource=constraint_sort_to_noun(c)),
+        state_transformer=lambda _s, _c: {"required_validations": [], "budget_curtailed": True},
+        on_overbudget=raise_budget_exceeded,
+    )
+
+    def combined(curr_state: SourceCVLGenerationState) -> MonitorReturn:
+        msgs, upd = b_monitor(curr_state)
+        if msgs is None and upd is None:
+            return monitor(curr_state)
+        return msgs, upd
+
+    return combined
+
 async def batch_cvl_generation(
     ctx: WorkflowContext[CVLGeneration],
     init_config: dict,
@@ -379,6 +422,8 @@ async def batch_cvl_generation(
         [prover_tool, ExpectRulePassage.as_tool("expect_rule_passage"), ExpectRuleFailure.as_tool("expect_rule_failure"), GiveUpTool.as_tool("give_up"), PublishResultTool.as_tool("result"), ctx.get_memory_tool()]
     ).with_state(
         SourceCVLGenerationState
+    ).with_monitor(
+        _author_monitor()
     ).with_output_key(
         "result"
     ).with_input(
@@ -398,34 +443,44 @@ async def batch_cvl_generation(
         }), props
     )
 
-    res_state = await run_cvl_generator(
-        ctx = ctx,
-        d = task_graph,
-        description=description,
-        ctxt=feedback_env,
-        in_state=SourceCVLGenerationInput(
-            curr_spec=None,
-            config=init_config,
-            spec_stem=spec_stem,
-            input=[],
-            required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
-            rule_skips={},
-            skipped=[],
-            property_rules=[],
-            validations={},
-            failed=None,
+    try:
+        res_state = await run_cvl_generator(
+            ctx = ctx,
+            d = task_graph,
+            description=description,
+            ctxt=feedback_env,
+            in_state=SourceCVLGenerationInput(
+                curr_spec=None,
+                config=init_config,
+                spec_stem=spec_stem,
+                input=[],
+                required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY],
+                rule_skips={},
+                skipped=[],
+                property_rules=[],
+                validations={},
+                failed=None,
+                budget_curtailed=False,
+                prover_history=[],
+                reminders_channel=[]
+            )
         )
-    )
+    except BudgetExceeded as e:
+        return Curtailed(None, detail=str(e))
 
     assert "result" in res_state
     assert res_state["failed"] is not None
     if res_state["failed"]:
+        if res_state["budget_curtailed"]:
+            # A give-up issued after the wrap-up order isn't a considered "this batch is
+            # unformalizable" judgment — it's the budget talking. Keep the agent's account.
+            return Curtailed(None, detail=res_state["result"])
         return GaveUp(reason=res_state["result"])
     d = res_state["curr_spec"]
     assert d is not None
     # Persist the base prover config and last run link from the final state so a later cache
     # hit (which skips the prover) can still reconstruct certora/confs and retain the link.
-    return GeneratedCVL(
+    generated = GeneratedCVL(
         commentary=res_state["result"],
         cvl=d,
         skipped=res_state["skipped"],
@@ -433,4 +488,8 @@ async def batch_cvl_generation(
         config=res_state["config"],
         final_link=res_state.get("prover_link"),
     )
+    if res_state["budget_curtailed"]:
+        # Published under lifted gates: hand it back as an explicitly unreliable partial.
+        return Curtailed(generated)
+    return generated
 
