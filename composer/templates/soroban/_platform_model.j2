@@ -34,7 +34,7 @@ contract code runs.
 
 **Calls.** Cross-contract calls use generated clients or `env.invoke_contract`.
 Unhandled called-contract errors abort the caller; `try_*` variants expose errors.
-Soroban forbids re-entering a contract already on the call stack, so classic EVM
+Soroban forbids re-entering a contract already on the call stack, so EVM
 reentrancy is not a Soroban bug class. Relevant call risks are stale pre-call
 state, attacker-controlled target addresses, and overly broad auth.
 

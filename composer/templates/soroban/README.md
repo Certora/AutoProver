@@ -1,7 +1,7 @@
 # Soroban Prompt Templates
 
-Templates for the Soroban/Stellar Rust facet. They mirror
-`composer/templates/solana/`, but use Soroban nouns: contracts, entry points,
+Templates for Soroban/Stellar smart contracts. The structure is similar to 
+`composer/templates/solana/`, but we use Soroban terminology: contracts, entry points,
 `Address` auth, storage kind, and cross-contract calls.
 
 | File | Role |
@@ -14,14 +14,13 @@ Templates for the Soroban/Stellar Rust facet. They mirror
 | `_platform_model.j2` | Soroban execution model facts shared by prompts |
 | `_vulnerability_patterns.j2` | Soroban-specific bug patterns |
 
-Rust-level issues stay in `rust/_vulnerability_patterns.j2`; Soroban-specific
-issues stay here.
+Rust-level issues are in `rust/_vulnerability_patterns.j2`; Soroban-specific
+issues are here.
 
 ## Expected Model
 
-These templates assume a future `SorobanApplication` model similar to
-`composer/spec/solana/model.py`. `ChainTag` already reserves `"soroban"`; the
-remaining wiring is the model, validators, unit locator, and `ECOSYSTEMS` entry.
+These templates assume a `SorobanApplication` model similar to
+`composer/spec/solana/model.py`. `ChainTag` already contains `"soroban"` as a possible blockchain name.
 
 Required fields:
 
@@ -44,7 +43,7 @@ StorageEntry:
 
 SorobanFunction:
   name, description, args, returns
-  auth: list[AuthRequirement]        # empty is meaningful
+  auth: list[AuthRequirement]
   storage: list[StorageAccess]
   calls: list[ContractCall]
   events, errors, requirements
