@@ -35,14 +35,18 @@ jobs:
           java-version: '21'
 
       - name: sync-deps
+        # --no-dev skips the `dev` group (and the `apps` group it includes), so this
+        # job doesn't compile the Rust crates — nothing under `expensive` or `fuzz`
+        # touches them. Every `uv run` below needs the flag too: a bare `uv run`
+        # re-syncs with the default groups and would pull `apps` back in.
         run: |
-          uv sync --group test --extra prover
+          uv sync --group test --extra prover --no-dev
 
       - name: sync solc
         run: |
           uv pip install solc-select
-          uv run solc-select install 0.8.29
-          uv run solc-select use 0.8.29
+          uv run --no-dev solc-select install 0.8.29
+          uv run --no-dev solc-select use 0.8.29
           # certoraRun resolves Certora-convention names like `solc8.29` as
           # literal executables; solc-select only ships the `solc` shim, so
           # fetch the static binary under that exact name.
@@ -53,12 +57,12 @@ jobs:
 
       - name: run autoprover integration tests
         run: |
-          uv run pytest -n 3 -m 'expensive' tests
+          uv run --no-dev pytest -n 3 -m 'expensive' tests
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
       - name: run template fuzz tests
         run: |
-          uv run pytest -n 2 -m 'fuzz' tests
+          uv run --no-dev pytest -n 2 -m 'fuzz' tests
         env:
           HYPOTHESIS_PROFILE: extended
 
