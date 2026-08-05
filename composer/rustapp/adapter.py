@@ -1,7 +1,7 @@
 """Adapter: wrap a Rust wheel (a :class:`~autoprover_sdk.Backend`) as a
 :class:`~composer.pipeline.core.PipelineBackend`.
 
-The Rust wheel is a **passive service** (``docs/rust-backend-api.md``): Python owns the
+The Rust wheel is a **passive service** (``docs/rust-applications.md``): Python owns the
 author→compile→judge→validate loop and every LLM turn, and calls the wheel's pure callouts
 (``descriptor`` / ``units`` / ``author_prompt`` / ``judge_prompt`` / ``finalize``) plus the two
 blocking ones (``compile`` / ``validate``) that run the toolchain via ``run-confined``. There is
@@ -16,7 +16,7 @@ Three phase objects mirror the CVL / foundry backends:
   ``validate`` baked into the result.
 
 App-specific orchestration (a shared setup artifact, workspace prep + its gate, crate assembly) is
-descriptor-driven here — no per-application Python package (``docs/rust-pure-app.md``): the wheel
+descriptor-driven here — no per-application Python package (``docs/rust-applications.md``): the wheel
 declares ``preflight`` / ``setup`` / ``workspace_prep`` / ``deliverable_mode=callout`` / ``finalize``
 and the generic host runs them.
 
@@ -633,7 +633,7 @@ async def run_workspace_prep(
     sandbox: SandboxConfig | None,
     command_timeout_s: int,
 ) -> str | None:
-    """Execute the wheel's pure ``workspace_prep`` plan (``docs/rust-pure-app.md`` §4): write the
+    """Execute the wheel's pure ``workspace_prep`` plan (``docs/rust-applications.md`` §7): write the
     declared files (path-confined) under ``source.project_root``, then hand anything further the
     plan asks for — warm these manifest dirs, build this program, place its IDL — to ``chain``'s
     registered :class:`~composer.rustapp.toolchain.WorkspaceToolchain`. Returns where the IDL was
@@ -1005,7 +1005,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
     The workspace itself was prepared and gated *before* analysis, by
     :meth:`RustBackend.preflight` — its outcome arrives here as :attr:`preflight`.
 
-    Fully expresses what Crucible used to need a subclass for (``docs/rust-pure-app.md``): the
+    Fully expresses what Crucible used to need a subclass for (``docs/rust-applications.md``): the
     shared fixture, per-run serialization, and the context-thread of the fixture + declared args."""
 
     backend: "RustBackend"
@@ -1158,9 +1158,9 @@ class RustBackend(
     @override
     async def preflight(self, run: PipelineRun) -> RustPreflight:
         """Prepare the wheel's workspace and gate it — everything buildable before the program has
-        been analyzed, run concurrently with system analysis (``docs/rust-backend-api.md`` §3.1).
+        been analyzed, run concurrently with system analysis (``docs/rust-applications.md`` §4.2).
 
-        Two steps, both *declared* by the wheel and executed here (``docs/rust-pure-app.md`` §4):
+        Two steps, both *declared* by the wheel and executed here (``docs/rust-applications.md`` §7):
 
         1. :func:`run_workspace_prep` — place the crate's build files, and (through the ecosystem's
            :class:`~composer.rustapp.toolchain.WorkspaceToolchain`) warm its dependencies, build the

@@ -8,7 +8,7 @@ tag all come from the Rust wheel's ``AppDescriptor`` instead of being hard-coded
 The imperative service wiring (Postgres pools, the async tool context, the thread
 logger, ``WorkflowContext``) stays Python and is essentially identical to the
 foundry entry point — that shell is irreducibly async and is not something Rust
-owns (see ``docs/rust-applications.md`` §4.2). What Rust contributes here is only
+owns (see ``docs/rust-applications.md`` §10). What Rust contributes here is only
 declarative: the arg schema and the ``validate_preconditions`` hook.
 
 The env built here is descriptor-driven too: the standard source-navigation toolset
@@ -118,7 +118,7 @@ def _build_confinement(app: RustApplication, args: dict[str, Any]) -> SandboxCon
     """The default command-sandbox config for a wheel that sets ``confine_by_default`` — the
     fail-closed ``launcher`` provider (overridable by ``COMPOSER_SANDBOX_PROVIDER``), with the
     wheel's ``sandbox_grants`` (extra read-only paths / env names) unioned in. Python owns the
-    policy; the wheel only *declares* the grants (``docs/rust-pure-app.md`` §5.2)."""
+    policy; the wheel only *declares* the grants (``docs/rust-applications.md`` §8)."""
     grants = parse_sandbox_grants(app.module.sandbox_grants(json.dumps(args)))
     extra_ro = tuple(pathlib.Path(p) for p in grants.extra_ro)
     extra_env = tuple(grants.extra_env)

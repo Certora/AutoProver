@@ -1,8 +1,8 @@
 # Cargo workspace for AutoProver's Rust extension framework.
 #
 # * `autoprover-sdk` — the library new Rust-based applications import. It defines
-#   the ABI (serde types), the `Application` / `FormalizeSession` traits, the FFI
-#   helpers, and the `export_app!` macro that emits the PyO3 module.
+#   the ABI (serde types), the `Backend` trait, the `run_confined` launcher helper,
+#   the FFI helpers, and the `export_app!` macro that emits the PyO3 module.
 # * `example-app`   — a self-contained demonstration application built into a
 #   Python wheel via maturin, used by the framework's round-trip test.
 #

@@ -42,8 +42,10 @@ class Block(BaseModel):
 class Section(BaseModel):
     """A logical documentation section: a header path plus its ordered content blocks.
 
-    ``headers`` is the ``h1..h6`` path (the importer left-packs and truncates to 6, matching the
-    DB's ``_normalize_head``). Both retrieval indexes are keyed off this path."""
+    ``headers`` is the ``h1..h6`` path: entry *i* lands in column ``h(i+1)``, and a falsy or absent
+    level stays ``NULL`` in its own column (the DB's ``_normalize_head`` packs nothing). At most 6 —
+    a deeper path raises there rather than losing its deepest level. Both retrieval indexes are
+    keyed off this path."""
 
     headers: list[str]
     blocks: list[Block] = Field(default_factory=list)

@@ -8,7 +8,7 @@ backend may analyze Solidity (``echoprover`` selects ecosystem ``evm``) or Rust 
 backend is a Rust wheel — it reads it from ``app.ecosystem.language``.
 
 This package is the Python side of the seam described in
-``docs/rust-backend-api.md``. A Rust application is a wheel built with
+``docs/rust-applications.md``. A Rust application is a wheel built with
 ``autoprover-sdk`` (see ``rust/``) exposing a small, synchronous, JSON FFI surface
 — a **passive service** the pipeline drives:
 

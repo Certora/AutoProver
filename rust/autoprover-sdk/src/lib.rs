@@ -3,7 +3,7 @@
 //! The library a Rust-based AutoProver application imports. It defines the seam
 //! between a Rust backend and the generic Python pipeline
 //! (`composer/pipeline/core.py`), realized over a **synchronous, JSON** FFI
-//! boundary — the service-shaped design in `docs/rust-backend-api.md`.
+//! boundary — the service-shaped design in `docs/rust-applications.md`.
 //!
 //! The backend is a **passive service**, not a driver: the Python pipeline owns the
 //! author→compile→judge→validate loop and every LLM turn, and calls the backend's
@@ -27,7 +27,7 @@ pub use pyo3;
 
 // ===========================================================================
 // Descriptor — the declarative spine the Python host consumes to synthesize the
-// phase enum, argparse, frontend and artifact store (see rust-applications.md).
+// phase enum, argparse, frontend and artifact store (see rust-applications.md §3).
 // ===========================================================================
 
 /// Which of the four driver-tagged core phases a declared phase fills. A phase
@@ -138,7 +138,7 @@ pub struct SetupSpec {
 }
 
 /// An analysis-independent **preflight** gate on the prepared workspace, run *concurrently with
-/// system analysis* — before a single property exists (`docs/rust-backend-api.md` §3.1).
+/// system analysis* — before a single property exists (`docs/rust-applications.md` §4.2).
 ///
 /// When a descriptor carries one, the host follows its [`WorkspacePrep`] with a
 /// `kind="preflight"` [`Backend::compile`] call whose `spec` is **empty**: nothing has been
@@ -228,7 +228,7 @@ fn default_ecosystem() -> String {
 // ===========================================================================
 // The service API — the data crossing the FFI. The backend is PASSIVE: the Python
 // pipeline drives the author→compile→judge→validate loop and calls these callouts;
-// nothing here holds state across calls (see docs/rust-backend-api.md).
+// nothing here holds state across calls (see docs/rust-applications.md).
 // ===========================================================================
 
 /// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), plus a
@@ -462,7 +462,8 @@ pub struct SandboxGrants {
 /// cover several units (e.g. Crucible runs every invariant in one target), and the backend — which
 /// owns its own result/failure format — attributes the run to those units; the host records the
 /// verdicts verbatim (it does no verdict logic). Fusing the build gate into `validate` (rather than
-/// a separate `compile` dry-run) is the component path's efficiency win (docs/rust-backend-api.md).
+/// a separate `compile` dry-run) is the component path's efficiency win (docs/rust-applications.md
+/// §4.4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ValidateOutcome {
@@ -577,7 +578,8 @@ fn confined_join(workdir: &std::path::Path, rel: &str) -> Result<std::path::Path
 /// `Python::allow_threads`**. Enforces `sandbox.timeout_s`.
 ///
 /// The **command line (`program`/`args`) is authored by the trusted backend**; only file
-/// *contents* may derive from the LLM (`docs/command-sandbox.md` §2). When present, the prefix's
+/// *contents* may derive from the LLM (`docs/command-sandbox.md` §2, `docs/rust-applications.md`
+/// §8). When present, the prefix's
 /// `run-confined` confines *itself* (Landlock+seccomp+rlimits+env scrub) and `execve`s the tool.
 pub fn run_confined(
     sandbox: &Sandbox,

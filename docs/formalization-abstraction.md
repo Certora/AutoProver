@@ -55,7 +55,7 @@ return type is the input to the next link:
   artifact store)               pre-work)   contract; backend setup)                  report inputs / finalize)
 ```
 
-The driver ([core.py:230](../composer/pipeline/core.py)) sequences them:
+The driver (`run_pipeline` in [core.py](../composer/pipeline/core.py)) sequences them:
 
 ```python
 # 1. analysis-independent backend pre-work runs CONCURRENTLY with the shared analysis
@@ -73,14 +73,19 @@ analyzed = await analysis_task
 prepared = await backend.prepare_system(analyzed, run, preflight)
 
 # 3. pre-formalization setup runs CONCURRENTLY with property extraction
-formalizer_task = asyncio.create_task(prepared.prepare_formalization(run))
+staged_task = asyncio.create_task(prepared.prepare_formalization(run))
 batches = await _extract_all(prepared.main, ...)
-formalizer = await formalizer_task            # only overlapped; neither side is cancelled
+staged = await staged_task                    # only overlapped; neither side is cancelled
 
-# 4. per-component formalization (parallel), cache-wrapped by the driver
+# 4. a backend whose units share one artifact handed back a StagedFormalizer instead: the
+#    artifact is authored HERE, once, from every unit's properties (§3.3)
+formalizer = await staged.begin(batches, run) if isinstance(staged, StagedFormalizer) else staged
+
+# 5. per-component formalization (parallel), cache-wrapped by the driver
 settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
+await formalizer.finalize(outcomes, run)
 
-# 5. shared: build + persist the report from the outcomes + backend verdicts
+# 6. shared: build + persist the report from the outcomes + backend verdicts
 report = await build_report(..., fetch_verdicts=formalizer.fetch_verdicts)
 ```
 
@@ -96,14 +101,18 @@ awaits it first and cancels the analysis on failure rather than the other way ro
 it would otherwise keep spending on a run that can no longer complete. That is what makes the
 preflight a *gate*: a broken workspace stops the run while it has spent one analysis agent, instead
 of surfacing as unfixable compiler errors in the first authored draft, after the whole extraction
-phase ([rust-backend-api.md §3.1](./rust-backend-api.md)).
+phase ([rust-applications.md §4.2](./rust-applications.md)).
 
 ---
 
 ## 3. The contract
 
-Two protocols + three abstract bases define the entire seam. All live in
-[composer/pipeline/core.py](../composer/pipeline/core.py) and
+Two protocols + four abstract bases define the entire seam. The abstract bases
+(`Formalizer`, `StagedFormalizer`, `PreparedSystem`, `PipelineBackend`) live in
+[composer/pipeline/core.py](../composer/pipeline/core.py); the data types the driver moves around
+(`BackendResult`, `GaveUp`, `Delivered`, `BackendJob`, `ComponentOutcome`, `CorePhases`,
+`PipelineRun`, `SystemAnalysisSpec`, `CorePipelineResult`) live in its sibling
+[ptypes.py](../composer/pipeline/ptypes.py), and the persistence protocols in
 [composer/spec/types.py](../composer/spec/types.py).
 
 ### 3.1 The result type: `FormT`
@@ -112,13 +121,13 @@ Everything is generic over one type variable, the *backend result*. It is the
 intersection of two narrow protocols:
 
 ```python
-# composer/pipeline/core.py
+# composer/pipeline/ptypes.py
 class BackendResult(FormalResult, ReportableResult, Protocol): ...
 ```
 
-- **`FormalResult`** ([types.py:43](../composer/spec/types.py)) — what *persistence*
+- **`FormalResult`** ([types.py](../composer/spec/types.py)) — what *persistence*
   needs: `property_units()`, `commentary`, `artifact_text`.
-- **`ReportableResult`** ([report/collect.py:25](../composer/spec/source/report/collect.py))
+- **`ReportableResult`** ([report/collect.py](../composer/spec/source/report/collect.py))
   — what the *report* needs: `skipped`, `property_units()`, `output_link`.
 
 A backend's concrete result (for CVL, `GeneratedCVL`) structurally satisfies both. The
@@ -129,12 +138,12 @@ driver only ever holds it as an opaque `FormT`; it never reads a field.
 ```python
 # composer/pipeline/core.py
 @dataclass
-class Formalizer[FormT: BackendResult](ABC):
+class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     formalized_type: type[FormT]      # the concrete result class — the cache get/put key
-    backend_tag: ReportBackend        # "prover" | "foundry" | "none", stamped into the report
+    backend_tag: ReportBackend        # the report vocabulary, stamped into the report
 
     @abstractmethod
-    async def formalize(self, label, feat, props, ctx, run) -> FormT | GaveUp: ...
+    async def formalize(self, label, feat: U, props, ctx, run) -> FormT | GaveUp: ...
 
     @abstractmethod
     async def fetch_verdicts(self, inp: ReportComponentInput[FormT]) -> dict[RuleName, Verdict]: ...
@@ -147,42 +156,72 @@ class Formalizer[FormT: BackendResult](ABC):
 ```
 
 The contract is deliberately small — one required producer (`formalize`), one required
-reader (`fetch_verdicts`), and two optional hooks. Crucially, a `Formalizer` is
-**immutable and fully constructed** by `prepare_formalization`: it carries its prover
-config, resources, and tool as constructor state, never set post-hoc. By the time
-`formalize` runs, every dependency is already present.
+reader (`fetch_verdicts`), and two optional hooks. The second type parameter `U` is the
+*formalized unit* the backend consumes (EVM's `ContractComponentInstance`, a Rust backend's
+`FeatureUnit`): the backend reads its concrete unit's members without casts while the driver stays
+unit-agnostic. Crucially, a `Formalizer` is **immutable and fully constructed** by whatever produced
+it: it carries its prover config, resources, and tool as constructor state, never set post-hoc. By
+the time `formalize` runs, every dependency is already present.
 
-### 3.3 `PreparedSystem[FormT]` — the formalizer factory
+### 3.3 `PreparedSystem` — the formalizer factory, and `StagedFormalizer`
 
 ```python
 # composer/pipeline/core.py
 @dataclass
-class PreparedSystem[FormT: BackendResult](ABC):
-    main: ContractInstance                                  # located main contract
+class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
+    main: Main                                              # the ecosystem's located "main"
     @abstractmethod
-    async def prepare_formalization(self, run) -> Formalizer[FormT]: ...
+    async def prepare_formalization(
+        self, run
+    ) -> Formalizer[FormT, U] | StagedFormalizer[FormT, U]: ...
 ```
+
+`main` is the *ecosystem's* main type (EVM's `ContractInstance`, Solana's
+`SolanaProgramInstance`), a different axis from `U` — the driver treats it opaquely and only hands
+it to `ecosystem.units(main)`.
+
+The union return is for a backend whose units all build on **one shared artifact** (Crucible's
+fixture; whatever setup module a CVLR backend needs). Such an artifact must be authored from the
+union of every unit's properties, which pins it to exactly one point in the run — and
+`prepare_formalization` is not it, because that overlaps extraction, so no properties exist there
+yet. Nor can it be lazy on first `formalize`: whichever unit won the race would decide the artifact
+every other unit is then told to work within — harmless at one unit, silently wrong at several. So
+such a backend returns a `StagedFormalizer` instead, and the driver calls its one method between
+extraction and the fan-out:
+
+```python
+class StagedFormalizer[FormT: BackendResult, U: FeatureUnit](ABC):
+    @abstractmethod
+    async def begin(self, jobs: Sequence[BackendJob[U]], run) -> Formalizer[FormT, U]: ...
+```
+
+Which of the two a backend returns is its own declared signature, so a backend with no shared
+artifact never mentions staging at all. The prover is one of those: its shared peer
+(`invariants.spec`) is produced inside `prepare_formalization` (§4.2), because the invariants are
+formulated from the *model*, not from the extracted properties.
 
 ### 3.4 The outcome types the driver produces
 
 ```python
+# composer/pipeline/ptypes.py
 @dataclass(frozen=True)
-class Delivered[FormT]:           # a success + the path it was written to
+class Delivered[FormT: BackendResult]:   # a success + the path it was written to
     result: FormT
     deliverable: Path
+    # unit_file (the deliverable's basename — the verdict-disambiguation key) and
+    # run_link (the result's output_link) are derived properties.
 
 class GaveUp(BaseModel):          # the single unified give-up signal
     reason: str
 
 @dataclass
-class ComponentOutcome[FormT](BackendJob):
+class ComponentOutcome[FormT: BackendResult, U: FeatureUnit](BackendJob[U]):
     result: Delivered[FormT] | GaveUp | BaseException   # success / declined / crashed
 ```
 
 `ComponentOutcome` is a closed sum of the three things that can happen to one component:
 it was `Delivered`, the agent `GaveUp` with a reason, or it raised. The driver's `_tally`
-([core.py:351](../composer/pipeline/core.py)) folds these into the run result; the report
-phase renders each.
+folds these into the `CorePipelineResult`; the report phase renders each.
 
 ---
 
@@ -207,7 +246,8 @@ class ProverBackend(PipelineBackend[
     @property
     @override
     def core_phases(self) -> CorePhases[AutoProvePhase]:
-        return CorePhases({"analysis": ..., "extraction": ..., "formalization": AutoProvePhase.CVL_GEN})
+        return CorePhases({"analysis": ..., "extraction": ...,
+                           "formalization": AutoProvePhase.CVL_GEN, "report": AutoProvePhase.REPORT})
 
     @property
     @override
@@ -226,7 +266,9 @@ backend that has nothing to narrow just returns a constant.
 ### 4.1 `prepare_system` — harness lift
 
 ```python
-async def prepare_system(self, analyzed: SourceApplication, run) -> PreparedSystem[GeneratedCVL]:
+async def prepare_system(
+    self, analyzed: SourceApplication, run, preflight: None,
+) -> PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]:
     sys_desc  = await run.runner(TaskInfo(HARNESS_TASK_ID, ...), lambda: run_harness_creation(...))
     harnessed = _lift_harnessed(analyzed, sys_desc)             # SourceApplication → HarnessedApplication
     prover_tool = get_prover_tool(run.env.llm_heavy(), run.source.contract_name,
@@ -236,7 +278,7 @@ async def prepare_system(self, analyzed: SourceApplication, run) -> PreparedSyst
 ```
 
 It runs the harness-classification agent, folds the generated harnesses back into the app
-as a `HarnessedApplication` ([pipeline.py:69](../composer/spec/source/pipeline.py)), builds
+as a `HarnessedApplication` (`_lift_harnessed` in [pipeline.py](../composer/spec/source/pipeline.py)), builds
 the shared `verify_spec` prover tool once, and packages everything the next phase needs into
 an immutable `ProverPrepared`. (Foundry's `prepare_system` is an identity transform — no
 harness, no tool.)
@@ -244,10 +286,10 @@ harness, no tool.)
 ### 4.2 `prepare_formalization` — the concurrent setup fan-out
 
 This is where the CVL backend does its expensive pre-work, and it is the richest method in
-the abstraction. From [pipeline.py:178](../composer/spec/source/pipeline.py):
+the abstraction. From `ProverPrepared` in [pipeline.py](../composer/spec/source/pipeline.py):
 
 ```python
-async def prepare_formalization(self, run) -> Formalizer[GeneratedCVL]:
+async def prepare_formalization(self, run) -> Formalizer[GeneratedCVL, ContractComponentInstance]:
     # AutoSetup (+ custom summaries) ∥ structural-invariant formulation — both depend only
     # on the harnessed app, so they run concurrently.
     (setup_config, resources), invariants = await asyncio.gather(
@@ -303,25 +345,25 @@ The `Formalizer.formalize` impl is a thin adapter; all the work is in
 `batch_cvl_generation`:
 
 ```python
-# ProverRunner.formalize  (pipeline.py:114)
+# ProverRunner.formalize  (pipeline.py)
 async def formalize(self, label, feat, props, ctx, run) -> GeneratedCVL | GaveUp:
     return await batch_cvl_generation(
         ctx.abstract(CVLGeneration), self._prover_config, props, feat,
         self._resources, self._prover_tool, run.env, label, run.source, SPECS_DIR)
 ```
 
-`batch_cvl_generation` ([author.py:334](../composer/spec/source/author.py)) builds a
+`batch_cvl_generation` ([author.py](../composer/spec/source/author.py)) builds a
 dedicated LLM agent graph and runs it to a fixpoint. The agent is given:
 
 - the property batch + component context, rendered into the prompt;
-- the resource set as `import` views, with paths made relative to `certora/specs/` so the
-  prover resolves CVL `import`s correctly ([author.py:349](../composer/spec/source/author.py));
+- the resource set as `import` views, with paths made relative to the spec dir so the
+  prover resolves CVL `import`s correctly;
 - a tool belt: CVL authoring tools, the `verify_spec` prover tool, config-edit tools, and the
   completion/give-up/expectation tools (`PublishResultTool`, `GiveUpTool`,
   `ExpectRuleFailure`/`ExpectRulePassage`).
 
 Two **hard validation gates** must both pass before the agent may publish
-([author.py:404](../composer/spec/source/author.py)):
+([author.py](../composer/spec/source/author.py)):
 
 ```python
 required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY]
@@ -334,7 +376,7 @@ required_validations=[FEEDBACK_VALIDATION_KEY, PROVER_VALIDATION_KEY]
   (typecheck failure / counterexample / manual citation / reasoned) against prior feedback.
 
 The agent loop ends in exactly one of two states, mapped onto the abstraction's
-`FormT | GaveUp` ([author.py:413](../composer/spec/source/author.py)):
+`FormT | GaveUp`:
 
 ```python
 if res_state["failed"]:
@@ -350,7 +392,7 @@ cache hit skips the prover entirely, so the result must carry enough to rebuild
 ### 4.4 `extra_report_inputs` — folding in the invariants
 
 Per-component outcomes are assembled by the driver. The structural invariants are a
-*synthetic* component the backend contributes ([pipeline.py:136](../composer/spec/source/pipeline.py)):
+*synthetic* component the backend contributes ([pipeline.py](../composer/spec/source/pipeline.py)):
 
 ```python
 def extra_report_inputs(self) -> list[ReportComponentInput[GeneratedCVL]]:
@@ -373,7 +415,7 @@ async def fetch_verdicts(self, inp) -> dict[RuleName, Verdict]:
 
 The fetcher resolves each spec's prover run (via `inp.formalized.run_link`) and rolls per-rule
 outcomes into `Verdict`s. The `collect` step
-([report/collect.py:104](../composer/spec/source/report/collect.py)) then keys rules by
+([report/collect.py](../composer/spec/source/report/collect.py)) then keys rules by
 `(unit_file, name)` so a structural invariant imported into several component specs collapses
 to one entry, and uses `Verdict.merge` (priority `BAD > ERROR > TIMEOUT > UNKNOWN > GOOD`) to
 roll up multiple results for one rule. Foundry's fetcher instead reads pass/fail straight off
@@ -438,7 +480,7 @@ from disagreeing:
 
 `Delivered` pairs a result with the path it was written to — and those two always travel
 together because the path *exists only because the result did*
-([core.py:98](../composer/pipeline/core.py)). The write happens in the driver's `_run`
+([ptypes.py](../composer/pipeline/ptypes.py)). The write happens in the driver's `_run`
 closure:
 
 ```python
@@ -448,7 +490,7 @@ Delivered(result, backend.artifact_store.write_artifact(result_key, result))   #
 ```
 
 The store is generic over `(ArtifactIdentifier, FormalResult)`
-([artifacts.py:32](../composer/spec/artifacts.py)). The base writes everything that is
+([artifacts.py](../composer/spec/artifacts.py)). The base writes everything that is
 identical across backends — `properties.json`, `commentary.md`, the
 `{property title → demonstrating units}` map — keyed off the identifier's `stem`. The CVL
 subclass [ProverArtifactStore](../composer/spec/source/artifacts.py) adds the
@@ -494,7 +536,7 @@ certora/ap_report/report.json                    # final cross-referenced report
 ## 7. Caching wraps formalization (driver-owned)
 
 A backend never writes cache logic — the driver does, keyed by
-`formalizer.formalized_type` ([core.py:271](../composer/pipeline/core.py)):
+`formalizer.formalized_type` (the `_run` closure in [core.py](../composer/pipeline/core.py)):
 
 ```python
 async def _run(batch):
@@ -530,7 +572,7 @@ The abstraction encodes three distinct failure modes, each handled differently:
 | Agent declines a component | `formalize` returns `GaveUp(reason)` | recorded as a `ComponentOutcome`, surfaced in `failures`, rendered in report as a gap; **not cached** |
 | Component crashes | `formalize` raises | `asyncio.gather(..., return_exceptions=True)` captures it into `ComponentOutcome.result` |
 | Invariant CVL gives up | `prepare_formalization` raises `RuntimeError` | **fatal** — invariants are a shared precondition, so the whole run aborts |
-| Report build fails | exception in `build_report` | best-effort: logged, run still succeeds ([core.py:318](../composer/pipeline/core.py)) |
+| Report build fails | exception in `build_report` | best-effort: logged, run still succeeds — unless `report_build.RERAISE_REPORT_FAILURES` is set, which tests flip to make a silent report failure fail loudly |
 
 The asymmetry is intentional: a single component giving up is a normal, reportable outcome,
 but the shared invariant spec failing would silently weaken every downstream component, so it
@@ -551,6 +593,7 @@ system analysis, property extraction, caching, and the report, and contributes o
 | `preflight` | none (its pre-work needs the harnessed model) | none (`forge` builds the project already) |
 | `prepare_system` | harness lift + prover tool | identity |
 | `prepare_formalization` | AutoSetup ∥ summaries ∥ invariants | trivial (pre-built formalizer) |
+| shared artifact (`StagedFormalizer`) | none — `invariants.spec` is built from the model, in `prepare_formalization` | none |
 | `formalize` | author CVL, run prover, revise | author tests, run `forge test` |
 | `fetch_verdicts` | query prover output off-thread | read ran/expected tests off the result |
 | `extra_report_inputs` | synthetic "Structural Invariants" | none |
@@ -567,9 +610,10 @@ A backend author's checklist:
    `artifact_store`. `preflight` returns `None`
    unless the backend has pre-work that needs nothing from the run — if it must *build* something,
    that is where the build belongs, so it overlaps system analysis and can fail the run before the
-   model has been spent (Crucible: [rust-backend-api.md §3.1](./rust-backend-api.md)).
+   model has been spent (Crucible: [rust-applications.md §4.2](./rust-applications.md)).
 4. Implement `PreparedSystem.prepare_formalization` returning a fully-constructed
-   `Formalizer`.
+   `Formalizer` — or, if every unit builds on one shared artifact, a `StagedFormalizer` whose
+   `begin` authors it from the union of all units' properties (§3.3).
 5. Implement `Formalizer.formalize` + `fetch_verdicts`; override `extra_report_inputs` /
    `finalize` only if needed.
 
@@ -580,8 +624,8 @@ A backend author's checklist:
 Putting it together, one run of the CVL backend over a component:
 
 ```
-run_autoprove_pipeline
-└─ run_pipeline(ProverBackend, run)
+_entry_point → cli_pipeline → cont(env, ProverBackend, EVM)
+└─ run_pipeline(ProverBackend, run, ecosystem=EVM)
    1. ┌ create_task: ProverBackend.preflight ─▶ None   # a building backend puts its build here
       └ run_component_analysis ─────────────▶ SourceApplication   # concurrent with the above
    2. ProverBackend.prepare_system
@@ -617,7 +661,8 @@ run_autoprove_pipeline
 
 | Concern | File |
 |---|---|
-| Driver + abstraction definitions | [composer/pipeline/core.py](../composer/pipeline/core.py) |
+| Driver + the abstract bases (`Formalizer`, `StagedFormalizer`, `PreparedSystem`, `PipelineBackend`) | [composer/pipeline/core.py](../composer/pipeline/core.py) |
+| The driver's data types (`BackendResult`, `Delivered`, `GaveUp`, `ComponentOutcome`, `PipelineRun`, …) | [composer/pipeline/ptypes.py](../composer/pipeline/ptypes.py) |
 | Result protocols (`FormalResult`, `ArtifactIdentifier`) | [composer/spec/types.py](../composer/spec/types.py) |
 | `ReportableResult`, `Verdict`, `VerdictFetcher`, `collect` | [composer/spec/source/report/collect.py](../composer/spec/source/report/collect.py) |
 | CVL backend (the three phase objects) | [composer/spec/source/pipeline.py](../composer/spec/source/pipeline.py) |
@@ -625,4 +670,4 @@ run_autoprove_pipeline
 | CVL result type (`GeneratedCVL`) | [composer/spec/cvl_generation.py](../composer/spec/cvl_generation.py) |
 | Artifact store base / CVL subclass | [composer/spec/artifacts.py](../composer/spec/artifacts.py) · [composer/spec/source/artifacts.py](../composer/spec/source/artifacts.py) |
 | Foundry backend (contrast) | [composer/foundry/pipeline.py](../composer/foundry/pipeline.py) |
-```
+| A Rust-wheel backend on this seam | [docs/rust-applications.md](./rust-applications.md) |

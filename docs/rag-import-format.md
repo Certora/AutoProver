@@ -16,8 +16,8 @@
 > candidate future adopters (§5), not part of this change. The format is nonetheless designed to be
 > general, so migrating them later needs no schema change.
 >
-> Companion to [rust-applications.md](./rust-applications.md) (the descriptor-driven app model)
-> and [rust-backend-api.md](./rust-backend-api.md) (the wheel FFI surface). The `knowledge_base`
+> Companion to [rust-applications.md](./rust-applications.md) (the descriptor-driven app model and
+> the wheel FFI surface). The `knowledge_base`
 > tag defined here is the *same* tag a wheel already declares as
 > [`rag_db_default`](../composer/rustapp/descriptor.py).
 
@@ -119,8 +119,9 @@ schema (v1), mirrored by a pydantic model the way
 
 Field notes:
 
-- **`version`** — schema version; the importer rejects unknown majors. Lets the format evolve
-  without silently mis-ingesting old files.
+- **`version`** — schema version; the importer refuses any value it doesn't recognize (an exact
+  match against `SCHEMA_VERSION`), before any DB write. Lets the format evolve without silently
+  mis-ingesting old files.
 - **`knowledge_base`** — the logical corpus tag. This is the *same* string a wheel declares as
   `rag_db_default` and that [`rag_env.py`](../composer/tools/rag_env.py) resolves to search
   tools. Making producer, importer, and runtime agree on one tag is a real simplification: it
@@ -130,8 +131,10 @@ Field notes:
   ([`documents`](../composer/rag/db.py) / `manual_sections` store `content + h1..h6`), so this
   is **not** persisted per row; it just lands in the importer's log line. (If we later want
   per-row provenance we'd extend the DB schema — out of scope for v1.)
-- **`headers`** — the section's header path, ≤ 6 entries (the `h1..h6` columns). Empty/trailing
-  levels are fine; the importer left-packs and truncates exactly as `_normalize_head` does.
+- **`headers`** — the section's header path, at most 6 entries: `_normalize_head` maps entry *i*
+  to column `h(i+1)`, leaving a falsy or absent level as `NULL` in its own column (so a gap stays a
+  gap — nothing is left-packed). A path longer than 6 is a producer bug, not something the importer
+  trims: it raises rather than silently dropping the deepest level.
 - **`blocks`** — ordered `{ "kind": "text" | "code", "body": "..." }`. Prose is fed to
   `append_text` (spaCy-split, structured boundary); code is fed to `add_code` and gets a
   `<code-ref-N>` tag automatically. This is the whole content model — it maps 1:1 onto the two
@@ -294,4 +297,3 @@ No runtime code changes — the search tools, `rag_env.py`, and the DB API are t
 - **One physical DB per corpus vs. one shared DB.** Orthogonal to this proposal — the
   `KNOWLEDGE_BASES` registry expresses whatever the deployment already does (today: shared
   `rag_db`, distinct roles; `extended_rag_db` separate). The format doesn't dictate topology.
-```

@@ -19,7 +19,7 @@ An AutoProver **application** is a complete, runnable vertical slice that takes 
 Solidity project + a design document and drives the shared property-extraction /
 formalization pipeline to a set of on-disk deliverables, rendered live to the user.
 
-There are two today:
+Two ship as hand-written verticals:
 
 | Application | Deliverable | Backend | Entry points |
 |---|---|---|---|
@@ -31,6 +31,12 @@ five collaborating pieces, each an implementation of a shared abstraction, wired
 together by a thin `main()`. The value of the convention is that the pieces are
 mutually orthogonal — you can swap the frontend (TUI ↔ console) without touching the
 pipeline, and swap the backend without touching either frontend.
+
+There is also a third path that writes **none** of the five by hand: an application whose backend
+is a Rust wheel *declares* them in an `AppDescriptor`, and the generic host in
+[composer/rustapp/](../composer/rustapp/) synthesizes the phase enum, entry point, frontend, store
+and `main()` from that declaration. The convention below is what that host implements, so this doc
+is still the model — see [rust-applications.md](./rust-applications.md) for the declarative form.
 
 ---
 
@@ -138,6 +144,7 @@ backend (`CorePhases[P]`). It only needs to satisfy `HasName` (an enum trivially
 ```python
 # composer/ui/autoprove_app.py
 class AutoProvePhase(enum.Enum):
+    DISCOVER_DESIGN_DOC = "discover_design_doc"
     HARNESS = "harness"
     AUTOSETUP = "autosetup"
     INVARIANTS = "invariants"
@@ -151,11 +158,16 @@ class AutoProvePhase(enum.Enum):
 ```python
 # composer/foundry/pipeline.py
 class FoundryPhase(enum.Enum):
+    DISCOVER_DESIGN_DOC = "discover_design_doc"
     SYSTEM_ANALYSIS = "system_analysis"
     PROPERTY_EXTRACTION = "property_extraction"
     TEST_GENERATION = "test_generation"
     REPORT = "report"
 ```
+
+Both carry `DISCOVER_DESIGN_DOC` because design-doc discovery is a *pre-pipeline* task the shared
+entry point runs (only when `system_doc` was omitted), and it still needs a phase to be grouped
+under — the application passes the member as `cli_pipeline`'s `design_doc_phase` (§5).
 
 The phase serves two roles:
 
@@ -165,16 +177,22 @@ The phase serves two roles:
   ```python
   # composer/ui/foundry_app.py
   FOUNDRY_PHASE_LABELS = {
+      FoundryPhase.DISCOVER_DESIGN_DOC: "Design Doc Discovery",
       FoundryPhase.SYSTEM_ANALYSIS: "System Analysis",
       FoundryPhase.PROPERTY_EXTRACTION: "Property Extraction",
       FoundryPhase.TEST_GENERATION: "Test Generation",
   }
-  FOUNDRY_SECTION_ORDER = ["System Analysis", "Property Extraction", "Test Generation"]
+  FOUNDRY_SECTION_ORDER = [
+      "Design Doc Discovery", "System Analysis", "Property Extraction", "Test Generation",
+  ]
   ```
+
+  A phase may be absent from the labels (foundry's `REPORT` is): the label map drives *sections*,
+  so an unlabelled phase simply gets no section of its own.
 
 - **The driver ↔ backend contract.** The shared driver tags four *core* phases; the
   backend maps its own enum onto them via `CorePhases[P]` (see §6). Note the two enums
-  above differ in granularity: foundry has three phases, autoprove has eight — the
+  above differ in granularity: foundry has five phases, autoprove has nine — the
   prover contributes several extra prep phases (harness, autosetup, summaries,
   invariants) that the driver never knows about. The enum is the application's own
   vocabulary; only the four core slots are shared.
@@ -183,42 +201,61 @@ The phase serves two roles:
 
 ## 5. Piece 2 — the entry point / Executor
 
-Each application has an `_entry_point` async context manager that owns **all** the
-imperative setup and yields the Executor closure. Its shape is a strict convention
-(the foundry file's docstring literally says "Mirrors autoprove_common's shape"):
+Each application has an `_entry_point` async context manager that yields the Executor closure. It
+owns only what is *its own* — the argument parser and the choice of env/backend/ecosystem — and
+delegates all the imperative service setup to one shared context manager,
+[`cli_pipeline`](../composer/pipeline/cli.py):
 
-> parse args → set up DB / RAG / store / checkpointer / logging / thread logger →
-> yield a closure the caller drives with a handler factory.
+> parse args → `cli_pipeline` (services, design-doc resolution, cache root) → build this
+> application's env + backend → hand them to the continuation.
 
 ```python
-# composer/spec/source/autoprove_common.py  (shape shared by composer/foundry/entry.py)
+# composer/foundry/entry.py  (shape shared by composer/spec/source/autoprove_common.py)
 @asynccontextmanager
-async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
-    parser = argparse.ArgumentParser(...)
-    add_protocol_args(parser, RAGDBOptions)
-    add_protocol_args(parser, ExtendedModelOptions)
-    parser.add_argument("project_root", ...)
-    parser.add_argument("main_contract", help="Main contract as path:ContractName")
-    parser.add_argument("system_doc", ...)
-    # ... application-specific flags ...
-    args = cast(AutoProveArgs, parser.parse_args())
-    async with autoprove_executor(args, summary) as runner:
-        yield runner
+async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
+    args = cast(FoundryArgs, _build_parser().parse_args())
+    thread_id = f"foundry_{uuid.uuid4().hex[:12]}"
+
+    async def runner(fact: HandlerFactory[FoundryPhase, None]) -> FoundryPipelineResult:
+        async with (
+            cli_pipeline(
+                args=args, thread_id=thread_id, summary=summary, task_handler=fact,
+                design_doc_phase=FoundryPhase.DISCOVER_DESIGN_DOC,
+                at_exit=_usage_exit_logger(summary), workflow="foundry",
+            ) as (staged, cont),
+            PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag,
+        ):
+            env = build_foundry_env(model_provider=staged.llm_models, rag_db=rag, ...)
+            return await cont(env, backend(source_input=staged.source, ...), EVM)
+
+    yield runner
 ```
 
-The heavy lifting is in the inner context manager, which:
+`cli_pipeline` is the shared half — one implementation, not a per-application convention:
 
-1. Resolves `project_root` + `main_contract` (`path:ContractName`) + `system_doc`.
-2. Computes a **root cache key** from the inputs (`_root_cache_key` hashes project
-   root + doc content + relative path + contract name) — identical helper in both.
-3. Opens the shared connection stack — `standard_connections`, a RAG DB, the async
-   tool context, the thread logger — under a single `async with`.
-4. Reads the design doc into a `SourceCode`, builds the environment (`ServiceHost`),
-   and creates the `WorkflowContext`.
-5. Yields a `runner(handler)` closure that calls the application's pipeline function.
+1. Resolves `project_root` + `main_contract` (`path:ContractName`).
+2. Opens the shared connection stack — `standard_connections`, the async tool context, the
+   thread logger — under a single `async with`.
+3. **Resolves the design doc**: the supplied `system_doc`, or, when it was omitted, discovers one
+   as a visible task tagged with the caller's `design_doc_phase`. This is why discovery needs a
+   phase member (§4) and why it happens inside the handler scope.
+4. Computes the **root cache key** (project root + doc bytes + relative path + contract name),
+   records the run's cache tags, and reads an optional threat model.
+5. Yields `(staged, cont)`: a `StagedPipeline` of everything the application needs to build its
+   env and backend (connections, models, embedder, `SourceCode`, logger, `root_key`), and a
+   `Continuation` that takes `(env, backend, ecosystem)`, builds the `PipelineRun`, and runs the
+   driver.
+
+What stays per-application is exactly the part that differs: the parser, the tool/RAG env, the
+backend, and which ecosystem it targets.
 
 The args are declared as a **Protocol** (`AutoProveArgs`, `FoundryArgs`), not a class,
 so the parser and the typed access agree without a dataclass in between:
+
+The shared half declares what it needs of them as `PipelineArgs`
+([pipeline/cli.py](../composer/pipeline/cli.py)) — `project_root`, `main_contract`, `system_doc`,
+the cache/memory namespaces, concurrency, recursion limit, `interactive`, `threat_model`,
+`max_bug_rounds` — and each application's protocol extends that with its own:
 
 ```python
 # composer/spec/source/autoprove_common.py
@@ -243,22 +280,6 @@ class FoundryArgs(TieredModelOptions, FoundryRAGDBOptions, Protocol):
     ...
 ```
 
-The `runner` closure each yields is the Executor:
-
-```python
-# autoprove
-async def runner(handler: HandlerFactory[AutoProvePhase, None]) -> CorePipelineResult[GeneratedCVL]:
-    return await run_autoprove_pipeline(
-        ctx=ctx, source_input=system_doc, env=source_env, handler_factory=handler,
-        prover_opts=prover_opts, interactive=args.interactive, ...)
-
-# foundry
-async def runner(handler: HandlerFactory[FoundryPhase, None]) -> FoundryPipelineResult:
-    return await run_foundry_pipeline(
-        source_input=source_input, ctx=ctx, handler_factory=handler, env=env,
-        forge_binary=args.forge_binary, forge_timeout_s=args.forge_timeout_s, ...)
-```
-
 Convention points worth naming:
 
 - **Foundry validates its precondition in the entry point** (`foundry.toml` must
@@ -266,9 +287,9 @@ Convention points worth naming:
   opened.
 - **Each application owns its RAG DB choice.** Foundry overrides `--rag-db`'s default
   to the cheatcodes DB via a Protocol (`FoundryRAGDBOptions`) rather than a new flag.
-- **The `finally` block is where run-close artifacts land** (autoprove dumps
-  `token_usage.json` there) — guarded so a diagnostics failure can't mask the run's
-  own outcome.
+- **Run-close artifacts land in an `at_exit` hook** passed to `cli_pipeline` (both apps dump
+  `token_usage.json` there). `cli_pipeline` calls it from its own `finally` and swallows what it
+  raises, so a diagnostics failure can't mask the run's own outcome.
 - **The entry point never imports a frontend.** It yields the Executor; `main()`
   chooses the frontend. That is what lets one entry point back both a TUI and a
   console `main()`.
@@ -277,31 +298,40 @@ Convention points worth naming:
 
 ## 6. Piece 3 — the pipeline and its backend
 
-The Executor's closure calls the application's `run_*_pipeline` function. For both
-current applications, that function is a thin wrapper that constructs a
-`PipelineBackend` + a `PipelineRun` and hands them to the shared driver
-[`run_pipeline`](../composer/pipeline/core.py):
+The application builds a `PipelineBackend` and hands it, with its env and its ecosystem, to
+`cli_pipeline`'s continuation. The continuation is where the `PipelineRun` is assembled and the
+shared driver [`run_pipeline`](../composer/pipeline/core.py) is called — so no application writes
+that wiring:
 
 ```python
-# composer/spec/source/pipeline.py
-async def run_autoprove_pipeline(source_input, ctx, handler_factory, env, *, prover_opts, ...):
-    backend = ProverBackend(ProverArtifactStore(source_input.project_root, source_input.contract_name), prover_opts)
-    run = PipelineRun(ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent))
-    return await run_pipeline(backend, run, interactive=interactive, ...)
+# composer/pipeline/cli.py — the Continuation yielded by cli_pipeline
+async def cont(env, backend, ecosystem) -> CorePipelineResult[FormT]:
+    run = PipelineRun(
+        ctx=full_ctx, source=full_source, env=env,
+        _semaphore=semaphore, _handler_factory=task_handler,
+    )
+    return await run_pipeline(
+        backend=backend, run=run, ecosystem=ecosystem,
+        interactive=args.interactive, max_bug_rounds=args.max_bug_rounds,
+        threat_model=threat_model,
+    )
 ```
 
 ```python
-# composer/foundry/pipeline.py
-async def run_foundry_pipeline(source_input, ctx, handler_factory, env, *, forge_binary, ...):
-    artifacts = FoundryArtifactStore(source_input.project_root)
-    backend = FoundryBackend(artifacts, _ForgeRunConfig(forge_binary, forge_timeout_s, foundry_sem))
-    run = PipelineRun(ctx, env, source_input, handler_factory, asyncio.Semaphore(max_concurrent))
-    return await run_pipeline(backend, run, ...)
+# each application supplies only the backend (composer/foundry/pipeline.py)
+def backend(*, forge_binary, forge_timeout_s, source_input, forge_concurrency) -> FoundryBackend:
+    return FoundryBackend(FoundryArtifactStore(source_input.project_root),
+                          _ForgeRunConfig(forge_binary, forge_timeout_s, ...))
 ```
 
-Notice the `handler_factory` (the frontend seam) is bundled into the `PipelineRun` —
-`run.runner(task_info, job)` is how every phase of the driver spins up a task through
-whatever frontend was supplied.
+Two things to notice. The `handler_factory` (the frontend seam) and the concurrency semaphore are
+bundled into the `PipelineRun` — `run.runner(task_info, job)` is how every phase of the driver
+spins up a task through whatever frontend was supplied, and `run.unmetered_runner` is its peer for a
+task that is *not* an agent (a toolchain build), which must not spend one of the run's
+`--max-concurrent` slots. And the **ecosystem** is an explicit argument to the driver, not something
+the backend carries: it supplies the analyzed-model type, the analysis prompts, `locate_main` and
+the unit enumeration, so one backend shape can target more than one chain (see
+[ecosystem-abstraction.md](./ecosystem-abstraction.md)).
 
 The backend itself is the four-slot contract the driver reads. The application maps
 its phase enum onto the four **core phases** the driver tags:
@@ -445,7 +475,7 @@ async def _main() -> int:
         async def work():
             result = await pipeline(app.make_handler)  # ← the seam
             app.notify(f"Foundry tests complete: {result.n_components} components, ...")
-            app._pipeline_done = True
+            app.mark_pipeline_done()
         app.set_work(work)
         await app.run_async()                          # TUI owns the event loop
         print(summary.format())
@@ -478,27 +508,31 @@ Because each piece is an implementation of a shared abstraction, adding an
 application is a fill-in-the-blanks exercise; nothing in the driver, the UI base, or
 the seam changes.
 
-1. **Phase enum** `P(enum.Enum)` — your task-grouping vocabulary, with at least the
-   four core phases (analysis / extraction / formalization / report) representable.
-2. **Backend** — implement `PipelineBackend[P, FormT, H, A]` and its three phase
-   objects (`prepare_system` → `PreparedSystem.prepare_formalization` → `Formalizer`),
-   plus `backend_guidance`, `core_phases`, `analysis_spec`, `artifact_store`,
-   `to_artifact_id`. (Full checklist in
-   [formalization-abstraction.md §9](./formalization-abstraction.md).)
+1. **Phase enum** `P(enum.Enum)` — your task-grouping vocabulary, with the four core phases
+   (analysis / extraction / formalization / report) representable, plus a member to group
+   design-doc discovery under.
+2. **Backend** — implement `PipelineBackend`, naming its eight type arguments, and its phase
+   objects (`preflight` → `prepare_system` → `PreparedSystem.prepare_formalization` →
+   `Formalizer`, or a `StagedFormalizer` when every unit shares one artifact), plus
+   `backend_guidance`, `core_phases`, `analysis_spec`, `artifact_store`, `to_artifact_id`. (Full
+   checklist in [formalization-abstraction.md §9](./formalization-abstraction.md).)
 3. **Artifact store** — subclass `ArtifactStore`; define an `ArtifactIdentifier`.
 4. **Result type** `FormT` satisfying `FormalResult` + `ReportableResult`.
-5. **Pipeline function** `run_<app>_pipeline(...)` — build backend + `PipelineRun`,
-   call `run_pipeline`.
-6. **Entry point** — an `_entry_point` context manager following the
-   parse → services → `yield runner` convention; declare args as a `Protocol`.
-7. **Frontend(s)** — a `MultiJobApp[P, T]` subclass (phase labels, section order,
+5. **Entry point** — an `_entry_point` context manager that parses args (declared as a `Protocol`
+   extending `PipelineArgs`) and yields a `runner(handler)` closure which opens `cli_pipeline`,
+   builds the env + backend from the `StagedPipeline`, and calls the continuation with its
+   ecosystem. There is no per-application pipeline wrapper to write.
+6. **Frontend(s)** — a `MultiJobApp[P, T]` subclass (phase labels, section order,
    `create_task_handler`, per-task event streaming) and/or a console handler.
-8. **`main()`** — glue an entry point to a frontend via `run(app.make_handler)`.
+7. **`main()`** — glue an entry point to a frontend via `run(app.make_handler)`.
 
 The dependency direction is the guardrail: `main` → (entry point, frontend);
-entry point → pipeline; pipeline → backend + `PipelineRun(handler_factory)`. Frontend
+entry point → `cli_pipeline` → driver; driver → backend + `PipelineRun(handler_factory)`. Frontend
 and backend never reference each other, and neither references `main`. Keep those
 edges and the pieces stay swappable.
+
+For a Rust-wheel backend, steps 1–7 are all *declared* instead of written; see
+[rust-applications.md](./rust-applications.md).
 
 ---
 
@@ -507,10 +541,11 @@ edges and the pieces stay swappable.
 | Piece | autoprove | foundry | shared abstraction |
 |---|---|---|---|
 | Phase enum | [autoprove_app.py](../composer/ui/autoprove_app.py) | [foundry/pipeline.py](../composer/foundry/pipeline.py) | `HasName` ([multi_job.py](../composer/io/multi_job.py)) |
-| Entry point / Executor | [autoprove_common.py](../composer/spec/source/autoprove_common.py) | [foundry/entry.py](../composer/foundry/entry.py) | — |
-| Pipeline + backend | [spec/source/pipeline.py](../composer/spec/source/pipeline.py) | [foundry/pipeline.py](../composer/foundry/pipeline.py) | [pipeline/core.py](../composer/pipeline/core.py) |
+| Entry point / Executor | [autoprove_common.py](../composer/spec/source/autoprove_common.py) | [foundry/entry.py](../composer/foundry/entry.py) | `cli_pipeline` ([pipeline/cli.py](../composer/pipeline/cli.py)) |
+| Backend | [spec/source/pipeline.py](../composer/spec/source/pipeline.py) | [foundry/pipeline.py](../composer/foundry/pipeline.py) | [pipeline/core.py](../composer/pipeline/core.py) · [pipeline/ptypes.py](../composer/pipeline/ptypes.py) |
 | Frontend (TUI) | [autoprove_app.py](../composer/ui/autoprove_app.py) | [foundry_app.py](../composer/ui/foundry_app.py) | [multi_job_app.py](../composer/ui/multi_job_app.py) |
-| Frontend (console) | [autoprove_console.py](../composer/ui/autoprove_console.py) | — | — |
+| Frontend (console) | [autoprove_console.py](../composer/ui/autoprove_console.py) | [foundry_console.py](../composer/ui/foundry_console.py) | [multi_console_handler.py](../composer/ui/multi_console_handler.py) |
 | Artifact store | [spec/source/artifacts.py](../composer/spec/source/artifacts.py) | [foundry/artifacts.py](../composer/foundry/artifacts.py) | [spec/artifacts.py](../composer/spec/artifacts.py) |
 | The seam | — | — | `HandlerFactory` / `TaskInfo` / `TaskHandle` ([multi_job.py](../composer/io/multi_job.py)) |
 | `main()` | [tui_autoprove.py](../composer/cli/tui_autoprove.py) · [console_autoprove.py](../composer/cli/console_autoprove.py) | [tui_foundry.py](../composer/cli/tui_foundry.py) · [console_foundry.py](../composer/cli/console_foundry.py) | — |
+| All five, declared | — | — | [composer/rustapp/](../composer/rustapp/) ([doc](./rust-applications.md)) |

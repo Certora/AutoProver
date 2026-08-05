@@ -4,7 +4,7 @@
 //! and validates every unit as GOOD — enough to exercise the Python host + FFI
 //! round-trip (descriptor, units, author_prompt, compile, validate) without any real
 //! toolchain. A production backend keeps this exact shape and swaps the callouts for
-//! real ones (see `docs/rust-backend-api.md`).
+//! real ones (see `docs/rust-applications.md`).
 
 use std::path::Path;
 

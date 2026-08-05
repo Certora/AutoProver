@@ -10,7 +10,7 @@ Domain-event rendering is *data-driven* by the descriptor's ``event_kinds``: a
 Rust ``Command::Emit`` becomes a ``{"type": kind, ...}`` custom-stream payload,
 which the handler writes to the task's log if ``kind`` is a declared event kind.
 No per-application Python subclass is needed — the same generic handler renders
-any Rust app's events (see ``docs/rust-applications.md`` §4.4).
+any Rust app's events (see ``docs/rust-applications.md`` §10).
 """
 
 import json

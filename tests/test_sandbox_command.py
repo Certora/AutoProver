@@ -4,7 +4,7 @@ Needs neither a Rust wheel nor Postgres/LLM: ``run_local_command`` shells out to
 trivial system binaries. Covers file materialization, path confinement, and the
 error/timeout paths. (It still backs the trusted Python build steps — e.g. the sBPF
 build; the Rust backend's own toolchain runs now go through ``run-confined`` in the
-wheel, see ``docs/rust-backend-api.md``.)
+wheel, see ``docs/rust-applications.md`` §8.)
 """
 
 import pytest
