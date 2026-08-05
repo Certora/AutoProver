@@ -650,8 +650,8 @@ class RustBackend:
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     # How to confine every toolchain run (docs/command-sandbox.md). None → unsandboxed.
     sandbox: SandboxConfig | None = None
-    # Parsed values of the descriptor's declared CLI args, put on every component's
-    # ``AuthorInput.args`` (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
+    # Parsed values of the descriptor's declared CLI args, put on every ``AuthorInput.args``
+    # (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
     declared_args: dict[str, Any] = field(default_factory=dict)
 
     @property

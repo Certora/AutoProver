@@ -55,8 +55,8 @@ class BackendOptions:
 
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     sandbox: SandboxConfig | None = None
-    #: Parsed values of the descriptor's declared CLI args, threaded into the backend and
-    #: injected into every component's ``AuthorInput.context``. Set by the entry point.
+    #: Parsed values of the descriptor's declared CLI args, threaded into the backend and put on
+    #: every ``AuthorInput.args``. Set by the entry point.
     declared_args: dict[str, Any] = field(default_factory=dict)
 
 

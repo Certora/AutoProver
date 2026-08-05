@@ -163,8 +163,12 @@ def test_validate_returns_per_unit_verdicts_and_the_host_records_them():
     from composer.spec.source.report.collect import ReportComponentInput
     from composer.spec.source.report.schema import Outcome
 
-    # A parse error still yields the per-unit `verdicts` shape the host consumes.
-    out = json.loads(crucible_app.validate("not json", "spec", "c_invariants", "/tmp", "{}"))
+    # A parse error still yields the per-unit `verdicts` shape the host consumes — keyed by the
+    # rows the target it was handed covers, which is the one part of the payload that did parse.
+    target = json.dumps(
+        {"name": "c_invariants", "units": [{"property": "p", "unit": "c_invariants"}]}
+    )
+    out = json.loads(crucible_app.validate("not json", "spec", target, "/tmp", "{}"))
     assert out["kind"] == "verdicts"
     assert out["verdicts"][0][0] == "c_invariants"
     assert out["verdicts"][0][1]["outcome"] == "ERROR"

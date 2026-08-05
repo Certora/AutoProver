@@ -14,7 +14,7 @@ import pytest
 
 import composer.spec.solana.build as buildmod
 from composer.rustapp.adapter import run_workspace_prep
-from composer.rustapp.wire import AuthorInput, ProgramCrate as WireCrate
+from composer.rustapp.wire import PreflightInput, ProgramCrate as WireCrate
 from composer.spec.cargo import ProgramCrate
 from composer.spec.context import SourceFields
 from composer.spec.solana.build import BuiltProgram
@@ -78,13 +78,11 @@ def _fake_build(monkeypatch, root: Path, *, emits_idl: bool, address: str | None
     return calls
 
 
-async def _prep(wheel, root: Path, context: dict | None = None) -> str | None:
+async def _prep(wheel, root: Path, args: dict | None = None) -> str | None:
     _project(root)
     return await run_workspace_prep(
         wheel,
-        AuthorInput(
-            kind="preflight", program="vault", program_crate=WIRE_CRATE, context=context or {}
-        ),
+        PreflightInput(program="vault", program_crate=WIRE_CRATE, args=args or {}),
         chain="solana",
         source=_source(root),
         sandbox=None, command_timeout_s=60,

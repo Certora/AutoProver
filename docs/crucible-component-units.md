@@ -345,7 +345,7 @@ Mirrors `ContractComponentInstance` — an index pair over `(program, component)
 parity. It costs nothing, because the whole-program surface already reaches each backend by its own
 route:
 
-- **Crucible** — the shared `Fixture` source is injected into every `AuthorInput.context` and
+- **Crucible** — the shared `Fixture` source is on every `AuthorInput.setup` and
   rendered verbatim in the author prompt, and it contains every `action_*` method. The author
   therefore still sees the full action surface; it just arrives as the fixture (a backend artifact)
   rather than as the unit (an ecosystem value). That is the correct axis for it.
@@ -508,7 +508,7 @@ from the union of all properties. That replaces the lazy lock with an explicit p
 first-caller-wins nondeterminism, and is a strict improvement even at K = 1. (As landed, that step
 is `StagedFormalizer.begin`, which *returns* the `Formalizer` — see §13.3.)
 
-Note this is a **generic `SetupSpec` concern, not a Crucible one**: any backend with a shared setup
+Note this is a **generic setup-step concern, not a Crucible one**: any backend with a shared setup
 artifact — plausibly including CVLR, whose rules will need shared mocks/setup — hits it the moment
 there is more than one unit. The EVM prover's peer (`invariants.spec`, staged in
 `prepare_formalization`) is already authored before fan-out and does not have the bug.
@@ -861,7 +861,7 @@ Nothing was wrong with any gate. Three facts compose into the gap:
 
 1. **A gated build is single-component by construction.** `compile`/`validate` write a *fresh*
    crate — `main.rs` = fixture + that one section, `Cargo.toml` declaring exactly one feature — and
-   `run_confined` materializes it with a plain overwrite. Fourteen sequential single-component
+   `Workspace::run` materializes it with a plain overwrite. Fourteen sequential single-component
    crates, each honestly compiled and fuzzed. Rebuilding the two culprit sections in isolation
    confirms both: exit 0 each, 3 errors together.
 2. **The union is assembled only at the end,** in `finalize` — you cannot know the component set
