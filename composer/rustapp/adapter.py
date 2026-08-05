@@ -69,6 +69,9 @@ from composer.rustapp.wire import (
     AuthorInput,
     CompileOk,
     ComponentGaveUp,
+    ComponentInput,
+    PreflightInput,
+    SetupInput,
     Failure,
     FailureKind,
     FinalizeComponent,
@@ -599,20 +602,20 @@ def program_crate_of(
     return source_crate(ecosystem.name, source)
 
 
-def _setup_identity(input: AuthorInput) -> str:
+def _setup_identity(input: SetupInput) -> str:
     """A cache key for the shared setup artifact: a hash of what it is authored *from*.
 
     Exactly the inputs the wheel renders the artifact from — the program and its crate, the analyzed
     model, the properties it has to make checkable, and whether its types come from the crate or a
-    generated IDL. Deliberately NOT the whole input: `context` also carries run knobs (a fuzz budget)
+    generated IDL. Deliberately NOT the whole input: ``args`` also carries run knobs (a fuzz budget)
     that don't change what gets authored, and keying on those would throw the artifact away for no
     reason.
     """
     material = {
         "program": input.program,
         "program_crate": input.program_crate.model_dump(),
-        "idl": bool(input.context.get("idl")),
-        "component": input.component,
+        "idl": input.idl is not None,
+        "model": input.model,
         "props": [p.model_dump() for p in input.props],
     }
     return string_hash(json.dumps(material, sort_keys=True, default=str))
@@ -719,7 +722,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
         command_sem: asyncio.Semaphore | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
-        context_extra: dict[str, Any] | None = None,
+        declared_args: dict[str, Any] | None = None,
         setup_result: str | None = None,
         program_crate: ProgramCrate | None = None,
         idl: str | None = None,
@@ -731,14 +734,12 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         self._command_timeout_s = command_timeout_s
         self._command_sem = command_sem
         self._max_attempts = max_attempts
-        # Injected into every component's ``AuthorInput.context`` (declared-arg values + the
-        # compiled setup artifact under its ``context_key``); the prepared system assembles it.
-        self._context_extra = context_extra or {}
-        # The compiled setup spec (Crucible's fixture), forwarded to ``finalize`` so a
-        # callout-mode wheel can render the whole deliverable, and already present in
-        # ``context_extra`` under its ``context_key`` for every component's ``_context``. A wheel
-        # that declares a ``setup`` step reaches here only through :class:`RustStagedFormalizer`,
-        # which authors the artifact before constructing this.
+        # The run's values for the wheel's own declared flags, put on every component's input.
+        self._declared_args = declared_args or {}
+        # The compiled setup spec (Crucible's fixture): on every component's input, and forwarded
+        # to ``finalize`` so a callout-mode wheel can render the whole deliverable. A wheel that
+        # declares a ``setup`` step reaches here only through :class:`RustStagedFormalizer`, which
+        # authors the artifact before constructing this.
         self._setup_result = setup_result
         # Where the analyzed source's compilation unit lives (see ``program_crate_of``), carried
         # on every ``AuthorInput`` and mirrored into ``finalize`` — the delivered crate must
@@ -749,11 +750,6 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # is a different fact from "it placed one at the empty path". The wire form flattens it to
         # ``""`` in ``finalize`` below, because that is the shape the payload promises.
         self._idl = idl
-
-    def _context(self, run: PipelineRun) -> dict[str, Any]:
-        """The ``AuthorInput.context`` blob for a component. The program plus whatever the
-        prepared system injected (declared args + the setup artifact under its context key)."""
-        return {"program": str(run.source.contract_name), **self._context_extra}
 
     async def _sandbox_spec(self, workdir: Path) -> BackendSpec:
         if self._sandbox is None or not self._sandbox.enabled:
@@ -773,13 +769,14 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     ) -> RustFormalResult | GaveUp:
         workdir = Path(run.source.project_root)
         slugs = unique_slugs(props)
-        input_json = AuthorInput(
-            kind="component",
+        input_json = ComponentInput(
             program=str(run.source.contract_name),
             program_crate=self._program_crate,
-            component=feat.feature_json(),
+            unit=feat.feature_json(),
             props=_properties(props, slugs),
-            context=self._context(run),
+            setup=self._setup_result,
+            idl=self._idl,
+            args=self._declared_args,
         ).model_dump_json()
         sandbox_dict = await self._sandbox_spec(workdir)
         sandbox_json = json.dumps(sandbox_dict)
@@ -936,16 +933,9 @@ class RustPreflight:
     delivered artifact all name the same dependency."""
 
     program_crate: ProgramCrate
+    #: Where the prep placed the program's IDL; ``None`` = it placed none, which is the signal the
+    #: wheel reads to decide how it sources the program's types.
     idl: str | None
-
-    def context(self, declared_args: dict[str, Any]) -> dict[str, Any]:
-        """The ``AuthorInput.context`` blob for everything downstream: the run's declared args plus
-        the placed IDL. The ``idl`` key is present only when the file is in place, which is the
-        signal the wheel reads to decide how it sources the program's types."""
-        ctx = dict(declared_args)
-        if self.idl is not None:
-            ctx["idl"] = self.idl
-        return ctx
 
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
@@ -1019,21 +1009,15 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
 
         analyzed_json = self.analyzed.model_dump(mode="json") if self.analyzed is not None else {}
         program_crate = self.preflight.program_crate
-        # Every component's context = declared args + the IDL the preflight placed. The shared setup
-        # artifact joins it in ``build`` below, once it exists.
-        context_extra: dict[str, Any] = self.preflight.context(b.declared_args)
 
-        def build(setup_result: str | None, context_key: str = "") -> RustFormalizer:
-            """The formalizer, around a shared setup artifact that is either already authored or not
-            called for. ``context_key`` is the declared key to inject it under — always supplied
-            together with the artifact, so there is no fallback key to invent."""
-            extra = dict(context_extra)
-            if setup_result is not None:
-                extra[context_key] = setup_result
+        def build(setup_result: str | None) -> RustFormalizer:
+            """The formalizer, around a shared setup artifact that is either already authored or
+            not called for."""
             return RustFormalizer(
                 b.module, b.descriptor, sandbox=b.sandbox,
                 command_timeout_s=b.command_timeout_s,
-                command_sem=command_sem, context_extra=extra, setup_result=setup_result,
+                command_sem=command_sem, declared_args=b.declared_args,
+                setup_result=setup_result,
                 program_crate=program_crate, idl=self.preflight.idl,
             )
 
@@ -1042,9 +1026,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
 
         setup = descriptor.setup
         # The base for the setup artifact's own input; ``author_setup`` adds the properties.
-        prep_input = AuthorInput(
-            kind="setup", program=program, program_crate=program_crate,
-            component=analyzed_json, context=context_extra,
+        prep_input = SetupInput(
+            program=program, program_crate=program_crate, model=analyzed_json,
+            idl=self.preflight.idl, args=b.declared_args,
         )
 
         async def author_setup(props: list[PropertyFormulation], run: PipelineRun) -> str:
@@ -1077,9 +1061,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             await setup_ctx.cache_put(RustSetupArtifact(source=fixture))
             return fixture
 
-        return RustStagedFormalizer(
-            author_setup, lambda artifact: build(artifact, setup.context_key)
-        )
+        return RustStagedFormalizer(author_setup, build)
 
 
 @dataclass
@@ -1172,9 +1154,9 @@ class RustBackend(
         program_crate = program_crate_of(self.ecosystem, run.source)
         # Declared args are in scope from the start: prep may need one (Crucible reads
         # ``program_idl`` when deciding how to source the program's types).
-        prep_input = AuthorInput(
-            kind="preflight", program=str(run.source.contract_name),
-            program_crate=program_crate, context=dict(self.declared_args),
+        prep_input = PreflightInput(
+            program=str(run.source.contract_name),
+            program_crate=program_crate, args=dict(self.declared_args),
         )
 
         async def prep() -> RustPreflight:
@@ -1185,10 +1167,10 @@ class RustBackend(
             result = RustPreflight(program_crate=program_crate, idl=idl)
             if descriptor.preflight is not None:
                 # The gate renders the same crate the prep just set up — including, under the IDL
-                # path, the file it placed — so it must see the reported `idl` context key.
+                # path, the file it placed — so it must see the reported `idl`.
                 await run_preflight_gate(
                     self.module,
-                    prep_input.with_context(result.context(self.declared_args)),
+                    prep_input.with_idl(result.idl),
                     workdir=workdir,
                     sandbox_dict=await self.sandbox_spec(workdir),
                     emit=make_emitter(),

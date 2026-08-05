@@ -41,9 +41,10 @@ pub trait Backend: Send + Sync + 'static {
 
     /// Compile/typecheck the whole spec once (all units share one build). BLOCKING.
     ///
-    /// Also the preflight gate: for `input.kind == "preflight"` the `spec` is empty and the wheel
-    /// supplies its own skeleton, so one implementation covers "does the authored artifact build"
-    /// and "could *any* artifact build here" (see [`PreflightSpec`](crate::PreflightSpec)).
+    /// Also the preflight gate: for [`Authored::Preflight`](crate::Authored::Preflight) the `spec`
+    /// is empty and the wheel supplies its own skeleton, so one implementation covers "does the
+    /// authored artifact build" and "could *any* artifact build here" (see
+    /// [`PreflightSpec`](crate::PreflightSpec)).
     fn compile(
         &self,
         input: &AuthorInput,

@@ -182,27 +182,27 @@ async def test_a_placed_idl_reaches_the_gate_that_builds_against_it(tmp_path, mo
     assert result.idl == IDL_DEST
     # The gate renders the same crate the prep just set up, so it must see where the IDL landed —
     # under the IDL path the harness generates its types from that file rather than linking the crate.
-    assert wheel.compiles[0][0]["context"]["idl"] == IDL_DEST
+    assert wheel.compiles[0][0]["idl"] == IDL_DEST
 
 
-async def test_no_idl_means_no_idl_key_rather_than_an_empty_one(tmp_path, monkeypatch):
+async def test_no_idl_means_null_rather_than_an_empty_path(tmp_path, monkeypatch):
     wheel = FakeWheel({"build_program": "example_lending"})
     result, _run = await _preflight(monkeypatch, tmp_path, wheel)
 
-    # "The key is set" is the signal the wheel reads to mean "the file is in place"; an empty string
+    # A set `idl` is the signal the wheel reads to mean "the file is in place"; an empty string
     # would read as the crate path either way, but only by accident.
     assert result.idl is None
-    assert "idl" not in wheel.compiles[0][0]["context"]
+    assert wheel.compiles[0][0]["idl"] is None
 
 
 async def test_declared_args_are_in_scope_for_the_gate(tmp_path, monkeypatch):
     # Prep may need one (Crucible reads `program_idl` when deciding how to source the types), so they
-    # are in the context from the very first callout.
+    # are on the input from the very first callout.
     wheel = FakeWheel({"build_program": "example_lending"})
     _result, _run = await _preflight(
         monkeypatch, tmp_path, wheel, declared={"fuzz_timeout": 30}
     )
-    assert wheel.compiles[0][0]["context"]["fuzz_timeout"] == 30
+    assert wheel.compiles[0][0]["args"]["fuzz_timeout"] == 30
 
 
 async def test_a_failing_gate_raises_with_the_diagnostics_and_does_not_retry(tmp_path, monkeypatch):

@@ -86,13 +86,11 @@ class PreflightSpec(StepSpec):
 
 class SetupSpec(StepSpec):
     """A shared setup artifact authored once before per-component formalization (Crucible's
-    shared fixture). The host runs the author→compile loop for a ``kind="setup"`` input under
-    ``phase_key`` and threads the compiled spec into each component's context under
-    ``context_key``. Mirrors the Rust ``SetupSpec``."""
+    shared fixture). The host runs the author→compile loop for a :class:`SetupInput
+    <composer.rustapp.wire.SetupInput>` under ``phase_key`` and hands the compiled spec to every
+    component as ``AuthorInput.setup``. Mirrors the Rust ``SetupSpec``."""
 
     step: ClassVar[str] = "setup"
-
-    context_key: str
 
 
 class PhaseSpec(BaseModel):

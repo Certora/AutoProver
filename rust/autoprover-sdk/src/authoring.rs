@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::args::DeclaredArgs;
+
 /// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), plus a
 /// host-assigned unique `slug` used to name its unit/artifact (Crucible: `c_<slug>`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,34 +93,80 @@ pub fn anchor_compat_key(req: &str) -> Option<(u64, u64)> {
     Some(if major == 0 { (0, minor) } else { (major, 0) })
 }
 
-/// The input to the authoring/gating callouts for one artifact. `context` carries backend
-/// dependencies (e.g. the shared fixture source a component builds on). `component`/`context` are
-/// opaque JSON the backend interprets.
-///
-/// `kind` selects what is being authored or gated. The host sends three:
-///
-///  * `"preflight"` — nothing is authored; the wheel renders its own skeleton and `compile` gates
-///    the prepared workspace (see [`PreflightSpec`](crate::PreflightSpec)). `props` is empty and
-///    `component` carries nothing: it runs before analysis has finished.
-///  * `"setup"` — the shared artifact every unit builds on (Crucible's fixture), authored once from
-///    every unit's properties (see [`SetupSpec`](crate::SetupSpec)). `component` carries the
-///    analyzed model.
-///  * `"component"` — one unit's spec. `component` carries that unit, `context` the setup artifact.
+/// What is being authored or gated, and the payload that exists only for it. The host sends three,
+/// and each carries something the other two have nothing to say about — which is why this is a
+/// variant rather than a tag beside fields that are empty two times in three.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Authored {
+    /// Nothing is authored: the wheel renders its own skeleton and `compile` gates the prepared
+    /// workspace (see [`PreflightSpec`](crate::PreflightSpec)). It runs before analysis has
+    /// finished, so there is no model, no unit, and [`AuthorInput::props`] is empty.
+    Preflight,
+    /// The shared artifact every unit builds on (Crucible's fixture), authored once from the
+    /// analyzed model and *every* unit's properties (see [`SetupSpec`](crate::SetupSpec)).
+    Setup {
+        /// The analyzed system model, opaque to the SDK — its shape is the ecosystem's.
+        #[serde(default)]
+        model: serde_json::Value,
+    },
+    /// One unit's spec.
+    Component {
+        /// The unit being formalized, opaque to the SDK — its shape is the ecosystem's
+        /// (`FeatureUnit::feature_json`).
+        #[serde(default)]
+        unit: serde_json::Value,
+    },
+}
+
+/// The input to the authoring/gating callouts for one artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorInput {
-    pub kind: String,
+    /// What is being authored, with its payload.
+    #[serde(flatten)]
+    pub authored: Authored,
     /// The analysis identifier of the program/contract under test (the `Name` half of the host's
     /// `path:Name` argument) — a label and a namespace, NOT a Cargo name: see [`ProgramCrate`].
     pub program: String,
-    /// The compilation unit holding the program's source, when the host's language has one.
+    /// The compilation unit holding the program's source, already
+    /// [resolved](ProgramCrate::resolved) by the FFI boundary.
     #[serde(default)]
     pub program_crate: ProgramCrate,
-    #[serde(default)]
-    pub component: serde_json::Value,
+    /// The properties this artifact must make checkable. Empty for a preflight; for a setup, every
+    /// unit's.
     #[serde(default)]
     pub props: Vec<Property>,
+    /// The compiled shared setup artifact, for a wheel that declared a
+    /// [`SetupSpec`](crate::SetupSpec) — the fixture a component's spec builds on.
     #[serde(default)]
-    pub context: serde_json::Value,
+    pub setup: Option<String>,
+    /// Where workspace prep placed the program's IDL, workdir-relative, when the wheel's
+    /// [`WorkspacePrep::idl_dest`](crate::WorkspacePrep::idl_dest) asked for one. `Some` means the
+    /// file is in place; `None` means the wheel depends on the program's crate directly.
+    #[serde(default)]
+    pub idl: Option<String>,
+    /// The run's values for the wheel's own declared flags.
+    #[serde(default)]
+    pub args: DeclaredArgs,
+}
+
+impl AuthorInput {
+    /// The unit being formalized, on a component turn. `None` on the two turns that formalize no
+    /// unit — a preflight (nothing is analyzed yet) and the shared setup artifact.
+    pub fn unit(&self) -> Option<&serde_json::Value> {
+        match &self.authored {
+            Authored::Component { unit } => Some(unit),
+            _ => None,
+        }
+    }
+
+    /// The analyzed system model, on a setup turn.
+    pub fn model(&self) -> Option<&serde_json::Value> {
+        match &self.authored {
+            Authored::Setup { model } => Some(model),
+            _ => None,
+        }
+    }
 }
 
 /// An authoring instruction (+ optional backend-defined system prompt) for one LLM turn.

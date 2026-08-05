@@ -18,7 +18,7 @@ import pytest
 from composer.pipeline.ecosystem import EVM, SOLANA
 from composer.rustapp.adapter import program_crate_of, run_workspace_prep
 from composer.rustapp.toolchain import SOURCE_CRATES, WORKSPACE_TOOLCHAINS
-from composer.rustapp.wire import AuthorInput, ProgramCrate
+from composer.rustapp.wire import PreflightInput, ProgramCrate
 from composer.spec.context import SourceFields
 from composer.spec.system_model import SolidityIdentifier
 
@@ -64,12 +64,10 @@ def _record_toolchain(monkeypatch, *, idl: str | None = None) -> list[dict]:
     return calls
 
 
-async def _prep(wheel, root: Path, context: dict | None = None) -> str | None:
+async def _prep(wheel, root: Path, args: dict | None = None) -> str | None:
     return await run_workspace_prep(
         wheel,
-        AuthorInput(
-            kind="preflight", program="vault", program_crate=CRATE, context=context or {}
-        ),
+        PreflightInput(program="vault", program_crate=CRATE, args=args or {}),
         chain="solana",
         source=_source(root),
         sandbox=None, command_timeout_s=60,
@@ -104,8 +102,7 @@ async def test_the_toolchain_half_is_handed_the_plan_and_the_analyzed_source(tmp
         warm_dirs=["fuzz/vault"], build_program="example_lending", idl_dest=IDL_DEST,
     )
 
-    # Whatever the toolchain reports as the IDL's home is what the caller reports to the wheel as
-    # the `idl` context key.
+    # Whatever the toolchain reports as the IDL's home is what the caller reports back as `idl`.
     assert await _prep(wheel, tmp_path, {"program_idl": "/elsewhere/lend.json"}) == IDL_DEST
     assert len(calls) == 1
     call = calls[0]
@@ -118,8 +115,8 @@ async def test_the_toolchain_half_is_handed_the_plan_and_the_analyzed_source(tmp
     assert call["source"].project_root == str(tmp_path)
     assert call["source"].relative_path == "programs/lend/src/lib.rs"
     # …and the whole AuthorInput, so it can read its own declared args (Crucible's `program_idl`)
-    # without the generic host having to know which context keys mean anything.
-    assert call["input"].context["program_idl"] == "/elsewhere/lend.json"
+    # without the generic host having to know which flags mean anything.
+    assert call["input"].args["program_idl"] == "/elsewhere/lend.json"
     assert call["timeout_s"] == 60
     # The files land before the toolchain runs: the manifest a warm or build reads is one of them.
     assert (tmp_path / "fuzz/vault/Cargo.toml").is_file()

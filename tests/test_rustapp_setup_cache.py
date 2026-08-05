@@ -28,7 +28,7 @@ from composer.rustapp.adapter import (
     RustFormalizer, RustPreparedSystem, RustStagedFormalizer, _setup_identity
 )
 from composer.rustapp.descriptor import AppDescriptor
-from composer.rustapp.wire import AuthorInput, ProgramCrate, Property
+from composer.rustapp.wire import ProgramCrate, Property, SetupInput
 from composer.spec.context import WorkflowContext
 
 pytestmark = pytest.mark.asyncio
@@ -88,7 +88,7 @@ def _descriptor() -> AppDescriptor:
                 "property_suffix": "s",
             },
             "setup": {"phase_key": "build_harness", "label": "Build Harness",
-                      "context_key": "fixture"},
+                      },
         }
     )
 
@@ -169,13 +169,13 @@ async def test_the_setup_artifact_is_authored_once_and_then_reused(monkeypatch, 
     assert second == FIXTURE and len(authored) == 1
 
 
-async def test_the_artifact_reaches_every_component_under_its_declared_context_key(monkeypatch, tmp_path):
-    # How the fixture actually gets to the components: `begin` builds the formalizer with the
-    # artifact already in the context blob, under the `context_key` the wheel declared ("fixture"
-    # here) — never assigned onto a formalizer that is already running.
+async def test_the_artifact_reaches_every_component_as_the_inputs_setup(monkeypatch, tmp_path):
+    # How the fixture actually gets to the components: `begin` builds the formalizer around the
+    # authored artifact, which it puts on every component's ``AuthorInput.setup`` — never assigned
+    # onto a formalizer that is already running.
     store, authored = _Store(), []
     f = await _formalizer(monkeypatch, _ctx(store, namespace=None), authored, tmp_path)
-    assert f._context_extra["fixture"] == FIXTURE
+    assert f._setup_result == FIXTURE
 
 
 async def test_the_setup_task_is_tagged_with_the_declared_phase_member(monkeypatch, tmp_path):
@@ -257,13 +257,13 @@ async def test_without_a_cache_namespace_nothing_is_stored(monkeypatch, tmp_path
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestWarning")
 def test_the_setup_key_covers_what_it_is_authored_from_and_not_run_knobs():
-    base = AuthorInput(
-        kind="setup",
+    base = SetupInput(
         program="example_lending",
         program_crate=ProgramCrate(dir="programs/lend", lib="example_lending"),
-        component={"programs": [{"name": "example_lending"}]},
+        model={"programs": [{"name": "example_lending"}]},
         props=[Property(title="no overflow", sort="invariant", description="d")],
-        context={"fuzz_timeout": 30, "idl": "fuzz/x/idls/example_lending.json"},
+        args={"fuzz_timeout": 30},
+        idl="fuzz/x/idls/example_lending.json",
     )
     same = _setup_identity(base)
 
@@ -271,17 +271,17 @@ def test_the_setup_key_covers_what_it_is_authored_from_and_not_run_knobs():
         return _setup_identity(base.model_copy(update=update))
 
     # A fuzz budget doesn't change what gets authored — keying on it would discard the artifact.
-    assert varied(context={**base.context, "fuzz_timeout": 900}) == same
+    assert varied(args={"fuzz_timeout": 900}) == same
     # Everything the prompt is built from does.
     assert varied(program="other") != same
-    assert varied(component={"programs": []}) != same
+    assert varied(model={"programs": []}) != same
     assert varied(program_crate=ProgramCrate(dir="programs/other")) != same
     # …including the properties: they are what the fixture is designed around.
     assert varied(props=[]) != same
     # …including which source the types come from: crate deps and IDL generation differ.
-    assert varied(context={"fuzz_timeout": 30}) != same
-    # Stable across key ordering *within* the opaque blobs — the analyzed model arrives as JSON, and
-    # the wire model fixes the order of everything else.
+    assert varied(idl=None) != same
+    # Stable across key ordering *within* the opaque model — it arrives as JSON, and the wire model
+    # fixes the order of everything else.
     model = {"programs": [{"name": "example_lending"}], "extra": {"a": 1, "b": 2}}
     reordered = json.loads(json.dumps({k: model[k] for k in reversed(list(model))}))
-    assert varied(component=model) == varied(component=reordered)
+    assert varied(model=model) == varied(model=reordered)

@@ -15,7 +15,7 @@ import sys
 import types
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from composer.rustapp.host import load_module
 from composer.rustapp.wire import (
@@ -23,8 +23,11 @@ from composer.rustapp.wire import (
     AuthorInput,
     CompileFailed,
     CompileOk,
+    ComponentInput,
     FailureKind,
+    PreflightInput,
     ProgramCrate,
+    SetupInput,
     RustAppModule,
     Unit,
     ValidateBuildFailed,
@@ -99,26 +102,46 @@ def test_a_workspace_plan_that_only_places_files_needs_no_toolchain():
 
 
 def test_author_input_requires_what_the_wheel_requires():
-    # `kind` and `program` have no sensible default — omitting one is a host bug, and the wheel
-    # would otherwise be prompted about a program called "".
+    # `kind` selects the variant and `program` has no sensible default — omitting either is a host
+    # bug, and the wheel would otherwise be prompted about a program called "".
+    adapter = TypeAdapter(AuthorInput)
     with pytest.raises(ValidationError):
-        AuthorInput.model_validate({"program": "vault"})
+        adapter.validate_python({"program": "vault"})
     with pytest.raises(ValidationError):
-        AuthorInput.model_validate({"kind": "component"})
+        adapter.validate_python({"kind": "component"})
     with pytest.raises(ValidationError):
-        AuthorInput.model_validate({"kind": "not_a_kind", "program": "vault"})
+        adapter.validate_python({"kind": "not_a_kind", "program": "vault"})
+
+
+def test_each_author_kind_carries_only_its_own_payload():
+    # The unit and the analyzed model belong to one kind each, so neither is a field the other two
+    # carry empty. A preflight has neither: it runs before anything is analyzed.
+    adapter = TypeAdapter(AuthorInput)
+    comp = adapter.validate_python(
+        {"kind": "component", "program": "vault", "unit": {"slug": "farms"}}
+    )
+    assert isinstance(comp, ComponentInput) and comp.unit == {"slug": "farms"}
+    assert not hasattr(comp, "model")
+    setup = adapter.validate_python(
+        {"kind": "setup", "program": "vault", "model": {"components": []}}
+    )
+    assert isinstance(setup, SetupInput) and setup.model == {"components": []}
+    assert not hasattr(setup, "unit")
+    pre = adapter.validate_python({"kind": "preflight", "program": "vault"})
+    assert not hasattr(pre, "unit") and not hasattr(pre, "model")
 
 
 def test_author_input_serializes_the_shape_the_wheel_deserializes():
-    inp = AuthorInput(kind="preflight", program="vault")
+    inp = PreflightInput(program="vault")
     assert inp.model_dump() == {
         "kind": "preflight",
         "program": "vault",
-        # Every part empty — the wheel fills them from its own convention via `resolved()`.
+        # Every part empty — the SDK's FFI boundary fills them from its own convention.
         "program_crate": {"dir": "", "package": "", "lib": "", "anchor": ""},
-        "component": {},
         "props": [],
-        "context": {},
+        "setup": None,
+        "idl": None,
+        "args": {},
     }
 
 

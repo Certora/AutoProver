@@ -136,7 +136,7 @@ async def test_an_authoring_turn_with_no_artifact_costs_an_attempt_but_never_rea
     monkeypatch,
 ):
     from composer.rustapp import adapter
-    from composer.rustapp.wire import AuthorInput
+    from composer.rustapp.wire import SetupInput
 
     compiled: list[str] = []
 
@@ -163,7 +163,7 @@ async def test_an_authoring_turn_with_no_artifact_costs_an_attempt_but_never_rea
     monkeypatch.setattr(adapter, "run_llm_agent", no_result)
     outcome = await adapter.author_and_compile(
         cast(Any, wheel),
-        AuthorInput(kind="setup", program="vault"),
+        SetupInput(program="vault"),
         env=cast(Any, None), sandbox_dict={"argv_prefix": [], "timeout_s": 1},
         workdir=pathlib.Path("/nonexistent"), recursion_limit=4, backend_name="t",
         emit=lambda *_a: None, max_attempts=2,

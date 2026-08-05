@@ -97,17 +97,16 @@ pub struct ArtifactLayout {
 }
 
 /// A shared "setup" artifact authored once, before per-component formalization (Crucible's
-/// shared fixture). When a descriptor carries one, the host runs the author→compile loop for a
-/// `kind="setup"` [`AuthorInput`](crate::AuthorInput) under `phase_key`, then threads the compiled
-/// spec into every component's `AuthorInput.context` under `context_key`. Absent → no setup step.
+/// shared fixture). When a descriptor carries one, the host runs the author→compile loop for an
+/// [`Authored::Setup`](crate::authoring::Authored::Setup) input under `phase_key`, then hands the
+/// compiled spec to every component as [`AuthorInput::setup`](crate::AuthorInput::setup).
+/// Absent → no setup step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupSpec {
     /// The descriptor phase key the setup task is grouped under (a UI-only phase).
     pub phase_key: String,
     /// The task label shown in the frontend.
     pub label: String,
-    /// The `AuthorInput.context` key the compiled setup spec is injected under for components.
-    pub context_key: String,
 }
 
 /// An analysis-independent **preflight** gate on the prepared workspace, run *concurrently with

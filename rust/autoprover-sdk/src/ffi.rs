@@ -229,6 +229,40 @@ mod tests {
     }
 
     #[test]
+    fn an_input_carries_only_the_payload_its_kind_has() {
+        // The host's wire shape is flat: `kind` selects the variant, and the field beside it
+        // belongs to that variant alone. A component turn has no analyzed model to read, and a
+        // preflight has neither — it runs before anything is analyzed.
+        let comp: AuthorInput = serde_json::from_str(
+            r#"{"kind":"component","program":"vault","unit":{"slug":"farms"},
+                "setup":"struct Fixture {}","idl":"fuzz/vault/idls/vault.json",
+                "args":{"fuzz_timeout":900}}"#,
+        )
+        .expect("parse");
+        assert_eq!(comp.unit().and_then(|u| u.get("slug")).and_then(|v| v.as_str()), Some("farms"));
+        assert!(comp.model().is_none());
+        assert_eq!(comp.setup.as_deref(), Some("struct Fixture {}"));
+        assert_eq!(comp.idl.as_deref(), Some("fuzz/vault/idls/vault.json"));
+        assert_eq!(comp.args.get::<u64>("fuzz_timeout"), Some(900));
+        // An absent flag and one left at a null default are the same answer.
+        assert_eq!(comp.args.get::<u64>("nope"), None);
+
+        let setup: AuthorInput =
+            serde_json::from_str(r#"{"kind":"setup","program":"vault","model":{"components":[]}}"#)
+                .expect("parse");
+        assert!(setup.model().is_some() && setup.unit().is_none());
+        assert_eq!(setup.idl, None, "no IDL placed is not the same as one at the empty path");
+
+        let pre: AuthorInput =
+            serde_json::from_str(r#"{"kind":"preflight","program":"vault"}"#).expect("parse");
+        assert!(pre.unit().is_none() && pre.model().is_none() && pre.props.is_empty());
+
+        // …and it round-trips flat, which is what the host parses back.
+        let json = serde_json::to_value(&pre).expect("serialize");
+        assert_eq!(json.get("kind").and_then(|v| v.as_str()), Some("preflight"));
+    }
+
+    #[test]
     fn a_malformed_args_payload_is_reported_as_a_failed_precondition() {
         // The only callout with a channel to say the host sent nonsense; the alternative is a
         // silent default that reads as "no preconditions to check".

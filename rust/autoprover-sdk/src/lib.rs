@@ -43,14 +43,14 @@ pub mod sandbox;
 
 pub use args::{AppArgs, DeclaredArgs};
 pub use authoring::{
-    anchor_compat_key, AuthorInput, Failure, FailureKind, ProgramCrate, Prompt, Property,
+    anchor_compat_key, AuthorInput, Authored, Failure, FailureKind, ProgramCrate, Prompt, Property,
 };
-pub use finalize::{ComponentOutcome, Delivered, FinalizeComponent, FinalizeInput};
 pub use backend::Backend;
 pub use descriptor::{
     AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, CoreSlot, DeliverableMode, EventKind,
     PhaseSpec, PreflightSpec, SetupSpec,
 };
+pub use finalize::{ComponentOutcome, Delivered, FinalizeComponent, FinalizeInput};
 pub use ffi::{
     ffi_author_prompt, ffi_compile, ffi_descriptor, ffi_finalize, ffi_judge_prompt,
     ffi_sandbox_grants, ffi_units, ffi_validate, ffi_validate_preconditions, ffi_workspace_prep,

@@ -84,9 +84,11 @@ Two files, one per half, and every string crossing the boundary is a model in on
   functions, so a renamed field fails at the boundary naming the field, not three frames later as
   an empty string.
 
-Both results that can go two ways are **tagged unions** on both sides (`#[serde(tag = …)]` ↔
-pydantic discriminated union), so `CompileFailed` carries `errors` and no verdicts,
-`ValidateVerdicts` the reverse, and neither can be asked for a field the other owns.
+Every payload that comes in more than one shape is a **tagged union** on both sides
+(`#[serde(tag = …)]` ↔ pydantic discriminated union), so `CompileFailed` carries `errors` and no
+verdicts, `ValidateVerdicts` the reverse, a `preflight` `AuthorInput` has neither a unit nor a
+model, and a component that gave up carries nothing past its name. None of them can be asked for a
+field another owns.
 
 Direction sets the defaults: **inbound** models (what a wheel returns) default every optional field
 so an older wheel still parses, and pydantic ignores unknown fields so a newer one does too;
@@ -141,8 +143,8 @@ wheel author has to spell exactly right with no error if they didn't.
 
 **CLI.** `args: [ArgSpec { flag, help, default, required }]` become `add_argument` calls on top of
 the three positional inputs (`project_root`, `main_contract`, `system_doc`) and the standard flags.
-Their parsed values are threaded into `validate_preconditions` *and* into every `AuthorInput.context`
-(`declared_args`), so a knob like a fuzz budget reaches the wheel without a bespoke channel.
+Their parsed values are threaded into `validate_preconditions` (as `AppArgs.declared`) *and* onto
+every `AuthorInput.args`, so a knob like a fuzz budget reaches the wheel without a bespoke channel.
 
 **Events.** `event_kinds: [EventKind { kind, label, notice }]` tells the generic frontend how to
 render each emitted payload (§10). A `notice` kind becomes a persistent callout plus a toast — for
@@ -157,7 +159,7 @@ one-shot important results such as a verdict — rather than a line in the colla
 | Field | Effect |
 |---|---|
 | `preflight: PreflightSpec?` | `{phase_key, label}` — run the workspace gate as its own visible task (§4.2). Absent: the prep still runs, silently, with no gate |
-| `setup: SetupSpec?` | `{phase_key, label, context_key}` — author one shared artifact before the per-unit fan-out and inject it into every component's context under `context_key` (§4.3) |
+| `setup: SetupSpec?` | `{phase_key, label}` — author one shared artifact before the per-unit fan-out and hand it to every component as `AuthorInput.setup` (§4.3) |
 | `deliverable_mode` | `per_component` (default) or `callout` (§9) |
 | `serialize_toolchain` | put the blocking callouts behind one `Semaphore(1)` — for an app sharing a single crate / target dir |
 | `confine_by_default` | build the fail-closed `launcher` sandbox config by default (§8) |
@@ -216,7 +218,7 @@ Two steps, both *declared* by the wheel and executed here:
 
 1. **`workspace_prep`** (§7) — write the plan's files, then warm dependencies / build the program /
    place its IDL through the chain's registered toolchain. Already the run's slowest non-LLM step.
-2. **The gate**, when the descriptor declares `preflight` — a `kind="preflight"` `compile` whose
+2. **The gate**, when the descriptor declares `preflight` — an `Authored::Preflight` `compile` whose
    `spec` is **empty**: nothing has been authored yet, so the wheel renders its own minimal
    skeleton, the smallest artifact that still exercises what an authored one will depend on.
 
@@ -262,7 +264,7 @@ mutated.
 The artifact is **cached** like a formalization result (`RustSetupArtifact`), keyed by
 [`_setup_identity`](../composer/rustapp/adapter.py): the program and its crate, the analyzed model,
 the property set, and whether types come from the crate or a generated IDL. Deliberately not the
-whole input — `context` also carries run knobs (a fuzz budget) that don't change what gets authored.
+whole input — `args` also carries run knobs (a fuzz budget) that don't change what gets authored.
 Authoring + compiling this is a full LLM loop and on a large program the longest single step of a
 run, so a re-run after a downstream failure must not pay for it twice. As with the driver's other
 caches, changing the *prompt* does not invalidate; clear the namespace for that.
@@ -404,8 +406,8 @@ brand-new security capability; declaring a plan is not.
 
 `idl_dest` is the same shape for a derived *input* rather than an artifact: the toolchain resolves
 the program's IDL (an operator-supplied file, else its own IDL build), writes it there, and the host
-echoes the path back as the `idl` context key on every later `AuthorInput` — so "the key is set"
-means "the file is in place". A hard error if it can't be produced: the wheel only asks when it
+echoes the path back as `AuthorInput.idl` on every later callout — so a set `idl` means "the file is
+in place". A hard error if it can't be produced: the wheel only asks when it
 cannot proceed without one. This is what lets a harness target a program whose toolchain it cannot
 link against — types generated from the IDL belong to the *wheel's* stack, so the program's own
 dependency graph never enters the harness build.

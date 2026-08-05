@@ -22,7 +22,7 @@ wheel requires: an omitted ``kind`` or ``program`` is a host bug and should not 
 
 import enum
 import logging
-from typing import Annotated, Any, Callable, Literal, Protocol
+from typing import Annotated, Any, Callable, Literal, Protocol, Self
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
@@ -33,12 +33,6 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Outbound — what the host sends into a callout.
 # ---------------------------------------------------------------------------
-
-#: What is being authored or gated. Mirrors the three ``AuthorInput::kind`` values the host sends
-#: (see the Rust ``AuthorInput`` docs): a workspace gate before analysis, the one shared artifact,
-#: or a single unit's spec.
-AuthorKind = Literal["preflight", "setup", "component"]
-
 
 class Property(BaseModel):
     """One property to formalize, plus the host-assigned unique ``slug`` that names its unit."""
@@ -103,31 +97,67 @@ class Failure(BaseModel):
     kind: FailureKind = FailureKind.COMPILE
 
 
-class AuthorInput(BaseModel):
-    """The input to every authoring/gating callout for one artifact.
+class _AuthorInputBase(BaseModel):
+    """What every authoring/gating callout is told, whatever is being authored."""
 
-    ``component`` and ``context`` are opaque JSON both sides agree on per application (the analyzed
-    unit; the declared args + shared artifact), so they stay dicts — typing them would mean the host
-    inventing a schema for values it only forwards."""
-
-    kind: AuthorKind
     #: The *analysis* identifier of the program under test — a label and a namespace, never a Cargo
     #: name (that is :class:`ProgramCrate`).
     program: str
     program_crate: ProgramCrate = Field(default_factory=ProgramCrate)
-    component: dict[str, Any] = Field(default_factory=dict)
+    #: The properties this artifact must make checkable.
     props: list[Property] = Field(default_factory=list)
-    context: dict[str, Any] = Field(default_factory=dict)
+    #: The compiled shared setup artifact, for a wheel that declared a
+    #: :class:`~composer.rustapp.descriptor.SetupSpec`.
+    setup: str | None = None
+    #: Where workspace prep placed the program's IDL, project-root-relative — ``None`` when it
+    #: placed none. Set means the file is *in place*, which is the signal a wheel reads to decide
+    #: how it sources the program's types.
+    idl: str | None = None
+    #: The run's values for the wheel's own declared flags, keyed by argparse dest. Untyped: the
+    #: wheel declares them, so the host has no schema for them.
+    args: dict[str, Any] = Field(default_factory=dict)
 
-    def with_props(self, props: list[Property]) -> "AuthorInput":
+    def with_props(self, props: list[Property]) -> Self:
         """This input with ``props`` replaced — the setup artifact's base input plus the properties
         it has to make checkable, which only exist after extraction."""
         return self.model_copy(update={"props": props})
 
-    def with_context(self, context: dict[str, Any]) -> "AuthorInput":
-        """This input under a different ``context`` (the preflight gate re-renders the prep's input
-        with the IDL key the prep just reported)."""
-        return self.model_copy(update={"context": context})
+    def with_idl(self, idl: str | None) -> Self:
+        """This input with the IDL the workspace prep just placed (the preflight gate re-renders
+        the prep's input, and must see the same crate the prep set up)."""
+        return self.model_copy(update={"idl": idl})
+
+
+class PreflightInput(_AuthorInputBase):
+    """Gate the prepared workspace before anything is authored: the wheel renders its own skeleton
+    and ``compile`` builds it. Runs before analysis finishes, so it carries no model and no unit."""
+
+    kind: Literal["preflight"] = "preflight"
+
+
+class SetupInput(_AuthorInputBase):
+    """Author the one shared artifact every unit builds on, from the analyzed model and *every*
+    unit's properties."""
+
+    kind: Literal["setup"] = "setup"
+    #: The analyzed system model. Opaque to the host seam — its shape is the ecosystem's.
+    model: dict[str, Any] = Field(default_factory=dict)
+
+
+class ComponentInput(_AuthorInputBase):
+    """Author (and gate) one unit's spec."""
+
+    kind: Literal["component"] = "component"
+    #: The unit being formalized (``FeatureUnit.feature_json()``). Opaque to the host seam.
+    unit: dict[str, Any] = Field(default_factory=dict)
+
+
+#: The input to every authoring/gating callout — tagged on ``kind`` (Rust ``Authored``). A variant
+#: rather than one struct with a tag beside it: each kind carries something the other two have
+#: nothing to say about, and none of them can be asked for another's payload.
+AuthorInput = Annotated[
+    PreflightInput | SetupInput | ComponentInput, Field(discriminator="kind")
+]
 
 
 class Delivered(BaseModel):
