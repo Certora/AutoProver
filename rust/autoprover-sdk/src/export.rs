@@ -11,7 +11,7 @@
 /// `module_ident` MUST match the wheel's module name. The expansion defines the pure callouts
 /// (`descriptor`/`validate_preconditions`/`units`/`author_prompt`/`judge_prompt`/`finalize`) and
 /// the two BLOCKING ones (`compile`/`validate`, which release the GIL while `run-confined` runs),
-/// all delegating to the `ffi_*` helpers.
+/// all delegating to the [`ffi`](crate::ffi) helpers of the same name.
 #[macro_export]
 macro_rules! export_app {
     ($module:ident, $ctor:expr) => {
@@ -23,19 +23,19 @@ macro_rules! export_app {
 
         #[$crate::pyo3::pyfunction]
         fn descriptor() -> ::std::string::String {
-            $crate::ffi_descriptor(__autoprover_app())
+            $crate::ffi::descriptor(__autoprover_app())
         }
 
         #[$crate::pyo3::pyfunction]
         fn validate_preconditions(
             args_json: ::std::string::String,
         ) -> ::std::option::Option<::std::string::String> {
-            $crate::ffi_validate_preconditions(__autoprover_app(), &args_json)
+            $crate::ffi::validate_preconditions(__autoprover_app(), &args_json)
         }
 
         #[$crate::pyo3::pyfunction]
         fn units(input_json: ::std::string::String) -> ::std::string::String {
-            $crate::ffi_units(__autoprover_app(), &input_json)
+            $crate::ffi::units(__autoprover_app(), &input_json)
         }
 
         #[$crate::pyo3::pyfunction]
@@ -44,7 +44,7 @@ macro_rules! export_app {
             input_json: ::std::string::String,
             failure_json: ::std::option::Option<::std::string::String>,
         ) -> ::std::string::String {
-            $crate::ffi_author_prompt(__autoprover_app(), &input_json, failure_json.as_deref())
+            $crate::ffi::author_prompt(__autoprover_app(), &input_json, failure_json.as_deref())
         }
 
         #[$crate::pyo3::pyfunction]
@@ -52,7 +52,7 @@ macro_rules! export_app {
             input_json: ::std::string::String,
             spec: ::std::string::String,
         ) -> ::std::option::Option<::std::string::String> {
-            $crate::ffi_judge_prompt(__autoprover_app(), &input_json, &spec)
+            $crate::ffi::judge_prompt(__autoprover_app(), &input_json, &spec)
         }
 
         #[$crate::pyo3::pyfunction]
@@ -65,7 +65,7 @@ macro_rules! export_app {
         ) -> ::std::string::String {
             // Release the GIL for the (minutes-long) build — no async runtime needed.
             py.allow_threads(move || {
-                $crate::ffi_compile(__autoprover_app(), &input_json, &spec, &workdir, &sandbox_json)
+                $crate::ffi::compile(__autoprover_app(), &input_json, &spec, &workdir, &sandbox_json)
             })
         }
 
@@ -79,7 +79,7 @@ macro_rules! export_app {
             sandbox_json: ::std::string::String,
         ) -> ::std::string::String {
             py.allow_threads(move || {
-                $crate::ffi_validate(
+                $crate::ffi::validate(
                     __autoprover_app(),
                     &input_json,
                     &spec,
@@ -92,19 +92,19 @@ macro_rules! export_app {
 
         #[$crate::pyo3::pyfunction]
         fn sandbox_grants(args_json: ::std::string::String) -> ::std::string::String {
-            $crate::ffi_sandbox_grants(__autoprover_app(), &args_json)
+            $crate::ffi::sandbox_grants(__autoprover_app(), &args_json)
         }
 
         #[$crate::pyo3::pyfunction]
         fn workspace_prep(input_json: ::std::string::String) -> ::std::string::String {
-            $crate::ffi_workspace_prep(__autoprover_app(), &input_json)
+            $crate::ffi::workspace_prep(__autoprover_app(), &input_json)
         }
 
         #[$crate::pyo3::pyfunction]
         fn finalize(
             outcomes_json: ::std::string::String,
         ) -> ::std::option::Option<::std::string::String> {
-            $crate::ffi_finalize(__autoprover_app(), &outcomes_json)
+            $crate::ffi::finalize(__autoprover_app(), &outcomes_json)
         }
 
         #[$crate::pyo3::pymodule]

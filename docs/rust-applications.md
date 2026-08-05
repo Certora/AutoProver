@@ -48,7 +48,7 @@ line this draws:
 ## 2. The FFI surface
 
 Ten callouts, all **synchronous**, all speaking JSON strings.
-[`export_app!`](../rust/autoprover-sdk/src/lib.rs) generates every one of them from a `Backend`
+[`export_app!`](../rust/autoprover-sdk/src/export.rs) generates every one of them from a `Backend`
 impl.
 
 | Callout | Kind | Role |
@@ -113,7 +113,7 @@ for genuine failures the driver captures per component.
 ## 3. The descriptor
 
 One struct, serialized at load time, that drives everything non-backend.
-[Rust](../rust/autoprover-sdk/src/lib.rs) ↔ [Python](../composer/rustapp/descriptor.py).
+[Rust](../rust/autoprover-sdk/src/descriptor.rs) ↔ [Python](../composer/rustapp/descriptor.py).
 
 **Identity and vocabulary**
 

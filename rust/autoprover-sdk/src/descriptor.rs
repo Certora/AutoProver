@@ -24,9 +24,9 @@ pub enum PhaseRole {
     Discovery,
     /// The analysis-independent gate on the prepared workspace, run concurrently with system
     /// analysis — before a single property exists. The host follows
-    /// [`WorkspacePrep`](crate::WorkspacePrep) with an
-    /// [`Authored::Preflight`](crate::Authored::Preflight) `compile` whose `spec` is **empty**:
-    /// nothing has been authored yet, so the wheel renders its own minimal skeleton — the smallest
+    /// [`WorkspacePrep`](crate::prep::WorkspacePrep) with an
+    /// [`Authored::Preflight`](crate::authoring::Authored::Preflight) `compile` whose `spec` is
+    /// **empty**: nothing has been authored yet, so the wheel renders its own skeleton — the smallest
     /// artifact that still exercises everything an authored one will depend on.
     ///
     /// The point is to fail on a *toolchain* problem — an unresolvable dependency graph, a harness
@@ -37,9 +37,10 @@ pub enum PhaseRole {
     /// re-authoring, and the driver cancels the analysis and extraction running alongside it.
     Preflight,
     /// The shared artifact authored once before per-component formalization (Crucible's fixture).
-    /// The host runs the author→compile loop for an [`Authored::Setup`](crate::Authored::Setup)
-    /// input, then hands the compiled spec to every component as
-    /// [`AuthorInput::setup`](crate::AuthorInput::setup).
+    /// The host runs the author→compile loop for an
+    /// [`Authored::Setup`](crate::authoring::Authored::Setup) input, then hands the compiled spec
+    /// to every component as
+    /// [`AuthorInput::setup`](crate::authoring::AuthorInput::setup).
     Setup,
 }
 

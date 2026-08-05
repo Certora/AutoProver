@@ -6,10 +6,14 @@
 //! toolchain. A production backend keeps this exact shape and swaps the callouts for
 //! real ones (see `docs/rust-applications.md`).
 
-use autoprover_sdk::{
-    AppDescriptor, ArtifactLayout, AuthorInput, Backend, CompileResult, EventKind, Failure,
-    Outcome, PhaseRole, PhaseSpec, Prompt, Target, Unit, ValidateOutcome, Workspace,
+use autoprover_sdk::authoring::{AuthorInput, Failure, Prompt};
+use autoprover_sdk::descriptor::{
+    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
+    PhaseSpec,
 };
+use autoprover_sdk::outcome::{CompileResult, Outcome, Target, Unit, ValidateOutcome};
+use autoprover_sdk::sandbox::Workspace;
+use autoprover_sdk::Backend;
 
 struct EchoApp;
 
@@ -36,10 +40,10 @@ impl Backend for EchoApp {
                 PhaseSpec::step("formalization", "Formalization", 3, PhaseRole::Formalization),
                 PhaseSpec::step("report", "Report", 4, PhaseRole::Report),
             ],
-            args: vec![autoprover_sdk::ArgSpec {
+            args: vec![ArgSpec {
                 flag: "--echo-tag".to_string(),
                 help: "An arbitrary tag stamped into the echo spec.".to_string(),
-                default: autoprover_sdk::ArgDefault::Str { value: Some("demo".to_string()) },
+                default: ArgDefault::Str { value: Some("demo".to_string()) },
                 required: false,
             }],
             rag_db_default: None,
@@ -57,7 +61,7 @@ impl Backend for EchoApp {
             // workspace to prepare and `compile` is a no-op) and no shared setup — neither role is
             // claimed by a phase above — plus one file per component and no toolchain
             // confinement/serialization. All defaults.
-            deliverable_mode: autoprover_sdk::DeliverableMode::PerComponent,
+            deliverable_mode: DeliverableMode::PerComponent,
             serialize_toolchain: false,
             confine_by_default: false,
             component_noun: None,

@@ -23,19 +23,21 @@ pub struct WorkspacePrep {
     pub warm_dirs: Vec<String>,
     /// If set, build the workspace and expect this artifact, via the host's shared build
     /// capability (Solana: `cargo-build-sbf` → `target/deploy/<name>.so`). It names the *build
-    /// artifact*, so for Cargo it is the crate's lib target ([`ProgramCrate::lib`](crate::ProgramCrate::lib))
-    /// — not the analysis identifier, which need not match it.
+    /// artifact*, so for Cargo it is the crate's lib target
+    /// ([`ProgramCrate::lib`](crate::authoring::ProgramCrate::lib)) — not the analysis identifier,
+    /// which need not match it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_program: Option<String>,
     /// If set, the wheel needs the program's **IDL** and wants it at this workdir-relative path.
     /// The host obtains it (a user-supplied file, else the build capability's IDL build), writes it
-    /// there, and echoes the path back as the `idl` context key on every later `AuthorInput` — so
-    /// "the key is set" means "the file is in place". A hard error if it can't be produced: the
-    /// wheel only asks when it cannot proceed without one.
+    /// there, and echoes the path back as [`AuthorInput::idl`](crate::authoring::AuthorInput::idl)
+    /// on every later callout — so a set `idl` means "the file is in place". A hard error if it
+    /// can't be produced: the wheel only asks when it cannot proceed without one.
     ///
     /// This is what lets a harness target a program whose toolchain it can't link against
-    /// ([`ProgramCrate::anchor`](crate::ProgramCrate::anchor)): types generated from the IDL belong
-    /// to the *wheel's* stack, so the program's own dependency graph never enters the harness build.
+    /// ([`ProgramCrate::anchor`](crate::authoring::ProgramCrate::anchor)): types generated from the
+    /// IDL belong to the *wheel's* stack, so the program's own dependency graph never enters the
+    /// harness build.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idl_dest: Option<String>,
 }

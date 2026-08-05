@@ -6,8 +6,8 @@ trusted Python build steps (the Solana sBPF build / IDL step) route through here
 
 (A Rust backend's own ``compile``/``validate`` toolchain runs no longer go through
 this: they spawn the ``run-confined`` launcher directly from the wheel via
-``autoprover_sdk::run_confined`` — see ``docs/rust-applications.md`` §8. This runner and the
-launcher share the same :mod:`composer.sandbox.policy` seam, which is why it lives in
+``autoprover_sdk::sandbox::Workspace::run`` — see ``docs/rust-applications.md`` §8. This runner
+and the launcher share the same :mod:`composer.sandbox.policy` seam, which is why it lives in
 :mod:`composer.sandbox` rather than under ``rustapp``.)
 
 Optional confinement is applied via a :class:`~composer.sandbox.policy.SandboxProvider`

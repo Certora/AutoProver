@@ -10,9 +10,9 @@ use crate::authoring::ProgramCrate;
 /// The parsed values of the descriptor's declared CLI flags, keyed the way the host's argparse
 /// keys them: leading dashes stripped and `-` folded to `_` (`--fuzz-timeout` → `fuzz_timeout`).
 ///
-/// Untyped because the *wheel* declares these flags ([`ArgSpec`](crate::ArgSpec)) — the host parses
-/// and forwards them without a schema of its own. Read one through [`DeclaredArgs::get`] rather
-/// than reaching into the map.
+/// Untyped because the *wheel* declares these flags ([`ArgSpec`](crate::descriptor::ArgSpec)) —
+/// the host parses and forwards them without a schema of its own. Read one through
+/// [`DeclaredArgs::get`] rather than reaching into the map.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct DeclaredArgs(serde_json::Map<String, serde_json::Value>);

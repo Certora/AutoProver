@@ -112,7 +112,7 @@ class SandboxConfig:
 
     async def backend_spec(self, workdir: str | Path, *, timeout_s: int) -> BackendSpec:
         """The ``Sandbox`` JSON a Rust backend's ``compile``/``validate`` consume to launch
-        a confined command (`autoprover_sdk::Sandbox`). Python keeps ownership of the
+        a confined command (`autoprover_sdk::sandbox::Sandbox`). Python keeps ownership of the
         confinement *intent* (this policy) and of translating it into an argv wrapper; the
         backend only prepends ``argv_prefix`` to its command — it names no sandbox mechanism.
 

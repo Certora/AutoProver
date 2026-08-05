@@ -127,8 +127,8 @@ Command execution funnels through one of two launch paths, and **both consume th
   [`composer/sandbox`](../composer/sandbox/) package — outside `rustapp` — so Python-based backends
   can run confined commands too.
 - A **Rust wheel's own `compile`/`validate`**, which spawn the launcher directly via
-  `autoprover_sdk::run_confined` rather than calling back into Python. They receive the policy
-  already lowered to an opaque argv prefix (`SandboxConfig.backend_spec` →
+  `autoprover_sdk::sandbox::Workspace::run` rather than calling back into Python. They receive the
+  policy already lowered to an opaque argv prefix (`SandboxConfig.backend_spec` →
   `LauncherProvider.argv_prefix`) and simply prepend it — see
   [rust-applications.md §8](./rust-applications.md).
 

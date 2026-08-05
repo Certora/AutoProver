@@ -40,17 +40,17 @@ pub trait Backend: Send + Sync + 'static {
 
     /// Compile/typecheck the whole spec once (all units share one build). BLOCKING.
     ///
-    /// Also the preflight gate: for [`Authored::Preflight`](crate::Authored::Preflight) the `spec`
-    /// is empty and the wheel supplies its own skeleton, so one implementation covers "does the
-    /// authored artifact build" and "could *any* artifact build here" (see
-    /// [`PhaseRole::Preflight`](crate::PhaseRole::Preflight)).
+    /// Also the preflight gate: for [`Authored::Preflight`](crate::authoring::Authored::Preflight)
+    /// the `spec` is empty and the wheel supplies its own skeleton, so one implementation covers
+    /// "does the authored artifact build" and "could *any* artifact build here" (see
+    /// [`PhaseRole::Preflight`](crate::descriptor::PhaseRole::Preflight)).
     fn compile(&self, input: &AuthorInput, spec: &str, ws: &Workspace) -> CompileResult;
 
     /// Build + check ONE target against the spec (the fused build gate — no separate compile for
     /// components). Returns [`ValidateOutcome::BuildFailed`] to trigger a re-author of the whole
-    /// spec (the build is shared across targets), or a [`Verdict`](crate::Verdict) for each unit
-    /// the target covers — [`Target::units`], which the host already grouped. Per-target so the
-    /// host owns enumeration and scheduling. BLOCKING.
+    /// spec (the build is shared across targets), or a [`Verdict`](crate::outcome::Verdict) for
+    /// each unit the target covers — [`Target::units`], which the host already grouped. Per-target
+    /// so the host owns enumeration and scheduling. BLOCKING.
     fn validate(
         &self,
         input: &AuthorInput,
@@ -74,9 +74,9 @@ pub trait Backend: Send + Sync + 'static {
 
     /// Optional run-level artifacts from the full outcome set, as `{relpath: contents}`.
     ///
-    /// Under [`DeliverableMode::Callout`](crate::DeliverableMode::Callout) this renders the whole
-    /// source deliverable (Crucible's one crate) — which is why the outcome set carries each
-    /// component's authored spec and targets alongside the setup artifact and the program's crate.
+    /// Under [`DeliverableMode::Callout`](crate::descriptor::DeliverableMode::Callout) this renders
+    /// the whole source deliverable (Crucible's one crate) — which is why the outcome set carries
+    /// each component's authored spec and targets alongside the setup artifact and the crate.
     fn finalize(&self, _outcomes: &FinalizeInput) -> BTreeMap<String, String> {
         BTreeMap::new()
     }

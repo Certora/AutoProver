@@ -9,7 +9,7 @@ use crate::authoring::ProgramCrate;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Delivered {
     /// The authored spec, verbatim — the source a
-    /// [`DeliverableMode::Callout`](crate::DeliverableMode::Callout) wheel assembles its
+    /// [`DeliverableMode::Callout`](crate::descriptor::DeliverableMode::Callout) wheel assembles its
     /// deliverable from.
     #[serde(default)]
     pub artifact_text: String,
@@ -59,7 +59,7 @@ pub struct FinalizeInput {
     #[serde(default)]
     pub idl: Option<String>,
     /// The compiled shared setup artifact, when the wheel declared a
-    /// [`PhaseRole::Setup`](crate::PhaseRole::Setup) phase.
+    /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase.
     #[serde(default)]
     pub setup: Option<String>,
     #[serde(default)]

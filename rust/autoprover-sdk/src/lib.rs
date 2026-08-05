@@ -10,15 +10,18 @@
 //! callouts. Most are pure ([`Backend::descriptor`], [`Backend::units`],
 //! [`Backend::author_prompt`], [`Backend::judge_prompt`], [`Backend::finalize`]). The
 //! two gating callouts ([`Backend::compile`], [`Backend::validate`]) run the toolchain
-//! directly — each spawns the `run-confined` launcher via [`Workspace::run`] — and BLOCK;
-//! the host calls them off the event loop (`asyncio.to_thread`) while the wheel releases
-//! the GIL. There is no `async`/`pyo3-async` bridge and no `Command`/`Observation` resume
-//! protocol on the Rust side.
+//! directly — each spawns the `run-confined` launcher via
+//! [`Workspace::run`](sandbox::Workspace::run) — and BLOCK; the host calls them off the event
+//! loop (`asyncio.to_thread`) while the wheel releases the GIL. There is no `async`/`pyo3-async`
+//! bridge and no `Command`/`Observation` resume protocol on the Rust side.
 //!
 //! An application implements [`Backend`] and calls [`export_app!`] to emit the PyO3
 //! module the Python host loads.
 //!
-//! Every item below is re-exported at the crate root; the modules only group them:
+//! ## Where things live
+//!
+//! Types are addressed through the module that owns them (`descriptor::AppDescriptor`,
+//! `outcome::Verdict`), grouped by which part of the seam they belong to:
 //!
 //!  * [`descriptor`] — the declaration the host reads at load time.
 //!  * [`args`] — the run's resolved inputs (project root, program, declared flags).
@@ -26,8 +29,7 @@
 //!  * [`outcome`] — the compile verdict, the property→unit map, the per-unit verdicts.
 //!  * [`finalize`] — the full outcome set the run-level deliverable is rendered from.
 //!  * [`prep`] — pure plans the host executes for the wheel (workspace prep, sandbox grants).
-//!  * [`sandbox`] — the confinement wrapper and the launcher helper.
-//!  * [`backend`] — the [`Backend`] trait itself.
+//!  * [`sandbox`] — where a blocking callout runs its toolchain, and how it spawns.
 //!  * [`ffi`] — the JSON-string boundary [`export_app!`] wraps.
 
 pub mod args;
@@ -41,24 +43,9 @@ pub mod outcome;
 pub mod prep;
 pub mod sandbox;
 
-pub use args::{AppArgs, DeclaredArgs};
-pub use authoring::{
-    anchor_compat_key, AuthorInput, Authored, Failure, FailureKind, ProgramCrate, Prompt, Property,
-    PropertyKind,
-};
+/// The trait an application implements — re-exported because it is what every app names, and
+/// [`backend`] holds nothing else.
 pub use backend::Backend;
-pub use descriptor::{
-    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
-    PhaseSpec,
-};
-pub use finalize::{ComponentOutcome, Delivered, FinalizeComponent, FinalizeInput};
-pub use ffi::{
-    ffi_author_prompt, ffi_compile, ffi_descriptor, ffi_finalize, ffi_judge_prompt,
-    ffi_sandbox_grants, ffi_units, ffi_validate, ffi_validate_preconditions, ffi_workspace_prep,
-};
-pub use outcome::{CompileResult, Outcome, Target, Unit, ValidateOutcome, Verdict};
-pub use prep::{SandboxGrants, WorkspacePrep};
-pub use sandbox::{CommandOutput, Sandbox, Workspace};
 
 /// Re-exported so [`export_app!`] can reference `$crate::pyo3::…`; an app crate
 /// still depends on pyo3 directly to enable `extension-module` / `abi3-py312`.

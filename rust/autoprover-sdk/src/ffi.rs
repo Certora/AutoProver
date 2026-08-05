@@ -14,7 +14,7 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Result<T, St
 
 /// Parse an [`AuthorInput`] with its `program_crate` normalized, so the partly-empty shape a host
 /// that resolved nothing may send never reaches a backend. This is the one place
-/// [`ProgramCrate::resolved`](crate::ProgramCrate::resolved) has to be remembered.
+/// [`ProgramCrate::resolved`](crate::authoring::ProgramCrate::resolved) has to be remembered.
 fn parse_input(json: &str) -> Result<AuthorInput, String> {
     let mut input: AuthorInput = parse(json, "AuthorInput")?;
     input.program_crate = input.program_crate.resolved(&input.program);
@@ -37,14 +37,14 @@ fn parse_args(json: &str) -> Result<AppArgs, String> {
 }
 
 /// `descriptor() -> str` (JSON).
-pub fn ffi_descriptor(b: &dyn Backend) -> String {
+pub fn descriptor(b: &dyn Backend) -> String {
     serde_json::to_string(&b.descriptor())
         .unwrap_or_else(|e| format!("{{\"error\":\"descriptor serialize: {e}\"}}"))
 }
 
 /// `validate_preconditions(args_json) -> str | None` (None = ok). A payload this can't parse is a
 /// host bug, and it is reported as a failed precondition — the one callout with a channel to say so.
-pub fn ffi_validate_preconditions(b: &dyn Backend, args_json: &str) -> Option<String> {
+pub fn validate_preconditions(b: &dyn Backend, args_json: &str) -> Option<String> {
     match parse_args(args_json) {
         Ok(args) => b.validate_preconditions(&args).err(),
         Err(e) => Some(e),
@@ -52,7 +52,7 @@ pub fn ffi_validate_preconditions(b: &dyn Backend, args_json: &str) -> Option<St
 }
 
 /// `units(input_json) -> str` (JSON `[Unit]`).
-pub fn ffi_units(b: &dyn Backend, input_json: &str) -> String {
+pub fn units(b: &dyn Backend, input_json: &str) -> String {
     match parse_input(input_json) {
         Ok(input) => serde_json::to_string(&b.units(&input)).unwrap_or_else(|_| "[]".into()),
         Err(_) => "[]".into(),
@@ -60,7 +60,7 @@ pub fn ffi_units(b: &dyn Backend, input_json: &str) -> String {
 }
 
 /// `author_prompt(input_json, failure_json | None) -> str` (JSON `Prompt`).
-pub fn ffi_author_prompt(b: &dyn Backend, input_json: &str, failure_json: Option<&str>) -> String {
+pub fn author_prompt(b: &dyn Backend, input_json: &str, failure_json: Option<&str>) -> String {
     let input = match parse_input(input_json) {
         Ok(v) => v,
         Err(e) => {
@@ -74,14 +74,14 @@ pub fn ffi_author_prompt(b: &dyn Backend, input_json: &str, failure_json: Option
 }
 
 /// `judge_prompt(input_json, spec) -> str | None` (None = skip judging).
-pub fn ffi_judge_prompt(b: &dyn Backend, input_json: &str, spec: &str) -> Option<String> {
+pub fn judge_prompt(b: &dyn Backend, input_json: &str, spec: &str) -> Option<String> {
     let input = parse_input(input_json).ok()?;
     b.judge_prompt(&input, spec)
         .map(|p| serde_json::to_string(&p).unwrap_or_default())
 }
 
 /// `compile(input_json, spec, workdir, sandbox_json) -> str` (JSON `CompileResult`). BLOCKING.
-pub fn ffi_compile(
+pub fn compile(
     b: &dyn Backend,
     input_json: &str,
     spec: &str,
@@ -104,7 +104,7 @@ pub fn ffi_compile(
 /// An unparseable target is the one payload with nowhere to report to — the units a verdict would
 /// be keyed by are exactly what failed to parse — so it yields no verdicts, and the host records
 /// the rows it asked about as UNKNOWN.
-pub fn ffi_validate(
+pub fn validate(
     b: &dyn Backend,
     input_json: &str,
     spec: &str,
@@ -121,13 +121,13 @@ pub fn ffi_validate(
 }
 
 /// `sandbox_grants(args_json) -> str` (JSON `SandboxGrants`).
-pub fn ffi_sandbox_grants(b: &dyn Backend, args_json: &str) -> String {
+pub fn sandbox_grants(b: &dyn Backend, args_json: &str) -> String {
     let args = parse_args(args_json).unwrap_or_default();
     serde_json::to_string(&b.sandbox_grants(&args)).unwrap_or_else(|_| "{}".into())
 }
 
 /// `workspace_prep(input_json) -> str` (JSON `WorkspacePrep`). Pure.
-pub fn ffi_workspace_prep(b: &dyn Backend, input_json: &str) -> String {
+pub fn workspace_prep(b: &dyn Backend, input_json: &str) -> String {
     match parse_input(input_json) {
         Ok(input) => serde_json::to_string(&b.workspace_prep(&input)).unwrap_or_else(|_| "{}".into()),
         Err(_) => "{}".into(),
@@ -135,7 +135,7 @@ pub fn ffi_workspace_prep(b: &dyn Backend, input_json: &str) -> String {
 }
 
 /// `finalize(outcomes_json) -> str | None` (JSON `{relpath: contents}`, or None).
-pub fn ffi_finalize(b: &dyn Backend, outcomes_json: &str) -> Option<String> {
+pub fn finalize(b: &dyn Backend, outcomes_json: &str) -> Option<String> {
     let mut outcomes: FinalizeInput = parse(outcomes_json, "FinalizeInput").ok()?;
     outcomes.program_crate = outcomes.program_crate.resolved(&outcomes.program);
     let files = b.finalize(&outcomes);
@@ -203,9 +203,9 @@ mod tests {
         // callout still gets the `programs/<program>` fallback filled in — the whole point of
         // normalizing here rather than trusting each wheel to remember `resolved()`.
         let spy = Spy::default();
-        ffi_units(&spy, r#"{"kind":"component","program":"vault"}"#);
-        ffi_workspace_prep(&spy, r#"{"kind":"preflight","program":"vault"}"#);
-        ffi_validate_preconditions(&spy, r#"{"project_root":"/p","program":"vault"}"#);
+        units(&spy, r#"{"kind":"component","program":"vault"}"#);
+        workspace_prep(&spy, r#"{"kind":"preflight","program":"vault"}"#);
+        validate_preconditions(&spy, r#"{"project_root":"/p","program":"vault"}"#);
         for cr in spy.seen.lock().unwrap().iter() {
             assert_eq!(cr.dir, "programs/vault");
             assert_eq!(cr.package, "vault");
@@ -218,7 +218,7 @@ mod tests {
         // The lend shape: directory, package and lib all differ from the analysis identifier, and
         // the convention would have got every one of them wrong.
         let spy = Spy::default();
-        ffi_units(
+        units(
             &spy,
             r#"{"kind":"component","program":"vault","program_crate":
                 {"dir":"programs/lend","package":"example-lending","lib":"example_lending",
@@ -269,7 +269,7 @@ mod tests {
     fn a_malformed_args_payload_is_reported_as_a_failed_precondition() {
         // The only callout with a channel to say the host sent nonsense; the alternative is a
         // silent default that reads as "no preconditions to check".
-        let err = ffi_validate_preconditions(&Spy::default(), "not json").expect("an error");
+        let err = validate_preconditions(&Spy::default(), "not json").expect("an error");
         assert!(err.contains("AppArgs"), "{err}");
     }
 
