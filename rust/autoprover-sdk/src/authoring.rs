@@ -21,9 +21,9 @@ pub struct Property {
 /// directory, package name and lib name are independent of each other and of it (a real lending
 /// program we hit had directory `programs/lend`, package `example-lending`, lib `example_lending`).
 ///
-/// Every field may be empty — a host that resolved nothing, or one predating this struct. Read it
-/// through [`ProgramCrate::resolved`], which fills the gaps from the `programs/<program>`
-/// convention, rather than using the fields raw.
+/// Every field of one a *backend* receives is populated: the FFI boundary runs
+/// [`ProgramCrate::resolved`] on every payload carrying one, so the partly-empty shape a host that
+/// resolved nothing sends is never what a callout sees.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProgramCrate {
     /// The crate directory relative to the project root, forward-slashed (`"."` = the root).
@@ -55,6 +55,9 @@ impl ProgramCrate {
     /// `programs/<program>` and is named `<program>`. That fallback only holds for a workspace
     /// whose directory and package names happen to match the analysis identifier — it is what a
     /// host that resolves nothing gets, not something to rely on.
+    ///
+    /// Applied by the FFI boundary to every inbound payload, so a backend calling it again gets
+    /// the same value back. Public for a caller building one outside a callout.
     pub fn resolved(&self, program: &str) -> ProgramCrate {
         let package =
             if self.package.is_empty() { program.to_string() } else { self.package.clone() };

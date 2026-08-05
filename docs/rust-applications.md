@@ -196,8 +196,9 @@ registry references are resolved up front: an unknown ecosystem or an unregister
 wheel bug, not something to discover mid-run.
 
 [`rust_entry_point`](../composer/rustapp/entry.py) then does the irreducibly imperative half —
-parse args, call `validate_preconditions` (with the resolved `program_crate` in the blob, so a wheel
-can check up-front that the code it will depend on is where the host says it is), open the four
+parse args, call `validate_preconditions` (with the run's inputs as `AppArgs` — the resolved
+`program_crate`, so a wheel can check up-front that the code it will depend on is where the host
+says it is, and the program/source path already split out of `path:Name`), open the four
 Postgres-backed pools + RAG + async tool context + thread logger, build the `ServiceHost` env and
 `WorkflowContext`, resolve or discover the design doc, apply `confine_by_default`, and yield the
 Executor a frontend drives.

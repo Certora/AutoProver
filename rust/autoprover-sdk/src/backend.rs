@@ -2,8 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::args::AppArgs;
 use crate::authoring::{AuthorInput, Failure, Prompt};
 use crate::descriptor::AppDescriptor;
+use crate::finalize::FinalizeInput;
 use crate::outcome::{CompileResult, Unit, ValidateOutcome};
 use crate::prep::{SandboxGrants, WorkspacePrep};
 use crate::sandbox::Sandbox;
@@ -18,7 +20,7 @@ pub trait Backend: Send + Sync + 'static {
     fn descriptor(&self) -> AppDescriptor;
 
     /// Validate application-specific preconditions before any service opens. `Err(msg)` aborts.
-    fn validate_preconditions(&self, _args: &serde_json::Value) -> Result<(), String> {
+    fn validate_preconditions(&self, _args: &AppArgs) -> Result<(), String> {
         Ok(())
     }
 
@@ -65,7 +67,7 @@ pub trait Backend: Send + Sync + 'static {
 
     /// Extra sandbox grants to union into the host's policy (see [`SandboxGrants`]). Pure; called
     /// once before any confined step. Default: no extra grants.
-    fn sandbox_grants(&self, _args: &serde_json::Value) -> SandboxGrants {
+    fn sandbox_grants(&self, _args: &AppArgs) -> SandboxGrants {
         SandboxGrants::default()
     }
 
@@ -79,10 +81,9 @@ pub trait Backend: Send + Sync + 'static {
     /// Optional run-level artifacts from the full outcome set, as `{relpath: contents}`.
     ///
     /// Under [`DeliverableMode::Callout`](crate::DeliverableMode::Callout) this renders the whole
-    /// source deliverable (Crucible's one crate); the host enriches the outcome set with each
-    /// component's `artifact_text` / `property_units` and the `setup` result so the wheel has
-    /// everything the deliverable needs.
-    fn finalize(&self, _outcomes: &serde_json::Value) -> BTreeMap<String, String> {
+    /// source deliverable (Crucible's one crate) — which is why the outcome set carries each
+    /// component's authored spec and targets alongside the setup artifact and the program's crate.
+    fn finalize(&self, _outcomes: &FinalizeInput) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
 }

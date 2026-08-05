@@ -50,7 +50,7 @@ from composer.pipeline.core import CorePipelineResult
 from composer.rag.models import get_model
 from composer.rustapp.adapter import program_crate_of
 from composer.rustapp.descriptor import ArgDefault, ArgSpec, CoreSlot
-from composer.rustapp.wire import parse_sandbox_grants
+from composer.rustapp.wire import AppArgs, parse_sandbox_grants
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
 from composer.sandbox.config import SandboxConfig
@@ -114,12 +114,12 @@ def build_default_env(
     ).bind_source_tools(full)
 
 
-def _build_confinement(app: RustApplication, args: dict[str, Any]) -> SandboxConfig:
+def _build_confinement(app: RustApplication, args: AppArgs) -> SandboxConfig:
     """The default command-sandbox config for a wheel that sets ``confine_by_default`` — the
     fail-closed ``launcher`` provider (overridable by ``COMPOSER_SANDBOX_PROVIDER``), with the
     wheel's ``sandbox_grants`` (extra read-only paths / env names) unioned in. Python owns the
     policy; the wheel only *declares* the grants (``docs/rust-applications.md`` §8)."""
-    grants = parse_sandbox_grants(app.module.sandbox_grants(json.dumps(args)))
+    grants = parse_sandbox_grants(app.module.sandbox_grants(args.model_dump_json()))
     extra_ro = tuple(pathlib.Path(p) for p in grants.extra_ro)
     extra_env = tuple(grants.extra_env)
     provider = os.environ.get("COMPOSER_SANDBOX_PROVIDER", "launcher")
@@ -253,19 +253,22 @@ async def rust_entry_point(
         forbidden_read=forbidden_read,
     )
 
-    # Rust-owned precondition validation (cf. foundry's foundry.toml check). ``program_crate`` is
-    # the same blob every ``AuthorInput`` carries, so a wheel can check up-front that the code it
-    # will depend on is where the host says it is (Crucible: the program crate must exist).
+    # The run's inputs as both argument-shaped callouts see them, resolved once here: the wheel
+    # gets each part as a field rather than re-deriving any of them (``program_crate`` is the same
+    # blob every ``AuthorInput`` carries, so a wheel can check up-front that the code it will
+    # depend on is where the host says it is — Crucible: the program crate must exist).
     declared_args = _declared_args(args, descriptor.args)
-    err = app.validate_preconditions(
-        {
-            "project_root": str(project_root),
-            "main_contract": args.main_contract,
-            "system_doc": args.system_doc or "",
-            "program_crate": program_crate_of(app.ecosystem, init_source).model_dump(),
-            **declared_args,
-        }
+    app_args = AppArgs(
+        project_root=str(project_root),
+        program=str(contract_name),
+        source_path=relative_path,
+        system_doc=args.system_doc or None,
+        program_crate=program_crate_of(app.ecosystem, init_source),
+        declared=declared_args,
     )
+
+    # Rust-owned precondition validation (cf. foundry's foundry.toml check).
+    err = app.validate_preconditions(app_args)
     if err:
         parser.error(err)
 
@@ -390,15 +393,7 @@ async def rust_entry_point(
             # declared sandbox grants. Both are inert for a wheel that declares neither.
             app.options.declared_args = declared_args
             if app.options.sandbox is None and app.descriptor.confine_by_default:
-                app.options.sandbox = _build_confinement(
-                    app,
-                    {
-                        "project_root": str(project_root),
-                        "main_contract": args.main_contract,
-                        "system_doc": args.system_doc or "",
-                        **declared_args,
-                    },
-                )
+                app.options.sandbox = _build_confinement(app, app_args)
 
             # 3. A backend that needs a bespoke store/pipeline (e.g. Crucible's crate
             #    store) supplies run_pipeline_fn; everything else uses the generic host.

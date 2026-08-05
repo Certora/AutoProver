@@ -21,25 +21,31 @@
 //! Every item below is re-exported at the crate root; the modules only group them:
 //!
 //!  * [`descriptor`] — the declaration the host reads at load time.
+//!  * [`args`] — the run's resolved inputs (project root, program, declared flags).
 //!  * [`authoring`] — what the host sends into a callout, and the prompt it gets back.
 //!  * [`outcome`] — the compile verdict, the property→unit map, the per-unit verdicts.
+//!  * [`finalize`] — the full outcome set the run-level deliverable is rendered from.
 //!  * [`prep`] — pure plans the host executes for the wheel (workspace prep, sandbox grants).
 //!  * [`sandbox`] — the confinement wrapper and the launcher helper.
 //!  * [`backend`] — the [`Backend`] trait itself.
 //!  * [`ffi`] — the JSON-string boundary [`export_app!`] wraps.
 
+pub mod args;
 pub mod authoring;
 pub mod backend;
 pub mod descriptor;
 pub mod export;
 pub mod ffi;
+pub mod finalize;
 pub mod outcome;
 pub mod prep;
 pub mod sandbox;
 
+pub use args::{AppArgs, DeclaredArgs};
 pub use authoring::{
     anchor_compat_key, AuthorInput, Failure, FailureKind, ProgramCrate, Prompt, Property,
 };
+pub use finalize::{ComponentOutcome, Delivered, FinalizeComponent, FinalizeInput};
 pub use backend::Backend;
 pub use descriptor::{
     AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, CoreSlot, DeliverableMode, EventKind,

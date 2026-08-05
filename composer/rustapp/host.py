@@ -17,7 +17,6 @@ by the frontend and the pipeline.
 import asyncio
 import enum
 import importlib
-import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, cast
 
@@ -33,7 +32,7 @@ from composer.rustapp.adapter import RustBackend
 from composer.rustapp.descriptor import AppDescriptor, CoreSlot
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.store import RustArtifactStore
-from composer.rustapp.wire import CALLOUTS, RustAppModule
+from composer.rustapp.wire import CALLOUTS, AppArgs, RustAppModule
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import SandboxConfig
 from composer.spec.artifacts import ArtifactStore
@@ -256,12 +255,9 @@ class RustApplication:
     def header_text(self) -> str:
         return self.descriptor.header_text
 
-    def validate_preconditions(self, args: dict[str, Any]) -> str | None:
-        """Delegate to the Rust precondition hook; return an error string or None.
-
-        ``args`` is the CLI's own parsed arguments, not an ``AuthorInput`` — a free-form blob the
-        wheel matched against its own declared flags, so it stays a dict."""
-        return self.module.validate_preconditions(json.dumps(args))
+    def validate_preconditions(self, args: AppArgs) -> str | None:
+        """Delegate to the Rust precondition hook; return an error string or None."""
+        return self.module.validate_preconditions(args.model_dump_json())
 
     def make_backend(self, source: SourceCode) -> RustBackend:
         """Build the backend for this run — same phase enum as :attr:`phase_labels`."""

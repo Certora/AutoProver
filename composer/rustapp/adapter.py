@@ -68,6 +68,7 @@ from composer.rustapp.toolchain import source_crate, workspace_toolchain
 from composer.rustapp.wire import (
     AuthorInput,
     CompileOk,
+    ComponentGaveUp,
     Failure,
     FailureKind,
     FinalizeComponent,
@@ -85,7 +86,9 @@ from composer.rustapp.wire import (
     parse_workspace_prep,
 )
 # The wheel's per-unit verdict and the *report's* per-unit verdict are different types with the same
-# name (``fetch_verdicts`` maps one to the other), so the wire one is aliased here.
+# name (``fetch_verdicts`` maps one to the other), so the wire one is aliased here. Likewise
+# ``Delivered``: the pipeline's component outcome and the wire's payload for one.
+from composer.rustapp.wire import Delivered as WireDelivered
 from composer.rustapp.wire import Verdict as WireVerdict
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import CacheKey, SourceFields, WorkflowContext
@@ -887,26 +890,27 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]], run: PipelineRun
     ) -> None:
         components = [
-            FinalizeComponent(name=o.feat.display_name, delivered=False)
+            FinalizeComponent(name=o.feat.display_name, outcome=ComponentGaveUp())
             if not isinstance(o.result, Delivered)
             # A callout-mode wheel renders the whole deliverable from these (Crucible: folds each
             # section into the shared crate, keyed by its property_units feature) — including the
             # targets each row was validated by, which its sections and declared features key on.
             else FinalizeComponent(
                 name=o.feat.display_name,
-                delivered=True,
-                unit_file=o.result.unit_file,
-                run_link=o.result.run_link,
-                artifact_text=o.result.result.artifact_text,
-                property_units=o.result.result.property_units(),
-                targets=list(o.result.result.targets),
+                outcome=WireDelivered(
+                    unit_file=o.result.unit_file,
+                    run_link=o.result.run_link,
+                    artifact_text=o.result.result.artifact_text,
+                    property_units=o.result.result.property_units(),
+                    targets=list(o.result.result.targets),
+                ),
             )
             for o in outcomes
         ]
         payload = FinalizeInput(
             program=str(run.source.contract_name),
             program_crate=self._program_crate,
-            idl=self._idl or "",
+            idl=self._idl,
             components=components,
             setup=self._setup_result,
         )

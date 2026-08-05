@@ -56,13 +56,35 @@ class ProgramCrate(BaseModel):
 
     Filled in by the chain's registered resolver (:func:`composer.rustapp.toolchain.source_crate`) —
     every field empty when there is none, when the language has no such unit, or when the layout
-    couldn't be read, which the wheel reads through its ``ProgramCrate::resolved`` fallback."""
+    couldn't be read. The wheel never sees that shape: the SDK's FFI boundary fills the gaps from
+    the ``programs/<program>`` convention before any callout runs."""
 
     dir: str = ""
     package: str = ""
     lib: str = ""
     #: The crate's declared ``anchor-lang`` requirement, verbatim; ``""`` when it declares none.
     anchor: str = ""
+
+
+class AppArgs(BaseModel):
+    """The run's resolved inputs, as the two argument-shaped callouts (``validate_preconditions``,
+    ``sandbox_grants``) receive them. Mirrors the Rust ``AppArgs``.
+
+    Every part the host already knows is its own field: ``program`` and ``source_path`` are the two
+    halves of the entry point's ``path:Name`` argument, split *here* so no wheel re-splits it."""
+
+    #: The project root, absolute.
+    project_root: str
+    #: The analysis identifier — never a Cargo name (that is :class:`ProgramCrate`).
+    program: str
+    #: The main source file, project-root-relative.
+    source_path: str = ""
+    #: The design doc, when one was named on the command line.
+    system_doc: str | None = None
+    program_crate: ProgramCrate = Field(default_factory=ProgramCrate)
+    #: The wheel's own declared flags, keyed by argparse dest (``--fuzz-timeout`` →
+    #: ``fuzz_timeout``). Untyped: the *wheel* declares these, so the host has no schema for them.
+    declared: dict[str, Any] = Field(default_factory=dict)
 
 
 class FailureKind(str, enum.Enum):
@@ -108,29 +130,46 @@ class AuthorInput(BaseModel):
         return self.model_copy(update={"context": context})
 
 
-class FinalizeComponent(BaseModel):
-    """One component's outcome in the ``finalize`` payload."""
+class Delivered(BaseModel):
+    """What a component that reached the deliverable produced. Mirrors the Rust ``Delivered``."""
 
-    name: str
-    delivered: bool
-    unit_file: str | None = None
-    run_link: str | None = None
+    status: Literal["delivered"] = "delivered"
     artifact_text: str = ""
-    property_units: list[tuple[str, list[str]]] = Field(default_factory=list)
     #: The validation targets this component's rows were checked by, in the order they ran — what a
     #: callout-mode wheel keys its deliverable sections and declared features on.
     targets: list[str] = Field(default_factory=list)
+    property_units: list[tuple[str, list[str]]] = Field(default_factory=list)
+    unit_file: str | None = None
+    run_link: str | None = None
+
+
+class ComponentGaveUp(BaseModel):
+    """Formalization gave up on this component; it contributes nothing to the deliverable."""
+
+    status: Literal["gave_up"] = "gave_up"
+
+
+#: A component's outcome — tagged on ``status`` (Rust ``ComponentOutcome``). A variant rather than a
+#: ``delivered`` flag beside always-present fields: there is nothing to read on one that gave up.
+ComponentOutcome = Annotated[Delivered | ComponentGaveUp, Field(discriminator="status")]
+
+
+class FinalizeComponent(BaseModel):
+    """One component's line in the ``finalize`` payload."""
+
+    name: str
+    outcome: ComponentOutcome
 
 
 class FinalizeInput(BaseModel):
-    """The full outcome set handed to ``finalize``. The Rust side takes this as an opaque
-    ``serde_json::Value`` (there is no ``Outcomes`` struct yet), so this model is the only written
-    definition of the shape — keep it in step with what the SDK's ``finalize`` docs promise."""
+    """The full outcome set handed to ``finalize`` (Rust ``FinalizeInput``): everything a wheel
+    needs to render the whole deliverable, including the same program crate and IDL the gated
+    builds used — what ships must be what was checked."""
 
     program: str
     program_crate: ProgramCrate = Field(default_factory=ProgramCrate)
-    #: Where workspace prep placed the program's IDL; ``""`` when it placed none.
-    idl: str = ""
+    #: Where workspace prep placed the program's IDL; ``None`` when it placed none.
+    idl: str | None = None
     components: list[FinalizeComponent] = Field(default_factory=list)
     #: The compiled shared setup artifact, when the wheel declared one.
     setup: str | None = None
