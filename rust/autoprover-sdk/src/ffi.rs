@@ -5,7 +5,7 @@ use crate::args::AppArgs;
 use crate::authoring::{AuthorInput, Failure, Prompt};
 use crate::backend::Backend;
 use crate::finalize::FinalizeInput;
-use crate::outcome::{CompileResult, Outcome, ValidateOutcome, Verdict};
+use crate::outcome::{CompileResult, Outcome, Target};
 use crate::sandbox::Sandbox;
 
 fn parse<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Result<T, String> {
@@ -91,21 +91,25 @@ pub fn ffi_compile(
     })
 }
 
-/// `validate(input_json, spec, unit, workdir, sandbox_json) -> str` (JSON `ValidateOutcome`). BLOCKING.
+/// `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` (JSON
+/// `ValidateOutcome`). BLOCKING.
+///
+/// An unparseable target is the one payload with nowhere to report to — the units a verdict would
+/// be keyed by are exactly what failed to parse — so it yields no verdicts, and the host records
+/// the rows it asked about as UNKNOWN.
 pub fn ffi_validate(
     b: &dyn Backend,
     input_json: &str,
     spec: &str,
-    unit: &str,
+    target_json: &str,
     workdir: &str,
     sandbox_json: &str,
 ) -> String {
     let sandbox: Sandbox = parse(sandbox_json, "Sandbox").unwrap_or_default();
+    let target: Target = parse(target_json, "Target").unwrap_or_default();
     let outcome = match parse_input(input_json) {
-        Ok(input) => b.validate(&input, spec, unit, std::path::Path::new(workdir), &sandbox),
-        Err(e) => ValidateOutcome::Verdicts {
-            verdicts: vec![(unit.to_string(), Verdict::detailed(Outcome::Error, e))],
-        },
+        Ok(input) => b.validate(&input, spec, &target, std::path::Path::new(workdir), &sandbox),
+        Err(e) => target.all(Outcome::Error, Some(e)),
     };
     serde_json::to_string(&outcome).unwrap_or_default()
 }
@@ -144,7 +148,7 @@ mod tests {
     use crate::authoring::ProgramCrate;
     use crate::descriptor::AppDescriptor;
     use crate::finalize::ComponentOutcome;
-    use crate::outcome::Unit;
+    use crate::outcome::{Unit, ValidateOutcome};
     use crate::prep::WorkspacePrep;
     use std::sync::Mutex;
 
@@ -178,7 +182,7 @@ mod tests {
             &self,
             _input: &AuthorInput,
             _spec: &str,
-            _unit: &str,
+            _target: &Target,
             _workdir: &std::path::Path,
             _sandbox: &Sandbox,
         ) -> ValidateOutcome {

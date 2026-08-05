@@ -55,7 +55,7 @@ pub use ffi::{
     ffi_author_prompt, ffi_compile, ffi_descriptor, ffi_finalize, ffi_judge_prompt,
     ffi_sandbox_grants, ffi_units, ffi_validate, ffi_validate_preconditions, ffi_workspace_prep,
 };
-pub use outcome::{CompileResult, Outcome, Unit, ValidateOutcome, Verdict};
+pub use outcome::{CompileResult, Outcome, Target, Unit, ValidateOutcome, Verdict};
 pub use prep::{SandboxGrants, WorkspacePrep};
 pub use sandbox::{run_confined, CommandOutput, Sandbox};
 

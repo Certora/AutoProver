@@ -59,7 +59,7 @@ impl.
 | `author_prompt(input_json, failure_json \| None) -> str` | pure | the instruction for one authoring turn; `failure` = revise context |
 | `judge_prompt(input_json, spec) -> str \| None` | pure | optional LLM review; `None` = this wheel has no judge |
 | `compile(input_json, spec, workdir, sandbox_json) -> str` | **blocking** | build the whole spec once — the setup and preflight gate |
-| `validate(input_json, spec, target, workdir, sandbox_json) -> str` | **blocking** | build + check one target, returning verdicts (§6) |
+| `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` | **blocking** | build + check one target — which arrives with the rows it covers — returning a verdict per row (§6) |
 | `workspace_prep(input_json) -> str` | pure | a *plan* the host executes (§7) |
 | `sandbox_grants(args_json) -> str` | pure | extra grants to union into the host's policy (§8) |
 | `finalize(outcomes_json) -> str \| None` | pure | run-level artifact files, `{relpath: contents}` (§9) |
@@ -284,6 +284,7 @@ for _ in range(max_attempts):                        # DEFAULT_MAX_ATTEMPTS = 7
         failure = Failure(errors=_NO_ARTIFACT); continue
     for target in distinct_targets(units):           # host owns enumeration + scheduling
         res = await run_blocking(module.validate(input_json, spec, target, workdir, sandbox))
+                                                     # `target` = {name, units it covers}
         if isinstance(res, ValidateBuildFailed):     # the build is shared ⇒ re-author everything
             failure = Failure(draft=spec, errors=res.errors); break
         record(res.verdicts); emit("verdict", …)      # live, per target
@@ -361,8 +362,9 @@ the first turn, so the report's shape never depends on what the model happened t
 
 A `Unit` is `{ property, unit, target? }`. `target` is the **validation target the host runs**, and
 several report rows may share one — a wheel can put a component's whole property set in a single
-target. The host runs each *distinct* target once (`target_or_unit()`), and the wheel returns a
-verdict **per report unit the target covers**. Attribution is the wheel's: it owns its result
+target. The host runs each *distinct* target once (`target_or_unit()`) and passes it as a
+`Target { name, units }` carrying the rows it covers, so the grouping the host just computed is not
+something the wheel has to reconstruct; the wheel returns a verdict **per unit in it**. Attribution is the wheel's: it owns its result
 format, so it decides which unit a counterexample belongs to; the host records the verdicts
 verbatim and does no verdict logic of its own, never parsing a tool's output.
 

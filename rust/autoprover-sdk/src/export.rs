@@ -74,7 +74,7 @@ macro_rules! export_app {
             py: $crate::pyo3::Python<'_>,
             input_json: ::std::string::String,
             spec: ::std::string::String,
-            unit: ::std::string::String,
+            target_json: ::std::string::String,
             workdir: ::std::string::String,
             sandbox_json: ::std::string::String,
         ) -> ::std::string::String {
@@ -83,7 +83,7 @@ macro_rules! export_app {
                     __autoprover_app(),
                     &input_json,
                     &spec,
-                    &unit,
+                    &target_json,
                     &workdir,
                     &sandbox_json,
                 )

@@ -32,6 +32,38 @@ impl Unit {
     }
 }
 
+/// One validation target the host runs, and the report units that target covers — the units
+/// [`Backend::validate`](crate::Backend::validate) must return a verdict for.
+///
+/// The host computes the grouping from [`Backend::units`] (it decides what to run, and in what
+/// order), so it hands the answer over rather than leaving each backend to recover it by
+/// re-deriving its own units and filtering them by name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Target {
+    /// The target's name — what the backend selects when it runs the checker (Crucible: the
+    /// component's `c_<slug>` harness fn, which is also its Cargo feature).
+    pub name: String,
+    /// The report rows this run must produce a verdict for. Usually one; several when a backend
+    /// checks a whole property set in one run.
+    #[serde(default)]
+    pub units: Vec<Unit>,
+}
+
+impl Target {
+    /// The same verdict for every covered unit — what a run that concluded one thing about the
+    /// whole target produces (it passed; it errored; it timed out).
+    pub fn all(&self, outcome: Outcome, detail: Option<String>) -> ValidateOutcome {
+        self.verdicts(|_| Verdict { detail: detail.clone(), ..Verdict::with_outcome(outcome) })
+    }
+
+    /// A verdict per covered unit, keyed by unit name so a backend never spells one itself.
+    pub fn verdicts(&self, mut of: impl FnMut(&Unit) -> Verdict) -> ValidateOutcome {
+        ValidateOutcome::Verdicts {
+            verdicts: self.units.iter().map(|u| (u.unit.clone(), of(u))).collect(),
+        }
+    }
+}
+
 /// The result of `validate` — the fused build+check for one validation **target**. Either the
 /// build failed (so the whole spec must be re-authored — the build is shared), or it built and
 /// produced a `Verdict` **per report unit the target covers** (`(unit, verdict)`). A target may

@@ -6,7 +6,7 @@ use crate::args::AppArgs;
 use crate::authoring::{AuthorInput, Failure, Prompt};
 use crate::descriptor::AppDescriptor;
 use crate::finalize::FinalizeInput;
-use crate::outcome::{CompileResult, Unit, ValidateOutcome};
+use crate::outcome::{CompileResult, Target, Unit, ValidateOutcome};
 use crate::prep::{SandboxGrants, WorkspacePrep};
 use crate::sandbox::Sandbox;
 
@@ -53,15 +53,16 @@ pub trait Backend: Send + Sync + 'static {
         sandbox: &Sandbox,
     ) -> CompileResult;
 
-    /// Build + check ONE unit against the spec (the fused build gate — no separate compile for
+    /// Build + check ONE target against the spec (the fused build gate — no separate compile for
     /// components). Returns [`ValidateOutcome::BuildFailed`] to trigger a re-author of the whole
-    /// spec (the build is shared across units), or a per-unit [`Verdict`](crate::Verdict). Per-unit
-    /// so the host owns enumeration/scheduling. BLOCKING.
+    /// spec (the build is shared across targets), or a [`Verdict`](crate::Verdict) for each unit
+    /// the target covers — [`Target::units`], which the host already grouped. Per-target so the
+    /// host owns enumeration and scheduling. BLOCKING.
     fn validate(
         &self,
         input: &AuthorInput,
         spec: &str,
-        unit: &str,
+        target: &Target,
         workdir: &std::path::Path,
         sandbox: &Sandbox,
     ) -> ValidateOutcome;

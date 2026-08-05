@@ -251,6 +251,21 @@ class Unit(BaseModel):
         return self.target or self.unit
 
 
+class Target(BaseModel):
+    """One validation target the host runs, and the report units it covers — what ``validate`` must
+    return a verdict for. Mirrors the Rust ``Target``.
+
+    The host owns the grouping (it decides what to run, and in what order), so it hands the answer
+    over rather than leaving the wheel to recover it by re-deriving its own ``units`` and filtering
+    them by name."""
+
+    #: What the backend selects when it runs the checker (Crucible: the component's ``c_<slug>``
+    #: harness fn, which is also its Cargo feature).
+    name: str
+    #: Usually one row; several when a backend checks a whole property set in one run.
+    units: list[Unit] = Field(default_factory=list)
+
+
 class Verdict(BaseModel):
     """One unit's outcome. Mirrors the Rust ``Verdict`` and maps onto the report's
     :class:`composer.spec.source.report.collect.Verdict` (whose ``message`` is this ``detail``)."""
@@ -352,7 +367,9 @@ class RustAppModule(Protocol):
     judge_prompt: Callable[[str, str], str | None]
     #: ``(input_json, spec, workdir, sandbox_json) -> CompileResult`` JSON. **Blocking.**
     compile: Callable[[str, str, str, str], str]
-    #: ``(input_json, spec, target, workdir, sandbox_json) -> ValidateOutcome`` JSON. **Blocking.**
+    #: ``(input_json, spec, target_json, workdir, sandbox_json) -> ValidateOutcome`` JSON, where
+    #: ``target_json`` is a :class:`Target` — the target to run and the rows it covers.
+    #: **Blocking.**
     validate: Callable[[str, str, str, str, str], str]
     #: ``(input_json) -> WorkspacePrep`` JSON. Pure — the host executes the plan.
     workspace_prep: Callable[[str], str]

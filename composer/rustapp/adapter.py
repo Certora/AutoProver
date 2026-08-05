@@ -70,16 +70,17 @@ from composer.rustapp.wire import (
     CompileOk,
     ComponentGaveUp,
     ComponentInput,
-    PreflightInput,
-    SetupInput,
     Failure,
     FailureKind,
     FinalizeComponent,
     FinalizeInput,
+    PreflightInput,
     ProgramCrate,
     Prompt,
     Property,
     RustAppModule,
+    SetupInput,
+    Target,
     ValidateBuildFailed,
     parse_compile,
     parse_files,
@@ -815,10 +816,15 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
 
             # Each report unit declares the *target* that validates it (its own name by default;
             # e.g. Crucible shares one `c_<component>` target across that component's units). Run each
-            # DISTINCT target once; the backend returns a verdict per unit it covers — it owns
-            # attribution (how a failure maps to units), the host records verbatim.
+            # DISTINCT target once, handing the wheel the rows that target covers; it returns a
+            # verdict per row — it owns attribution (how a failure maps to units), the host records
+            # verbatim.
             targets = list(dict.fromkeys(u.target_or_unit() for u in units))
             prop_of = {u.unit: u.property for u in units}
+            covered = {
+                name: Target(name=name, units=[u for u in units if u.target_or_unit() == name])
+                for name in targets
+            }
 
             verdicts: dict[str, WireVerdict] = {}
             # Grouped by property, not appended as singletons: two units checking the same property
@@ -829,8 +835,8 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             for target in targets:
                 res = parse_validate(
                     await _run_blocking(
-                        lambda target=target, spec=spec: self._module.validate(
-                            input_json, spec, target, str(workdir), sandbox_json
+                        lambda target=covered[target], spec=spec: self._module.validate(
+                            input_json, spec, target.model_dump_json(), str(workdir), sandbox_json
                         ),
                         self._command_sem,
                     )
