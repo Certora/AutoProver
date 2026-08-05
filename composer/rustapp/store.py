@@ -10,7 +10,7 @@ the on-disk layout, taken from the descriptor's :class:`ArtifactLayout`.
 from pathlib import Path
 from typing import override
 
-from composer.rustapp.descriptor import ArtifactLayout, DeliverableMode
+from composer.rustapp.descriptor import ArtifactLayout, Callout, DeliverableMode, PerComponent
 from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.util import ensure_dir
@@ -30,11 +30,11 @@ class RustArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
         project_root: str,
         layout: ArtifactLayout,
         *,
-        deliverable_mode: DeliverableMode = DeliverableMode.PER_COMPONENT,
+        deliverable_mode: DeliverableMode | None = None,
         program: str = "",
     ):
         self._layout = layout
-        self._deliverable_mode = deliverable_mode
+        self._deliverable_mode: DeliverableMode = deliverable_mode or PerComponent()
         self._program = program
         super().__init__(
             project_root,
@@ -53,11 +53,12 @@ class RustArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
         """In ``callout`` mode, write only the shared metadata and return the (whole-deliverable)
         report link — the source files come from the wheel's ``finalize``. Otherwise defer to the
         base one-file-per-component writer."""
-        if self._deliverable_mode is not DeliverableMode.CALLOUT:
+        mode = self._deliverable_mode
+        if not isinstance(mode, Callout):
             return super().write_artifact(i, artifact)
         self._write_commentary(i.stem, artifact.commentary)
         self._write_property_map(
             i.stem, self._property_suffix, dict(artifact.property_units())
         )
-        primary = self._layout.deliverable_primary
+        primary = mode.primary
         return Path(primary.format(program=self._program) if primary else self._layout.deliverable_dir)

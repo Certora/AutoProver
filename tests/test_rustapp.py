@@ -20,7 +20,7 @@ echoprover = pytest.importorskip(
     reason="demo wheel not built; run `uv sync` (builds rust/example-app)",
 )
 
-from composer.rustapp.descriptor import AppDescriptor, CoreSlot
+from composer.rustapp.descriptor import AppDescriptor, PhaseRole
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.wire import Verdict
 from composer.spec.cvl_generation import SkippedProperty
@@ -32,14 +32,18 @@ def _component_input(*titles: str) -> str:
         {
             "kind": "component",
             "program": "Counter",
-            "component": {"name": "Counter"},
+            "unit": {"name": "Counter"},
             "props": [
                 {"title": t, "sort": "invariant", "description": "x", "slug": t.replace(" ", "_")}
                 for t in titles
             ],
-            "context": {},
         }
     )
+
+
+def _target(*units: str) -> str:
+    """A target and the report rows it covers — what the host passes ``validate``."""
+    return json.dumps({"name": units[0], "units": [{"property": "p", "unit": u} for u in units]})
 
 
 def test_descriptor_parses_and_maps_core_phases():
@@ -51,9 +55,9 @@ def test_descriptor_parses_and_maps_core_phases():
     assert desc.backend_tag == "prover"
     # Every *required* slot is mapped, plus a UI-only "solving" phase. The optional DISCOVERY slot is
     # left unclaimed, which is the common case: the design-doc task then groups under the first phase.
-    slots = desc.core_slot_map()
-    assert set(slots) == set(CoreSlot.required())
-    assert CoreSlot.DISCOVERY not in slots
+    slots = desc.role_map()
+    assert set(slots) == set(PhaseRole.required())
+    assert PhaseRole.DISCOVERY not in slots
     keys = [p.key for p in desc.ordered_phases()]
     assert keys == ["analysis", "extraction", "solving", "formalization", "report"]
 
@@ -78,12 +82,20 @@ def test_compile_is_a_noop_ok():
     assert r == {"status": "ok"}
 
 
-def test_validate_returns_a_good_verdict():
+def test_validate_returns_a_verdict_for_every_row_the_target_covers():
+    sandbox = json.dumps({"argv_prefix": []})
     res = json.loads(
-        echoprover.validate(_component_input("p"), "spec", "rule_p", "/tmp", json.dumps({"argv_prefix": []}))
+        echoprover.validate(_component_input("p"), "spec", _target("rule_p"), "/tmp", sandbox)
     )
     # ValidateOutcome: the demo always builds, so per-unit verdicts (not build_failed).
     assert res == {"kind": "verdicts", "verdicts": [["rule_p", {"outcome": "GOOD"}]]}
+
+    # A target covering several rows answers for all of them in the one run — the wheel keys the
+    # verdicts off the units the host sent, so it never has to spell a unit name itself.
+    shared = json.loads(
+        echoprover.validate(_component_input("p"), "spec", _target("rule_a", "rule_b"), "/tmp", sandbox)
+    )
+    assert [u for u, _v in shared["verdicts"]] == ["rule_a", "rule_b"]
 
 
 def test_result_round_trips_through_cache_serialization():

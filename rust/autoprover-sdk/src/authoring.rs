@@ -100,11 +100,12 @@ pub fn anchor_compat_key(req: &str) -> Option<(u64, u64)> {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Authored {
     /// Nothing is authored: the wheel renders its own skeleton and `compile` gates the prepared
-    /// workspace (see [`PreflightSpec`](crate::PreflightSpec)). It runs before analysis has
-    /// finished, so there is no model, no unit, and [`AuthorInput::props`] is empty.
+    /// workspace (see [`PhaseRole::Preflight`](crate::PhaseRole::Preflight)). It runs before
+    /// analysis has finished, so there is no model, no unit, and [`AuthorInput::props`] is empty.
     Preflight,
     /// The shared artifact every unit builds on (Crucible's fixture), authored once from the
-    /// analyzed model and *every* unit's properties (see [`SetupSpec`](crate::SetupSpec)).
+    /// analyzed model and *every* unit's properties (see
+    /// [`PhaseRole::Setup`](crate::PhaseRole::Setup)).
     Setup {
         /// The analyzed system model, opaque to the SDK — its shape is the ecosystem's.
         #[serde(default)]
@@ -137,7 +138,8 @@ pub struct AuthorInput {
     #[serde(default)]
     pub props: Vec<Property>,
     /// The compiled shared setup artifact, for a wheel that declared a
-    /// [`SetupSpec`](crate::SetupSpec) — the fixture a component's spec builds on.
+    /// [`PhaseRole::Setup`](crate::PhaseRole::Setup) phase — the fixture a component's spec builds
+    /// on.
     #[serde(default)]
     pub setup: Option<String>,
     /// Where workspace prep placed the program's IDL, workdir-relative, when the wheel's

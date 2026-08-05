@@ -9,8 +9,8 @@
 use std::path::Path;
 
 use autoprover_sdk::{
-    AppDescriptor, ArtifactLayout, AuthorInput, Backend, CompileResult, CoreSlot, EventKind,
-    Failure, Outcome, PhaseSpec, Prompt, Sandbox, Target, Unit, ValidateOutcome,
+    AppDescriptor, ArtifactLayout, AuthorInput, Backend, CompileResult, EventKind, Failure,
+    Outcome, PhaseRole, PhaseSpec, Prompt, Sandbox, Target, Unit, ValidateOutcome,
 };
 
 struct EchoApp;
@@ -31,12 +31,12 @@ impl Backend for EchoApp {
                 .to_string(),
             analysis_key: "echoprover-analysis".to_string(),
             phases: vec![
-                PhaseSpec { key: "analysis".into(), label: "System Analysis".into(), order: 0, core_slot: Some(CoreSlot::Analysis) },
-                PhaseSpec { key: "extraction".into(), label: "Property Extraction".into(), order: 1, core_slot: Some(CoreSlot::Extraction) },
-                // A UI-only phase with no core slot (cf. autoprove's harness/autosetup).
-                PhaseSpec { key: "solving".into(), label: "Solving".into(), order: 2, core_slot: None },
-                PhaseSpec { key: "formalization".into(), label: "Formalization".into(), order: 3, core_slot: Some(CoreSlot::Formalization) },
-                PhaseSpec { key: "report".into(), label: "Report".into(), order: 4, core_slot: Some(CoreSlot::Report) },
+                PhaseSpec::step("analysis", "System Analysis", 0, PhaseRole::Analysis),
+                PhaseSpec::step("extraction", "Property Extraction", 1, PhaseRole::Extraction),
+                // A phase that only groups (cf. autoprove's harness/autosetup).
+                PhaseSpec::grouping("solving", "Solving", 2),
+                PhaseSpec::step("formalization", "Formalization", 3, PhaseRole::Formalization),
+                PhaseSpec::step("report", "Report", 4, PhaseRole::Report),
             ],
             args: vec![autoprover_sdk::ArgSpec {
                 flag: "--echo-tag".to_string(),
@@ -54,13 +54,11 @@ impl Backend for EchoApp {
                 artifact_prefix: "echospec".into(),
                 artifact_extension: "espec".into(),
                 property_suffix: "property_rules".into(),
-                deliverable_primary: None,
             },
             // A simple per-component wheel: nothing to gate ahead of analysis (there is no
-            // workspace to prepare and `compile` is a no-op), no shared setup, one file per
-            // component, no toolchain confinement/serialization. All defaults.
-            preflight: None,
-            setup: None,
+            // workspace to prepare and `compile` is a no-op) and no shared setup — neither role is
+            // claimed by a phase above — plus one file per component and no toolchain
+            // confinement/serialization. All defaults.
             deliverable_mode: autoprover_sdk::DeliverableMode::PerComponent,
             serialize_toolchain: false,
             confine_by_default: false,

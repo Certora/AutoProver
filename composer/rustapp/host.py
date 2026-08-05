@@ -29,7 +29,7 @@ from composer.pipeline.core import (
 )
 from composer.pipeline.ecosystem import ECOSYSTEMS, Ecosystem
 from composer.rustapp.adapter import RustBackend
-from composer.rustapp.descriptor import AppDescriptor, CoreSlot
+from composer.rustapp.descriptor import AppDescriptor, PhaseRole
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.store import RustArtifactStore
 from composer.rustapp.wire import CALLOUTS, AppArgs, RustAppModule
@@ -108,21 +108,20 @@ def build_phase_enum(descriptor: AppDescriptor) -> type[enum.Enum]:
 def build_core_phases(
     descriptor: AppDescriptor, phase: type[enum.Enum]
 ) -> CorePhases:
-    """Map the descriptor's core-slot declarations onto the synthesized enum. Every *required*
-    slot must be filled — the driver tags all four (the optional ones fall back; see
-    :class:`CoreSlot`)."""
-    slot_to_key = descriptor.core_slot_map()
-    missing = [s.value for s in CoreSlot.required() if s not in slot_to_key]
+    """Map the descriptor's phase roles onto the synthesized enum. Every *required* role must be
+    claimed — the driver tags all four (the optional ones fall back; see :class:`PhaseRole`)."""
+    role_to_key = descriptor.role_map()
+    missing = [r.value for r in PhaseRole.required() if r not in role_to_key]
     if missing:
         raise ValueError(
             f"descriptor {descriptor.name!r} is missing core phase(s): {missing}. "
             "Every application must map analysis/extraction/formalization/report."
         )
     return CorePhases(
-        analysis=phase[slot_to_key[CoreSlot.ANALYSIS]],
-        extraction=phase[slot_to_key[CoreSlot.EXTRACTION]],
-        formalization=phase[slot_to_key[CoreSlot.FORMALIZATION]],
-        report=phase[slot_to_key[CoreSlot.REPORT]],
+        analysis=phase[role_to_key[PhaseRole.ANALYSIS]],
+        extraction=phase[role_to_key[PhaseRole.EXTRACTION]],
+        formalization=phase[role_to_key[PhaseRole.FORMALIZATION]],
+        report=phase[role_to_key[PhaseRole.REPORT]],
     )
 
 

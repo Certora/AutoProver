@@ -49,7 +49,7 @@ from composer.pipeline.cli import root_cache_key
 from composer.pipeline.core import CorePipelineResult
 from composer.rag.models import get_model
 from composer.rustapp.adapter import program_crate_of
-from composer.rustapp.descriptor import ArgDefault, ArgSpec, CoreSlot
+from composer.rustapp.descriptor import ArgDefault, ArgSpec, PhaseRole
 from composer.rustapp.wire import AppArgs, parse_sandbox_grants
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
@@ -207,13 +207,13 @@ def build_arg_parser(app: RustApplication) -> argparse.ArgumentParser:
 
 def _discovery_phase(app: RustApplication) -> enum.Enum:
     """The phase to tag the design-doc-discovery task with: the phase claiming
-    :attr:`CoreSlot.DISCOVERY`, else the first ordered phase (so a wheel that doesn't care still
+    :attr:`PhaseRole.DISCOVERY`, else the first ordered phase (so a wheel that doesn't care still
     groups it somewhere sensible).
 
     Claimed by slot rather than by a phase *key* the host recognizes: the descriptor already has a
     mechanism for "this declared phase fills that role", and a magic key would be a convention a
     wheel author has to know to spell exactly right — with no error if they didn't."""
-    key = app.descriptor.core_slot_map().get(CoreSlot.DISCOVERY)
+    key = app.descriptor.role_map().get(PhaseRole.DISCOVERY)
     return app.phase[key or app.descriptor.ordered_phases()[0].key]
 
 

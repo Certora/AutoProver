@@ -62,7 +62,7 @@ from composer.pipeline.core import (
 from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
-from composer.rustapp.descriptor import AppDescriptor, StepSpec
+from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupArtifact
 from composer.rustapp.toolchain import source_crate, workspace_toolchain
 from composer.rustapp.wire import (
@@ -1027,10 +1027,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
                 program_crate=program_crate, idl=self.preflight.idl,
             )
 
-        if descriptor.setup is None:
+        setup = descriptor.step(PhaseRole.SETUP)
+        if setup is None:
             return build(None)
-
-        setup = descriptor.setup
         # The base for the setup artifact's own input; ``author_setup`` adds the properties.
         prep_input = SetupInput(
             program=program, program_crate=program_crate, model=analyzed_json,
@@ -1123,14 +1122,16 @@ class RustBackend(
     def artifact_store(self) -> ArtifactStore[Any, RustFormalResult]:
         return self.store
 
-    def task_info(self, spec: StepSpec) -> TaskInfo[enum.Enum]:
-        """The task a declared step runs as: its own id, the wheel's label, and the phase *member*
-        its ``phase_key`` names.
+    def task_info(self, phase: PhaseSpec) -> TaskInfo[enum.Enum]:
+        """The task a step-declaring phase runs as: an id from its role, the wheel's label, and the
+        phase *member* itself.
 
-        The one way to turn a declared key into a member. The enum is synthesized per application, so
-        a caller can't name a member statically — and resolving it here keeps the member the driver
-        emits identical to the one the frontend's labels are keyed by."""
-        return TaskInfo(f"{self.descriptor.name}-{spec.step}", spec.label, self.phase[spec.phase_key])
+        The one way to turn a declared phase into a member. The enum is synthesized per application,
+        so a caller can't name a member statically — and resolving it here keeps the member the
+        driver emits identical to the one the frontend's labels are keyed by."""
+        return TaskInfo(
+            f"{self.descriptor.name}-{phase.role.value}", phase.label, self.phase[phase.key]
+        )
 
     @override
     async def preflight(self, run: PipelineRun) -> RustPreflight:
@@ -1154,6 +1155,7 @@ class RustBackend(
         A failure raises (:class:`PreflightFailed` from the gate, or the workspace toolchain's own
         error), and the driver cancels the analysis racing it."""
         descriptor = self.descriptor
+        gate = descriptor.step(PhaseRole.PREFLIGHT)
         workdir = Path(run.source.project_root)
         # Resolved once per run and carried on every AuthorInput from here on: the wheel renders its
         # crate from this, so prep, every gated build, and the deliverable name one dependency.
@@ -1171,7 +1173,7 @@ class RustBackend(
                 sandbox=self.sandbox, command_timeout_s=self.command_timeout_s,
             )
             result = RustPreflight(program_crate=program_crate, idl=idl)
-            if descriptor.preflight is not None:
+            if gate is not None:
                 # The gate renders the same crate the prep just set up — including, under the IDL
                 # path, the file it placed — so it must see the reported `idl`.
                 await run_preflight_gate(
@@ -1183,12 +1185,12 @@ class RustBackend(
                 )
             return result
 
-        if descriptor.preflight is None:
+        if gate is None:
             # Nothing to show a task for: the prep is silent (it always was) and there is no gate.
             return await prep()
         # Unmetered: this is a build, not an agent — it must not spend one of the run's
         # ``--max-concurrent`` agent slots for the whole of system analysis.
-        return await run.unmetered_runner(self.task_info(descriptor.preflight), prep)
+        return await run.unmetered_runner(self.task_info(gate), prep)
 
     async def sandbox_spec(self, workdir: Path) -> BackendSpec:
         """The confinement prefix the wheel's blocking callouts prepend, or the trusted empty one."""

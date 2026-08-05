@@ -2,7 +2,7 @@
 
 Discovery runs in the *entry point*, before the pipeline, and only when the doc wasn't passed on the
 command line — so it is not one of the four phases the driver tags. A wheel that wants it in a
-section of its own claims ``CoreSlot.DISCOVERY``, rather than spelling a magic phase key the host
+section of its own claims ``PhaseRole.DISCOVERY``, rather than spelling a magic phase key the host
 recognizes by name and silently ignores when it is misspelled.
 
 No wheel and no services — the descriptor and the synthesized enum are all this needs.
@@ -10,7 +10,7 @@ No wheel and no services — the descriptor and the synthesized enum are all thi
 
 from typing import Any, cast
 
-from composer.rustapp.descriptor import AppDescriptor, CoreSlot
+from composer.rustapp.descriptor import AppDescriptor, PhaseRole
 from composer.rustapp.entry import _discovery_phase
 from composer.rustapp.host import (
     RustApplication,
@@ -20,10 +20,10 @@ from composer.rustapp.host import (
 )
 
 PHASES = [
-    {"key": "analysis", "label": "A", "order": 0, "core_slot": "analysis"},
-    {"key": "extraction", "label": "E", "order": 1, "core_slot": "extraction"},
-    {"key": "formalization", "label": "F", "order": 2, "core_slot": "formalization"},
-    {"key": "report", "label": "R", "order": 3, "core_slot": "report"},
+    {"key": "analysis", "label": "A", "order": 0, "role": "analysis"},
+    {"key": "extraction", "label": "E", "order": 1, "role": "extraction"},
+    {"key": "formalization", "label": "F", "order": 2, "role": "formalization"},
+    {"key": "report", "label": "R", "order": 3, "role": "report"},
 ]
 
 
@@ -36,7 +36,7 @@ def _app(*, claims_discovery: bool) -> RustApplication:
                 *PHASES,
                 {
                     "key": "find_doc", "label": "Design Doc", "order": 4,
-                    "core_slot": "discovery" if claims_discovery else None,
+                    "role": "discovery" if claims_discovery else "grouping",
                 },
             ],
             "artifact_layout": {
@@ -58,7 +58,7 @@ def _app(*, claims_discovery: bool) -> RustApplication:
 
 def test_the_discovery_task_uses_the_phase_that_claims_the_slot():
     app = _app(claims_discovery=True)
-    assert app.descriptor.core_slot_map()[CoreSlot.DISCOVERY] == "find_doc"
+    assert app.descriptor.role_map()[PhaseRole.DISCOVERY] == "find_doc"
     assert _discovery_phase(app) is app.phase["find_doc"]
 
 
@@ -66,11 +66,11 @@ def test_an_unclaimed_slot_falls_back_to_the_first_phase():
     # The common case: most wheels don't care where the task is grouped, and none has to know a
     # magic key to opt in.
     app = _app(claims_discovery=False)
-    assert CoreSlot.DISCOVERY not in app.descriptor.core_slot_map()
+    assert PhaseRole.DISCOVERY not in app.descriptor.role_map()
     assert _discovery_phase(app) is app.phase["analysis"]
 
 
 def test_the_optional_slot_is_not_required_of_every_application():
     # `build_core_phases` must keep demanding the four the driver tags — and only those.
     app = _app(claims_discovery=False)
-    assert set(app.descriptor.core_slot_map()) == set(CoreSlot.required())
+    assert set(app.descriptor.role_map()) == set(PhaseRole.required())

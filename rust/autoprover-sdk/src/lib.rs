@@ -47,8 +47,8 @@ pub use authoring::{
 };
 pub use backend::Backend;
 pub use descriptor::{
-    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, CoreSlot, DeliverableMode, EventKind,
-    PhaseSpec, PreflightSpec, SetupSpec,
+    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
+    PhaseSpec,
 };
 pub use finalize::{ComponentOutcome, Delivered, FinalizeComponent, FinalizeInput};
 pub use ffi::{

@@ -66,11 +66,11 @@ def _descriptor(*, with_preflight: bool = True) -> AppDescriptor:
         "backend_guidance": "g",
         "analysis_key": "k",
         "phases": [
-            {"key": "preflight", "label": "Build Preflight", "order": 0},
-            {"key": "analysis", "label": "A", "order": 1, "core_slot": "analysis"},
-            {"key": "extraction", "label": "E", "order": 2, "core_slot": "extraction"},
-            {"key": "formalization", "label": "F", "order": 3, "core_slot": "formalization"},
-            {"key": "report", "label": "R", "order": 4, "core_slot": "report"},
+            {"key": "preflight", "label": "Build Preflight", "order": 0, "role": "preflight"},
+            {"key": "analysis", "label": "A", "order": 1, "role": "analysis"},
+            {"key": "extraction", "label": "E", "order": 2, "role": "extraction"},
+            {"key": "formalization", "label": "F", "order": 3, "role": "formalization"},
+            {"key": "report", "label": "R", "order": 4, "role": "report"},
         ],
         "artifact_layout": {
             "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r",
@@ -78,8 +78,9 @@ def _descriptor(*, with_preflight: bool = True) -> AppDescriptor:
             "property_suffix": "s",
         },
     }
-    if with_preflight:
-        body["preflight"] = {"phase_key": "preflight", "label": "Build Preflight"}
+    if not with_preflight:
+        # No phase claims the role, which is how an application says it has no gate.
+        body["phases"][0] = {"key": "preflight", "label": "Build Preflight", "order": 0}
     return AppDescriptor.model_validate(body)
 
 

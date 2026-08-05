@@ -127,19 +127,26 @@ One struct, serialized at load time, that drives everything non-backend.
 | `analysis_key` | the system-analysis cache key |
 | `component_noun` | the human noun for one formalized unit in the console/TUI ("instruction"); `None` → "component", read through `unit_noun()` |
 
-**Phases.** `phases: [PhaseSpec { key, label, order, core_slot }]`. The host synthesizes
+**Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host synthesizes
 `enum.Enum(f"{Name}Phase", …)` from the keys ([`build_phase_enum`](../composer/rustapp/host.py)).
 This is safe because phase members are only ever used for `.name` and as dict keys — there are no
 `isinstance` or identity checks against a static class — and the *one* rule (`phase_labels` must be
 keyed by the same synthesized members) holds by construction: the frontend's labels and the
-backend's `TaskInfo`s come from one `RustApplication`. A phase with no `core_slot` is UI-only.
+backend's `TaskInfo`s come from one `RustApplication`.
 
-`CoreSlot` has five values. The four the driver itself tags — `analysis`, `extraction`,
-`formalization`, `report` — are `CoreSlot.required()` and every descriptor must map them
-(`build_core_phases` raises otherwise). `discovery` is optional: it groups the design-doc-discovery
-task the *entry point* runs before the pipeline, and unclaimed, that task falls back to the first
-declared phase. It is claimed by slot rather than by a magic phase key, so there is no convention a
-wheel author has to spell exactly right with no error if they didn't.
+`role` says **which step of the run the phase groups**, and for the steps the host runs as their own
+visible task it is also the declaration *of* that step: the task is the phase's own label, under the
+phase itself, with id `{app}-{role}`. `grouping` (the default) declares no step — a phase that only
+organizes the UI, like autoprove's harness/autosetup.
+
+The four the driver itself tags — `analysis`, `extraction`, `formalization`, `report` — are
+`PhaseRole.required()` and every descriptor must claim them (`build_core_phases` raises otherwise).
+The rest are optional, and **a role no phase claims is a step the application does not have**:
+`discovery` groups the design-doc task the *entry point* runs before the pipeline (unclaimed, it
+falls back to the first declared phase), `preflight` declares the workspace gate (§4.2), and `setup`
+the shared artifact authored before the fan-out (§4.3). Claiming a step by role rather than by a
+side struct naming a `phase_key` means there is no key for one half to spell and the other to
+match — and no way to point a step at a phase that doesn't exist.
 
 **CLI.** `args: [ArgSpec { flag, help, default, required }]` become `add_argument` calls on top of
 the three positional inputs (`project_root`, `main_contract`, `system_doc`) and the standard flags.
@@ -151,16 +158,15 @@ render each emitted payload (§10). A `notice` kind becomes a persistent callout
 one-shot important results such as a verdict — rather than a line in the collapsible log.
 
 **Layout.** `artifact_layout: ArtifactLayout` — `deliverable_dir`, `internal_dir`, `report_dir`,
-`artifact_dir`, `artifact_prefix`, `artifact_extension`, `property_suffix`, and (callout mode only)
-`deliverable_primary`, a `{program}`-templated path used as each component's report link (§9).
+`artifact_dir`, `artifact_prefix`, `artifact_extension`, `property_suffix`.
 
 **Steps and modes** — the fields that let a demanding app stay bespoke-Python-free:
 
 | Field | Effect |
 |---|---|
-| `preflight: PreflightSpec?` | `{phase_key, label}` — run the workspace gate as its own visible task (§4.2). Absent: the prep still runs, silently, with no gate |
-| `setup: SetupSpec?` | `{phase_key, label}` — author one shared artifact before the per-unit fan-out and hand it to every component as `AuthorInput.setup` (§4.3) |
-| `deliverable_mode` | `per_component` (default) or `callout` (§9) |
+| a phase with `role: preflight` | run the workspace gate as its own visible task (§4.2). No such phase: the prep still runs, silently, with no gate |
+| a phase with `role: setup` | author one shared artifact before the per-unit fan-out and hand it to every component as `AuthorInput.setup` (§4.3) |
+| `deliverable_mode` | `per_component` (default), or `callout { primary? }` — where `primary` is the `{program}`-templated path used as each component's report link (§9) |
 | `serialize_toolchain` | put the blocking callouts behind one `Semaphore(1)` — for an app sharing a single crate / target dir |
 | `confine_by_default` | build the fail-closed `launcher` sandbox config by default (§8) |
 | `rag_db_default` | the RAG corpus whose search tools the default env binds; validated at load (§10) |
@@ -493,7 +499,7 @@ the choice of how the *source* deliverable lands:
 - **`per_component`** (default) — one `{prefix}_{slug}.{ext}` file per component, written from its
   `artifact_text` by the base writer.
 - **`callout`** — the store writes **no** per-component source; it writes the shared metadata and
-  returns `deliverable_primary` (`{program}`-templated) as the component's report link. The whole
+  returns the mode's `primary` (`{program}`-templated) as the component's report link. The whole
   deliverable comes from `finalize`, which is handed every component's `artifact_text`,
   `property_units` and `targets` plus the shared setup artifact, and can therefore assemble one
   artifact (a single crate with a section per property) as the single source of truth for its layout.

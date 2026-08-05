@@ -59,7 +59,7 @@ pub struct FinalizeInput {
     #[serde(default)]
     pub idl: Option<String>,
     /// The compiled shared setup artifact, when the wheel declared a
-    /// [`SetupSpec`](crate::SetupSpec).
+    /// [`PhaseRole::Setup`](crate::PhaseRole::Setup) phase.
     #[serde(default)]
     pub setup: Option<String>,
     #[serde(default)]

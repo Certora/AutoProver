@@ -76,19 +76,18 @@ def _descriptor() -> AppDescriptor:
             "backend_guidance": "g",
             "analysis_key": "k",
             "phases": [
-                {"key": "analysis", "label": "A", "order": 0, "core_slot": "analysis"},
-                {"key": "extraction", "label": "E", "order": 1, "core_slot": "extraction"},
-                {"key": "build_harness", "label": "Build Harness", "order": 2},
-                {"key": "formalization", "label": "F", "order": 3, "core_slot": "formalization"},
-                {"key": "report", "label": "R", "order": 4, "core_slot": "report"},
+                {"key": "analysis", "label": "A", "order": 0, "role": "analysis"},
+                {"key": "extraction", "label": "E", "order": 1, "role": "extraction"},
+                {"key": "build_harness", "label": "Build Harness", "order": 2,
+                 "role": "setup"},
+                {"key": "formalization", "label": "F", "order": 3, "role": "formalization"},
+                {"key": "report", "label": "R", "order": 4, "role": "report"},
             ],
             "artifact_layout": {
                 "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r",
                 "artifact_dir": "a", "artifact_prefix": "p", "artifact_extension": "rs",
                 "property_suffix": "s",
             },
-            "setup": {"phase_key": "build_harness", "label": "Build Harness",
-                      },
         }
     )
 

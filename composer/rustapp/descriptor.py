@@ -7,7 +7,7 @@ field names in lockstep with ``rust/autoprover-sdk/src/lib.rs``.
 """
 
 import enum
-from typing import ClassVar, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -19,87 +19,86 @@ from composer.spec.source.report.schema import ReportBackend
 ChainTag = Literal["evm", "solana", "soroban"]
 
 
-class CoreSlot(str, enum.Enum):
-    """Which host-tagged step a declared phase groups.
+class PhaseRole(str, enum.Enum):
+    """Which step of the run a declared phase groups — and, for the steps the host runs as their own
+    visible task (:data:`STEP_ROLES`), the declaration *of* that step.
 
-    A phase with no slot is UI-only (cf. autoprove's harness/autosetup). The four the *driver* runs
-    are :meth:`required` and every application must map them; the rest are optional steps the host
-    runs around it, which fall back to a sensible phase when unclaimed."""
+    The four the *driver* runs are :meth:`required` and every application must claim them; the rest
+    are optional steps the host runs around it. A role no phase claims is a step this application
+    does not have; :attr:`GROUPING` is a phase that declares no step at all."""
 
+    #: Grouping only — the host runs no step of its own here (cf. autoprove's harness/autosetup).
+    GROUPING = "grouping"
     ANALYSIS = "analysis"
     EXTRACTION = "extraction"
     FORMALIZATION = "formalization"
     REPORT = "report"
     #: Design-doc discovery, which the *entry point* runs before the pipeline (only when the doc
     #: wasn't passed on the command line). Optional: unclaimed, the task is grouped under the first
-    #: declared phase. A wheel that wants it in a section of its own claims this slot rather than
+    #: declared phase. A wheel that wants it in a section of its own claims this role rather than
     #: relying on a phase key the host would have to recognize by name.
     DISCOVERY = "discovery"
+    #: The analysis-independent gate on the prepared workspace, run concurrently with system
+    #: analysis. The host follows the wheel's ``workspace_prep`` with a ``preflight`` ``compile``
+    #: whose ``spec`` is empty: the wheel renders its own minimal skeleton, since nothing has been
+    #: authored yet.
+    #:
+    #: It exists to fail on a *toolchain* problem — an unresolvable dependency graph, a harness that
+    #: doesn't link, IDL codegen the generator rejects — while the run has spent almost no LLM
+    #: budget. Such a failure is terminal (the host raises rather than re-authoring: the author does
+    #: not own the manifest and cannot fix it), which lets the driver cancel the analysis and
+    #: extraction running alongside.
+    PREFLIGHT = "preflight"
+    #: A shared setup artifact authored once before per-component formalization (Crucible's shared
+    #: fixture). The host runs the author→compile loop for a :class:`SetupInput
+    #: <composer.rustapp.wire.SetupInput>` and hands the compiled spec to every component as
+    #: ``AuthorInput.setup``.
+    SETUP = "setup"
 
     @classmethod
-    def required(cls) -> tuple["CoreSlot", ...]:
-        """The slots every application must fill — the four steps the shared driver itself runs, and
-        therefore tags every run with."""
+    def required(cls) -> tuple["PhaseRole", ...]:
+        """The roles every application must claim — the four steps the shared driver itself runs,
+        and therefore tags every run with."""
         return (cls.ANALYSIS, cls.EXTRACTION, cls.FORMALIZATION, cls.REPORT)
 
 
-class DeliverableMode(str, enum.Enum):
-    """How the source deliverable is written (mirrors the Rust ``DeliverableMode``).
-
-    ``per_component`` (default): the generic store writes one ``{prefix}_{slug}.{ext}`` file per
-    component. ``callout``: the store writes no per-component source; the wheel's ``finalize``
-    renders the whole deliverable (e.g. Crucible's one shared crate)."""
-
-    PER_COMPONENT = "per_component"
-    CALLOUT = "callout"
+#: The roles whose step the host runs as its own visible task, ``{app}-{role}``. Looked up through
+#: :meth:`AppDescriptor.step` — an unclaimed one means the application has no such step.
+STEP_ROLES: tuple[PhaseRole, ...] = (PhaseRole.PREFLIGHT, PhaseRole.SETUP)
 
 
-class StepSpec(BaseModel):
-    """A declared step the host runs as its own visible task: which phase groups it (``phase_key``,
-    a member of the synthesized enum) and what to call it (``label``).
+class PerComponent(BaseModel):
+    """The generic store writes one ``{prefix}_{slug}.{ext}`` file per component."""
 
-    ``step`` is the step's kind, not wire data — it names the task id the host gives this step
-    (``{app}-{step}``), so the id lives with the declaration rather than being spelled at each call
-    site. Turn a spec into its task with :meth:`composer.rustapp.adapter.RustBackend.task_info`,
-    which is what resolves ``phase_key`` against the enum."""
-
-    step: ClassVar[str]
-
-    phase_key: str
-    label: str
+    mode: Literal["per_component"] = "per_component"
 
 
-class PreflightSpec(StepSpec):
-    """An analysis-independent gate on the prepared workspace, run *concurrently with system
-    analysis* — before a single property exists. The host follows the wheel's ``workspace_prep``
-    with a ``kind="preflight"`` ``compile`` call under ``phase_key``, whose ``spec`` is empty: the
-    wheel renders its own minimal skeleton, since nothing has been authored yet.
+class Callout(BaseModel):
+    """The store writes no per-component source; the wheel's ``finalize`` renders the whole
+    deliverable (e.g. Crucible's one shared crate)."""
 
-    It exists to fail on a *toolchain* problem — an unresolvable dependency graph, a harness that
-    doesn't link, IDL codegen the generator rejects — while the run has spent almost no LLM budget.
-    Such a failure is terminal (the host raises rather than re-authoring: the author does not own
-    the manifest and cannot fix it), which lets the driver cancel the analysis and extraction
-    running alongside. Mirrors the Rust ``PreflightSpec``."""
-
-    step: ClassVar[str] = "preflight"
+    mode: Literal["callout"] = "callout"
+    #: The project-relative path of the primary deliverable file, ``{program}``-templated (Crucible:
+    #: ``fuzz/{program}/src/main.rs``). Used only as each component's report link — the actual files
+    #: come from ``finalize``. On the variant because it means nothing per-component.
+    primary: str | None = None
 
 
-class SetupSpec(StepSpec):
-    """A shared setup artifact authored once before per-component formalization (Crucible's
-    shared fixture). The host runs the author→compile loop for a :class:`SetupInput
-    <composer.rustapp.wire.SetupInput>` under ``phase_key`` and hands the compiled spec to every
-    component as ``AuthorInput.setup``. Mirrors the Rust ``SetupSpec``."""
-
-    step: ClassVar[str] = "setup"
+#: How the source deliverable is written — tagged on ``mode`` (Rust ``DeliverableMode``).
+DeliverableMode = Annotated[PerComponent | Callout, Field(discriminator="mode")]
 
 
 class PhaseSpec(BaseModel):
-    """One task-grouping phase; ``key`` becomes the synthesized enum member name."""
+    """One task-grouping phase; ``key`` becomes the synthesized enum member name.
+
+    For a :data:`STEP_ROLES` role this is also the declaration of that step: the task the host runs
+    is this ``label``, under this phase, with id ``{app}-{role}``. Turn one into its task with
+    :meth:`composer.rustapp.adapter.RustBackend.task_info`, which resolves the phase member."""
 
     key: str
     label: str
     order: int = 0
-    core_slot: CoreSlot | None = None
+    role: PhaseRole = PhaseRole.GROUPING
 
 
 class ArgDefault(BaseModel):
@@ -141,10 +140,6 @@ class ArtifactLayout(BaseModel):
     artifact_prefix: str
     artifact_extension: str
     property_suffix: str
-    #: Under ``callout`` deliverable mode, the project-relative primary deliverable path,
-    #: ``{program}``-templated (Crucible: ``fuzz/{program}/src/main.rs``). Used only as each
-    #: component's report link; ``None`` in ``per_component`` mode.
-    deliverable_primary: str | None = None
 
 
 class AppDescriptor(BaseModel):
@@ -168,13 +163,8 @@ class AppDescriptor(BaseModel):
     rag_db_default: str | None = None
     event_kinds: list[EventKind] = Field(default_factory=list)
     artifact_layout: ArtifactLayout
-    #: Optional preflight gate on the prepared workspace, concurrent with system analysis (see
-    #: :class:`PreflightSpec`).
-    preflight: PreflightSpec | None = None
-    #: Optional shared-setup step run before per-component formalization (see :class:`SetupSpec`).
-    setup: SetupSpec | None = None
-    #: How the source deliverable is written (see :class:`DeliverableMode`).
-    deliverable_mode: DeliverableMode = DeliverableMode.PER_COMPONENT
+    #: How the source deliverable is written (see :data:`DeliverableMode`).
+    deliverable_mode: DeliverableMode = Field(default_factory=PerComponent)
     #: Serialize the blocking toolchain callouts on one semaphore — set when the app shares a
     #: single build dir / target across units.
     serialize_toolchain: bool = False
@@ -194,6 +184,12 @@ class AppDescriptor(BaseModel):
     def ordered_phases(self) -> list[PhaseSpec]:
         return sorted(self.phases, key=lambda p: (p.order, p.key))
 
-    def core_slot_map(self) -> dict[CoreSlot, str]:
-        """The declared phase ``key`` for each core slot it fills."""
-        return {p.core_slot: p.key for p in self.phases if p.core_slot is not None}
+    def role_map(self) -> dict[PhaseRole, str]:
+        """The declared phase ``key`` for each role a phase claims."""
+        return {p.role: p.key for p in self.phases if p.role is not PhaseRole.GROUPING}
+
+    def step(self, role: PhaseRole) -> PhaseSpec | None:
+        """The phase declaring ``role``'s step, or ``None`` when no phase claims it — which is how
+        an application says it has no such step. The lookup is by role rather than by a key one
+        side spells and the other has to match."""
+        return next((p for p in self.phases if p.role is role), None)

@@ -89,10 +89,10 @@ def _descriptor() -> AppDescriptor:
         "name": "demoprover", "header_text": "h", "backend_tag": "prover",
         "backend_guidance": "g", "analysis_key": "k",
         "phases": [
-            {"key": "analysis", "label": "A", "core_slot": "analysis"},
-            {"key": "extraction", "label": "E", "core_slot": "extraction"},
-            {"key": "formalization", "label": "F", "core_slot": "formalization"},
-            {"key": "report", "label": "R", "core_slot": "report"},
+            {"key": "analysis", "label": "A", "role": "analysis"},
+            {"key": "extraction", "label": "E", "role": "extraction"},
+            {"key": "formalization", "label": "F", "role": "formalization"},
+            {"key": "report", "label": "R", "role": "report"},
         ],
         "artifact_layout": {
             "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r", "artifact_dir": "a",
