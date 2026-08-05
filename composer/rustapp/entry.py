@@ -20,7 +20,6 @@ surface entirely can supply its own builder via ``env_builder=``.
 import argparse
 import asyncio
 import enum
-import hashlib
 import json
 import os
 import pathlib
@@ -46,6 +45,7 @@ from composer.input.types import (
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
 from composer.io.thread_logging import default_logging_ns, thread_logger
 from composer.kb.knowledge_base import DefaultEmbedder
+from composer.pipeline.cli import root_cache_key
 from composer.pipeline.core import CorePipelineResult
 from composer.rag.models import get_model
 from composer.rustapp.adapter import program_crate_of
@@ -135,11 +135,15 @@ def _user_ns(*parts: str | None) -> tuple[str, ...]:
 
 
 def _root_cache_key(
-    project_root: str, system_doc_path: pathlib.Path, relative_path: str, contract_name: str
+    project_root: str, system_doc_path: pathlib.Path | None, relative_path: str, contract_name: str
 ) -> str:
-    doc_hash = hashlib.sha256(system_doc_path.read_bytes()).hexdigest()
-    combined = "|".join([project_root, doc_hash, relative_path, contract_name])
-    return hashlib.sha256(combined.encode()).hexdigest()[:16]
+    """The pipeline's root key, truncated to keep the Rust cache namespaces readable."""
+    return root_cache_key(
+        project_root=project_root,
+        system_doc_path=system_doc_path,
+        relative_path=relative_path,
+        contract_name=contract_name,
+    )[:16]
 
 
 def _arg_dest(spec: ArgSpec) -> str:
@@ -314,7 +318,9 @@ async def rust_entry_point(
 
         async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult]:
             # 1. Resolve the design doc: use the supplied path, else discover one as a
-            #    visible task (needs the handler scope, which only exists here).
+            #    visible task (needs the handler scope, which only exists here). Discovery
+            #    may come up empty, which is not fatal — see below.
+            sys_path: pathlib.Path | None
             if args.system_doc is not None:
                 sys_path = pathlib.Path(args.system_doc)
             else:
@@ -332,9 +338,13 @@ async def rust_entry_point(
                     semaphore=semaphore,
                 )
 
-            content = await conns.uploader.get_document(sys_path)
-            if content is None:
-                raise ValueError(f"cannot read design document: {sys_path}")
+            # ``sys_path`` is None only when discovery found nothing: run source-only.
+            if sys_path is not None:
+                content = await conns.uploader.get_document(sys_path)
+                if content is None:
+                    raise ValueError(f"cannot read design document: {sys_path}")
+            else:
+                content = None
 
             # 2. Doc-dependent construction. The root cache key hashes the doc bytes, so
             #    a discovered doc and a supplied one produce an identical key.
