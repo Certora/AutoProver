@@ -112,8 +112,11 @@ def rust_build_policy(
     root — see :func:`shared_cargo_ro_paths`), Solana platform-tool directories, the
     system dirs, and ``extra_ro`` read-only. Non-existent paths are dropped.
 
-    With ``offline`` (the default — the sandbox has no network, §5), ``CARGO_NET_OFFLINE=1``
-    is set in the child env. That one var forces *every* cargo invocation offline,
+    With ``offline`` (the default — the sandbox has no network, §5),
+    ``CARGO_NET_OFFLINE=true`` is set in the child env. Spelled ``true`` because cargo parses
+    this one as a config boolean and rejects anything else — ``=1`` aborts the build with
+    "provided string was not `true` or `false`" *while still going to the network*, so the
+    truthy-looking value is worse than no value at all. That one var forces every cargo offline,
     including the nested ``cargo`` that ``crucible run`` spawns to build the harness —
     so the deps must already be warm in the private ``CARGO_HOME`` (see
     :func:`warm_cargo_cache`, run *outside* the sandbox first).
@@ -142,7 +145,7 @@ def rust_build_policy(
 
     env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
     if offline:
-        env["CARGO_NET_OFFLINE"] = "1"
+        env["CARGO_NET_OFFLINE"] = "true"
     # A private temp dir UNDER the (writable) workdir, so tools that need scratch space
     # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
     # work without granting the shared /tmp (which may hold host/other-run secrets and

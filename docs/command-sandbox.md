@@ -190,10 +190,12 @@ step. This also closes the build-time supply-chain vector: with offline + a pre-
 malicious `build.rs` cannot pull a payload at build time.
 
 **Implementation.** "Offline inside" is one env var, not per-tool flags: the policy sets
-**`CARGO_NET_OFFLINE=1`** in the child env, which forces *every* cargo invocation offline — including
-a nested `cargo` that a checker spawns to build a harness — so we never thread `--offline`
-through each tool ([recipes.py](../composer/sandbox/recipes.py), `offline=True` default). "Fetch
-outside" is a `cargo fetch` run *unsandboxed* (no provider → network on) before the confined build.
+**`CARGO_NET_OFFLINE=true`** in the child env, which forces *every* cargo invocation offline —
+including a nested `cargo` that a checker spawns to build a harness — so we never thread `--offline`
+through each tool ([recipes.py](../composer/sandbox/recipes.py), `offline=True` default). The value
+must be exactly `true`: cargo parses it as a config boolean and rejects anything else, so a truthy
+`1` aborts the build *and* leaves it online. "Fetch outside" is a `cargo fetch` run *unsandboxed*
+(no provider → network on) before the confined build.
 Both halves of that prep are now **declared, not called**: a wheel's `workspace_prep` names the dirs
 to warm and the program to build, and the chain's registered `WorkspaceToolchain` performs them —
 fetch unconfined, build confined + offline (see
@@ -445,7 +447,7 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    Integration-tested: `run_local_command` under the launcher denies out-of-workdir reads and network
    while allowing the workdir + toolchain.
 4. **Offline prep (§5)** — *done*: a `cargo fetch` run outside the sandbox (network on) warms the
-   registry, and the policy sets `CARGO_NET_OFFLINE=1` so the confined build — and any nested cargo a
+   registry, and the policy sets `CARGO_NET_OFFLINE=true` so the confined build — and any nested cargo a
    checker spawns — run offline. Both are now declared by the wheel's `workspace_prep` and performed
    by the chain's `WorkspaceToolchain` (§5). `CARGO_HOME` is granted rw (pointed at the private
    per-run home, §11 item 5) so cargo can extract crate sources offline.
