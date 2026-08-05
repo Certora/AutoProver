@@ -146,31 +146,6 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-editable \
       --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
-# certora-cloud pulls niquests, which pulls urllib3-future, which ships a
-# `urllib3_future.pth`. That hook runs on every interpreter start and, whenever it finds
-# both distributions installed and the directory writable, deletes site-packages/urllib3
-# and copies urllib3_future over it. The result here is a tree carrying urllib3-future's
-# backend/ but no urllib3/exceptions.py, so every plain `import urllib3` fails — which
-# takes down anything reaching it through requests (spacy, and so setup-db).
-#
-# Dropping the hook stops the substitution. Removing the tree before reinstalling is what
-# makes it stick: a reinstall only replaces files listed in urllib3's own RECORD, leaving
-# backend/ behind, and the hook reads that leftover as "already substituted" and clobbers
-# again on the next start. niquests imports urllib3_future directly and is unaffected.
-#
-# The imports are asserted here so a dependency bump that reintroduces this fails the
-# build instead of surfacing as a runtime ImportError deep in a pipeline phase.
-RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv set -eux; \
-    py=/opt/autoprove/venv/bin/python; \
-    sp="$($py -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
-    if [ -e "$sp/urllib3_future.pth" ]; then \
-      pinned="$($py -c 'import importlib.metadata as m; print(m.version("urllib3"))')"; \
-      rm -f "$sp/urllib3_future.pth"; \
-      rm -rf "$sp/urllib3"; \
-      uv pip install --python "$py" --reinstall --no-deps "urllib3==$pinned"; \
-    fi; \
-    $py -c 'import urllib3, requests, spacy, niquests'
-
 # Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
 COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
 
