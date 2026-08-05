@@ -158,7 +158,7 @@ def build_backend(
         module=module,
         descriptor=descriptor,
         phase=ph,
-        phase_map=core,
+        core_phases=core,
         store=sf(source, descriptor),
         ecosystem=resolve_ecosystem(descriptor),
         command_timeout_s=opts.command_timeout_s,

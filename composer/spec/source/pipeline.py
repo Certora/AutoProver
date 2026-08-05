@@ -281,28 +281,19 @@ class ProverBackend(
         ContractInstance, SourceApplication, None,
     ]
 ):
+    backend_guidance = CERTORA_BACKEND_GUIDANCE
+
+    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, AP_PROPERTIES_KEY_NAME)
+
+    core_phases = CorePhases({
+        "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
+        "extraction": AutoProvePhase.BUG_ANALYSIS,
+        "formalization": AutoProvePhase.CVL_GEN,
+        "report": AutoProvePhase.REPORT
+    })
+
     _store: ProverArtifactStore
     _prover_opts: ProverOptions
-
-    @property
-    @override
-    def backend_guidance(self) -> str:
-        return CERTORA_BACKEND_GUIDANCE
-
-    @property
-    @override
-    def analysis_spec(self) -> SystemAnalysisSpec:
-        return SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, AP_PROPERTIES_KEY_NAME)
-
-    @property
-    @override
-    def core_phases(self) -> CorePhases[AutoProvePhase]:
-        return CorePhases({
-            "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
-            "extraction": AutoProvePhase.BUG_ANALYSIS,
-            "formalization": AutoProvePhase.CVL_GEN,
-            "report": AutoProvePhase.REPORT
-        })
 
     @property
     @override

@@ -152,34 +152,25 @@ class NullSolanaBackend(
         SolanaProgramInstance, SolanaApplication, None,
     ]
 ):
+    backend_guidance = SOLANA_NULL_GUIDANCE
+
+    analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
+
+    core_phases = CorePhases(
+        {
+            "analysis": SolanaPhase.ANALYSIS,
+            "extraction": SolanaPhase.EXTRACTION,
+            "formalization": SolanaPhase.FORMALIZATION,
+            "report": SolanaPhase.REPORT,
+        }
+    )
+
     _store: NullSolanaArtifactStore
 
     @property
     @override
     def artifact_store(self) -> NullSolanaArtifactStore:
         return self._store
-
-    @property
-    @override
-    def backend_guidance(self) -> str:
-        return SOLANA_NULL_GUIDANCE
-
-    @property
-    @override
-    def analysis_spec(self) -> SystemAnalysisSpec:
-        return SystemAnalysisSpec("solana-analysis", "solana-properties")
-
-    @property
-    @override
-    def core_phases(self) -> CorePhases[SolanaPhase]:
-        return CorePhases(
-            {
-                "analysis": SolanaPhase.ANALYSIS,
-                "extraction": SolanaPhase.EXTRACTION,
-                "formalization": SolanaPhase.FORMALIZATION,
-                "report": SolanaPhase.REPORT,
-            }
-        )
 
     @override
     async def preflight(self, run: PipelineRun[SolanaPhase, None]) -> None:

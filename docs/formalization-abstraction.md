@@ -24,8 +24,8 @@ The pipeline has two kinds of work:
 
 The **formalization abstraction** is the seam between the two. It lets the driver in
 [composer/pipeline/core.py](../composer/pipeline/core.py) own all the shared work while
-delegating every backend-specific decision through a small, typed contract. The CVL and
-Foundry backends are two implementations of that contract; the driver never imports
+delegating every backend-specific decision through a small, typed protocol. The CVL and
+Foundry backends are two implementations of that protocol; the driver never imports
 either.
 
 ### Design goals
@@ -107,8 +107,8 @@ phase ([rust-applications.md §4.2](./rust-applications.md)).
 
 ## 3. The contract
 
-Two protocols + four abstract bases define the entire seam. The abstract bases
-(`Formalizer`, `StagedFormalizer`, `PreparedSystem`, `PipelineBackend`) live in
+Three protocols + three abstract bases define the entire seam. The `PipelineBackend` protocol and
+the abstract bases (`Formalizer`, `StagedFormalizer`, `PreparedSystem`) live in
 [composer/pipeline/core.py](../composer/pipeline/core.py); the data types the driver moves around
 (`BackendResult`, `GaveUp`, `Delivered`, `BackendJob`, `ComponentOutcome`, `CorePhases`,
 `PipelineRun`, `SystemAnalysisSpec`, `CorePipelineResult`) live in its sibling
@@ -236,18 +236,13 @@ class ProverBackend(PipelineBackend[
     AutoProvePhase, GeneratedCVL, None, SpecIdentity, ContractComponentInstance,
     ContractInstance, SourceApplication, None,
 ]):
+    backend_guidance = CERTORA_BACKEND_GUIDANCE
+    core_phases = CorePhases({"analysis": ..., "extraction": ...,
+                              "formalization": AutoProvePhase.CVL_GEN, "report": AutoProvePhase.REPORT})
+    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, AP_PROPERTIES_KEY_NAME)
+
     _store: ProverArtifactStore
     _prover_opts: ProverOptions
-
-    @property
-    @override
-    def backend_guidance(self) -> str: return CERTORA_BACKEND_GUIDANCE
-
-    @property
-    @override
-    def core_phases(self) -> CorePhases[AutoProvePhase]:
-        return CorePhases({"analysis": ..., "extraction": ...,
-                           "formalization": AutoProvePhase.CVL_GEN, "report": AutoProvePhase.REPORT})
 
     @property
     @override
@@ -255,13 +250,18 @@ class ProverBackend(PipelineBackend[
 ```
 
 So `FormT = GeneratedCVL`, the artifact id type `A = SpecIdentity`, and the phase enum is
-`AutoProvePhase` — written down in the `class` line, and checked there.
+`AutoProvePhase`. The seam is structural, so naming `PipelineBackend` as a base is optional — but
+that is the one place those eight arguments can be written down and tied to each other, and it
+moves the conformance check from wherever the backend reaches `run_pipeline` to where it is
+*defined*.
 
-The four non-method members are **read-only properties** on the base, which is what lets this
-backend narrow one: the driver only needs `ArtifactStore[SpecIdentity, GeneratedCVL]`, while
-`ProverPrepared` needs the `ProverArtifactStore` this returns (for `write_component_runs`). A
-mutable attribute would be invariant, so overriding it with a narrower field would not typecheck; a
-backend that has nothing to narrow just returns a constant.
+Three of the four non-method members are run-constants the driver only reads, so they are stated as
+plain class attributes. The store is the exception, and is declared **read-only** on the protocol so
+this backend can narrow it: the driver needs only `ArtifactStore[SpecIdentity, GeneratedCVL]`, while
+`ProverPrepared` needs the `ProverArtifactStore` this returns (for `write_component_runs`), and a
+mutable attribute is invariant — a narrowed field would not typecheck. A backend with nothing to
+narrow returns its store the same way; `RustBackend` derives its guidance and analysis spec from the
+wheel's descriptor in `__post_init__` rather than by accessor, for the same reason.
 
 ### 4.1 `prepare_system` — harness lift
 
@@ -582,7 +582,7 @@ fails loud.
 
 ## 9. Extending: what a new backend must provide
 
-To add a backend you subclass `PipelineBackend` and implement the three phase objects — nothing in the
+To add a backend you implement `PipelineBackend` and the three phase objects — nothing in the
 driver changes. The Foundry backend
 ([composer/foundry/pipeline.py](../composer/foundry/pipeline.py)) is the proof: it reuses
 system analysis, property extraction, caching, and the report, and contributes only:
@@ -605,9 +605,9 @@ A backend author's checklist:
 1. Define a result type satisfying `FormalResult` + `ReportableResult` (`artifact_text`,
    `commentary`, `property_units()`, `skipped`, `output_link`).
 2. Subclass `ArtifactStore` for the on-disk bundle; define an `ArtifactIdentifier` sum type.
-3. Subclass `PipelineBackend`, naming its eight type arguments, and implement `preflight`,
-   `prepare_system`, `to_artifact_id`, `backend_guidance`, `core_phases`, `analysis_spec`,
-   `artifact_store`. `preflight` returns `None`
+3. Implement `PipelineBackend` (`preflight`, `prepare_system`, `to_artifact_id`,
+   `backend_guidance`, `core_phases`, `analysis_spec`, `artifact_store`) — naming it as a base and
+   filling in its eight type arguments is what the in-tree backends do. `preflight` returns `None`
    unless the backend has pre-work that needs nothing from the run — if it must *build* something,
    that is where the build belongs, so it overlaps system analysis and can fail the run before the
    model has been spent (Crucible: [rust-applications.md §4.2](./rust-applications.md)).
@@ -661,7 +661,7 @@ _entry_point → cli_pipeline → cont(env, ProverBackend, EVM)
 
 | Concern | File |
 |---|---|
-| Driver + the abstract bases (`Formalizer`, `StagedFormalizer`, `PreparedSystem`, `PipelineBackend`) | [composer/pipeline/core.py](../composer/pipeline/core.py) |
+| Driver + the seam (`PipelineBackend`, `Formalizer`, `StagedFormalizer`, `PreparedSystem`) | [composer/pipeline/core.py](../composer/pipeline/core.py) |
 | The driver's data types (`BackendResult`, `Delivered`, `GaveUp`, `ComponentOutcome`, `PipelineRun`, …) | [composer/pipeline/ptypes.py](../composer/pipeline/ptypes.py) |
 | Result protocols (`FormalResult`, `ArtifactIdentifier`) | [composer/spec/types.py](../composer/spec/types.py) |
 | `ReportableResult`, `Verdict`, `VerdictFetcher`, `collect` | [composer/spec/source/report/collect.py](../composer/spec/source/report/collect.py) |

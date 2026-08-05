@@ -153,29 +153,20 @@ class FoundryBackend(
         ContractInstance, SourceApplication, None,
     ]
 ):
+    backend_guidance = FOUNDRY_BACKEND_GUIDANCE
+
+    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "foundry-properties")
+
+    core_phases = CorePhases({
+        "analysis": FoundryPhase.SYSTEM_ANALYSIS,
+        "extraction": FoundryPhase.PROPERTY_EXTRACTION,
+        "formalization": FoundryPhase.TEST_GENERATION,
+        "report": FoundryPhase.REPORT
+    })
+
     _store: ArtifactStore[FoundryTestArtifact, GeneratedFoundryTest]
 
     foundry_conf: _ForgeRunConfig
-
-    @property
-    @override
-    def backend_guidance(self) -> str:
-        return FOUNDRY_BACKEND_GUIDANCE
-
-    @property
-    @override
-    def analysis_spec(self) -> SystemAnalysisSpec:
-        return SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "foundry-properties")
-
-    @property
-    @override
-    def core_phases(self) -> CorePhases[FoundryPhase]:
-        return CorePhases({
-            "analysis": FoundryPhase.SYSTEM_ANALYSIS,
-            "extraction": FoundryPhase.PROPERTY_EXTRACTION,
-            "formalization": FoundryPhase.TEST_GENERATION,
-            "report": FoundryPhase.REPORT
-        })
 
     @property
     @override

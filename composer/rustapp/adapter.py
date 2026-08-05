@@ -1091,7 +1091,7 @@ class RustBackend(
     #: it through :meth:`task_info` rather than indexing it.
     phase: type[enum.Enum]
     #: The four core slots of :attr:`phase`, as the driver's own mapping.
-    phase_map: CorePhases
+    core_phases: CorePhases
     store: ArtifactStore[Any, RustFormalResult]
     ecosystem: Ecosystem[Any, Any, Any]
     # Wall-clock ceiling for a single compile/validate (a first build can be minutes).
@@ -1102,20 +1102,13 @@ class RustBackend(
     # ``AuthorInput.context`` (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
     declared_args: dict[str, Any] = field(default_factory=dict)
 
-    @property
-    @override
-    def backend_guidance(self) -> str:
-        return self.descriptor.backend_guidance
+    # Both are the wheel's to state, so they are derived from its descriptor rather than passed.
+    backend_guidance: str = field(init=False)
+    analysis_spec: SystemAnalysisSpec = field(init=False)
 
-    @property
-    @override
-    def analysis_spec(self) -> SystemAnalysisSpec:
-        return SystemAnalysisSpec(self.descriptor.analysis_key, "rust-properties")
-
-    @property
-    @override
-    def core_phases(self) -> CorePhases:
-        return self.phase_map
+    def __post_init__(self) -> None:
+        self.backend_guidance = self.descriptor.backend_guidance
+        self.analysis_spec = SystemAnalysisSpec(self.descriptor.analysis_key, "rust-properties")
 
     @property
     @override
