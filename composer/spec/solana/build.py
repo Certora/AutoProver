@@ -330,7 +330,7 @@ async def prepare_workspace(
 
     # An operator-supplied IDL wins over building one — for a program whose own toolchain isn't
     # installed (the usual reason the wheel wants an IDL at all), `anchor idl build` can't run.
-    supplied = input.context.get("program_idl") or None
+    supplied = input.args.get("program_idl") or None
     idl_src = Path(supplied) if (idl_dest and supplied) else None
     if idl_src is not None and not idl_src.is_file():
         raise RuntimeError(f"--program-idl: no such file: {idl_src}")

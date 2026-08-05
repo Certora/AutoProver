@@ -12,12 +12,19 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use autoprover_sdk::{
-    run_confined, AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, AuthorInput, Backend,
-    CommandOutput, CompileResult, CoreSlot, DeliverableMode, EventKind, Failure, FailureKind,
-    Outcome, PhaseSpec, PreflightSpec, ProgramCrate, Prompt, Sandbox, SandboxGrants, SetupSpec,
-    Unit, ValidateOutcome, Verdict, WorkspacePrep,
+use autoprover_sdk::args::AppArgs;
+use autoprover_sdk::authoring::{
+    anchor_compat_key, AuthorInput, Authored, Failure, FailureKind, ProgramCrate, Prompt,
 };
+use autoprover_sdk::descriptor::{
+    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
+    PhaseSpec,
+};
+use autoprover_sdk::finalize::FinalizeInput;
+use autoprover_sdk::outcome::{CompileResult, Outcome, Target, Unit, ValidateOutcome, Verdict};
+use autoprover_sdk::prep::{SandboxGrants, WorkspacePrep};
+use autoprover_sdk::sandbox::{CommandOutput, Workspace};
+use autoprover_sdk::Backend;
 
 use askama::Template;
 
@@ -39,7 +46,7 @@ const DEFAULT_HARNESS_FN: &str = "c_invariants";
 /// The unit's human label, for the authoring/judge prompts. Falls back to the program name for a
 /// host that sends no component (a single-unit host).
 fn unit_name(input: &AuthorInput) -> String {
-    match input.component.get("name").and_then(|v| v.as_str()) {
+    match input.unit().and_then(|u| u.get("name")).and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => input.program.clone(),
     }
@@ -56,7 +63,7 @@ fn unit_name(input: &AuthorInput) -> String {
 /// deliverable's feature names drift from the report's. What this *does* own is spelling that slug
 /// as a Rust identifier — see [`ident_of`].
 fn harness_fn(input: &AuthorInput) -> String {
-    match input.component.get("slug").and_then(|v| v.as_str()) {
+    match input.unit().and_then(|u| u.get("slug")).and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => format!("c_{}", ident_of(s)),
         _ => DEFAULT_HARNESS_FN.to_string(),
     }
@@ -84,35 +91,24 @@ fn ident_of(slug: &str) -> String {
 
 /// The delivered crate's `harness fn -> authored section` map, from the host's outcome set.
 ///
-/// Keyed by the *validation target* each component ran under (the host mirrors those in as
-/// `targets`), so the crate declares exactly the features the gated builds selected. Never keyed
-/// off `property_units`: those are report **rows**, one per property, and none of them is a feature
-/// that gates anything — keying on them is what once wrote the harness fn once per property.
-/// A `BTreeMap` keeps the emitted crate stable and sorted.
+/// Keyed by the *validation target* each component ran under, so the crate declares exactly the
+/// features the gated builds selected. Never keyed off `property_units`: those are report **rows**,
+/// one per property, and none of them is a feature that gates anything — keying on them is what
+/// once wrote the harness fn once per property. A `BTreeMap` keeps the emitted crate stable and
+/// sorted.
 ///
 /// Split out of `finalize` so the assembly rule is testable without a crucible checkout (the
 /// manifest half of `finalize`'s output only materializes when `$CRUCIBLE_REPO` is set).
-fn delivered_sections(outcomes: &serde_json::Value) -> BTreeMap<String, String> {
+fn delivered_sections(outcomes: &FinalizeInput) -> BTreeMap<String, String> {
     let mut sections: BTreeMap<String, String> = BTreeMap::new();
-    let Some(comps) = outcomes.get("components").and_then(|v| v.as_array()) else {
-        return sections;
-    };
-    for c in comps {
-        if !c.get("delivered").and_then(|v| v.as_bool()).unwrap_or(false) {
-            continue;
-        }
-        let text = c.get("artifact_text").and_then(|v| v.as_str()).unwrap_or_default().trim();
-        let targets: Vec<String> = c
-            .get("targets")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        if targets.is_empty() {
+    for (_name, delivered) in outcomes.delivered() {
+        let text = delivered.artifact_text.trim().to_string();
+        if delivered.targets.is_empty() {
             // A host that sends no targets ran one unnamed target; use the fallback fn.
-            sections.insert(DEFAULT_HARNESS_FN.to_string(), text.to_string());
+            sections.insert(DEFAULT_HARNESS_FN.to_string(), text);
         } else {
-            for t in targets {
-                sections.insert(t, text.to_string());
+            for t in &delivered.targets {
+                sections.insert(t.clone(), text.clone());
             }
         }
     }
@@ -353,7 +349,7 @@ fn crucible_repo() -> Option<PathBuf> {
 /// An unknown requirement (no `anchor-lang`, or a git/path dep) keeps the crate path: that is the
 /// historical behaviour, and the compiler reports it precisely if it turns out to be wrong.
 fn crate_dep_usable(cr: &ProgramCrate) -> bool {
-    match (cr.anchor_compat(), autoprover_sdk::anchor_compat_key(ANCHOR_VERSION)) {
+    match (cr.anchor_compat(), anchor_compat_key(ANCHOR_VERSION)) {
         (Some(theirs), Some(ours)) => theirs == ours,
         _ => true,
     }
@@ -377,8 +373,8 @@ struct HarnessSpec {
     /// The analysis identifier. Names the harness crate itself — `fuzz/<program>/`, package
     /// `<program>_fuzz`, and the selector `crucible run <program>` resolves — nothing else.
     program: String,
-    /// The program under test's crate, [`ProgramCrate::resolved`] so every part is populated. Used
-    /// for the path dep under [`ProgramTypes::Crate`]; its `lib` is the module holding the
+    /// The program under test's crate — every part populated, the SDK boundary having resolved it.
+    /// Used for the path dep under [`ProgramTypes::Crate`]; its `lib` is the module holding the
     /// program's types under *either* mode, so the authored fixture's `use <id>::*` is identical.
     cr: ProgramCrate,
     types: ProgramTypes,
@@ -390,7 +386,11 @@ impl HarnessSpec {
     /// for one, so the types are generated. See [`CrucibleApp::workspace_prep`], which makes the
     /// decision.
     fn of(input: &AuthorInput) -> Self {
-        Self::new(&input.program, input.program_crate.resolved(&input.program), ctx_str(input, "idl"))
+        Self::new(
+            &input.program,
+            input.program_crate.clone(),
+            input.idl.clone().unwrap_or_default(),
+        )
     }
 
     /// `idl_at` is the IDL's workdir-relative path, or empty for the crate path.
@@ -504,23 +504,6 @@ impl HarnessSpec {
         files.insert(format!("fuzz/{}/src/main.rs", self.program), self.main_rs(authored));
         files
     }
-}
-
-/// The program under test's crate as declared in the entry point's `args` blob (the same value the
-/// host puts on every `AuthorInput`), or an empty one when the host resolved none.
-fn arg_program_crate(args: &serde_json::Value) -> ProgramCrate {
-    args.get("program_crate")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default()
-}
-
-/// The analysis identifier from `args` — the `Name` half of `main_contract` (`path:Name`).
-fn arg_program(args: &serde_json::Value) -> &str {
-    args.get("main_contract")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.split_once(':'))
-        .map(|(_, name)| name)
-        .unwrap_or_default()
 }
 
 /// The directory of `bin` on `$PATH` (for a read-only sandbox grant), if found.
@@ -870,34 +853,23 @@ fn finding_detail(out: &str, workdir: &Path, program: &str, unit: &str) -> Optio
     Some(detail)
 }
 
-/// Attribute a shared-target counterexample across the covered report units. Crucible tags each
+/// Attribute a shared-target counterexample across the rows the target covers. Crucible tags each
 /// assertion message with its property title (`[<title>]`), so the finding names the invariant it
 /// refutes: that unit gets `BAD` (carrying the finding); the rest held over the explored space, so
 /// `GOOD`. If nothing can be attributed (no tagged title matched), mark them all `BAD` rather than
 /// silently pass a real counterexample. This is the backend's own attribution — the host never
 /// parses the finding.
-fn attribute_finding(covered: &[Unit], detail: Option<String>) -> ValidateOutcome {
+fn attribute_finding(target: &Target, detail: Option<String>) -> ValidateOutcome {
     let d = detail.clone().unwrap_or_default();
-    let named: std::collections::HashSet<&str> = covered
-        .iter()
-        .filter(|u| !u.property.is_empty() && d.contains(&u.property))
-        .map(|u| u.unit.as_str())
-        .collect();
-    let all_bad = named.is_empty();
-    ValidateOutcome::Verdicts {
-        verdicts: covered
-            .iter()
-            .map(|u| {
-                if all_bad || named.contains(u.unit.as_str()) {
-                    let mut v = Verdict::with_outcome(Outcome::Bad);
-                    v.detail = detail.clone();
-                    (u.unit.clone(), v)
-                } else {
-                    (u.unit.clone(), Verdict::with_outcome(Outcome::Good))
-                }
-            })
-            .collect(),
-    }
+    let refuted = |u: &Unit| !u.property.is_empty() && d.contains(&u.property);
+    let unattributable = !target.units.iter().any(refuted);
+    target.verdicts(|u| {
+        if unattributable || refuted(u) {
+            Verdict::with_outcome(Outcome::Bad).with_detail(detail.clone())
+        } else {
+            Verdict::with_outcome(Outcome::Good)
+        }
+    })
 }
 
 // ===========================================================================
@@ -915,14 +887,9 @@ fn listed_props(input: &AuthorInput) -> String {
         .join("\n")
 }
 
-/// A string field from the input's `context` blob (e.g. the shared fixture source).
-fn ctx_str(input: &AuthorInput, key: &str) -> String {
-    input.context.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string()
-}
-
-/// A u64 field from the input's `context` blob, with a default.
-fn ctx_u64(input: &AuthorInput, key: &str, default: u64) -> u64 {
-    input.context.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
+/// The compiled shared fixture every component's tests build on, or empty before it exists.
+fn fixture_of(input: &AuthorInput) -> String {
+    input.setup.clone().unwrap_or_default()
 }
 
 /// The compiler errors to hand back to the model — extracted diagnostics, else a raw tail.
@@ -952,19 +919,24 @@ impl Backend for CrucibleApp {
             backend_tag: "crucible".to_string(),
             backend_guidance: BackendGuidance.render().expect("render backend_guidance"),
             analysis_key: "crucible-solana-analysis".to_string(),
+            // A phase's role is also the declaration of the step it groups, so the two host-run
+            // steps below (the preflight gate, the shared fixture) need nothing else said.
             phases: vec![
-                // UI-only phase: discover the design doc when one isn't supplied (§host).
-                PhaseSpec { key: "discover_design_doc".into(), label: "Design Doc Discovery".into(), order: 0, core_slot: None },
-                // UI-only phase: the program `.so` + IDL + the skeleton harness build (§5.0). It
-                // runs CONCURRENTLY with the two phases below it — the order is the declaration's,
-                // which is what the frontend lists sections by, not a claim about sequencing.
-                PhaseSpec { key: "preflight".into(), label: "Build Preflight".into(), order: 1, core_slot: None },
-                PhaseSpec { key: "analysis".into(), label: "System Analysis".into(), order: 2, core_slot: Some(CoreSlot::Analysis) },
-                PhaseSpec { key: "extraction".into(), label: "Property Extraction".into(), order: 3, core_slot: Some(CoreSlot::Extraction) },
-                // UI-only phase: author the shared fixture, once every property is known (§5.2).
-                PhaseSpec { key: "harness_fixture".into(), label: "Harness Fixture".into(), order: 4, core_slot: None },
-                PhaseSpec { key: "formalization".into(), label: "Harness Authoring".into(), order: 5, core_slot: Some(CoreSlot::Formalization) },
-                PhaseSpec { key: "report".into(), label: "Report".into(), order: 6, core_slot: Some(CoreSlot::Report) },
+                // Discover the design doc when one isn't supplied (§host).
+                PhaseSpec::step("discover_design_doc", "Design Doc Discovery", 0, PhaseRole::Discovery),
+                // The program `.so` + IDL + the skeleton harness build (§5.0). It runs CONCURRENTLY
+                // with the two phases below it — the order is the declaration's, which is what the
+                // frontend lists sections by, not a claim about sequencing. Gating the whole
+                // toolchain surface once, up front, against a skeleton this wheel authors itself:
+                // a dependency or codegen problem is not something a fixture author can fix, so it
+                // must not first appear as compiler errors in its draft.
+                PhaseSpec::step("preflight", "Build Preflight", 1, PhaseRole::Preflight),
+                PhaseSpec::step("analysis", "System Analysis", 2, PhaseRole::Analysis),
+                PhaseSpec::step("extraction", "Property Extraction", 3, PhaseRole::Extraction),
+                // The shared fixture, authored once every property is known (§5.2).
+                PhaseSpec::step("harness_fixture", "Harness Fixture", 4, PhaseRole::Setup),
+                PhaseSpec::step("formalization", "Harness Authoring", 5, PhaseRole::Formalization),
+                PhaseSpec::step("report", "Report", 6, PhaseRole::Report),
             ],
             // Only `--fuzz-timeout` is wired through to `crucible run`. Other tuning knobs
             // (parallel cores, stateful mode, a version pin) are deliberately omitted until
@@ -1003,7 +975,7 @@ impl Backend for CrucibleApp {
             ],
             // Metadata (properties.json / commentary / property→tests map) lands under
             // `certora/crucible/` — the split Foundry uses — while the crate deliverable is the
-            // one file under `fuzz/<program>/` (deliverable_primary + the finalize render).
+            // one file under `fuzz/<program>/` (the callout mode's `primary` + the finalize render).
             artifact_layout: ArtifactLayout {
                 deliverable_dir: "certora/crucible".into(),
                 internal_dir: ".certora_internal/crucible".into(),
@@ -1012,24 +984,12 @@ impl Backend for CrucibleApp {
                 artifact_prefix: "harness".into(),
                 artifact_extension: "rs".into(),
                 property_suffix: "property_tests".into(),
-                deliverable_primary: Some("fuzz/{program}/src/main.rs".into()),
             },
-            // The whole toolchain surface gated once, up front, against a skeleton this wheel
-            // authors itself — a dependency or codegen problem is not something a fixture author
-            // can fix, so it must not first appear as compiler errors in its draft.
-            preflight: Some(PreflightSpec {
-                phase_key: "preflight".into(),
-                label: "Build Preflight".into(),
-            }),
-            // A shared fixture authored once (the setup step), one crate assembled by finalize
-            // (callout), all toolchain runs serialized on the one crate/target, confined by
-            // default (untrusted native builds), and "instruction" as the unit noun.
-            setup: Some(SetupSpec {
-                phase_key: "harness_fixture".into(),
-                label: "Harness Fixture".into(),
-                context_key: "fixture".into(),
-            }),
-            deliverable_mode: DeliverableMode::Callout,
+            // One crate assembled by finalize (callout), all toolchain runs serialized on the one
+            // crate/target, and confined by default (untrusted native builds).
+            deliverable_mode: DeliverableMode::Callout {
+                primary: Some("fuzz/{program}/src/main.rs".into()),
+            },
             serialize_toolchain: true,
             confine_by_default: true,
             // Units are the Solana ecosystem's `ProgramComponent`s, so the SDK default noun is
@@ -1038,7 +998,7 @@ impl Backend for CrucibleApp {
         }
     }
 
-    fn validate_preconditions(&self, args: &serde_json::Value) -> Result<(), String> {
+    fn validate_preconditions(&self, args: &AppArgs) -> Result<(), String> {
         let mut problems: Vec<String> = Vec::new();
 
         let missing: Vec<&str> = REQUIRED_BINARIES
@@ -1058,28 +1018,25 @@ impl Backend for CrucibleApp {
         // The target must be a buildable Cargo/Anchor workspace (cf. foundry's
         // foundry.toml precondition). We only check structure here; the actual build
         // happens in the build phase.
-        if let Some(root) = args.get("project_root").and_then(|v| v.as_str()) {
-            if !Path::new(root).join("Cargo.toml").is_file() {
-                problems.push(format!(
-                    "{root}/Cargo.toml not found — Crucible needs a buildable Cargo/Anchor \
-                     workspace containing the program's crate."
-                ));
-            }
-            // The harness declares the program under test as a path dep, so its crate must exist:
-            // check it here rather than let a wrong directory surface as a confusing "failed to
-            // load manifest for dependency" deep in an offline build.
-            let cr = arg_program_crate(args).resolved(arg_program(args));
-            let manifest = Path::new(root).join(&cr.dir).join("Cargo.toml");
-            if !manifest.is_file() {
-                problems.push(format!(
-                    "no Cargo crate for the program under test at {}/Cargo.toml — Crucible \
-                     declares it as a path dependency of the harness. Point the main-contract \
-                     path at a source file inside the program's crate.",
-                    cr.dir
-                ));
-            }
-        } else {
-            problems.push("no project_root in args".to_string());
+        let root = &args.project_root;
+        if !root.join("Cargo.toml").is_file() {
+            problems.push(format!(
+                "{}/Cargo.toml not found — Crucible needs a buildable Cargo/Anchor \
+                 workspace containing the program's crate.",
+                root.display()
+            ));
+        }
+        // The harness declares the program under test as a path dep, so its crate must exist:
+        // check it here rather than let a wrong directory surface as a confusing "failed to
+        // load manifest for dependency" deep in an offline build.
+        let cr = &args.program_crate;
+        if !root.join(&cr.dir).join("Cargo.toml").is_file() {
+            problems.push(format!(
+                "no Cargo crate for the program under test at {}/Cargo.toml — Crucible \
+                 declares it as a path dependency of the harness. Point the main-contract \
+                 path at a source file inside the program's crate.",
+                cr.dir
+            ));
         }
 
         // The crucible checkout resolves the harness crate's path deps (§6.1). Was
@@ -1105,14 +1062,15 @@ impl Backend for CrucibleApp {
     }
 
     fn units(&self, input: &AuthorInput) -> Vec<Unit> {
-        // The setup fixture has no report units. One component's properties all live in ONE
+        // Only a component has report units — neither the preflight gate nor the shared fixture
+        // formalizes anything. One component's properties all live in ONE
         // harness fn ([`harness_fn`]) — a single build + fuzz run per component
         // (docs/crucible-component-units.md §8.1) — but each property is still its own report row,
         // mapping to that shared fuzz target. The host runs each distinct target once and
         // attributes a counterexample to the offending property via the finding message.
-        if input.kind == "setup" {
+        let Authored::Component { .. } = input.authored else {
             return Vec::new();
-        }
+        };
         input
             .props
             .iter()
@@ -1132,9 +1090,12 @@ impl Backend for CrucibleApp {
     fn author_prompt(&self, input: &AuthorInput, failure: Option<&Failure>) -> Prompt {
         let program = &input.program;
         let revise = failure.map(revise_for).unwrap_or_default();
-        let instruction = if input.kind == "setup" {
-            // Author the shared fixture from the analyzed model (carried in `component`).
-            let analyzed = &input.component;
+        let instruction = match &input.authored {
+            // Nothing is authored for the gate — the wheel supplies its own skeleton — so the host
+            // never asks for this prompt. Say so rather than rendering a prompt about no unit.
+            Authored::Preflight => "ERROR: the preflight gate authors nothing".to_string(),
+            // Author the shared fixture from the analyzed model.
+            Authored::Setup { model: analyzed } => {
             let model =
                 serde_json::to_string_pretty(analyzed).unwrap_or_else(|_| analyzed.to_string());
             // The fixture's `use <id>::*` and the `.so` it loads are the crate's lib name — which
@@ -1158,13 +1119,14 @@ impl Backend for CrucibleApp {
             }
             .render()
             .expect("render author_setup")
-        } else {
+            }
             // Author ONE #[invariant_test] fn holding all of THIS component's properties.
+            Authored::Component { unit } => {
             let hf = harness_fn(input);
             let listed = listed_props(input);
-            let component = serde_json::to_string_pretty(&input.component)
-                .unwrap_or_else(|_| input.component.to_string());
-            let fixture = ctx_str(input, "fixture");
+            let component =
+                serde_json::to_string_pretty(unit).unwrap_or_else(|_| unit.to_string());
+            let fixture = fixture_of(input);
             let cheat = TestCheatSheet { harness_fn: &hf }.render().expect("render test_cheat_sheet");
             AuthorComponent {
                 harness_fn: &hf,
@@ -1180,6 +1142,7 @@ impl Backend for CrucibleApp {
             }
             .render()
             .expect("render author_component")
+            }
         };
         Prompt { system: None, instruction }
     }
@@ -1188,14 +1151,13 @@ impl Backend for CrucibleApp {
         // The shared fixture is scaffolding, not test evidence — the compile/dry-run gate
         // already vets it, and there is no property to judge it against. Judge only the
         // per-component test suites (the peer of Foundry's feedback judge).
-        if input.kind == "setup" {
+        let Authored::Component { unit } = &input.authored else {
             return None;
-        }
+        };
         let program = &input.program;
         let listed = listed_props(input);
-        let component = serde_json::to_string_pretty(&input.component)
-            .unwrap_or_else(|_| input.component.to_string());
-        let fixture = ctx_str(input, "fixture");
+        let component = serde_json::to_string_pretty(unit).unwrap_or_else(|_| unit.to_string());
+        let fixture = fixture_of(input);
         let instruction = JudgeInstruction {
             program,
             harness_fn: &harness_fn(input),
@@ -1210,45 +1172,33 @@ impl Backend for CrucibleApp {
         Some(Prompt { system: Some(system), instruction })
     }
 
-    fn compile(
-        &self,
-        input: &AuthorInput,
-        spec: &str,
-        workdir: &Path,
-        sandbox: &Sandbox,
-    ) -> CompileResult {
+    fn compile(&self, input: &AuthorInput, spec: &str, ws: &Workspace) -> CompileResult {
         let program = &input.program;
         let hspec = HarnessSpec::of(input);
         let probe = || ProbeFn.render().expect("render probe_fn");
         // Preflight: the wheel's OWN skeleton — `spec` is empty, nothing has been authored yet.
         // Setup: dry-run the authored fixture behind that same probe test. Component: fixture + the
         // authored tests, dry-run behind that component's harness feature (which gates `main`).
-        let (main_rs, feature) = match input.kind.as_str() {
-            "preflight" => {
+        let (main_rs, feature) = match &input.authored {
+            Authored::Preflight => {
                 let skeleton = SkeletonFixture { crate_id: hspec.crate_id() }
                     .render()
                     .expect("render skeleton_fixture");
                 (format!("{skeleton}{}", probe()), "c_probe".to_string())
             }
-            "setup" => (format!("{spec}{}", probe()), "c_probe".to_string()),
-            _ => {
+            Authored::Setup { .. } => (format!("{spec}{}", probe()), "c_probe".to_string()),
+            Authored::Component { .. } => {
                 // Same shape the deliverable gets (`finalize`): the section sealed behind its
                 // feature. Assembling it differently here is what let a green gate ship a crate
                 // that did not build — see docs/crucible-component-units.md and the e2e gate.
-                let fixture = ctx_str(input, "fixture");
+                let fixture = fixture_of(input);
                 let fname = harness_fn(input);
                 (format!("{fixture}\n\n{}", SectionModule::wrap(&fname, spec)), fname)
             }
         };
         let files = hspec.files(&main_rs, std::slice::from_ref(&feature));
-        let args = vec![
-            "run".to_string(),
-            program.clone(),
-            feature,
-            "--release".to_string(),
-            "--dry-run".to_string(),
-        ];
-        match run_confined(sandbox, "crucible", &args, &files, workdir) {
+        let args = ["run", program, &feature, "--release", "--dry-run"];
+        match ws.run("crucible", args, &files) {
             Ok(out)
                 if out.exit_code == 0
                     && !is_build_error(&format!("{}\n{}", out.stdout, out.stderr)) =>
@@ -1264,46 +1214,25 @@ impl Backend for CrucibleApp {
         &self,
         input: &AuthorInput,
         spec: &str,
-        unit: &str,
-        workdir: &Path,
-        sandbox: &Sandbox,
+        target: &Target,
+        ws: &Workspace,
     ) -> ValidateOutcome {
         let program = &input.program;
-        let fixture = ctx_str(input, "fixture");
-        let timeout = ctx_u64(input, "fuzz_timeout", 30);
+        let fixture = fixture_of(input);
+        let timeout: u64 = input.args.get("fuzz_timeout").unwrap_or(30);
+        // The target's name is the harness fn, which is also the Cargo feature and the selector.
+        let fname = &target.name;
         // Wrapped exactly as `compile` and `finalize` do it — one shape for the gate and the
         // deliverable, so what is fuzzed is what ships.
         let files = HarnessSpec::of(input).files(
-            &format!("{fixture}\n\n{}", SectionModule::wrap(unit, spec)),
-            std::slice::from_ref(&unit.to_string()),
+            &format!("{fixture}\n\n{}", SectionModule::wrap(fname, spec)),
+            std::slice::from_ref(fname),
         );
-        let args = vec![
-            "run".to_string(),
-            program.clone(),
-            unit.to_string(),
-            "--release".to_string(),
-            "--mode".to_string(),
-            "explore".to_string(),
-            "--timeout".to_string(),
-            timeout.to_string(),
+        let args = [
+            "run", program, fname, "--release", "--mode", "explore", "--timeout",
+            &timeout.to_string(),
         ];
-        // The report units this fuzz target covers (Crucible: a component's properties share its fn).
-        // The backend owns attribution — it maps ONE run to a verdict per covered unit.
-        let covered: Vec<Unit> =
-            self.units(input).into_iter().filter(|u| u.target_or_unit() == unit).collect();
-        let all = |o: Outcome, detail: Option<String>| -> ValidateOutcome {
-            ValidateOutcome::Verdicts {
-                verdicts: covered
-                    .iter()
-                    .map(|u| {
-                        let mut v = Verdict::with_outcome(o);
-                        v.detail = detail.clone();
-                        (u.unit.clone(), v)
-                    })
-                    .collect(),
-            }
-        };
-        match run_confined(sandbox, "crucible", &args, &files, workdir) {
+        match ws.run("crucible", args, &files) {
             Ok(out) => {
                 let combined = format!("{}\n{}", out.stdout, out.stderr);
                 // Order matters: a fuzz finding and a clean run both mean the harness BUILT, so
@@ -1315,24 +1244,25 @@ impl Backend for CrucibleApp {
                     // (each assertion is tagged `[<title>]`), holding the rest GOOD over the
                     // explored space. If it can't be attributed, mark all BAD (never hide it).
                     attribute_finding(
-                        &covered,
-                        finding_detail(&combined, workdir, program, unit),
+                        target,
+                        finding_detail(&combined, &ws.dir, program, fname),
                     )
                 } else if out.exit_code == 0 {
-                    all(Outcome::Good, None) // ran to the budget with no violation = every invariant held
+                    // Ran to the budget with no violation = every invariant it covers held.
+                    target.all(Outcome::Good, None)
                 } else if is_build_error(&combined) {
-                    // Shared build; re-author the whole spec (docs/rust-backend-api.md).
+                    // Shared build; re-author the whole spec (docs/rust-applications.md).
                     ValidateOutcome::BuildFailed { errors: build_errors(&out) }
                 } else {
                     // Non-zero exit with no build markers and no finding — capture the tail.
-                    all(Outcome::Error, Some(build_errors(&out)))
+                    target.all(Outcome::Error, Some(build_errors(&out)))
                 }
             }
-            Err(e) => all(Outcome::Error, Some(e)),
+            Err(e) => target.all(Outcome::Error, Some(e)),
         }
     }
 
-    fn sandbox_grants(&self, _args: &serde_json::Value) -> SandboxGrants {
+    fn sandbox_grants(&self, _args: &AppArgs) -> SandboxGrants {
         // Read-only grants beyond the launcher's discovered Rust toolchain: the crucible checkout
         // (path deps) and the `crucible` binary's dir. Was Python's `crucible_sandbox` extra_ro.
         let mut extra_ro = Vec::new();
@@ -1353,13 +1283,13 @@ impl Backend for CrucibleApp {
         //
         // This is also where the crate-vs-IDL decision is made, ONCE: the program's own Anchor
         // version decides it (`crate_dep_usable`), or the operator forces the IDL path by supplying
-        // one. Later callouts don't re-derive it — they read the `idl` context key the host sets
-        // after placing the file, so the whole run renders one consistent crate.
+        // one. Later callouts don't re-derive it — they read the `idl` the host reports after
+        // placing the file, so the whole run renders one consistent crate.
         let program = &input.program;
-        let cr = input.program_crate.resolved(program);
-        let forced = !ctx_str(input, "program_idl").is_empty();
+        let cr = &input.program_crate;
+        let forced = input.args.text("program_idl").is_some();
         let dest = HarnessSpec::new(program, cr.clone(), String::new()).idl_dest();
-        let idl_dest = (forced || !crate_dep_usable(&cr)).then_some(dest);
+        let idl_dest = (forced || !crate_dep_usable(cr)).then_some(dest);
         // Render the manifest for the mode just decided — warming must fetch the deps the real
         // builds will use (under the IDL path the program's own graph is never resolved at all) —
         // and pin the toolchain, so the fetch resolves with the cargo that will do the building.
@@ -1369,25 +1299,24 @@ impl Backend for CrucibleApp {
             warm_dirs: vec![format!("fuzz/{program}")],
             // The `.so` is named after the crate's lib target, not the analysis identifier. Needed
             // under both paths: LiteSVM loads the compiled program either way.
-            build_program: Some(cr.lib),
+            build_program: Some(cr.lib.clone()),
             idl_dest,
         }
     }
 
-    fn finalize(&self, outcomes: &serde_json::Value) -> BTreeMap<String, String> {
+    fn finalize(&self, outcomes: &FinalizeInput) -> BTreeMap<String, String> {
         // Assemble the one deliverable crate: the shared fixture + every delivered invariant's
         // test section, keyed by its feature (was Python's `CrucibleHarness`/`CrucibleArtifactStore`).
-        let program = outcomes.get("program").and_then(|v| v.as_str()).unwrap_or_default();
-        let fixture = outcomes.get("setup").and_then(|v| v.as_str()).unwrap_or_default();
-        // The host mirrors `AuthorInput.program_crate` and the placed `idl` into the outcome set —
-        // the delivered crate must be the same one the gated builds used, or it won't compile for
-        // the user.
-        let cr = outcomes
-            .get("program_crate")
-            .and_then(|v| serde_json::from_value::<ProgramCrate>(v.clone()).ok())
-            .unwrap_or_default();
-        let idl = outcomes.get("idl").and_then(|v| v.as_str()).unwrap_or_default();
-        let spec = HarnessSpec::new(program, cr.resolved(program), idl.to_string());
+        let program = &outcomes.program;
+        let fixture = outcomes.setup.as_deref().unwrap_or_default();
+        // The outcome set carries the same `program_crate` and placed `idl` every callout saw —
+        // the delivered crate must be the one the gated builds used, or it won't compile for the
+        // user.
+        let spec = HarnessSpec::new(
+            program,
+            outcomes.program_crate.clone(),
+            outcomes.idl.clone().unwrap_or_default(),
+        );
 
         let sections = delivered_sections(outcomes);
         if program.is_empty() || sections.is_empty() {
@@ -1434,6 +1363,8 @@ mod template_parity {
     //! to the former `format!` output (else the harness crate won't compile), and the static
     //! prose templates must preserve their bytes. Prompts are checked for template residue only.
     use super::*;
+    use autoprover_sdk::args::DeclaredArgs;
+    use autoprover_sdk::authoring::{Property, PropertyKind};
 
     /// The expected `[dependencies]` block, spelled out independently of the template (originally
     /// the `crucible_deps` `format!` body, kept as the oracle across the askama migration). The
@@ -1527,14 +1458,27 @@ mod template_parity {
         HarnessSpec::new("vault", cr, idl_at.to_string())
     }
 
-    fn prep_input(cr: ProgramCrate, context: serde_json::Value) -> AuthorInput {
+    /// The declared flags as they arrive — off the wire, as JSON.
+    fn declared(v: serde_json::Value) -> DeclaredArgs {
+        serde_json::from_value(v).expect("declared args")
+    }
+
+    /// The outcome set as the host sends it, parsed. Written as JSON rather than built as a struct
+    /// so these tests also pin the payload shape `finalize` is handed.
+    fn outcomes(v: serde_json::Value) -> FinalizeInput {
+        serde_json::from_value(v).expect("outcome set")
+    }
+
+    /// The input the host sends `workspace_prep`: the preflight one, before anything is analyzed.
+    fn prep_input(cr: ProgramCrate, args: serde_json::Value) -> AuthorInput {
         AuthorInput {
-            kind: "setup".into(),
+            authored: Authored::Preflight,
             program: "vault".into(),
             program_crate: cr,
-            component: serde_json::Value::Null,
             props: vec![],
-            context,
+            setup: None,
+            idl: None,
+            args: declared(args),
         }
     }
 
@@ -1623,13 +1567,13 @@ mod template_parity {
         assert!(pin.contains(&format!("channel = \"{HARNESS_TOOLCHAIN}\"")), "unexpected pin:\n{pin}");
         // Emitted with the crate under every path: warming (manifest only) and the deliverable.
         assert!(spec.files("fn main() {}", &[]).contains_key("fuzz/vault/rust-toolchain.toml"));
-        let plan = CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::Value::Null));
+        let plan = CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::json!({})));
         assert!(plan.files.contains_key("fuzz/vault/rust-toolchain.toml"));
     }
 
     #[test]
     fn workspace_prep_builds_the_lib_artifact_and_warms_the_harness_dir() {
-        let plan = CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::Value::Null));
+        let plan = CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::json!({})));
         // The harness dir follows the identifier (`crucible run vault`)…
         assert_eq!(plan.warm_dirs, vec!["fuzz/vault".to_string()]);
         // …but the `.so` to build is the program crate's lib target.
@@ -1643,7 +1587,7 @@ mod template_parity {
         // Anchor 0.29 vs ours ⇒ the crate path is impossible, so the wheel requests an IDL and
         // renders the warming manifest for the IDL path (else warming would resolve — and fail on —
         // the program's own dependency graph).
-        let plan = CrucibleApp.workspace_prep(&prep_input(skewed_crate(), serde_json::Value::Null));
+        let plan = CrucibleApp.workspace_prep(&prep_input(skewed_crate(), serde_json::json!({})));
         assert_eq!(plan.idl_dest.as_deref(), Some("fuzz/vault/idls/example_lending.json"));
         if let Some(repo) = crucible_repo() {
             let cargo = &plan.files["fuzz/vault/Cargo.toml"];
@@ -1759,13 +1703,11 @@ mod template_parity {
 
     #[test]
     fn prompt_templates_render_end_to_end() {
-        use autoprover_sdk::Property;
-
         let app = CrucibleApp;
         let component = serde_json::json!({ "instructions": [{ "name": "deposit" }] });
         let prop = Property {
             title: "no overflow".into(),
-            sort: "invariant".into(),
+            sort: PropertyKind::Invariant,
             description: "balance never overflows".into(),
             slug: "no_overflow".into(),
         };
@@ -1774,12 +1716,9 @@ mod template_parity {
         // fixture is authored with the properties in hand — that is the whole point of the host
         // deferring it until extraction has run — so they are part of this input too.
         let setup = AuthorInput {
-            kind: "setup".into(),
-            program: "vault".into(),
-            program_crate: ProgramCrate::default(),
-            component: component.clone(),
+            authored: Authored::Setup { model: component.clone() },
             props: vec![prop.clone()],
-            context: serde_json::Value::Null,
+            ..prep_input(ProgramCrate::default(), serde_json::json!({}))
         };
         let compile_fail = Failure {
             draft: "prior fixture src".into(),
@@ -1809,12 +1748,10 @@ mod template_parity {
 
         // component branch + a judge failure (exercises author_component.j2 + revise_judge.j2).
         let comp = AuthorInput {
-            kind: "component".into(),
-            program: "vault".into(),
-            program_crate: ProgramCrate::default(),
-            component: component.clone(),
+            authored: Authored::Component { unit: component.clone() },
             props: vec![prop],
-            context: serde_json::json!({ "fixture": "struct Fixture { ctx: TestContext }" }),
+            setup: Some("struct Fixture { ctx: TestContext }".into()),
+            ..prep_input(ProgramCrate::default(), serde_json::json!({}))
         };
         let judge_fail = Failure {
             draft: "prior tests".into(),
@@ -1846,23 +1783,24 @@ mod template_parity {
 
     // --- per-component harness fns (docs/crucible-component-units.md §8.1) -------------------
 
-    fn component_input(slug: &str, name: &str, props: Vec<autoprover_sdk::Property>) -> AuthorInput {
+    fn component_input(slug: &str, name: &str, props: Vec<Property>) -> AuthorInput {
         AuthorInput {
-            kind: "component".into(),
+            authored: Authored::Component {
+                unit: serde_json::json!({
+                    "name": name, "slug": slug,
+                    "instructions": [{ "name": "deposit" }],
+                }),
+            },
             program: "lending".into(),
-            program_crate: ProgramCrate::default(),
-            component: serde_json::json!({
-                "name": name, "slug": slug,
-                "instructions": [{ "name": "deposit" }],
-            }),
             props,
-            context: serde_json::json!({ "fixture": "struct Fixture { ctx: TestContext }" }),
+            setup: Some("struct Fixture { ctx: TestContext }".into()),
+            ..prep_input(ProgramCrate::default(), serde_json::json!({}))
         }
     }
 
-    fn prop(title: &str, slug: &str) -> autoprover_sdk::Property {
-        autoprover_sdk::Property {
-            title: title.into(), sort: "invariant".into(),
+    fn prop(title: &str, slug: &str) -> Property {
+        Property {
+            title: title.into(), sort: PropertyKind::Invariant,
             description: "d".into(), slug: slug.into(),
         }
     }
@@ -1907,7 +1845,7 @@ mod template_parity {
     fn a_unit_without_a_slug_falls_back_to_the_single_harness_name() {
         // Single-unit hosts (and older payloads) send no slug; collision is impossible there.
         let mut input = component_input("", "", vec![]);
-        input.component = serde_json::json!({ "instructions": [] });
+        input.authored = Authored::Component { unit: serde_json::json!({ "instructions": [] }) };
         assert_eq!(harness_fn(&input), DEFAULT_HARNESS_FN);
         assert_eq!(unit_name(&input), "lending");
     }
@@ -1934,11 +1872,17 @@ mod template_parity {
     }
 
     #[test]
-    fn setup_has_no_report_units() {
+    fn only_a_component_has_report_units() {
+        // The shared fixture formalizes nothing, and the gate runs before anything is analyzed.
         let app = CrucibleApp;
         let mut input = component_input("farms", "Farms", vec![prop("p", "p")]);
-        input.kind = "setup".into();
-        assert!(app.units(&input).is_empty());
+        assert_eq!(app.units(&input).len(), 1);
+        for authored in
+            [Authored::Setup { model: serde_json::Value::Null }, Authored::Preflight]
+        {
+            input.authored = authored;
+            assert!(app.units(&input).is_empty());
+        }
     }
 
     /// A resolver failure reaches us through the `crucible` CLI, which normalizes *any* failed
@@ -2039,20 +1983,21 @@ Error: Build failed
         // features the gated builds selected — read off the hosts' mirrored `targets`, not
         // re-derived from a display name.
         let app = CrucibleApp;
-        let outcomes = serde_json::json!({
+        let outcomes = outcomes(serde_json::json!({
             "program": "lending",
             "setup": "struct Fixture {}",
             "program_crate": { "dir": "programs/lending", "lib": "lending_program", "package": "lending_program" },
-            "idl": "",
             "components": [
-                { "name": "Withdraw Queue", "delivered": true, "targets": ["c_withdraw_queue"],
-                  "artifact_text": "fn c_withdraw_queue() { /* q */ }" },
-                { "name": "Farms", "delivered": true, "targets": ["c_farms"],
-                  "artifact_text": "fn c_farms() { /* f */ }" },
-                // A component that gave up contributes nothing — not an empty fn, not a feature.
-                { "name": "Referrals", "delivered": false },
+                { "name": "Withdraw Queue", "outcome": { "status": "delivered",
+                  "targets": ["c_withdraw_queue"],
+                  "artifact_text": "fn c_withdraw_queue() { /* q */ }" } },
+                { "name": "Farms", "outcome": { "status": "delivered", "targets": ["c_farms"],
+                  "artifact_text": "fn c_farms() { /* f */ }" } },
+                // A component that gave up contributes nothing — not an empty fn, not a feature,
+                // and the variant carries nothing for one to be read from.
+                { "name": "Referrals", "outcome": { "status": "gave_up" } },
             ],
-        });
+        }));
         // The features the crate declares ARE the section keys — one per delivered component,
         // read off the host's targets. (Asserted here rather than via the rendered Cargo.toml,
         // which only materializes when a crucible checkout is on `$CRUCIBLE_REPO`.)
@@ -2080,16 +2025,15 @@ Error: Build failed
     fn finalize_writes_a_shared_section_once_even_if_two_targets_map_to_it() {
         // Guards the failure that produced N copies of one fn: two targets, one authored source.
         let app = CrucibleApp;
-        let outcomes = serde_json::json!({
+        let outcomes = outcomes(serde_json::json!({
             "program": "lending",
             "setup": "struct Fixture {}",
             "program_crate": { "dir": "programs/lending", "lib": "lending_program", "package": "lending_program" },
-            "idl": "",
             "components": [
-                { "name": "A", "delivered": true, "targets": ["c_a", "c_b"],
-                  "artifact_text": "fn c_a() {}" },
+                { "name": "A", "outcome": { "status": "delivered", "targets": ["c_a", "c_b"],
+                  "artifact_text": "fn c_a() {}" } },
             ],
-        });
+        }));
         let main_rs = app.finalize(&outcomes);
         let main_rs = main_rs.get("fuzz/lending/src/main.rs").expect("main.rs");
         assert_eq!(main_rs.matches("fn c_a()").count(), 1, "{main_rs}");
@@ -2120,13 +2064,13 @@ mod section_isolation {
     }
 
     fn delivered(components: serde_json::Value) -> String {
-        let outcomes = serde_json::json!({
+        let outcomes: FinalizeInput = serde_json::from_value(serde_json::json!({
             "program": "lending",
             "setup": "struct Fixture {}",
             "program_crate": { "dir": "p", "lib": "lending_program", "package": "lending_program" },
-            "idl": "",
             "components": components,
-        });
+        }))
+        .expect("outcome set");
         CrucibleApp
             .finalize(&outcomes)
             .get("fuzz/lending/src/main.rs")
@@ -2178,8 +2122,10 @@ mod section_isolation {
     #[test]
     fn two_components_may_define_the_same_helper_name() {
         let main_rs = delivered(serde_json::json!([
-            { "name": "A", "delivered": true, "targets": ["c_a"], "artifact_text": SEC_A },
-            { "name": "B", "delivered": true, "targets": ["c_b"], "artifact_text": SEC_B },
+            { "name": "A", "outcome": { "status": "delivered", "targets": ["c_a"],
+              "artifact_text": SEC_A } },
+            { "name": "B", "outcome": { "status": "delivered", "targets": ["c_b"],
+              "artifact_text": SEC_B } },
         ]));
         let code = code_only(&main_rs);
         // Both helpers are present in the source…
@@ -2198,7 +2144,8 @@ mod section_isolation {
         // and `finalize` now go through the same `SectionModule::wrap`, and this pins that.
         let gate_section = SectionModule::wrap("c_a", SEC_A);
         let main_rs = delivered(serde_json::json!([
-            { "name": "A", "delivered": true, "targets": ["c_a"], "artifact_text": SEC_A },
+            { "name": "A", "outcome": { "status": "delivered", "targets": ["c_a"],
+              "artifact_text": SEC_A } },
         ]));
         assert!(
             main_rs.contains(gate_section.trim()),
@@ -2211,7 +2158,8 @@ mod section_isolation {
         // Wrapping it twice would emit an entry delegating to a fn the source never defines, and
         // declaring a feature with no `main()` is a link error, not a usable fuzz target.
         let code = code_only(&delivered(serde_json::json!([
-            { "name": "A", "delivered": true, "targets": ["c_a", "c_b"], "artifact_text": SEC_A },
+            { "name": "A", "outcome": { "status": "delivered", "targets": ["c_a", "c_b"],
+              "artifact_text": SEC_A } },
         ])));
         assert_eq!(code.matches("mod section_").count(), 1, "{code}");
         // `c_b` is not emitted at all — and since the declared feature list is built in the same

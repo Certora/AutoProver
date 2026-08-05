@@ -307,7 +307,7 @@ class SolanaComponentInstance:
         ``slug`` rides along because a backend names artifacts after it and must not re-derive it.
 
         The *whole-program* surface deliberately does NOT travel here. A backend that needs it has
-        its own route: Crucible's authored fixture — injected into every ``AuthorInput.context`` and
+        its own route: Crucible's authored fixture — put on every ``AuthorInput.setup`` and
         rendered in the prompt — already exposes every ``action_*`` the fuzzer can drive."""
         return {
             **self.component.model_dump(mode="json"),

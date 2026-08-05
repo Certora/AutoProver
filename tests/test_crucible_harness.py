@@ -39,7 +39,7 @@ _SKEWED = {**_CRATE, "anchor": "0.29.0"}
 _IDL_AT = "fuzz/vault/idls/example_lending.json"
 
 
-def _finalize(*sections: tuple[str, str], idl: str = "") -> dict[str, str]:
+def _finalize(*sections: tuple[str, str], idl: str | None = None) -> dict[str, str]:
     """Render the crate for delivered components, each ``(harness_fn, test_src)``.
 
     ``targets`` is what keys a section and declares its feature — the host mirrors the distinct
@@ -55,10 +55,12 @@ def _finalize(*sections: tuple[str, str], idl: str = "") -> dict[str, str]:
         "components": [
             {
                 "name": fn,
-                "delivered": True,
-                "artifact_text": src,
-                "targets": [fn],
-                "property_units": [[f"p {fn}", [f"c_p_{i}"]]],
+                "outcome": {
+                    "status": "delivered",
+                    "artifact_text": src,
+                    "targets": [fn],
+                    "property_units": [[f"p {fn}", [f"c_p_{i}"]]],
+                },
             }
             for i, (fn, src) in enumerate(sections)
         ],
@@ -66,12 +68,12 @@ def _finalize(*sections: tuple[str, str], idl: str = "") -> dict[str, str]:
     return json.loads(crucible_app.finalize(json.dumps(payload)))
 
 
-def _prep(program_crate: dict | None = None, context: dict | None = None) -> dict:
+def _prep(program_crate: dict | None = None, args: dict | None = None) -> dict:
     return json.loads(
         crucible_app.workspace_prep(
             json.dumps({
-                "kind": "setup", "program": "vault", "program_crate": program_crate or {},
-                "component": {}, "props": [], "context": context or {},
+                "kind": "preflight", "program": "vault",
+                "program_crate": program_crate or {}, "args": args or {},
             })
         )
     )
@@ -173,13 +175,13 @@ def test_finalize_delivers_the_idl_path_crate_when_prep_placed_an_idl():
 _NO_LAUNCH = json.dumps({"argv_prefix": ["/nonexistent/run-confined", "--"], "timeout_s": 5})
 
 
-def _compile_crate(tmp_path, *, spec: str = "", context: dict | None = None) -> dict[str, str]:
-    """Ask the wheel to compile a ``kind="preflight"`` input; return the crate it wrote."""
+def _compile_crate(tmp_path, *, spec: str = "", idl: str | None = None) -> dict[str, str]:
+    """Ask the wheel to compile a preflight input; return the crate it wrote."""
     result = json.loads(
         crucible_app.compile(
             json.dumps({
                 "kind": "preflight", "program": "vault", "program_crate": _CRATE,
-                "component": {}, "props": [], "context": context or {},
+                "props": [], "idl": idl,
             }),
             spec, str(tmp_path), _NO_LAUNCH,
         )
@@ -226,7 +228,7 @@ def test_the_preflight_skeleton_follows_the_idl_path_when_prep_placed_one(tmp_pa
     # Same decision as every other build in the run: types from the IDL the prep placed, and no
     # dependency on the program's crate — so the preflight gates the codegen too, which is one of
     # the biggest failure surfaces (it macro-expands the whole IDL at compile time).
-    files = _compile_crate(tmp_path, context={"idl": _IDL_AT})
+    files = _compile_crate(tmp_path, idl=_IDL_AT)
     main_rs = files["fuzz/vault/src/main.rs"]
     assert 'declare_fuzz_program!(example_lending = "idls/example_lending.json")' in main_rs
     assert main_rs.index("declare_fuzz_program") < main_rs.index("use example_lending::*;")
