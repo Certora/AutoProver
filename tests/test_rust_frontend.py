@@ -26,7 +26,7 @@ def test_notice_headline_without_outcome_is_plain_line():
 
 def test_notice_headline_glyphs_come_from_the_reports_own_table():
     # One table, not a copy: a ✓ must mean the same thing in the callout, the console rollup and the
-    # HTML report. The TUI used to keep its own string-keyed dict beside the rollup's enum-keyed one.
+    # HTML report.
     assert all(
         _notice_headline({"outcome": o.value, "line": "x"}) == f"{outcome_glyph(o)} x"
         for o in Outcome

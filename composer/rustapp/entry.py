@@ -93,8 +93,8 @@ def build_default_env(
 ) -> ServiceHost:
     """The env for a wheel that supplies no ``env_builder``: the same ``code_explorer`` + fs tools
     the built-in backends use for analysis/authoring, plus — when the descriptor declares a
-    ``rag_db_default`` and it is passed here as ``rag_db`` — that corpus's RAG search tools
-    (replacing the old per-app ``build_crucible_env``). No ``rag_db`` means no RAG surface.
+    ``rag_db_default`` and it is passed here as ``rag_db`` — that corpus's RAG search tools.
+    No ``rag_db`` means no RAG surface.
 
     ``forbidden_read`` is the ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry
     for EVM)."""

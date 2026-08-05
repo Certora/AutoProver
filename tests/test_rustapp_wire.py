@@ -56,8 +56,8 @@ def test_validate_outcome_is_discriminated_on_kind():
 
 
 def test_an_unknown_tag_is_refused_rather_than_read_as_the_other_variant():
-    # The failure mode this replaces: `res.get("kind") == "build_failed"` was False for a typo'd or
-    # renamed tag, so the host went on to read `res["verdicts"]` and died there instead.
+    # A discriminated union, not a `kind == "build_failed"` test: an unrecognized tag has to be
+    # named here rather than fall through to the other variant's fields and die reading them.
     with pytest.raises(ValidationError):
         parse_validate('{"kind": "verdict", "verdicts": []}')
     with pytest.raises(ValidationError):

@@ -172,7 +172,7 @@ async def test_the_setup_artifact_is_authored_once_and_then_reused(monkeypatch, 
 async def test_the_artifact_reaches_every_component_under_its_declared_context_key(monkeypatch, tmp_path):
     # How the fixture actually gets to the components: `begin` builds the formalizer with the
     # artifact already in the context blob, under the `context_key` the wheel declared ("fixture"
-    # here). This is the seam that used to be an assignment onto a live formalizer.
+    # here) — never assigned onto a formalizer that is already running.
     store, authored = _Store(), []
     f = await _formalizer(monkeypatch, _ctx(store, namespace=None), authored, tmp_path)
     assert f._context_extra["fixture"] == FIXTURE

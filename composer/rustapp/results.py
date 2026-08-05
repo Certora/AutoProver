@@ -7,9 +7,8 @@ pipeline result (:attr:`RustFormalResult.verdicts`, published by ``validate``) i
 tally + per-unit listing, using the report's own outcome labels so the wording matches the HTML
 report.
 
-Backend-agnostic: the outcome wording is parametrized by the descriptor's ``backend_tag`` (was
-hard-coded ``crucible`` when this lived in ``composer/crucible/results.py``), so any Rust app whose
-results carry verdicts gets the same summary.
+Backend-agnostic: the outcome wording is parametrized by the descriptor's ``backend_tag``, so any
+Rust app whose results carry verdicts gets the same summary.
 """
 
 from collections import Counter

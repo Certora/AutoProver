@@ -2,9 +2,9 @@
 
 Peer of :mod:`composer.rustapp.descriptor`, which mirrors the *declarative* half (the
 ``AppDescriptor`` a wheel exports once). Together they are the whole seam: every string that goes
-into or comes out of a wheel is one of these models, so the JSON shape lives in exactly two files
-and a field renamed in ``rust/autoprover-sdk/src/lib.rs`` fails here — at the boundary, naming the
-field — instead of silently reading as ``""`` three call frames later.
+into or comes out of a wheel is one of these models, so a field renamed in
+``rust/autoprover-sdk/src/lib.rs`` fails here — at the boundary, naming the field — instead of
+silently reading as ``""`` three call frames later.
 
 Keep the field names, defaults and tags in lockstep with ``rust/autoprover-sdk/src/lib.rs``.
 
@@ -175,9 +175,8 @@ class Unit(BaseModel):
     unit: str
     target: str | None = None
 
-    # A method rather than a ``@property``, deliberately: the field above shadows that builtin
-    # inside this class body. It also reads as the peer of the Rust ``Unit::target_or_unit`` it
-    # mirrors — the rule lives in one place per side, not inline at each call.
+    # A method, not a ``@property``: the ``property`` field above shadows that builtin inside this
+    # class body. Mirrors the Rust ``Unit::target_or_unit``.
     def target_or_unit(self) -> str:
         """The target this unit is checked by — its own name unless it shares one."""
         return self.target or self.unit

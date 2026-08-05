@@ -21,10 +21,10 @@ impl Backend for EchoApp {
             name: "echoprover".to_string(),
             header_text: "Echo Prover (Rust demo) | AutoProver".to_string(),
             ecosystem: "evm".to_string(),
-            // Must be a tag the *report* knows (`ReportBackend`: prover | foundry | crucible) — it
+            // Must be a tag the *report* knows (`ReportBackend`: prover | foundry | none) — it
             // picks the outcome wording, and the Python host validates it when it parses this
-            // descriptor. The demo has no report vocabulary of its own, so it borrows "prover":
-            // provenance only, the same borrow the null Solana backend makes.
+            // descriptor. The demo has no vocabulary of its own, so it borrows "prover"; a real
+            // backend adds its own literal to `ReportBackend` instead.
             backend_tag: "prover".to_string(),
             backend_guidance: "These properties are checked by the echo backend, a demo that \
                 accepts any well-formed spec. Feel free to state universal properties."

@@ -1,9 +1,9 @@
 """Generic RAG importer — ingest any corpus described by a common JSON manifest.
 
-This is the shared back half of the RAG build, factored out of the old per-corpus builders (see
-``docs/rag-import-format.md``): it reads one or more :class:`~composer.rag.import_format.RagManifest`
-documents and owns everything downstream — length-bounded chunking (``BlockBuilder``), embedding,
-``part`` numbering, and the *dual-path* ingestion every corpus wants:
+This is the shared back half of the RAG build (see ``docs/rag-import-format.md``): it reads one or
+more :class:`~composer.rag.import_format.RagManifest` documents and owns everything downstream —
+length-bounded chunking (``BlockBuilder``), embedding, ``part`` numbering, and the *dual-path*
+ingestion every corpus wants:
 
 * ``add_chunks_batch`` — length-bounded embedded chunks for **vector** (semantic) search;
 * ``add_manual_section`` — the full section for **keyword** search + exact ``get_section``.

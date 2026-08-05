@@ -219,14 +219,13 @@ async def test_a_failing_gate_raises_with_the_diagnostics_and_does_not_retry(tmp
 
 
 async def test_without_a_declared_preflight_the_prep_runs_but_nothing_is_gated(tmp_path, monkeypatch):
-    # The gate is opt-in per wheel; the workspace prep is not. A wheel that declares no preflight
-    # keeps exactly the old behaviour.
+    # The gate is opt-in per wheel; the workspace prep is not.
     wheel = FakeWheel({"build_program": "example_lending", "idl_dest": IDL_DEST})
     result, run = await _preflight(monkeypatch, tmp_path, wheel, with_preflight=False)
 
     assert result.idl == IDL_DEST  # the prep still ran
     assert wheel.compiles == []
-    assert run.metered == [] and run.unmetered == []  # no task, as before
+    assert run.metered == [] and run.unmetered == []  # the prep is silent, so there is no task
 
 
 async def test_the_build_does_not_spend_an_agent_slot(tmp_path, monkeypatch):
@@ -243,8 +242,7 @@ async def test_the_gate_is_tagged_with_the_declared_phase_member(tmp_path, monke
     # The task id comes from the step's kind, and the phase from its declared `phase_key` resolved
     # against the backend's own synthesized enum. That identity is load-bearing: the frontend looks
     # up section labels by enum *member*, so a member from any other copy of the enum would land the
-    # task in no section at all. `RustBackend.task_info` is the only thing that resolves it — this is
-    # what callers used to reach into the backend's private field to do.
+    # task in no section at all. `RustBackend.task_info` is the only thing that resolves it.
     wheel = FakeWheel({"build_program": "example_lending"})
     _project(tmp_path)
     _fake_chain(monkeypatch)

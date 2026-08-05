@@ -38,15 +38,16 @@ def test_an_unregistered_tag_raises_and_says_where_to_register_it():
 
 
 def test_the_message_says_so_when_nothing_is_registered_at_all():
-    # The resting state of this branch: the "known: []" wording would read as a lookup failure.
+    # An empty registry is the intended resting state, and "known: []" would read as a lookup
+    # failure against a populated one.
     assert "none is registered yet" in str(
         pytest.raises(ValueError, rag_env.validate_rag_db, "no_such_kb").value
     )
 
 
 def test_half_a_registration_is_not_a_corpus(monkeypatch: pytest.MonkeyPatch):
-    # Tools but no connection: nothing to search. This is the shape that used to slip through —
-    # a tag registered in both maps whose tools module didn't exist yet.
+    # Tools but no connection: nothing to search. A half-registration must fail validation, not
+    # validate and then silently produce no tools.
     monkeypatch.setitem(rag_env._FACTORIES, "tools_only", lambda _db: ())
     with pytest.raises(ValueError, match="not a registered RAG corpus"):
         rag_env.validate_rag_db("tools_only")

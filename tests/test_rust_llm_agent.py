@@ -1,13 +1,12 @@
 """The tool-enabled authoring turn's prompt handling (no wheel / LLM needed).
 
 The backend owns the prompt: its author/judge prompt payload carries the ``instruction`` and may
-define its own ``system`` prompt; otherwise a neutral, backend-agnostic default applies (no
-language/domain leak — the trigger for this was the old prompt hardcoding "Rust-based").
+define its own ``system`` prompt; otherwise a neutral, backend-agnostic default applies — one that
+names no language or domain, since the host serves wheels for any of them.
 
 The payload is a :class:`composer.rustapp.wire.Prompt`, parsed at the seam, so the shape is checked
 where it crosses rather than read key-by-key later: a wheel that sends no ``instruction`` fails here
-with the field named, where the host used to quietly prompt the agent with a JSON dump of whatever
-it did send.
+with the field named, rather than prompting the agent with a JSON dump of whatever it did send.
 """
 
 import pytest

@@ -104,8 +104,8 @@ def test_a_json_verdict_is_authoritative():
 
 
 def test_a_rejection_with_no_reason_still_says_something_to_revise_against():
-    # An empty feedback string used to be handed to the next authoring turn as its revise context —
-    # a round spent on "you were rejected" with no statement of why.
+    # An empty feedback string would make the next authoring turn a round spent on "you were
+    # rejected" with no statement of why.
     review = _parse_judge('{"accept": false}')
     assert isinstance(review, Rejected) and review.feedback.strip()
 
@@ -127,8 +127,7 @@ def test_prose_with_no_leading_verdict_is_taken_as_an_acceptance():
 
 # ---------------------------------------------------------------------------
 # A turn that produced nothing. `run_llm_agent` returns None when the agent ended without ever
-# calling the result tool — it used to be JSON-dumped, so the caller received the literal string
-# "null" and treated it as the authored artifact.
+# calling the result tool, so no caller can mistake a missing artifact for an authored one.
 # ---------------------------------------------------------------------------
 
 
@@ -171,9 +170,9 @@ async def test_an_authoring_turn_with_no_artifact_costs_an_attempt_but_never_rea
     )
 
     # Every attempt is spent, and the loop gives up — but nothing was ever handed to `compile`,
-    # because there was no draft to build. ("null" used to be.)
+    # because there was no draft to build.
     assert isinstance(outcome, GaveUp)
     assert turns == 2
     assert compiled == []
-    # …and the next turn is told what went wrong, rather than being asked to revise a draft of "null".
+    # …and the next turn is told what went wrong, rather than being asked to revise a missing draft.
     assert "without calling the `result` tool" in json.loads(wheel.last_failure)["errors"]

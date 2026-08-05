@@ -251,7 +251,7 @@ pub struct Property {
 /// program we hit had directory `programs/lend`, package `example-lending`, lib `example_lending`).
 ///
 /// Every field may be empty — a host that resolved nothing, or one predating this struct. Read it
-/// through [`ProgramCrate::resolved`], which fills the gaps from the old `programs/<program>`
+/// through [`ProgramCrate::resolved`], which fills the gaps from the `programs/<program>`
 /// convention, rather than using the fields raw.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProgramCrate {
@@ -280,10 +280,10 @@ pub struct ProgramCrate {
 }
 
 impl ProgramCrate {
-    /// This crate with every empty part filled from the pre-`program_crate` convention: the crate
-    /// sits at `programs/<program>` and is named `<program>`. The fallback only holds for a
-    /// workspace whose directory and package names happen to match the analysis identifier, but it
-    /// keeps a host that sends nothing working exactly as before.
+    /// This crate with every empty part filled from the conventional layout: the crate sits at
+    /// `programs/<program>` and is named `<program>`. That fallback only holds for a workspace
+    /// whose directory and package names happen to match the analysis identifier — it is what a
+    /// host that resolves nothing gets, not something to rely on.
     pub fn resolved(&self, program: &str) -> ProgramCrate {
         let package =
             if self.package.is_empty() { program.to_string() } else { self.package.clone() };
@@ -461,9 +461,8 @@ pub struct SandboxGrants {
 /// produced a `Verdict` **per report unit the target covers** (`(unit, verdict)`). A target may
 /// cover several units (e.g. Crucible runs every invariant in one target), and the backend — which
 /// owns its own result/failure format — attributes the run to those units; the host records the
-/// verdicts verbatim (it does no verdict logic). Fusing the build gate into `validate` (rather than
-/// a separate `compile` dry-run) is the component path's efficiency win (docs/rust-applications.md
-/// §4.4).
+/// verdicts verbatim (it does no verdict logic). The build gate is fused in here rather than run as
+/// a separate `compile` dry-run, so a component pays for one build (docs/rust-applications.md §4.4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ValidateOutcome {
@@ -477,8 +476,7 @@ pub enum ValidateOutcome {
 /// application's `backend_tag`, so a backend never spells it out here.
 ///
 /// An enum rather than a free string: the host validates this field against the same closed set, so
-/// a typo that used to reach a report row and read there as an unexplained `UNKNOWN` now doesn't
-/// compile.
+/// a typo fails to compile here instead of reaching a report row as an unexplained `UNKNOWN`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Outcome {

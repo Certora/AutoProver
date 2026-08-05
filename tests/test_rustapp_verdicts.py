@@ -49,8 +49,8 @@ def _result(*outcomes: ComponentOutcome) -> CorePipelineResult[RustFormalResult]
 
 
 def test_every_unit_of_a_component_gets_a_row():
-    # A component with several properties bakes several verdicts. Reporting only the first read as
-    # "1 Verified" for a component where three checks ran — and hid the failing one.
+    # A component with several properties bakes several verdicts. Reporting only the first would
+    # read as "1 Verified" where three checks ran, and would hide the failing one.
     result = _result(
         ComponentOutcome(
             _Feat("increment"), [],

@@ -194,8 +194,8 @@ _OUTCOME_GLYPHS: dict[Outcome, str] = {
 
 def outcome_glyph(outcome: Outcome) -> str:
     """The at-a-glance mark for an ``Outcome``. Lives beside :func:`outcome_label` because it answers
-    the same question — how this outcome reads to a human — and the two were drifting as separate
-    tables in the console rollup and the TUI."""
+    the same question — how this outcome reads to a human — and every surface that shows a glyph
+    must show the same one."""
     return _OUTCOME_GLYPHS[outcome]
 
 

@@ -2,9 +2,8 @@
 
 Discovery runs in the *entry point*, before the pipeline, and only when the doc wasn't passed on the
 command line — so it is not one of the four phases the driver tags. A wheel that wants it in a
-section of its own claims ``CoreSlot.DISCOVERY``; the host used to look for a phase whose key was
-literally ``"discover_design_doc"``, a convention a wheel author had to spell exactly right with no
-error if they didn't.
+section of its own claims ``CoreSlot.DISCOVERY``, rather than spelling a magic phase key the host
+recognizes by name and silently ignores when it is misspelled.
 
 No wheel and no services — the descriptor and the synthesized enum are all this needs.
 """

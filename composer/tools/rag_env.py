@@ -1,9 +1,7 @@
 """Descriptor-driven RAG toolset selection for Rust applications.
 
 A wheel declares ``rag_db_default`` in its :class:`AppDescriptor`; the generic env builder looks
-that tag up here and binds the corresponding corpus's search tools onto the author's env — the same
-wiring the old ``build_crucible_env`` did, now selected by tag rather than hard-coded per
-application.
+that tag up here and binds the corresponding corpus's search tools onto the author's env.
 
 Like the ecosystem registry, this maps a declarative tag → a concrete toolset; it is not an
 application fork (the tool classes live in ``composer/tools/<corpus>_rag.py``, shared, exactly as

@@ -46,8 +46,8 @@ def test_descriptor_parses_and_maps_core_phases():
     desc = AppDescriptor.model_validate_json(echoprover.descriptor())
     assert desc.name == "echoprover"
     # A tag from the closed ``ReportBackend`` set: the demo borrows the prover's outcome wording
-    # rather than inventing a vocabulary the report can't render. Anything outside the set now fails
-    # here, at descriptor load, instead of later when the formalizer is constructed.
+    # rather than inventing a vocabulary the report can't render. Anything outside the set fails
+    # here, at descriptor load, rather than later when the formalizer is constructed.
     assert desc.backend_tag == "prover"
     # Every *required* slot is mapped, plus a UI-only "solving" phase. The optional DISCOVERY slot is
     # left unclaimed, which is the common case: the design-doc task then groups under the first phase.
@@ -136,9 +136,9 @@ def test_entry_argparser_has_positionals_and_declared_flags():
 
 
 def test_the_parser_the_entry_point_runs_is_the_one_that_carries_help_text():
-    # ``build_arg_parser`` used to be a hand-copy of the parser ``rust_entry_point`` built inline,
-    # and had already drifted: every help string was missing, so ``--help`` from the introspection
-    # path documented nothing. One definition now, and this asserts the help survives in it.
+    # ``build_arg_parser`` is the single definition ``rust_entry_point`` runs, not a hand-copy of an
+    # inline one — a second copy drifts, and a copy missing its help strings makes ``--help`` from
+    # the introspection path document nothing.
     from composer.rustapp.entry import build_arg_parser
 
     # argparse re-wraps help to the terminal width, so compare on collapsed whitespace.

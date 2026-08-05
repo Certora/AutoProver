@@ -100,14 +100,13 @@ from composer.spec.util import slugify_filename, string_hash, uniq_thread_id
 
 _log = logging.getLogger(__name__)
 
-# Author→compile revise budget (was the Rust sessions' SETUP/PC_MAX_ATTEMPTS).
+# Author→compile revise attempts per artifact.
 DEFAULT_MAX_ATTEMPTS = 7
 
 # ---------------------------------------------------------------------------
-# The LLM authoring turn — the Rust backend's binding of the shared agent primitive
-# (bind_standard / run_to_completion), the peer of composer/foundry/author.py. Python
-# runs this; the backend only supplies the prompt (its author_prompt/judge_prompt
-# callouts). It is the "author" step of the author→compile→judge→validate loop.
+# The LLM authoring turn — the "author" step of the author→compile→judge→validate loop, and
+# the peer of composer/foundry/author.py. Python runs it; the backend only supplies the
+# prompt, through its author_prompt/judge_prompt callouts.
 # ---------------------------------------------------------------------------
 
 # Neutral fallback system prompt. The backend's prompt payload carries the task-specific
@@ -122,10 +121,9 @@ _DEFAULT_SYS_PROMPT = (
 )
 
 
-# NOTE: `bind_standard` introspects this state class's ``__annotations__`` at runtime to
-# unwrap ``result: NotRequired[T]`` — so the annotation must stay a real object, not a
-# string. This is a concrete reason the repo bans ``from __future__ import annotations``
-# (see CLAUDE.md); stringized annotations would break the unwrap here.
+# WARNING: `bind_standard` introspects this state class's ``__annotations__`` at runtime to
+# unwrap ``result: NotRequired[T]``, so the annotation must stay a real object — a stringized
+# one breaks the unwrap.
 class _LlmState(MessagesState):
     result: NotRequired[str]
 
@@ -159,10 +157,8 @@ class Rejected:
     feedback: str
 
 
-#: One review's verdict. Two types rather than ``(bool, str)``: the string means different things on
-#: either side of that bool (a revise instruction vs an aside), and the pair had a third meaning too
-#: — ``(True, "")`` doubled as "this wheel declares no judge". Absence is now ``None``, which the
-#: callers read as "nothing to review", so no verdict has to stand in for it.
+#: One review's verdict. A wheel that declares no judge produces ``None`` instead — "nothing to
+#: review", which is not a verdict and must not be read as a favourable one.
 type Review = Accepted | Rejected
 
 # Reviews a candidate artifact. The host builds it (see :func:`_make_judge_hook`) around the wheel's
@@ -334,9 +330,8 @@ async def run_llm_agent(
     )
     result = res.get("result")
     # ``result`` is ``NotRequired``: the agent may end its turn without ever calling the result tool
-    # (it ran out of recursion, or just stopped). ``None`` says so. It used to be JSON-dumped, which
-    # handed the caller the literal string "null" as if it were the authored artifact — a draft that
-    # then went to the toolchain and spent an attempt on a build nobody could have fixed.
+    # (it ran out of recursion, or just stopped). ``None`` says so, rather than handing the caller a
+    # placeholder the toolchain would spend an attempt building.
     return result if isinstance(result, str) else None
 
 
@@ -347,7 +342,7 @@ async def run_llm_agent(
 def make_emitter() -> Callable[[str, dict], None]:
     """A ``emit(kind, payload)`` that streams a domain event to the current task's panel.
     Routes out-of-graph (the loop isn't inside a LangGraph run) via ``push_custom_update``,
-    keyed by the active ``run_task`` id — the same routing the old ``RealEffects.emit`` used."""
+    keyed by the active ``run_task`` id."""
 
     def emit(kind: str, payload: dict) -> None:
         push_custom_update({"type": kind, **payload}, thread_id=get_current_task_id() or "rust")
@@ -597,10 +592,6 @@ def program_crate_of(
     chain has no resolver, when the language has no such unit (Solidity), or when the layout
     couldn't be read — all three mean the same thing to the wheel, which then applies its own
     convention (the SDK's ``ProgramCrate::resolved``).
-
-    Takes the whole ecosystem rather than its ``name`` because that is what a caller with a
-    configured application has in hand (see ``composer.rustapp.entry``), and the chain is the only
-    part of it this question turns on.
     """
     return source_crate(ecosystem.name, source)
 
@@ -743,8 +734,8 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # The compiled setup spec (Crucible's fixture), forwarded to ``finalize`` so a
         # callout-mode wheel can render the whole deliverable, and already present in
         # ``context_extra`` under its ``context_key`` for every component's ``_context``. A wheel
-        # that declares a ``setup`` step gets here only through :class:`RustStagedFormalizer`, which
-        # authors it first — so this is a plain constructor argument, never filled in later.
+        # that declares a ``setup`` step reaches here only through :class:`RustStagedFormalizer`,
+        # which authors the artifact before constructing this.
         self._setup_result = setup_result
         # Where the analyzed source's compilation unit lives (see ``program_crate_of``), carried
         # on every ``AuthorInput`` and mirrored into ``finalize`` — the delivered crate must
@@ -779,11 +770,6 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     ) -> RustFormalResult | GaveUp:
         workdir = Path(run.source.project_root)
         slugs = unique_slugs(props)
-        # Nothing to scaffold before the loop: the wheel materializes its crate per confined run
-        # from the ``files`` map, and the shared setup artifact is already in
-        # ``self._context_extra`` — ``begin`` authored it from every unit's properties before the
-        # driver fanned out.
-
         input_json = AuthorInput(
             kind="component",
             program=str(run.source.contract_name),
@@ -809,9 +795,9 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             backend_name=self._descriptor.name, emit=emit, memory_tool=memory_tool,
         ) if has_judge else None
 
-        # Fused author → validate loop: validate's build IS the compile gate (no separate dry-run
-        # per component — that ~2×'d the e2e). The units share one build, so a BuildFailed from any
-        # unit re-authors the whole spec.
+        # Fused author → validate loop: validate's build IS the compile gate, so a component pays
+        # for one build rather than a dry-run plus a check. The units share that build, so a
+        # BuildFailed from any unit re-authors the whole spec.
         failure: Failure | None = None
         for _ in range(self._max_attempts):
             spec = await _author_turn(
@@ -1005,8 +991,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
     The workspace itself was prepared and gated *before* analysis, by
     :meth:`RustBackend.preflight` — its outcome arrives here as :attr:`preflight`.
 
-    Fully expresses what Crucible used to need a subclass for (``docs/rust-applications.md``): the
-    shared fixture, per-run serialization, and the context-thread of the fixture + declared args."""
+    Descriptor-driven throughout (``docs/rust-applications.md``), so an application needing a shared
+    fixture, per-run serialization, or a context-thread of the fixture + declared args declares them
+    rather than subclassing."""
 
     backend: "RustBackend"
     preflight: RustPreflight
@@ -1034,10 +1021,8 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
 
         def build(setup_result: str | None, context_key: str = "") -> RustFormalizer:
             """The formalizer, around a shared setup artifact that is either already authored or not
-            called for. Threading the artifact through here (rather than assigning it onto a
-            formalizer that already exists) is what keeps :class:`RustFormalizer` constructed once
-            and never mutated. ``context_key`` is the declared key to inject it under — always
-            supplied together with the artifact, so there is no fallback key to invent."""
+            called for. ``context_key`` is the declared key to inject it under — always supplied
+            together with the artifact, so there is no fallback key to invent."""
             extra = dict(context_extra)
             if setup_result is not None:
                 extra[context_key] = setup_result
@@ -1169,9 +1154,9 @@ class RustBackend(
            skeleton artifact *the wheel authors itself* through the real toolchain, in the real
            sandbox. This is what turns step 1 from "we placed a manifest" into "this workspace
            compiles": a `cargo fetch` resolves a dependency graph but compiles nothing, and its
-           failures are deliberately non-fatal, so nothing here used to be *checked* until the first
-           authored draft was compiled — after the whole extraction phase, and as compiler errors an
-           authoring agent cannot fix because it does not own the manifest.
+           failures are deliberately non-fatal. Without the gate the first *check* of the workspace
+           is the first authored draft's build — after the whole extraction phase, and reported as
+           compiler errors an authoring agent cannot fix because it does not own the manifest.
 
         Neither step reads the analyzed model or any property, which is what makes the overlap safe.
         A failure raises (:class:`PreflightFailed` from the gate, or the workspace toolchain's own

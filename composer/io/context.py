@@ -144,9 +144,9 @@ def push_custom_update(
 ) -> bool:
     """Push a ``CustomUpdate`` to the current ``with_handler`` scope's queue so it
     reaches ``EventHandler.handle_event`` — the out-of-graph analogue of
-    ``get_stream_writer()``. Used by backends (e.g. the Rust IoC loop) that emit
-    domain events *between* graph calls, where ``get_stream_writer()`` is unavailable.
-    Returns ``False`` (event dropped) if no handler scope is installed."""
+    ``get_stream_writer()``. Used by backends (e.g. the Rust author→compile→validate
+    loop) that emit domain events *between* graph calls, where ``get_stream_writer()``
+    is unavailable. Returns ``False`` (event dropped) if no handler scope is installed."""
     curr_io = _io_handler.get()
     if curr_io is None:
         return False
