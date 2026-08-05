@@ -1,13 +1,14 @@
 """A null Solana backend — records extracted properties without verifying them.
 
-It satisfies the full ``PipelineBackend`` contract over the Solana ecosystem's
+It implements the full ``PipelineBackend`` contract over the Solana ecosystem's
 ``(SolanaApplication, SolanaProgramInstance, SolanaComponentInstance)`` triple, but its
 ``formalize`` just echoes the extracted properties into a trivial result and its
 ``fetch_verdicts`` returns nothing.
 
 **Role:** a **test double** for the Solana front half (analysis + property extraction)
 without a real verifier — see ``tests/test_solana_gate.py``. Production Solana
-verification is the Crucible fuzzer backend.
+verification is the Crucible fuzzer backend — a Rust wheel hosted by
+:mod:`composer.rustapp`.
 """
 
 import enum
@@ -22,6 +23,7 @@ from composer.pipeline.core import (
     CorePhases,
     Formalizer,
     GaveUp,
+    PipelineBackend,
     PipelineRun,
     PreparedSystem,
     SystemAnalysisSpec,
@@ -105,13 +107,10 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
 
 class NullSolanaFormalizer(Formalizer[NullResult, SolanaComponentInstance]):
     def __init__(self) -> None:
-        # The tag is provenance only — it picks the report's outcome labels, and this backend's
-        # results are all-UNKNOWN either way. So borrow ``"prover"``, an existing member of
-        # ``ReportBackend``: the real Solana verifier's own tag is added to that literal by the
-        # backend that introduces it, and until then a value outside the literal is not merely
-        # untyped but unusable — ``AutoProverReport`` is a pydantic model, so it would fail
-        # validation in ``build_report`` and lose the report phase to a swallowed exception.
-        super().__init__(NullResult, "prover")
+        # ``"none"``: this backend verifies nothing, and its report should say so rather than
+        # borrow a real verifier's vocabulary — every unit comes out UNKNOWN, which that tag's
+        # wording renders as "Unverified".
+        super().__init__(NullResult, "none")
 
     @override
     async def formalize(
@@ -147,24 +146,49 @@ class NullSolanaPrepared(PreparedSystem[NullResult, SolanaComponentInstance, Sol
 
 
 @dataclass
-class NullSolanaBackend:
-    """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, SolanaComponentInstance,
-    SolanaProgramInstance, SolanaApplication]`` (P, FormT, H, A, Unit, Main, App) — structural."""
+class NullSolanaBackend(
+    PipelineBackend[
+        SolanaPhase, NullResult, None, NullArtifact, SolanaComponentInstance,
+        SolanaProgramInstance, SolanaApplication, None,
+    ]
+):
+    _store: NullSolanaArtifactStore
 
-    artifact_store: NullSolanaArtifactStore
-    backend_guidance = SOLANA_NULL_GUIDANCE
-    analysis_spec = SystemAnalysisSpec("solana-analysis", "solana-properties")
-    core_phases = CorePhases(
-        {
-            "analysis": SolanaPhase.ANALYSIS,
-            "extraction": SolanaPhase.EXTRACTION,
-            "formalization": SolanaPhase.FORMALIZATION,
-            "report": SolanaPhase.REPORT,
-        }
-    )
+    @property
+    @override
+    def artifact_store(self) -> NullSolanaArtifactStore:
+        return self._store
 
+    @property
+    @override
+    def backend_guidance(self) -> str:
+        return SOLANA_NULL_GUIDANCE
+
+    @property
+    @override
+    def analysis_spec(self) -> SystemAnalysisSpec:
+        return SystemAnalysisSpec("solana-analysis", "solana-properties")
+
+    @property
+    @override
+    def core_phases(self) -> CorePhases[SolanaPhase]:
+        return CorePhases(
+            {
+                "analysis": SolanaPhase.ANALYSIS,
+                "extraction": SolanaPhase.EXTRACTION,
+                "formalization": SolanaPhase.FORMALIZATION,
+                "report": SolanaPhase.REPORT,
+            }
+        )
+
+    @override
+    async def preflight(self, run: PipelineRun[SolanaPhase, None]) -> None:
+        """Nothing to prepare — this backend builds nothing and only records properties."""
+        return None
+
+    @override
     async def prepare_system(
-        self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None]
+        self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None], preflight: None
     ) -> PreparedSystem[NullResult, SolanaComponentInstance, SolanaProgramInstance]:
         # Use the Solana ecosystem's locate_main so the backend and ecosystem agree on the
         # target program (imported lazily to avoid an import cycle with pipeline.ecosystem).
@@ -172,5 +196,6 @@ class NullSolanaBackend:
 
         return NullSolanaPrepared(SOLANA.locate_main(analyzed, run.source), NullSolanaFormalizer())
 
+    @override
     def to_artifact_id(self, c: SolanaComponentInstance) -> NullArtifact:
         return NullArtifact(c.slug)

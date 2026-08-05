@@ -99,7 +99,9 @@ class _Backend:
 
     def __init__(self, prepared): self._prepared = prepared
 
-    async def prepare_system(self, _analyzed, _run): return self._prepared
+    async def preflight(self, _run): return None
+
+    async def prepare_system(self, _analyzed, _run, _preflight): return self._prepared
 
     def to_artifact_id(self, _c): return "artifact-id"
 

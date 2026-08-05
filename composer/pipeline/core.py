@@ -3,12 +3,21 @@
 Phase chain — each link is immutable and its existence proves the prior phase ran, so ordering is
 a constructor dependency rather than a call-order convention; there is no half-initialized state:
 
-    Backend ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
-    (config, source)            (.main: structure)                        (formalize / persist / report)
+    Backend ──preflight──▶ Pre ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
+    (config, source)       (built    (.main: structure)                                      (formalize /
+                            workspace)                                                        persist / report)
 
-A backend whose units all build on one *shared* artifact inserts a link: ``prepare_formalization`` returns 
-a :class:`StagedFormalizer`, and its ``begin`` — handed every unit's properties — is what produces the 
-:class:`Formalizer`. 
+Two links are *overlapped* with the LLM steps they don't depend on, since both are usually builds:
+``preflight`` runs alongside system analysis, and ``prepare_formalization`` alongside property
+extraction. ``preflight`` is additionally a *gate*: it is the cheap side of its pair, so it is
+awaited first and a failure there cancels the analysis agent racing it rather than letting it spend
+on a run that can no longer complete. The second pair is simply awaited in turn.
+
+A backend whose units all build on one *shared* artifact inserts a link rather than a call-order
+convention: ``prepare_formalization`` returns a :class:`StagedFormalizer`, and its ``begin`` — handed
+every unit's properties — is what produces the :class:`Formalizer`. Same rule as the rest of the
+chain, so it needs no new rule: the artifact is a constructor argument to the only object that uses
+it, and no formalizer ever exists without it.
 
 The driver owns the genuinely-shared steps: system analysis, per-component property extraction, the
 result-type-keyed cache, and (since the report is backend-agnostic) building + persisting the
@@ -21,7 +30,7 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Protocol, Any, cast
+from typing import Any, cast
 from collections.abc import Sequence
 from abc import ABC, abstractmethod
 
@@ -141,24 +150,68 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](Protocol):
-    @property
-    def backend_guidance(self) -> str: ...
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](ABC):
+    """What the driver needs from a backend, and the only thing it knows about one.
+
+    Each backend names its own eight type arguments in its ``class`` line: that is what ties its
+    result / artifact-id / unit / app axes to one another, and it is checked where the backend is
+    *defined* rather than only where it is handed to :func:`run_pipeline`.
+
+    Every member the driver reads is declared **read-only**. The driver only ever reads them, and
+    read-only is what lets a backend derive one (the Rust backend reads its guidance off the wheel's
+    descriptor) or narrow one (the prover's store is a ``ProverArtifactStore``, whose extra
+    ``write_component_runs`` its own prepared system needs) — a mutable attribute would be invariant,
+    so a backend holding constructor state exposes it through the accessor instead of overriding it
+    with a field."""
 
     @property
-    def analysis_spec(self) -> SystemAnalysisSpec: ...
+    @abstractmethod
+    def backend_guidance(self) -> str:
+        """Backend-specific direction for property extraction — what this verifier can check."""
+        ...
 
     @property
-    def core_phases(self) -> CorePhases[P]: ...
+    @abstractmethod
+    def analysis_spec(self) -> SystemAnalysisSpec:
+        """The backend's contribution to the shared system-analysis call."""
+        ...
 
     @property
-    def artifact_store(self) -> ArtifactStore[A, FormT]: ...
+    @abstractmethod
+    def core_phases(self) -> CorePhases[P]:
+        """The backend's own phase enum, mapped onto the four phases the driver tags tasks with."""
+        ...
 
+    @property
+    @abstractmethod
+    def artifact_store(self) -> ArtifactStore[A, FormT]:
+        """Where the driver persists each unit's properties, deliverable, and the run's report."""
+        ...
+
+    @abstractmethod
+    async def preflight(self, run: PipelineRun[P, H]) -> Pre:
+        """Whatever the backend can do before it knows anything about the program — run
+        *concurrently with system analysis*, and awaited before :meth:`prepare_system`.
+
+        This is where a backend that must build something puts the build. Crucible prepares its
+        harness crate, compiles the program to sBPF, and gates a wheel-authored skeleton harness
+        through the real toolchain; none of that reads the analyzed model, so serializing it behind
+        analysis buys nothing, while running it alongside means a broken dependency graph or an
+        unbuildable program surfaces before the run has spent meaningfully on the model.
+
+        ``Pre`` is opaque to the driver — it only carries the result to ``prepare_system``, so a
+        backend can hand its own prep forward as immutable state rather than stashing it on itself.
+        ``None`` for a backend with nothing to do ahead of time."""
+        ...
+
+    @abstractmethod
     async def prepare_system(
         self, analyzed: App,
-        run: PipelineRun[P, H]
+        run: PipelineRun[P, H],
+        preflight: Pre,
     ) -> PreparedSystem[FormT, U, Main]: ...
 
+    @abstractmethod
     def to_artifact_id(self, c: U) -> A: ...
 
 
@@ -196,8 +249,8 @@ def extract_task_id(idx: int) -> str:
 def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
 
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
     run: PipelineRun[P, H],
     *,
     interactive: bool = False,
@@ -214,8 +267,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         )
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
     run: PipelineRun[P, H],
     plugin_manager: PluginManager[P, U],
     *,
@@ -231,25 +284,38 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         f"ecosystem {ecosystem.name!r} has no greenfield prompts; got sort='greenfield'"
     )
 
-    # 1. System analysis (shared primitive; the ecosystem supplies the analyzed model type,
-    #    prompts, validation, and front-matter — EVM reproduces prior behavior exactly).
-    analyzed = await run.runner(
-        TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
-        lambda: run_component_analysis(
-            ty=ecosystem.system_model, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
-            input=source, env=run.env,
-            extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
-            expected_main_id=source.contract_name,
-            system_template=ecosystem.analysis_prompts.system,
-            initial_template=ecosystem.analysis_prompts.initial,
-            validate=ecosystem.validate_analysis,
-        ),
+    # 1. Backend preflight ∥ system analysis. The preflight (Crucible: build the program and gate a
+    #    skeleton harness through the real toolchain) reads nothing analysis produces, so it starts
+    #    at t=0 — and if the toolchain is broken, the analysis racing it is cancelled rather than run
+    #    to completion first. The analysis itself is the shared primitive; the ecosystem supplies the
+    #    analyzed model type, prompts, validation, and front-matter.
+    preflight_task = asyncio.create_task(backend.preflight(run))
+    analysis_task = asyncio.create_task(
+        run.runner(
+            TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
+            lambda: run_component_analysis(
+                ty=ecosystem.system_model, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
+                input=source, env=run.env,
+                extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
+                expected_main_id=source.contract_name,
+                system_template=ecosystem.analysis_prompts.system,
+                initial_template=ecosystem.analysis_prompts.initial,
+                validate=ecosystem.validate_analysis,
+            ),
+        )
     )
+    try:
+        preflight = await preflight_task
+    except BaseException:
+        analysis_task.cancel()
+        await asyncio.gather(analysis_task, return_exceptions=True)
+        raise
+    analyzed = await analysis_task
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
     
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
-    prepared = await backend.prepare_system(analyzed, run)
+    prepared = await backend.prepare_system(analyzed, run, preflight)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.

@@ -30,7 +30,7 @@ from composer.foundry.author import (
 from composer.foundry.artifacts import FoundryArtifactStore
 from composer.foundry.report import _foundry_verdicts
 from composer.pipeline.core import (
-    Formalizer, PreparedSystem, PipelineRun,
+    Formalizer, PipelineBackend, PreparedSystem, PipelineRun,
     GaveUp, SystemAnalysisSpec,
     CorePhases, CorePipelineResult,
     COMMON_SYSTEM_CACHE_KEY
@@ -147,26 +147,54 @@ class FoundrySystem(PreparedSystem[GeneratedFoundryTest, ContractComponentInstan
         return self.form
 
 @dataclass
-class FoundryBackend:
-    backend_guidance = FOUNDRY_BACKEND_GUIDANCE
-
-    core_phases = CorePhases({
-        "analysis": FoundryPhase.SYSTEM_ANALYSIS,
-        "extraction": FoundryPhase.PROPERTY_EXTRACTION,
-        "formalization": FoundryPhase.TEST_GENERATION,
-        "report": FoundryPhase.REPORT
-    })
-
-    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "foundry-properties")
-
-    artifact_store: ArtifactStore[FoundryTestArtifact, GeneratedFoundryTest]
+class FoundryBackend(
+    PipelineBackend[
+        FoundryPhase, GeneratedFoundryTest, None, FoundryTestArtifact, ContractComponentInstance,
+        ContractInstance, SourceApplication, None,
+    ]
+):
+    _store: ArtifactStore[FoundryTestArtifact, GeneratedFoundryTest]
 
     foundry_conf: _ForgeRunConfig
 
+    @property
+    @override
+    def backend_guidance(self) -> str:
+        return FOUNDRY_BACKEND_GUIDANCE
+
+    @property
+    @override
+    def analysis_spec(self) -> SystemAnalysisSpec:
+        return SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "foundry-properties")
+
+    @property
+    @override
+    def core_phases(self) -> CorePhases[FoundryPhase]:
+        return CorePhases({
+            "analysis": FoundryPhase.SYSTEM_ANALYSIS,
+            "extraction": FoundryPhase.PROPERTY_EXTRACTION,
+            "formalization": FoundryPhase.TEST_GENERATION,
+            "report": FoundryPhase.REPORT
+        })
+
+    @property
+    @override
+    def artifact_store(self) -> ArtifactStore[FoundryTestArtifact, GeneratedFoundryTest]:
+        return self._store
+
+    @override
+    async def preflight(self, run: PipelineRun[FoundryPhase, None]) -> None:
+        """Nothing to do ahead of analysis. Foundry authors `.t.sol` into a project `forge` already
+        builds, so there is no workspace to prepare; the existing project is the precondition (a
+        `forge build` smoke test would be the natural thing to add here)."""
+        return None
+
+    @override
     async def prepare_system(
         self,
         analyzed: SourceApplication,
-        run: PipelineRun[FoundryPhase, None]
+        run: PipelineRun[FoundryPhase, None],
+        preflight: None,
     ) -> PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]:
         return FoundrySystem(
             main_instance(
@@ -175,6 +203,7 @@ class FoundryBackend:
             FoundryFormalizer(self.foundry_conf)
         )
 
+    @override
     def to_artifact_id(self, c: ContractComponentInstance) -> FoundryTestArtifact:
         return FoundryTestArtifact(c.slugified_name)
 

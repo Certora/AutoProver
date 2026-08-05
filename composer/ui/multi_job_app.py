@@ -667,6 +667,14 @@ class MultiJobApp[P: HasName, T: MultiJobTaskHandler](LogViewerMixin, FileConten
         self._previous_view = switcher.current
         switcher.current = pane_id
 
+    def mark_pipeline_done(self) -> None:
+        """The run has ended — successfully or not — so quitting is allowed from here on.
+
+        Every entry point's worker calls this in *both* its success and its failure path: until it
+        does, :meth:`action_quit_app` swallows the quit key, so the user can't close the app (and
+        lose every panel with it) while work is still streaming in."""
+        self._pipeline_done = True
+
     def action_quit_app(self) -> None:
         if self._pipeline_done:
             self.exit()

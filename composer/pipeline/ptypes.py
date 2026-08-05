@@ -47,6 +47,20 @@ class TaskRunnerHost[P: enum.Enum, H, S: SourceFields, C]:
             semaphore=self._semaphore
         )
 
+    async def unmetered_runner[T](
+        self,
+        task_info: TaskInfo[P],
+        job: Callable[[], Awaitable[T]] | Callable[[ConversationContextProvider], Awaitable[T]],
+    ) -> T:
+        """:meth:`runner` for a task that is not an agent — a toolchain build, say.
+
+        The run's semaphore budgets *concurrent agents* (``--max-concurrent``, default 4). A build
+        spends CPU and wall-clock, not model calls, so charging it to that budget quietly takes away
+        concurrency the user asked for: a ten-minute cargo build would hold one of the four slots for
+        the whole phase it overlaps. The task is otherwise identical — same handler, phase, and
+        lifecycle events — it is just not counted."""
+        return await run_task(factory=self._handler_factory, fn=job, info=task_info)
+
 # ---- run-scoped shared infra, handed to every hook ---------------------------
 @dataclass
 class PipelineRun[P: enum.Enum, H](TaskRunnerHost[P, H, SourceCode, None]):

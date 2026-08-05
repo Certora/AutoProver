@@ -1,40 +1,41 @@
-# Design — Sandboxing the `RunCommand` effect (Phase 6)
+# Design — Sandboxing untrusted command execution
 
-**Status:** implemented. Design + record for [crucible-application.md §7.4](./crucible-application.md#L436)
-and [§9 Phase 6](./crucible-application.md#L634) — the *required*, definition-of-done phase. The
-sandbox mechanism is built and validated (§9 steps 1–5 done, gate §10 green — incl. the full LLM
-e2e passing under the launcher); Crucible runs confined by default. Open items are orthogonal to the
-sandbox (§11): a shared-`Cargo.toml` feature race that lost one of three instructions, and per-run
-`CARGO_HOME`/tightening follow-ups.
+**Status:** implemented. The mechanism lives in this repo — [`composer/sandbox/`](../composer/sandbox/)
+(policy, provider seam, launcher mapping, recipes) plus the
+[`run-confined`](../rust/run-confined) launcher binary — and is validated by the escape suite
+(§10 A). It was built for, and first consumed by, the Crucible backend; **Crucible itself and the
+Solana build step now live outside this repository**, so the run-level gates that exercised the
+legitimate path (§10 B, the LLM e2e) run there, and the per-consumer notes below say which side
+each piece is on. Open items are in §11.
 
-**One-line summary.** Every command run through the `RunCommand` effect compiles and/or runs
-LLM-authored *native* code (§7.2). Today that runs with the full ambient environment of the
-AutoProver process. Phase 6 confines each such command — with no network, no inherited secrets, and
+**One-line summary.** Every toolchain command a formalization backend runs compiles and/or runs
+LLM-authored *native* code (§2). Unconfined, that runs with the full ambient environment of the
+AutoProver process. This confines each such command — no network, no inherited secrets, and
 only its own inputs on the filesystem — using **unprivileged, in-process kernel sandboxing
 (Landlock + seccomp)** that needs no container changes, no namespaces, no capabilities, and no
-custom runtime. It is a single wrapper around [`run_local_command`](../composer/sandbox/command.py).
-Done is proven by an escape test.
+custom runtime. One authored policy serves both launch paths (§4). Done is proven by an escape test.
 
 ---
 
 ## 1. Why this is required, not optional
 
 The outer AutoProver container protects the *host* from AutoProver. It does **not** protect
-AutoProver's own secrets, network access, and filesystem from code running *inside* it. And the
-`RunCommand` effect deliberately runs untrusted native code:
+AutoProver's own secrets, network access, and filesystem from code running *inside* it. And a
+backend's toolchain steps deliberately run untrusted native code:
 
 - `cargo build-sbf` on the **user-supplied program** compiles it natively — running its
   `build.rs`, its proc-macros, and (for a future Prover/CVLR backend) LLM-munged source.
 - `crucible run` compiles the **LLM-authored harness** (its `setup()`, `action_*`, `build.rs`)
-  and then runs it as a native LiteSVM-in-process binary (§7.2 — verified native, no SVM sandbox).
+  and then runs it as a native LiteSVM-in-process binary (verified native — there is no SVM sandbox
+  around it).
 
 So arbitrary code of the LLM's (and the analyzed program's) choosing executes with whatever
 ambient authority the AutoProver process has.
-The trust boundary from §7.2 ("the LLM authors only file *contents*, never argv") stops the LLM
-from choosing *what command runs* — it does nothing about what that command, once running, can
-*reach*. That is this phase's job.
+The standing trust boundary — **the LLM authors only file *contents*, never argv**
+([rust-applications.md §8](./rust-applications.md)) — stops the LLM from choosing *what command
+runs*. It does nothing about what that command, once running, can *reach*. That is the sandbox's job.
 
-Until this phase is green the backend may run only in a trusted, offline environment on trusted
+Without the sandbox a backend may run only in a trusted, offline environment on trusted
 input (the gate scenario). This is the definition of done.
 
 ---
@@ -45,9 +46,9 @@ input (the gate scenario). This is the definition of done.
 |---|---|
 | **Asset** | AutoProver's ambient secrets, and host files outside the command's declared inputs. |
 | **Adversary** | Native code the LLM authored (harness `setup`/`action`/`build.rs`) **and** native code in the analyzed program (its `build.rs`, proc-macros) that `cargo build-sbf` runs. Assume it is actively hostile and knows it is being fuzzed. |
-| **Trust boundary** | The process boundary of each `RunCommand` invocation. Inside: untrusted. Outside: the trusted AutoProver process. `program`+`args` are trusted (Rust decider / Python build step author them, §7.2); only the *files* are untrusted. |
-| **Assumptions** | (1) The outer container/host is the infrastructure's boundary against the host machine and other tenants (on EC2, the Nitro hypervisor) — this phase is the boundary *within* the container, between AutoProver and its own untrusted child. (2) The kernel is patched and Landlock-capable (§8). (3) The host toolchains we grant read access are trusted. |
-| **Non-goals** | Protecting the host machine *from the container* (the infrastructure does that). A full VM boundary between AutoProver and the child (that is what gVisor/Kata/VM-per-run would add at the infra layer, orthogonal to this phase — §6). Defending against a malicious *`program`/`args`* — those are trusted by construction (§7.2). |
+| **Trust boundary** | The process boundary of each confined command. Inside: untrusted. Outside: the trusted AutoProver process. `program`+`args` are trusted — the compiled wheel or a trusted Python build step authors them; only the *files* are untrusted. |
+| **Assumptions** | (1) The outer container/host is the infrastructure's boundary against the host machine and other tenants (on EC2, the Nitro hypervisor) — the sandbox is the boundary *within* the container, between AutoProver and its own untrusted child. (2) The kernel is patched and Landlock-capable (§8). (3) The host toolchains we grant read access are trusted. |
+| **Non-goals** | Protecting the host machine *from the container* (the infrastructure does that). A full VM boundary between AutoProver and the child (that is what gVisor/Kata/VM-per-run would add at the infra layer, orthogonal to the sandbox — §6). Defending against a malicious *`program`/`args`* — those are trusted by construction. |
 
 **Explicit guarantees the sandbox must provide:**
 
@@ -73,7 +74,7 @@ their real needs:
 | Command | Reads (grant **ro+x**) | Writes (grant **rw**) | Network |
 |---|---|---|---|
 | `cargo build-sbf <program>` | rust toolchain (`RUSTUP_HOME`), solana platform-tools (the sBPF toolchain), warm cargo registry (`CARGO_HOME/registry`), program crate source | program crate `target/` | none (offline) |
-| `crucible run <prog> <test> …` | the `crucible` binary + its libs, rust toolchain, cargo registry, the **crucible checkout crates** (path deps from `CrucibleDep`, §6.1), the built `.so` + IDL | the harness crate `target/`, corpus/output dirs | none (offline) |
+| `crucible run <prog> <test> …` | the `crucible` binary + its libs, rust toolchain, cargo registry, the **checker's checkout crates** (the path deps the wheel's manifest names), the built `.so` + IDL | the harness crate `target/`, corpus/output dirs | none (offline) |
 | `cargo build` (harness, if run directly) | as above | harness `target/` | none (offline) |
 
 Common surface, resolved once at sandbox-config time and expressed as Landlock rules (§6):
@@ -106,20 +107,33 @@ Common surface, resolved once at sandbox-config time and expressed as Landlock r
 Everything else — the rest of the bind-mounted project, `/etc`, `/proc/<other-pids>`, `$HOME`, the
 process environment — is **not granted**, therefore inaccessible. Confinement is default-deny.
 
-> The exact host paths (`RUSTUP_HOME`, platform-tools dir, crucible binary) are **resolved by the
-> host at config time**, not hardcoded — see the `SandboxPolicy` in §7. They are discovered from the
-> environment the same way `resolve_crucible_repo` already discovers the checkout.
+> The exact host paths (`RUSTUP_HOME`, platform-tools dir, a checker's binary) are **resolved at
+> config time**, not hardcoded — see the `SandboxPolicy` in §7. The generic ones are discovered from
+> the environment by the `rust_build_policy` recipe; the ones only a particular backend knows about
+> (its checker's checkout and binary dir) are contributed by that backend as `extra_ro` — for a Rust
+> wheel, through its pure `sandbox_grants` callout, so the wheel *declares* grants and Python still
+> decides the policy.
 
 ---
 
-## 4. The seam — one function, unchanged signature
+## 4. The seam — one policy, two launch paths
 
-All command execution already funnels through
-[`run_local_command`](../composer/sandbox/command.py) (both the IoC `RunCommand` effect via
-[`RealEffects.run_command`](../composer/rustapp/adapter.py#L120) and the Solana build step
-[`build_program`](../composer/spec/solana/build.py)). It lives in the backend-agnostic
-[`composer/sandbox`](../composer/sandbox/) package — outside `rustapp` — so Python-based backends can
-run confined commands too, not just the Rust-IoC ones. The sandbox wraps exactly this one function.
+Command execution funnels through one of two launch paths, and **both consume the same
+`SandboxPolicy`**:
+
+- [`run_local_command`](../composer/sandbox/command.py) — the Python runner, used by trusted Python
+  build steps (the Solana sBPF build / IDL step, now behind the
+  [`WorkspaceToolchain`](../composer/rustapp/toolchain.py) seam). It lives in the backend-agnostic
+  [`composer/sandbox`](../composer/sandbox/) package — outside `rustapp` — so Python-based backends
+  can run confined commands too.
+- A **Rust wheel's own `compile`/`validate`**, which spawn the launcher directly via
+  `autoprover_sdk::sandbox::Workspace::run` rather than calling back into Python. They receive the
+  policy already lowered to an opaque argv prefix (`SandboxConfig.backend_spec` →
+  `LauncherProvider.argv_prefix`) and simply prepend it — see
+  [rust-applications.md §8](./rust-applications.md).
+
+The sandbox wraps exactly these, and the policy/provider seam below is what keeps the two in step:
+one authored intent, two launchers.
 
 **The mechanism sits behind a `SandboxProvider` seam, so it is swappable.** `run_local_command`
 never names a concrete tool. It holds a **tool-agnostic `SandboxPolicy`** (the *intent*: rw paths,
@@ -137,16 +151,18 @@ create_subprocess_exec(*spec.argv, cwd=workdir, env=spec.env, …)
 ```
 
 The first provider is our **custom launcher shim** (§6): `LaunchSpec.argv == ["run-confined",
-*policy_argv, "--", program, *args]`, all authored by trusted Python (never the LLM). Swapping to an
-off-the-shelf tool later — `landrun`, `sandlock` — is a *new `SandboxProvider` implementation that
-maps the same `SandboxPolicy` to that tool's flags*; the policy, this seam, `run_local_command`,
-`RealEffects`, and the escape-test gate (§10) are all untouched. The provider is chosen by config
-(`CommandConfig` / an env var), defaulting to the custom launcher. The `none` provider is a
-passthrough (`argv == [program, *args]`) — byte-for-byte today's behavior for the EVM/Foundry paths
-and explicit trusted-input dev runs.
+*policy_argv, "--", program, *args]`, all authored by trusted Python (never the LLM). The same
+provider also exposes that wrapper on its own, as `argv_prefix(policy)` — everything *except* the
+`program args` — which is what lets a Rust wheel launch a confined command without Python in the
+loop. Swapping to an off-the-shelf tool later — `landrun`, `sandlock` — is a *new `SandboxProvider`
+implementation that maps the same `SandboxPolicy` to that tool's flags*; the policy, this seam,
+`run_local_command`, the wheel side, and the escape suite (§10) are all untouched. The provider is
+chosen by [`SandboxConfig`](../composer/sandbox/config.py) (`$COMPOSER_SANDBOX_PROVIDER`). The `none`
+provider is a passthrough (`argv == [program, *args]`, and an **empty** `argv_prefix`) — byte-for-byte
+the unconfined behavior, for the EVM/Foundry paths and explicit trusted-input dev runs.
 
-Nothing in the Rust decider, the ABI, the driver, or the artifact store changes — this is why §7.4
-could defer it to last.
+Nothing in the backend ABI, the driver, or the artifact store changes — which is why confinement
+could be added last, and why a wheel names no sandbox mechanism anywhere.
 
 Two properties `run_local_command` *already* enforces stay in force and are the first line of
 defense (the sandbox is the second): the command runs via **exec, not a shell**, and every written
@@ -167,22 +183,24 @@ splits cleanly along the code-execution line:
 - **`cargo build` runs build scripts and proc-macros** — this is where untrusted code executes, so
   it happens **inside** the sandbox, `--offline`, against the already-warm cache.
 
-The harness `Cargo.toml` is **host-owned** (`CrucibleDep.render_deps`, pinned versions, §6.1), so
+The harness `Cargo.toml` is **authored by the trusted wheel** (pinned versions, never LLM text), so
 its dep graph is fixed and vendorable deterministically. The program-under-test's `Cargo.toml` is
 user-supplied, but `cargo fetch` on it is still exec-free, so the same split holds for the build-sbf
 step. This also closes the build-time supply-chain vector: with offline + a pre-warmed cache, a
 malicious `build.rs` cannot pull a payload at build time.
 
-**Implementation (step 4).** "Offline inside" is one env var, not per-tool flags: the policy sets
-**`CARGO_NET_OFFLINE=1`** in the child env, which forces *every* cargo invocation offline — including
-the nested `cargo` that `crucible run` spawns to build the harness — so we never thread `--offline`
-through each tool ([recipes.py](../composer/sandbox/recipes.py), `offline=True` default). "Fetch
-outside" is [`warm_cargo_cache`](../composer/spec/solana/build.py) — a `cargo fetch` run *unsandboxed*
-(no provider → network on) before the confined build; `build_program` calls it before the sandboxed
-`cargo build-sbf`. The harness crate has its own deps (libafl, litesvm, …), so it needs its own warm
-at manifest-assembly time; wiring that exact call site (and confirming whether `CARGO_HOME` must be
-granted rw for cargo's build-time source extraction, or pre-extracted during the warm) lands with the
-gate in step 5, where a real offline build proves it. All of this is inert until a sandbox is enabled.
+**Implementation.** "Offline inside" is one env var, not per-tool flags: the policy sets
+**`CARGO_NET_OFFLINE=true`** in the child env, which forces *every* cargo invocation offline —
+including a nested `cargo` that a checker spawns to build a harness — so we never thread `--offline`
+through each tool ([recipes.py](../composer/sandbox/recipes.py), `offline=True` default). The value
+must be exactly `true`: cargo parses it as a config boolean and rejects anything else, so a truthy
+`1` aborts the build *and* leaves it online. "Fetch outside" is a `cargo fetch` run *unsandboxed*
+(no provider → network on) before the confined build.
+Both halves of that prep are now **declared, not called**: a wheel's `workspace_prep` names the dirs
+to warm and the program to build, and the chain's registered `WorkspaceToolchain` performs them —
+fetch unconfined, build confined + offline (see
+[rust-applications.md §7](./rust-applications.md)). That keeps the network posture Python-owned while
+the wheel supplies no command line. All of it is inert until a sandbox is enabled.
 
 ---
 
@@ -208,7 +226,7 @@ host-kernel attack surface across *all* of AutoProver — the opposite of what a
 should do) or running AutoProver under a **gVisor/Kata** runtime. gVisor works, but (a) it imposes
 its *heaviest* overhead precisely on our syscall/I/O-bound compile+fuzz workload, and (b) its benefit
 — protecting the host kernel — is an *infrastructure* boundary that on EC2 is already provided by the
-Nitro hypervisor. Neither is worth coupling this phase to a deployment decision.
+Nitro hypervisor. Neither is worth coupling the sandbox to a deployment decision.
 
 ### The chosen model: the process sandboxes itself
 
@@ -355,12 +373,16 @@ class SandboxPolicy:
     # program + args come per-call from run_local_command
 ```
 
-**Provider selection is separate config, not part of the policy** — a `CommandConfig.sandbox_provider`
-knob (`"launcher"` = the custom Rust shim, default; `"none"` = passthrough; later `"landrun"` /
-`"sandlock"`), overridable by env var. `run_local_command` gains `policy: SandboxPolicy | None` +
-the resolved provider (default provider `"none"` when no policy, so existing callers and the EVM path
-are unchanged). `RealEffects` builds the policy from a host-resolved config (toolchain paths
-discovered like `resolve_crucible_repo` already does), and `build_program` uses the same.
+**Provider selection is separate config, not part of the policy** —
+[`SandboxConfig`](../composer/sandbox/config.py) carries the provider name (`"launcher"` = the custom
+Rust shim; `"none"` = passthrough, the default; later `"landrun"` / `"sandlock"`), overridable by
+`$COMPOSER_SANDBOX_PROVIDER`, plus the `extra_ro` / `env_passthrough` a consumer adds. It builds the
+policy for a workdir (`build_policy`) for the Python path and lowers it to an argv prefix
+(`backend_spec`) for the wheel path. A Rust application declares that it wants confinement
+(`confine_by_default`) and contributes its extra grants (`sandbox_grants`); the host, never the wheel,
+constructs the config — see [rust-applications.md §8](./rust-applications.md). `run_local_command`
+takes `policy: SandboxPolicy | None` + the resolved provider (no policy → `"none"`, so existing
+callers and the EVM path are unchanged).
 
 **Fail-closed.** Before running under a real sandbox provider, `provider.available()` is checked
 (for the launcher: Landlock is present *and* actually enforcing). If it isn't — or the provider cannot apply its
@@ -411,65 +433,68 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    → fail-closed (§7). Enforcement smoke-tested on the host (write-outside / planted host file /
    `/proc/<parent>/environ` / inet+io_uring+netlink sockets all denied; workdir write, AF_UNIX, and
    toolchain `exec` allowed); argv mapping golden-tested. Full escape gate is step 5.
-3. **Thread `policy` + provider through `run_local_command`** — *done*: the runner accepts
-   `provider`/`policy` (default `None` → the `none` passthrough, byte-for-byte today's behavior) and
-   is fail-closed via `ensure_available`. A `SandboxConfig` ([composer/sandbox/config.py](../composer/sandbox/config.py))
+3. **Thread `policy` + provider through both launch paths** — *done*: `run_local_command` accepts
+   `provider`/`policy` (default `None` → the `none` passthrough, byte-for-byte the unconfined
+   behavior) and is fail-closed via `ensure_available`. A `SandboxConfig`
+   ([composer/sandbox/config.py](../composer/sandbox/config.py))
    selects the provider (`$COMPOSER_SANDBOX_PROVIDER`, default `none`) and builds the policy via the
    `rust_build_policy` recipe ([composer/sandbox/recipes.py](../composer/sandbox/recipes.py) — the
    workdir and `/dev` nodes rw; discovered rust/cargo/platform-tool and system dirs ro, incl. `/etc`
-   for NSS; env allowlist; network off). Threaded through `RealEffects` and `RustBackend`/`RustFormalizer`
-   ([composer/rustapp/adapter.py](../composer/rustapp/adapter.py)), `build_program`
-   ([composer/spec/solana/build.py](../composer/spec/solana/build.py)), and the Crucible pipeline
-   (which adds the crucible checkout + binary to `extra_ro`). Integration-tested: `run_local_command`
-   under the launcher denies out-of-workdir reads and network while allowing the workdir + toolchain.
-4. **Offline prep (§5)** — *done*: `warm_cargo_cache` (a `cargo fetch` run outside the sandbox,
-   network on) warms the registry, and the policy sets `CARGO_NET_OFFLINE=1` so the confined build —
-   and the nested cargo `crucible run` spawns — run offline. Wired into `build_program`; the
-   harness-dir warm is `CrucibleArtifactStore.warm_dependencies`, called from `prepare_formalization`
-   after the manifest is placed when a sandbox is on. `CARGO_HOME` is granted rw (the crucible policy)
-   so cargo can extract crate sources offline.
-5. **The escape-test gate (§10)** — *done*, and **Crucible's default provider is now `launcher`**
-   (`_crucible_sandbox`; override with `COMPOSER_SANDBOX_PROVIDER=none`). Validated:
+   for NSS; env allowlist; network off). The wheel path gets the same policy as an opaque
+   `argv_prefix` through `backend_spec`, threaded by `RustBackend`/`RustFormalizer`
+   ([composer/rustapp/adapter.py](../composer/rustapp/adapter.py)); a wheel's `sandbox_grants` is what
+   adds a checker's own read-only paths (a tool checkout, its binary dir) to `extra_ro`.
+   Integration-tested: `run_local_command` under the launcher denies out-of-workdir reads and network
+   while allowing the workdir + toolchain.
+4. **Offline prep (§5)** — *done*: a `cargo fetch` run outside the sandbox (network on) warms the
+   registry, and the policy sets `CARGO_NET_OFFLINE=true` so the confined build — and any nested cargo a
+   checker spawns — run offline. Both are now declared by the wheel's `workspace_prep` and performed
+   by the chain's `WorkspaceToolchain` (§5). `CARGO_HOME` is granted rw (pointed at the private
+   per-run home, §11 item 5) so cargo can extract crate sources offline.
+5. **The escape suite (§10 A)** — *done*, and a wheel that declares `confine_by_default` gets the
+   `launcher` provider by default (override with `COMPOSER_SANDBOX_PROVIDER=none`). Validated:
    - **Part A (escape suite) — green** ([tests/test_sandbox_escape.py](../tests/test_sandbox_escape.py)):
      a `rustc`-compiled malicious program run through the real launcher has every vector *denied*
      (secret env, `/proc/<ppid>/environ`, host file outside the workdir, external TCP, and
      `169.254.169.254`), with an unconfined control confirming the leaks would otherwise happen.
-   - **Part B — green**: a real `cargo-build-sbf` of `solana_vault` under the launcher (offline,
-     confined) produces the `.so` ([tests/test_crucible_sandbox_gate.py](../tests/test_crucible_sandbox_gate.py)
-     — this caught the relative-policy-path bug; grants must be absolute), and a real
-     `crucible run --dry-run` under the launcher builds the harness *offline* and runs LiteSVM
-     (`Harness validation passed!`).
-   - **Full LLM vertical — green**: the e2e gate (`tests/test_crucible_e2e_gate.py`) passes under the
-     launcher (`COMPOSER_SANDBOX_PROVIDER=launcher`): analysis → 23 properties → shared fixture
-     authored → per-instruction harness build + fuzz, all confined + offline, with **all three
-     instructions (initialize / deposit / withdraw) delivered with fuzz verdicts** (`BAD` —
-     counterexamples found). Getting here required the `/tmp` fix below and the shared-crate
-     concurrency fix (§11 item 8); before the latter, `initialize` was dropped to a `Cargo.toml`
-     feature race.
+   - **Part B (the legitimate path) — green when it was validated, and now lives with the
+     consumer**: a real `cargo-build-sbf` of a Solana program under the launcher (offline, confined)
+     produced the `.so` — this is what caught the relative-policy-path bug, so grants must be
+     absolute — and a real checker dry-run under the launcher built the harness *offline* and ran
+     LiteSVM. Those gates moved out with the Crucible backend; nothing in this repo exercises a real
+     toolchain build under the launcher, so a change to the *grants* (§3) can only be re-validated
+     against a consumer.
+   - **Full LLM vertical — green** at the time, under `COMPOSER_SANDBOX_PROVIDER=launcher`: analysis
+     → properties → shared fixture authored → per-unit harness build + fuzz, all confined + offline,
+     with every unit delivered with fuzz verdicts. Getting there required the `/tmp` fix below and the
+     shared-crate concurrency fix (§11 item 8).
 
-   **Root cause found via the gate:** every fresh harness build initially failed at the *link* step —
+   **Root cause found via that gate:** every fresh harness build initially failed at the *link* step —
    `Cannot create temporary file in /tmp/: Permission denied` (the linker's `$TMPDIR` scratch, which
    the policy didn't grant). A link failure reads as "could not compile", so the LLM kept rewriting a
    fine fixture. Fixed by redirecting `TMPDIR` to a private `<workdir>/.sandbox_tmp` (§3) rather than
-   granting the shared `/tmp`. The `RunCommand` failure logging added alongside the authoring
-   improvements is what surfaced it.
+   granting the shared `/tmp`. Logging the failing command's output is what surfaced it.
 
-Each step is behind the seam, so the earlier Phase 1–5 gates keep passing. **Prerequisite of the
-flip:** `run-confined` must be resolvable — `$RUN_CONFINED_BIN`, then PATH, then the dev build
-(`cargo build -p run-confined --release`). Containers opt in via the `scripts/docker-compose.sandbox.yml`
-overlay, which builds the launcher (`scripts/Dockerfile.sandbox`) and mounts it read-only at
-`$RUN_CONFINED_BIN`. Otherwise Crucible fail-closes (§7/§8). A later off-the-shelf swap
-(`landrun`/`sandlock`) is *only* a new step-2-style provider — the seam, policy, and gate are
+Each step is behind the seam, so every earlier gate kept passing. **Prerequisite of running
+confined:** `run-confined` must be resolvable — `$RUN_CONFINED_BIN`, then PATH (a development
+checkout gets it in `.venv/bin` from `uv sync`, which builds `rust/run-confined` as a bin
+wheel), then a bare `cargo build -p run-confined --release`. Containers opt in via the
+`scripts/docker-compose.sandbox.yml` overlay, which builds the launcher
+(`scripts/Dockerfile.sandbox`) and mounts it read-only at `$RUN_CONFINED_BIN`. Otherwise a
+confine-by-default application fail-closes (§7/§8). A later off-the-shelf swap
+(`landrun`/`sandlock`) is *only* a new step-2-style provider — the seam, policy, and escape suite are
 untouched.
 
 ---
 
 ## 10. The gate — an escape test
 
-A new expensive gate (`tests/test_crucible_sandbox_gate.py`) with two halves:
+Two halves. **A** lives here as [tests/test_sandbox_escape.py](../tests/test_sandbox_escape.py) and
+runs against the real launcher; **B** exercises a real toolchain build and therefore lives with the
+consuming application.
 
-**A. Escape attempts are denied.** Author a *malicious* harness whose `setup()` (and a companion
-`build.rs`) attempts, and record the outcome of each:
+**A. Escape attempts are denied.** Compile a *malicious* program whose entry point (and a companion
+`build.rs`) attempts each of the following, recording the outcome:
 
 - **Read a planted secret** — set a fake `ANTHROPIC_API_KEY=canary-<nonce>` in AutoProver's env
   before the run; the harness (a) reads `std::env::var("ANTHROPIC_API_KEY")` and (b) tries to read
@@ -486,19 +511,21 @@ A new expensive gate (`tests/test_crucible_sandbox_gate.py`) with two halves:
 - **Cargo credentials** — a planted `credentials.toml` under the shared cargo home is **not**
   readable (policy grants `bin/` only).
 
-The harness must not be able to fail the assertions silently — it writes each probe's result into
-the workdir (allowed) and the test reads them back, asserting every probe reports *denied*.
+The program must not be able to fail the assertions silently — it writes each probe's result into
+the workdir (allowed) and the test reads them back, asserting every probe reports *denied*. An
+unconfined control run confirms the leaks would otherwise happen, so a vacuously-passing suite (the
+program failing to run at all) can't read as success.
 
-**B. The legitimate path still works.** The existing `solana_vault` gate ([§8](./crucible-application.md#L545))
-passes **unchanged** under the launcher provider — the shared fixture is authored, the `.so` builds,
-tests compile and fuzz, verdicts are produced. This proves the sandbox grants exactly the toolchain
-the real work needs and nothing more.
+**B. The legitimate path still works.** A backend's own run-level gate passes **unchanged** under the
+launcher provider — the shared artifact is authored, the program builds, units compile and are
+checked, verdicts are produced. This is what proves the sandbox grants exactly the toolchain the real
+work needs and nothing more, and it can only be run where a real backend + program live.
 
 Because the gate is written against the `SandboxProvider` seam (§4), not a specific tool, it doubles
 as the **conformance test any future provider must pass** — swapping in `landrun`/`sandlock` means
 re-running this same gate green, nothing more.
 
-Only when both halves are green may the backend run on untrusted input (the §9 definition of done).
+Only when both halves are green may a backend run on untrusted input (§1's definition of done).
 
 ---
 
@@ -529,7 +556,7 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    sources, takes locks), and that build runs untrusted `build.rs`/proc-macro code — so a writable
    *shared* `~/.cargo` was a cross-run poisoning surface (overwrite an extracted `registry/src` to
    hit a later run). Fixed: `rust_build_policy` points `CARGO_HOME` at a **private per-run dir under
-   the workdir** (`sandbox_cargo_home` → `<workdir>/.sandbox_cargo`), the warm step (`warm_cargo_cache`,
+   the workdir** (`sandbox_cargo_home` → `<workdir>/.sandbox_cargo`), the warm step (a `cargo fetch`,
    unsandboxed) fetches *into that same home*, and the shared cargo home is granted **read-only on
    `bin/` only** (`shared_cargo_ro_paths`) — never the home root, so `credentials.toml` cannot be
    read by untrusted code. Untrusted writes touch only the run's throwaway cache. Validated: a fresh
@@ -546,13 +573,13 @@ Only when both halves are green may the backend run on untrusted input (the §9 
    deployments running genuinely untrusted programs should also apply the standard EC2 hardening —
    least-privilege instance IAM role, IMDSv2 with hop limit 1, egress-restricted security group, and
    (if desired) VM-per-run or a gVisor runtime. Decide per deployment when the tenancy model is
-   settled; none of it blocks Phase 6.
-8. **Shared-`Cargo.toml`/`main.rs` race (crucible backend) — fixed.** The per-component sessions
-   share one `fuzz/<prog>/` crate; concurrent runs raced on both files (the observed
-   "package does not contain this feature: `c_<slug>`" that dropped `initialize`, and a latent
-   `main.rs` clobber). Fixed two ways: `prepare_component` now reserves Cargo features
-   **cumulatively** (the manifest only grows, so no feature is lost), and per-component command runs
-   are **serialized + atomic** (`run_local_command` materializes files and runs as one unit under a
-   `Semaphore(1)` shared by `RustFormalizer`), while the LLM authoring turns still run concurrently.
-   The remaining parallelism win — concurrent *builds/fuzzing* — needs a crate-per-component (§10 Q1);
-   deferred.
+   settled; none of it blocks or is blocked by the in-process sandbox.
+8. **Shared-crate race (a backend whose units share one crate) — fixed.** Per-unit runs against one
+   shared crate raced on its `Cargo.toml` and `main.rs` (the observed "package does not contain this
+   feature" that silently dropped a unit, plus a latent source clobber). The fix is now structural
+   rather than a mutation protocol: the wheel **materializes the manifest and source per confined
+   run** from that run's `files` map, so no two runs mutate a shared file, and a wheel that shares a
+   build dir declares `serialize_toolchain`, which puts its blocking callouts behind one
+   `Semaphore(1)` while the LLM authoring turns still run concurrently
+   ([rust-applications.md §3](./rust-applications.md)). The remaining parallelism win — concurrent
+   builds/checks — needs the wheel to split building from running; deferred.

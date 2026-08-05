@@ -57,6 +57,13 @@ _OUTCOME_LABELS: dict[ReportBackend, dict[Outcome, str]] = {
         Outcome.GOOD: "Successful test", Outcome.BAD: "Failing test", Outcome.ERROR: "Error",
         Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
     },
+    # The analysis-only backend never produces a verdict, so UNKNOWN is the label that matters:
+    # "Unverified" states why the row is empty, where "Unknown" would read as a failed attempt.
+    # The rest are neutral words, present because the table has to be total.
+    "none": {
+        Outcome.GOOD: "Passed", Outcome.BAD: "Failed", Outcome.ERROR: "Error",
+        Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unverified",
+    },
 }
 _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     "prover": {
@@ -66,6 +73,10 @@ _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     "foundry": {
         GroupStatus.GOOD: "All tests passing", GroupStatus.BAD: "Has failing test",
         GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
+    },
+    "none": {
+        GroupStatus.GOOD: "All passing", GroupStatus.BAD: "Has failure",
+        GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "Unverified",
     },
 }
 
@@ -88,6 +99,10 @@ _TERMS: dict[ReportBackend, ReportTerms] = {
     "foundry": ReportTerms(
         title="Foundry test report", unit_singular="test", unit_plural="tests",
         unit_cap="Test", outcomes_label="Test outcomes",
+    ),
+    "none": ReportTerms(
+        title="Property report", unit_singular="property", unit_plural="properties",
+        unit_cap="Property", outcomes_label="Property outcomes",
     ),
 }
 
@@ -123,6 +138,9 @@ class RowView(TypedDict):
     line: int | None
     link: LinkView
     descriptions: list[str]
+    #: Backend diagnostic for a non-GOOD row (e.g. the fuzzer's counterexample / failed-assertion
+    #: message). ``None`` when the backend supplied none.
+    message: str | None
 
 
 class GroupView(TypedDict):
@@ -150,6 +168,35 @@ class ReportTemplateParams(TypedDict):
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
+
+
+def outcome_label(backend: ReportBackend, outcome: Outcome) -> str:
+    """The human word an auditor reads for an ``Outcome`` under a backend (e.g. a ``prover``
+    ``GOOD`` → "Verified", a ``foundry`` ``GOOD`` → "Successful test").
+
+    The report's HTML render is the primary consumer, but the console/TUI verdict
+    rollups reuse this so the same run reads with one vocabulary everywhere — this is
+    the single place the per-backend wording lives."""
+    return _OUTCOME_LABELS[backend][outcome]
+
+
+#: One glyph per outcome, for the places a verdict has to scan at a glance rather than read: the
+#: console rollup's per-unit listing and the TUI's notice callouts. Backend-independent, unlike the
+#: labels — a ✓ means the same thing whichever prover produced it.
+_OUTCOME_GLYPHS: dict[Outcome, str] = {
+    Outcome.GOOD: "✓",
+    Outcome.BAD: "✗",
+    Outcome.TIMEOUT: "⧖",
+    Outcome.ERROR: "!",
+    Outcome.UNKNOWN: "?",
+}
+
+
+def outcome_glyph(outcome: Outcome) -> str:
+    """The at-a-glance mark for an ``Outcome``. Lives beside :func:`outcome_label` because it answers
+    the same question — how this outcome reads to a human — and every surface that shows a glyph
+    must show the same one."""
+    return _OUTCOME_GLYPHS[outcome]
 
 
 def _is_url(link: str) -> bool:
@@ -217,6 +264,7 @@ def _group_view(
             "line": rule.line if rule else None,
             "link": _link_view(rule.prover_link if rule else None),
             "descriptions": descriptions[ref],
+            "message": rule.message if rule else None,
         })
     return {
         "slug": group.slug,
