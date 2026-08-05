@@ -1,5 +1,11 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+# Two constraints, the second binding. The ``templates/**/*.j2`` entry under
+# [tool.setuptools.package-data] needs 62.3+, which is where package-data globs
+# gained ``recursive=True``; below that ``**`` collapses to a single ``*`` and
+# every top-level template silently drops out of the wheel. But 67.0 is the
+# floor that actually applies: earlier releases import ``pkgutil.ImpImporter``,
+# removed in 3.12, so they cannot run on the Python this project requires.
+requires = ["setuptools>=67.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
