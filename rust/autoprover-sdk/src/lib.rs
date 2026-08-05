@@ -10,7 +10,7 @@
 //! callouts. Most are pure ([`Backend::descriptor`], [`Backend::units`],
 //! [`Backend::author_prompt`], [`Backend::judge_prompt`], [`Backend::finalize`]). The
 //! two gating callouts ([`Backend::compile`], [`Backend::validate`]) run the toolchain
-//! directly — each spawns the `run-confined` launcher via [`run_confined`] — and BLOCK;
+//! directly — each spawns the `run-confined` launcher via [`Workspace::run`] — and BLOCK;
 //! the host calls them off the event loop (`asyncio.to_thread`) while the wheel releases
 //! the GIL. There is no `async`/`pyo3-async` bridge and no `Command`/`Observation` resume
 //! protocol on the Rust side.
@@ -44,6 +44,7 @@ pub mod sandbox;
 pub use args::{AppArgs, DeclaredArgs};
 pub use authoring::{
     anchor_compat_key, AuthorInput, Authored, Failure, FailureKind, ProgramCrate, Prompt, Property,
+    PropertyKind,
 };
 pub use backend::Backend;
 pub use descriptor::{
@@ -57,7 +58,7 @@ pub use ffi::{
 };
 pub use outcome::{CompileResult, Outcome, Target, Unit, ValidateOutcome, Verdict};
 pub use prep::{SandboxGrants, WorkspacePrep};
-pub use sandbox::{run_confined, CommandOutput, Sandbox};
+pub use sandbox::{CommandOutput, Sandbox, Workspace};
 
 /// Re-exported so [`export_app!`] can reference `$crate::pyo3::…`; an app crate
 /// still depends on pyo3 directly to enable `extension-module` / `abi3-py312`.

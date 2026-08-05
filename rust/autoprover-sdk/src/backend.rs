@@ -8,13 +8,12 @@ use crate::descriptor::AppDescriptor;
 use crate::finalize::FinalizeInput;
 use crate::outcome::{CompileResult, Target, Unit, ValidateOutcome};
 use crate::prep::{SandboxGrants, WorkspacePrep};
-use crate::sandbox::Sandbox;
+use crate::sandbox::Workspace;
 
 /// A Rust AutoProver backend — a **passive service** the Python pipeline drives. One instance
 /// per wheel; construct it in [`export_app!`](crate::export_app). Metadata/authoring callouts are
-/// pure; `compile` and `validate` run the toolchain (via [`run_confined`](crate::run_confined)) and
-/// BLOCK — the host calls them off the event loop (`asyncio.to_thread`) while the wheel releases
-/// the GIL.
+/// pure; `compile` and `validate` run the toolchain (via [`Workspace::run`]) and BLOCK — the host
+/// calls them off the event loop (`asyncio.to_thread`) while the wheel releases the GIL.
 pub trait Backend: Send + Sync + 'static {
     /// The declaration the Python host reads at load time.
     fn descriptor(&self) -> AppDescriptor;
@@ -45,13 +44,7 @@ pub trait Backend: Send + Sync + 'static {
     /// is empty and the wheel supplies its own skeleton, so one implementation covers "does the
     /// authored artifact build" and "could *any* artifact build here" (see
     /// [`PhaseRole::Preflight`](crate::PhaseRole::Preflight)).
-    fn compile(
-        &self,
-        input: &AuthorInput,
-        spec: &str,
-        workdir: &std::path::Path,
-        sandbox: &Sandbox,
-    ) -> CompileResult;
+    fn compile(&self, input: &AuthorInput, spec: &str, ws: &Workspace) -> CompileResult;
 
     /// Build + check ONE target against the spec (the fused build gate — no separate compile for
     /// components). Returns [`ValidateOutcome::BuildFailed`] to trigger a re-author of the whole
@@ -63,8 +56,7 @@ pub trait Backend: Send + Sync + 'static {
         input: &AuthorInput,
         spec: &str,
         target: &Target,
-        workdir: &std::path::Path,
-        sandbox: &Sandbox,
+        ws: &Workspace,
     ) -> ValidateOutcome;
 
     /// Extra sandbox grants to union into the host's policy (see [`SandboxGrants`]). Pure; called

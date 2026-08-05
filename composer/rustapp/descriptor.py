@@ -118,12 +118,17 @@ class ArgSpec(BaseModel):
 
 
 class EventKind(BaseModel):
-    """A domain event kind the frontend should render (see ``Command::Emit``).
+    """A domain event kind the frontend should render.
 
     ``notice`` events are surfaced as a persistent, always-visible callout (plus a toast)
     rather than a line in the collapsible per-task events log — for one-shot important
     results such as a per-unit verdict. Defaults to ``False`` so wheels built before
-    the field existed still load."""
+    the field existed still load.
+
+    The events themselves are emitted by the *host*, around the callouts it drives (a build
+    failure, a review verdict, a unit's outcome) — a wheel has no emit channel, since its blocking
+    callouts run to completion with the GIL released. A declared kind nothing emits renders
+    nothing."""
 
     kind: str
     label: str

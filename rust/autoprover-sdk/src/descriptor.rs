@@ -98,11 +98,16 @@ pub struct ArgSpec {
     pub required: bool,
 }
 
-/// A domain event kind the frontend should render (see `Command::Emit`).
+/// A domain event kind the frontend should render.
 ///
 /// A `notice` kind is surfaced as a persistent, always-visible callout (plus a toast)
 /// rather than a line in the collapsible per-task events log — for one-shot important
 /// results such as a per-unit verdict. Ordinary kinds stream into the log.
+///
+/// The events themselves are emitted by the **host**, around the callouts it drives (a build
+/// failure, a review verdict, a unit's outcome): a wheel has no emit channel, because its blocking
+/// callouts run to completion with the GIL released. Declaring a kind nothing emits renders
+/// nothing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventKind {
     pub kind: String,

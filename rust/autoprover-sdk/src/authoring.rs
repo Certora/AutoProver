@@ -4,13 +4,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::args::DeclaredArgs;
 
+/// What kind of thing a property states (mirrors `composer.spec.types.PropertyType`). An enum
+/// rather than a free string for the reason [`Outcome`](crate::Outcome) is one: the set is closed
+/// and shared with the host, so a typo fails to compile instead of reaching a prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PropertyKind {
+    AttackVector,
+    SafetyProperty,
+    Invariant,
+}
+
+impl PropertyKind {
+    /// The wire spelling, which is also how a prompt listing properties refers to one.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AttackVector => "attack_vector",
+            Self::SafetyProperty => "safety_property",
+            Self::Invariant => "invariant",
+        }
+    }
+}
+
+impl std::fmt::Display for PropertyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), plus a
 /// host-assigned unique `slug` used to name its unit/artifact (Crucible: `c_<slug>`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Property {
     pub title: String,
-    /// One of "attack_vector" | "safety_property" | "invariant".
-    pub sort: String,
+    pub sort: PropertyKind,
     pub description: String,
     #[serde(default)]
     pub slug: String,

@@ -6,7 +6,7 @@ use crate::authoring::{AuthorInput, Failure, Prompt};
 use crate::backend::Backend;
 use crate::finalize::FinalizeInput;
 use crate::outcome::{CompileResult, Outcome, Target};
-use crate::sandbox::Sandbox;
+use crate::sandbox::Workspace;
 
 fn parse<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Result<T, String> {
     serde_json::from_str(json).map_err(|e| format!("invalid {what} JSON: {e}"))
@@ -19,6 +19,14 @@ fn parse_input(json: &str) -> Result<AuthorInput, String> {
     let mut input: AuthorInput = parse(json, "AuthorInput")?;
     input.program_crate = input.program_crate.resolved(&input.program);
     Ok(input)
+}
+
+/// The workspace a blocking callout runs in, from the two strings the host sends it as.
+fn workspace(workdir: &str, sandbox_json: &str) -> Workspace {
+    Workspace {
+        dir: std::path::PathBuf::from(workdir),
+        sandbox: parse(sandbox_json, "Sandbox").unwrap_or_default(),
+    }
 }
 
 /// Parse [`AppArgs`], normalizing its `program_crate` for the same reason as [`parse_input`].
@@ -84,8 +92,7 @@ pub fn ffi_compile(
         Ok(v) => v,
         Err(e) => return serde_json::to_string(&CompileResult::Failed { errors: e }).unwrap_or_default(),
     };
-    let sandbox: Sandbox = parse(sandbox_json, "Sandbox").unwrap_or_default();
-    let r = b.compile(&input, spec, std::path::Path::new(workdir), &sandbox);
+    let r = b.compile(&input, spec, &workspace(workdir, sandbox_json));
     serde_json::to_string(&r).unwrap_or_else(|e| {
         serde_json::to_string(&CompileResult::Failed { errors: e.to_string() }).unwrap_or_default()
     })
@@ -105,10 +112,9 @@ pub fn ffi_validate(
     workdir: &str,
     sandbox_json: &str,
 ) -> String {
-    let sandbox: Sandbox = parse(sandbox_json, "Sandbox").unwrap_or_default();
     let target: Target = parse(target_json, "Target").unwrap_or_default();
     let outcome = match parse_input(input_json) {
-        Ok(input) => b.validate(&input, spec, &target, std::path::Path::new(workdir), &sandbox),
+        Ok(input) => b.validate(&input, spec, &target, &workspace(workdir, sandbox_json)),
         Err(e) => target.all(Outcome::Error, Some(e)),
     };
     serde_json::to_string(&outcome).unwrap_or_default()
@@ -169,13 +175,7 @@ mod tests {
         fn author_prompt(&self, _input: &AuthorInput, _failure: Option<&Failure>) -> Prompt {
             unimplemented!("not exercised")
         }
-        fn compile(
-            &self,
-            _input: &AuthorInput,
-            _spec: &str,
-            _workdir: &std::path::Path,
-            _sandbox: &Sandbox,
-        ) -> CompileResult {
+        fn compile(&self, _input: &AuthorInput, _spec: &str, _ws: &Workspace) -> CompileResult {
             unimplemented!("not exercised")
         }
         fn validate(
@@ -183,8 +183,7 @@ mod tests {
             _input: &AuthorInput,
             _spec: &str,
             _target: &Target,
-            _workdir: &std::path::Path,
-            _sandbox: &Sandbox,
+            _ws: &Workspace,
         ) -> ValidateOutcome {
             unimplemented!("not exercised")
         }

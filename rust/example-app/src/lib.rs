@@ -6,11 +6,9 @@
 //! toolchain. A production backend keeps this exact shape and swaps the callouts for
 //! real ones (see `docs/rust-applications.md`).
 
-use std::path::Path;
-
 use autoprover_sdk::{
     AppDescriptor, ArtifactLayout, AuthorInput, Backend, CompileResult, EventKind, Failure,
-    Outcome, PhaseRole, PhaseSpec, Prompt, Sandbox, Target, Unit, ValidateOutcome,
+    Outcome, PhaseRole, PhaseSpec, Prompt, Target, Unit, ValidateOutcome, Workspace,
 };
 
 struct EchoApp;
@@ -90,13 +88,7 @@ impl Backend for EchoApp {
         Prompt { system: None, instruction }
     }
 
-    fn compile(
-        &self,
-        _input: &AuthorInput,
-        _spec: &str,
-        _workdir: &Path,
-        _sandbox: &Sandbox,
-    ) -> CompileResult {
+    fn compile(&self, _input: &AuthorInput, _spec: &str, _ws: &Workspace) -> CompileResult {
         // The demo accepts any well-formed spec — no build gate.
         CompileResult::Ok
     }
@@ -106,8 +98,7 @@ impl Backend for EchoApp {
         _input: &AuthorInput,
         _spec: &str,
         target: &Target,
-        _workdir: &Path,
-        _sandbox: &Sandbox,
+        _ws: &Workspace,
     ) -> ValidateOutcome {
         // Self-contained: any well-formed spec builds, so every unit the target covers "passes".
         target.all(Outcome::Good, None)

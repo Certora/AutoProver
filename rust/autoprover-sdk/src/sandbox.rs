@@ -1,13 +1,16 @@
-//! The confinement wrapper (Python-authored) + the shared launcher helper.
+//! Where a blocking callout runs its toolchain: the workdir, the Python-authored confinement
+//! wrapper, and the launcher helper that spawns behind it.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 
 /// The confinement wrapper for a command, authored by Python
 /// (`SandboxConfig.backend_spec`) and passed to `compile`/`validate`. The backend never
 /// invents policy or names a sandbox mechanism: Python owns the confinement *intent* and
 /// translates it into `argv_prefix`, an opaque argv the backend simply prepends to its
-/// command — `[*argv_prefix, program, *args]` (see [`run_confined`]).
+/// command — `[*argv_prefix, program, *args]` (see [`Workspace::run`]).
 ///
 /// `argv_prefix` is **empty** for a passthrough (`provider="none"`) spec — the command runs
 /// directly (the trusted path). Otherwise it is a full `run-confined <flags…> --` wrapper
@@ -38,8 +41,8 @@ pub struct CommandOutput {
 const NOT_FOUND_EXIT: i32 = 127;
 
 /// Reject absolute paths / `..` traversal (mirrors `composer.sandbox.command._confined_target`).
-fn confined_join(workdir: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, String> {
-    use std::path::{Component, Path};
+fn confined_join(workdir: &Path, rel: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
     let p = Path::new(rel);
     if p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(format!("unsafe file path {rel:?}: absolute or traverses outside the workdir"));
@@ -47,22 +50,55 @@ fn confined_join(workdir: &std::path::Path, rel: &str) -> Result<std::path::Path
     Ok(workdir.join(p))
 }
 
-/// Materialize `files` into `workdir` (path-confined), then run `program args` there behind
-/// `sandbox.argv_prefix` — i.e. `[*argv_prefix, program, *args]` (or `program args` directly,
-/// when `argv_prefix` is empty). Blocks on the child; **call from within
-/// `Python::allow_threads`**. Enforces `sandbox.timeout_s`.
-///
-/// The **command line (`program`/`args`) is authored by the trusted backend**; only file
-/// *contents* may derive from the LLM (`docs/command-sandbox.md` §2, `docs/rust-applications.md`
-/// §8). When present, the prefix's
-/// `run-confined` confines *itself* (Landlock+seccomp+rlimits+env scrub) and `execve`s the tool.
-pub fn run_confined(
+/// Where one blocking callout runs its toolchain: the directory, and the confinement to run
+/// behind. The two always travel together — every command a backend runs needs both — so
+/// [`Backend::compile`](crate::Backend::compile) and [`Backend::validate`](crate::Backend::validate)
+/// are handed this rather than a loose pair.
+#[derive(Debug, Clone)]
+pub struct Workspace {
+    /// The workdir: where files are materialized and the command runs. Also the root every path a
+    /// backend reads back (a checker's output file, say) is resolved against.
+    pub dir: PathBuf,
+    /// The confinement wrapper to run behind.
+    pub sandbox: Sandbox,
+}
+
+impl Workspace {
+    /// Materialize `files` into the workdir (path-confined), then run `program args` there behind
+    /// the sandbox's `argv_prefix` — i.e. `[*argv_prefix, program, *args]` (or `program args`
+    /// directly, when the prefix is empty). Blocks on the child; the host already calls the
+    /// blocking callouts with the GIL released. Enforces `sandbox.timeout_s`.
+    ///
+    /// The **command line (`program`/`args`) is authored by the trusted backend**; only file
+    /// *contents* may derive from the LLM (`docs/command-sandbox.md` §2,
+    /// `docs/rust-applications.md` §8). When present, the prefix's `run-confined` confines *itself*
+    /// (Landlock+seccomp+rlimits+env scrub) and `execve`s the tool.
+    pub fn run<I, S>(
+        &self,
+        program: &str,
+        args: I,
+        files: &BTreeMap<String, String>,
+    ) -> Result<CommandOutput, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        run_confined(&self.sandbox, program, args, files, &self.dir)
+    }
+}
+
+/// The body of [`Workspace::run`], over the parts rather than the bundle.
+fn run_confined<I, S>(
     sandbox: &Sandbox,
     program: &str,
-    args: &[String],
+    args: I,
     files: &BTreeMap<String, String>,
-    workdir: &std::path::Path,
-) -> Result<CommandOutput, String> {
+    workdir: &Path,
+) -> Result<CommandOutput, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     use std::io::Read;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -80,15 +116,15 @@ pub fn run_confined(
     // 2. Build argv by prepending the (opaque, Python-authored) confinement prefix:
     // `[*argv_prefix, program, *args]`. When the prefix is empty this is `program args`
     // run directly; otherwise its first element is the launcher binary to spawn.
-    let (launch, mut launch_args): (&str, Vec<String>) = match sandbox.argv_prefix.split_first() {
-        Some((bin, rest)) => (bin, rest.to_vec()),
+    let (launch, mut launch_args): (&str, Vec<OsString>) = match sandbox.argv_prefix.split_first() {
+        Some((bin, rest)) => (bin, rest.iter().map(OsString::from).collect()),
         None => (program, Vec::new()),
     };
     if !sandbox.argv_prefix.is_empty() {
         // The prefix ends at its `--`; the wrapped command follows it.
-        launch_args.push(program.to_string());
+        launch_args.push(OsString::from(program));
     }
-    launch_args.extend_from_slice(args);
+    launch_args.extend(args.into_iter().map(|a| a.as_ref().to_os_string()));
     let mut cmd = Command::new(launch);
     cmd.args(&launch_args);
     cmd.current_dir(workdir)

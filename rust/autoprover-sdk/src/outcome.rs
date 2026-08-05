@@ -35,9 +35,9 @@ impl Unit {
 /// One validation target the host runs, and the report units that target covers — the units
 /// [`Backend::validate`](crate::Backend::validate) must return a verdict for.
 ///
-/// The host computes the grouping from [`Backend::units`] (it decides what to run, and in what
-/// order), so it hands the answer over rather than leaving each backend to recover it by
-/// re-deriving its own units and filtering them by name.
+/// The host computes the grouping from [`Backend::units`](crate::Backend::units) (it decides what
+/// to run, and in what order), so it hands the answer over rather than leaving each backend to
+/// recover it by re-deriving its own units and filtering them by name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Target {
     /// The target's name — what the backend selects when it runs the checker (Crucible: the
@@ -53,7 +53,7 @@ impl Target {
     /// The same verdict for every covered unit — what a run that concluded one thing about the
     /// whole target produces (it passed; it errored; it timed out).
     pub fn all(&self, outcome: Outcome, detail: Option<String>) -> ValidateOutcome {
-        self.verdicts(|_| Verdict { detail: detail.clone(), ..Verdict::with_outcome(outcome) })
+        self.verdicts(|_| Verdict::with_outcome(outcome).with_detail(detail.clone()))
     }
 
     /// A verdict per covered unit, keyed by unit name so a backend never spells one itself.
@@ -126,6 +126,12 @@ impl Verdict {
     /// A failing verdict carrying its explanation — the shape a backend almost always wants for a
     /// `Bad` or an `Error`, since a bare one gives a reader no clue why.
     pub fn detailed(outcome: Outcome, detail: impl Into<String>) -> Self {
-        Verdict { detail: Some(detail.into()), ..Verdict::with_outcome(outcome) }
+        Verdict::with_outcome(outcome).with_detail(Some(detail.into()))
+    }
+
+    /// This verdict with `detail` when there is one — for a caller holding the `Option` a parsed
+    /// tool output gives it, rather than one deciding between two constructors.
+    pub fn with_detail(self, detail: Option<String>) -> Self {
+        Verdict { detail, ..self }
     }
 }

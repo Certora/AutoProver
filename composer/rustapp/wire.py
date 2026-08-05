@@ -27,6 +27,7 @@ from typing import Annotated, Any, Callable, Literal, Protocol, Self
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from composer.spec.source.report.schema import Outcome
+from composer.spec.types import PropertyType
 
 _log = logging.getLogger(__name__)
 
@@ -38,9 +39,9 @@ class Property(BaseModel):
     """One property to formalize, plus the host-assigned unique ``slug`` that names its unit."""
 
     title: str
-    #: ``attack_vector`` | ``safety_property`` | ``invariant`` — ``PropertyFormulation.sort``,
-    #: passed through as the wheel's own vocabulary for it is the report's, not ours.
-    sort: str
+    #: The shared vocabulary (:data:`~composer.spec.types.PropertyType`), mirrored by the Rust
+    #: ``PropertyKind`` — a closed set on both sides rather than a free string.
+    sort: PropertyType
     description: str
     slug: str = ""
 

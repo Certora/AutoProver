@@ -449,9 +449,10 @@ the fact that routes a wheel to the IDL path instead.
 > The LLM controls file **contents** only. The trusted wheel authors every argv. **Python** authors
 > every sandbox policy.
 
-The wheel gets `Sandbox { argv_prefix, timeout_s }` and launches
+The wheel gets a `Workspace { dir, sandbox }` — the workdir and its `Sandbox { argv_prefix,
+timeout_s }`, bundled because every command needs both — and launches
 `[*argv_prefix, program, *args]` through the one shared helper,
-[`autoprover_sdk::run_confined`](../rust/autoprover-sdk/src/lib.rs). The prefix is **opaque**:
+[`Workspace::run`](../rust/autoprover-sdk/src/sandbox.rs). The prefix is **opaque**:
 Python owns the confinement *intent* and lowers it to an argv (`SandboxConfig.backend_spec` →
 `LauncherProvider.argv_prefix`), which names no sandbox mechanism, so swapping the mechanism never
 changes this shape. An empty prefix is the trusted/`none` path — the command runs directly. A
@@ -464,7 +465,7 @@ run-confined --rw <workdir> --rw <cargo home> --ro <toolchain> --allow-env PATH 
              ^──────────── Python-authored ───────────^  ^─ wheel-authored ─^
 ```
 
-`run_confined` materializes the (possibly LLM-derived) `files` map into the workdir first, joining
+`Workspace::run` materializes the (possibly LLM-derived) `files` map into the workdir first, joining
 each relative path through `confined_join` — rejecting absolute paths and `..` — and Landlock grants
 only the `--rw` workdir, so even a bad path can't escape. The host's own writes (the prep plan's
 files, `finalize`'s deliverables, an IDL a toolchain places) go through the mirror-image
@@ -605,7 +606,7 @@ Facts about the seam as it stands, not open design questions:
 
 | Concern | File |
 |---|---|
-| The SDK: trait, descriptor, wire types, `run_confined`, `export_app!` | [rust/autoprover-sdk/src/lib.rs](../rust/autoprover-sdk/src/lib.rs) |
+| The SDK: the `Backend` trait, descriptor, wire types, `Workspace::run`, `export_app!` | [rust/autoprover-sdk/src/](../rust/autoprover-sdk/src/) |
 | A complete minimal application | [rust/example-app/src/lib.rs](../rust/example-app/src/lib.rs) |
 | The sandbox launcher | [rust/run-confined/src/main.rs](../rust/run-confined/src/main.rs) |
 | Declarative ABI mirror | [composer/rustapp/descriptor.py](../composer/rustapp/descriptor.py) |
