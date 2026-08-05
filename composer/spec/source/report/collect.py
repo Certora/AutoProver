@@ -103,20 +103,19 @@ class VerdictFetcher[R: ReportableResult](Protocol):
 
 @dataclass(frozen=True)
 class RuleEvidence:
-    """Backend-supplied raw material for synthesizing a finding from a violated rule.
-
-    ``analysis`` is the backend's pre-computed root-cause / fix explanation for the violation
-    (prover: the ``analyze_cex_raw`` output captured during the run); ``counterexample`` is a concrete
-    failing trace excerpt (prover: the rule's ``cex_dump``). Both optional — a finding degrades to
-    property/group text when absent."""
+    """One failing instance of a violated rule: the backend's root-cause explanation and a concrete
+    counterexample, either of which may be absent. A parametric rule (``rule r(method f)``) fails once
+    per binding, so a rule's evidence is a list of these; ``label`` names the instance ("" when the
+    rule is not parametric)."""
+    label: str = ""
     analysis: str | None = None
     counterexample: str | None = None
 
 
 class EvidenceFetcher(Protocol):
-    """Backend hook: given a violated rule's name, return its `RuleEvidence`, or ``None`` when the
-    backend has no evidence for that rule. Prover reads the run-scoped CEX-analysis capture."""
-    async def __call__(self, rule_name: str, /) -> RuleEvidence | None:
+    """Backend hook: every captured failing instance of a violated rule, or ``[]`` when the backend has
+    none for it. Prover reads the run-scoped CEX-analysis capture."""
+    async def __call__(self, rule_name: str, /) -> list[RuleEvidence]:
         ...
 
 

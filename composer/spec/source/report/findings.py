@@ -9,11 +9,13 @@ finding is best-effort, so a synthesis failure drops that one finding rather tha
 """
 import asyncio
 import logging
+from typing import TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import Field
 
+from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.collect import EvidenceFetcher, RuleEvidence
 from composer.spec.source.report.schema import (
@@ -44,6 +46,27 @@ def severity_for(impact: ImpactLevel, likelihood: LikelihoodLevel) -> SeverityTi
     if impact == "none":
         return "informational"
     return _SEVERITY_MATRIX[(impact, likelihood)]
+
+
+class FindingsSystemParams(TypedDict):
+    """``autoprove_report_findings_system.j2`` takes no parameters — the instructions are static.
+    Declared empty rather than skipped so the template is still covered by the strict-render fuzz
+    test: adding a ``{{ ... }}`` without declaring it here then fails."""
+
+
+class FindingsPromptParams(TypedDict):
+    """The full, typed context of ``autoprove_report_findings_prompt.j2``. Every key is required;
+    the nullable ones carry ``None`` when the backend supplied no evidence (the template guards them
+    with ``{% if %}``)."""
+    contract_name: str
+    rule_name: str
+    properties: list[FormalizedProperty]
+    groups: list[PropertyGroup]
+    instances: list[RuleEvidence]
+
+
+_FINDINGS_SYSTEM = TypedTemplate[FindingsSystemParams]("autoprove_report_findings_system.j2")
+_FINDINGS_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_prompt.j2")
 
 
 class FindingDraft(AuthoredContent):
@@ -94,30 +117,28 @@ async def build_findings(
             props_by_ref.setdefault(ref, []).append(p)
     group_by_key: dict[PropertyKey, PropertyGroup] = {k: g for g in groups for k in g.members}
 
-    system = load_jinja_template("autoprove_report_findings_system.j2")
+    system = _FINDINGS_SYSTEM.bind({}).render_to(load_jinja_template)
     bound = llm.with_structured_output(FindingDraft)
 
     async def _one(rule: RuleVerdict) -> Finding | None:
         try:
-            ev = await fetch_evidence(rule.name)
+            instances = await fetch_evidence(rule.name)
             # Every rule in the report is referenced by >=1 property (collect drops orphans), so pass
             # ALL of them: the rule may jointly formalize several, and only the counterexample says
             # which one actually broke — that is the LLM's job, not ours to pre-guess.
             props = props_by_ref.get(rule.ref, [])
             # A rule's properties may share a group (some may be in none); dedupe by slug, first-seen order.
             rule_groups = list({g.slug: g for p in props if (g := group_by_key.get(p.key)) is not None}.values())
-            user = load_jinja_template(
-                "autoprove_report_findings_prompt.j2",
-                contract_name=contract_name,
-                rule_name=rule.name,
-                properties=props,
-                groups=rule_groups,
-                analysis=ev.analysis if ev else None,
-                counterexample=ev.counterexample if ev else None,
-            )
+            user = _FINDINGS_PROMPT.bind({
+                "contract_name": contract_name,
+                "rule_name": rule.name,
+                "properties": props,
+                "groups": rule_groups,
+                "instances": instances,
+            }).render_to(load_jinja_template)
             draft = await bound.ainvoke([SystemMessage(system), HumanMessage(user)])
             assert isinstance(draft, FindingDraft)
-            return _compose(rule, draft, ev, rule_groups)
+            return _compose(rule, draft, instances, rule_groups)
         except Exception:  # noqa: BLE001 — one finding failing must never fail the report
             _log.warning("report: finding synthesis failed for rule %r; skipping", rule.name, exc_info=True)
             return None
@@ -132,10 +153,19 @@ async def build_findings(
     return [f for f in findings if f is not None]
 
 
+def _proof_of_concept(instances: list[RuleEvidence]) -> str | None:
+    """Every instance's counterexample, labelled once there is more than one — the report shows a
+    single row per rule, so its PoC should cover all of that rule's failing instances."""
+    traces = [(i.label, i.counterexample) for i in instances if i.counterexample]
+    if len(traces) <= 1:
+        return traces[0][1] if traces else None
+    return "\n\n".join(f"# {label or 'counterexample'}\n{cex}" for label, cex in traces)
+
+
 def _compose(
     rule: RuleVerdict,
     draft: FindingDraft,
-    ev: RuleEvidence | None,
+    instances: list[RuleEvidence],
     groups: list[PropertyGroup],
 ) -> Finding:
     return Finding(
@@ -143,7 +173,7 @@ def _compose(
         severity=severity_for(draft.impact_level, draft.likelihood_level),
         content=IssueContent(
             **{f: getattr(draft, f) for f in AuthoredContent.model_fields},
-            proof_of_concept=ev.counterexample if ev else None,
+            proof_of_concept=_proof_of_concept(instances),
             references=[rule.prover_link] if rule.prover_link else None,
         ),
         provenance=FindingProvenance(

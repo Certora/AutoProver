@@ -157,19 +157,29 @@ class _SpecCallbacks(ProverEventCallbacks):
             f"elapsed={elapsed:.1f}s status={status_summary}"
         )
         self._summary.add_prover_call(elapsed)
+        # This run supersedes what was captured for the rules it covers, so drop their old analyses
+        # before the handler records fresh ones: an instantiation that failed in an earlier iteration
+        # and passes now must not survive into the report as a current failure. Fires before the CEX
+        # handler runs, so the analyses recorded below are always the current run's.
+        if self._analysis_store is not None:
+            for rule_name in {r.path.rule for r in results.values()}:
+                try:
+                    await self._analysis_store.forget_rule(rule_name)
+                except Exception:
+                    _logger.exception("failed to clear stale cex analyses for %s", rule_name)
         await super().on_prover_result(
             results
         )
 
     @override
     async def on_analysis_complete(self, rule: RuleResult, explanation: str) -> None:
-        # Capture the per-rule counterexample analysis (last-write-wins across iterations) so the
-        # report phase can reshape the final iteration's analysis into a finding without re-running
-        # the analysis. Key by the bare rule name (rule.path.rule).
+        # Capture this violated instantiation's counterexample analysis so the report phase can
+        # reshape it into a finding without re-running the analysis. Keyed per instantiation, so a
+        # parametric rule keeps every binding's analysis instead of only the last one written.
         # Never let a capture error disturb the run.
         if self._analysis_store is not None:
             try:
-                await self._analysis_store.record(rule.path.rule, explanation, rule.cex_dump)
+                await self._analysis_store.record(rule.path, explanation, rule.cex_dump)
             except Exception:
                 _logger.exception("failed to capture cex analysis for %s", rule.name)
         await super().on_analysis_complete(rule, explanation)

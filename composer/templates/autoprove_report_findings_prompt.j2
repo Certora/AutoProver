@@ -14,13 +14,24 @@ Audit-level claim(s) it belongs to:
   - {{ g.title }}: {{ g.description }}
 {%- endfor %}
 {% endif %}
-{% if analysis -%}
-The prover's counterexample analysis (root cause + suggested fix), produced during the run:
-{{ analysis }}
+{% if instances -%}
+{% if instances | length > 1 -%}
+This rule failed for {{ instances | length }} separate instantiations. They may share one root cause or
+be genuinely different problems — read them all and say which is the case.
+{% endif -%}
+{% for i in instances %}
+--- Failing instantiation{% if i.label %}: {{ i.label }}{% endif %} ---
+{% if i.analysis -%}
+Prover's counterexample analysis (root cause + suggested fix), produced during the run:
+{{ i.analysis }}
 {%- else -%}
-(No counterexample analysis was captured for this rule — reason conservatively from the properties.)
+(No counterexample analysis was captured for this instantiation.)
 {%- endif %}
-{% if counterexample %}
+{% if i.counterexample %}
 Counterexample trace:
-{{ counterexample }}
+{{ i.counterexample }}
 {% endif %}
+{%- endfor %}
+{%- else -%}
+(No counterexample evidence was captured for this rule — reason conservatively from the properties.)
+{%- endif %}

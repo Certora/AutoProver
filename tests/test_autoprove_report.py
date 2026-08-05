@@ -525,9 +525,9 @@ def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLe
     )
 
 
-def _evidence(by_rule: dict[str, RuleEvidence]):
+def _evidence(by_rule: dict[str, list[RuleEvidence]]):
     async def fetch(rule_name):
-        return by_rule.get(rule_name)
+        return by_rule.get(rule_name, [])
     return fetch
 
 
@@ -570,7 +570,7 @@ async def test_build_report_synthesizes_one_finding_per_violation():
     ]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="gd", members=[("C", "p_good"), ("C", "p_bad")])]))
-    evidence = _evidence({"r_bad": RuleEvidence(analysis="root cause X", counterexample="<cex/>")})
+    evidence = _evidence({"r_bad": [RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
 
     report = await build.build_report(
         contract_name="Vault", backend="prover",
@@ -691,28 +691,52 @@ def test_report_round_trips_with_findings(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_spec_callbacks_captures_cex_analysis():
-    """The source-pipeline prover callback records each violated rule's analysis into the run-scoped
-    store, keyed by the bare rule name, while still emitting the stream event."""
+def _capture(events: list | None = None):
+    """(store, callbacks) over an in-memory store, as the prover tool wires them."""
     from langgraph.store.memory import InMemoryStore
     from composer.spec.source.prover import _SpecCallbacks
-    from composer.prover.ptypes import RulePath, RuleResult
-
     store = CexAnalysisStore(store=InMemoryStore(), namespace=("cex_analyses", "t"))
+    summary = SimpleNamespace(add_prover_call=lambda _elapsed: None)
+    cb = _SpecCallbacks((events if events is not None else []).append, "tc1",
+                        cast(RunSummary, summary), {}, analysis_store=store)
+    return store, cb
+
+
+def _violated(rule: str, method: str | None = None, cex: str = "<cex/>"):
+    from composer.prover.ptypes import RulePath, RuleResult
+    return RuleResult(path=RulePath(rule=rule, method=method), cex_dump=cex, status="VIOLATED")
+
+
+@pytest.mark.asyncio
+async def test_spec_callbacks_captures_cex_analysis():
+    """The callback records a violated rule's analysis, readable back under the bare rule name (what
+    the report's RuleVerdict.name carries), while still emitting the stream event."""
     events: list = []
-    cb = _SpecCallbacks(events.append, "tc1", cast(RunSummary, SimpleNamespace()), {},
-                        analysis_store=store)
-    rule = RuleResult(path=RulePath(rule="no_reentrancy", method="withdraw"),
-                      cex_dump="<cex/>", status="VIOLATED")
+    store, cb = _capture(events)
+    await cb.on_analysis_complete(_violated("no_reentrancy", "withdraw"), "root cause: CEI")
 
-    await cb.on_analysis_complete(rule, "root cause: external call before state update")
-
-    # Keyed by the bare rule name (RulePath.rule) — exactly what the report's RuleVerdict.name carries
-    # (POU derives it from the prover tree's context[0]) — so the findings join is an exact match.
-    rec = await store.get("no_reentrancy")
-    assert rec is not None and rec.analysis.startswith("root cause")
-    assert rec.counterexample == "<cex/>"
-    # NOT keyed by the pretty-printed form ("no_reentrancy for withdraw"); the report never looks that up.
-    assert await store.get(rule.name) is None
-    # the UI stream event still fires
+    recs = await store.for_rule("no_reentrancy")
+    assert [(r.label, r.analysis, r.counterexample) for r in recs] == [
+        ("withdraw", "root cause: CEI", "<cex/>")]
+    assert await store.for_rule("no_reentrancy for withdraw") == []   # not the pretty-printed form
     assert any(e.get("type") == "rule_analysis" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_parametric_instantiations_are_all_kept_and_purged_when_stale():
+    """A parametric rule is analyzed once per binding: every instantiation survives (keying by rule
+    alone would overwrite all but one), re-analysis replaces just that binding, and a fresh run on the
+    rule drops bindings that no longer fail."""
+    store, cb = _capture()
+    await cb.on_analysis_complete(_violated("r", "foo", "<cex-foo/>"), "foo breaks")
+    await cb.on_analysis_complete(_violated("r", "bar", "<cex-bar/>"), "bar breaks")
+    assert [(r.label, r.analysis) for r in await store.for_rule("r")] == [
+        ("bar", "bar breaks"), ("foo", "foo breaks")]      # both kept, stable order
+
+    await cb.on_analysis_complete(_violated("r", "foo"), "foo breaks differently")
+    assert [r.analysis for r in await store.for_rule("r")] == ["bar breaks", "foo breaks differently"]
+
+    # A later run covers "r" again and only foo fails now -> bar's stale analysis must not linger.
+    await cb.on_prover_result({"r": _violated("r", "foo")})
+    await cb.on_analysis_complete(_violated("r", "foo"), "foo still breaks")
+    assert [(r.label, r.analysis) for r in await store.for_rule("r")] == [("foo", "foo still breaks")]
