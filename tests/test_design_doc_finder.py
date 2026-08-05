@@ -174,19 +174,21 @@ async def test_resolve_discovered_doc(tmp_path, monkeypatch):
     assert path == doc
 
 
-async def test_resolve_no_doc_fails_fast_with_reason(tmp_path, monkeypatch):
+async def test_resolve_no_doc_returns_none_for_source_only(tmp_path, monkeypatch):
+    # Discovery finding nothing is no longer fatal: resolve_design_doc returns None
+    # and the pipeline proceeds source-only.
     async def fake_discover(**_kwargs) -> DesignDocChoice:
         return DesignDocChoice(selected_path=None, reason="only a build README here")
 
     monkeypatch.setattr("composer.spec.source.design_doc_finder._discover", fake_discover)
 
-    with pytest.raises(ValueError, match="only a build README here"):
-        await resolve_design_doc(
-            source=_source(str(tmp_path)),
-            uploader=cast(Any, _StubUploader()),
-            models=cast(Any, None),
-            disc_ctx=cast(Any, None),
-        )
+    path = await resolve_design_doc(
+        source=_source(str(tmp_path)),
+        uploader=cast(Any, _StubUploader()),
+        models=cast(Any, None),
+        disc_ctx=cast(Any, None),
+    )
+    assert path is None
 
 
 # ---------------------------------------------------------------------------

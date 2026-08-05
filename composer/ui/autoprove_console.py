@@ -70,7 +70,13 @@ class AutoProveConsoleHandler(MultiJobConsoleHandler[AutoProvePhase]):
             case "auto_setup_complete":
                 self._output(f"[AutoSetup] complete (return code {evt['return_code']})")
             case "design_doc_chosen":
-                self._output(
-                    f"[Design Doc Discovery] {evt['source']} design doc: "
-                    f"{evt['path']}  ({evt['reason']})"
-                )
+                if evt["source"] == "none found":
+                    self._output(
+                        "[Design Doc Discovery] no design doc found — "
+                        f"proceeding source-only  ({evt['reason']})"
+                    )
+                else:
+                    self._output(
+                        f"[Design Doc Discovery] {evt['source']} design doc: "
+                        f"{evt['path']}  ({evt['reason']})"
+                    )

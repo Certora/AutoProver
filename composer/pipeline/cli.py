@@ -47,11 +47,17 @@ import hashlib
 
 def root_cache_key(
     project_root: str,
-    system_doc_path: pathlib.Path,
+    system_doc_path: pathlib.Path | None,
     relative_path: str,
-    contract_name: str,       
+    contract_name: str,
 ):
-    doc_hash = hashlib.sha256(system_doc_path.read_bytes()).hexdigest()
+    # A source-only run (no design doc) hashes a fixed sentinel in place of the doc
+    # bytes, so it gets a stable key that is distinct from any real document.
+    doc_hash = (
+        hashlib.sha256(system_doc_path.read_bytes()).hexdigest()
+        if system_doc_path is not None
+        else "no-design-doc"
+    )
     combined = "|".join([project_root, doc_hash, relative_path, contract_name])
     return hashlib.sha256(combined.encode()).hexdigest()
 
@@ -224,10 +230,14 @@ async def cli_pipeline[P: enum.Enum, H](
                 )
             else:
                 system_doc = pathlib.Path(args.system_doc)
-            
-            system_doc_doc = await conns.uploader.get_document(system_doc)
-            if system_doc_doc is None:
-                raise ValueError(f"Fatal error, failed to upload system doc: {system_doc}")
+
+            # ``system_doc`` is None only when discovery found nothing: run source-only.
+            if system_doc is not None:
+                system_doc_content = await conns.uploader.get_document(system_doc)
+                if system_doc_content is None:
+                    raise ValueError(f"Fatal error, failed to upload system doc: {system_doc}")
+            else:
+                system_doc_content = None
 
             root_key = root_cache_key(
                 project_root=str(project_root),
@@ -242,7 +252,7 @@ async def cli_pipeline[P: enum.Enum, H](
                 if (threat_path := args.threat_model) is not None else None
             )
             full_source = SourceCode(
-                content=system_doc_doc,
+                content=system_doc_content,
                 contract_name=init_source.contract_name,
                 forbidden_read=init_source.forbidden_read,
                 project_root=init_source.project_root,
@@ -291,7 +301,7 @@ async def cli_pipeline[P: enum.Enum, H](
                 embed_model=model,
                 root_key=root_key,
                 source=SourceCode(
-                    content=system_doc_doc,
+                    content=system_doc_content,
                     contract_name=init_source.contract_name,
                     forbidden_read=init_source.forbidden_read,
                     project_root=init_source.project_root,
