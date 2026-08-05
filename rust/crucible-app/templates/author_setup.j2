@@ -1,0 +1,38 @@
+Author a Crucible fuzz-harness FIXTURE (only) for the Solana program `{{ program }}`.
+
+The fixture is the ONLY thing that can drive the program: the invariant tests written against it may
+read state but never send instructions (an invariant that mutates state corrupts the campaign). So
+the fixture's `action_*` methods and its initial state decide which properties can be checked at all
+— everything you leave out is a property that can only be "checked" by an assertion that is true no
+matter what the program does. Design it for these {{ n }} properties:
+{{ listed }}
+
+Concretely, for that list:
+- **One `action_*` per instruction those properties exercise.** An instruction with no action is
+  unreachable state the fuzzer can never explore.
+- **Negative attempts are actions too.** For a property of the form "X must be rejected" (re-init,
+  an unauthorized caller, a flash borrow with no repay, an operation while paused), write an action
+  that *attempts* X and asserts it failed — `fuzz_assert!(res.is_err(), "[<property title>] …")`. A
+  rejected call changes nothing, so this is safe inside an action. It cannot go in the test.
+- **Enough actors and accounts to make the property non-degenerate.** A property about "only the
+  owner may X" needs a second, non-owner signer; "at most N positions" needs enough reserves/markets
+  to reach N; a per-user property needs two users. One of each is a fixture that proves nothing.
+- **Realistic configuration.** Never set a limit, cap or threshold to `u64::MAX` (or a fee to 0) just
+  to keep setup simple: it makes the property about that limit vacuously true. Pick values the fuzzer
+  can actually cross.
+- **Expose typed reads.** Give the tests helper methods returning the state they must assert on
+  (`pub fn reserve(&self) -> State`, a scaled-fraction → integer helper, PDA accessors), so a test
+  never has to parse raw account bytes at hand-computed offsets.
+
+State the fixture holds must be reachable from the tests: make the fields the properties talk about
+`pub(crate)` or expose an accessor.
+{{ cheat }}
+
+{{ example }}
+
+{{ facts }}
+Full analyzed system model (accounts, PDAs, authorities, requirements):
+{{ model }}
+
+Use the source-exploration tools to read the program's Rust source for exact signatures. Return the complete fixture
+module source as your final answer.{{ revise }}

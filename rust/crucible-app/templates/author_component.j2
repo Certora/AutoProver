@@ -1,0 +1,38 @@
+Author a SINGLE Crucible `#[invariant_test]` function named EXACTLY `{{ harness_fn }}` for the **{{ unit }}** component
+of the `{{ program }}` program, checking ALL {{ n }} properties below — one fuzz run covers them all. Read on-chain
+state and assert each property in the one fn.
+
+**The fuzzer drives the WHOLE program, not just this component.** Your invariant is evaluated after every action in a
+random sequence that interleaves every `action_*` the fixture exposes — including instructions belonging to the
+program's other components. So each assertion must hold no matter what else ran first; do not assume the rest of the
+program is idle, and do not assume this component's actions run in any particular order or at all.
+
+Properties to check (assert each; PREFIX every assertion message with its property title in brackets, e.g.
+`"[{{ first }}] ..."`, so a counterexample names the property it refutes):
+{{ listed }}
+
+This component (its instructions are the ones the properties are about; drive them via the fixture's `action_*`
+methods, and see the fixture source below for the full set of actions the fuzzer can take):
+{{ component }}
+
+{{ cheat }}
+
+The shared fixture below is already defined — `Fixture`, its `#[fuzz_fixture] impl` and its `action_*` methods. You may
+ADD to it: put extra `impl Fixture { ... }` blocks (plain, NOT `#[fuzz_fixture]`) after your test fn for read helpers —
+typed account reads, PDA derivations, fixed-point → integer conversions. Prefer that to parsing raw account bytes at
+hand-computed offsets, which is unreadable and silently wrong when a struct's layout differs from your guess.
+
+Two things you may NOT do, both of which break the campaign rather than the build:
+- Do not add `action_*` methods or a second `#[fuzz_fixture]` block — only the fixture's own impl is fuzz-driven, and
+  the macro takes exactly one.
+- Do not send instructions from the test. The invariant runs after every action and must be OBSERVATIONAL: a test that
+  calls the program mutates the state being explored, which produces counterexamples that don't reproduce.
+
+**If a property cannot be checked with the actions the fixture provides, do not fake it.** An assertion that holds
+whatever the program does (re-reading a field nothing can change, `x >= 0` on a `u64`, a limit set so high nothing
+reaches it) is worse than nothing: it reports a property as covered when it is not. Write the honest thing instead — a
+`// UNCOVERABLE: <property title> — needs <the action or actor the fixture lacks>` comment, and check what you *can*.
+Fixture source for reference:
+```rust
+{{ fixture }}
+```{{ revise }}

@@ -109,7 +109,7 @@ dev = [
 # cache-keys` over its `.rs` sources, so uv rebuilds on `uv run` when the Rust
 # changes and there is no manual `maturin develop` / `cargo build` step.
 apps = [
-    # crucible_app is added in PR3 (its crate lives in rust/crucible-app, which lands there).
+    "crucible_app",
     "echoprover",
     # The command-sandbox launcher — a binary, not an extension module; the wheel
     # lands it in `.venv/bin`, which is where composer.sandbox.launcher resolves it
@@ -135,7 +135,7 @@ conflicts = [
 [tool.uv.sources]
 graphcore = { path = "./graphcore", editable = true }
 # Wheels built from the local Rust workspace (see the `apps` group above).
-# crucible_app's source is added in PR3 (with its crate under rust/crucible-app).
+crucible_app = { path = "rust/crucible-app", editable = true }
 echoprover = { path = "rust/example-app", editable = true }
 # Not editable: a bin wheel has nothing to link back to a source tree — uv rebuilds
 # it from the cache-keys in rust/run-confined/pyproject.toml instead.
@@ -171,9 +171,8 @@ console-autoprove = "composer.cli.console_autoprove:main"
 tui-autoprove = "composer.cli.tui_autoprove:main"
 console-foundry = "composer.cli.console_foundry:main"
 tui-foundry = "composer.cli.tui_foundry:main"
-# console-crucible / tui-crucible land in PR3, together with the `composer.crucible_launch`
-# module they name — an entry point pointing at a module that doesn't exist installs happily
-# and only fails, as an ImportError, when someone runs it.
+console-crucible = "composer.crucible_launch:console_crucible"
+tui-crucible = "composer.crucible_launch:tui_crucible"
 autoprove-report-render = "composer.spec.source.report.render:main"
 tui-natspec = "composer.cli.tui_pipeline:main"
 cache-natspec = "composer.cli.cache_natspec:main"

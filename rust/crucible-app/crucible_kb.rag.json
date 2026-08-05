@@ -1,0 +1,2072 @@
+{
+  "version": 1,
+  "knowledge_base": "crucible_kb",
+  "source": "crucible docs (docs/*.md + README.md) @ 35ec899",
+  "sections": [
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Index"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "- [Program Loading](#program-loading) — `add_program`\n- [Account Creation](#account-creation) — `create_account`, `create_mint`, `create_token_account`\n- [Program Calls](#program-calls) — `program(...).call(...).accounts(...).signers(...).send()`\n- [Transaction Results (`TxOutcome`)](#transaction-results-txoutcome)\n- [Raw Instruction Calls](#raw-instruction-calls) — `raw_call` for non-Anchor / custom instructions\n- [Transaction Batching](#transaction-batching) — `add_transaction`, `send_batch`\n- [Account Reading/Writing](#account-readingwriting) — `read_anchor_account`, `update_account`, zero-copy helpers\n- [RPC Account Cloning](#rpc-account-cloning) — `clone_from_rpc`, `clone_account(s)`\n- [Time Control](#time-control) — `slot`, `warp_to_slot`, `advance_slots`\n- [Mock Pyth Oracles](#mock-pyth-oracles)\n- [Fixture Hooks](#fixture-hooks) — `setup`, `after_action` (see also [Writing Tests](writing-tests.md))"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Program Loading"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "ctx.add_program(&program_id, \"path/to/program.so\")?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Account Creation"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "// Generic account\nctx.create_account()\n    .pubkey(address)\n    .lamports(1_000_000_000)\n    .owner(system_program::id())\n    .size(128)  // optional\n    .create()?;\n\n// Mint account\nctx.create_mint()\n    .pubkey(mint_address)\n    .mint_authority(authority)\n    .decimals(9)\n    .create()?;\n\n// Token account\nctx.create_token_account()\n    .pubkey(token_address)\n    .mint(mint_address)\n    .token_owner(owner)\n    .amount(1000)\n    .create()?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Program Calls"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "ctx.program(program_id)\n    .call(instruction::DoSomething { amount })\n    .accounts(accounts::DoSomething {\n        user: user.pubkey(),\n        pool: pool_pda,\n        system_program: system_program::id(),\n    })\n    .signers(&[&*user])\n    .send()?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Transaction Results (`TxOutcome`)"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "The `.send()` method returns `Result<TxOutcome>`, a parsed transaction result:"
+        },
+        {
+          "kind": "code",
+          "body": "use crucible_test_context::TxOutcome;\n\nlet result = ctx.program(program_id)\n    .call(instruction::DoSomething { amount })\n    .accounts(accounts::DoSomething { /* ... */ })\n    .signers(&[&*user])\n    .send()?;\n\nmatch result {\n    TxOutcome::Success { compute_units, logs } => {\n        println!(\"Used {} CU\", compute_units);\n    }\n    TxOutcome::ProgramError { error, error_code, logs, .. } => {\n        if let Some(code) = error_code {\n            println!(\"Failed with error code: {}\", code);\n        }\n    }\n}"
+        },
+        {
+          "kind": "text",
+          "body": "**Helper methods:**\n- `is_success()` / `is_error()` - Check outcome type\n- `error_code()` - Extract `Custom(N)` error codes\n- `logs()` - Get program logs\n- `unwrap()` / `expect(msg)` - Panic on error with detailed message\n- `into_result()` - Convert to `Result<(), TxError>` for `?` operator\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Raw Instruction Calls"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For non-Anchor programs or custom instructions:"
+        },
+        {
+          "kind": "code",
+          "body": "use solana_instruction::{AccountMeta, Instruction};\n\nlet instruction = Instruction {\n    program_id: my_program_id,\n    accounts: vec![\n        AccountMeta::new(user.pubkey(), true),\n        AccountMeta::new(pool_pda, false),\n        AccountMeta::new_readonly(config, false),\n    ],\n    data: my_instruction_data.try_to_vec()?,\n};\n\nctx.raw_call(instruction)\n    .signers(&[&*user])\n    .send()?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Transaction Batching"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Combine multiple instructions into a single atomic transaction:"
+        },
+        {
+          "kind": "code",
+          "body": "ctx.program(program_id)\n    .call(instruction::Initialize {})\n    .accounts(accounts::Initialize { /* ... */ })\n    .signers(&[&*payer])\n    .add_transaction()?;\n\nctx.program(program_id)\n    .call(instruction::Deposit { amount: 1000 })\n    .accounts(accounts::Deposit { /* ... */ })\n    .signers(&[&*user])\n    .add_transaction()?;\n\n// Send all queued instructions as ONE atomic transaction\nctx.send_batch()?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Account Reading/Writing"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "let account: MyAccount = ctx.read_anchor_account(&address)?;\nlet account: Account = ctx.get_account(&address)?;\nctx.write_anchor_account(&address, &my_data)?;"
+        },
+        {
+          "kind": "text",
+          "body": "Read-modify-write a single account atomically:"
+        },
+        {
+          "kind": "code",
+          "body": "ctx.update_account(&address, |account| {\n    account.lamports += 1_000_000;\n    Ok(())\n})?;"
+        },
+        {
+          "kind": "text",
+          "body": "Check whether an account exists with at least `min_size` bytes of data (useful in invariants that need to skip uninitialized accounts):"
+        },
+        {
+          "kind": "code",
+          "body": "if ctx.account_has_data(&pubkey, 8) {\n    let data: MyAccount = ctx.read_anchor_account(&pubkey)?;\n    // ...\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Account Reading/Writing",
+        "Zero-Copy Accounts"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For accounts using `bytemuck`/zero-copy layouts. Default discriminator length is 8 bytes; use the `_with_discriminator` variants for non-Anchor zero-copy formats."
+        },
+        {
+          "kind": "code",
+          "body": "let pool: Pool = ctx.read_zero_copy_account(&pool_address)?;\nctx.write_zero_copy_account(&pool_address, &updated_pool)?;\n\n// Custom discriminator length (e.g., 0 for raw layouts):\nlet raw: RawState = ctx.read_zero_copy_account_with_discriminator(&address, 0)?;\nctx.write_zero_copy_account_with_discriminator(&address, &raw, 0)?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Account Reading/Writing",
+        "SPL Token Balance"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "let amount = ctx.token_balance(&token_account_address);"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "RPC Account Cloning"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Clone accounts directly from mainnet/devnet into your test environment. Accounts are cached to disk in `.fuzz-cache/accounts/` - subsequent runs load from cache without RPC calls.\n\nRequires the `rpc-clone` feature in your fuzz harness Cargo.toml:"
+        },
+        {
+          "kind": "code",
+          "body": "crucible-test-context = { ..., features = [\"rpc-clone\"] }"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "RPC Account Cloning",
+        "Basic Usage"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "fn setup() -> Self {\n    let mut ctx = TestContext::new();\n    let mut cloner = ctx.clone_from_rpc(\"https://api.mainnet-beta.solana.com\");\n\n    // Clone a program (auto-handles BPF Upgradeable Loader)\n    cloner.clone_account(&program_id)?;\n\n    // Batch clone accounts (PDAs, token accounts, oracles, etc)\n    cloner.clone_accounts(&[reserve_a, reserve_b, oracle_a])?;\n\n    // ...\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "RPC Account Cloning",
+        "Cache Management"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "// Force re-fetch from RPC (ignore disk cache)\nlet mut cloner = ctx.clone_from_rpc(rpc_url).force_refresh();\ncloner.clone_account(&stale_account)?;\n\n// Custom cache directory\nlet mut cloner = ctx.clone_from_rpc(rpc_url).cache_dir(\"./my-cache\");\n\n// Invalidate specific account or entire cache\ncloner.invalidate(&pubkey)?;\ncloner.clear_cache()?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "RPC Account Cloning",
+        "Program Account Fetching"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "use solana_rpc_client_api::filter::{RpcFilterType, Memcmp};\n\n// Fetch all accounts owned by a program (requires filters)\n// WARNING: Unfiltered getProgramAccounts can return millions of results\nlet filters = vec![RpcFilterType::DataSize(200)];\nlet pubkeys = cloner.clone_program_accounts(&program_id, &filters)?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "RPC Account Cloning",
+        "How Caching Works"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "- First run: fetches from RPC and saves to `.fuzz-cache/accounts/<pubkey>.json` + `.bin`\n- Subsequent runs: loads from disk (no network calls)\n- Use `.force_refresh()` to re-fetch stale accounts\n- Add `.fuzz-cache/` to `.gitignore`"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Time Control"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "let current = ctx.slot();\nctx.warp_to_slot(current + 1000);\nctx.advance_slots(100);"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Mock Pyth Oracles"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "let oracle = ctx.create_mock_pyth_oracle()\n    .price(100_00000000)  // $100 with 8 decimals\n    .exponent(-8)\n    .confidence(100_000)\n    .build()?;\n\nctx.update_pyth_price(&oracle, 95_00000000, -8)?;\nctx.refresh_pyth_oracle(&oracle)?;"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "TestContext API Reference",
+        "Fixture Hooks"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "`#[fuzz_fixture]` recognises a few special method names on the fixture impl:\n\n- `setup() -> Self` — required. Builds the initial state once per iteration (stateless) or once per state-pool entry (stateful).\n- `action_*` — fuzz-discovered actions, see [Writing Tests › Action Naming Convention](writing-tests.md#action-naming-convention).\n- `after_action(&self)` — optional. Called after every action dispatch. Useful for diagnostic logging or state stats. See [Writing Tests › After-Action Callback](writing-tests.md#after-action-callback)."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "`crucible init`"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible init <program_name> [-C <HARNESS_DIR>]"
+        },
+        {
+          "kind": "text",
+          "body": "Creates a standalone fuzz workspace in `fuzz/<program_name>/` by default, or directly in `-C/--harness-dir`."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "`crucible run`"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible run <program_name> <test_name> [OPTIONS]"
+        },
+        {
+          "kind": "text",
+          "body": "| Flag | Description |\n|------|-------------|\n| `--binary-in <PATH>` | Run a prebuilt harness binary directly |\n| `--release` | Build in release mode (recommended) |\n| `--coverage` | Enable coverage reporting |\n| `--timeout <SECS>` | Stop after N seconds |\n| `--cores N` / `-j N` | Run N parallel fuzzer workers |\n| `--corpus-in <DIR>` | Load seed corpus from directory |\n| `--corpus-out <DIR>` | Write corpus to directory |\n| `--crashes-out <DIR>` | Custom crash output directory |\n| `--replay <FILE>` | Replay a single input file |\n| `--dry-run` | Validate setup without fuzzing |\n| `--seed <N>` | Random seed for reproducible fuzzing |\n| `--symbols <PATH>` | Path to debug binary with DWARF symbols (for source-level coverage) |\n| `--no-tracing` | Disable SVM register tracing (~2x faster, no coverage) |\n| `--stop-on-crash` | Stop fuzzing on first crash |\n| `--max-actions <N>` | Max actions per iteration (default: 8 stateless, 100 stateful) |\n| `--stateful` | Stateful fuzzing: single action per iteration with state pool |\n| `--max-depth <N>` | Maximum state depth (action chain length) in stateful mode (default: 15) |\n| `--pool-size <N>` | State pool capacity in stateful mode (default: 256000) |\n| `--program-so <PATH>` | Override the program `.so` loaded by the harness |\n| `--mode <MODE>` | Remote fuzzing operational mode (see [Remote Fuzzing Integration](remote-fuzzing.md)) |\n| `--lcov-out <PATH>` | Custom LCOV coverage output file path |\n\n**Examples:**"
+        },
+        {
+          "kind": "code",
+          "body": "# Basic fuzzing\ncrucible run myproject invariant_test --release --timeout 60\n\n# Run a prebuilt harness directly\ncrucible run myproject invariant_test --binary-in ./fuzz/myproject/target/release/invariant_test\n\n# Multi-core fuzzing (4 workers)\ncrucible run myproject invariant_test --release -j 4\n\n# Coverage report\ncrucible run myproject invariant_test --release --coverage --timeout 120\n\n# Coverage with custom output path\ncrucible run myproject invariant_test --release --coverage --lcov-out ./output/coverage.lcov\n\n# Custom harness directory\ncrucible run myproject invariant_test -C ./custom-harness --release\n\n# Dry-run validation\ncrucible run myproject invariant_test --dry-run\n\n# Replay a crash\ncrucible run myproject invariant_test --replay ./crashes/invariant_test/abc123\n\n# Reproducible fuzzing\ncrucible run myproject invariant_test --release --seed 12345\n\n# Stateful mode\ncrucible run myproject invariant_test --release --stateful\n\n# Stateful with custom depth and multi-core\ncrucible run myproject invariant_test --release --stateful --max-depth 20 -j 4"
+        },
+        {
+          "kind": "text",
+          "body": "**Environment variables:**\n\n| Variable | Description |\n|----------|-------------|\n| `FUZZ_VERBOSE=1` | Enable verbose harness output |\n| `FUZZ_STATS_CSV=<path>` | Write per-second stats to CSV file for benchmarking |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "`crucible list`"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible list <program_name>   # List tests for a program\ncrucible list -C ./fuzz/myproject  # List tests from a harness dir\ncrucible list                  # List all fuzz harnesses"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "`crucible show`"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible show <program>                                    # List all crashes\ncrucible show <program> <crash_file>                       # View metadata\ncrucible show <program> <crash_file> --replay              # Replay crash\ncrucible show <program> --crashes-dir <DIR>                # List crashes from custom dir\ncrucible show <program> <crash_file> --crashes-dir <DIR>   # View metadata from custom dir\ncrucible show . <crash_file>                               # Auto-detect from current dir"
+        },
+        {
+          "kind": "text",
+          "body": "Use `\".\"` as the program name to auto-detect the fuzz harness when running from within the fuzz directory.\n\n`-C/--harness-dir` is a global option for locating a custom harness directory on `init`, `run`, `list`, `show`, `tmin`, and `cmin`.\n\n| Flag | Description |\n|------|-------------|\n| `--replay` | Actually replay the crash by running the binary |\n| `--regen` | Regenerate crash metadata (requires `--replay`) |\n| `--crashes-dir <DIR>` | Custom crashes directory to read from (supports flat and nested layouts) |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "`crucible cmin`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Minimize corpus to smallest set preserving all coverage."
+        },
+        {
+          "kind": "code",
+          "body": "crucible cmin <program> <test> <corpus_dir> --release\ncrucible cmin <program> <test> <corpus_dir> --corpus-out ./corpus_min --release\ncrucible cmin <program> <test> --corpus-in <DIR> --release"
+        },
+        {
+          "kind": "text",
+          "body": "| Flag | Description |\n|------|-------------|\n| `--release` | Build in release mode |\n| `--corpus-in <DIR>` | Input corpus directory (alternative to positional arg) |\n| `--corpus-out <DIR>` | Output directory (default: overwrite input) |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "`crucible tmin`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Minimize a crash to the smallest action sequence that still reproduces the violation."
+        },
+        {
+          "kind": "code",
+          "body": "crucible tmin <program> <test> <crash_file> [OPTIONS]\ncrucible tmin <program> <test> --all [OPTIONS]"
+        },
+        {
+          "kind": "text",
+          "body": "| Flag | Description |\n|------|-------------|\n| `--release` | Build in release mode |\n| `--all` | Minimize all crashes for this test |\n\nOnly works with structured/invariant tests (action sequences). Overwrites crash files in place."
+        },
+        {
+          "kind": "code",
+          "body": "# Minimize a single crash\ncrucible tmin myproject invariant_test crash_abc123 --release\n\n# Minimize all crashes\ncrucible tmin myproject invariant_test --all --release"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "Execution Modes"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "1. **Normal Fuzzing** (default) - Continuous input generation and mutation\n2. **Dry-Run** (`--dry-run`) - Single iteration to validate harness setup\n3. **Input Replay** (`--replay`) - Execute one specific input file\n4. **Coverage-Only** (`--coverage --corpus-in`) - Run corpus once for coverage report\n5. **Seeded Fuzzing** (`--corpus-in`) - Start from pre-existing corpus\n6. **Multi-Core** (`--cores N`) - Parallel fuzzer workers with shared coverage\n7. **Stateful** (`--stateful`) - Single action per iteration with state pool\n8. **Corpus Minimization** (`crucible cmin`) - Reduce corpus to minimal set preserving coverage\n9. **Crash Minimization** (`crucible tmin`) - Reduce crash to minimal reproducing action sequence"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "Execution Modes",
+        "Stateful Mode"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Stateful mode (`--stateful`) uses a state-pool approach where each fuzzer iteration executes a **single action** on a state selected from a pool, rather than replaying an entire action sequence from scratch.\n\n- States form a tree: each state has a parent and a depth (action chain length)\n- New states are created by applying an action to an existing state\n- The state pool is bounded; states are evicted based on coverage novelty\n- `--max-depth <N>` controls maximum chain length (default: 100)\n- Works with both single-core and multi-core (`-j N`)\n- Crashes record the full action chain from root to violation"
+        },
+        {
+          "kind": "code",
+          "body": "# Basic stateful fuzzing\ncrucible run myproject invariant_test --release --stateful\n\n# With custom depth limit\ncrucible run myproject invariant_test --release --stateful --max-depth 50\n\n# Multi-core stateful\ncrucible run myproject invariant_test --release --stateful -j 4"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "CLI Reference",
+        "Remote Fuzzing Integration"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For running Crucible as a managed engine on a remote fuzzing platform, see the dedicated **[Remote Fuzzing Integration Guide](remote-fuzzing.md)** covering:\n\n- All five operational modes (`dry_run`, `explore`, `reproduce`, `coverage`, `corpus_merge`)\n- Directory conventions (`./corpus`, `./input`, `./output`)\n- Structured output protocol (`[FUZZ_PULSE]`, `[FUZZ_FINDING]`, `[FUZZ_ERROR]`)\n- Bundle layout and manifest configuration\n- Exit code semantics per mode"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Crucible can generate LCOV coverage reports showing which lines of your Solana program were exercised during fuzzing. There are two modes: **bytecode-level** (default, no extra setup) and **source-level** (requires a debug binary, produces highlighted Rust source)."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Bytecode-level coverage"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Just add `--coverage` to your run command. This writes `./coverage/coverage.lcov` by default and uses SBF program counter addresses as line numbers:"
+        },
+        {
+          "kind": "code",
+          "body": "crucible run myproject invariant_test --release --coverage --timeout 60"
+        },
+        {
+          "kind": "text",
+          "body": "This is useful for tracking coverage growth over time, but the LCOV output uses fake line numbers (PC addresses) rather than real source locations."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Source-level coverage"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For proper source-level reports that map to your Rust code, you need a **debug binary** — the unstripped ELF with DWARF debug sections."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Source-level coverage",
+        "Step 1: Build the debug binary"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Add these settings to your program's workspace `Cargo.toml` under `[profile.release]`:"
+        },
+        {
+          "kind": "code",
+          "body": "[profile.release]\nopt-level = 1    # Better DWARF accuracy (opt-level 3 causes gaps due to inlining)\ndebug = 2        # Full DWARF debug info\nstrip = false    # Keep debug sections in the binary"
+        },
+        {
+          "kind": "text",
+          "body": "Then build with `--debug` and **platform-tools v1.51+** (earlier versions have a linker bug that corrupts DWARF address relocations):"
+        },
+        {
+          "kind": "code",
+          "body": "cargo build-sbf --debug --tools-version v1.51 \\\n  --manifest-path programs/<your_program>/Cargo.toml"
+        },
+        {
+          "kind": "text",
+          "body": "> **Important:** Platform-tools versions before v1.51 produce corrupted DWARF debug info due to a bug in the SBF linker (LLD) where `R_SBF_64_64` relocations are incorrectly applied to debug sections instead of `R_SBF_64_ABS64`. This causes `addr2line` to resolve 0 PCs. See [anza-xyz/llvm-project#159](https://github.com/anza-xyz/llvm-project/pull/159) for details.\n\nThis produces two binaries:\n- `target/deploy/<program>.so` — stripped, for SVM execution (~1.5 MB)\n- `target/sbpf-solana-solana/release/<program>.so` — unstripped with DWARF (~30-40 MB)\n\n> **Important:** The execution binary and debug binary must come from the **same build** so that PC addresses match. If you rebuild the debug binary, also copy the deploy binary to your fuzz harness."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Source-level coverage",
+        "Step 2: Copy the deploy binary"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Copy the freshly built deploy binary to your fuzz harness directory (replacing the existing one):"
+        },
+        {
+          "kind": "code",
+          "body": "cp target/deploy/<program>.so path/to/fuzz/harness/<program>.so"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Source-level coverage",
+        "Step 3: Run with `--symbols`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Point `--symbols` at the unstripped debug binary:"
+        },
+        {
+          "kind": "code",
+          "body": "crucible run myproject invariant_test --release --coverage --timeout 60 \\\n  --symbols /path/to/target/sbpf-solana-solana/release/<program>.so"
+        },
+        {
+          "kind": "text",
+          "body": "To write the LCOV file to a custom path (e.g., for remote fuzzing integration), use `--lcov-out`:"
+        },
+        {
+          "kind": "code",
+          "body": "crucible run myproject invariant_test --release --coverage --corpus-in ./corpus \\\n  --lcov-out ./output/coverage.lcov"
+        },
+        {
+          "kind": "text",
+          "body": "You should see output like:"
+        },
+        {
+          "kind": "code",
+          "body": "[COVERAGE] DWARF source map loaded: 143160 PCs resolved\n[LCOV] Source-level coverage: 133 source files\n[LCOV] Coverage written to coverage.lcov (2 programs, 23994 lines, 2166 branches)"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Source-level coverage",
+        "Step 4: Generate HTML report"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "By default the LCOV file is written to `./coverage/coverage.lcov` (or the path passed via `--lcov-out`). Use `lcov` and `genhtml` to produce a browsable HTML report.\n\nFirst, extract only your program's source files (filtering out stdlib and third-party crate paths):"
+        },
+        {
+          "kind": "code",
+          "body": "lcov --extract coverage.lcov '*/programs/<your_program>/*' -o program_coverage.lcov"
+        },
+        {
+          "kind": "text",
+          "body": "Then generate HTML:"
+        },
+        {
+          "kind": "code",
+          "body": "genhtml program_coverage.lcov -o coverage_html --legend\nopen coverage_html/index.html"
+        },
+        {
+          "kind": "text",
+          "body": "> **Tip:** Run `genhtml` from your program's workspace root so that relative source paths resolve correctly."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Why opt-level 1?"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "At `opt-level = 3` (the default for release), the compiler aggressively inlines and reorders code. This produces lossy DWARF debug info — many source lines have no corresponding instructions, causing gaps in the coverage report. `opt-level = 1` preserves the source-to-instruction mapping much more faithfully:\n\n| Setting | Executable lines | Lines hit | Coverage |\n|---------|-----------------|-----------|----------|\n| opt-level 3 | 2,708 | 657 | 24.3% |\n| opt-level 1 | 1,988 | 856 | 43.1% |\n\nThe opt-level 1 binary is larger and slower at runtime. The recommended workflow is to fuzz normally (without `--coverage`) to build up a corpus, then generate the coverage report separately:"
+        },
+        {
+          "kind": "code",
+          "body": "# 1. Fuzz normally to build a corpus (fast, no coverage overhead)\ncrucible run myproject invariant_test --release --timeout 300 --corpus-out ./corpus\n\n# 2. Replay the corpus with --coverage to generate the report (quick single pass)\ncrucible run myproject invariant_test --release --coverage --corpus-in ./corpus \\\n  --symbols /path/to/debug/binary.so"
+        },
+        {
+          "kind": "text",
+          "body": "This way your main fuzzing runs at full speed, and coverage reports are generated on demand from the saved corpus."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Different optimization levels (3-binary workflow)"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "When you fuzz with an optimized binary (default `cargo build-sbf`) but need source-level coverage, the PCs from the optimized binary won't match the DWARF debug info (which requires `opt-level = 1`). Use `--program-so` to load a debug-stripped binary whose instruction layout matches the DWARF symbols binary."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Different optimization levels (3-binary workflow)",
+        "Build the binaries"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "cd programs/my_program\n\n# Build 1: optimized binary for fuzzing\ncargo build-sbf\ncp target/deploy/my_program.so /path/to/fuzz/optimized.so\n\n# Build 2: debug binary for coverage (edit Cargo.toml first, or append)\ncat >> Cargo.toml <<'EOF'\n[profile.release]\nopt-level = 1\ndebug = 2\nstrip = false\nEOF\n\ncargo build-sbf\ncp target/deploy/my_program.so /path/to/fuzz/debug.so           # stripped, for execution\ncp target/sbpf-solana-solana/release/my_program.so /path/to/fuzz/symbols.so  # unstripped, for DWARF"
+        },
+        {
+          "kind": "text",
+          "body": "This produces 3 binaries:\n\n| Binary | Optimization | DWARF | Purpose |\n|--------|-------------|-------|---------|\n| `optimized.so` | default (fast) | no | Fuzzing |\n| `debug.so` | opt-level=1, stripped | no | Coverage execution (PCs match symbols) |\n| `symbols.so` | opt-level=1, unstripped | yes | DWARF source mapping |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Different optimization levels (3-binary workflow)",
+        "Run coverage with --program-so"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "# Fuzz with the optimized binary (fast)\ncrucible run myproject invariant_test --release --timeout 300 --corpus-out ./corpus\n\n# Generate coverage: load debug.so for execution, symbols.so for DWARF\ncrucible run myproject invariant_test --release --coverage --corpus-in ./corpus \\\n  --program-so ./debug.so --symbols ./symbols.so"
+        },
+        {
+          "kind": "text",
+          "body": "The `--program-so` flag overrides the `.so` that the harness loads into litesvm at runtime, without requiring any harness code changes."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "LCOV format reference"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "The generated `coverage.lcov` file uses standard LCOV format. This section documents the format and how to programmatically consume it for automated coverage analysis (e.g., in `solana-rag`'s `coverage_analysis` / `coverage_loop` tools)."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "LCOV format reference",
+        "File structure"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Each source file gets a record block:"
+        },
+        {
+          "kind": "code",
+          "body": "TN:fuzzer\nSF:/absolute/path/to/source_file.rs\nFN:<line>,<function_name>\nFNDA:<hit_count>,<function_name>\nFNF:<functions_found>\nFNH:<functions_hit>\nDA:<line_number>,<execution_count>\nDA:<line_number>,<execution_count>\n...\nLF:<lines_found>\nLH:<lines_hit>\nBRDA:<line>,<block>,<branch>,<taken_count>\nBRF:<branches_found>\nBRH:<branches_hit>\nend_of_record"
+        },
+        {
+          "kind": "text",
+          "body": "**Key record types:**\n- `SF:` — absolute path to the source file (only user source files, stdlib/deps filtered out)\n- `FN:` / `FNDA:` — function declarations and hit counts\n- `DA:<line>,<count>` — line hit data. `count=0` means executable but not reached\n- `BRDA:<line>,<block>,<branch>,<taken>` — branch data. `taken=-` means not executed\n- `LF:` / `LH:` — total lines found vs hit (for computing line coverage %)"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "LCOV format reference",
+        "Source-level vs bytecode-level"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "| | Source-level (with `--symbols`) | Bytecode-level (without `--symbols`) |\n|---|---|---|\n| `SF:` paths | Real source files (`programs/stake/src/processor.rs`) | Synthetic (`program_2a54379117d8a106.bpf`) |\n| `DA:` line numbers | Actual source line numbers (1-based) | SBF program counter addresses |\n| `FN:` names | Demangled Rust function names | `fn_0`, `fn_25`, etc. |\n| Useful for | Gap analysis, genhtml, CI reporting | Tracking coverage growth over time |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "LCOV format reference",
+        "Generating source-level LCOV for programmatic analysis"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "The recommended flow for tools that want to analyze coverage gaps:"
+        },
+        {
+          "kind": "code",
+          "body": "# 1. Fuzz to build corpus (fast, multi-core, no coverage overhead)\ncrucible run prog test --release -j 4 --timeout 300 --corpus-out ./corpus\n\n# 2. Generate source-level LCOV (single pass over corpus, no mutation)\n#    Requires: debug.so (same opt-level as symbols.so) + symbols.so (DWARF)\ncrucible run prog test --release --coverage --corpus-in ./corpus \\\n  --program-so ./debug.so \\\n  --symbols ./symbols.so \\\n  --lcov-out ./output/coverage.lcov"
+        },
+        {
+          "kind": "text",
+          "body": "**What happens in step 2:**\n1. `FUZZ_COVERAGE_ONLY=1` is set automatically (coverage + corpus-in + no timeout)\n2. Each corpus input is replayed once with SVM register tracing enabled\n3. PCs from execution are mapped to source locations via DWARF from `--symbols`\n4. LCOV is written with real file paths and line numbers"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "LCOV format reference",
+        "Parsing LCOV programmatically"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Python example (matches `solana-rag`'s `coverage.parse_lcov()`):"
+        },
+        {
+          "kind": "code",
+          "body": "def parse_lcov(path: str) -> list[dict]:\n    \"\"\"Returns per-file coverage: source_file, lines_hit, lines_total, hit_pct, uncovered_lines.\"\"\"\n    results = []\n    current_file = \"\"\n    lines_hit = lines_total = 0\n    uncovered = []\n\n    for line in open(path):\n        line = line.strip()\n        if line.startswith(\"SF:\"):\n            current_file = line[3:]\n            lines_hit = lines_total = 0\n            uncovered = []\n        elif line.startswith(\"DA:\"):\n            parts = line[3:].split(\",\")\n            line_no, count = int(parts[0]), int(parts[1])\n            lines_total += 1\n            if count > 0:\n                lines_hit += 1\n            else:\n                uncovered.append(line_no)\n        elif line == \"end_of_record\" and current_file:\n            hit_pct = (lines_hit / lines_total * 100) if lines_total else 0\n            results.append({\n                \"source_file\": current_file,\n                \"lines_hit\": lines_hit,\n                \"lines_total\": lines_total,\n                \"hit_pct\": round(hit_pct, 1),\n                \"uncovered_lines\": sorted(uncovered),\n            })\n            current_file = \"\"\n    return results"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "LCOV format reference",
+        "Mapping uncovered lines to instructions/functions"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Once you have `uncovered_lines` per file, map them to program instructions using the source tree:\n\n1. For each uncovered line range, find which function it belongs to (using `line_start`/`line_end` from the indexed source tree)\n2. Group uncovered ranges by function name\n3. Use these gaps to decide which actions to add or improve in the fuzz harness\n\n**Example gap output:**"
+        },
+        {
+          "kind": "code",
+          "body": "processor.rs: StakeInstruction::Merge (lines 412-445) — 0% covered\n  → Need action_merge in harness\n\nprocessor.rs: StakeInstruction::AuthorizeChecked (lines 220-235) — 0% covered\n  → Admin-only, intentionally excluded\n\nhelpers/delegate.rs: validate_delegated_amount (lines 89-102) — partial\n  → Edge case: delegation with lockup not tested"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "LCOV format reference",
+        "CLI flags summary for coverage"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "| Flag | Env var | Description |\n|------|---------|-------------|\n| `--coverage` | `FUZZ_COVERAGE` | Enable LCOV output (sets `COVERAGE_ENABLED`) |\n| `--symbols <path>` | `FUZZ_SYMBOLS` | Path to unstripped `.so` with DWARF debug info |\n| `--program-so <path>` | `FUZZ_PROGRAM_SO` | Override which `.so` litesvm loads (for coverage with different opt-level) |\n| `--lcov-out <path>` | `FUZZ_COVERAGE_OUT` | Custom LCOV output path (default: `coverage.lcov`) |\n| `--corpus-in <dir>` | `FUZZ_CORPUS_IN` | Load corpus for replay (with `--coverage`, triggers coverage-only mode) |\n\n**Coverage-only mode** is activated automatically when `--coverage` + `--corpus-in` are both set without `--timeout`. It replays each corpus input once and writes LCOV, then exits."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "LCOV format reference",
+        "Build requirements"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "| Requirement | Details |\n|-------------|---------|\n| **platform-tools >= v1.51** | Required for correct DWARF. Use `cargo build-sbf --tools-version v1.51`. See [anza-xyz/llvm-project#159](https://github.com/anza-xyz/llvm-project/pull/159). |\n| **`--debug` flag** | Pass to `cargo build-sbf` to set `DW_AT_comp_dir` for source path resolution |\n| **`[profile.release]`** | `opt-level = 1, debug = 2, strip = false` in program's `Cargo.toml` |\n| **Same build for debug.so + symbols.so** | Both must come from the same `cargo build-sbf` invocation so PCs match |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Coverage Reports",
+        "Installing lcov and genhtml"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "# macOS\nbrew install lcov\n\n# Ubuntu/Debian\nsudo apt install lcov"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Crash Analysis & Replay",
+        "List all crashes"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible show <project>"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Crash Analysis & Replay",
+        "View crash metadata"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible show <project> <crash_file>"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Crash Analysis & Replay",
+        "Replay crash"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible show <project> <crash_file> --replay"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Crash Analysis & Replay",
+        "Minimize a crash"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Crashes often contain unnecessary actions — setup noise that doesn't contribute to the violation. Use `crucible tmin` to reduce a crash to the smallest action sequence that still triggers the same invariant violation:"
+        },
+        {
+          "kind": "code",
+          "body": "# Minimize a single crash\ncrucible tmin <project> <test_name> <crash_file> --release\n\n# Minimize all crashes for a test\ncrucible tmin <project> <test_name> --all --release"
+        },
+        {
+          "kind": "text",
+          "body": "The minimized crash overwrites the original file in place (same filename, updated binary + metadata). Use `crucible show` to view the minimized sequence.\n\n**Algorithm:** Multi-pass forward removal. First, actions after the violation are truncated. Then each remaining action is tried for removal — if the crash still reproduces without it, it's discarded. Passes repeat until no more actions can be removed (convergence), handling cases where removing later actions makes earlier ones removable.\n\n**Example output:**"
+        },
+        {
+          "kind": "code",
+          "body": "[TMIN] Original: 10 actions\n[TMIN] Crash reproduces. Minimizing...\n[TMIN] Truncated 2 post-violation actions (violation at index 7)\n[TMIN]   [0] send_batch — REMOVED\n[TMIN]   [0] borrow — REMOVED\n[TMIN]   [0] deposit — KEPT\n[TMIN]   [1] flashloan_start — KEPT\n[TMIN]   [2] borrow — KEPT\n[TMIN]   [3] transfer_account — KEPT\n[TMIN]   [4] flashloan_end — KEPT\n[TMIN] Pass 2...\n[TMIN]   [0] deposit — KEPT\n[TMIN]   [1] flashloan_start — KEPT\n[TMIN]   [2] borrow — KEPT\n[TMIN]   [3] transfer_account — KEPT\n[TMIN]   [4] flashloan_end — KEPT\n[TMIN] Result: 10 → 5 actions (5 removed)"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Getting Started",
+        "Setup & Running",
+        "Initialize a fuzz project"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible init <project_name>"
+        },
+        {
+          "kind": "text",
+          "body": "This creates `fuzz/<project_name>/` by default. Use `-C <dir>` to place the harness elsewhere."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Getting Started",
+        "Setup & Running",
+        "Run a fuzz test"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible run <project_name> <test_name>\n\ncrucible run <project_name> <test_name> --release  # Optimized\n\ncrucible run <project_name> <test_name> --timeout 60  # Stop after 60 seconds\n\ncrucible run <project_name> <test_name> --release --cores 8  # 8 parallel fuzzer workers (-j 8 also works)\n\ncrucible run <project_name> <test_name> --release --stateful  # Stateful mode (single action per iter with state pool)"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Getting Started",
+        "Setup & Running",
+        "Feature flags"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Every fuzz test must be added as a feature in `Cargo.toml`:"
+        },
+        {
+          "kind": "code",
+          "body": "[features]\nfuzz_single = []\ninvariant_fuzz = []"
+        },
+        {
+          "kind": "text",
+          "body": "The test name must match the feature name exactly.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Getting Started",
+        "Project Structure"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "After `crucible init myproject`:"
+        },
+        {
+          "kind": "code",
+          "body": "myproject/\n├── Cargo.toml\n├── programs/\n│   └── myproject/          # Your Solana program\n├── fuzz/\n│   └── myproject/\n│       ├── Cargo.toml      # Standalone workspace + features\n│       ├── idls/\n│       │   └── myproject.json  # Program IDL\n│       ├── src/\n│       │   └── main.rs     # Fixtures, actions, and tests\n│       └── crashes/        # Crash artifacts saved here\n│           └── <test_name>/\n│               ├── abc123          # Raw crash input\n│               └── abc123.meta.json  # Crash metadata"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "This guide covers critical practices for writing effective fuzz harnesses for Solana programs built with Anchor. **First read the [API Reference](api-reference.md) and [Writing Tests](writing-tests.md)** for the framework API and examples.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "Core Workflow: Iterative Feedback Loop"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "**The key to writing effective harnesses is running the fuzzer frequently and using feedback to guide development.**"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "Core Workflow: Iterative Feedback Loop",
+        "Run Early and Often"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "# Run with short timeouts during development (3-5 seconds)\ncrucible run <program> <test> --release --timeout 5"
+        },
+        {
+          "kind": "text",
+          "body": "**During development:**\n- Run for **3-5 seconds** if there's verbose debug output\n- Run for **10-30 seconds** if output is clean to see coverage trends\n- Watch for: error patterns, coverage plateaus, action failures"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "Core Workflow: Iterative Feedback Loop",
+        "What to Look For"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "1. **Coverage growth** - Is `edges` count increasing over time?\n2. **Error patterns** - Are the same errors repeating? (indicates a blocker)\n3. **Execution speed** - Should be 200+ exec/sec once setup completes\n4. **Corpus growth** - Is the fuzzer finding new interesting inputs?"
+        },
+        {
+          "kind": "code",
+          "body": "# Good output - coverage growing, exec speed normal:\n[FUZZ_PULSE] run time: 3s, corpus: 50, exec/sec: 1234, edges: 1491/65536 (2%)\n[FUZZ_PULSE] run time: 6s, corpus: 85, exec/sec: 1180, edges: 1572/65536 (2%)  <- growth!\n\n# Bad output - coverage stuck, repeated errors:\n[DEBUG] Deposit failed: Custom(6090)\n[DEBUG] Deposit failed: Custom(6090)\n[DEBUG] Deposit failed: Custom(6090)  <- same error = blocker"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "Core Workflow: Iterative Feedback Loop",
+        "Debug Output Management"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Use a global DEBUG flag to control verbose output:"
+        },
+        {
+          "kind": "code",
+          "body": "const DEBUG: bool = true;  // Set to false for production runs\n\nif DEBUG {\n    eprintln!(\"[DEBUG] Action result: {:?}\", result);\n}"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "1. Result Handling"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "use crucible_test_context::TxOutcome;\n\nmatch result? {\n    TxOutcome::Success { compute_units, logs } => {\n        // Transaction succeeded\n    }\n    TxOutcome::ProgramError { error, error_code, logs, .. } => {\n        // Transaction failed\n        if let Some(code) = error_code {\n            println!(\"Failed with error code: {}\", code);\n        }\n    }\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "2. Admin/Authority Whitelists"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Many Solana programs have **hardcoded authority whitelists**. Look for:\n- `ADMINS`, `AUTHORITIES`, `ALLOWED_SIGNERS` arrays\n- `is_admin()`, `is_authority()` check functions\n- Constraints like `#[account(constraint = is_admin(&signer.key()))]`\n\n**Always check the program source** for these patterns. If found:\n1. Locate the predefined keypair files (often in `localnet/`, `test-keys/`, or similar)\n2. Load and use those specific keypairs instead of generating random ones"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "3. PDA Seed Encoding"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Anchor PDAs can encode arguments as either **binary bytes** or **string bytes**. Check the actual program source:"
+        },
+        {
+          "kind": "code",
+          "body": "// Binary encoding:\nseeds = [b\"account\", &id.to_le_bytes()]\n\n// String encoding:\nseeds = [b\"tick_array\", whirlpool.as_ref(), start_tick_index.to_string().as_bytes()]"
+        },
+        {
+          "kind": "text",
+          "body": "**The IDL won't tell you which encoding is used** - you must read the Rust source."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "4. Setup Must Be Loud and Fail-Fast"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "During initialization, **always panic on failure**:"
+        },
+        {
+          "kind": "code",
+          "body": "match result? {\n    TxOutcome::Success { .. } => eprintln!(\"[SETUP] InitializeX SUCCESS\"),\n    TxOutcome::ProgramError { error, logs, .. } => {\n        eprintln!(\"[SETUP] InitializeX FAILED: {:?}\", error);\n        for log in &logs { eprintln!(\"  {}\", log); }\n        panic!(\"Setup failed: InitializeX\");\n    }\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "5. Initialization Order Dependencies"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Solana programs have strict initialization order. Common pattern:\n1. **Global config** (WhirlpoolsConfig, Protocol, etc.)\n2. **Fee/tier structures** (FeeTier, PriceFeed, etc.)\n3. **Token mints** (often must be ordered by pubkey: `mint_a < mint_b`)\n4. **Main accounts** (Pool, Vault, Market)\n5. **Supporting structures** (TickArrays, OrderBooks, etc.)\n6. **User accounts** (with token accounts funded)\n7. **Positions/state** with initial values (liquidity, deposits, etc.)"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "6. Reading Anchor Error Codes"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "When you see errors like `Custom(2003)` or `Custom(6038)`:\n- Anchor errors 2000-2999 are **constraint errors** (seeds, signer, owner, etc.)\n- Anchor errors 6000+ are **program-specific errors** defined in the program\n\nLook up the error in:\n1. The program's `error.rs` or error enum\n2. Anchor's standard errors (ConstraintSeeds=2006, ConstraintRaw=2003, etc.)"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "7. Token Account Requirements"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For DeFi programs:\n- Create token accounts with correct mint and owner\n- Fund accounts with sufficient tokens (check decimal places!)\n- Mint authority must match what the program expects\n- Order mints correctly if program requires (e.g., `token_mint_a < token_mint_b`)"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "8. Sysvar and Program IDs"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For Solana v3:"
+        },
+        {
+          "kind": "code",
+          "body": "use anchor_lang::system_program;\nsystem_program::ID  // not system_program::id()"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "9. Debugging Checklist"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "When a harness isn't working:\n1. Enable **loud setup** (eprintln + panic on all failures)\n2. Check **admin/authority requirements** in program source\n3. Verify **PDA seed encoding** matches program source\n4. Confirm **initialization order** is correct\n5. Check **account constraints** in the Accounts struct\n6. Read **program logs** from failed transactions\n7. Verify **token balances** are sufficient"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "10. Coverage Expectations"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Different program types have different coverage profiles:\n- **AMM/DEX** (Whirlpool, Raydium): ~2000-3000 edges\n- **Lending** (Marginfi, Kamino): ~2000-4000 edges\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "When coverage plateaus or actions consistently fail, you have a **blocker**."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "11. Identifying Blockers from Error Messages"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "**Common error patterns and fixes:**\n\n| Error | Likely Cause | Fix |\n|-------|--------------|-----|\n| `Custom(6090)` DepositLimitExceeded | Config limit too low | Patch account data or use UpdateConfig |\n| `Custom(6007)` MathOverflow | last_update.slot is 0 | Set to current SVM slot |\n| `Custom(3002)` AccountDiscriminatorMismatch | Instruction format wrong | IDL outdated vs binary |\n| `Custom(3008)` InvalidProgramId | Wrong token_program | Check SPL Token vs Token-2022 |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "12. Adjusting Initial State (Account Patching)"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "When UpdateConfig instructions fail, patch account data directly:"
+        },
+        {
+          "kind": "code",
+          "body": "fn configure_reserve_manually(ctx: &mut TestContext, reserve: &Pubkey, program_id: &Pubkey) {\n    let account = ctx.get_account(reserve).unwrap();\n    let mut data = account.data.clone();\n\n    let config_offset = 5000;\n    data[config_offset] = 0;  // status = Active\n    data[config_offset + 16..config_offset + 24]\n        .copy_from_slice(&u64::MAX.to_le_bytes());  // deposit_limit = MAX\n\n    ctx.create_account()\n        .pubkey(*reserve)\n        .lamports(account.lamports)\n        .owner(*program_id)\n        .data(&data)\n        .create()\n        .unwrap();\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "13. IDL vs Binary Layout Mismatches"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "**The IDL may not match the actual binary layout.** Write a known value and see what the program reads:"
+        },
+        {
+          "kind": "code",
+          "body": "data[config_offset + 16..config_offset + 18].copy_from_slice(&1000u16.to_le_bytes());\n// Run the program - if it shows \"limit: 1000\", deposit_limit is at offset 16"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "14. Action Dependencies and Multi-Step Flows"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Some actions depend on previous actions completing successfully:"
+        },
+        {
+          "kind": "code",
+          "body": "deposit_reserve_liquidity  ->  get cTokens\ndeposit_obligation_collateral  ->  cTokens become collateral\nborrow_obligation_liquidity  ->  borrow against collateral"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "15. Early Return Checks"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Check prerequisites before attempting actions that depend on prior state:"
+        },
+        {
+          "kind": "code",
+          "body": "pub fn action_borrow(&mut self, user_idx: usize, amount: u64) {\n    let has_collateral = /* check on-chain state */;\n    if !has_collateral {\n        return;  // Don't waste cycles on guaranteed failure\n    }\n    // Proceed with borrow...\n}"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "16. Deserialize On-Chain State"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "**Don't just track local variables** - read actual on-chain state to verify:"
+        },
+        {
+          "kind": "code",
+          "body": "fn invariant_check(&mut self) {\n    for position in &self.positions {\n        let on_chain_data: PositionAccount = self.ctx\n            .read_anchor_account(&position.pubkey)\n            .expect(\"Position account must exist\");\n\n        assert_eq!(\n            on_chain_data.liquidity,\n            position.expected_liquidity,\n            \"Position liquidity mismatch\"\n        );\n    }\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses",
+        "17. Designing Useful Invariants"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "**Conservation invariants** (tokens in = tokens out):"
+        },
+        {
+          "kind": "code",
+          "body": "let total_in_vaults = self.ctx.token_balance(&vault_a) + self.ctx.token_balance(&vault_b);\nlet expected = self.total_deposits - self.total_withdrawals + self.accrued_fees;\nfuzz_assert_ge!(total_in_vaults, expected, \"Token conservation violated\");"
+        },
+        {
+          "kind": "text",
+          "body": "**Solvency invariants** (protocol can meet obligations):"
+        },
+        {
+          "kind": "code",
+          "body": "let total_liabilities = self.positions.iter().map(|p| p.owed_amount).sum();\nlet total_assets = self.ctx.token_balance(&vault);\nfuzz_assert_ge!(total_assets, total_liabilities, \"Protocol insolvent\");"
+        },
+        {
+          "kind": "text",
+          "body": "**State consistency invariants** (data structures are valid):"
+        },
+        {
+          "kind": "code",
+          "body": "for pos in &self.positions {\n    fuzz_assert_lt!(pos.tick_lower, pos.tick_upper, \"Invalid tick range\");\n}"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "When manual byte offset patching becomes unwieldy, use **bytemuck** with `#[repr(C)]` structs for type-safe account access."
+        },
+        {
+          "kind": "code",
+          "body": "use bytemuck::{Pod, Zeroable};\n\n#[repr(C)]\n#[derive(Clone, Copy, Pod, Zeroable)]\npub struct ReserveConfig {\n    pub status: u8,\n    pub _padding1: [u8; 7],\n    pub loan_to_value_pct: u8,\n    pub liquidation_threshold_pct: u8,\n    pub deposit_limit: u64,\n    pub borrow_limit: u64,\n    // ...\n}"
+        },
+        {
+          "kind": "text",
+          "body": "Reading and writing:"
+        },
+        {
+          "kind": "code",
+          "body": "let reserve: &Reserve = bytemuck::from_bytes(&account.data[8..8 + RESERVE_SIZE]);\nlet reserve: &mut Reserve = bytemuck::from_bytes_mut(&mut data[8..8 + RESERVE_SIZE]);\nreserve.config.deposit_limit = u64::MAX;"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Track per-action success/failure rates to identify blockers:"
+        },
+        {
+          "kind": "code",
+          "body": "use std::sync::atomic::{AtomicU32, Ordering};\n\nstruct ActionStats {\n    attempts: AtomicU32,\n    success: AtomicU32,\n    early_return: AtomicU32,\n    program_error: AtomicU32,\n}"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "| Code | Name | Cause | Fix |\n|------|------|-------|-----|\n| 6006 | InvalidAccountInput | Wrong remaining_accounts | Read state to discover required accounts |\n| 6007 | MathOverflow | last_update.slot = 0 | Set to current slot |\n| 6020 | ObligationDepositsEmpty | Borrow without collateral | Early return check for deposits |\n| 6051 | ReserveStale | Reserve not refreshed | Call RefreshReserve or patch last_update |\n| 6087 | CollateralNonLiquidatable | LTV = 0% | Set loan_to_value_pct > 0 |\n| 6090 | DepositLimitExceeded | deposit_limit too low | Set deposit_limit = u64::MAX |\n| 6091 | BorrowLimitExceeded | borrow_limit too low | Set borrow_limit = u64::MAX |\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "- [ ] Create `types.rs` with bytemuck structs matching program accounts\n- [ ] Set up mock oracles for any price feeds\n- [ ] Configure reserves/pools with reasonable limits (u64::MAX)\n- [ ] Patch freshness/staleness fields (last_update.slot)\n- [ ] Add remaining_accounts logic for instructions that need them\n- [ ] Add early return checks for state prerequisites\n- [ ] Add diagnostic logging to all actions\n- [ ] Run initial fuzzing and analyze error patterns\n- [ ] Iterate on fixes until major actions succeed\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Solana/Anchor Fuzz Harnesses"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "1. WRITE/MODIFY  ->  2. BUILD  ->  3. RUN (3-5s)  ->  4. ANALYZE\n       ^                                                    |\n       +----------------------------------------------------+"
+        },
+        {
+          "kind": "text",
+          "body": "| Symptom | Likely Cause | Section |\n|---------|--------------|---------|\n| Setup panics | Initialization order wrong | 5 |\n| Same error every time | Blocker - config/state issue | 11-15 |\n| Coverage stuck at low % | Actions failing silently | 14 |\n| Program panics with enum error | Patching corrupted enum | 12 |\n| Later actions can't find accounts | State not persisted | 14, 16 |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Using crucible-idl-gen (Standalone Harnesses)"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For programs using different Solana versions than the fuzzer, `crucible-idl-gen` generates types from IDL without a crate dependency."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Using crucible-idl-gen (Standalone Harnesses)",
+        "Setup"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "1. **Convert your IDL to JSON format:**"
+        },
+        {
+          "kind": "code",
+          "body": "   anchor idl convert target/idl/my_program.json -o fuzz/my_fuzz/idls/my_program.json"
+        },
+        {
+          "kind": "text",
+          "body": "2. **Add crucible-idl-gen to your fuzz Cargo.toml:**"
+        },
+        {
+          "kind": "code",
+          "body": "   [dependencies]\n   crucible-idl-gen = { git = \"https://github.com/asymmetric-research/crucible\", branch = \"main\" }"
+        },
+        {
+          "kind": "text",
+          "body": "3. **Generate types in main.rs:**"
+        },
+        {
+          "kind": "code",
+          "body": "   crucible_idl_gen::declare_fuzz_program!(\"idls/my_program.json\");\n\n   // Or with explicit module name\n   crucible_idl_gen::declare_fuzz_program!(my_program = \"idls/my_program.json\");\n\n   // Now use generated types\n   use my_program::{instruction, accounts, ID};"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Using crucible-idl-gen (Standalone Harnesses)",
+        "Generated Code"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "The macro generates:\n- `instruction::*` - Instruction structs with `InstructionData` impl\n- `accounts::*` - Account context structs with `ToAccountMetas` impl\n- `state::*` - Account state types for deserialization\n- `types::*` - Custom type definitions\n- `ID` - Program ID constant\n- `register_schemas()` - Register account schemas for semantic field-level diffs in crash output"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Using crucible-idl-gen (Standalone Harnesses)",
+        "Example Usage"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible_idl_gen::declare_fuzz_program!(\"idls/lending.json\");\n\n#[fuzz_fixture]\nimpl MyFixture {\n    pub fn setup() -> Self {\n        lending::register_schemas();  // Enable semantic field diffs in crash output\n\n        let mut ctx = TestContext::new();\n        // ... setup accounts, load program ...\n        Self { ctx }\n    }\n\n    pub fn action_deposit(&mut self, amount: u64) {\n        self.ctx.program(lending::ID)\n            .call(lending::instruction::Deposit { amount })\n            .accounts(lending::accounts::Deposit {\n                user: user_pubkey,\n                reserve: reserve_pda,\n                // ...\n            })\n            .signers(&[&user])\n            .send().ok();\n    }\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Crucible integrates with the standard driver protocol used by remote fuzzing platforms, allowing it to run as a managed fuzzing engine. The integration is implemented entirely through the `--mode` CLI flag, which translates the driver's operational modes into equivalent Crucible flags and directory conventions.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Quick Start"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "A minimal remote fuzzing bundle for a Crucible harness needs:\n\n1. The `crucible` binary\n2. The compiled fuzz harness (under `fuzz/<program>/`)\n3. The program `.so` binary\n4. A manifest pointing the standard driver at `crucible run`"
+        },
+        {
+          "kind": "code",
+          "body": "{\n  \"executable_path_in_bundle\": \"bin/crucible\",\n  \"executable_sub_command\": [\"run\", \"myproject\", \"invariant_test\", \"--release\"],\n  \"supported_tasks\": [\"explore\", \"reproduce\", \"lineage_cover\", \"corpus_merge\"],\n  \"coverage\": {\n    \"kind\": \"lcov\",\n    \"lcov_config\": {\n      \"SourcesPathInBundle\": \"src/\",\n      \"SourcesOriginalPath\": \"/build/src/\"\n    }\n  }\n}"
+        },
+        {
+          "kind": "text",
+          "body": "The standard driver appends `--mode <mode>` and `--cores <N>` to the sub-command. Crucible accepts both.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "How Invocation Works"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "The driver invokes:"
+        },
+        {
+          "kind": "code",
+          "body": "<bundle>/bin/crucible run <program> <test> --release --mode <mode> --cores <N>"
+        },
+        {
+          "kind": "text",
+          "body": "Crucible's `--mode` flag translates each mode into native flags before the underlying harness binary is launched. All standard Crucible flags (`--corpus-in`, `--crashes-out`, etc.) can still be passed alongside `--mode` to override defaults.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Operational Modes",
+        "`dry_run`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Validates that the harness can compile, set up, and execute one iteration.\n\n| Aspect | Behavior |\n|--------|----------|\n| Maps to | `--dry-run` |\n| Corpus | None required |\n| Output | None |\n| Exit code | 0 = OK, non-zero = error |"
+        },
+        {
+          "kind": "code",
+          "body": "crucible run myproject invariant_test --release --mode dry_run\n# Equivalent to:\ncrucible run myproject invariant_test --release --dry-run"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Operational Modes",
+        "`explore`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Primary fuzzing mode. The harness continuously generates and mutates inputs, looking for invariant violations.\n\n| Aspect | Behavior |\n|--------|----------|\n| Corpus in | `./corpus` (if the directory exists) |\n| Corpus out | `./output` |\n| Crashes out | `./output` |\n| Stop-on-crash | Enabled (exits after first finding) |\n| Structured output | `[FUZZ_PULSE]`, `[FUZZ_FINDING]` on stdout; verbose details on stderr |"
+        },
+        {
+          "kind": "code",
+          "body": "crucible run myproject invariant_test --release --mode explore --cores 4\n# Equivalent to:\ncrucible run myproject invariant_test --release \\\n  --corpus-in ./corpus --corpus-out ./output --crashes-out ./output \\\n  --stop-on-crash -j 4"
+        },
+        {
+          "kind": "text",
+          "body": "**Override defaults** by passing flags explicitly:"
+        },
+        {
+          "kind": "code",
+          "body": "# Use a custom corpus directory\ncrucible run myproject invariant_test --release --mode explore --corpus-in ./seeds\n\n# Custom crashes directory (overrides ./output for crashes)\ncrucible run myproject invariant_test --release --mode explore --crashes-out ./findings"
+        },
+        {
+          "kind": "text",
+          "body": "When a crash is found:\n1. The crash file (binary input) is written to `./output` (or `--crashes-out`)\n2. A `.meta.json` file with the action sequence is written alongside it\n3. `[FUZZ_FINDING] reproduces:true summary:<msg>` is emitted\n4. The process exits"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Operational Modes",
+        "`reproduce`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Attempts to replay a known crash to verify it still triggers.\n\n| Aspect | Behavior |\n|--------|----------|\n| Input | First file found in `./input/` directory |\n| Non-reproduction signal | `did not reproduce` printed to stdout |\n| Account diffs | Auto-enabled for rich replay output |"
+        },
+        {
+          "kind": "code",
+          "body": "crucible run myproject invariant_test --release --mode reproduce\n# Equivalent to:\ncrucible run myproject invariant_test --release --replay ./input/<first_file>"
+        },
+        {
+          "kind": "text",
+          "body": "**Output protocol:**\n\n- If the crash **reproduces**: `[FUZZ_FINDING] reproduces:true summary:<msg>` on stdout, exit code 1\n- If the crash **does not reproduce**: `[FUZZ_FINDING] reproduces:false summary:did not reproduce` on stdout, plus the literal string `did not reproduce` on stdout. Exit code 0.\n\nThe driver uses the presence of `did not reproduce` (case-sensitive) on stdout to determine reproduction status. The exit code is **not** used for this determination."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Operational Modes",
+        "`coverage`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Replays the corpus once and generates an LCOV coverage report.\n\n| Aspect | Behavior |\n|--------|----------|\n| Maps to | `--coverage --corpus-in ./corpus` |\n| Corpus in | `./corpus` |\n| LCOV output | `./output/coverage.lcov` |\n| Exit code | 0 = success |"
+        },
+        {
+          "kind": "code",
+          "body": "crucible run myproject invariant_test --release --mode coverage\n# Equivalent to:\ncrucible run myproject invariant_test --release \\\n  --coverage --corpus-in ./corpus --lcov-out ./output/coverage.lcov"
+        },
+        {
+          "kind": "text",
+          "body": "The LCOV file is in standard LCOV format. For source-level coverage (real file paths and line numbers rather than bytecode PCs), pass `--symbols <path>` pointing to the unstripped debug binary. See [Coverage Reports](coverage.md) for details."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Operational Modes",
+        "`corpus_merge`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Merges and deduplicates the corpus, writing the effective (minimized) subset to the output directory.\n\n| Aspect | Behavior |\n|--------|----------|\n| Corpus in | `./corpus` |\n| Output | `./output` (merged corpus files) |\n| Method | Greedy set-cover: replays all inputs, keeps minimum set preserving all coverage |\n| Exit code | 0 = success |"
+        },
+        {
+          "kind": "code",
+          "body": "crucible run myproject invariant_test --release --mode corpus_merge\n# Equivalent to:\ncrucible run myproject invariant_test --release \\\n  --corpus-in ./corpus --corpus-out ./output\n# (internally runs the cmin greedy set-cover algorithm)"
+        },
+        {
+          "kind": "text",
+          "body": "The driver checks the number of files in `./output` after execution. Fewer files than in `./corpus` indicates effective merging.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Directory Layout"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "When running under a remote driver, the working directory is structured by the driver:"
+        },
+        {
+          "kind": "code",
+          "body": "<workdir>/\n├── corpus/        # Input corpus (explore, coverage, corpus_merge)\n├── input/         # Single crash file (reproduce mode)\n└── output/        # All output: corpus, crashes, coverage.lcov"
+        },
+        {
+          "kind": "text",
+          "body": "Crucible maps these directories to its native `--corpus-in`, `--corpus-out`, `--crashes-out`, and `--lcov-out` flags.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Structured Output Protocol"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Crucible emits structured output that the remote driver parses for status tracking and finding detection."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Structured Output Protocol",
+        "`[FUZZ_PULSE]` — Progress Updates"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Emitted periodically during `explore` mode (approximately once per second)."
+        },
+        {
+          "kind": "code",
+          "body": "[FUZZ_PULSE] execs/s:<uint64> corpus_count:<uint64> coverage:<uint64> memory_kib:<uint64>"
+        },
+        {
+          "kind": "text",
+          "body": "All fields are optional per the protocol. Crucible typically emits a superset:"
+        },
+        {
+          "kind": "code",
+          "body": "[FUZZ_PULSE] run time: 30s, exec/sec: 1234, corpus: 567, crashes: 0, edges: 1500/65536 (2.3%), memory_kib: 204800"
+        },
+        {
+          "kind": "text",
+          "body": "The driver extracts `execs/s`, `corpus_count`, `coverage`, and `memory_kib` from any `[FUZZ_PULSE]` line using key-value parsing.\n\nCrucible emits two pulse lines per update:\n- **stdout**: spec-compliant `[FUZZ_PULSE] execs/s:N corpus_count:N coverage:N memory_kib:N` (for the driver)\n- **stderr**: verbose human-readable line with edges, branches, action stats, etc. (captured as artifact)"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Structured Output Protocol",
+        "`[FUZZ_FINDING]` — Crash/Violation Discovered"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Emitted when an invariant violation is detected."
+        },
+        {
+          "kind": "code",
+          "body": "[FUZZ_FINDING] reproduces:true summary:<string>"
+        },
+        {
+          "kind": "text",
+          "body": "In `explore` mode, this is followed by the crash file being written to the output directory. The process then exits (stop-on-crash is enforced).\n\nIn `reproduce` mode, findings go to stdout:"
+        },
+        {
+          "kind": "code",
+          "body": "[FUZZ_FINDING] reproduces:true summary:Invariant violated: total_supply exceeded cap\n[FUZZ_FINDING] reproduces:false summary:did not reproduce"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Structured Output Protocol",
+        "`[FUZZ_ERROR]` — Fatal Error"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Emitted when the harness cannot continue (e.g., missing input file, configuration error)."
+        },
+        {
+          "kind": "code",
+          "body": "[FUZZ_ERROR] <error_message>"
+        },
+        {
+          "kind": "text",
+          "body": "The driver treats any `[FUZZ_ERROR]` as a fatal failure."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Structured Output Protocol",
+        "`did not reproduce`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "In `reproduce` mode, if the crash input does not trigger a violation, the literal string `did not reproduce` (case-sensitive) is printed to stdout. This is the driver's detection mechanism — the exit code is not used.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Manifest Configuration Reference"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "The standard driver manifest is a JSON object:"
+        },
+        {
+          "kind": "code",
+          "body": "{\n  \"executable_path_in_bundle\": \"bin/crucible\",\n  \"executable_sub_command\": [\"run\", \"myproject\", \"invariant_test\", \"--release\"],\n  \"supported_tasks\": [\"explore\", \"reproduce\", \"lineage_cover\", \"corpus_merge\"],\n  \"extra\": {\n    \"FUZZ_VERBOSE\": \"1\",\n    \"RUST_LOG\": \"info\"\n  },\n  \"coverage\": {\n    \"kind\": \"lcov\",\n    \"lcov_config\": {\n      \"SourcesPathInBundle\": \"programs/myproject/src/\",\n      \"SourcesOriginalPath\": \"/home/builder/programs/myproject/src/\"\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Manifest Configuration Reference",
+        "Fields"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "| Field | Required | Description |\n|-------|----------|-------------|\n| `executable_path_in_bundle` | Yes | Relative path to the `crucible` binary in the bundle |\n| `executable_sub_command` | Yes | Arguments passed before `--mode` and `--cores` |\n| `supported_tasks` | Yes | Which modes the harness supports |\n| `extra` | No | Environment variables set before invocation |\n| `coverage.kind` | If coverage | `\"lcov\"` for Crucible |\n| `coverage.lcov_config.SourcesPathInBundle` | If coverage | Path to sources in the bundle (for LCOV path rewriting) |\n| `coverage.lcov_config.SourcesOriginalPath` | If coverage | Original source path on the build machine |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Manifest Configuration Reference",
+        "Supported Tasks"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "| Task | Driver Name | Crucible Mode |\n|------|---------------|---------------|\n| Explore | `explore` | `--mode explore` |\n| Reproduce | `reproduce` | `--mode reproduce` |\n| Coverage | `lineage_cover` | `--mode coverage` |\n| Corpus merge | `corpus_merge` | `--mode corpus_merge` |\n\nNote: `lineage_cover` in `supported_tasks` maps to `--mode coverage`. The task name differs from the mode name."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Manifest Configuration Reference",
+        "Environment Variables via `extra`"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Any key-value pairs in `extra` are set as environment variables. Useful Crucible variables:\n\n| Variable | Description |\n|----------|-------------|\n| `FUZZ_VERBOSE=1` | Verbose harness output (action stats, state snapshots) |\n| `FUZZ_STATS_CSV=stats.csv` | Write per-second fuzzing stats to CSV |\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Building a Remote Fuzzing Bundle"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "A typical bundle layout:"
+        },
+        {
+          "kind": "code",
+          "body": "bundle/\n├── bin/\n│   └── crucible                          # CLI binary\n├── fuzz/\n│   └── myproject/\n│       ├── Cargo.toml\n│       ├── src/main.rs                   # Harness code\n│       ├── idls/myproject.json           # Program IDL\n│       └── target/release/invariant_test # Compiled harness binary\n├── target/\n│   └── deploy/myproject.so              # Program binary (loaded by harness)\n├── programs/\n│   └── myproject/src/                   # Source files (for LCOV path mapping)\n└── manifest.json                        # Standard driver config"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Building a Remote Fuzzing Bundle",
+        "Build Steps"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "# 1. Build the program binary\ncd /path/to/program\ncargo build-sbf\n\n# 2. Build the fuzz harness\ncd fuzz/myproject\ncargo build --release --features invariant_test\n\n# 3. Build the crucible CLI\ncd /path/to/crucible\ncargo build --release -p crucible-fuzz-cli\n\n# 4. Assemble the bundle\nmkdir -p bundle/bin bundle/fuzz/myproject bundle/target/deploy bundle/programs/myproject/src\ncp target/release/crucible bundle/bin/\ncp -r fuzz/myproject/ bundle/fuzz/myproject/\ncp target/deploy/myproject.so bundle/target/deploy/\ncp -r programs/myproject/src/ bundle/programs/myproject/src/"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "CLI Flags Accepted from Driver"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "The standard driver appends these flags to every invocation:\n\n| Flag | Source | How Crucible Handles It |\n|------|--------|------------------------|\n| `--mode <mode>` | Driver | Translated into native Crucible flags (see mode table above) |\n| `--cores <N>` | Driver | Passed to `-j N` for multi-core fuzzing |\n\nBoth are defined as clap arguments on `crucible run` and will not cause parse errors.\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Exit Codes"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "| Mode | Exit 0 | Non-zero |\n|------|--------|----------|\n| `dry_run` | Setup OK | Setup failed |\n| `explore` | Crash found and written | Build/runtime error |\n| `reproduce` | Did not reproduce (check stdout for `did not reproduce`) | Crash reproduced, or input read error |\n| `coverage` | LCOV written | Corpus missing or build error |\n| `corpus_merge` | Merged corpus written | Corpus missing or build error |\n\nNote: In `reproduce` mode, the exit code is **not** used to determine reproduction status. The driver checks for the string `did not reproduce` on stdout. Exit 0 = did not reproduce, exit 1 = crash reproduced (the inner harness returns 1 on reproduction, and the CLI passes it through without treating it as an error).\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Remote Fuzzing Integration",
+        "Differences from Standalone Usage"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "When running under a remote driver (`--mode` set), Crucible behaves slightly differently:\n\n| Behavior | Standalone | Remote |\n|----------|-----------|----------|\n| Corpus directory | User-specified or `fuzz/<prog>/corpus/` | `./corpus` (CWD-relative) |\n| Crash directory | `fuzz/<prog>/crashes/<test>/` | `./output` |\n| Coverage output | `./coverage/coverage.lcov` | `./output/coverage.lcov` |\n| Stop-on-crash | Off by default | Always on in `explore` |\n| Account diffs on replay | Auto-enabled | Auto-enabled |\n\nExplicit flags always override mode defaults (e.g., `--mode explore --crashes-out ./custom` uses `./custom` instead of `./output`)."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Tests",
+        "Fixture Requirements"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "#[derive(Clone)]  // Required - fixture is cloned each iteration\nstruct MyFixture {\n    ctx: TestContext,\n    program_id: Pubkey,\n    user: Rc<Keypair>,  // Keypairs wrapped in Rc<>\n    pool_pda: Pubkey,\n}\n\n#[fuzz_fixture]\nimpl MyFixture {\n    pub fn setup() -> Self {\n        let mut ctx = TestContext::new();\n        // ... initialization ...\n        Self { ctx, /* fields */ }\n    }\n}"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Tests",
+        "Action Naming Convention"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Actions must be prefixed with `action_` for auto-discovery:"
+        },
+        {
+          "kind": "code",
+          "body": "#[fuzz_fixture]\nimpl MyFixture {\n    pub fn setup() -> Self { /* ... */ }\n\n    pub fn action_stake(&mut self, amount: u64) { }\n    pub fn action_withdraw(&mut self, #[range(0..3)] user_idx: usize) { }\n\n    pub fn helper_method(&self) { }  // Not discovered\n}"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Tests",
+        "Action Naming Convention",
+        "Action Return Types"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "// Implicit success\npub fn action_advance_time(&mut self, slots: u64) {\n    self.ctx.advance_slots(slots);\n}\n\n// Explicit success/failure tracking\npub fn action_deposit(&mut self, amount: u64) -> Result<()> {\n    self.ctx.program(self.program_id)\n        .call(instruction::Deposit { amount })\n        .accounts(accounts::Deposit { /* ... */ })\n        .signers(&[&*self.user])\n        .send()?\n        .into_result()\n}"
+        },
+        {
+          "kind": "text",
+          "body": "For non-Anchor programs or hand-rolled instructions, use `ctx.raw_call(instruction)` instead of the typed `ctx.program(..).call(..)` builder. See [API Reference › Raw Instruction Calls](api-reference.md#raw-instruction-calls)."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Tests",
+        "Action Naming Convention",
+        "After-Action Callback"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "#[fuzz_fixture]\nimpl MyFixture {\n    pub fn setup() -> Self { /* ... */ }\n    pub fn action_deposit(&mut self, amount: u64) { /* ... */ }\n\n    // Optional: called after EVERY action dispatch\n    pub fn after_action(&self) {\n        let pool = self.ctx.read_anchor_account::<Pool>(&self.pool_pda).ok();\n        if let Some(pool) = pool {\n            eprintln!(\"[STATS] total_deposited: {}\", pool.total_deposited);\n        }\n    }\n}"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Tests",
+        "Range Constraints"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Bound fuzz inputs using `#[range(start..end)]`:"
+        },
+        {
+          "kind": "code",
+          "body": "pub fn action_stake(\n    &mut self,\n    #[range(0..3)] user_idx: usize,  // 0, 1, or 2\n    #[range(0..1_000_000)] amount: u64,\n) { }"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Tests",
+        "Simple Fuzzing (`#[crucible_fuzz]`)"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For testing individual operations with random inputs:"
+        },
+        {
+          "kind": "code",
+          "body": "#[crucible_fuzz]\nfn fuzz_stake(fixture: &mut StakingFixture, #[range(0..100_000)] amount: u64) {\n    fixture.action_stake(0, amount);\n    let user = fixture.ctx.read_anchor_account::<User>(&fixture.user_pda).unwrap();\n    fuzz_assert_le!(user.staked, INITIAL_BALANCE);\n}"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Tests",
+        "Invariant Fuzzing (`#[invariant_test]` + `#[fuzz_fixture]`)"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "For testing complex interactions with random action sequences:"
+        },
+        {
+          "kind": "code",
+          "body": "#[fuzz_fixture]\nimpl StakingFixture {\n    pub fn setup() -> Self { /* ... */ }\n    pub fn action_stake(&mut self, #[range(0..3)] user: usize, amount: u64) { }\n    pub fn action_unstake(&mut self, #[range(0..3)] user: usize, amount: u64) { }\n    pub fn action_claim(&mut self, #[range(0..3)] user: usize) { }\n    pub fn action_advance_time(&mut self, #[range(0..10000)] slots: u64) {\n        self.ctx.warp_to_slot(self.ctx.slot() + slots);\n    }\n}\n\n#[invariant_test]\nfn invariant_fuzz(fixture: &mut StakingFixture) {\n    // Runs AFTER EACH action in the sequence\n    let pool = fixture.ctx.read_anchor_account::<Pool>(&fixture.pool_pda).unwrap();\n    fuzz_assert_le!(pool.total_staked, fixture.total_deposited);\n}"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Writing Tests",
+        "Assertion Macros"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Use `fuzz_assert_*` macros instead of `assert!` in invariant checks:\n\n| Macro | Description |\n|-------|-------------|\n| `fuzz_assert!(cond)` | Assert condition is true |\n| `fuzz_assert_eq!(a, b)` | Assert `a == b` |\n| `fuzz_assert_ne!(a, b)` | Assert `a != b` |\n| `fuzz_assert_lt!(a, b)` | Assert `a < b` |\n| `fuzz_assert_le!(a, b)` | Assert `a <= b` |\n| `fuzz_assert_gt!(a, b)` | Assert `a > b` |\n| `fuzz_assert_ge!(a, b)` | Assert `a >= b` |\n| `fuzz_assert_approx_eq!(a, b, delta)` | Assert `\\|a - b\\| <= delta` |\n\nStandard `assert!` panics crash the entire fuzzer process. The `fuzz_assert_*` macros record violations and report them as crashes to LibAFL without killing the process."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Readme"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "<p align=\"center\">\n  <img src=\"assets/crucible_logo.png\" alt=\"Crucible\" width=\"400\">\n</p>\n\n<p align=\"center\">\n  <strong>Coverage-guided fuzzing framework for Solana smart contracts</strong>\n</p>\n\n<p align=\"center\">\n  Built on <a href=\"https://github.com/AFLplusplus/LibAFL\">LibAFL</a> and <a href=\"https://github.com/LiteSVM/litesvm\">LiteSVM</a> for fast, local transaction simulation with edge-level coverage tracking.\n</p>\n\n---\n\nCrucible enables property-based testing and stateful invariant checking for Solana programs through randomly generated action sequences. Define your program's actions, write invariants, and let the fuzzer find violations."
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Readme",
+        "Performance"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Upperbound throughput on small/medium programs with MacBook Pro M3:\n\n| Mode      | 1 core    | 12 cores   | 12 cores, no tracing |\n|-----------|-----------|------------|----------------------|\n| Stateless | 1,200/s   | 9,600/s    | 22,000/s             |\n| Stateful  | 8,200/s   | 67,000/s   | 130,000/s            |"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Readme",
+        "Features"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "- **Works on any compiled Solana program.** Coverage comes from sBPF edge tracing on the LiteSVM execution trace, so no source-side instrumentation or program rebuild is required. Standard Anchor/Codama/Shank IDL is sufficient to generate typed call bindings at compile time. See [IDL Code Generation](docs/idl-gen.md). When no IDL available, calling can still be done with `raw_call()`\n- **Concise harness API.** TestContext collapses account construction, signing, instruction encoding, and result parsing into one builder chain: `ctx.program(...).call(...).accounts(...).signers(...).send()`. Helpers cover time control (`advance_epoch`, `warp_to_slot`), account creation, and mint setup. Reduces testing boilerplate by 50-70%. See [API Reference](docs/api-reference.md). \n- **Typed-action mutator.** Mutations rewrite typed `Vec<Action>` entries directly. Sequence operations (insert, delete, swap, splice) and parameter rewrites (numeric values biased toward boundaries and declared `#[range(..)]` endpoints) keep every generated input structurally valid. Roughly a 5x improvement in bug discovery rate over `arbitrary`. \n- **Stateless mode.** Each iteration clones the post-setup snapshot and executes a full mutated sequence against it. Coverage feedback is per-sequence: sequences that reach a new edge survive into the corpus. \n- **Stateful mode.** Keeps a coverage-indexed pool of live program states and applies one mutated action at a time, picking up where prior iterations left off. Roughly an order-of-magnitude throughput gain over stateless, at the cost of higher memory use as the pool grows with coverage.\n- **Crash triage built in.** Findings are minimized with `crucible tmin` and replayed with `crucible show`. Programs compiled with debug symbols produce LCOV reports viewable with `genhtml`. See [Crash Analysis](docs/crash-analysis.md) and [Coverage Reports](docs/coverage.md).\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Readme",
+        "Quick Start",
+        "Install"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "From source:"
+        },
+        {
+          "kind": "code",
+          "body": "git clone https://github.com/asymmetric-research/crucible\ncd crucible\ncargo install --path crates/crucible-fuzz-cli"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Readme",
+        "Quick Start",
+        "Initialize a fuzz harness"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible init <program_name>"
+        },
+        {
+          "kind": "text",
+          "body": "Defaults to `fuzz/<program_name>/`"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Readme",
+        "Quick Start",
+        "Run a fuzz test"
+      ],
+      "blocks": [
+        {
+          "kind": "code",
+          "body": "crucible run <program_name> <test_name> --release"
+        },
+        {
+          "kind": "text",
+          "body": "---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Readme",
+        "Documentation"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "| Topic | Description |\n|-------|-------------|\n| [Getting Started](docs/getting-started.md) | Setup, running, project structure, feature flags |\n| [IDL Code Generation](docs/idl-gen.md) | Using `crucible-idl-gen` for standalone harnesses |\n| [API Reference](docs/api-reference.md) | TestContext API — program loading, accounts, transactions, RPC cloning, time, oracles |\n| [Writing Tests](docs/writing-tests.md) | Fixtures, actions, range constraints, simple & invariant fuzzing, assertion macros |\n| [CLI Reference](docs/cli-reference.md) | All `crucible` commands and execution modes |\n| [Crash Analysis](docs/crash-analysis.md) | Listing, viewing, replaying, and minimizing crashes |\n| [Coverage Reports](docs/coverage.md) | Bytecode & source-level coverage, LCOV, genhtml |\n| [Harness Guide](docs/harness-guide.md) | In-depth guide to writing effective fuzz harnesses |\n\n---"
+        }
+      ]
+    },
+    {
+      "headers": [
+        "Readme",
+        "License"
+      ],
+      "blocks": [
+        {
+          "kind": "text",
+          "body": "Licensed under the [MIT License](LICENSE)."
+        }
+      ]
+    }
+  ]
+}

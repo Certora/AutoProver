@@ -156,9 +156,13 @@ async def test_component_grouping_on_a_real_program(pg_container: "PostgresConta
 
     args = _model_args()
     root_s = str(root)
+    # Built BEFORE the connections: `standard_connections` takes the resolved provider
+    # service (it asks it for an uploader and the memory tool), not a provider name.
+    tiered = get_provider_for(tiered=cast(Any, args))
     async with (
         standard_connections(
-            provider="anthropic", embedder=DefaultEmbedder(MockSentenceTransformer())
+            provider=tiered.provider_service,
+            embedder=DefaultEmbedder(MockSentenceTransformer()),
         ) as conns,
         async_tool_context(),
     ):
@@ -171,7 +175,6 @@ async def test_component_grouping_on_a_real_program(pg_container: "PostgresConta
             relative_path=src_rel,
             forbidden_read=RUST_FORBIDDEN_READ,
         )
-        tiered = get_provider_for(tiered=cast(Any, args))
         models = ModelProvider(
             heavy_model=tiered.heavy, lite_model=tiered.lite, checkpointer=conns.checkpointer
         )

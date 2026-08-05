@@ -1,0 +1,45 @@
+
+Write ONE invariant function holding ALL of this component's properties (no fixture — it already
+exists as `Fixture`):
+
+- `pub fn {{ harness_fn }}(fixture: &mut Fixture) { ... }` — named EXACTLY that, and `pub` —
+  runs AFTER EACH fuzzed action. Put EVERY listed property's checks in this one fn (conservation,
+  solvency, bounds, access control, …). One fn = one build = one fuzz run for this component.
+  The fuzzer drives the WHOLE program, so the sequence interleaves other components' actions too.
+- Do NOT write `#[invariant_test]` yourself. Your code is placed inside a private, feature-gated
+  module and the host generates the `#[invariant_test]` entry point that calls your fn (the macro
+  expands `fn main()` next to itself, so it has to sit at the crate root, outside your module).
+  Helper items are welcome — `impl Fixture { ... }` blocks, free fns, consts — and because the
+  module is gated, a name you choose can never clash with another component's.
+- Assert against ON-CHAIN state, not local mirrors:
+    let acct = fixture.ctx.read_anchor_account::<SomeState>(&fixture.some_pda).unwrap();
+    fuzz_assert_le!(acct.balance, cap, "message");   // fuzz_assert_{eq,ne,lt,le,gt,ge}
+- Read RAW lamports / data / owner (bypassing Anchor deserialization) via
+  `read_account` / `get_account`, which return `Result<Account>` — unwrap/`?` FIRST,
+  THEN the field (there is NO `get_account_lamports`, and `Result` has no `.lamports`):
+    let lamports = fixture.ctx.read_account(&fixture.some_pda).unwrap().lamports;
+  Existence check: `fixture.ctx.account_exists(&fixture.some_pda)` (returns bool).
+- TRANSACTION FEE — do NOT assert an EXACT lamport delta on a signer. The fee payer (the
+  FIRST signer of the `action_*`'s `.send()`, e.g. the `depositor`/`authority`) is debited the
+  tx fee (~5000 lamports/signature) ON TOP OF whatever lamports the instruction moves, so
+  `depositor_before - amount == depositor_after` is WRONG (off by the fee). Assert exact deltas
+  on NON-signer accounts (e.g. the vault PDA, which only receives the transfer); for a signer,
+  subtract the fee or assert a bound (`<=`) instead of `==`.
+- Drive state via the fixture's existing `action_*` methods; do not re-`send()`
+  instructions yourself unless necessary.
+- EVERY assertion message MUST do two things: (a) START with its property title in brackets
+  (`"[<title>] ..."`) so a counterexample names which property it refutes, and (b) INTERPOLATE THE
+  OPERAND VALUES via format args. Passing a custom message makes `fuzz_assert*` use that message
+  VERBATIM — the macro's built-in `(left != right)` operand dump is DISCARDED — so a message
+  without the values leaves the counterexample untriageable:
+      // BAD — says nothing about what the values were, so nobody can tell a real bug from a
+      // fixture-modelling mistake without rebuilding and re-running the harness:
+      fuzz_assert!(total <= limit, "[deposit_limit_not_exceeded] total supply exceeds limit");
+      // GOOD — the message carries the numbers that refute the property:
+      fuzz_assert_le!(total, limit,
+          "[deposit_limit_not_exceeded] total_supply={} exceeds deposit_limit={}", total, limit);
+  Prefer the comparison macros (`fuzz_assert_{eq,ne,lt,le,gt,ge}`) over a bare `fuzz_assert!` so
+  the operands are explicit, and when the check LOOPS over accounts include the account key too —
+  otherwise the message cannot say which one failed.
+- Return ONLY the one annotated `fn {{ harness_fn }}`.
+

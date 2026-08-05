@@ -1,0 +1,19 @@
+[package]
+name = "crucible-app"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "AutoProver Solana verification application (Crucible fuzzing backend), built into a Python wheel."
+
+[lib]
+# MUST match the `export_app!` module ident and the maturin module name.
+name = "crucible_app"
+crate-type = ["cdylib"]
+
+[dependencies]
+autoprover-sdk = { path = "../autoprover-sdk" }
+askama = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `extension-module` (don't link libpython) + `abi3-py312` (one wheel for cp312+).
+pyo3 = { workspace = true, features = ["extension-module", "abi3-py312"] }

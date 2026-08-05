@@ -849,10 +849,15 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                     prop = prop_of.get(unit, unit)
                     units_by_prop.setdefault(prop, []).append(unit)
                     line = f"{prop}: {verdict.outcome.value}"
+                    # First line only: a backend may put follow-on diagnostics (e.g. Crucible's
+                    # reproducing action sequence) on later lines, and those belong in the report,
+                    # not smeared across the live one-line-per-verdict view. The backend puts the
+                    # deciding signal first — see `crucible_app`'s `finding_detail`.
+                    head = _first_line(verdict.detail) if verdict.detail else ""
                     emit(
                         "verdict",
                         {"outcome": verdict.outcome.value, "name": prop,
-                         "line": f"{line} — {verdict.detail}" if verdict.detail else line},
+                         "line": f"{line} — {head}" if head else line},
                     )
             if build_failed is not None:
                 failure = Failure(draft=spec, errors=build_failed.errors)
@@ -1098,8 +1103,8 @@ class RustBackend(
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     # How to confine every toolchain run (docs/command-sandbox.md). None → unsandboxed.
     sandbox: SandboxConfig | None = None
-    # Parsed values of the descriptor's declared CLI args, injected into every component's
-    # ``AuthorInput.context`` (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
+    # Parsed values of the descriptor's declared CLI args, put on every ``AuthorInput.args``
+    # (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
     declared_args: dict[str, Any] = field(default_factory=dict)
 
     @property

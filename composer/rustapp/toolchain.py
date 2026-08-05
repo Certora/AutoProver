@@ -10,7 +10,9 @@ tag → one concrete implementation, not an application fork: a chain's entry is
 targeting it (Crucible's fuzz harness and a future CVLR backend read a Cargo manifest and build a
 Solana program the same way).
 
-**Neither map has an entry yet**, and the two are unregistered in deliberately different ways:
+**Solana is registered in both** (a Cargo manifest walk; ``cargo-build-sbf`` + ``anchor idl`` with
+the ``Anchor.toml`` program-id resolution an IDL needs). A chain with no entry behaves in
+deliberately different ways per seam:
 
 * :func:`source_crate` **degrades**. An all-empty
   :class:`~composer.rustapp.wire.ProgramCrate` is already a documented state — it is what Solidity
@@ -42,8 +44,28 @@ from composer.spec.context import SourceFields
 type SourceCrateResolver = Callable[[SourceFields], ProgramCrate]
 
 
-#: Registered resolvers, by chain. Empty is a working state — see the module docstring.
-SOURCE_CRATES: dict[ChainTag, SourceCrateResolver] = {}
+def _solana_source_crate(source: SourceFields) -> ProgramCrate:
+    """Solana's resolver: the Cargo crate whose manifest owns the main source file, flattened to the
+    wire shape. Imported lazily so the generic host stays ecosystem-agnostic at import time.
+
+    The flattening happens here because it loses information: the resolver's own type spells an
+    unknown Anchor requirement ``None``, while the wire struct's ``#[serde(default)]`` fields make it
+    ``""`` — so everything on the Python side that needs the distinction works with the resolved type
+    (see :func:`composer.spec.solana.build.prepare_workspace`), and the lossy copy is made once, on
+    the way out to the wheel."""
+    from composer.spec.cargo import resolve_program_crate
+
+    crate = resolve_program_crate(source.project_root, source.relative_path)
+    if crate is None:
+        return ProgramCrate()
+    return ProgramCrate(
+        dir=crate.dir, package=crate.package, lib=crate.lib, anchor=crate.anchor or ""
+    )
+
+
+#: Registered resolvers, by chain. A chain without one answers "nothing resolved" — see the module
+#: docstring.
+SOURCE_CRATES: dict[ChainTag, SourceCrateResolver] = {"solana": _solana_source_crate}
 
 
 def source_crate(chain: ChainTag, source: SourceFields) -> ProgramCrate:
@@ -89,9 +111,27 @@ class WorkspaceToolchain(Protocol):
     ) -> str | None: ...
 
 
-#: Registered implementations, by chain. An entry is added together with the module it lives in —
-#: see the module docstring for why an empty map is the intended state on its own.
-WORKSPACE_TOOLCHAINS: dict[ChainTag, WorkspaceToolchain] = {}
+async def _solana_workspace(
+    plan: WorkspacePrep,
+    input: AuthorInput,
+    *,
+    source: SourceFields,
+    sandbox: SandboxConfig | None,
+    timeout_s: int,
+) -> str | None:
+    """Lazy binding for Solana's implementation, so the generic host stays ecosystem-agnostic at
+    import time: the Solana build helpers are imported only once a plan actually asks for them."""
+    from composer.spec.solana.build import prepare_workspace
+
+    return await prepare_workspace(
+        plan, input, source=source, sandbox=sandbox, timeout_s=timeout_s
+    )
+
+
+#: Registered implementations, by chain. An entry is added together with the module it binds — a tag
+#: whose module doesn't exist would pass every check here and then fail at the first plan that needs
+#: it.
+WORKSPACE_TOOLCHAINS: dict[ChainTag, WorkspaceToolchain] = {"solana": _solana_workspace}
 
 
 def workspace_toolchain(chain: ChainTag) -> WorkspaceToolchain:

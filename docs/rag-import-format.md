@@ -10,11 +10,11 @@
 > chunking, embedding, batching and dual-path ingestion move into the importer — once — and a
 > producer shrinks to "parse my docs → emit JSON", with no dependency on the RAG stack.
 >
-> **Scope:** this layer ships the *mechanism* — the format, the importer, and the tag→connection
-> registry — with **no corpus on it**; the first adopter is the Crucible application, which lands
-> with the Solana backend. The Foundry and CVL builders stay exactly as they are; they are
-> candidate future adopters (§5), not part of this change. The format is nonetheless designed to be
-> general, so migrating them later needs no schema change.
+> **Scope:** the *mechanism* — the format, the importer, and the tag→connection registry — ships
+> with the Rust application framework, corpus-free; **Crucible is its first adopter** (§7), and the
+> only one. The Foundry and CVL builders stay exactly as they are; they are candidate future
+> adopters (§5), not part of this change. The format is nonetheless designed to be general, so
+> migrating them later needs no schema change.
 >
 > Companion to [rust-applications.md](./rust-applications.md) (the descriptor-driven app model and
 > the wheel FFI surface). The `knowledge_base`
@@ -193,14 +193,14 @@ overridable by `--output`:
 
 ```python
 KNOWLEDGE_BASES: dict[str, str] = {
-    # "<corpus>_kb": CORPUS_DEFAULT_CONNECTION,
+    "crucible_kb": CRUCIBLE_DEFAULT_CONNECTION,
 }
 ```
 
-It is **empty here** — a corpus's entry lands with the application that declares it, together with
-the `composer/tools/<corpus>_rag.py` that searches it, because [`rag_env.py`](../composer/tools/rag_env.py)
-requires both halves before a tag is usable. This is the same registry idea
-as `rag_env.py` (tag → search tools) and the ecosystem registry:
+It holds `crucible_kb` — the one corpus on this path. An entry lands with the application that
+declares it, together with the `composer/tools/<corpus>_rag.py` that searches it, because
+[`rag_env.py`](../composer/tools/rag_env.py) requires both halves before a tag is usable. This is
+the same registry idea as `rag_env.py` (tag → search tools) and the ecosystem registry:
 a declarative tag resolved to a concrete resource, not a fork. The existing
 `*_DEFAULT_CONNECTION` constants in `db.py` stay put; if CVL/Foundry ever migrate onto this path,
 their tags join the registry then — and ideally the two registries share the tag namespace, so a
@@ -245,8 +245,10 @@ without writing composer-resident Python glued to the RAG DB. Two levels:
 - **Level 1 (what this layer enables):** the app ships a `<kb>.rag.json` next to its crate (built
   however it likes — a script in the app's own repo, checked-in output, a CI artifact) and the
   generic `rag_import.py` ingests it. No checkout of the upstream doc source at build or run time.
-  Composer ships the importer and the schema, nothing corpus-specific. Crucible is the first app to
-  do this; see its own docs for that corpus.
+  Composer ships the importer and the schema, nothing corpus-specific. Crucible does exactly this,
+  with the committed
+  [`rust/crucible-app/crucible_kb.rag.json`](../rust/crucible-app/crucible_kb.rag.json) — no
+  crucible checkout at build or run time.
 - **Level 2 (optional, natural follow-on):** add a wheel FFI callout — `rag_entries() -> str`
   returning the manifest JSON — so RAG content becomes part of the app package exactly like
   `descriptor()`. The importer could then ingest straight from a loaded wheel
@@ -267,13 +269,37 @@ The mechanism, corpus-free:
    covered by [`tests/test_rag_import.py`](../tests/test_rag_import.py) (both indexes fed, `part`
    numbering across sections *and* across manifests sharing a DB, code-ref tagging, version and
    target-resolution refusals).
-3. The `KNOWLEDGE_BASES` registry (§4) in [`composer/rag/db.py`](../composer/rag/db.py) — **empty**,
-   the same resting state as [`rag_env.py`](../composer/tools/rag_env.py)'s tools registry.
+3. The `KNOWLEDGE_BASES` registry (§4) in [`composer/rag/db.py`](../composer/rag/db.py).
 
 What an adopting application adds, in one go: its committed `<kb>.rag.json`, both registry halves
 (the `KNOWLEDGE_BASES` connection + a `composer/tools/<corpus>_rag.py` in `rag_env._FACTORIES`), the
 DB role/schema in [`init-db.sql`](../composer/scripts/init-db.sql), and whatever container wiring
 populates it at `setup-db` time.
+
+### The first adopter: Crucible
+
+1. `crucible_kb` is registered in both halves — `CRUCIBLE_DEFAULT_CONNECTION` in
+   [`db.py`](../composer/rag/db.py) and `_crucible_tools` in
+   [`rag_env.py`](../composer/tools/rag_env.py), whose
+   [`crucible_rag.py`](../composer/tools/crucible_rag.py) binds all three retrieval styles — plus a
+   `crucible_rag_user` schema in `init-db.sql`.
+2. The corpus is generated **once** from the crucible repo's `docs/` and committed as
+   [`rust/crucible-app/crucible_kb.rag.json`](../rust/crucible-app/crucible_kb.rag.json)
+   (126 sections). A checked-in artifact — no crucible checkout is needed to build or run the app.
+3. The container populates it at `setup-db` time: the Dockerfile copies the manifest to
+   `$AUTOPROVE_HOME/crucible_kb.rag.json`, and
+   [`scripts/autoprove-entrypoint.sh`](../scripts/autoprove-entrypoint.sh) runs `rag_import` into
+   the `crucible_rag` schema (alongside the CVL `rag_db` build). The demo (§1g of
+   [crucible-demo.md](./crucible-demo.md)) imports the same committed manifest.
+4. No Crucible-specific RAG *script* exists — the `crucible_ragbuild.py` and
+   `populate_crucible_rag.sh` this mechanism replaced are gone, so Crucible contributes a corpus as
+   data plus two registry entries.
+
+**Regenerating the manifest.** It was produced by a small markdown→manifest producer (parse ATX
+headers + fenced code into sections — the logic mirrors §2 and is preserved in git history at the
+commit that removed it). To refresh after a crucible docs update, restore or re-derive that
+producer, point it at the crucible `docs/`, and re-commit the JSON. Because the corpus changes
+rarely, this is an occasional manual step, not part of any build.
 
 **Untouched:** `foundry_ragbuild.py`, `ragbuild.py` (CVL), their wrappers, and `refresh_rag.sh`.
 No runtime code changes — the search tools, `rag_env.py`, and the DB API are the same.

@@ -153,7 +153,7 @@ def _arg_dest(spec: ArgSpec) -> str:
 
 def _declared_args(args: argparse.Namespace, specs: list[ArgSpec]) -> dict[str, Any]:
     """The parsed values of the descriptor's declared flags, keyed by dest — what the host threads
-    into ``validate_preconditions`` and every component's ``AuthorInput.context``."""
+    into ``validate_preconditions`` and every ``AuthorInput.args``."""
     return {d: getattr(args, d) for d in (_arg_dest(s) for s in specs)}
 
 
