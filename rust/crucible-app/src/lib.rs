@@ -13,14 +13,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use autoprover_sdk::args::AppArgs;
-use autoprover_sdk::authoring::{AuthorInput, Authored, Failure, FailureKind, Prompt};
+use autoprover_sdk::authoring::{AuthorInput, Authored, Prompt};
 use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::descriptor::{
     AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
     PhaseSpec,
 };
 use autoprover_sdk::finalize::FinalizeInput;
-use autoprover_sdk::outcome::{CompileResult, Outcome, Target, Unit, ValidateOutcome, Verdict};
+use autoprover_sdk::outcome::{Check, CompileResult, Outcome, Target, ValidateOutcome, Verdict};
 use autoprover_sdk::prep::{SandboxGrants, WorkspacePrep};
 use autoprover_sdk::sandbox::{CommandOutput, Workspace};
 use autoprover_sdk::Backend;
@@ -92,7 +92,7 @@ fn ident_of(slug: &str) -> String {
 /// The delivered crate's `harness fn -> authored section` map, from the host's outcome set.
 ///
 /// Keyed by the *validation target* each component ran under, so the crate declares exactly the
-/// features the gated builds selected. Never keyed off `property_units`: those are report **rows**,
+/// features the gated builds selected. Never keyed off `property_checks`: those are the **checks**,
 /// one per property, and none of them is a feature that gates anything — keying on them is what
 /// once wrote the harness fn once per property. A `BTreeMap` keeps the emitted crate stable and
 /// sorted.
@@ -252,23 +252,6 @@ struct CargoToml<'a> {
     feats: &'a str,
 }
 
-/// Re-author suffix after a failed build / dry-run (leads with extracted compiler errors).
-#[derive(Template)]
-#[template(path = "revise_compile.j2", escape = "none")]
-struct ReviseCompile<'a> {
-    errors: &'a str,
-    prev_src: &'a str,
-    tail: &'a str,
-}
-
-/// Re-author suffix after a security reviewer rejected a compiling suite.
-#[derive(Template)]
-#[template(path = "revise_judge.j2", escape = "none")]
-struct ReviseJudge<'a> {
-    feedback: &'a str,
-    prev_src: &'a str,
-}
-
 /// The fixture-authoring prompt (the `setup` phase). `listed`/`n` are the properties the fixture
 /// must make checkable — the host authors it *after* extraction precisely so they can be here.
 #[derive(Template)]
@@ -281,7 +264,6 @@ struct AuthorSetup<'a> {
     example: &'a str,
     facts: &'a str,
     model: &'a str,
-    revise: &'a str,
 }
 
 /// The invariant-suite authoring prompt (per component).
@@ -297,7 +279,6 @@ struct AuthorComponent<'a> {
     component: &'a str,
     cheat: &'a str,
     fixture: &'a str,
-    revise: &'a str,
 }
 
 /// The judge instruction (embeds `judge_guidance.j2` via `{% include %}`).
@@ -580,6 +561,9 @@ fn to_pascal(snake: &str) -> String {
 /// A concise, high-signal "API facts" block mined from the analyzed model so the author
 /// need not dig through the full JSON (or rediscover Anchor names by exploring): the crate
 /// id, declare_id, state types, and each instruction's snake→Pascal name + args + accounts.
+/// A concise, high-signal "API facts" block mined from the analyzed model so the author
+/// need not dig through the full JSON (or rediscover Anchor names by exploring): the crate
+/// id, declare_id, state types, and each instruction's snake→Pascal name + args + accounts.
 /// Returns "" if the model shape isn't recognized.
 fn api_facts(analyzed: &serde_json::Value, program: &str, crate_id: &str) -> String {
     let components = match analyzed.get("components").and_then(|c| c.as_array()) {
@@ -655,35 +639,6 @@ fn api_facts(analyzed: &serde_json::Value, program: &str, crate_id: &str) -> Str
     .render()
     .expect("render api_facts")
 }
-
-/// The "previous attempt failed, fix it" suffix shared by both authoring loops: lead with
-/// the *extracted* compiler errors, then the prior source, then a trimmed raw-log tail.
-fn revise_suffix(prev_src: &str, raw: &str) -> String {
-    let errors = compiler_diagnostics(raw);
-    let tail = &raw[raw.len().saturating_sub(2500)..];
-    ReviseCompile { errors: &errors, prev_src, tail }
-        .render()
-        .expect("render revise_compile")
-}
-
-/// The "previous attempt was rejected by the reviewer" suffix. Unlike `revise_suffix`, the
-/// draft *compiled* — so frame it as review feedback to address, not compiler errors to fix
-/// (otherwise the author thrashes hunting for build errors that do not exist).
-fn judge_revise_suffix(prev_src: &str, feedback: &str) -> String {
-    ReviseJudge { feedback, prev_src }
-        .render()
-        .expect("render revise_judge")
-}
-
-/// Dispatch the re-author suffix on which gate rejected the prior attempt.
-fn revise_for(f: &Failure) -> String {
-    match f.kind {
-        FailureKind::Judge => judge_revise_suffix(&f.draft, &f.errors),
-        FailureKind::Compile => revise_suffix(&f.draft, &f.errors),
-    }
-}
-
-
 
 /// Did the build fail (as opposed to the harness building and fuzzing)?
 ///
@@ -862,10 +817,10 @@ fn finding_detail(out: &str, workdir: &Path, program: &str, unit: &str) -> Optio
 /// parses the finding.
 fn attribute_finding(target: &Target, detail: Option<String>) -> ValidateOutcome {
     let d = detail.clone().unwrap_or_default();
-    let refuted = |u: &Unit| !u.property.is_empty() && d.contains(&u.property);
-    let unattributable = !target.units.iter().any(refuted);
-    target.verdicts(|u| {
-        if unattributable || refuted(u) {
+    let refuted = |c: &Check| !c.property.is_empty() && d.contains(&c.property);
+    let unattributable = !target.checks.iter().any(refuted);
+    target.verdicts(|c| {
+        if unattributable || refuted(c) {
             Verdict::with_outcome(Outcome::Bad).with_detail(detail.clone())
         } else {
             Verdict::with_outcome(Outcome::Good)
@@ -996,6 +951,18 @@ impl Backend for CrucibleApp {
             // Units are the Solana ecosystem's `ProgramComponent`s, so the SDK default noun is
             // right — this used to say "instruction", from the long-gone per-instruction units.
             component_noun: None,
+            // A Crucible check is one property's assertion inside the component's
+            // `#[invariant_test]` fn, which is what its own prompts and generated code call it.
+            check_noun: Some("invariant".into()),
+            // What an author can actually produce here: the harness build's diagnostics, the
+            // fuzzer's output, and the reproducing action sequence behind a crash.
+            evidence_kinds: vec![
+                "build_failure".into(),
+                "fuzz_output".into(),
+                "counterexample".into(),
+                "manual_citation".into(),
+                "reasoned".into(),
+            ],
         }
     }
 
@@ -1062,8 +1029,8 @@ impl Backend for CrucibleApp {
         }
     }
 
-    fn units(&self, input: &AuthorInput) -> Vec<Unit> {
-        // Only a component has report units — neither the preflight gate nor the shared fixture
+    fn checks(&self, input: &AuthorInput) -> Vec<Check> {
+        // Only a component has checks — neither the preflight gate nor the shared fixture
         // formalizes anything. One component's properties all live in ONE
         // harness fn ([`harness_fn`]) — a single build + fuzz run per component
         // (docs/crucible-component-units.md §8.1) — but each property is still its own report row,
@@ -1078,19 +1045,18 @@ impl Backend for CrucibleApp {
             .enumerate()
             .map(|(i, p)| {
                 let slug = if p.slug.is_empty() { format!("inv{i}") } else { p.slug.clone() };
-                // Report row = c_<prop slug> (one per property); fuzz target = the component's fn.
-                Unit {
+                // One check per property; they share the component's fn as their fuzz target.
+                Check {
                     property: p.title.clone(),
-                    unit: format!("c_{slug}"),
+                    name: format!("c_{slug}"),
                     target: Some(harness_fn(input)),
                 }
             })
             .collect()
     }
 
-    fn author_prompt(&self, input: &AuthorInput, failure: Option<&Failure>) -> Prompt {
+    fn author_prompt(&self, input: &AuthorInput) -> Prompt {
         let program = &input.program;
-        let revise = failure.map(revise_for).unwrap_or_default();
         let instruction = match &input.authored {
             // Nothing is authored for the gate — the wheel supplies its own skeleton — so the host
             // never asks for this prompt. Say so rather than rendering a prompt about no unit.
@@ -1116,7 +1082,6 @@ impl Backend for CrucibleApp {
                 example: &example,
                 facts: &facts,
                 model: &model,
-                revise: &revise,
             }
             .render()
             .expect("render author_setup")
@@ -1139,7 +1104,6 @@ impl Backend for CrucibleApp {
                 component: &component,
                 cheat: &cheat,
                 fixture: &fixture,
-                revise: &revise,
             }
             .render()
             .expect("render author_component")
@@ -1488,7 +1452,8 @@ mod template_parity {
                 "status": "delivered",
                 "targets": targets,
                 "artifact_text": artifact_text,
-                "property_units": [],
+                "property_checks": [],
+                "skipped": [],
                 "unit_file": null,
                 "run_link": null,
             },
@@ -1754,18 +1719,13 @@ mod template_parity {
             slug: "no_overflow".into(),
         };
 
-        // setup branch + a compile failure (exercises author_setup.j2 + revise_compile.j2). The
-        // fixture is authored with the properties in hand — that is the whole point of the host
-        // deferring it until extraction has run — so they are part of this input too.
+        // setup branch (exercises author_setup.j2). The fixture is authored with the properties in
+        // hand — that is the whole point of the host deferring it until extraction has run — so
+        // they are part of this input too.
         let setup = AuthorInput {
             authored: Authored::Setup { model: component.clone() },
             props: vec![prop.clone()],
             ..prep_input(SolanaSourceUnit::default(), serde_json::json!({}))
-        };
-        let compile_fail = Failure {
-            draft: "prior fixture src".into(),
-            errors: "error[E0433]: failed to resolve".into(),
-            kind: FailureKind::Compile,
         };
         // Prose templates are wrapped to 120, so a phrase can span a newline — compare with
         // whitespace collapsed so the checks are wrap-insensitive.
@@ -1774,11 +1734,9 @@ mod template_parity {
             norm(hay).contains(&norm(needle)), "missing {needle:?} in:\n{hay}"
         );
 
-        let p = app.author_prompt(&setup, Some(&compile_fail));
+        let p = app.author_prompt(&setup);
         assert_no_residue(&p.instruction);
         has(&p.instruction, "FIXTURE (only) for the Solana program `vault`");
-        has(&p.instruction, "The previous attempt FAILED");
-        has(&p.instruction, "error[E0433]");
         // The properties the fixture must make checkable, and the design rules that follow from
         // them: an action per instruction they touch (including negative attempts), enough actors,
         // and configuration the fuzzer can actually cross.
@@ -1788,23 +1746,17 @@ mod template_parity {
         has(&p.instruction, "Negative attempts are actions too");
         has(&p.instruction, "Never set a limit, cap or threshold to `u64::MAX`");
 
-        // component branch + a judge failure (exercises author_component.j2 + revise_judge.j2).
+        // component branch (exercises author_component.j2).
         let comp = AuthorInput {
             authored: Authored::Component { unit: component.clone() },
             props: vec![prop],
             setup: Some("struct Fixture { ctx: TestContext }".into()),
             ..prep_input(SolanaSourceUnit::default(), serde_json::json!({}))
         };
-        let judge_fail = Failure {
-            draft: "prior tests".into(),
-            errors: "Criterion 1: vacuous assertion".into(),
-            kind: FailureKind::Judge,
-        };
-        let p = app.author_prompt(&comp, Some(&judge_fail));
+        let p = app.author_prompt(&comp);
         assert_no_residue(&p.instruction);
         has(&p.instruction, "named EXACTLY `c_invariants`");
         has(&p.instruction, "`\"[no overflow] ...\"`");
-        has(&p.instruction, "reviewer REJECTED");
         // What the component turn may add to the fixture, what it may not, and the honest way out
         // when the fixture can't reach a property (the alternative being a vacuous assertion).
         has(&p.instruction, "put extra `impl Fixture { ... }` blocks (plain, NOT `#[fuzz_fixture]`)");
@@ -1872,7 +1824,7 @@ mod template_parity {
         // it must agree — units()' target included.
         let app = CrucibleApp;
         let unit = component_input("Withdraw-Queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
-        assert_eq!(app.units(&unit)[0].target_or_unit(), "c_withdraw_queue");
+        assert_eq!(app.checks(&unit)[0].target_or_name(), "c_withdraw_queue");
 
         for ident in ["c_vault_initialization", "c_admin_config", "c_withdraw_queue"] {
             let body = ident.strip_prefix("c_").unwrap();
@@ -1894,23 +1846,23 @@ mod template_parity {
 
     #[test]
     fn every_property_of_a_component_shares_that_components_fuzz_target() {
-        // Report rows stay per-property (attribution); the fuzz target is the component's one fn.
+        // Checks stay per-property (attribution); the fuzz target is the component's one fn.
         let app = CrucibleApp;
         let input = component_input(
             "farms", "Farms Integration",
             vec![prop("stake matches position", "stake_matches"), prop("no double stake", "no_dbl")],
         );
-        let units = app.units(&input);
+        let checks = app.checks(&input);
         assert_eq!(
-            units.iter().map(|u| u.unit.as_str()).collect::<Vec<_>>(),
+            checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
             vec!["c_stake_matches", "c_no_dbl"],
         );
-        for u in &units {
-            assert_eq!(u.target_or_unit(), "c_farms");
+        for c in &checks {
+            assert_eq!(c.target_or_name(), "c_farms");
         }
         // …and a different component gets a different target, so the host runs one campaign each.
         let other = component_input("referrals", "Referrals", vec![prop("fees capped", "fees")]);
-        assert_eq!(app.units(&other)[0].target_or_unit(), "c_referrals");
+        assert_eq!(app.checks(&other)[0].target_or_name(), "c_referrals");
     }
 
     #[test]
@@ -1918,12 +1870,12 @@ mod template_parity {
         // The shared fixture formalizes nothing, and the gate runs before anything is analyzed.
         let app = CrucibleApp;
         let mut input = component_input("farms", "Farms", vec![prop("p", "p")]);
-        assert_eq!(app.units(&input).len(), 1);
+        assert_eq!(app.checks(&input).len(), 1);
         for authored in
             [Authored::Setup { model: serde_json::Value::Null }, Authored::Preflight]
         {
             input.authored = authored;
-            assert!(app.units(&input).is_empty());
+            assert!(app.checks(&input).is_empty());
         }
     }
 
@@ -1964,7 +1916,7 @@ Error: Build failed
         let input = component_input("withdraw_queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
         let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
 
-        let p = app.author_prompt(&input, None);
+        let p = app.author_prompt(&input);
         assert_no_residue(&p.instruction);
         assert!(norm(&p.instruction).contains("named EXACTLY `c_withdraw_queue`"));
         assert!(norm(&p.instruction).contains("**Withdraw Queue** component"));
@@ -1991,7 +1943,7 @@ Error: Build failed
         // "total supply exceeds deposit_limit" needed an hour and a rebuild to explain.
         let app = CrucibleApp;
         let input = component_input("withdraw_queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
-        let s = app.author_prompt(&input, None).instruction;
+        let s = app.author_prompt(&input).instruction;
         let norm = s.split_whitespace().collect::<Vec<_>>().join(" ");
 
         assert!(norm.contains("INTERPOLATE THE OPERAND VALUES"), "{norm}");

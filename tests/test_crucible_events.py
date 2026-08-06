@@ -61,23 +61,23 @@ def test_descriptor_declares_design_doc_discovery_phase():
     assert _discovery_phase(app) is app.phase["discover_design_doc"]
 
 
-def test_each_property_is_its_own_row_sharing_one_fuzz_target():
-    # Collapse (docs/crucible-unit-granularity.md §3): every property is its own report row
+def test_each_property_is_its_own_check_sharing_one_fuzz_target():
+    # Collapse (docs/crucible-unit-granularity.md §3): every property is its own check
     # (`c_<slug>`) but they all share ONE fuzz `target` (`c_invariants`), so the host runs a
     # single build + fuzz and attributes the outcome per property.
-    units = json.loads(crucible_app.units(_component_input("solvency", "conservation")))
-    assert units == [
-        {"property": "p solvency", "unit": "c_solvency", "target": "c_invariants"},
-        {"property": "p conservation", "unit": "c_conservation", "target": "c_invariants"},
+    checks = json.loads(crucible_app.checks(_component_input("solvency", "conservation")))
+    assert checks == [
+        {"property": "p solvency", "name": "c_solvency", "target": "c_invariants"},
+        {"property": "p conservation", "name": "c_conservation", "target": "c_invariants"},
     ]
 
 
-def test_setup_has_no_units():
-    assert json.loads(crucible_app.units(_setup_input())) == []
+def test_setup_has_no_checks():
+    assert json.loads(crucible_app.checks(_setup_input())) == []
 
 
 def test_component_author_prompt_asks_for_one_invariant_fn_covering_all_props():
-    prompt = json.loads(crucible_app.author_prompt(_component_input("solvency", "conservation"), None))
+    prompt = json.loads(crucible_app.author_prompt(_component_input("solvency", "conservation")))
     assert prompt.get("system") is None
     ins = prompt["instruction"]
     # One c_invariants fn asserting ALL listed properties.
@@ -86,19 +86,8 @@ def test_component_author_prompt_asks_for_one_invariant_fn_covering_all_props():
 
 
 def test_setup_author_prompt_asks_for_a_fixture():
-    prompt = json.loads(crucible_app.author_prompt(_setup_input(), None))
+    prompt = json.loads(crucible_app.author_prompt(_setup_input()))
     assert "FIXTURE" in prompt["instruction"]
-
-
-def test_author_prompt_failure_appends_revise_context():
-    # `kind` included: the wheel parses the whole payload or none of it, and a `Failure` it cannot
-    # read is indistinguishable from no failure at all — the prompt would silently lose its revise
-    # context.
-    failure = json.dumps({
-        "draft": "fn c_x() {}", "errors": "error[E0425]: cannot find value", "kind": "compile",
-    })
-    prompt = json.loads(crucible_app.author_prompt(_component_input("x"), failure))
-    assert "FAILED" in prompt["instruction"] and "E0425" in prompt["instruction"]
 
 
 def test_component_judge_prompt_reviews_the_suite():
@@ -121,23 +110,26 @@ def test_setup_has_no_judge_prompt():
     assert crucible_app.judge_prompt(_setup_input(), "spec") is None
 
 
-def test_review_gate_blocks_until_the_submitted_draft_was_accepted():
-    from composer.rustapp import adapter
+def test_the_publish_gate_blocks_until_this_exact_draft_was_accepted():
+    # A reviewer's acceptance is a stamp over the buffer it saw, so it goes stale the moment the
+    # author edits — which is what stops a spec being published on the strength of a review of a
+    # different draft.
+    from composer.authoring.state import check_completion, spec_digest
+    from composer.rustapp.session import FEEDBACK_KEY
 
-    fresh = adapter._ReviewBudget()  # rounds remaining, so the gate is still enforcing
-    # Accept only when the judge accepted THIS exact draft.
-    assert adapter._review_gate({"review_ok": True, "reviewed_text": "spec-A"}, "spec-A", fresh) is None
-    # A draft that was never reviewed (or a different one) is blocked.
-    assert adapter._review_gate({"review_ok": True, "reviewed_text": "spec-A"}, "spec-B", fresh) is not None
-    # A reviewed-but-rejected draft is blocked.
-    assert adapter._review_gate({"review_ok": False, "reviewed_text": "spec-A"}, "spec-A", fresh) is not None
-    # No review yet → blocked.
-    assert adapter._review_gate({}, "spec-A", fresh) is not None
-    # …until the review budget runs out, which releases the gate on purpose (see
-    # tests/test_rustapp_review_budget.py): an author that can neither pass review nor improve
-    # would otherwise cycle forever.
-    spent = adapter._ReviewBudget(used=adapter.MAX_REVIEW_ROUNDS)
-    assert adapter._review_gate({}, "spec-A", spent) is None
+    def state(spec: str, stamped_for: str | None) -> dict:
+        return {
+            "curr_spec": spec,
+            "skipped": [],
+            "required_validations": [FEEDBACK_KEY],
+            "validations": {} if stamped_for is None else {
+                FEEDBACK_KEY: spec_digest(stamped_for, []),
+            },
+        }
+
+    assert check_completion(state("spec-A", "spec-A")) is None
+    assert check_completion(state("spec-B", "spec-A")) is not None
+    assert check_completion(state("spec-A", None)) is not None
 
 
 def test_fetch_verdicts_threads_finding_detail_into_message():
@@ -171,8 +163,8 @@ def test_fetch_verdicts_threads_finding_detail_into_message():
     assert verdicts["c_y"].message is None
 
 
-def test_validate_returns_per_unit_verdicts_and_the_host_records_them():
-    # The backend owns attribution: `validate` returns a verdict PER report unit the target covers
+def test_validate_returns_per_check_verdicts_and_the_host_records_them():
+    # The backend owns attribution: `validate` returns a verdict PER check the target covers
     # (the host does no verdict logic). Here we exercise the FFI contract shape + fetch_verdicts.
     import asyncio
     from pathlib import Path
@@ -184,11 +176,11 @@ def test_validate_returns_per_unit_verdicts_and_the_host_records_them():
     from composer.spec.source.report.collect import ReportComponentInput
     from composer.spec.source.report.schema import Outcome
 
-    # A parse error still yields the per-unit `verdicts` shape the host consumes — keyed by the
-    # rows the target it was handed covers, which is the one part of the payload that did parse.
+    # A parse error still yields the per-check `verdicts` shape the host consumes — keyed by the
+    # checks the target it was handed covers, which is the one part of the payload that did parse.
     target = json.dumps(
         {"name": "c_invariants",
-         "units": [{"property": "p", "unit": "c_invariants", "target": None}]}
+         "checks": [{"property": "p", "name": "c_invariants", "target": None}]}
     )
     out = json.loads(crucible_app.validate("not json", "spec", target, "/tmp", "{}"))
     assert out["kind"] == "verdicts"
@@ -211,58 +203,6 @@ def test_validate_returns_per_unit_verdicts_and_the_host_records_them():
     assert verdicts["c_conservation"].outcome == Outcome.BAD
     assert "conservation" in verdicts["c_conservation"].message
     assert verdicts["c_solvency"].outcome == Outcome.GOOD
-
-
-def test_author_prompt_judge_failure_uses_review_framing():
-    # A judge rejection is NOT a build failure (the draft compiled): the revise prompt must
-    # frame it as review feedback, not compiler errors to fix.
-    failure = json.dumps(
-        {"draft": "fn c_x() {}", "errors": "REJECTED: c_x fails Criterion 3", "kind": "judge"}
-    )
-    ins = json.loads(crucible_app.author_prompt(_component_input("x"), failure))["instruction"]
-    assert "reviewer REJECTED" in ins
-    assert "FAILED to build" not in ins
-    assert "Criterion 3" in ins
-
-
-# ---------------------------------------------------------------------------
-# The out-of-graph emit routing the Python loop's `emit` relies on.
-# ---------------------------------------------------------------------------
-
-
-class _RecordingEventHandler:
-    def __init__(self) -> None:
-        self.events: list[tuple[dict, list[str]]] = []
-
-    async def handle_event(self, payload: dict, path: list[str], checkpoint_id: str) -> None:
-        self.events.append((payload, path))
-
-    async def handle_progress_event(self, payload: dict) -> None:
-        pass
-
-
-class _NullIO:
-    async def log_checkpoint_id(self, *, path, checkpoint_id): ...
-    async def log_state_update(self, path, st): ...
-    async def log_start(self, *, path, description, tool_id): ...
-    async def log_end(self, path): ...
-    async def human_interaction(self, ty, debug_thunk): return ""
-
-
-@pytest.mark.asyncio
-async def test_push_custom_update_reaches_handle_event_outside_a_graph():
-    from composer.io.context import push_custom_update, with_handler
-
-    rec = _RecordingEventHandler()
-    async with with_handler(_NullIO(), rec):
-        delivered = push_custom_update(
-            {"type": "verdict", "outcome": "GOOD", "name": "solvency"}, thread_id="formalize-0"
-        )
-        assert delivered is True
-    assert rec.events, "custom update never reached handle_event"
-    payload, path = rec.events[0]
-    assert payload["type"] == "verdict" and payload["outcome"] == "GOOD"
-    assert path == ["formalize-0"]
 
 
 def test_push_custom_update_without_scope_is_dropped_not_raised():

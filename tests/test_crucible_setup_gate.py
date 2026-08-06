@@ -1,10 +1,10 @@
 """Phase-3 gate: the Crucible fixture-authoring loop, with a REAL model.
 
-Drives the crucible wheel's `new_setup_session` decider through the IoC loop
-(`drive_session` + `RealEffects`) on the `solana_vault` scenario: the agent reads
-the program source (tool-enabled `call_llm`), authors a `Fixture`, and the loop
-validates it with `crucible run … --dry-run`, revising on failure. Pass = the
-session *publishes* a fixture (i.e. a dry-run went green) with no human edits.
+Runs a real `setup` authoring session on the `solana_vault` scenario: the agent reads
+the program source, authors a `Fixture` into its spec buffer, and gates it with
+`compile_spec` (the wheel's `compile`, i.e. `crucible run … --dry-run`), revising until
+it builds. Pass = the session *publishes* a fixture — which the publish gate only allows
+once a dry-run has gone green against that exact buffer — with no human edits.
 
 Heavy + paid: real LLM + Postgres (testcontainers) + the Solana/Anchor toolchain +
 the `crucible` CLI + a local crucible checkout (`CRUCIBLE_REPO`). The first
@@ -32,7 +32,9 @@ from composer.io.multi_job import TaskInfo
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
-from composer.rustapp.adapter import author_and_compile, make_emitter
+from composer.rustapp.adapter import make_emitter
+from composer.rustapp.session import run_session
+from composer.rustapp.wire import SetupInput
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.rustapp.host import build_phase_enum, load_descriptor, load_module
 from composer.spec.context import SourceCode, WorkflowContext
@@ -188,25 +190,23 @@ async def test_crucible_fixture_authoring(pg_container: "PostgresContainer", mon
 
         # The setup artifact: author the fixture, then `compile` (crucible --dry-run) it.
         # Unsandboxed here (the gate trusts its inputs), so the argv prefix is empty.
-        setup_input = {
-            "kind": "setup", "program": _PROGRAM,
-            "component": _ANALYZED, "props": [], "context": {},
-        }
+        setup_input = SetupInput(program=_PROGRAM, model=_ANALYZED)
         sandbox_dict = {"argv_prefix": [], "timeout_s": 1200}
         run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
 
         result = await run.runner(
             TaskInfo("crucible_setup", "Harness Fixture", phase["harness_fixture"]),
-            lambda: author_and_compile(
-                module, setup_input, env=env, sandbox_dict=sandbox_dict,
-                workdir=Path(_SCENARIO), recursion_limit=100, backend_name="crucible",
-                emit=make_emitter(),
+            lambda: run_session(
+                module=module, input=setup_input, kind="setup", checks=[], titles=[],
+                env=env, ctx=ctx, run=run, workdir=Path(_SCENARIO),
+                sandbox_dict=sandbox_dict, descriptor=descriptor, emit=make_emitter(),
+                description="Harness Fixture",
             ),
         )
 
     if isinstance(result, GaveUp):
         pytest.fail(f"fixture authoring gave up: {result.reason}")
-    fixture = result
+    fixture = result.spec
     print("\n===== authored fixture =====\n" + fixture)
     # It published, so a --dry-run went green. Sanity-check the shape.
     assert "struct Fixture" in fixture, "fixture must define `struct Fixture`"

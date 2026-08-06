@@ -275,17 +275,25 @@ async def test_crucible_phase2_store_assembles_crate():
     main_rel = store.write_artifact(comp, result)  # metadata + the crate report link
     assert str(main_rel) == f"fuzz/{_PROGRAM}/src/main.rs"
 
-    # finalize renders the crate (fixture + the delivered section, features from property_units).
+    # finalize renders the crate (fixture + the delivered section, features from targets).
     payload = json.dumps(
         {
             "program": _PROGRAM,
             "setup": _FIXTURE_SRC,
+            "source_unit": {},
+            "prep_facts": {},
             "components": [
                 {
                     "name": "deposit",
-                    "delivered": True,
-                    "artifact_text": _DEPOSIT_SECTION,
-                    "property_units": [["balance bounded by initial funds", ["c_deposit"]]],
+                    "outcome": {
+                        "status": "delivered",
+                        "artifact_text": _DEPOSIT_SECTION,
+                        "targets": ["c_invariants"],
+                        "property_checks": [["balance bounded by initial funds", ["c_deposit"]]],
+                        "skipped": [],
+                        "unit_file": None,
+                        "run_link": None,
+                    },
                 }
             ],
         }

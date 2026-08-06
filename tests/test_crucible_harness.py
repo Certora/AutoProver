@@ -46,7 +46,7 @@ def _finalize(*sections: tuple[str, str], idl: str | None = None) -> dict[str, s
 
     ``targets`` is what keys a section and declares its feature — the host mirrors the distinct
     validation targets it ran onto each outcome entry (``RustFormalResult.targets``). It is NOT
-    ``property_units``: those are per-property report rows, and several share one target, so keying
+    ``property_checks``: those are per-property checks, and several share one target, so keying
     on them wrote the harness fn once per property. Both are sent here, as the host sends both.
     """
     payload = {
@@ -61,7 +61,8 @@ def _finalize(*sections: tuple[str, str], idl: str | None = None) -> dict[str, s
                     "status": "delivered",
                     "artifact_text": src,
                     "targets": [fn],
-                    "property_units": [[f"p {fn}", [f"c_p_{i}"]]],
+                    "property_checks": [[f"p {fn}", [f"c_p_{i}"]]],
+                    "skipped": [],
                     "unit_file": None,
                     "run_link": None,
                 },

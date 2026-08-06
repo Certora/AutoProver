@@ -30,7 +30,9 @@ from composer.io.multi_job import TaskInfo
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
-from composer.rustapp.adapter import author_and_compile, make_emitter
+from composer.rustapp.adapter import make_emitter
+from composer.rustapp.session import run_session, targets_of
+from composer.rustapp.wire import ComponentInput, Property, parse_checks
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.rustapp.host import build_phase_enum, load_descriptor, load_module
 from composer.spec.context import SourceCode, WorkflowContext
@@ -53,7 +55,7 @@ pytestmark = [pytest.mark.expensive, needs_postgres, pytest.mark.asyncio]
 _SCENARIO = Path(__file__).parent.parent / "test_scenarios" / "solana_vault"
 _PROGRAM = "vault"
 _SLUG = "deposit"
-_FEATURE = f"c_{_SLUG}"  # this property's report unit (one row per property)
+_FEATURE = f"c_{_SLUG}"  # this property's check (one per property)
 # Every Crucible property shares ONE fuzz target/harness fn (docs/crucible-unit-granularity.md
 # §3); its name gates `main` via the `#[invariant_test]` macro. `validate` is called with the
 # *target* (as the real pipeline does: `u["target"] or u["unit"]`), not the per-property unit —
@@ -243,46 +245,53 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
         # No manifest pre-placement needed: `compile`/`validate` materialize the harness crate
         # (Cargo.toml + main.rs) themselves per run (docs/rust-pure-app.md §4).
         module = load_module("crucible_app")
-        phase = build_phase_enum(load_descriptor(module))
+        descriptor = load_descriptor(module)
+        phase = build_phase_enum(descriptor)
 
         # The component artifact: author the test(s), `compile` (dry-run), then `validate`
         # the unit (fuzz). Unsandboxed here (trusted inputs), so the argv prefix is empty.
-        input_dict = {
-            "kind": "component", "program": _PROGRAM, "component": _COMPONENT, "props": _PROPS,
-            "context": {"fixture": _FIXTURE, "fuzz_timeout": 15},
-        }
-        input_json = json.dumps(input_dict)
+        component_input = ComponentInput(
+            program=_PROGRAM,
+            unit=_COMPONENT,
+            props=[Property.model_validate(p) for p in _PROPS],
+            setup=_FIXTURE,
+            args={"fuzz_timeout": 15},
+        )
+        input_json = component_input.model_dump_json()
+        checks = parse_checks(module.checks(input_json))
         sandbox_dict = {"argv_prefix": [], "timeout_s": 1200}
         sandbox_json = json.dumps(sandbox_dict)
 
         run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
-        test_src = await run.runner(
+        outcome = await run.runner(
             TaskInfo("crucible_fmz", "Harness Authoring", phase["formalization"]),
-            lambda: author_and_compile(
-                module, input_dict, env=env, sandbox_dict=sandbox_dict,
-                workdir=Path(_SCENARIO), recursion_limit=100, backend_name="crucible",
-                emit=make_emitter(),
+            lambda: run_session(
+                module=module, input=component_input, kind="component", checks=checks,
+                titles=[p["title"] for p in _PROPS], env=env, ctx=ctx, run=run,
+                workdir=Path(_SCENARIO), sandbox_dict=sandbox_dict, descriptor=descriptor,
+                emit=make_emitter(), description="Harness Authoring",
             ),
         )
-        if isinstance(test_src, GaveUp):
-            pytest.fail(f"per-component authoring gave up: {test_src.reason}")
+        if isinstance(outcome, GaveUp):
+            pytest.fail(f"per-component authoring gave up: {outcome.reason}")
+        test_src = outcome.spec
 
-        units = json.loads(module.units(input_json))
-        # Validate the shared *target* once, exactly as the pipeline does (adapter.py):
-        # every unit maps to `c_invariants`, whose fn name gates `main`.
-        targets = list(dict.fromkeys(u.get("target") or u["unit"] for u in units))
-        assert targets == [_TARGET], units
+        # Every check maps to the one shared *target* `c_invariants`, whose fn name gates `main` —
+        # the grouping the session hands to `validate`, asserted here as the pipeline computes it.
+        targets = list(dict.fromkeys(c.target_or_name() for c in checks))
+        assert targets == [_TARGET], checks
         # validate is the fused build+fuzz; a clean vault run → GOOD verdicts (not build_failed).
+        target = targets_of(checks)[0].model_dump_json()
         res = json.loads(
-            await asyncio.to_thread(module.validate, input_json, test_src, _TARGET, str(_SCENARIO), sandbox_json)
+            await asyncio.to_thread(module.validate, input_json, test_src, target, str(_SCENARIO), sandbox_json)
         )
 
     print("\n===== authored test =====\n" + test_src)
-    print("units:", units, "validate:", res)
+    print("checks:", checks, "validate:", res)
     assert "#[invariant_test]" in test_src or "#[crucible_fuzz]" in test_src
     assert res["kind"] == "verdicts", res
-    (unit_name, verdict), = res["verdicts"]
-    assert unit_name == _FEATURE, res
+    (check_name, verdict), = res["verdicts"]
+    assert check_name == _FEATURE, res
     assert verdict["outcome"] == "GOOD", res
     # property → its report unit (c_<slug>), all sharing the one fuzz target.
     assert units == [{"property": _PROPS[0]["title"], "unit": _FEATURE, "target": _TARGET}]
