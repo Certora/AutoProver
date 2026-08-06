@@ -41,8 +41,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, override
 
 
-from composer.diagnostics.timing import get_current_task_id
-from composer.io.context import push_custom_update
+from langgraph.config import get_stream_writer
+
 from composer.io.multi_job import TaskInfo
 from composer.pipeline.core import (
     BackendJob,
@@ -104,15 +104,13 @@ _log = logging.getLogger(__name__)
 # Shared loop helpers (used by RustFormalizer.formalize and app setup specs).
 # ---------------------------------------------------------------------------
 
-def make_emitter() -> Callable[[str, dict], None]:
-    """A ``emit(kind, payload)`` that streams a domain event to the current task's panel.
-    Routes out-of-graph (the loop isn't inside a LangGraph run) via ``push_custom_update``,
-    keyed by the active ``run_task`` id."""
+def emit_event(kind: str, payload: dict) -> None:
+    """Stream a domain event to the current task's panel, as the wheel's ``{"type": kind, …}``
+    custom-stream payload.
 
-    def emit(kind: str, payload: dict) -> None:
-        push_custom_update({"type": kind, **payload}, thread_id=get_current_task_id() or "rust")
-
-    return emit
+    Callable only from inside a graph run — every emission site is a gate tool's body, where
+    LangGraph's stream writer routes the event with the run's own thread and checkpoint."""
+    get_stream_writer()({"type": kind, **payload})
 
 
 def unique_slugs(props: list[PropertyFormulation]) -> list[str]:
@@ -138,10 +136,6 @@ def _properties(props: list[PropertyFormulation], slugs: list[str]) -> list[Prop
         Property(title=p.title, sort=p.sort, description=p.description, slug=s)
         for p, s in zip(props, slugs)
     ]
-
-
-def _first_line(s: str) -> str:
-    return next((ln for ln in s.splitlines() if ln.strip()), "").strip()
 
 
 def confined_target(root: Path, rel: str) -> Path:
@@ -252,7 +246,6 @@ async def run_preflight_gate(
     *,
     workdir: Path,
     sandbox_dict: BackendSpec,
-    emit: Callable[[str, dict], None],
 ) -> None:
     """Gate the prepared workspace with a ``kind="preflight"`` ``compile`` — the wheel's own
     skeleton artifact, built by the real toolchain under the real sandbox.
@@ -260,7 +253,10 @@ async def run_preflight_gate(
     The ``spec`` is empty on purpose: nothing has been authored yet (this runs alongside system
     analysis), so the wheel renders the smallest artifact that still exercises what an authored one
     will depend on. Raises :class:`PreflightFailed` with the compiler diagnostics the wheel
-    extracted; there is no retry."""
+    extracted; there is no retry.
+
+    Nothing is streamed as it goes: this is not a graph run, so there is no stream writer to emit
+    on, and the one thing worth showing — the diagnostics — is what the exception carries."""
     result = parse_compile(
         await asyncio.to_thread(
             module.compile, input.model_dump_json(), "", str(workdir), json.dumps(sandbox_dict)
@@ -268,7 +264,6 @@ async def run_preflight_gate(
     )
     if isinstance(result, CompileOk):
         return
-    emit("build_output", {"line": _first_line(result.errors) or "preflight build failed"})
     raise PreflightFailed(
         "the prepared workspace does not build (or its skeleton does not run), before anything has "
         "been authored — a toolchain, dependency or program-build problem, not something the run "
@@ -356,7 +351,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             workdir=workdir,
             sandbox_dict=await self._sandbox_spec(workdir),
             descriptor=self._descriptor,
-            emit=make_emitter(),
+            emit=emit_event,
             command_sem=self._command_sem,
             description=label,
         )
@@ -584,7 +579,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
                     workdir=workdir,
                     sandbox_dict=sandbox_dict,
                     descriptor=descriptor,
-                    emit=make_emitter(),
+                    emit=emit_event,
                     command_sem=command_sem,
                     description=setup.label,
                 ),
@@ -703,7 +698,6 @@ class RustBackend(
                     prep_input.with_prep_facts(result.prep_facts),
                     workdir=workdir,
                     sandbox_dict=await self.sandbox_spec(workdir),
-                    emit=make_emitter(),
                 )
             return result
 

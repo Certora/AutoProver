@@ -617,9 +617,9 @@ surface and takes no `rag_db`.
 
 **Frontend** ([frontend.py](../composer/rustapp/frontend.py)). Two thin subclasses of the shared
 bases — a `MultiJobApp` TUI and a stdout handler — whose phase labels and section order come from the
-descriptor. Domain-event rendering is data-driven: the loop emits with
-[`make_emitter`](../composer/rustapp/adapter.py), which pushes `{"type": kind, …}` onto the custom
-stream keyed by the active task, and the handler writes any *declared* kind to that task's
+descriptor. Domain-event rendering is data-driven: the gate tools emit with
+[`emit_event`](../composer/rustapp/adapter.py), which puts `{"type": kind, …}` on the graph run's
+custom stream, and the handler writes any *declared* kind to that task's
 collapsible log, or, for a `notice` kind, posts a persistent callout with the report's own outcome
 glyph. Rust controls the event *content*; Python does the emission (the wheel cannot call
 `get_stream_writer()`), and no per-application handler subclass is needed.
