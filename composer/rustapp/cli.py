@@ -44,7 +44,7 @@ def _notice_kinds(app: RustApplication) -> set[str]:
 def _verdict_lines(
     app: RustApplication, result: CorePipelineResult[RustFormalResult]
 ) -> list[str]:
-    """Per-unit verdict tally + listing when the results carry verdicts; empty otherwise
+    """Per-check verdict tally + listing when the results carry verdicts; empty otherwise
     (a run-service backend, or a wheel that bakes none)."""
     return format_verdict_lines(
         summarize_verdicts(result, app.descriptor.backend_tag)

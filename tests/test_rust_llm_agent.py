@@ -105,7 +105,7 @@ def test_the_initial_prompt_states_the_exact_names_the_gate_will_check():
 
 
 def test_a_setup_sessions_initial_prompt_is_the_wheels_own():
-    # Nothing to list: a setup artifact declares no checks, so there is no mapping to check.
+    # Nothing to list: a setup spec declares no checks, so there is no mapping to check.
     prompt = Prompt(system=None, instruction="Author the fixture.")
     assert _initial_prompt(prompt, [], False, _GENERIC) == "Author the fixture."
 

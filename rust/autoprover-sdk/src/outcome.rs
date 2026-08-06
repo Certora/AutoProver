@@ -25,8 +25,9 @@ pub struct SkippedProperty {
     pub reason: String,
 }
 
-/// One report row: a property title and the backend's name for the check that carries it — a CVL
-/// rule, a foundry test, a fuzz harness function. A check yields a [`Verdict`].
+/// One check: a property title and the backend's name for the thing that verifies it — a CVL rule,
+/// a foundry test, a fuzz harness function. A check yields a [`Verdict`] and becomes one row of the
+/// report.
 ///
 /// `target` names the [`Target`] this check runs under — **one invocation of the checker**. Several
 /// checks may share one (e.g. Crucible puts a component's whole property set in a single fuzz

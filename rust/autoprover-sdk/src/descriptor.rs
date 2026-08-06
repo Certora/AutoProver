@@ -28,7 +28,7 @@ pub enum PhaseRole {
     /// [`WorkspacePrep`](crate::prep::WorkspacePrep) with an
     /// [`Authored::Preflight`](crate::authoring::Authored::Preflight) `compile` whose `spec` is
     /// **empty**: nothing has been authored yet, so the wheel renders its own skeleton — the smallest
-    /// artifact that still exercises everything an authored one will depend on.
+    /// spec that still exercises everything an authored one will depend on.
     ///
     /// The point is to fail on a *toolchain* problem — an unresolvable dependency graph, a harness
     /// that doesn't link, IDL codegen the generator rejects — while the run has spent almost no LLM
@@ -37,7 +37,7 @@ pub enum PhaseRole {
     /// re-author attempt trying. So a preflight failure is **terminal** — the host raises instead of
     /// re-authoring, and the driver cancels the analysis and extraction running alongside it.
     Preflight,
-    /// The shared artifact authored once before per-component formalization (Crucible's fixture).
+    /// The shared spec authored once before per-component formalization (Crucible's fixture).
     /// The host runs the author→compile loop for an
     /// [`Authored::Setup`](crate::authoring::Authored::Setup) input, then hands the compiled spec
     /// to every component as
@@ -108,10 +108,10 @@ pub struct ArgSpec {
 ///
 /// A `notice` kind is surfaced as a persistent, always-visible callout (plus a toast)
 /// rather than a line in the collapsible per-task events log — for one-shot important
-/// results such as a per-unit verdict. Ordinary kinds stream into the log.
+/// results such as one check's verdict. Ordinary kinds stream into the log.
 ///
 /// The events themselves are emitted by the **host**, around the callouts it drives (a build
-/// failure, a review verdict, a unit's outcome): a wheel has no emit channel, because its blocking
+/// failure, a review verdict, a check's outcome): a wheel has no emit channel, because its blocking
 /// callouts run to completion with the GIL released. Declaring a kind nothing emits renders
 /// nothing.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -41,8 +41,9 @@ A wheel exports exactly (all synchronous, JSON strings across the boundary):
 ```text
 descriptor() -> str                                        # the AppDescriptor
 validate_preconditions(args_json) -> str|None
-units(input_json) -> str                                   # the report rows / validation targets
-author_prompt(input_json, failure_json|None) -> str
+checks(input_json) -> str                                  # the checks this input formalizes
+author_prompt(input_json) -> str                           # one authoring session's prompt
+check_syntax(input_json, spec) -> str|None                 # None ⇒ the spec may be written
 judge_prompt(input_json, spec) -> str|None                 # None ⇒ no judge
 compile(input_json, spec, workdir, sandbox_json) -> str    # BLOCKING (run-confined)
 validate(input_json, spec, target, workdir, sandbox_json) -> str  # BLOCKING (run-confined)
@@ -60,9 +61,9 @@ child process runs, so the host calls them with `asyncio.to_thread`.
    (`features = ["extension-module", "abi3-py312"]`). See
    [example-app/Cargo.toml](example-app/Cargo.toml).
 
-2. Implement `Backend`. Required: `descriptor` + `units` + `author_prompt` +
-   `compile` + `validate`. Defaulted: `validate_preconditions`, `judge_prompt`,
-   `workspace_prep`, `sandbox_grants`, `finalize`. See
+2. Implement `Backend`. Required: `descriptor` + `checks` + `author_prompt` +
+   `compile` + `validate`. Defaulted: `validate_preconditions`, `check_syntax`,
+   `judge_prompt`, `workspace_prep`, `sandbox_grants`, `finalize`. See
    [example-app/src/lib.rs](example-app/src/lib.rs).
 
 3. Export the module (ident must match the wheel/module name):

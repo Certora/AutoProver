@@ -55,7 +55,7 @@ pub struct FinalizeComponent {
 
 /// The complete outcome set. Everything a wheel needs to render the whole deliverable: the same
 /// project facts the gated builds used (so what ships is what was checked), the compiled shared
-/// setup artifact, and every component's result.
+/// setup spec, and every component's result.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
@@ -67,7 +67,7 @@ pub struct FinalizeInput {
     /// As every authoring callout received it — see
     /// [`AuthorInput::prep_facts`](crate::authoring::AuthorInput::prep_facts).
     pub prep_facts: ChainData,
-    /// The compiled shared setup artifact, when the wheel declared a
+    /// The compiled shared setup spec, when the wheel declared a
     /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase.
     #[serde(deserialize_with = "crate::required::present")]
     pub setup: Option<String>,

@@ -62,7 +62,7 @@ pub enum Authored {
     /// before analysis has finished, so there is no model, no unit, and [`AuthorInput::props`] is
     /// empty.
     Preflight,
-    /// The shared artifact every unit builds on (Crucible's fixture), authored once from the
+    /// The shared spec every unit builds on (Crucible's fixture), authored once from the
     /// analyzed model and *every* unit's properties (see
     /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup)).
     Setup {
@@ -77,7 +77,7 @@ pub enum Authored {
     },
 }
 
-/// The input to the authoring/gating callouts for one artifact.
+/// The input to the authoring/gating callouts for one spec.
 ///
 /// The one wire type without `#[serde(deny_unknown_fields)]`: serde rejects that attribute
 /// alongside a `flatten` field, and [`Authored`] has to flatten so the tag and the payload it
@@ -102,10 +102,10 @@ pub struct AuthorInput {
     /// Anchor requirement; a Move package is not. Empty when nothing was resolved, which is when a
     /// wheel applies its own convention.
     pub source_unit: ChainData,
-    /// The properties this artifact must make checkable. Empty for a preflight; for a setup, every
+    /// The properties this spec must make checkable. Empty for a preflight; for a setup, every
     /// unit's.
     pub props: Vec<Property>,
-    /// The compiled shared setup artifact, for a wheel that declared a
+    /// The compiled shared setup spec, for a wheel that declared a
     /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase — the fixture a component's
     /// spec builds on.
     #[serde(deserialize_with = "crate::required::present")]
@@ -124,7 +124,7 @@ pub struct AuthorInput {
 
 impl AuthorInput {
     /// The unit being formalized, on a component turn. `None` on the two turns that formalize no
-    /// unit — a preflight (nothing is analyzed yet) and the shared setup artifact.
+    /// unit — a preflight (nothing is analyzed yet) and the shared setup spec.
     pub fn unit(&self) -> Option<&serde_json::Value> {
         match &self.authored {
             Authored::Component { unit } => Some(unit),

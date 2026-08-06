@@ -51,7 +51,7 @@ class PhaseRole(str, enum.Enum):
     #: not own the manifest and cannot fix it), which lets the driver cancel the analysis and
     #: extraction running alongside.
     PREFLIGHT = "preflight"
-    #: A shared setup artifact authored once before per-component formalization (Crucible's shared
+    #: A shared setup spec authored once before per-component formalization (Crucible's shared
     #: fixture). The host runs the author→compile loop for a :class:`SetupInput
     #: <composer.rustapp.wire.SetupInput>` and hands the compiled spec to every component as
     #: ``AuthorInput.setup``.
@@ -145,10 +145,10 @@ class EventKind(WireModel):
 
     ``notice`` events are surfaced as a persistent, always-visible callout (plus a toast)
     rather than a line in the collapsible per-task events log — for one-shot important
-    results such as a per-unit verdict.
+    results such as one check's verdict.
 
     The events themselves are emitted by the *host*, around the callouts it drives (a build
-    failure, a review verdict, a unit's outcome) — a wheel has no emit channel, since its blocking
+    failure, a review verdict, a check's outcome) — a wheel has no emit channel, since its blocking
     callouts run to completion with the GIL released. A declared kind nothing emits renders
     nothing."""
 
@@ -193,7 +193,7 @@ class AppDescriptor(WireModel):
     #: How the source deliverable is written (see :data:`DeliverableMode`).
     deliverable_mode: DeliverableMode
     #: Serialize the blocking toolchain callouts on one semaphore — set when the app shares a
-    #: single build dir / target across units.
+    #: single build dir / target across components.
     serialize_toolchain: bool
     #: Default to the fail-closed ``launcher`` sandbox provider (still overridable by
     #: ``COMPOSER_SANDBOX_PROVIDER``). Set by any wheel that runs untrusted native toolchains.

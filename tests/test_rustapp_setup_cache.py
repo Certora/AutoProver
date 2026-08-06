@@ -1,4 +1,4 @@
-"""Tests for the shared setup artifact: when it is authored, from what, and its cache.
+"""Tests for the shared setup spec: when it is authored, from what, and its cache.
 
 Three things are pinned here. **When**: not during ``prepare_formalization`` (which runs
 concurrently with property extraction, so the properties don't exist yet) but in

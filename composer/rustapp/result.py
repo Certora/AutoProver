@@ -20,8 +20,8 @@ from composer.rustapp.wire import Verdict
 from composer.authoring.state import SkippedProperty
 
 
-class RustSetupArtifact(BaseModel):
-    """The compiled shared setup artifact (Crucible's fixture), wrapped for the store.
+class RustSetupSpec(BaseModel):
+    """The compiled shared setup spec (Crucible's fixture), wrapped for the store.
 
     It is one string, but the typed cache round-trips pydantic models only — and it earns a cache
     entry: authoring + compiling it is a full LLM loop (on a large program, the longest single step
