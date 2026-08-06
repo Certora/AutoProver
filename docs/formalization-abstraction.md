@@ -341,6 +341,8 @@ Three things worth calling out:
 
 ### 4.3 `formalize` — per-component authoring + verification loop
 
+This is one instance of the **authoring session** (§4.3.1), which every backend runs.
+
 The `Formalizer.formalize` impl is a thin adapter; all the work is in
 `batch_cvl_generation`:
 
@@ -388,6 +390,55 @@ return GeneratedCVL(commentary=..., cvl=..., skipped=..., property_rules=...,
 Note `config` and `final_link` are captured into the result. That is deliberate: a later
 cache hit skips the prover entirely, so the result must carry enough to rebuild
 `certora/confs/` and keep the run link without re-running anything.
+
+### 4.3.1 The authoring session, shared by every backend
+
+Every backend authors the same way, and that shape lives in
+[composer/authoring/](../composer/authoring/). It is **one stateful agent**, not a retry loop
+around a stateless one — the difference is where the state lives, and everything else follows from
+it:
+
+- **One `curr_spec` buffer.** `put_spec` replaces it; an edit tool replaces one exact span
+  ([composer/core/edit.py](../composer/core/edit.py)) and is what the agent should reach for once a
+  draft exists. A backend that can reject a malformed spec cheaply supplies a validator, and a
+  rejected write leaves the buffer untouched.
+- **Gates stamp, they do not return.** A checker or judge that accepts the draft writes
+  `spec_digest(buffer, skips)` into `validations`. `check_completion` then requires every
+  `required_validations` key to carry a stamp equal to the digest *as it now stands*, so editing
+  after a green run invalidates that run without anything having to remember to clear it. The digest
+  covers the skip declarations too, because "this property is left out, here is why" is part of what
+  was accepted.
+- **A judge that must state a verdict.** `build_feedback_judge` compiles a sub-agent with the
+  session's tool belt, a rough-draft scratchpad, the run memory, and an enforced read-back of the
+  draft (`did_read` — reviewing the copy in its own prompt is not reviewing what was written). It
+  returns a structured `PropertyFeedback`, so there is no unparseable reply to interpret. The author
+  may answer a prior round with an evidence-typed `Rebuttal` rather than re-arguing it.
+- **Two honest exits.** `record_skip` excuses a property from the publish-time mapping with a
+  justification; `give_up` ends the session with a reason that reaches the report. Both are better
+  outcomes than a spec that only looks checked.
+- **A publish gate that checks the mapping.** `validate_check_mapping` requires every non-skipped
+  property to name at least one check, refuses a skipped one, and — when the backend's checker
+  reports what it ran (forge names every test; the prover names nothing) — checks both directions
+  against that ground truth.
+
+What a backend supplies is the part that genuinely differs: the put-time validator, the gate tools
+and the keys they stamp, the mapping's ground truth, the prompts, and its **own vocabulary**. That
+last one is deliberate: `MappingVocab` carries the word each backend uses with its own model — CVL
+says *rule*, Foundry says *test*, a Rust wheel declares its own via `check_noun` — because an author
+writes better in the language its generated code already uses. The framework's generic term for the
+concept is a **check**: the backend's named, runnable verification of one property, which yields a
+`Verdict`.
+
+One holdout, deliberate: the **report** still says *rule* (`RuleName`, `total_rules`,
+`FormalizedProperty.rules`). Those are field names in `certora/ap_report/report.json`, which the
+standalone renderer reads back, so renaming them changes an output format rather than an internal
+name. `type RuleName = CheckName` marks the seam, and `fetch_verdicts` is the one place the two
+vocabularies meet.
+
+The per-backend assembly (which tools, which prompts, which cache) stays in that backend's own entry
+point — `batch_cvl_generation`, `batch_foundry_test_generation`,
+[`run_session`](../composer/rustapp/session.py). They differ in exactly the parameters the core takes,
+so collapsing them into one function would buy nothing.
 
 ### 4.4 `extra_report_inputs` — folding in the invariants
 
@@ -594,7 +645,7 @@ system analysis, property extraction, caching, and the report, and contributes o
 | `prepare_system` | harness lift + prover tool | identity |
 | `prepare_formalization` | AutoSetup ∥ summaries ∥ invariants | trivial (pre-built formalizer) |
 | shared artifact (`StagedFormalizer`) | none — `invariants.spec` is built from the model, in `prepare_formalization` | none |
-| `formalize` | author CVL, run prover, revise | author tests, run `forge test` |
+| `formalize` | authoring session, gated by `verify_spec` | authoring session, gated by `forge_test` |
 | `fetch_verdicts` | query prover output off-thread | read ran/expected tests off the result |
 | `extra_report_inputs` | synthetic "Structural Invariants" | none |
 | `finalize` | `components_to_prover_runs.json` | none |
@@ -603,7 +654,7 @@ system analysis, property extraction, caching, and the report, and contributes o
 A backend author's checklist:
 
 1. Define a result type satisfying `FormalResult` + `ReportableResult` (`artifact_text`,
-   `commentary`, `property_units()`, `skipped`, `output_link`).
+   `commentary`, `property_checks()`, `skipped`, `output_link`).
 2. Subclass `ArtifactStore` for the on-disk bundle; define an `ArtifactIdentifier` sum type.
 3. Implement `PipelineBackend` (`preflight`, `prepare_system`, `to_artifact_id`,
    `backend_guidance`, `core_phases`, `analysis_spec`, `artifact_store`) — naming it as a base and
@@ -615,7 +666,9 @@ A backend author's checklist:
    `Formalizer` — or, if every unit builds on one shared artifact, a `StagedFormalizer` whose
    `begin` authors it from the union of all units' properties (§3.3).
 5. Implement `Formalizer.formalize` + `fetch_verdicts`; override `extra_report_inputs` /
-   `finalize` only if needed.
+   `finalize` only if needed. `formalize` should assemble the shared authoring session (§4.3.1)
+   rather than grow its own loop — what it supplies is the gate tools, the prompts, and its own
+   noun for a check.
 
 ---
 
@@ -666,6 +719,7 @@ _entry_point → cli_pipeline → cont(env, ProverBackend, EVM)
 | Result protocols (`FormalResult`, `ArtifactIdentifier`) | [composer/spec/types.py](../composer/spec/types.py) |
 | `ReportableResult`, `Verdict`, `VerdictFetcher`, `collect` | [composer/spec/source/report/collect.py](../composer/spec/source/report/collect.py) |
 | CVL backend (the three phase objects) | [composer/spec/source/pipeline.py](../composer/spec/source/pipeline.py) |
+| The shared authoring session (buffer, stamps, judge, publish gate) | [composer/authoring/](../composer/authoring/) |
 | CVL authoring agent (`batch_cvl_generation`) | [composer/spec/source/author.py](../composer/spec/source/author.py) |
 | CVL result type (`GeneratedCVL`) | [composer/spec/cvl_generation.py](../composer/spec/cvl_generation.py) |
 | Artifact store base / CVL subclass | [composer/spec/artifacts.py](../composer/spec/artifacts.py) · [composer/spec/source/artifacts.py](../composer/spec/source/artifacts.py) |

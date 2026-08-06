@@ -375,10 +375,11 @@ path-confined.
 ## 5. Authoring and review
 
 Authoring is the **shared session** of [`composer/authoring/`](../composer/authoring/) — the same
-workflow the CVL and foundry backends run — assembled for a wheel in
+workflow the CVL and foundry backends run, described in
+[formalization-abstraction.md §4.3.1](./formalization-abstraction.md) — assembled for a wheel in
 [`session.py`](../composer/rustapp/session.py). One stateful agent per spec: it owns a `curr_spec`
 buffer, edits it, calls the gate, asks for review, and publishes. The wheel supplies the prompts and
-answers the callouts; it is still a passive service.
+answers the callouts; it is still a passive service. What follows is only what is Rust-specific.
 
 **The prompt is two halves.** The host owns the protocol half — the tools, what the publish gate
 requires, what a skip and a give-up mean — rendered from
@@ -673,6 +674,10 @@ Facts about the seam as it stands, not open design questions:
   backend).
 - **No HITL.** The generic task handler raises on an interrupt prompt; an interactive Rust
   application would need a new mechanism.
+- **No build-only tool in the component belt.** `validate` fuses build and run, so a separate
+  `check_build` would only save the checker's runtime on a draft that does not compile. Worth adding
+  if a real run shows an author burning its fuzz budget on build errors — the callout is already
+  wrapped for the setup session's `compile_spec`.
 - **A skipped property is not re-planned.** `checks()` is asked for once, before authoring; a skip
   removes its checks from the run and from the mapping, but nothing re-derives what the remaining
   checks should be.
