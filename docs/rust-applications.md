@@ -59,7 +59,7 @@ impl.
 | `author_prompt(input_json) -> str` | pure | the instruction (+ domain system prompt) for one authoring *session* (§5) |
 | `check_syntax(input_json, spec) -> str \| None` | pure | reject a spec at write time; `None` = accept. Cheap — it runs on every put/edit |
 | `judge_prompt(input_json, spec) -> str \| None` | pure | optional LLM review; `None` = this wheel has no judge |
-| `compile(input_json, spec, workdir, sandbox_json) -> str` | **blocking** | build the whole spec once — the setup and preflight gate |
+| `compile(input_json, spec, workdir, sandbox_json) -> str` | **blocking** | build the whole spec once — how setup and preflight build |
 | `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` | **blocking** | build + check one target — which arrives with the rows it covers — returning a verdict per row (§6) |
 | `workspace_prep(input_json) -> str` | pure | a *plan* the host executes (§7) |
 | `sandbox_grants(args_json) -> str` | pure | extra grants to union into the host's policy (§8) |
@@ -195,7 +195,7 @@ The four the driver itself tags — `analysis`, `extraction`, `formalization`, `
 `PhaseRole.required()` and every descriptor must claim them (`build_core_phases` raises otherwise).
 The rest are optional, and **a role no phase claims is a step the application does not have**:
 `discovery` groups the design-doc task the *entry point* runs before the pipeline (unclaimed, it
-falls back to the first declared phase), `preflight` declares the workspace gate (§4.2), and `setup`
+falls back to the first declared phase), `preflight` declares the toolchain check (§4.2), and `setup`
 the shared artifact authored before the fan-out (§4.3). Claiming a step by role rather than by a
 side struct naming a `phase_key` means there is no key for one half to spell and the other to
 match — and no way to point a step at a phase that doesn't exist.
@@ -216,7 +216,7 @@ one-shot important results such as a verdict — rather than a line in the colla
 
 | Field | Effect |
 |---|---|
-| a phase with `role: preflight` | run the workspace gate as its own visible task (§4.2). No such phase: the prep still runs, silently, with no gate |
+| a phase with `role: preflight` | check the toolchain before authoring, as its own visible task (§4.2). No such phase: the workspace prep still runs, and nothing else changes — a wheel with nothing to check just doesn't declare one |
 | a phase with `role: setup` | author one shared artifact before the per-component fan-out and hand it to every component as `AuthorInput.setup` (§4.3) |
 | `deliverable_mode` | `per_component` (default), or `callout { primary? }` — where `primary` is the `{program}`-templated path used as each component's report link (§9) |
 | `serialize_toolchain` | put the blocking callouts behind one `Semaphore(1)` — for an app sharing a single crate / target dir |
@@ -233,7 +233,7 @@ is a complete application.
 ## 4. The run, end to end
 
 ```text
-load ─ entry point ─┬─ preflight  (workspace_prep → toolchain → compile gate)  ─┐
+load ─ entry point ─┬─ preflight  (workspace_prep → toolchain → build check)   ─┐
                     └─ system analysis                                          ├─ prepare_system
                                                                                 ┘
    ─┬─ prepare_formalization ─────────────────┐
@@ -263,7 +263,7 @@ Postgres-backed pools + RAG + async tool context + thread logger, build the `Ser
 `WorkflowContext`, resolve or discover the design doc, apply `confine_by_default`, and yield the
 Executor a frontend drives.
 
-### 4.2 Preflight: prepare the workspace, then gate it
+### 4.2 Preflight: prepare the workspace, then check the toolchain
 
 [`RustBackend.preflight`](../composer/rustapp/adapter.py) runs **concurrently with system
 analysis** — neither step reads the analyzed model, which is what makes the overlap safe — and the
@@ -277,12 +277,14 @@ Two steps, both *declared* by the wheel and executed here:
 
 1. **`workspace_prep`** (§7) — write the plan's files, then warm dependencies / build the program /
    place its IDL through the chain's registered toolchain. Already the run's slowest non-LLM step.
-2. **The gate**, when the descriptor declares `preflight` — an `Authored::Preflight` `compile` whose
-   `spec` is **empty**: nothing has been authored yet, so the wheel renders its own minimal
-   skeleton, the smallest artifact that still exercises what an authored one will depend on.
+2. **The toolchain check**, when the descriptor declares `preflight` — an `Authored::Preflight`
+   `compile` whose `spec` is **empty**: nothing has been authored yet, so the wheel renders its own
+   throwaway skeleton, the smallest artifact that still exercises what an authored one will depend
+   on. This step is optional; a wheel whose toolchain has nothing worth checking early omits the
+   phase and keeps only step 1.
 
-Why the gate and not just the prep: `cargo fetch` resolves a dependency graph and **compiles
-nothing**, and a failed warm is deliberately non-fatal. Without the gate, the first thing that
+Why check, and not just prep: `cargo fetch` resolves a dependency graph and **compiles
+nothing**, and a failed warm is deliberately non-fatal. Without the check, the first thing that
 actually builds is the compile of the first LLM-authored draft — at the far end of extraction — and
 everything that can go wrong there is invisible to an authoring agent's revise loop, because the
 agent does not own the manifest:
@@ -296,11 +298,11 @@ agent does not own the manifest:
 
 So a failure is **terminal**: `run_preflight_gate` raises
 [`PreflightFailed`](../composer/rustapp/adapter.py) with the diagnostics the wheel extracted, and
-there is no re-author. Two side benefits: the gate proves the built artifact actually runs, and it
+there is no re-author. Two side benefits: the check proves the built artifact actually runs, and it
 leaves the target dir warm, so the first *authored* compile builds one crate instead of a graph.
 
 What the step establishes is carried forward as `ProjectFacts { source_unit, prep_facts }` — the driver
-holds it opaquely and hands it to `prepare_system` — so the gated build, every authoring turn and the
+holds it opaquely and hands it to `prepare_system` — so the preflight build, every authoring turn and the
 delivered artifact all agree on what they are building against. Both halves are chain-shaped (§7).
 
 ### 4.3 Setup: the shared artifact

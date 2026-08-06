@@ -9,9 +9,10 @@ a constructor dependency rather than a call-order convention; there is no half-i
 
 Two links are *overlapped* with the LLM steps they don't depend on, since both are usually builds:
 ``preflight`` runs alongside system analysis, and ``prepare_formalization`` alongside property
-extraction. ``preflight`` is additionally a *gate*: it is the cheap side of its pair, so it is
-awaited first and a failure there cancels the analysis agent racing it rather than letting it spend
-on a run that can no longer complete. The second pair is simply awaited in turn.
+extraction. ``preflight`` is additionally a *gate*: it and the analysis run in a task group, so a
+failure on either side cancels the other rather than letting it spend on a run that can no longer
+complete — a broken toolchain does not wait out the analysis agent, and a failed analysis does not
+wait out the workspace build. The second pair is simply awaited in turn.
 
 A backend whose units all build on one *shared* artifact inserts a link rather than a call-order
 convention: ``prepare_formalization`` returns a :class:`StagedFormalizer`, and its ``begin`` — handed
@@ -261,31 +262,36 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
     # 1. Backend preflight ∥ system analysis. The preflight (Crucible: build the program and gate a
     #    skeleton harness through the real toolchain) reads nothing analysis produces, so it starts
-    #    at t=0 — and if the toolchain is broken, the analysis racing it is cancelled rather than run
-    #    to completion first. The analysis itself is the shared primitive; the ecosystem supplies the
-    #    analyzed model type, prompts, validation, and front-matter.
-    preflight_task = asyncio.create_task(backend.preflight(run))
-    analysis_task = asyncio.create_task(
-        run.runner(
-            TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
-            lambda: run_component_analysis(
-                ty=ecosystem.system_model, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
-                input=source, env=run.env,
-                extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
-                expected_main_id=source.contract_name,
-                system_template=ecosystem.analysis_prompts.system,
-                initial_template=ecosystem.analysis_prompts.initial,
-                validate=ecosystem.validate_analysis,
-            ),
-        )
-    )
+    #    at t=0. Neither side outlives the other's failure: whichever breaks first, the group cancels
+    #    the one still running rather than let it spend — money on the analysis agent, minutes on the
+    #    workspace build — on a run that can no longer complete. The analysis itself is the shared
+    #    primitive; the ecosystem supplies the analyzed model type, prompts, validation, front-matter.
     try:
-        preflight = await preflight_task
-    except BaseException:
-        analysis_task.cancel()
-        await asyncio.gather(analysis_task, return_exceptions=True)
+        async with asyncio.TaskGroup() as overlap:
+            preflight_task = overlap.create_task(backend.preflight(run))
+            analysis_task = overlap.create_task(
+                run.runner(
+                    TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
+                    lambda: run_component_analysis(
+                        ty=ecosystem.system_model,
+                        child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
+                        input=source, env=run.env,
+                        extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
+                        expected_main_id=source.contract_name,
+                        system_template=ecosystem.analysis_prompts.system,
+                        initial_template=ecosystem.analysis_prompts.initial,
+                        validate=ecosystem.validate_analysis,
+                    ),
+                )
+            )
+    except BaseExceptionGroup as eg:
+        # Callers expect the failure itself, not a wrapper, so unwrap the usual case: one side
+        # failed and the other was cancelled, and a cancelled task adds nothing to the group.
+        # Both failing at once is the only case with two real errors; keep the group there.
+        if len(eg.exceptions) == 1:
+            raise eg.exceptions[0] from None
         raise
-    analyzed = await analysis_task
+    preflight, analyzed = preflight_task.result(), analysis_task.result()
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
     

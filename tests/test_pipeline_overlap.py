@@ -6,10 +6,9 @@ don't depend on them.
 * ``backend.preflight`` (Crucible's program build + harness-skeleton build) with **system analysis**;
 * ``prepared.prepare_formalization`` (the prover's autosetup) with **property extraction**.
 
-Neither side of either pair needs the other. The preflight is additionally a *gate*: it is the cheap
-side of its pair, so the driver awaits it first and a failure there cancels the analysis agent racing
-it, rather than letting an agent spend on a run that can no longer complete. Nothing else is
-cancelled — the second pair is awaited in turn.
+Neither side of either pair needs the other. The preflight is additionally a *gate*: it shares a task
+group with the analysis, so a failure on either side cancels the other rather than letting it spend
+on a run that can no longer complete. Nothing else is cancelled — the second pair is awaited in turn.
 
 Stubs throughout — no LLM, no DB, no backend wheel.
 """
@@ -176,18 +175,33 @@ async def test_a_preflight_failure_stops_system_analysis(monkeypatch):
     assert not extract.finished and not extract.cancelled
 
 
-async def test_an_analysis_failure_lets_the_preflight_finish(monkeypatch):
-    # Not symmetric: the gate is the cheap side of the pair, so there is nothing to save by
-    # cancelling it. It is awaited to completion and the analysis failure is what ends the run.
+async def test_an_analysis_failure_stops_the_preflight(monkeypatch):
+    # Symmetric: the gate spends no money, but it is the run's slowest non-LLM step, so an analysis
+    # that has already failed must not wait out a workspace build whose result nothing will read.
     boom = RuntimeError("system analysis blew up")
-    preflight = _Step(0.02, None, PREFLIGHT_RESULT)
+    preflight = _Step(30, None, PREFLIGHT_RESULT)
     seen = await _drive(
         monkeypatch, prep=_Step(0, None), extract=_Step(0, None),
         analysis=_Step(0.01, boom), preflight=preflight,
     )
 
     assert seen["raised"] is boom
-    assert preflight.finished and not preflight.cancelled
+    assert preflight.cancelled and not preflight.finished
+
+
+async def test_a_double_failure_reports_both(monkeypatch):
+    # The one case the driver cannot answer with a single error: both sides raise before either
+    # cancellation lands, so neither is "the" cause and the group carries them both.
+    analysis_boom = RuntimeError("system analysis blew up")
+    preflight_boom = RuntimeError("the harness workspace does not build")
+    seen = await _drive(
+        monkeypatch, prep=_Step(0, None), extract=_Step(0, None),
+        analysis=_Step(0, analysis_boom), preflight=_Step(0, preflight_boom),
+    )
+
+    raised = seen["raised"]
+    assert isinstance(raised, BaseExceptionGroup)
+    assert set(raised.exceptions) == {analysis_boom, preflight_boom}
 
 
 async def test_cancelling_the_run_cancels_the_steps_it_was_waiting_on(monkeypatch):
