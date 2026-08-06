@@ -28,10 +28,10 @@ pub struct SkippedProperty {
 /// One report row: a property title and the backend's name for the check that carries it — a CVL
 /// rule, a foundry test, a fuzz harness function. A check yields a [`Verdict`].
 ///
-/// `target` is the *validation target the host runs*, and several checks may share one (e.g.
-/// Crucible puts a component's whole property set in a single fuzz target), so the host runs the
-/// target once and the backend attributes the outcome back to each check. `None` ⇒ the check is its
-/// own target (one run per check, the default).
+/// `target` names the [`Target`] this check runs under — **one invocation of the checker**. Several
+/// checks may share one (e.g. Crucible puts a component's whole property set in a single fuzz
+/// target), so the host runs it once and the backend attributes the outcome back to each check.
+/// `None` ⇒ the check is its own target (one invocation per check, the default).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
@@ -50,18 +50,25 @@ impl Check {
     }
 }
 
-/// One validation target the host runs, and the checks that target covers — the checks
-/// [`Backend::validate`](crate::Backend::validate) must return a verdict for.
+/// **One invocation of the checker** — one build + one run — and the checks that invocation covers,
+/// which are the checks [`Backend::validate`](crate::Backend::validate) must return a verdict for.
+///
+/// Targets are how *running* is grouped; [`Check`]s are how *reporting* is. A target always sits
+/// inside a single unit's session (the [`AuthorInput::unit`](crate::authoring::AuthorInput::unit)
+/// being formalized), so the three nest: one unit's checks partition into its targets. That is the
+/// point of the split — a backend that fuzzes a whole property set in one campaign pays for one
+/// build and one run, and still reports a row per property.
 ///
 /// The host computes the grouping from [`Backend::checks`](crate::Backend::checks) (it decides what
 /// to run, and in what order), so it hands the answer over rather than leaving each backend to
-/// recover it by re-deriving its own checks and filtering them by name.
+/// recover it by re-deriving its own checks and filtering them by name. A target name is only
+/// meaningful within its session: two units naming the same target each run their own.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
 pub struct Target {
-    /// The target's name — what the backend selects when it runs the checker (Crucible: the
-    /// component's `c_<slug>` harness fn, which is also its Cargo feature).
+    /// The target's name — what the backend selects when it invokes the checker (Crucible: the
+    /// unit's harness fn, which is also its Cargo feature).
     pub name: String,
     /// The checks this run must produce a verdict for. Usually one; several when a backend checks
     /// a whole property set in one run.

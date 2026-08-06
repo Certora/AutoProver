@@ -308,10 +308,13 @@ class ValidateSpec(
 
 
 def targets_of(checks: Sequence[Check]) -> list[Target]:
-    """The distinct validation targets covering ``checks``, each carrying the checks it covers.
+    """``checks`` partitioned into the checker invocations that cover them — one :class:`Target` per
+    distinct target name, in first-seen order, each carrying its own checks.
 
-    The host owns the grouping — it decides what runs and in what order — so it hands the answer to
-    the wheel rather than leaving it to re-derive one."""
+    This is the whole of the run-vs-report split: several checks sharing a target means one build
+    and one run for all of them, while each still gets its own verdict. The host owns the grouping —
+    it decides what runs and in what order — so it hands the answer to the wheel rather than leaving
+    it to re-derive one."""
     names = list(dict.fromkeys(c.target_or_name() for c in checks))
     return [
         Target(name=name, checks=[c for c in checks if c.target_or_name() == name])
