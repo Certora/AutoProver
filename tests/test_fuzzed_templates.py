@@ -1,5 +1,5 @@
 import pathlib
-from typing import Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 import typing
 import types
 from functools import wraps, reduce
@@ -15,7 +15,10 @@ from composer.meta.resolver import resolve_params
 from composer.spec.system_model import (
     ContractComponentInstance, ContractInstance, AnyApplication, Application, FromSourceApplication,
     HarnessedApplication, _context_marker_attr,
-    BaseApplication, ExplicitContract, ExternalActor, ContractComponent
+    BaseApplication
+)
+from composer.spec.solana.model import (
+    SolanaApplication, SolanaComponentInstance, SolanaProgramInstance
 )
 from composer.spec.service_host import Sort # defined here? huh?
 import hypothesis.strategies._internal.core as hcore
@@ -30,6 +33,10 @@ MANIFEST = Manifest.validate_json((REPO_ROOT / "template_manifest.json").read_te
 
 env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), undefined=StrictUndefined)
 
+#: Cap on any drawn list field (see ``_field_strategy``). Templates iterate these; a handful of
+#: elements covers the same branches as an unbounded draw, at a fraction of the entropy.
+_MAX_LIST = 3
+
 FUZZABLE = sorted(
     (key, entry) for key, entry in MANIFEST.items()
 )
@@ -39,27 +46,45 @@ class _TypeResolver(Protocol):
         ...
 
 
+def _unit_type_of(ctx_ann: typing.Any) -> type:
+    """The concrete unit type a marked param dict declares for its ``context``, with any
+    ``| None`` stripped. Each ecosystem names its own (``ContractComponentInstance``,
+    ``SolanaComponentInstance``) precisely so this is constructible — the ``FeatureUnit``
+    protocol the pipeline speaks is not."""
+    variants = [a for a in typing.get_args(ctx_ann) if a is not type(None)]
+    if not variants:
+        assert isinstance(ctx_ann, type)
+        return ctx_ann
+    assert len(variants) == 1 and isinstance(variants[0], type), ctx_ann
+    return variants[0]
+
+
 def _build_template_context[T](t: type[T]) -> st.SearchStrategy[T]:
     """Strategy for a context-marked template-param TypedDict: draw ``sort``,
     then build a ``context`` coherent with it.
 
-    ``sort`` selects the application family (``sort_to_application``); the
-    ``context`` is a ``ContractComponentInstance`` pointing into a freshly-drawn
-    app of that family, its ``ind`` chosen in-bounds by
-    ``app_to_contract``/``contract_to_component``. This keeps the sort-gated,
-    subtype-specific fields the templates read off the context (e.g. the
-    ``.tag``/``.path`` ``application_context_new.j2`` renders only under
-    ``sort == "update"``) present exactly when the template will touch them, and
-    keeps the embedded indices valid. When the field is ``Optional`` the strategy
-    also yields ``None`` to exercise the ``{% if context %}``-absent branch. Any
-    remaining fields are drawn normally.
+    ``sort`` selects the application family (``sort_to_application``); the ``context`` is a unit
+    of the *declared* type pointing into a freshly-drawn app of that family, its ``ind`` chosen
+    in-bounds (``app_to_contract``/``contract_to_component`` for EVM,
+    ``solana_component_resolver`` for Solana — see ``_COHERENT_UNITS``). This keeps the sort-gated,
+    subtype-specific fields the templates read off the context (e.g. the ``.tag``/``.path``
+    ``application_context_new.j2`` renders only under ``sort == "update"``) present exactly when
+    the template will touch them, and keeps the embedded indices valid. When the field is
+    ``Optional`` the strategy also yields ``None`` to exercise the ``{% if context %}``-absent
+    branch. Any remaining fields are drawn normally.
     """
     annots = typing.get_type_hints(t)
     ctx_ann = annots["context"]
     optional = type(None) in typing.get_args(ctx_ann)
+    unit_type = _unit_type_of(ctx_ann)
+    assert unit_type in _COHERENT_UNITS, (
+        f"{t.__name__} declares context: {unit_type.__name__}, which has no coherent-unit "
+        f"strategy. Add one to _COHERENT_UNITS — drawing it independently of `sort` (or with "
+        f"out-of-bounds indices) makes the template crash rather than exercising it."
+    )
 
-    def _context(sort: Sort) -> st.SearchStrategy[ContractComponentInstance | None]:
-        component = contract_to_component(app_to_contract(sort_to_application(sort)))
+    def _context(sort: Sort) -> st.SearchStrategy[object | None]:
+        component = _COHERENT_UNITS[unit_type](sort)
         # Exercise the `{% if context %}`-absent branch when the field permits None.
         return st.none() | component if optional else component
 
@@ -75,25 +100,35 @@ def _build_template_context[T](t: type[T]) -> st.SearchStrategy[T]:
         )
     )
 
+def _bears_units(t: type[BaseModel]) -> bool:
+    """Whether template units are indexed *out of* this component type — i.e. it carries its own
+    ``components`` list (EVM's ``ExplicitContract``, Solana's ``SolanaProgram``), as opposed to an
+    external actor / authority component, which has none. This is the property the shaping below
+    exists to guarantee: an app must hold at least one unit-bearing component, and each of those
+    at least one component, or indexing a unit out of it has nothing to land on."""
+    return "components" in t.model_fields
+
 def _unwrap_component_types(
     t: typing.TypeAliasType | type
-) -> tuple[Sequence[type[ExplicitContract]], Sequence[type[ExternalActor]]]:
+) -> tuple[Sequence[type[BaseModel]], Sequence[type[BaseModel]]]:
+    """Split an app's ``components`` element union into (unit-bearing, other) — see
+    :func:`_bears_units`."""
     if isinstance(t, typing.TypeAliasType):
         return _unwrap_component_types(
             t.__value__
         )
     assert typing.get_origin(t) in (typing.Union, types.UnionType)
     variants = typing.get_args(t)
-    to_ret_contracts : list[type[ExplicitContract]] = []
-    to_ret_external : list[type[ExternalActor]] = []
+    to_ret_bearing : list[type[BaseModel]] = []
+    to_ret_other : list[type[BaseModel]] = []
     for t in variants:
         assert isinstance(t, type) and issubclass(t, BaseModel)
-        if issubclass(t, ExternalActor):
-            to_ret_external.append(t)
+        if _bears_units(t):
+            to_ret_bearing.append(t)
         else:
-            assert issubclass(t, ExplicitContract)
-            to_ret_contracts.append(t)
-    return (to_ret_contracts, to_ret_external)
+            to_ret_other.append(t)
+    assert to_ret_bearing, f"no unit-bearing component type among {variants}"
+    return (to_ret_bearing, to_ret_other)
 
 def _make_cursed_patcher(wrapped: _TypeResolver) -> _TypeResolver:
     """Wrap Hypothesis's internal type resolver so Pydantic models and
@@ -173,35 +208,48 @@ def _make_cursed_patcher(wrapped: _TypeResolver) -> _TypeResolver:
             return st.from_regex(p, fullmatch=True)
         ann = f.annotation
         assert ann is not None
-        # `components` is `list[<contract | external-actor union>]`. Force at least
-        # one contract (downstream indexing and `contract_components` need a
-        # non-empty contract set) plus a bounded external-actor mix, then permute.
-        # Each variant recurses through the patched resolver, so nested models are
-        # themselves built pattern-aware.
+        # `components` is `list[<unit-bearing | other union>]` (EVM: contract | external actor;
+        # Solana: program | authority). Force at least one unit-bearing component (downstream
+        # indexing and `contract_components`/`programs` need a non-empty set) plus a bounded mix
+        # of the others, then permute. Each variant recurses through the patched resolver, so
+        # nested models are themselves built pattern-aware.
         if issubclass(cls, BaseApplication) and n == "components":
             assert typing.get_origin(ann) is list
             component_type = next(iter(typing.get_args(ann)))
-            (contracts, external) = _unwrap_component_types(component_type)
-            contract_types = reduce(
+            (bearing, other) = _unwrap_component_types(component_type)
+            bearing_types = reduce(
                 operator.or_,
-                (st.from_type(t) for t in contracts)
+                (st.from_type(t) for t in bearing)
             )
-            external_types = reduce(
+            bearing_comps = st.lists(bearing_types, min_size=1, max_size=3)
+            if not other:
+                return bearing_comps
+            other_types = reduce(
                 operator.or_,
-                (st.from_type(t) for t in external)
+                (st.from_type(t) for t in other)
             )
-            external_comps = st.lists(external_types, max_size=2)
-            return st.lists(contract_types, min_size=1, max_size=3).flatmap(lambda conts: \
-                external_comps.flatmap(lambda exts: 
+            other_comps = st.lists(other_types, max_size=2)
+            return bearing_comps.flatmap(lambda bears: \
+                other_comps.flatmap(lambda others:
                     st.permutations([
-                        *conts, *exts
+                        *bears, *others
                     ])
                 )
             )
-        # At least one sub-component so a ContractComponentInstance built off this
-        # contract always has a component to point at.
-        if issubclass(cls, ExplicitContract) and n == "components":
-            return st.lists(st.from_type(ContractComponent), min_size=1)
+        # At least one sub-component so a unit built off this component always has something to
+        # point at. Element type comes from the annotation rather than being hardcoded, so this
+        # covers `ExplicitContract.components` and `SolanaProgram.components` alike.
+        if n == "components" and _bears_units(cls):
+            assert typing.get_origin(ann) is list
+            return st.lists(st.from_type(next(iter(typing.get_args(ann)))), min_size=1)
+        # Cap every other list field. The Solana program model nests list-of-model three deep
+        # (program -> instructions -> accounts -> roles); drawn unbounded at each level, a single
+        # app blows past Hypothesis's entropy budget under the `extended` profile. Templates only
+        # ever iterate these, so a few elements exercise the same paths as a hundred. The element
+        # type recurses through the patched resolver, so nesting stays pattern-aware.
+        if typing.get_origin(ann) is list:
+            (elem,) = typing.get_args(ann)
+            return st.lists(st.from_type(elem), max_size=_MAX_LIST)
         return st.from_type(ann)
 
     def _model_strategy[T: BaseModel](cls: type[T]) -> st.SearchStrategy[T]:
@@ -268,6 +316,28 @@ def contract_to_component(s: st.SearchStrategy[ContractInstance]) -> st.SearchSt
         )
     )
 
+def solana_program_resolver(t: type) -> st.SearchStrategy[SolanaProgramInstance]:
+    return st.from_type(SolanaApplication).filter(
+        lambda a: len(a.programs) > 0
+    ).flatmap(lambda app: \
+        st.builds(
+            SolanaProgramInstance,
+            ind=st.integers(min_value=0, max_value=len(app.programs) - 1),
+            app=st.just(app)
+        )
+    )
+
+def solana_component_resolver(t: type) -> st.SearchStrategy[SolanaComponentInstance]:
+    return st.from_type(SolanaProgramInstance).filter(
+        lambda p: len(p.program.components) > 0
+    ).flatmap(lambda prog: \
+        st.builds(
+            SolanaComponentInstance,
+            ind=st.integers(min_value=0, max_value=len(prog.program.components) - 1),
+            _program=st.just(prog)
+        )
+    )
+
 def sort_to_application(
     sort: Sort
 ) -> st.SearchStrategy[AnyApplication]:
@@ -280,6 +350,20 @@ def sort_to_application(
 st.register_type_strategy(ContractInstance, contract_resolver)
 
 st.register_type_strategy(ContractComponentInstance, instance_resolver)
+
+st.register_type_strategy(SolanaProgramInstance, solana_program_resolver)
+
+st.register_type_strategy(SolanaComponentInstance, solana_component_resolver)
+
+#: How to draw a marked param dict's ``context``, per concrete unit type the ecosystems declare
+#: (see ``_build_template_context``). EVM's is sort-coherent: its prompts branch on ``sort`` and
+#: read subtype-specific fields off the app, so the unit must come from an app of the matching
+#: family. Solana's templates have no ``sort`` branch (no greenfield/update split), so its unit is
+#: drawn independently — the registered resolver already keeps the indices in bounds.
+_COHERENT_UNITS: dict[type, Callable[[Sort], st.SearchStrategy[Any]]] = {
+    ContractComponentInstance: lambda sort: contract_to_component(app_to_contract(sort_to_application(sort))),
+    SolanaComponentInstance: lambda _sort: st.from_type(SolanaComponentInstance),
+}
 
 settings.register_profile("quick", settings(
     max_examples=10,

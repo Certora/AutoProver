@@ -19,6 +19,7 @@ from composer.spec.context import (
     SourceFields
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
+from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.prover.core import make_prover_options
@@ -30,7 +31,7 @@ from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.io.thread_logging import RunDataLogger
 
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 from composer.io.multi_job import HandlerFactory
 
 _logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             source_env = build_source_env(
                 models=staged.llm_models,
                 db=rag_db,
-                forbidden_read=FS_FORBIDDEN_READ,
+                forbidden_read=fs_forbidden_read,
                 kb_ns=DEFAULT_KB_NS,
                 root=staged.source.project_root,
                 store=staged.conns.indexed_store,
@@ -148,5 +149,5 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 make_prover_options(cloud=args.cloud),
                 CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
-            return await cont(source_env, backend)
+            return await cont(source_env, backend, EVM)
     yield callback

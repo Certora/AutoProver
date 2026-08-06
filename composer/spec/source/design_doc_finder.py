@@ -50,7 +50,7 @@ class DesignDocChosenEvent(TypedDict):
     ``handle_progress_event``; other handlers ignore unknown types (``NullEventHandler``).
     ``source`` is the display verb ("discovered" / "reusing cached")."""
     type: Literal["design_doc_chosen"]
-    source: Literal["discovered", "reusing cached"]
+    source: Literal["discovered", "reusing cached", "none found"]
     path: str
     reason: str
 
@@ -63,7 +63,17 @@ def _emit_choice(source: Literal["discovered", "reusing cached"], choice: "Desig
     TUI). Must run inside the discovery task's handler scope — ``emit_custom_event``
     requires it."""
     if choice.selected_path is None:
-        return  # no doc found — resolve_design_doc raises with the reason instead
+        # No doc found: the run proceeds source-only (component analysis derives the
+        # breakdown from source). Surface it so the downgrade is visible, not silent.
+        none_event: DesignDocChosenEvent = {
+            "type": "design_doc_chosen",
+            "source": "none found",
+            "path": "",
+            "reason": choice.reason,
+        }
+        emit_custom_event(none_event)
+        _logger.info("no design doc found — proceeding source-only: %s", choice.reason)
+        return
     event: DesignDocChosenEvent = {
         "type": "design_doc_chosen",
         "source": source,
@@ -282,28 +292,24 @@ async def resolve_design_doc[P: HasName](
     uploader: FileUploader,
     models: ModelProvider,
     disc_ctx: WorkflowContext[None],
-) -> pathlib.Path:
-    """Resolve the design document to a ``(path, Document)`` pair.
+) -> pathlib.Path | None:
+    """Resolve the design document to a path, or ``None`` for a source-only run.
 
-    When ``system_doc_arg`` is given, read it directly (unchanged behavior, no phase).
-    Otherwise run the finder under a ``run_task`` discovery phase, fail fast if it
-    finds nothing, then load the chosen path through the same uploader. The returned
-    path feeds the unchanged byte-hash root cache key, so a discovered doc and a
-    supplied doc produce an identical key.
+    Run the finder under a ``run_task`` discovery phase. If it finds a document,
+    return its path (which feeds the byte-hash root cache key, so a discovered doc
+    and a supplied doc produce an identical key). If it finds nothing, return
+    ``None`` instead of failing: the pipeline degrades to source-only, deriving the
+    component breakdown from the source code alone. ``_discover`` has already
+    surfaced the source-only downgrade to the user via ``_emit_choice``.
     """
-    
+
     choice = await _discover(
         source=source,
         uploader=uploader,
         models=models,
         disc_ctx=disc_ctx,
     )
-    if choice.selected_path is None:  # None *is* "no doc found"
-        raise ValueError(
-            f"No design document found under {source.project_root}.\n"
-            f"  {choice.reason}\n"
-            "  Pass one explicitly as the design-doc argument — e.g. a file under test/ "
-            "or a .json file, which the finder does not search."
-        )
+    if choice.selected_path is None:  # None *is* "no doc found" → source-only
+        return None
     path = pathlib.Path(source.project_root) / choice.selected_path
     return path

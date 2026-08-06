@@ -3,7 +3,7 @@ from typing import TypedDict
 
 from langchain_core.tools import BaseTool
 
-from graphcore.tools.vfs import DirBackend, FSBackend, Materializer, fs_tools_layered
+from graphcore.tools.vfs import GlobalExcludeArg, DirBackend, FSBackend, Materializer, fs_tools_layered
 
 from composer.spec.gen_types import PartialTemplate
 from composer.spec.system_model import Application, FromSourceApplication
@@ -74,7 +74,7 @@ def build_mental_model(
 
 def make_source_factory(
     source_root: pathlib.Path | None,
-    forbidden_read: str | None,
+    forbidden_read: GlobalExcludeArg,
 ):
     """Build the ``source_factory`` closure the pipeline calls at each phase.
 

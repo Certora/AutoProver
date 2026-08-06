@@ -50,7 +50,7 @@ from composer.pipeline.core import (
     COMMON_SYSTEM_CACHE_KEY, PROPERTIES_KEY,
     _component_cache_key, _batch_cache_key, _pre_property_cache_key,
 )
-from composer.pipeline.plugins import installed_plugin_manifest, manifest_digest
+from composer.pipeline.plugins import applicable_plugin_manifest, manifest_digest
 from composer.pipeline.run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.core.user import get_uid
 from composer.workflow.services import store_context
@@ -474,7 +474,8 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
         memory_ns = get_uid() + "/" + memory_ns
 
     plugins: list[str] = (
-        sorted(args.plugins) if args.plugins is not None else installed_plugin_manifest()
+        sorted(args.plugins) if args.plugins is not None
+        else applicable_plugin_manifest(ContractComponentInstance)
     )
     tm_digest = (
         file_digest(pathlib.Path(args.threat_model))

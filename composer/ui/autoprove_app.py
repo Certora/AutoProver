@@ -127,10 +127,12 @@ class AutoProveTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
         evt = cast(AutoSetupEvents | DesignDocChosenEvent, payload)
         match evt["type"]:
             case "design_doc_chosen":
-                await self.post_notice(
-                    f"{evt['source']} design doc: {evt['path']}",
-                    evt["reason"] or None,
+                title = (
+                    "no design doc — proceeding source-only"
+                    if evt["source"] == "none found"
+                    else f"{evt['source']} design doc: {evt['path']}"
                 )
+                await self.post_notice(title, evt["reason"] or None)
             case "auto_setup_complete":
                 log = await self._ensure_prover_log("_autosetup", "AutoSetup Agent")
                 p : Collapsible = log.parent #type: ignore
