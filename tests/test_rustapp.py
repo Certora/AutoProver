@@ -14,6 +14,7 @@ the loop lives in Python and the wheel just answers questions.
 import json
 
 import pytest
+from pydantic import ValidationError
 
 echoprover = pytest.importorskip(
     "echoprover",
@@ -22,28 +23,33 @@ echoprover = pytest.importorskip(
 
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole
 from composer.rustapp.result import RustFormalResult
-from composer.rustapp.wire import Verdict
+from composer.rustapp.wire import ComponentInput, Property, Target, Unit, Verdict
 from composer.spec.cvl_generation import SkippedProperty
 from composer.spec.source.report.schema import Outcome
+from tests.conftest import wire_verdict
 
 
 def _component_input(*titles: str) -> str:
-    return json.dumps(
-        {
-            "kind": "component",
-            "program": "Counter",
-            "unit": {"name": "Counter"},
-            "props": [
-                {"title": t, "sort": "invariant", "description": "x", "slug": t.replace(" ", "_")}
-                for t in titles
-            ],
-        }
-    )
+    return ComponentInput(
+        program="Counter",
+        unit={"name": "Counter"},
+        props=[
+            Property(title=t, sort="invariant", description="x", slug=t.replace(" ", "_"))
+            for t in titles
+        ],
+    ).model_dump_json()
 
 
 def _target(*units: str) -> str:
     """A target and the report rows it covers — what the host passes ``validate``."""
-    return json.dumps({"name": units[0], "units": [{"property": "p", "unit": u} for u in units]})
+    return Target(
+        name=units[0], units=[Unit(property="p", unit=u, target=None) for u in units]
+    ).model_dump_json()
+
+
+def _sandbox() -> str:
+    """A passthrough ``Sandbox``: no confinement wrapper (``composer.sandbox.config.BackendSpec``)."""
+    return json.dumps({"argv_prefix": [], "timeout_s": 600})
 
 
 def test_descriptor_parses_and_maps_core_phases():
@@ -65,8 +71,10 @@ def test_descriptor_parses_and_maps_core_phases():
 def test_units_are_one_per_property():
     units = json.loads(echoprover.units(_component_input("increment_increases", "never_overflows")))
     assert units == [
-        {"property": "increment_increases", "unit": "rule_increment_increases"},
-        {"property": "never_overflows", "unit": "rule_never_overflows"},
+        # `target` null: each unit is its own validation target. Present, not absent — an omitted
+        # key is not a spelling of anything on this seam.
+        {"property": "increment_increases", "unit": "rule_increment_increases", "target": None},
+        {"property": "never_overflows", "unit": "rule_never_overflows", "target": None},
     ]
 
 
@@ -78,17 +86,17 @@ def test_author_prompt_lists_the_properties():
 
 def test_compile_is_a_noop_ok():
     # The demo accepts any well-formed spec — compile is a no-op gate.
-    r = json.loads(echoprover.compile(_component_input("p"), "spec", "/tmp", json.dumps({"argv_prefix": []})))
+    r = json.loads(echoprover.compile(_component_input("p"), "spec", "/tmp", _sandbox()))
     assert r == {"status": "ok"}
 
 
 def test_validate_returns_a_verdict_for_every_row_the_target_covers():
-    sandbox = json.dumps({"argv_prefix": []})
+    sandbox = _sandbox()
     res = json.loads(
         echoprover.validate(_component_input("p"), "spec", _target("rule_p"), "/tmp", sandbox)
     )
     # ValidateOutcome: the demo always builds, so per-unit verdicts (not build_failed).
-    assert res == {"kind": "verdicts", "verdicts": [["rule_p", {"outcome": "GOOD"}]]}
+    assert res == {"kind": "verdicts", "verdicts": [["rule_p", wire_verdict("GOOD")]]}
 
     # A target covering several rows answers for all of them in the one run — the wheel keys the
     # verdicts off the units the host sent, so it never has to spell a unit name itself.
@@ -107,7 +115,8 @@ def test_result_round_trips_through_cache_serialization():
         units=[("p", ["rule_p"])],
         skipped=[SkippedProperty(property_title="q", reason="n/a")],
         output_link="local://x",
-        verdicts={"rule_p": Verdict(outcome=Outcome.BAD, line=7, detail="counterexample")},
+        verdicts={"rule_p": Verdict(outcome=Outcome.BAD, line=7, detail="counterexample",
+                                    duration_seconds=None, unit_file=None)},
     )
     reloaded = RustFormalResult.model_validate_json(res.model_dump_json())
     assert reloaded.property_units() == [("p", ["rule_p"])]
@@ -288,9 +297,11 @@ def test_resolve_ecosystem_rejects_unregistered_chain():
         resolve_ecosystem(unregistered)
 
 
-def test_descriptor_ecosystem_defaults_to_evm_when_absent():
-    # Wheels built before the field existed omit it; the mirror defaults to evm.
+def test_a_descriptor_missing_a_field_is_refused():
+    # No wheel is old enough to be excused one — the SDK and the host ship together, so an absent
+    # `ecosystem` is a drifted mirror, and guessing "evm" would run the whole front half against the
+    # wrong system model and prompts.
     raw = json.loads(echoprover.descriptor())
     del raw["ecosystem"]
-    desc = AppDescriptor.model_validate(raw)
-    assert desc.ecosystem == "evm"
+    with pytest.raises(ValidationError):
+        AppDescriptor.model_validate(raw)

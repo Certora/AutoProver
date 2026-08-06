@@ -30,6 +30,7 @@ from composer.rustapp.adapter import (
     _review_gate,
     _ReviewBudget,
 )
+from tests.conftest import wire_prompt
 
 
 def _state(**kw) -> _JudgedAuthorState:
@@ -143,7 +144,7 @@ async def test_an_authoring_turn_with_no_artifact_costs_an_attempt_but_never_rea
     class _Wheel:
         def author_prompt(self, _input_json, failure_json):
             self.last_failure = failure_json
-            return '{"instruction": "author it"}'
+            return json.dumps(wire_prompt("author it"))
 
         def compile(self, _input_json, spec, _workdir, _sandbox_json):
             compiled.append(spec)

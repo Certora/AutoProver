@@ -74,7 +74,8 @@ binary, so the wheel needs nothing from Python at run time except the policy dat
 
 ### Where the ABI lives
 
-Two files, one per half, and every string crossing the boundary is a model in one of them:
+Every string crossing the boundary is a model in one of three places — two files holding the ABI
+proper, plus the confinement wrapper, which belongs to the sandbox layer:
 
 - [descriptor.py](../composer/rustapp/descriptor.py) — the declarative half (`AppDescriptor` and
   friends), mirroring the Rust structs.
@@ -83,6 +84,11 @@ Two files, one per half, and every string crossing the boundary is a model in on
   `FinalizeInput`. Every `json.loads` of a wheel's answer happens in one of its `parse_*`
   functions, so a renamed field fails at the boundary naming the field, not three frames later as
   an empty string.
+- `BackendSpec` in [sandbox/config.py](../composer/sandbox/config.py) — the `sandbox_json` argument
+  the two blocking callouts receive, mirroring `autoprover_sdk::sandbox::Sandbox`. A `TypedDict`
+  rather than a model, because the sandbox layer deliberately carries no pydantic dependency; it is
+  held to the same round trip regardless, which is why `timeout_s` is bounded below (the mirrored
+  field is a `u64`, so a negative is refused at the wheel — the bound says so on this side too).
 
 Every payload that comes in more than one shape is a **tagged union** on both sides
 (`#[serde(tag = …)]` ↔ pydantic discriminated union), so `CompileFailed` carries `errors` and no
@@ -90,9 +96,52 @@ verdicts, `ValidateVerdicts` the reverse, a `preflight` `AuthorInput` has neithe
 model, and a component that gave up carries nothing past its name. None of them can be asked for a
 field another owns.
 
-Direction sets the defaults: **inbound** models (what a wheel returns) default every optional field
-so an older wheel still parses, and pydantic ignores unknown fields so a newer one does too;
-**outbound** models require what the wheel requires, because an omitted `kind` is a host bug.
+Nothing on either side tolerates a missing or unexpected field — see **The strictness rule** below.
+
+Keeping the two halves in step is checked, not just asked for:
+[test_wire_roundtrip.py](../tests/test_wire_roundtrip.py) round-trips every payload root through the
+other language and back, in both directions, under Hypothesis. Its generator for the inbound
+direction lives in Rust ([`autoprover_sdk::fuzz`](../rust/autoprover-sdk/src/fuzz.rs), behind the
+`fuzz` feature, driven by the `wire-echo` binary over a pipe) rather than being derived from the
+pydantic schema, because a generator built from the host's own models cannot produce a field only
+the *Rust* side declares — the drift that matters most for an outbound payload, where it means the
+wheel expects something the host never sends.
+
+A round trip is blind to one thing, but only on a *tolerant* seam: a field only one side declares,
+which the other quietly defaults. Then "an older wheel omitted it" and "no wheel will ever send it"
+are the same observation, and the field reads as `""` / `None` / an empty vec forever.
+
+This seam is not tolerant, so both cases fail at the callout that carries them, and the round trips
+catch every class of drift on their own. `test_wire_roundtrip.py` keeps a deterministic per-type
+field-set check beside them only so a one-sided field is named directly rather than surfacing as a
+serde error inside a shrunk example.
+
+### The strictness rule
+
+The SDK and the host ship as a unit, so a payload missing a field is never version skew — it is a
+mirror that drifted, and defaulting it converts a caught bug into a silent one. **The side that
+deserializes requires everything.** Concretely, and in both directions:
+
+| | host → wheel | wheel → host |
+| --- | --- | --- |
+| a field only the *sender* declares | `#[serde(deny_unknown_fields)]` | `extra="forbid"` |
+| a field only the *receiver* declares | no `#[serde(default)]` | no pydantic default |
+
+Two mechanical notes for anyone adding a field:
+
+- **`#[serde(default)]` on an `Option<T>` does nothing.** serde deserializes a missing field of that
+  type as `None` on its own, whatever attributes are present, so the attribute reads as a deliberate
+  compatibility decision where none was made. Requiring such a field takes
+  [`crate::required::present`](../rust/autoprover-sdk/src/required.rs) via `deserialize_with`, which
+  serde cannot satisfy from an absent key.
+- **Nothing carries `skip_serializing_if`.** An empty optional is spelled `null`, always present, so
+  absence is never a second way to say "nothing" and neither side has to treat the two alike.
+
+Two exceptions, both structural: [`AuthorInput`](../rust/autoprover-sdk/src/authoring.rs) cannot
+carry `deny_unknown_fields` because serde rejects it alongside the `flatten` that `Authored` needs
+(so a host-only field there is caught by the round trip rather than at the callout), and the outbound
+*pydantic* models keep their defaults — Python only serializes those, `model_dump_json` writes every
+field regardless, and an all-empty `ProgramCrate` is how the host says its resolver found none.
 
 `RustAppModule` is that surface as a Protocol, and `CALLOUTS` is derived from its annotations — so
 [`load_module`](../composer/rustapp/host.py) rejects a module that isn't an AutoProver wheel (or is
@@ -381,11 +430,11 @@ that the store's `dict()` would silently collapse.
 `Outcome` is a closed enum on both sides (`GOOD` / `BAD` / `ERROR` / `TIMEOUT` / `UNKNOWN`) — the
 report's backend-agnostic vocabulary, whose human wording ("No counterexample" vs "Verified") is
 picked at render time from `backend_tag`, so a wheel never spells it out. A typo that used to reach
-a report row as an unexplained `UNKNOWN` now doesn't compile. From an *older or newer* wheel,
-though, an outcome this host doesn't know is version skew rather than corruption, so the wire
-validator downgrades it to `UNKNOWN` with a warning: losing one row's wording beats losing the run's
-results. `Verdict.detail` carries the counterexample or error text, so a bare `BAD` is never
-unexplained.
+a report row as an unexplained `UNKNOWN` now doesn't compile. A label the *host* has never heard of
+is refused rather than downgraded: with both sides shipping together it can only mean a variant added
+to one `Outcome` and not the other, and rendering that as `UNKNOWN` would hide the drift behind a row
+that looks merely inconclusive. `Verdict.detail` carries the counterexample or error text, so a bare
+`BAD` is never unexplained.
 
 [`results.py`](../composer/rustapp/results.py) rolls these up for the console/TUI: one row per
 *unit*, named by the property title it checks, with the tally in the report's own display order and
@@ -620,7 +669,8 @@ Facts about the seam as it stands, not open design questions:
 | Sandbox policy authoring | [composer/sandbox/](../composer/sandbox/) |
 
 Tests: `tests/test_rustapp.py` (the wheel round-trip, end to end through the host),
-`test_rustapp_wire.py` (ABI), `test_rustapp_preflight.py`, `test_rustapp_workspace_prep.py`,
+`test_rustapp_wire.py` (ABI), `test_wire_roundtrip.py` (both directions of the ABI under
+Hypothesis, against the real serde types), `test_rustapp_preflight.py`, `test_rustapp_workspace_prep.py`,
 `test_rustapp_setup_cache.py`, `test_rustapp_verdicts.py`, `test_rustapp_toolchain_sem.py`,
 `test_rustapp_review_budget.py`, `test_rustapp_discovery_phase.py`, `test_rust_llm_agent.py`,
 `test_rust_frontend.py`, plus `test_sandbox_run_confined.py` / `test_sandbox_escape.py` for the

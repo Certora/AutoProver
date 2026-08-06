@@ -21,6 +21,7 @@ from composer.rustapp.toolchain import SOURCE_CRATES, WORKSPACE_TOOLCHAINS
 from composer.rustapp.wire import PreflightInput, ProgramCrate
 from composer.spec.context import SourceFields
 from composer.spec.system_model import SolidityIdentifier
+from tests.conftest import wire_workspace_prep
 
 pytestmark = pytest.mark.asyncio
 
@@ -34,7 +35,7 @@ class FakeWheel:
     """A wheel whose ``workspace_prep`` returns a fixed plan."""
 
     def __init__(self, **plan):
-        self._plan = {"files": {}, **plan}
+        self._plan = wire_workspace_prep(**plan)
 
     def workspace_prep(self, _input_json: str) -> str:
         return json.dumps(self._plan)

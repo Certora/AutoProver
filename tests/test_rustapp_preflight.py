@@ -22,6 +22,9 @@ import pytest
 
 from composer.rustapp.adapter import PreflightFailed, RustPreflight
 from composer.rustapp.descriptor import AppDescriptor
+from tests.conftest import (
+    wire_descriptor, wire_phase, wire_required_phases, wire_workspace_prep,
+)
 from composer.rustapp.host import build_backend
 from composer.rustapp.toolchain import SOURCE_CRATES, WORKSPACE_TOOLCHAINS
 from composer.rustapp.wire import ProgramCrate
@@ -42,7 +45,7 @@ class FakeWheel:
     """A wheel with a fixed ``workspace_prep`` plan and a scripted ``compile``."""
 
     def __init__(self, plan: dict, *, compile_errors: str | None = None):
-        self._plan = {"files": {}, "warm_dirs": ["fuzz/vault"], **plan}
+        self._plan = wire_workspace_prep(warm_dirs=["fuzz/vault"], **plan)
         self._compile_errors = compile_errors
         #: Every ``compile`` call, as ``(input, spec)`` — the assertion surface for these tests.
         self.compiles: list[tuple[dict, str]] = []
@@ -58,30 +61,12 @@ class FakeWheel:
 
 
 def _descriptor(*, with_preflight: bool = True) -> AppDescriptor:
-    body: dict = {
-        "name": "demoprover",
-        "header_text": "h",
-        "ecosystem": "solana",
-        "backend_tag": "prover",
-        "backend_guidance": "g",
-        "analysis_key": "k",
-        "phases": [
-            {"key": "preflight", "label": "Build Preflight", "order": 0, "role": "preflight"},
-            {"key": "analysis", "label": "A", "order": 1, "role": "analysis"},
-            {"key": "extraction", "label": "E", "order": 2, "role": "extraction"},
-            {"key": "formalization", "label": "F", "order": 3, "role": "formalization"},
-            {"key": "report", "label": "R", "order": 4, "role": "report"},
-        ],
-        "artifact_layout": {
-            "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r",
-            "artifact_dir": "a", "artifact_prefix": "p", "artifact_extension": "rs",
-            "property_suffix": "s",
-        },
-    }
-    if not with_preflight:
-        # No phase claims the role, which is how an application says it has no gate.
-        body["phases"][0] = {"key": "preflight", "label": "Build Preflight", "order": 0}
-    return AppDescriptor.model_validate(body)
+    # Without the role claimed the phase only groups, which is how an application says it has no
+    # gate — the phase itself stays, so the two descriptors differ in exactly one thing.
+    gate = wire_phase("preflight", "Build Preflight", 4, "preflight" if with_preflight else "grouping")
+    return AppDescriptor.model_validate(
+        wire_descriptor(ecosystem="solana", phases=[*wire_required_phases(), gate])
+    )
 
 
 class _Run:

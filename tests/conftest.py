@@ -380,3 +380,77 @@ def certora_prover(
         return the_tool
 
     return bind_tool
+
+
+# ---------------------------------------------------------------------------
+# Rust ABI payloads (``composer.rustapp.wire`` / ``.descriptor``)
+#
+# The seam carries no defaults on the side that deserializes: both halves ship together, so an
+# absent field is a drifted mirror, not an older wheel. That is right for the ABI and wrong for a
+# fixture — a test spelling all fifteen descriptor fields to exercise one of them buries what it is
+# testing. These builders stand in for the wheel that would have sent the rest, so what they
+# produce is exactly what a real wheel emits. Scaffolding, not tolerance.
+# ---------------------------------------------------------------------------
+
+def wire_phase(key: str, label: str, order: int, role: str = "grouping") -> dict[str, Any]:
+    """One ``PhaseSpec``. ``role`` defaults to grouping — a phase declaring no step of its own."""
+    return {"key": key, "label": label, "order": order, "role": role}
+
+
+def wire_required_phases() -> list[dict[str, Any]]:
+    """The four steps the driver runs itself, which every application must claim. A fresh list, so a
+    caller can splice its own phase in without reaching into another test's fixture."""
+    return [
+        wire_phase("analysis", "A", 0, "analysis"),
+        wire_phase("extraction", "E", 1, "extraction"),
+        wire_phase("formalization", "F", 2, "formalization"),
+        wire_phase("report", "R", 3, "report"),
+    ]
+
+
+def wire_descriptor(**overrides: Any) -> dict[str, Any]:
+    """A complete ``AppDescriptor`` payload, with ``overrides`` applied."""
+    return {
+        "name": "demoprover",
+        "header_text": "h",
+        "ecosystem": "evm",
+        "backend_tag": "prover",
+        "backend_guidance": "g",
+        "analysis_key": "k",
+        "phases": wire_required_phases(),
+        "args": [],
+        "rag_db_default": None,
+        "event_kinds": [],
+        "artifact_layout": {
+            "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r", "artifact_dir": "a",
+            "artifact_prefix": "p", "artifact_extension": "rs", "property_suffix": "s",
+        },
+        "deliverable_mode": {"mode": "per_component"},
+        "serialize_toolchain": False,
+        "confine_by_default": False,
+        "component_noun": None,
+        **overrides,
+    }
+
+
+def wire_unit(prop: str, unit: str, target: str | None = None) -> dict[str, Any]:
+    """One report row (``Unit``); ``target`` null means the unit is its own validation target."""
+    return {"property": prop, "unit": unit, "target": target}
+
+
+def wire_verdict(outcome: str, **overrides: Any) -> dict[str, Any]:
+    """One ``Verdict`` — every diagnostic field null unless ``overrides`` says otherwise."""
+    return {
+        "outcome": outcome, "line": None, "duration_seconds": None,
+        "unit_file": None, "detail": None, **overrides,
+    }
+
+
+def wire_prompt(instruction: str, system: str | None = None) -> dict[str, Any]:
+    """One authoring ``Prompt``."""
+    return {"instruction": instruction, "system": system}
+
+
+def wire_workspace_prep(**overrides: Any) -> dict[str, Any]:
+    """A ``WorkspacePrep`` plan that asks for nothing, plus ``overrides``."""
+    return {"files": {}, "warm_dirs": [], "build_program": None, "idl_dest": None, **overrides}

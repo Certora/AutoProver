@@ -9,6 +9,7 @@ use crate::args::DeclaredArgs;
 /// is closed and shared with the host, so a typo fails to compile instead of reaching a prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 pub enum PropertyKind {
     AttackVector,
     SafetyProperty,
@@ -35,11 +36,12 @@ impl std::fmt::Display for PropertyKind {
 /// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), plus a
 /// host-assigned unique `slug` used to name its unit/artifact (Crucible: `c_<slug>`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct Property {
     pub title: String,
     pub sort: PropertyKind,
     pub description: String,
-    #[serde(default)]
     pub slug: String,
 }
 
@@ -54,17 +56,16 @@ pub struct Property {
 /// [`ProgramCrate::resolved`] on every payload carrying one, so the partly-empty shape a host that
 /// resolved nothing sends is never what a callout sees.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct ProgramCrate {
     /// The crate directory relative to the project root, forward-slashed (`"."` = the root).
-    #[serde(default)]
     pub dir: String,
     /// `[package] name` — the key a dependent's `[dependencies]` must use.
-    #[serde(default)]
     pub package: String,
     /// The lib target name — the Rust identifier (`use <lib>::*`) and the built artifact's
     /// basename (`target/deploy/<lib>.so`). NOT interchangeable with `package`, which may
     /// contain `-`.
-    #[serde(default)]
     pub lib: String,
     /// The crate's declared `anchor-lang` requirement, verbatim (`"0.29.0"`, `"^1.0.1"`, `">=0.31"`;
     /// workspace inheritance already resolved by the host). Empty when the crate declares none, so
@@ -75,7 +76,6 @@ pub struct ProgramCrate {
     /// `InstructionData` / `ToAccountMetas` impls are tied to the exact `anchor-lang` crate that
     /// generated them, so a program on a different major can't satisfy a harness's trait bounds no
     /// matter how the versions are pinned.
-    #[serde(default)]
     pub anchor: String,
 }
 
@@ -125,6 +125,7 @@ pub fn anchor_compat_key(req: &str) -> Option<(u64, u64)> {
 /// variant rather than a tag beside fields that are empty two times in three.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum Authored {
     /// Nothing is authored: the wheel renders its own skeleton and `compile` gates the prepared
     /// workspace (see [`PhaseRole::Preflight`](crate::descriptor::PhaseRole::Preflight)). It runs
@@ -136,20 +137,25 @@ pub enum Authored {
     /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup)).
     Setup {
         /// The analyzed system model, opaque to the SDK — its shape is the ecosystem's.
-        #[serde(default)]
         model: serde_json::Value,
     },
     /// One unit's spec.
     Component {
         /// The unit being formalized, opaque to the SDK — its shape is the ecosystem's
         /// (`FeatureUnit::feature_json`).
-        #[serde(default)]
         unit: serde_json::Value,
     },
 }
 
 /// The input to the authoring/gating callouts for one artifact.
+///
+/// The one wire type without `#[serde(deny_unknown_fields)]`: serde rejects that attribute
+/// alongside a `flatten` field, and [`Authored`] has to flatten so the tag and the payload it
+/// selects arrive at the same level as everything else. A field the host declares and this side
+/// doesn't is therefore silently ignored *here* — caught by `tests/test_wire_roundtrip.py`, which
+/// re-reads what this side made of a payload, rather than at the callout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 pub struct AuthorInput {
     /// What is being authored, with its payload.
     #[serde(flatten)]
@@ -159,24 +165,21 @@ pub struct AuthorInput {
     pub program: String,
     /// The compilation unit holding the program's source, already
     /// [resolved](ProgramCrate::resolved) by the FFI boundary.
-    #[serde(default)]
     pub program_crate: ProgramCrate,
     /// The properties this artifact must make checkable. Empty for a preflight; for a setup, every
     /// unit's.
-    #[serde(default)]
     pub props: Vec<Property>,
     /// The compiled shared setup artifact, for a wheel that declared a
     /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase — the fixture a component's
     /// spec builds on.
-    #[serde(default)]
+    #[serde(deserialize_with = "crate::required::present")]
     pub setup: Option<String>,
     /// Where workspace prep placed the program's IDL, workdir-relative, when the wheel's
     /// [`WorkspacePrep::idl_dest`](crate::prep::WorkspacePrep::idl_dest) asked for one. `Some`
     /// means the file is in place; `None` means the wheel depends on the program's crate directly.
-    #[serde(default)]
+    #[serde(deserialize_with = "crate::required::present")]
     pub idl: Option<String>,
     /// The run's values for the wheel's own declared flags.
-    #[serde(default)]
     pub args: DeclaredArgs,
 }
 
@@ -201,17 +204,20 @@ impl AuthorInput {
 
 /// An authoring instruction (+ optional backend-defined system prompt) for one LLM turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct Prompt {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub system: Option<String>,
     pub instruction: String,
 }
 
 /// Whether a draft was rejected by the toolchain or by the optional LLM judge — so a
 /// re-author can frame the retry correctly (a judge rejection is NOT a build failure: the
-/// draft compiled). Defaults to `Compile` for backends/hosts that predate the field.
+/// draft compiled).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 pub enum FailureKind {
     #[default]
     Compile,
@@ -223,10 +229,10 @@ pub enum FailureKind {
 /// authoring turn is fresh (no LLM-side memory of the prior attempt). `kind` says which gate
 /// rejected it so the revise prompt can distinguish compiler errors from review feedback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct Failure {
-    #[serde(default)]
     pub draft: String,
     pub errors: String,
-    #[serde(default)]
     pub kind: FailureKind,
 }

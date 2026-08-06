@@ -18,16 +18,13 @@ use std::path::{Path, PathBuf};
 /// is the launcher binary. Because the prefix is opaque, swapping the sandbox mechanism never
 /// changes this shape.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 pub struct Sandbox {
-    #[serde(default)]
     pub argv_prefix: Vec<String>,
-    #[serde(default = "default_timeout")]
     pub timeout_s: u64,
 }
 
-fn default_timeout() -> u64 {
-    600
-}
 
 /// The captured result of a (confined) command.
 #[derive(Debug, Clone, Serialize, Deserialize)]

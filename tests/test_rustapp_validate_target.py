@@ -22,6 +22,7 @@ from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.wire import Target, Unit
 from composer.spec.source.report.schema import Outcome
 from composer.spec.types import PropertyFormulation
+from tests.conftest import wire_descriptor, wire_verdict
 
 SPEC = "fn c_farms(f: &mut Fixture) {}"
 
@@ -29,7 +30,7 @@ SPEC = "fn c_farms(f: &mut Fixture) {}"
 UNITS = [
     Unit(property="stake matches", unit="c_stake", target="c_farms"),
     Unit(property="no double stake", unit="c_dbl", target="c_farms"),
-    Unit(property="fees capped", unit="c_fees"),
+    Unit(property="fees capped", unit="c_fees", target=None),
 ]
 
 
@@ -53,7 +54,7 @@ class _Wheel:
         self.targets.append(target)
         return json.dumps({
             "kind": "verdicts",
-            "verdicts": [[u.unit, {"outcome": "GOOD"}] for u in target.units],
+            "verdicts": [[u.unit, wire_verdict("GOOD")] for u in target.units],
         })
 
 
@@ -85,20 +86,7 @@ class _Run:
 
 
 def _descriptor() -> AppDescriptor:
-    return AppDescriptor.model_validate({
-        "name": "demoprover", "header_text": "h", "backend_tag": "prover",
-        "backend_guidance": "g", "analysis_key": "k",
-        "phases": [
-            {"key": "analysis", "label": "A", "role": "analysis"},
-            {"key": "extraction", "label": "E", "role": "extraction"},
-            {"key": "formalization", "label": "F", "role": "formalization"},
-            {"key": "report", "label": "R", "role": "report"},
-        ],
-        "artifact_layout": {
-            "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r", "artifact_dir": "a",
-            "artifact_prefix": "p", "artifact_extension": "rs", "property_suffix": "s",
-        },
-    })
+    return AppDescriptor.model_validate(wire_descriptor())
 
 
 async def _formalize(monkeypatch, tmp_path: pathlib.Path, wheel: _Wheel):

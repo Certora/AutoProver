@@ -9,7 +9,9 @@ field names in lockstep with ``rust/autoprover-sdk/src/lib.rs``.
 import enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from composer.rustapp.wire import WireModel
 
 from composer.spec.source.report.schema import ReportBackend
 
@@ -67,13 +69,13 @@ class PhaseRole(str, enum.Enum):
 STEP_ROLES: tuple[PhaseRole, ...] = (PhaseRole.PREFLIGHT, PhaseRole.SETUP)
 
 
-class PerComponent(BaseModel):
+class PerComponent(WireModel):
     """The generic store writes one ``{prefix}_{slug}.{ext}`` file per component."""
 
     mode: Literal["per_component"] = "per_component"
 
 
-class Callout(BaseModel):
+class Callout(WireModel):
     """The store writes no per-component source; the wheel's ``finalize`` renders the whole
     deliverable (e.g. Crucible's one shared crate)."""
 
@@ -81,14 +83,14 @@ class Callout(BaseModel):
     #: The project-relative path of the primary deliverable file, ``{program}``-templated (Crucible:
     #: ``fuzz/{program}/src/main.rs``). Used only as each component's report link — the actual files
     #: come from ``finalize``. On the variant because it means nothing per-component.
-    primary: str | None = None
+    primary: str | None
 
 
 #: How the source deliverable is written — tagged on ``mode`` (Rust ``DeliverableMode``).
 DeliverableMode = Annotated[PerComponent | Callout, Field(discriminator="mode")]
 
 
-class PhaseSpec(BaseModel):
+class PhaseSpec(WireModel):
     """One task-grouping phase; ``key`` becomes the synthesized enum member name.
 
     For a :data:`STEP_ROLES` role this is also the declaration of that step: the task the host runs
@@ -97,33 +99,53 @@ class PhaseSpec(BaseModel):
 
     key: str
     label: str
-    order: int = 0
-    role: PhaseRole = PhaseRole.GROUPING
+    order: int
+    role: PhaseRole
 
 
-class ArgDefault(BaseModel):
-    """Tagged default value for a declared CLI argument."""
+class StrDefault(WireModel):
+    """A text flag's default; ``None`` when it has none."""
 
-    kind: Literal["str", "int", "bool"]
-    value: str | int | bool | None = None
+    kind: Literal["str"] = "str"
+    value: str | None
 
 
-class ArgSpec(BaseModel):
+class IntDefault(WireModel):
+    """A numeric flag's default; ``None`` when it has none."""
+
+    kind: Literal["int"] = "int"
+    value: int | None
+
+
+class BoolDefault(WireModel):
+    """A ``store_true`` flag's initial state. Not optional the way the other two are: a boolean
+    flag is either set or unset, so there is no third "no default" case to spell."""
+
+    kind: Literal["bool"] = "bool"
+    value: bool
+
+
+#: A declared CLI argument's default — tagged on ``kind`` (Rust ``ArgDefault``). A variant per type
+#: rather than one model with a ``str | int | bool | None`` beside the tag: only the matching
+#: variant's ``value`` is meaningful, and this way the tag is what narrows it.
+ArgDefault = Annotated[StrDefault | IntDefault | BoolDefault, Field(discriminator="kind")]
+
+
+class ArgSpec(WireModel):
     """A CLI flag the generic entry point adds beyond the positional inputs."""
 
     flag: str
     help: str
     default: ArgDefault
-    required: bool = False
+    required: bool
 
 
-class EventKind(BaseModel):
+class EventKind(WireModel):
     """A domain event kind the frontend should render.
 
     ``notice`` events are surfaced as a persistent, always-visible callout (plus a toast)
     rather than a line in the collapsible per-task events log — for one-shot important
-    results such as a per-unit verdict. Defaults to ``False`` so wheels built before
-    the field existed still load.
+    results such as a per-unit verdict.
 
     The events themselves are emitted by the *host*, around the callouts it drives (a build
     failure, a review verdict, a unit's outcome) — a wheel has no emit channel, since its blocking
@@ -132,10 +154,10 @@ class EventKind(BaseModel):
 
     kind: str
     label: str
-    notice: bool = False
+    notice: bool
 
 
-class ArtifactLayout(BaseModel):
+class ArtifactLayout(WireModel):
     """Project-root-relative deliverable layout."""
 
     deliverable_dir: str
@@ -147,15 +169,15 @@ class ArtifactLayout(BaseModel):
     property_suffix: str
 
 
-class AppDescriptor(BaseModel):
+class AppDescriptor(WireModel):
     """The complete declaration a Rust wheel exports."""
 
     name: str
     header_text: str
     #: The ecosystem (chain) whose system model / prompts the shared front half uses. The
-    #: host resolves it against ``composer.pipeline.ecosystem.ECOSYSTEMS``. Defaults to
-    #: ``"evm"`` so wheels built before this field existed keep working.
-    ecosystem: ChainTag = "evm"
+    #: host resolves it against ``composer.pipeline.ecosystem.ECOSYSTEMS``; a tag outside the set
+    #: fails here, at descriptor load, rather than against the wrong system model mid-run.
+    ecosystem: ChainTag
     #: Which report vocabulary this backend's results are rendered with. Typed (rather than a free
     #: ``str`` validated later by ``as_report_backend``) so a wheel declaring a tag the report
     #: doesn't know fails in ``model_validate_json`` — at descriptor load, before the run starts —
@@ -164,21 +186,21 @@ class AppDescriptor(BaseModel):
     backend_guidance: str
     analysis_key: str
     phases: list[PhaseSpec]
-    args: list[ArgSpec] = Field(default_factory=list)
-    rag_db_default: str | None = None
-    event_kinds: list[EventKind] = Field(default_factory=list)
+    args: list[ArgSpec]
+    rag_db_default: str | None
+    event_kinds: list[EventKind]
     artifact_layout: ArtifactLayout
     #: How the source deliverable is written (see :data:`DeliverableMode`).
-    deliverable_mode: DeliverableMode = Field(default_factory=PerComponent)
+    deliverable_mode: DeliverableMode
     #: Serialize the blocking toolchain callouts on one semaphore — set when the app shares a
     #: single build dir / target across units.
-    serialize_toolchain: bool = False
+    serialize_toolchain: bool
     #: Default to the fail-closed ``launcher`` sandbox provider (still overridable by
     #: ``COMPOSER_SANDBOX_PROVIDER``). Set by any wheel that runs untrusted native toolchains.
-    confine_by_default: bool = False
+    confine_by_default: bool
     #: Human noun for one formalized unit in the console/TUI summary ("instruction" for
     #: Crucible). ``None`` → "component"; read it through :meth:`unit_noun`.
-    component_noun: str | None = None
+    component_noun: str | None
 
     def unit_noun(self, *, plural: bool = False) -> str:
         """The noun for a formalized unit, with the generic default applied — so no frontend

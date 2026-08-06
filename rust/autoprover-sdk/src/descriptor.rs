@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// The four the driver itself runs must each be claimed exactly once; the rest are optional.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 pub enum PhaseRole {
     /// Grouping only — the host runs no step of its own here (cf. autoprove's harness/autosetup).
     #[default]
@@ -54,11 +55,12 @@ impl PhaseRole {
 /// One task-grouping phase. `key` becomes the synthesized `enum.Enum` member name; `label`/`order`
 /// drive UI grouping; `role` says which step of the run it groups (and declares that step).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct PhaseSpec {
     pub key: String,
     pub label: String,
     pub order: u32,
-    #[serde(default)]
     pub role: PhaseRole,
 }
 
@@ -82,6 +84,8 @@ impl PhaseSpec {
 /// Default value for a declared CLI argument.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub enum ArgDefault {
     Str { value: Option<String> },
     Int { value: Option<i64> },
@@ -91,11 +95,12 @@ pub enum ArgDefault {
 /// A CLI flag the generic entry point adds beyond the three positional inputs
 /// (`project_root`, `main_contract`, `system_doc`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct ArgSpec {
     pub flag: String,
     pub help: String,
     pub default: ArgDefault,
-    #[serde(default)]
     pub required: bool,
 }
 
@@ -110,10 +115,11 @@ pub struct ArgSpec {
 /// callouts run to completion with the GIL released. Declaring a kind nothing emits renders
 /// nothing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct EventKind {
     pub kind: String,
     pub label: String,
-    #[serde(default)]
     pub notice: bool,
 }
 
@@ -131,6 +137,8 @@ impl EventKind {
 
 /// On-disk deliverable layout. All paths are project-root-relative.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactLayout {
     pub deliverable_dir: String,
     pub internal_dir: String,
@@ -148,6 +156,8 @@ pub struct ArtifactLayout {
 /// How the source deliverable is written to disk.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub enum DeliverableMode {
     /// The generic store writes one `{prefix}_{slug}.{ext}` file per component from its
     /// `artifact_text`.
@@ -160,20 +170,20 @@ pub enum DeliverableMode {
         /// (Crucible: `fuzz/{program}/src/main.rs`). Used only as each component's report link —
         /// the actual files come from `finalize`. Carried by the variant because it means nothing
         /// under `PerComponent`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(deserialize_with = "crate::required::present")]
         primary: Option<String>,
     },
 }
 
 /// The complete declaration the Python host reads once at load time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppDescriptor {
     pub name: String,
     pub header_text: String,
     /// The ecosystem (chain) tag: "evm" | "solana" | "soroban". Selects the shared front
     /// half's system model + prompts; the Python host resolves it against its ecosystem
-    /// registry. Defaults to "evm" so a descriptor built before this field existed still loads.
-    #[serde(default = "default_ecosystem")]
+    /// registry, and rejects a tag it doesn't know.
     pub ecosystem: String,
     /// The report's backend tag (`AutoProverReport.backend`).
     pub backend_tag: String,
@@ -182,30 +192,22 @@ pub struct AppDescriptor {
     /// The system-analysis cache key (`SystemAnalysisSpec.analysis_key`).
     pub analysis_key: String,
     pub phases: Vec<PhaseSpec>,
-    #[serde(default)]
     pub args: Vec<ArgSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub rag_db_default: Option<String>,
-    #[serde(default)]
     pub event_kinds: Vec<EventKind>,
     pub artifact_layout: ArtifactLayout,
     /// How the source deliverable is written (see [`DeliverableMode`]).
-    #[serde(default)]
     pub deliverable_mode: DeliverableMode,
     /// Serialize the blocking toolchain callouts (`prepare_workspace`/`compile`/`validate`) on
     /// one semaphore — set when the app shares a single build dir / target across units.
-    #[serde(default)]
     pub serialize_toolchain: bool,
     /// Default to the fail-closed `launcher` sandbox provider (still overridable by
     /// `COMPOSER_SANDBOX_PROVIDER`). Set by any wheel that runs untrusted native toolchains.
-    #[serde(default)]
     pub confine_by_default: bool,
     /// Human noun for one formalized unit in the console/TUI summary ("instruction" for
     /// Crucible). Defaults to "component".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub component_noun: Option<String>,
 }
 
-fn default_ecosystem() -> String {
-    "evm".to_string()
-}

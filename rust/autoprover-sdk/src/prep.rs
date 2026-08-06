@@ -12,21 +12,21 @@ use std::collections::BTreeMap;
 /// (`docs/command-sandbox.md` §5). This keeps warming out of confinement — the codebase never
 /// gives a confined process network — while still letting a pure-Rust app own its layout.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct WorkspacePrep {
     /// Files to write under the workdir (path-confined) before warming — e.g. the harness
     /// `Cargo.toml` (whose deps only the wheel knows). Contents only; no command line.
-    #[serde(default)]
     pub files: BTreeMap<String, String>,
     /// Project-relative manifest dirs to `cargo fetch` (unconfined, network) so a later
     /// confined + offline build finds every dep warm in the private `CARGO_HOME`.
-    #[serde(default)]
     pub warm_dirs: Vec<String>,
     /// If set, build the workspace and expect this artifact, via the host's shared build
     /// capability (Solana: `cargo-build-sbf` → `target/deploy/<name>.so`). It names the *build
     /// artifact*, so for Cargo it is the crate's lib target
     /// ([`ProgramCrate::lib`](crate::authoring::ProgramCrate::lib)) — not the analysis identifier,
     /// which need not match it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub build_program: Option<String>,
     /// If set, the wheel needs the program's **IDL** and wants it at this workdir-relative path.
     /// The host obtains it (a user-supplied file, else the build capability's IDL build), writes it
@@ -38,7 +38,7 @@ pub struct WorkspacePrep {
     /// ([`ProgramCrate::anchor`](crate::authoring::ProgramCrate::anchor)): types generated from the
     /// IDL belong to the *wheel's* stack, so the program's own dependency graph never enters the
     /// harness build.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub idl_dest: Option<String>,
 }
 
@@ -46,11 +46,12 @@ pub struct WorkspacePrep {
 /// crucible checkout + the `crucible` binary dir as read-only). Pure data — the wheel declares
 /// grants, Python decides the policy; the wheel never invents confinement.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct SandboxGrants {
     /// Extra read-only paths.
-    #[serde(default)]
     pub extra_ro: Vec<String>,
-    /// Extra `NAME=VALUE` env entries to pass through confinement.
-    #[serde(default)]
+    /// Extra env variable *names* to pass through confinement — the host unions these into its
+    /// passthrough list, so a value is inherited from the ambient environment, never supplied here.
     pub extra_env: Vec<String>,
 }

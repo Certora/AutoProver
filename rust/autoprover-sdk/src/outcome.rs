@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 /// The outcome of `compile`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub enum CompileResult {
     Ok,
     Failed { errors: String },
@@ -17,10 +19,12 @@ pub enum CompileResult {
 /// target once and the backend attributes the outcome back to each unit. `None` ⇒ the unit is its
 /// own target (one run per unit, the default).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct Unit {
     pub property: String,
     pub unit: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub target: Option<String>,
 }
 
@@ -39,13 +43,14 @@ impl Unit {
 /// to run, and in what order), so it hands the answer over rather than leaving each backend to
 /// recover it by re-deriving its own units and filtering them by name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct Target {
     /// The target's name — what the backend selects when it runs the checker (Crucible: the
     /// component's `c_<slug>` harness fn, which is also its Cargo feature).
     pub name: String,
     /// The report rows this run must produce a verdict for. Usually one; several when a backend
     /// checks a whole property set in one run.
-    #[serde(default)]
     pub units: Vec<Unit>,
 }
 
@@ -73,6 +78,8 @@ impl Target {
 /// a separate `compile` dry-run, so a component pays for one build (docs/rust-applications.md §4.4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub enum ValidateOutcome {
     BuildFailed { errors: String },
     Verdicts { verdicts: Vec<(String, Verdict)> },
@@ -87,6 +94,7 @@ pub enum ValidateOutcome {
 /// a typo fails to compile here instead of reaching a report row as an unexplained `UNKNOWN`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 pub enum Outcome {
     /// The property holds.
     Good,
@@ -102,18 +110,19 @@ pub enum Outcome {
 
 /// A per-unit outcome (mirrors `composer…report.collect.Verdict`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Verdict {
     pub outcome: Outcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub line: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub duration_seconds: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub unit_file: Option<String>,
     /// Human-readable explanation of a non-GOOD outcome — the failure detail (a counterexample /
     /// assertion message) for a `BAD`, or the error text for an `ERROR`. Surfaced live and persisted
     /// to the report so a verdict is self-explaining (otherwise a bare `BAD` gives no clue why).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::required::present")]
     pub detail: Option<String>,
 }
 

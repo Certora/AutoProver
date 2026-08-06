@@ -14,28 +14,44 @@ The two results are **tagged unions** on the Rust side (``#[serde(tag = "status"
 reverse, and ``isinstance`` is what tells them apart. Neither can be asked for a field the other
 owns.
 
-Direction matters for defaults. **Inbound** models (what a wheel returns) default every optional
-field, so a wheel built against an older SDK still parses — pydantic ignores unknown fields, which
-covers the newer-wheel direction too. **Outbound** models (what the host sends) require what the
-wheel requires: an omitted ``kind`` or ``program`` is a host bug and should not be reachable.
+Both halves of this seam ship together, so a payload missing a field is never version skew — it is a
+mirror that drifted. Nothing here is tolerant of that: **the side that deserializes requires
+everything**. Python deserializes the *inbound* payloads, so those models default nothing and reject
+unknown fields — a field a wheel omits, or one it sends that the host doesn't declare, fails in
+``model_validate`` naming the field, at the callout that returned it.
+
+Defaults on the *outbound* models are a different thing wearing the same clothes. Python only
+serializes those, and ``model_dump_json`` writes every field whether or not it was set, so a default
+there costs the wire nothing and buys a constructor: an all-empty :class:`ProgramCrate` is how the
+host says its resolver found none. Requiring those payloads in full is the Rust side's job, and it
+does it the same way — no ``#[serde(default)]``, ``deny_unknown_fields``, and
+``crate::required::present`` on the ``Option`` fields serde would otherwise fill in silently.
 """
 
 import enum
-import logging
 from typing import Annotated, Any, Callable, Literal, Protocol, Self
 
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from composer.spec.source.report.schema import Outcome
 from composer.spec.types import PropertyType
 
-_log = logging.getLogger(__name__)
+
+class WireModel(BaseModel):
+    """Base for every payload on this seam, and for :mod:`composer.rustapp.descriptor`'s.
+
+    Rejects unknown fields, the counterpart of the Rust side's ``#[serde(deny_unknown_fields)]``:
+    a key one half sends and the other doesn't declare is drift between two mirrors that ship
+    together, so it should stop the run naming the key rather than be dropped on the floor."""
+
+    model_config = ConfigDict(extra="forbid")
+
 
 # ---------------------------------------------------------------------------
 # Outbound — what the host sends into a callout.
 # ---------------------------------------------------------------------------
 
-class Property(BaseModel):
+class Property(WireModel):
     """One property to formalize, plus the host-assigned unique ``slug`` that names its unit."""
 
     title: str
@@ -46,7 +62,7 @@ class Property(BaseModel):
     slug: str = ""
 
 
-class ProgramCrate(BaseModel):
+class ProgramCrate(WireModel):
     """Where the analyzed code lives as a compilation unit, for a wheel that must *depend* on it.
 
     Filled in by the chain's registered resolver (:func:`composer.rustapp.toolchain.source_crate`) —
@@ -61,7 +77,7 @@ class ProgramCrate(BaseModel):
     anchor: str = ""
 
 
-class AppArgs(BaseModel):
+class AppArgs(WireModel):
     """The run's resolved inputs, as the two argument-shaped callouts (``validate_preconditions``,
     ``sandbox_grants``) receive them. Mirrors the Rust ``AppArgs``.
 
@@ -89,7 +105,7 @@ class FailureKind(str, enum.Enum):
     JUDGE = "judge"
 
 
-class Failure(BaseModel):
+class Failure(WireModel):
     """Why a draft was rejected, fed into the next ``author_prompt`` as revise context. ``draft`` is
     carried because each authoring turn is fresh — the model has no memory of its prior attempt."""
 
@@ -98,7 +114,7 @@ class Failure(BaseModel):
     kind: FailureKind = FailureKind.COMPILE
 
 
-class _AuthorInputBase(BaseModel):
+class _AuthorInputBase(WireModel):
     """What every authoring/gating callout is told, whatever is being authored."""
 
     #: The *analysis* identifier of the program under test — a label and a namespace, never a Cargo
@@ -161,7 +177,7 @@ AuthorInput = Annotated[
 ]
 
 
-class Delivered(BaseModel):
+class Delivered(WireModel):
     """What a component that reached the deliverable produced. Mirrors the Rust ``Delivered``."""
 
     status: Literal["delivered"] = "delivered"
@@ -174,7 +190,7 @@ class Delivered(BaseModel):
     run_link: str | None = None
 
 
-class ComponentGaveUp(BaseModel):
+class ComponentGaveUp(WireModel):
     """Formalization gave up on this component; it contributes nothing to the deliverable."""
 
     status: Literal["gave_up"] = "gave_up"
@@ -185,14 +201,14 @@ class ComponentGaveUp(BaseModel):
 ComponentOutcome = Annotated[Delivered | ComponentGaveUp, Field(discriminator="status")]
 
 
-class FinalizeComponent(BaseModel):
+class FinalizeComponent(WireModel):
     """One component's line in the ``finalize`` payload."""
 
     name: str
     outcome: ComponentOutcome
 
 
-class FinalizeInput(BaseModel):
+class FinalizeInput(WireModel):
     """The full outcome set handed to ``finalize`` (Rust ``FinalizeInput``): everything a wheel
     needs to render the whole deliverable, including the same program crate and IDL the gated
     builds used — what ships must be what was checked."""
@@ -210,40 +226,40 @@ class FinalizeInput(BaseModel):
 # Inbound — what a callout returns.
 # ---------------------------------------------------------------------------
 
-class Prompt(BaseModel):
+class Prompt(WireModel):
     """An authoring instruction for one LLM turn, plus an optional backend-defined system prompt
     (``None`` → the host's neutral default)."""
 
     instruction: str
-    system: str | None = None
+    system: str | None
 
 
-class CompileOk(BaseModel):
+class CompileOk(WireModel):
     """The spec (or, in a preflight, the wheel's own skeleton) built."""
 
     status: Literal["ok"]
 
 
-class CompileFailed(BaseModel):
+class CompileFailed(WireModel):
     """It did not build. ``errors`` is the diagnostics the wheel extracted, and becomes the revise
     context for the next authoring turn."""
 
     status: Literal["failed"]
-    errors: str = ""
+    errors: str
 
 
 #: ``compile``'s result — tagged on ``status`` (Rust ``CompileResult``).
 CompileResult = Annotated[CompileOk | CompileFailed, Field(discriminator="status")]
 
 
-class Unit(BaseModel):
+class Unit(WireModel):
     """One report row: a property title and the backend's unit name for it (the rule the report keys
     by). ``target`` is the validation target the *host runs*; several units may share one, so the
     host runs each distinct target once and the wheel attributes the outcome back to each unit."""
 
     property: str
     unit: str
-    target: str | None = None
+    target: str | None
 
     # A method, not a ``@property``: the ``property`` field above shadows that builtin inside this
     # class body. Mirrors the Rust ``Unit::target_or_unit``.
@@ -252,7 +268,7 @@ class Unit(BaseModel):
         return self.target or self.unit
 
 
-class Target(BaseModel):
+class Target(WireModel):
     """One validation target the host runs, and the report units it covers — what ``validate`` must
     return a verdict for. Mirrors the Rust ``Target``.
 
@@ -267,65 +283,60 @@ class Target(BaseModel):
     units: list[Unit] = Field(default_factory=list)
 
 
-class Verdict(BaseModel):
+class Verdict(WireModel):
     """One unit's outcome. Mirrors the Rust ``Verdict`` and maps onto the report's
     :class:`composer.spec.source.report.collect.Verdict` (whose ``message`` is this ``detail``)."""
 
     outcome: Outcome
-    line: int | None = None
-    duration_seconds: float | None = None
-    unit_file: str | None = None
+    line: int | None
+    duration_seconds: float | None
+    unit_file: str | None
     #: Human-readable explanation of a non-GOOD outcome — the counterexample / assertion message for
     #: a BAD, the error text for an ERROR.
-    detail: str | None = None
+    detail: str | None
 
-    @field_validator("outcome", mode="before")
     @classmethod
-    def _tolerate_unknown_outcome(cls, value: object) -> object:
-        """An outcome this host doesn't know reads as UNKNOWN instead of failing the component.
-
-        The label is a diagnostic, and a wheel emitting one we've never heard of is version skew —
-        not a corrupt payload. Losing one row's wording beats losing the run's results."""
-        if isinstance(value, str) and Outcome.parse(value) is None:
-            _log.warning("wheel reported unknown outcome %r; recording UNKNOWN", value)
-            return Outcome.UNKNOWN
-        return value
+    def with_outcome(cls, outcome: Outcome) -> "Verdict":
+        """A bare verdict: the outcome, no diagnostics. Mirrors the Rust ``Verdict::with_outcome``,
+        and exists for the same reason — every field being required is right for the wire and no
+        reason for a caller that has only an outcome to spell four nulls to say so."""
+        return cls(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=None)
 
 
-class ValidateBuildFailed(BaseModel):
+class ValidateBuildFailed(WireModel):
     """The shared build failed, so the whole spec is re-authored — no unit got a verdict."""
 
     kind: Literal["build_failed"]
-    errors: str = ""
+    errors: str
 
 
-class ValidateVerdicts(BaseModel):
+class ValidateVerdicts(WireModel):
     """It built, and every report unit the target covers got a verdict, ``(unit, verdict)``."""
 
     kind: Literal["verdicts"]
-    verdicts: list[tuple[str, Verdict]] = Field(default_factory=list)
+    verdicts: list[tuple[str, Verdict]]
 
 
 #: ``validate``'s result — tagged on ``kind`` (Rust ``ValidateOutcome``).
 ValidateOutcome = Annotated[ValidateBuildFailed | ValidateVerdicts, Field(discriminator="kind")]
 
 
-class WorkspacePrep(BaseModel):
+class WorkspacePrep(WireModel):
     """A pure plan for preparing the workspace: the wheel declares it, the host executes it with the
     shared toolchain helpers (so the network posture stays Python-owned and the wheel never supplies
     a command line)."""
 
     #: Files to write under the workdir, path-confined. Contents only.
-    files: dict[str, str] = Field(default_factory=dict)
+    files: dict[str, str]
     #: Project-relative manifest dirs to ``cargo fetch`` (unconfined, network) so a later confined +
     #: offline build finds every dep warm.
-    warm_dirs: list[str] = Field(default_factory=list)
+    warm_dirs: list[str]
     #: The build artifact the chain's :class:`~composer.rustapp.toolchain.WorkspaceToolchain` should
     #: produce (for Cargo, the crate's *lib* target — not the analysis identifier).
-    build_program: str | None = None
+    build_program: str | None
     #: Where the wheel wants the program's IDL, workdir-relative. The host obtains it, writes it
     #: there, and echoes the path back as the ``idl`` context key.
-    idl_dest: str | None = None
+    idl_dest: str | None
 
     @property
     def needs_toolchain(self) -> bool:
@@ -335,13 +346,13 @@ class WorkspacePrep(BaseModel):
         return bool(self.warm_dirs or self.build_program or self.idl_dest)
 
 
-class SandboxGrants(BaseModel):
+class SandboxGrants(WireModel):
     """Extra grants a wheel needs unioned into the host-authored policy. Pure data — the wheel
     declares grants, Python decides the policy."""
 
-    extra_ro: list[str] = Field(default_factory=list)
+    extra_ro: list[str]
     #: Extra env *names* to pass through confinement.
-    extra_env: list[str] = Field(default_factory=list)
+    extra_env: list[str]
 
 
 # ---------------------------------------------------------------------------

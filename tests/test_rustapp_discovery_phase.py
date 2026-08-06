@@ -8,6 +8,7 @@ recognizes by name and silently ignores when it is misspelled.
 No wheel and no services — the descriptor and the synthesized enum are all this needs.
 """
 
+import json
 from typing import Any, cast
 
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole
@@ -18,6 +19,7 @@ from composer.rustapp.host import (
     build_phase_enum,
     resolve_ecosystem,
 )
+from tests.conftest import wire_descriptor, wire_phase
 
 PHASES = [
     {"key": "analysis", "label": "A", "order": 0, "role": "analysis"},
@@ -29,21 +31,14 @@ PHASES = [
 
 def _app(*, claims_discovery: bool) -> RustApplication:
     descriptor = AppDescriptor.model_validate(
-        {
-            "name": "app", "header_text": "h", "ecosystem": "solana", "backend_tag": "prover",
-            "backend_guidance": "g", "analysis_key": "k",
-            "phases": [
+        wire_descriptor(
+            name="app", ecosystem="solana",
+            phases=[
                 *PHASES,
-                {
-                    "key": "find_doc", "label": "Design Doc", "order": 4,
-                    "role": "discovery" if claims_discovery else "grouping",
-                },
+                wire_phase("find_doc", "Design Doc", 4,
+                           "discovery" if claims_discovery else "grouping"),
             ],
-            "artifact_layout": {
-                "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r", "artifact_dir": "a",
-                "artifact_prefix": "p", "artifact_extension": "rs", "property_suffix": "s",
-            },
-        }
+        )
     )
     phase = build_phase_enum(descriptor)
     ordered = descriptor.ordered_phases()

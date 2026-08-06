@@ -36,7 +36,7 @@ def _delivered(**verdicts: Outcome) -> Delivered[RustFormalResult]:
     return Delivered(
         RustFormalResult(
             units=[(f"{unit}_prop", [unit]) for unit in verdicts],
-            verdicts={unit: Verdict(outcome=outcome) for unit, outcome in verdicts.items()},
+            verdicts={unit: Verdict.with_outcome(outcome) for unit, outcome in verdicts.items()},
         ),
         pathlib.Path("harness.rs"),
     )
@@ -72,7 +72,7 @@ def test_rows_are_named_by_property_title_falling_back_to_the_unit():
     # The property's own words read better than the backend's unit name; a unit with no title in
     # ``units`` (a wheel that reports a verdict for something it never declared) still gets a row.
     delivered = _delivered(rule_a=Outcome.GOOD)
-    delivered.result.verdicts["orphan"] = Verdict(outcome=Outcome.ERROR)
+    delivered.result.verdicts["orphan"] = Verdict.with_outcome(Outcome.ERROR)
     summary = summarize_verdicts(_result(ComponentOutcome(_Feat("c"), [], delivered)), BACKEND)
 
     assert [v.name for v in summary.verdicts] == ["rule_a_prop", "orphan"]

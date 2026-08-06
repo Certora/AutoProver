@@ -8,9 +8,21 @@ description = "SDK for building AutoProver formalization backends / applications
 [lib]
 name = "autoprover_sdk"
 
+# The generator half of the wire round-trip fuzzer (`tests/test_wire_roundtrip.py`), which
+# drives it over a pipe. Behind `fuzz` so neither `arbitrary` nor this binary enters a shipped
+# wheel.
+[[bin]]
+name = "wire-echo"
+path = "src/bin/wire_echo.rs"
+required-features = ["fuzz"]
+
+[features]
+fuzz = ["dep:arbitrary"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+arbitrary = { version = "1", features = ["derive"], optional = true }
 # Re-exported (see `pub use pyo3`) so the `export_app!` macro can reference
 # `$crate::pyo3::…` and the app crate needs no direct dependency edge for the
 # macro body. The app crate still lists pyo3 to enable `extension-module` /

@@ -49,7 +49,7 @@ from composer.pipeline.cli import root_cache_key
 from composer.pipeline.core import CorePipelineResult
 from composer.rag.models import get_model
 from composer.rustapp.adapter import program_crate_of
-from composer.rustapp.descriptor import ArgDefault, ArgSpec, PhaseRole
+from composer.rustapp.descriptor import ArgSpec, BoolDefault, IntDefault, PhaseRole, StrDefault
 from composer.rustapp.wire import AppArgs, parse_sandbox_grants
 from composer.rustapp.host import RustApplication, build_application, run_application
 from composer.rustapp.result import RustFormalResult
@@ -161,22 +161,22 @@ def _add_declared_args(parser: argparse.ArgumentParser, specs: list[ArgSpec]) ->
     """Add the descriptor's declared flags to ``parser``."""
     for spec in specs:
         dest = _arg_dest(spec)
-        d: ArgDefault = spec.default
-        if d.kind == "bool":
-            parser.add_argument(
-                spec.flag, dest=dest, action="store_true",
-                default=bool(d.value), help=spec.help,
-            )
-        elif d.kind == "int":
-            parser.add_argument(
-                spec.flag, dest=dest, type=int, default=d.value,
-                required=spec.required, help=spec.help,
-            )
-        else:  # str
-            parser.add_argument(
-                spec.flag, dest=dest, type=str, default=d.value,
-                required=spec.required, help=spec.help,
-            )
+        match spec.default:
+            case BoolDefault() as d:
+                parser.add_argument(
+                    spec.flag, dest=dest, action="store_true",
+                    default=d.value, help=spec.help,
+                )
+            case IntDefault() as d:
+                parser.add_argument(
+                    spec.flag, dest=dest, type=int, default=d.value,
+                    required=spec.required, help=spec.help,
+                )
+            case StrDefault() as d:
+                parser.add_argument(
+                    spec.flag, dest=dest, type=str, default=d.value,
+                    required=spec.required, help=spec.help,
+                )
 
 
 def build_arg_parser(app: RustApplication) -> argparse.ArgumentParser:

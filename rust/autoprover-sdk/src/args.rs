@@ -42,6 +42,8 @@ impl From<serde_json::Map<String, serde_json::Value>> for DeclaredArgs {
 /// re-derive one by splitting a joined string (`program` and `source_path` are the two halves of
 /// the entry point's `path:Name` argument, split here rather than there).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct AppArgs {
     /// The project root, absolute.
     pub project_root: PathBuf,
@@ -49,16 +51,13 @@ pub struct AppArgs {
     /// Cargo name: see [`ProgramCrate`].
     pub program: String,
     /// The main source file, project-root-relative.
-    #[serde(default)]
     pub source_path: String,
     /// The design doc, when one was named on the command line.
-    #[serde(default)]
+    #[serde(deserialize_with = "crate::required::present")]
     pub system_doc: Option<String>,
     /// The compilation unit holding the program's source, already
     /// [resolved](ProgramCrate::resolved) by the FFI boundary.
-    #[serde(default)]
     pub program_crate: ProgramCrate,
     /// The wheel's own declared flags.
-    #[serde(default)]
     pub declared: DeclaredArgs,
 }

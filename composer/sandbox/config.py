@@ -15,7 +15,11 @@ import os
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import NotRequired, Self, TypedDict, Unpack
+from typing import Annotated, NotRequired, Self, TypedDict, Unpack
+
+# A three-file, zero-dependency package (and already a transitive dep via pydantic):
+# the vocabulary for a field constraint, without pulling pydantic into this module.
+from annotated_types import Ge
 
 from composer.sandbox.policy import SandboxPolicy, SandboxProvider, ensure_available
 from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH, rust_build_policy
@@ -35,7 +39,10 @@ class BackendSpec(TypedDict):
     shape (``docs/command-sandbox.md`` §4)."""
 
     argv_prefix: list[str]
-    timeout_s: int
+    #: Wall-clock budget for the command. Bounded below because the mirrored field is a Rust `u64`:
+    #: a negative here is refused by the wheel's deserializer, so say so on this side rather than
+    #: leaving the two halves to disagree about the domain.
+    timeout_s: Annotated[int, Ge(0)]
 
 
 class SandboxArgs(TypedDict):

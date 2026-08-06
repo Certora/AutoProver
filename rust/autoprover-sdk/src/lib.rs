@@ -41,7 +41,13 @@ pub mod ffi;
 pub mod finalize;
 pub mod outcome;
 pub mod prep;
+pub mod required;
 pub mod sandbox;
+
+/// Value generation for the wire round-trip fuzzer, behind the `fuzz` feature so it never enters
+/// a shipped wheel. Driven by the `wire-echo` binary.
+#[cfg(feature = "fuzz")]
+pub mod fuzz;
 
 /// The trait an application implements — re-exported because it is what every app names, and
 /// [`backend`] holds nothing else.

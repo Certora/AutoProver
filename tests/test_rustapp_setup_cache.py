@@ -28,6 +28,7 @@ from composer.rustapp.adapter import (
     RustFormalizer, RustPreparedSystem, RustStagedFormalizer, _setup_identity
 )
 from composer.rustapp.descriptor import AppDescriptor
+from tests.conftest import wire_descriptor, wire_phase, wire_required_phases
 from composer.rustapp.wire import ProgramCrate, Property, SetupInput
 from composer.spec.context import WorkflowContext
 
@@ -68,27 +69,13 @@ class _Run:
 
 def _descriptor() -> AppDescriptor:
     return AppDescriptor.model_validate(
-        {
-            "name": "demoprover",
-            "header_text": "h",
-            "ecosystem": "solana",
-            "backend_tag": "prover",
-            "backend_guidance": "g",
-            "analysis_key": "k",
-            "phases": [
-                {"key": "analysis", "label": "A", "order": 0, "role": "analysis"},
-                {"key": "extraction", "label": "E", "order": 1, "role": "extraction"},
-                {"key": "build_harness", "label": "Build Harness", "order": 2,
-                 "role": "setup"},
-                {"key": "formalization", "label": "F", "order": 3, "role": "formalization"},
-                {"key": "report", "label": "R", "order": 4, "role": "report"},
+        wire_descriptor(
+            ecosystem="solana",
+            phases=[
+                *wire_required_phases(),
+                wire_phase("build_harness", "Build Harness", 4, "setup"),
             ],
-            "artifact_layout": {
-                "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r",
-                "artifact_dir": "a", "artifact_prefix": "p", "artifact_extension": "rs",
-                "property_suffix": "s",
-            },
-        }
+        )
     )
 
 
