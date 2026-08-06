@@ -12,6 +12,9 @@ from langchain_core.messages import ToolMessage
 
 from .edit_store import EditStore
 from .vfs_diff import summarize_changes
+from composer.spec.source.conf_maps import (
+    CompilerSettings, MapViolations, extend_compiler_maps, map_violation_message,
+)
 from .compile_check import check_edits_compile, BuildFailed, EditsNotCompiled
 from .erc7201 import ComputeErc7201Slot, ComputeKeccakString
 from .tool_names import (
@@ -25,6 +28,7 @@ from graphcore.tools.schemas import (
     WithAsyncDependencies, WithImplementation, WithInjectedState, WithInjectedId,
 )
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, EditorAgent, EditorJudge
+from composer.spec.system_model import SolidityIdentifier
 from composer.spec.service_host import ServiceHost
 from composer.spec.graph_builder import run_to_completion, bind_standard
 from composer.spec.util import uniq_thread_id
@@ -53,11 +57,27 @@ class CommonMungeDescription(
 
     why_sound: str = Field(description="A precise, reasoned argument why your changes are *either* sound, OR an acceptable over-approximation")
 
+class AddedFile(BaseModel):
+    """A file this edit created, destined for the compilation's file set."""
+    path: str = Field(description="Project-relative path of the created file")
+    contract: SolidityIdentifier | None = Field(
+        default=None,
+        description="The Solidity identifier the file contributes to the scene, when it does "
+        "not match the file stem; leave null otherwise",
+    )
+    compiler_settings: CompilerSettings | None = Field(
+        default=None,
+        description="Explicit per-file compiler settings for this file. Required exactly when "
+        "the prover configuration carries the corresponding per-file compiler map (and no "
+        "existing entry matches the file); rejected when it does not.",
+    )
+
+
 class MungeDescription(
     CommonMungeDescription
 ):
     """A holistic description of your changes & any extra entry points you added"""
-    added_files: list[str] = Field(description="A manifest of files you added that should be added to the compilation steps. Empty if no files were added")
+    added_files: list[AddedFile] = Field(description="A manifest of files you added that should be added to the compilation steps. Empty if no files were added")
 
 class MungeRefusal(BaseModel):
     """
@@ -130,10 +150,22 @@ class EditMungeTool(WithAsyncDependencies[str, MungeToolDeps], WithInjectedId, W
             diff = summarize_changes(
                 res, deps.accessor, self.state["vfs"]
             )
+            def _added_line(af: AddedFile) -> str:
+                explicit = (
+                    af.compiler_settings.model_dump(exclude_none=True)
+                    if af.compiler_settings is not None else {}
+                )
+                return f"`{af.path}`" + (
+                    f" (contract `{af.contract}`)" if af.contract is not None else ""
+                ) + (
+                    f" (explicit compiler settings: {explicit})" if explicit else ""
+                )
+
             added_note = (
-                f"\n**New files**: {', '.join(d.added_files)} — after applying this edit, add "
-                f"them to the prover's inputs with `{CONFIG_EDIT}`, or the prover will never "
-                "compile them.\n"
+                "\n**New files**: " + ", ".join(_added_line(af) for af in d.added_files)
+                + f" — after applying this edit, register them with `{CONFIG_EDIT}`, passing "
+                "the same contract name and explicit compiler settings (when given), or the "
+                "prover will never compile them.\n"
                 if d.added_files else ""
             )
             result_msg = f"""
@@ -356,21 +388,48 @@ class SubmitEditTool(
         with self.tool_deps() as deps:
             current: VFSState = {"vfs": self.state["vfs"]}
 
-            # The added files must join the build's file set for coverage to pass.
+            # The added files must join the build's file set for coverage to pass,
+            # and any per-file compiler maps must match them or certoraRun rejects
+            # the conf outright.
             conf = dict(self.state["compile_conf"])
             conf_files = list(conf.get("files", []))
-            for f in self.summary.added_files:
+            added_entries = [
+                f"{af.path}:{af.contract}" if af.contract is not None else af.path
+                for af in self.summary.added_files
+            ]
+            added_paths = [af.path for af in self.summary.added_files]
+            for f in added_entries:
                 if f not in conf_files:
                     conf_files.append(f)
             conf["files"] = conf_files
+            extended = extend_compiler_maps(
+                conf,
+                [
+                    (entry, af.compiler_settings)
+                    for entry, af in zip(added_entries, self.summary.added_files)
+                ],
+            )
+            if isinstance(extended, MapViolations):
+                return (
+                    "Your added files cannot join the prover configuration as declared; "
+                    "fix the compiler_settings on your added_files entries and resubmit.\n\n"
+                    f"{map_violation_message(extended)}"
+                )
 
             check = await check_edits_compile(
-                current, deps.accessor, conf, self.summary.added_files
+                current, deps.accessor, extended.config, added_paths
             )
             if isinstance(check, BuildFailed):
+                settings_note = (
+                    "\n\nPer-file compiler-map entries were added for your new files: "
+                    f"{extended.written}. If the failure is a compiler-version or "
+                    "language-feature mismatch, either adapt the code to those settings or "
+                    "declare explicit compiler_settings on the added_files entry."
+                    if extended.written else ""
+                )
                 return (
                     "Your edits do not build; fix them before submitting.\n\n"
-                    f"{check.reason}"
+                    f"{check.reason}{settings_note}"
                 )
             if isinstance(check, EditsNotCompiled):
                 return (

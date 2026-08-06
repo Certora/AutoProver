@@ -44,6 +44,9 @@ from composer.spec.feedback import (
 )
 from composer.ui.tool_display import tool_display
 
+from composer.spec.source.conf_maps import (
+    CompilerSettings, MapViolations, extend_compiler_maps, map_violation_message,
+)
 from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.source.munge.munge_agent import editor_tool
 from composer.spec.source.munge.tool_names import (
@@ -248,6 +251,13 @@ class AddFile(BaseModel):
     contract_name: SolidityIdentifier | None = Field(
         description="The Solidity identifier of the contract within `file_path`" \
         "to ingest into the prover, if it does not match the file stem")
+    compiler_settings: CompilerSettings | None = Field(
+        default=None,
+        description="Explicit per-file compiler-map settings for the file. Required exactly when "
+        "the prover configuration carries the corresponding per-file compiler map (and no "
+        "existing entry matches the file); rejected when it does not. Mirror the editor's "
+        "declared settings when registering an editor-created file.",
+    )
 
 class RemoveFile(BaseModel):
     """
@@ -342,7 +352,7 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
                     if not found:
                         return f"Path {to_remove} doesn't seem to appear in {"\n".join(curr_config["files"])}"
                     curr_config["files"] = new_files
-                case AddFile(file_path=to_add, contract_name=explicit_name):
+                case AddFile(file_path=to_add, contract_name=explicit_name, compiler_settings=settings):
                     assert "files" in curr_config
                     if any([ x.startswith(to_add) for x in curr_config["files"] ]):
                         return f"Path {to_add} already appears in prover inputs"
@@ -353,6 +363,10 @@ class ConfigEditTool(WithAsyncImplementation[Command | str], WithInjectedId, Wit
                         to_add
                     )
                     curr_config["files"] = new_files
+                    ext = extend_compiler_maps(curr_config, [(to_add, settings)])
+                    if isinstance(ext, MapViolations):
+                        return map_violation_message(ext)
+                    curr_config = ext.config
                 case SetStorageExtensionAnnotation(value=value):
                     if value:
                         curr_config["storage_extension_annotation"] = True

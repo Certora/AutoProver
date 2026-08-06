@@ -13,6 +13,7 @@ from composer.spec.source.author import (
     SetStorageExtensionAnnotation, SetStorageExtensionHarnesses, SetContractExtensions,
     ExtensionSpec,
 )
+from composer.spec.source.conf_maps import CompilerSettings
 from composer.spec.source.munge.tool_names import CONFIG_EDIT
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, prover_config_overlay,
@@ -41,8 +42,15 @@ TOOL = ConfigEditTool.as_tool(_EDIT)
 # ---------------------------------------------------------------------------
 
 
-def _add_file(path: str, contract_name: str | None = None) -> dict:
-    return AddFile(type="add_file", file_path=path, contract_name=contract_name).model_dump()
+def _add_file(
+    path: str,
+    contract_name: str | None = None,
+    compiler_settings: CompilerSettings | None = None,
+) -> dict:
+    return AddFile(
+        type="add_file", file_path=path, contract_name=contract_name,
+        compiler_settings=compiler_settings,
+    ).model_dump()
 
 
 def _remove_file(path: str) -> dict:
@@ -72,10 +80,13 @@ def _edit(*edits: dict) -> ToolCallDict:
 
 def _scenario(
     files: list[str] | None = None,
+    extra: dict | None = None,
 ):
     config: dict = {}
     if files is not None:
         config["files"] = files
+    if extra is not None:
+        config.update(extra)
     return Scenario(ConfigTestState, TOOL).init(
         config=config, rule_skips={},
     )
@@ -96,6 +107,68 @@ def _edit_response(st: ConfigTestState) -> str:
 # =========================================================================
 # AddFile
 # =========================================================================
+
+
+class TestAddFileCompilerMaps:
+    async def test_add_file_without_demanded_settings_rejected(self):
+        # Present map + absent contract + no settings: the whole edit aborts —
+        # neither the file registration nor any map entry lands.
+        config = await _scenario(
+            files=["src/Hub.sol"],
+            extra={"solc_optimize_map": {"Hub": "22300"}},
+        ).turn(
+            _edit(_add_file("certora/mocks/Mock.sol")),
+        ).map_run(_config)
+        assert "certora/mocks/Mock.sol" not in config["files"]
+        assert "Mock" not in config["solc_optimize_map"]
+
+    async def test_add_file_spurious_settings_rejected(self):
+        config = await _scenario(
+            files=["src/Hub.sol"],
+        ).turn(
+            _edit(_add_file(
+                "certora/mocks/Mock.sol",
+                compiler_settings=CompilerSettings(optimize="200"),
+            )),
+        ).map_run(_config)
+        assert "certora/mocks/Mock.sol" not in config["files"]
+        assert "solc_optimize_map" not in config
+
+    async def test_add_file_explicit_settings_written_under_contract(self):
+        config = await _scenario(
+            files=["src/Hub.sol"],
+            extra={"solc_map": {"Hub": "solc8.29"}},
+        ).turn(
+            _edit(_add_file(
+                "certora/mocks/OldMock.sol",
+                compiler_settings=CompilerSettings(solc="solc4.24"),
+            )),
+        ).map_run(_config)
+        assert config["solc_map"]["OldMock"] == "solc4.24"
+
+    async def test_add_file_contract_already_mapped_needs_no_settings(self):
+        config = await _scenario(
+            files=["src/Hub.sol"],
+            extra={"solc_optimize_map": {"Hub": "22300", "Mock": "200"}},
+        ).turn(
+            _edit(_add_file("certora/mocks/Mock.sol")),
+        ).map_run(_config)
+        assert "certora/mocks/Mock.sol" in config["files"]
+        assert config["solc_optimize_map"] == {"Hub": "22300", "Mock": "200"}
+
+    async def test_add_file_with_contract_suffix_maps_contract_name(self):
+        config = await _scenario(
+            files=["src/Hub.sol"],
+            extra={"solc_optimize_map": {"Hub": "22300"}},
+        ).turn(
+            _edit(_add_file(
+                "certora/mocks/Mocks.sol", "DummyERC20B",
+                compiler_settings=CompilerSettings(optimize="200"),
+            )),
+        ).map_run(_config)
+        assert config["solc_optimize_map"]["DummyERC20B"] == "200"
+        assert "Mocks" not in config["solc_optimize_map"]
+        assert "certora/mocks/Mocks.sol:DummyERC20B" in config["files"]
 
 
 class TestAddFile:

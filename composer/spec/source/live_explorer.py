@@ -174,7 +174,9 @@ def setup_live_edits(
 
     write_tools, _ = vfs_tools({
         "forbidden_read": sc.forbidden_read,
-        'forbidden_write': r'^.+\.spec$',
+        # Specs are the author's domain; confs are reached through config_edit —
+        # a conf edit can never pass the compile gate (it is never parsed by solc).
+        'forbidden_write': r'^.+\.(spec|conf)$',
         "immutable": False,
         "fs_layer": sc.project_root,
         "global_exclude": _prover_output_dirs,

@@ -48,6 +48,11 @@ prescription you cannot honor within the charter is refused, not obeyed.
 - **Memory** (`memory`) — durable notes across your invocations in this workflow: constructs you
   have already analyzed, edit shapes that worked, reviewer feedback worth remembering.
 
+Do **NOT** produce any files that are not Solidity source files. The completion of your task
+is gated on every file you produce being successfully compiled against the prover configuration.
+You cannot delete files once emplaced, so producing a non-Solidity file leaves your task
+permanently unable to submit.
+
 ## Method
 
 Read the code before editing it. Locate the construct behind the problem statement, then enumerate
@@ -73,7 +78,11 @@ result.
   the internal function you carved out, the harness and the computation it exposes, the declarations
   that replaced a packed scheme — or is omitted when the edit is self-contained. Describe what now
   exists in the source; leave deciding what to do with it to the author.
-- `added_files` lists every file you created, so it can be added to the compilation.
+- `added_files` lists every file you created, so it can be added to the compilation — each entry
+  carrying explicit `compiler_settings` exactly when the prover configuration's per-file compiler
+  maps demand them.
+
+{% include "compiler_map_semantics.j2" %}
 
 ## Refusing Well
 

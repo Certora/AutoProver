@@ -24,7 +24,9 @@ dedicated editor agent: you describe the problem you need solved, and you evalua
   edits applied after it; a null edit id discards every edit, returning to the unedited source.
 - **`config_edit`** — add or remove files in the prover's input set, or set/remove certain configuration flags.
   Applying an edit does not update the prover inputs by itself: when an edit created new files, add each one here or the
-  prover will never compile it.
+  prover will never compile it, passing through the editor's declared `compiler_settings` when it gave any.
+
+{% include "compiler_map_semantics.j2" %}
 
 Treat source edits as a last resort, reached only after spec-side approaches have failed: every
 applied edit becomes part of the final deliverable, where a human auditor must read and accept it.
