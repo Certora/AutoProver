@@ -78,6 +78,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "autoprover-solana"
+version = "0.1.0"
+dependencies = [
+ "autoprover-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

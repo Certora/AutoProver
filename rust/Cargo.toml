@@ -3,6 +3,10 @@
 # * `autoprover-sdk` — the library new Rust-based applications import. It defines
 #   the ABI (serde types), the `Backend` trait, the `run_confined` launcher helper,
 #   the FFI helpers, and the `export_app!` macro that emits the PyO3 module.
+# * `autoprover-solana` — one *chain's* half of the project seam: the types a Solana
+#   wheel and the host's Solana `ProjectToolchain` share, which the SDK deliberately
+#   does not define (`autoprover_sdk::chain`). A second ecosystem is a second crate
+#   like this one, not an edit to the SDK.
 # * `example-app`   — a self-contained demonstration application built into a
 #   Python wheel via maturin, used by the framework's round-trip test.
 #
@@ -11,7 +15,7 @@
 # real use; `example-app` is kept here so the framework has something to test.
 [workspace]
 resolver = "2"
-members = ["autoprover-sdk", "example-app", "run-confined"]
+members = ["autoprover-sdk", "autoprover-solana", "example-app", "run-confined"]
 
 [workspace.package]
 edition = "2021"

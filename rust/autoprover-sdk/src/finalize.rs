@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::authoring::ProgramCrate;
+use crate::chain::ChainData;
 
 /// What one component's formalization produced, when it produced anything.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,19 +49,19 @@ pub struct FinalizeComponent {
 }
 
 /// The complete outcome set. Everything a wheel needs to render the whole deliverable: the same
-/// program/crate/IDL the gated builds used (so what ships is what was checked), the compiled
-/// shared setup artifact, and every component's result.
+/// project facts the gated builds used (so what ships is what was checked), the compiled shared
+/// setup artifact, and every component's result.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
 pub struct FinalizeInput {
     pub program: String,
-    /// Already [resolved](ProgramCrate::resolved) by the FFI boundary.
-    pub program_crate: ProgramCrate,
-    /// Where workspace prep placed the program's IDL, workdir-relative; `None` = it placed none,
-    /// so the wheel depends on the program's crate directly.
-    #[serde(deserialize_with = "crate::required::present")]
-    pub idl: Option<String>,
+    /// As every authoring callout received it — see
+    /// [`AuthorInput::source_unit`](crate::authoring::AuthorInput::source_unit).
+    pub source_unit: ChainData,
+    /// As every authoring callout received it — see
+    /// [`AuthorInput::prep_facts`](crate::authoring::AuthorInput::prep_facts).
+    pub prep_facts: ChainData,
     /// The compiled shared setup artifact, when the wheel declared a
     /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase.
     #[serde(deserialize_with = "crate::required::present")]

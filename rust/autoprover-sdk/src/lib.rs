@@ -25,6 +25,8 @@
 //!
 //!  * [`descriptor`] — the declaration the host reads at load time.
 //!  * [`args`] — the run's resolved inputs (project root, program, declared flags).
+//!  * [`chain`] — the payload this seam carries without a schema: what the analyzed project's own
+//!    build system calls things.
 //!  * [`authoring`] — what the host sends into a callout, and the prompt it gets back.
 //!  * [`outcome`] — the compile verdict, the property→unit map, the per-unit verdicts.
 //!  * [`finalize`] — the full outcome set the run-level deliverable is rendered from.
@@ -35,6 +37,7 @@
 pub mod args;
 pub mod authoring;
 pub mod backend;
+pub mod chain;
 pub mod descriptor;
 pub mod export;
 pub mod ffi;

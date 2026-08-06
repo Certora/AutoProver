@@ -1,34 +1,40 @@
-"""Tests for the generic workspace prep and the two per-chain seams under it
+"""Tests for the generic workspace prep and the per-chain seam under it
 (``composer.rustapp.adapter.run_workspace_prep`` / ``composer.rustapp.toolchain``).
 
 The prep has two halves, and the split is the point: the host writes the plan's ``files`` itself
-(that is the same in every ecosystem), and hands anything further — warm these dirs, build this
-program, place its IDL — to the chain's registered :class:`WorkspaceToolchain`, which is the only
-part that has to know what ``cargo-build-sbf`` or an IDL is. The crate resolver behind
-``AuthorInput.program_crate`` is the same story with the opposite failure mode: unregistered, it
-answers "nothing resolved" rather than raising, because that is a state the wheel already handles.
+(that is the same in every ecosystem), and hands the plan's ``toolchain_request`` to the chain's
+registered :class:`ProjectToolchain`, which is the only part that has to know what
+``cargo-build-sbf`` or an IDL is. Everything crossing that seam is chain-shaped and opaque here —
+these tests assert the framework *transports* it, never that it understands it. The ``source_unit``
+half of the same seam has the opposite failure mode: unregistered, it answers "nothing resolved"
+rather than raising, because that is a state the wheel already handles.
+
 Fake wheel, fake chain — no toolchain, no LLM.
 """
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from composer.pipeline.ecosystem import EVM, SOLANA
-from composer.rustapp.adapter import program_crate_of, run_workspace_prep
-from composer.rustapp.toolchain import SOURCE_CRATES, WORKSPACE_TOOLCHAINS
-from composer.rustapp.wire import PreflightInput, ProgramCrate
+from composer.rustapp.adapter import run_workspace_prep, source_unit_of
+from composer.rustapp.toolchain import PROJECT_TOOLCHAINS
+from composer.rustapp.wire import PreflightInput
 from composer.spec.context import SourceFields
 from composer.spec.system_model import SolidityIdentifier
 from tests.conftest import wire_workspace_prep
 
 pytestmark = pytest.mark.asyncio
 
-#: What a registered resolver reports. Framework-side these are opaque strings; deriving them from a
-#: Cargo manifest is the registered resolver's business, not the framework's.
-CRATE = ProgramCrate(dir="programs/lend", package="example-lending", lib="example_lending")
-IDL_DEST = "fuzz/vault/idls/example_lending.json"
+#: What a registered toolchain reports about the analyzed project. Framework-side this is an opaque
+#: object; that these keys spell a Cargo crate is the *chain's* business (``autoprover-solana``).
+SOURCE_UNIT = {"dir": "programs/lend", "package": "example-lending", "lib": "example_lending"}
+#: A chain-shaped prep request, and the facts carrying it out established.
+REQUEST = {"warm_dirs": ["fuzz/vault"], "build_program": "example_lending",
+           "idl_dest": "fuzz/vault/idls/example_lending.json"}
+PREP_FACTS = {"idl": "fuzz/vault/idls/example_lending.json"}
 
 
 class FakeWheel:
@@ -41,6 +47,25 @@ class FakeWheel:
         return json.dumps(self._plan)
 
 
+class FakeToolchain:
+    """A chain implementation that records every call and reports fixed facts."""
+
+    def __init__(self, *, source_unit: dict[str, Any], prep_facts: dict[str, Any]):
+        self._source_unit = source_unit
+        self._prep_facts = prep_facts
+        self.calls: list[dict[str, Any]] = []
+
+    def source_unit(self, _source: SourceFields) -> dict[str, Any]:
+        return self._source_unit
+
+    async def prepare(self, plan, input, *, source, sandbox, timeout_s) -> dict[str, Any]:
+        self.calls.append({
+            "plan": plan, "input": input, "source": source,
+            "sandbox": sandbox, "timeout_s": timeout_s,
+        })
+        return self._prep_facts
+
+
 def _source(root: Path) -> SourceFields:
     return SourceFields(
         project_root=str(root),
@@ -50,25 +75,19 @@ def _source(root: Path) -> SourceFields:
     )
 
 
-def _record_toolchain(monkeypatch, *, idl: str | None = None) -> list[dict]:
-    """Register a fake toolchain for ``solana`` that records every call it gets."""
-    calls: list[dict] = []
-
-    async def fake_prepare(plan, input, *, source, sandbox, timeout_s):
-        calls.append({
-            "plan": plan, "input": input, "source": source,
-            "sandbox": sandbox, "timeout_s": timeout_s,
-        })
-        return idl
-
-    monkeypatch.setitem(WORKSPACE_TOOLCHAINS, "solana", fake_prepare)
-    return calls
+def _register(
+    monkeypatch, *, source_unit: dict[str, Any] | None = None,
+    prep_facts: dict[str, Any] | None = None,
+) -> FakeToolchain:
+    toolchain = FakeToolchain(source_unit=source_unit or {}, prep_facts=prep_facts or {})
+    monkeypatch.setitem(PROJECT_TOOLCHAINS, "solana", toolchain)
+    return toolchain
 
 
-async def _prep(wheel, root: Path, args: dict | None = None) -> str | None:
+async def _prep(wheel, root: Path, args: dict | None = None) -> dict[str, Any]:
     return await run_workspace_prep(
         wheel,
-        PreflightInput(program="vault", program_crate=CRATE, args=args or {}),
+        PreflightInput(program="vault", source_unit=SOURCE_UNIT, args=args or {}),
         chain="solana",
         source=_source(root),
         sandbox=None, command_timeout_s=60,
@@ -76,41 +95,37 @@ async def _prep(wheel, root: Path, args: dict | None = None) -> str | None:
 
 
 async def test_a_files_only_plan_is_complete_once_they_are_written(tmp_path, monkeypatch):
-    # No warm, no build, no IDL — so nothing that needs a toolchain, and none is consulted. This is
-    # what makes an empty WORKSPACE_TOOLCHAINS a resting state rather than a broken one.
-    calls = _record_toolchain(monkeypatch)
+    # An empty toolchain_request asks for nothing, so no toolchain is consulted. This is what makes
+    # an empty PROJECT_TOOLCHAINS a resting state rather than a broken one.
+    toolchain = _register(monkeypatch)
     wheel = FakeWheel(files={"fuzz/vault/Cargo.toml": "[package]\n", "fuzz/vault/src/lib.rs": "//"})
 
-    assert await _prep(wheel, tmp_path) is None
+    assert await _prep(wheel, tmp_path) == {}
     assert (tmp_path / "fuzz/vault/Cargo.toml").read_text() == "[package]\n"
     assert (tmp_path / "fuzz/vault/src/lib.rs").read_text() == "//"
-    assert calls == []
+    assert toolchain.calls == []
 
 
 async def test_wheel_written_files_are_path_confined(tmp_path, monkeypatch):
     # The wheel is trusted, but its file paths go through the same confinement as everything else
     # the host writes on its behalf — a traversal is refused rather than followed.
-    _record_toolchain(monkeypatch)
+    _register(monkeypatch)
     with pytest.raises(ValueError, match="unsafe file path"):
         await _prep(FakeWheel(files={"../../etc/evil": "x"}), tmp_path)
     assert not (tmp_path.parent.parent / "etc" / "evil").exists()
 
 
 async def test_the_toolchain_half_is_handed_the_plan_and_the_analyzed_source(tmp_path, monkeypatch):
-    calls = _record_toolchain(monkeypatch, idl=IDL_DEST)
-    wheel = FakeWheel(
-        files={"fuzz/vault/Cargo.toml": "[package]\n"},
-        warm_dirs=["fuzz/vault"], build_program="example_lending", idl_dest=IDL_DEST,
-    )
+    toolchain = _register(monkeypatch, prep_facts=PREP_FACTS)
+    wheel = FakeWheel(files={"fuzz/vault/Cargo.toml": "[package]\n"}, toolchain_request=REQUEST)
 
-    # Whatever the toolchain reports as the IDL's home is what the caller reports back as `idl`.
-    assert await _prep(wheel, tmp_path, {"program_idl": "/elsewhere/lend.json"}) == IDL_DEST
-    assert len(calls) == 1
-    call = calls[0]
-    # The plan reaches it whole: which dirs to warm, which program to build, where the IDL goes.
-    assert call["plan"].warm_dirs == ["fuzz/vault"]
-    assert call["plan"].build_program == "example_lending"
-    assert call["plan"].idl_dest == IDL_DEST
+    # Whatever the toolchain reports having established is what the caller reports back.
+    assert await _prep(wheel, tmp_path, {"program_idl": "/elsewhere/lend.json"}) == PREP_FACTS
+    assert len(toolchain.calls) == 1
+    call = toolchain.calls[0]
+    # The request reaches it whole and uninterpreted — the host never reads a key of it, which is
+    # what lets a chain add one without touching composer.rustapp.wire.
+    assert call["plan"].toolchain_request == REQUEST
     # The analyzed source, not just its root — an implementation resolves its own project facts from
     # `relative_path` rather than being handed a shape the framework would have to understand.
     assert call["source"].project_root == str(tmp_path)
@@ -124,27 +139,27 @@ async def test_the_toolchain_half_is_handed_the_plan_and_the_analyzed_source(tmp
 
 
 async def test_a_plan_needing_an_unregistered_toolchain_fails_loudly(tmp_path, monkeypatch):
-    # Skipping the build the wheel asked for would surface much later as a compile error the
+    # Skipping the preparation the wheel asked for would surface much later as a compile error the
     # authoring agent cannot fix, so the seam refuses up front and names the fix.
-    monkeypatch.delitem(WORKSPACE_TOOLCHAINS, "solana", raising=False)
-    wheel = FakeWheel(build_program="example_lending")
+    monkeypatch.delitem(PROJECT_TOOLCHAINS, "solana", raising=False)
+    wheel = FakeWheel(toolchain_request={"build_program": "example_lending"})
 
-    with pytest.raises(ValueError, match="no workspace toolchain is registered"):
+    with pytest.raises(ValueError, match="no project toolchain is registered"):
         await _prep(wheel, tmp_path)
 
 
-async def test_the_program_crate_comes_from_the_chains_resolver(tmp_path, monkeypatch):
-    monkeypatch.setitem(SOURCE_CRATES, "solana", lambda _source: CRATE)
-    assert program_crate_of(SOLANA, _source(tmp_path)) == CRATE
+async def test_the_source_unit_comes_from_the_chains_toolchain(tmp_path, monkeypatch):
+    _register(monkeypatch, source_unit=SOURCE_UNIT)
+    assert source_unit_of(SOLANA, _source(tmp_path)) == SOURCE_UNIT
 
 
-async def test_an_unresolved_program_crate_is_empty_rather_than_an_error(tmp_path, monkeypatch):
-    # Three different situations answer the same way — no resolver for the chain, a language with no
-    # compilation unit (Solidity), and a layout the resolver couldn't read — because the wheel does
-    # the same thing with all three: fall back to its own convention (`ProgramCrate::resolved`).
-    monkeypatch.delitem(SOURCE_CRATES, "solana", raising=False)
-    assert program_crate_of(SOLANA, _source(tmp_path)) == ProgramCrate()
-    assert program_crate_of(EVM, _source(tmp_path)) == ProgramCrate()
+async def test_an_unresolved_source_unit_is_empty_rather_than_an_error(tmp_path, monkeypatch):
+    # Three different situations answer the same way — no toolchain for the chain, a language with no
+    # such unit (Solidity), and a layout the toolchain couldn't read — because the wheel does the
+    # same thing with all three: fall back to its own convention.
+    monkeypatch.delitem(PROJECT_TOOLCHAINS, "solana", raising=False)
+    assert source_unit_of(SOLANA, _source(tmp_path)) == {}
+    assert source_unit_of(EVM, _source(tmp_path)) == {}
 
-    monkeypatch.setitem(SOURCE_CRATES, "solana", lambda _source: ProgramCrate())
-    assert program_crate_of(SOLANA, _source(tmp_path)) == ProgramCrate()
+    _register(monkeypatch, source_unit={})
+    assert source_unit_of(SOLANA, _source(tmp_path)) == {}
