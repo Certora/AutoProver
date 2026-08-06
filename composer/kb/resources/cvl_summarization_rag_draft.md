@@ -528,6 +528,19 @@ alternative is splitting the specification into separate files/configurations.
   call was attempted even when the surrounding call later reverts — are
   declared `persistent` (A5.6).
 
+### A5.9 CVL Expression Summaries for Multiple Returns
+
+CVL functions may return multiple values by declaring a parenthesized tuple
+of return types `returns (t1, t2, ...)`,
+e.g., `function myFunction returns (uint, bool)`. Return statements in such functions
+use the syntax `return (v1, v2, ...);`. You can use such functions to summarize
+functions that are expected to return multiple values. For wildcard target
+summaries the `expect` clause also takes a tuple of types, e.g.:
+
+```
+function _.someExternalFunction() external => myCVLFunction() expect (uint, bool);
+```
+
 ## A6. Types across the summary boundary; rerouting
 
 ### A6.1 What converts
