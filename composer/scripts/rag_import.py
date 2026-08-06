@@ -28,7 +28,7 @@ from collections import defaultdict
 import spacy
 
 from composer.rag.db import KNOWLEDGE_BASES, get_rag_db
-from composer.rag.import_format import RagManifest, Section, SCHEMA_VERSION
+from composer.rag.import_format import BlockKind, RagManifest, Section, SCHEMA_VERSION
 from composer.rag.models import get_model
 from composer.rag.text import code_ref_tag
 from composer.rag.types import BlockChunk
@@ -45,7 +45,7 @@ def _manual_chunk(sec: Section) -> BlockChunk:
     parts: list[str] = []
     code_refs: list[str] = []
     for b in sec.blocks:
-        if b.kind == "code":
+        if b.kind is BlockKind.CODE:
             parts.append(code_ref_tag(len(code_refs)))
             code_refs.append(b.body)
         else:
@@ -57,7 +57,7 @@ def _embedded_chunks(sec: Section, config: BuilderConfig) -> list[BlockChunk]:
     """Length-bounded embedded chunks for vector search, via the shared builder."""
     builder = BlockBuilder(header=list(sec.headers), config=config)
     for b in sec.blocks:
-        if b.kind == "code":
+        if b.kind is BlockKind.CODE:
             builder.add_code(b.body)
         else:
             builder.append_text(b.body, is_structured_boundary=True, unbreakable=False)
