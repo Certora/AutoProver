@@ -59,15 +59,15 @@ The driver (`run_pipeline` in [core.py](../composer/pipeline/core.py)) sequences
 
 ```python
 # 1. analysis-independent backend pre-work runs CONCURRENTLY with the shared analysis
-preflight_task = asyncio.create_task(backend.preflight(run))
-analysis_task = asyncio.create_task(run.runner(TaskInfo(SYSTEM_ANALYSIS_TASK_ID, ...), ...))
 try:
-    preflight = await preflight_task          # the gate: cheap side first…
-except BaseException:
-    analysis_task.cancel()                    # …and its failure cancels the analysis racing it
-    await asyncio.gather(analysis_task, return_exceptions=True)
+    async with asyncio.TaskGroup() as overlap:        # the gate: either failure cancels the other
+        preflight_task = overlap.create_task(backend.preflight(run))
+        analysis_task = overlap.create_task(run.runner(TaskInfo(SYSTEM_ANALYSIS_TASK_ID, ...), ...))
+except BaseExceptionGroup as eg:
+    if len(eg.exceptions) == 1:                       # grouping is the group's doing, not a contract
+        raise eg.exceptions[0] from None
     raise
-analyzed = await analysis_task
+preflight, analyzed = preflight_task.result(), analysis_task.result()
 
 # 2. backend transform: prover lifts to a harnessed app; foundry is identity
 prepared = await backend.prepare_system(analyzed, run, preflight)
@@ -96,10 +96,11 @@ gets the same overlap with zero extra code.
 
 `preflight` is the earlier peer, for pre-work that needs *nothing at all* from the run: Crucible
 builds the program under test and gates a skeleton harness through the real toolchain there, since
-neither reads the analyzed model. It is also the *cheap* side of its pair, which is why the driver
-awaits it first and cancels the analysis on failure rather than the other way round: the agent racing
-it would otherwise keep spending on a run that can no longer complete. That is what makes the
-preflight a *gate*: a broken workspace stops the run while it has spent one analysis agent, instead
+neither reads the analyzed model. The two share a task group, so whichever side fails first cancels
+the one still running: an agent would otherwise keep spending on a run that can no longer complete,
+and a workspace build — the run's slowest non-LLM step — would keep running for a result nothing will
+read. That is what makes the preflight a *gate*: a broken workspace stops the run while it has spent
+at most one partial analysis agent, instead
 of surfacing as unfixable compiler errors in the first authored draft, after the whole extraction
 phase ([rust-applications.md §4.2](./rust-applications.md)).
 
