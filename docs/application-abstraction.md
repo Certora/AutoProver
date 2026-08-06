@@ -324,11 +324,11 @@ def backend(*, forge_binary, forge_timeout_s, source_input, forge_concurrency) -
                           _ForgeRunConfig(forge_binary, forge_timeout_s, ...))
 ```
 
-Two things to notice. The `handler_factory` (the frontend seam) and the concurrency semaphore are
-bundled into the `PipelineRun` — `run.runner(task_info, job)` is how every phase of the driver
-spins up a task through whatever frontend was supplied, and `run.unmetered_runner` is its peer for a
-task that is *not* an agent (a toolchain build), which must not spend one of the run's
-`--max-concurrent` slots. And the **ecosystem** is an explicit argument to the driver, not something
+Two things to notice. The `handler_factory` (the frontend seam) and the run's two concurrency
+semaphores are bundled into the `PipelineRun` — `run.runner(task_info, job)` is how every phase of
+the driver spins up a task through whatever frontend was supplied, and `run.cpu_runner` is its peer
+for a task that is *not* an agent (a toolchain build): same task machinery, charged to the CPU
+budget (`--max-cpu-tasks`) rather than to the `--max-concurrent` agent slots. And the **ecosystem** is an explicit argument to the driver, not something
 the backend carries: it supplies the analyzed-model type, the analysis prompts, `locate_main` and
 the unit enumeration, so one backend shape can target more than one chain (see
 [ecosystem-abstraction.md](./ecosystem-abstraction.md)).

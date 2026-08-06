@@ -19,6 +19,7 @@ from composer.spec.context import (
     SourceFields
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
+from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
 from composer.prover.core import make_prover_options
@@ -44,6 +45,7 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     main_contract: str
     system_doc: str | None
     max_concurrent: int
+    max_cpu_tasks: int
     cache_ns: str | None
     memory_ns: str | None
     cloud: bool
@@ -71,6 +73,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("main_contract", help="Main contract as path:ContractName")
     parser.add_argument("system_doc", nargs="?", default=None, help="Path to the design document (text or PDF). Optional — auto-discovered from the project when omitted.")
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
+    parser.add_argument("--max-cpu-tasks", type=int, default=DEFAULT_MAX_CPU_TASKS, help=f"Max concurrent CPU-bound tasks — toolchain builds and the like (default: {DEFAULT_MAX_CPU_TASKS})")
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
     parser.add_argument("--cloud", action="store_true", help="Run prover jobs in the cloud")

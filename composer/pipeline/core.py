@@ -55,6 +55,7 @@ from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
 from .ptypes import (
+    DEFAULT_MAX_CPU_TASKS,
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp,
     PipelineRun, SystemAnalysisSpec
 )

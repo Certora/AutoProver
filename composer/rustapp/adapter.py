@@ -710,9 +710,9 @@ class RustBackend(
         if gate is None:
             # Nothing to show a task for: the prep is silent (it always was) and there is no gate.
             return await prep()
-        # Unmetered: this is a build, not an agent — it must not spend one of the run's
-        # ``--max-concurrent`` agent slots for the whole of system analysis.
-        return await run.unmetered_runner(self.task_info(gate), prep)
+        # This is a build, not an agent: it belongs to the run's CPU budget, not to the
+        # ``--max-concurrent`` agent slots it would otherwise hold for the whole of system analysis.
+        return await run.cpu_runner(self.task_info(gate), prep)
 
     async def sandbox_spec(self, workdir: Path) -> BackendSpec:
         """The confinement prefix the wheel's blocking callouts prepend, or the trusted empty one."""

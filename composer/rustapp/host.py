@@ -22,6 +22,7 @@ from typing import Any, Callable, cast
 
 from composer.io.multi_job import HandlerFactory
 from composer.pipeline.core import (
+    DEFAULT_MAX_CPU_TASKS,
     CorePhases,
     CorePipelineResult,
     PipelineRun,
@@ -175,6 +176,7 @@ async def run_rust_pipeline(
     env: ServiceHost,
     *,
     max_concurrent: int = 4,
+    max_cpu_tasks: int = DEFAULT_MAX_CPU_TASKS,
     max_bug_rounds: int = 3,
     interactive: bool = False,
 ) -> CorePipelineResult[RustFormalResult]:
@@ -193,6 +195,7 @@ async def run_rust_pipeline(
         handler_factory,
         env,
         max_concurrent=max_concurrent,
+        max_cpu_tasks=max_cpu_tasks,
         max_bug_rounds=max_bug_rounds,
         interactive=interactive,
     )
@@ -206,6 +209,7 @@ async def run_application(
     env: ServiceHost,
     *,
     max_concurrent: int = 4,
+    max_cpu_tasks: int = DEFAULT_MAX_CPU_TASKS,
     max_bug_rounds: int = 3,
     interactive: bool = False,
 ) -> CorePipelineResult[RustFormalResult]:
@@ -216,7 +220,8 @@ async def run_application(
     backend = app.make_backend(source_input)
     run = PipelineRun(
         ctx=ctx, source=source_input, _handler_factory=handler_factory,
-        _semaphore=asyncio.Semaphore(max_concurrent), env=env,
+        _agent_semaphore=asyncio.Semaphore(max_concurrent),
+        _cpu_semaphore=asyncio.Semaphore(max_cpu_tasks), env=env,
     )
     return await run_pipeline(
         backend, run, ecosystem=app.ecosystem, interactive=interactive, threat_model=None, max_bug_rounds=max_bug_rounds

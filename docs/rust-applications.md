@@ -267,10 +267,11 @@ Executor a frontend drives.
 
 [`RustBackend.preflight`](../composer/rustapp/adapter.py) runs **concurrently with system
 analysis** — neither step reads the analyzed model, which is what makes the overlap safe — and the
-driver cancels the analysis if it raises. It is created with `run.unmetered_runner`, not
-`run.runner`: the run's semaphore budgets concurrent *agents*, and a multi-minute cargo build
-charged to it would quietly take a quarter of the default concurrency away from the analysis it
-overlaps.
+driver cancels the analysis if it raises. It is created with `run.cpu_runner`, not `run.runner`:
+the agent semaphore (`--max-concurrent`) budgets concurrent *agents*, and a multi-minute cargo
+build charged to it would quietly take a quarter of the default concurrency away from the analysis
+it overlaps. It is bounded by the run's other budget instead — the CPU semaphore
+(`--max-cpu-tasks`, default 2), which is what keeps two toolchains off the same machine at once.
 
 Two steps, both *declared* by the wheel and executed here:
 

@@ -120,7 +120,7 @@ class _Run:
     async def runner(self, _task_info, job):
         return await job()
 
-    async def unmetered_runner(self, _task_info, job):
+    async def cpu_runner(self, _task_info, job):
         return await job()
 
 
