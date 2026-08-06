@@ -22,10 +22,16 @@ unknown fields — a field a wheel omits, or one it sends that the host doesn't 
 
 Defaults on the *outbound* models are a different thing wearing the same clothes. Python only
 serializes those, and ``model_dump_json`` writes every field whether or not it was set, so a default
-there costs the wire nothing and buys a constructor: an all-empty :class:`ProgramCrate` is how the
-host says its resolver found none. Requiring those payloads in full is the Rust side's job, and it
-does it the same way — no ``#[serde(default)]``, ``deny_unknown_fields``, and
-``crate::required::present`` on the ``Option`` fields serde would otherwise fill in silently.
+there costs the wire nothing and buys a constructor: an empty ``source_unit`` is how the host says it
+resolved nothing. Requiring those payloads in full is the Rust side's job, and it does it the same
+way — no ``#[serde(default)]``, ``deny_unknown_fields``, and ``crate::required::present`` on the
+``Option`` fields serde would otherwise fill in silently.
+
+Three payloads on this seam are **chain-shaped**: ``source_unit``, ``prep_facts`` and
+``WorkspacePrep.toolchain_request`` are typed here as bare ``dict[str, Any]`` (Rust:
+``chain::ChainData``) because their fields belong to the *analyzed project's* build system, which this
+framework deliberately holds no schema for — see :mod:`composer.rustapp.toolchain`. They are the same
+treatment ``model`` and ``unit`` already get, and for the same reason.
 """
 
 import enum
@@ -62,21 +68,6 @@ class Property(WireModel):
     slug: str = ""
 
 
-class ProgramCrate(WireModel):
-    """Where the analyzed code lives as a compilation unit, for a wheel that must *depend* on it.
-
-    Filled in by the chain's registered resolver (:func:`composer.rustapp.toolchain.source_crate`) —
-    every field empty when there is none, when the language has no such unit, or when the layout
-    couldn't be read. The wheel never sees that shape: the SDK's FFI boundary fills the gaps from
-    the ``programs/<program>`` convention before any callout runs."""
-
-    dir: str = ""
-    package: str = ""
-    lib: str = ""
-    #: The crate's declared ``anchor-lang`` requirement, verbatim; ``""`` when it declares none.
-    anchor: str = ""
-
-
 class AppArgs(WireModel):
     """The run's resolved inputs, as the two argument-shaped callouts (``validate_preconditions``,
     ``sandbox_grants``) receive them. Mirrors the Rust ``AppArgs``.
@@ -86,13 +77,16 @@ class AppArgs(WireModel):
 
     #: The project root, absolute.
     project_root: str
-    #: The analysis identifier — never a Cargo name (that is :class:`ProgramCrate`).
+    #: The analysis identifier — never the name of a build-system unit (that is ``source_unit``).
     program: str
     #: The main source file, project-root-relative.
     source_path: str = ""
     #: The design doc, when one was named on the command line.
     system_doc: str | None = None
-    program_crate: ProgramCrate = Field(default_factory=ProgramCrate)
+    #: Where the analyzed code lives as a unit of its own build system, chain-shaped — see
+    #: :attr:`_AuthorInputBase.source_unit`. These two callouts run before workspace prep, so there
+    #: are no prep facts to accompany it.
+    source_unit: dict[str, Any] = Field(default_factory=dict)
     #: The wheel's own declared flags, keyed by argparse dest (``--fuzz-timeout`` →
     #: ``fuzz_timeout``). Untyped: the *wheel* declares these, so the host has no schema for them.
     declared: dict[str, Any] = Field(default_factory=dict)
@@ -117,19 +111,26 @@ class Failure(WireModel):
 class _AuthorInputBase(WireModel):
     """What every authoring/gating callout is told, whatever is being authored."""
 
-    #: The *analysis* identifier of the program under test — a label and a namespace, never a Cargo
-    #: name (that is :class:`ProgramCrate`).
+    #: The *analysis* identifier of the program under test — a label and a namespace, never the name
+    #: of a build-system unit (that is :attr:`source_unit`, and the two are independent).
     program: str
-    program_crate: ProgramCrate = Field(default_factory=ProgramCrate)
+    #: Where the analyzed code lives as a unit of *its own* build system, resolved once per run by
+    #: the chain's registered :class:`~composer.rustapp.toolchain.ProjectToolchain` and carried
+    #: unchanged from here on. Chain-shaped and opaque to the host: a Cargo crate is a directory, a
+    #: package, a lib target and an Anchor requirement; a Move package is not. Empty when nothing was
+    #: resolved, which is when the wheel applies its own convention.
+    source_unit: dict[str, Any] = Field(default_factory=dict)
     #: The properties this artifact must make checkable.
     props: list[Property] = Field(default_factory=list)
     #: The compiled shared setup artifact, for a wheel that declared a
     #: :class:`~composer.rustapp.descriptor.SetupSpec`.
     setup: str | None = None
-    #: Where workspace prep placed the program's IDL, project-root-relative — ``None`` when it
-    #: placed none. Set means the file is *in place*, which is the signal a wheel reads to decide
-    #: how it sources the program's types.
-    idl: str | None = None
+    #: What workspace prep established from the wheel's own
+    #: :attr:`WorkspacePrep.toolchain_request` — chain-shaped like :attr:`source_unit`, and produced
+    #: by the same toolchain. Empty when the plan asked for nothing beyond placing files. A fact here
+    #: means *the thing it describes is in place*, which is what a wheel reads to decide how it
+    #: sources the program's types.
+    prep_facts: dict[str, Any] = Field(default_factory=dict)
     #: The run's values for the wheel's own declared flags, keyed by argparse dest. Untyped: the
     #: wheel declares them, so the host has no schema for them.
     args: dict[str, Any] = Field(default_factory=dict)
@@ -139,10 +140,10 @@ class _AuthorInputBase(WireModel):
         it has to make checkable, which only exist after extraction."""
         return self.model_copy(update={"props": props})
 
-    def with_idl(self, idl: str | None) -> Self:
-        """This input with the IDL the workspace prep just placed (the preflight gate re-renders
-        the prep's input, and must see the same crate the prep set up)."""
-        return self.model_copy(update={"idl": idl})
+    def with_prep_facts(self, prep_facts: dict[str, Any]) -> Self:
+        """This input with what the workspace prep just established (the preflight gate re-renders
+        the prep's input, and must see the workspace the prep actually set up)."""
+        return self.model_copy(update={"prep_facts": prep_facts})
 
 
 class PreflightInput(_AuthorInputBase):
@@ -210,13 +211,14 @@ class FinalizeComponent(WireModel):
 
 class FinalizeInput(WireModel):
     """The full outcome set handed to ``finalize`` (Rust ``FinalizeInput``): everything a wheel
-    needs to render the whole deliverable, including the same program crate and IDL the gated
-    builds used — what ships must be what was checked."""
+    needs to render the whole deliverable, including the same project facts the gated builds used —
+    what ships must be what was checked."""
 
     program: str
-    program_crate: ProgramCrate = Field(default_factory=ProgramCrate)
-    #: Where workspace prep placed the program's IDL; ``None`` when it placed none.
-    idl: str | None = None
+    #: As every authoring callout received it — see :attr:`_AuthorInputBase.source_unit`.
+    source_unit: dict[str, Any] = Field(default_factory=dict)
+    #: As every authoring callout received it — see :attr:`_AuthorInputBase.prep_facts`.
+    prep_facts: dict[str, Any] = Field(default_factory=dict)
     components: list[FinalizeComponent] = Field(default_factory=list)
     #: The compiled shared setup artifact, when the wheel declared one.
     setup: str | None = None
@@ -322,28 +324,28 @@ ValidateOutcome = Annotated[ValidateBuildFailed | ValidateVerdicts, Field(discri
 
 
 class WorkspacePrep(WireModel):
-    """A pure plan for preparing the workspace: the wheel declares it, the host executes it with the
-    shared toolchain helpers (so the network posture stays Python-owned and the wheel never supplies
-    a command line)."""
+    """A pure plan for preparing the workspace: the wheel declares it, the host executes it (so the
+    network posture stays Python-owned and the wheel never supplies a command line).
+
+    Two halves, split by who can execute them — writing files is the same in every ecosystem, while
+    preparing a *project* means driving a build system the host does not understand."""
 
     #: Files to write under the workdir, path-confined. Contents only.
     files: dict[str, str]
-    #: Project-relative manifest dirs to ``cargo fetch`` (unconfined, network) so a later confined +
-    #: offline build finds every dep warm.
-    warm_dirs: list[str]
-    #: The build artifact the chain's :class:`~composer.rustapp.toolchain.WorkspaceToolchain` should
-    #: produce (for Cargo, the crate's *lib* target — not the analysis identifier).
-    build_program: str | None
-    #: Where the wheel wants the program's IDL, workdir-relative. The host obtains it, writes it
-    #: there, and echoes the path back as the ``idl`` context key.
-    idl_dest: str | None
+    #: What the chain's :class:`~composer.rustapp.toolchain.ProjectToolchain` should do beyond
+    #: writing :attr:`files` — warm a dependency cache, build the program, derive a client from it.
+    #: Chain-shaped and opaque here (Solana: ``{warm_dirs, build_program, idl_dest}``): the host
+    #: forwards it and only asks whether it is empty, which is what keeps a new ecosystem a
+    #: registration rather than a field on this model. Whatever it establishes comes back as
+    #: :attr:`_AuthorInputBase.prep_facts`.
+    toolchain_request: dict[str, Any]
 
     @property
     def needs_toolchain(self) -> bool:
         """Whether anything beyond writing :attr:`files` is asked for. A plan that only places files
-        is complete once they are written — no warm, no build, no IDL, so nothing that needs a
+        is complete once they are written — nothing to warm or build, so nothing that needs a
         toolchain, a sandbox or the network."""
-        return bool(self.warm_dirs or self.build_program or self.idl_dest)
+        return bool(self.toolchain_request)
 
 
 class SandboxGrants(WireModel):

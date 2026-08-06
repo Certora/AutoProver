@@ -453,4 +453,4 @@ def wire_prompt(instruction: str, system: str | None = None) -> dict[str, Any]:
 
 def wire_workspace_prep(**overrides: Any) -> dict[str, Any]:
     """A ``WorkspacePrep`` plan that asks for nothing, plus ``overrides``."""
-    return {"files": {}, "warm_dirs": [], "build_program": None, "idl_dest": None, **overrides}
+    return {"files": {}, "toolchain_request": {}, **overrides}

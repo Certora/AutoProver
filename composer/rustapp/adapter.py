@@ -64,7 +64,7 @@ from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupArtifact
-from composer.rustapp.toolchain import source_crate, workspace_toolchain
+from composer.rustapp.toolchain import project_toolchain, source_unit
 from composer.rustapp.wire import (
     AuthorInput,
     CompileOk,
@@ -75,7 +75,6 @@ from composer.rustapp.wire import (
     FinalizeComponent,
     FinalizeInput,
     PreflightInput,
-    ProgramCrate,
     Prompt,
     Property,
     RustAppModule,
@@ -578,44 +577,43 @@ def confined_target(root: Path, rel: str) -> Path:
     inside the project (the wheel is trusted, but defense-in-depth is cheap).
 
     Public because the toolchain half of a workspace prep lives outside this module
-    (:class:`~composer.rustapp.toolchain.WorkspaceToolchain`) and its writes — the IDL it places —
-    must be confined exactly as the host's own are."""
+    (:class:`~composer.rustapp.toolchain.ProjectToolchain`) and whatever it writes must be confined
+    exactly as the host's own writes are."""
     p = Path(rel)
     if p.is_absolute() or ".." in p.parts:
         raise ValueError(f"unsafe file path {rel!r}: absolute or traverses outside the workdir")
     return root / p
 
 
-def program_crate_of(
+def source_unit_of(
     ecosystem: Ecosystem[Any, Any, Any], source: SourceFields
-) -> ProgramCrate:
-    """The ``AuthorInput.program_crate`` field — where the code under analysis lives as a
-    compilation unit and what it is called — from the chain's registered resolver
-    (:func:`composer.rustapp.toolchain.source_crate`).
+) -> dict[str, Any]:
+    """The ``AuthorInput.source_unit`` field — where the code under analysis lives as a unit of its
+    own build system — from the chain's registered toolchain
+    (:func:`composer.rustapp.toolchain.source_unit`).
 
     A wheel that must *depend on* the analyzed code (Crucible's harness path-depends on the program
     under test) reads this instead of deriving a directory or package name from
-    ``source.contract_name``, which is only the analysis identifier. Every field is empty when the
-    chain has no resolver, when the language has no such unit (Solidity), or when the layout
-    couldn't be read — all three mean the same thing to the wheel, which then applies its own
-    convention (the SDK's ``ProgramCrate::resolved``).
+    ``source.contract_name``, which is only the analysis identifier. Empty when the chain has no
+    toolchain, when the language has no such unit (Solidity), or when the layout couldn't be read —
+    all three mean the same thing to the wheel, which then applies its own convention.
     """
-    return source_crate(ecosystem.name, source)
+    return source_unit(ecosystem.name, source)
 
 
 def _setup_identity(input: SetupInput) -> str:
     """A cache key for the shared setup artifact: a hash of what it is authored *from*.
 
-    Exactly the inputs the wheel renders the artifact from — the program and its crate, the analyzed
-    model, the properties it has to make checkable, and whether its types come from the crate or a
-    generated IDL. Deliberately NOT the whole input: ``args`` also carries run knobs (a fuzz budget)
-    that don't change what gets authored, and keying on those would throw the artifact away for no
-    reason.
+    Exactly the inputs the wheel renders the artifact from — the program, the project facts (where its
+    code lives, and what the prep established, which is what decides where its types come from), the
+    analyzed model, and the properties it has to make checkable. Deliberately NOT the whole input:
+    ``args`` also carries run knobs (a fuzz budget) that don't change what gets authored, and keying
+    on those would throw the artifact away for no reason.
     """
     material = {
         "program": input.program,
-        "program_crate": input.program_crate.model_dump(),
-        "idl": input.idl is not None,
+        "source_unit": input.source_unit,
+        "prep_facts": input.prep_facts,
         "model": input.model,
         "props": [p.model_dump() for p in input.props],
     }
@@ -630,19 +628,19 @@ async def run_workspace_prep(
     source: SourceFields,
     sandbox: SandboxConfig | None,
     command_timeout_s: int,
-) -> str | None:
+) -> dict[str, Any]:
     """Execute the wheel's pure ``workspace_prep`` plan (``docs/rust-applications.md`` §7): write the
-    declared files (path-confined) under ``source.project_root``, then hand anything further the
-    plan asks for — warm these manifest dirs, build this program, place its IDL — to ``chain``'s
-    registered :class:`~composer.rustapp.toolchain.WorkspaceToolchain`. Returns where the IDL was
-    placed (relative to the project root), else ``None`` — the caller reports that back to the wheel
-    as the ``idl`` context key.
+    declared files (path-confined) under ``source.project_root``, then hand the plan's
+    ``toolchain_request`` to ``chain``'s registered
+    :class:`~composer.rustapp.toolchain.ProjectToolchain`. Returns what the prep established, which
+    the caller reports back to the wheel as ``AuthorInput.prep_facts`` — empty when the plan only
+    placed files.
 
-    The split is the seam: writing files is the same in every ecosystem, while warming/building
-    means driving *the analyzed project's* toolchain, which only something that knows the chain can
-    do (see the toolchain module for why the framework carries no implementation). Either way the
-    wheel supplies only file contents + which dirs/program, never a command line, so the network
-    posture stays Python-owned.
+    The split is the seam: writing files is the same in every ecosystem, while preparing a *project*
+    means driving a build system the host does not understand, which only something that knows the
+    chain can do (see the toolchain module for why the framework carries no implementation). Either
+    way the wheel supplies only file contents + a request its chain's toolchain understands, never a
+    command line, so the network posture stays Python-owned.
 
     The whole ``source`` goes through rather than just its root: an implementation resolves its own
     project facts from it (Solana reads the crate that owns ``relative_path`` to fill in an IDL's
@@ -655,13 +653,13 @@ async def run_workspace_prep(
         target.write_text(contents)
 
     if not plan.needs_toolchain:
-        return None
-    idl = await workspace_toolchain(chain)(
+        return {}
+    facts = await project_toolchain(chain).prepare(
         plan, input, source=source, sandbox=sandbox, timeout_s=command_timeout_s
     )
-    if idl is not None:
-        _log.info("workspace prep placed the program's IDL at %s", idl)
-    return idl
+    if facts:
+        _log.info("workspace prep established %s", facts)
+    return facts
 
 
 class PreflightFailed(RuntimeError):
@@ -669,10 +667,10 @@ class PreflightFailed(RuntimeError):
     before any property or authored artifact exists.
 
     Terminal by construction: what fails here is the *workspace* (a dependency graph that won't
-    resolve, a crate that won't link, IDL codegen the generator rejects, a built program that won't
-    load), and none of that is something an authoring agent can fix — it doesn't own the manifest.
-    Re-authoring against it only burns the revise budget on errors the model can't address, which is
-    exactly what this gate exists to prevent."""
+    resolve, a unit that won't link, codegen the generator rejects, a built program that won't load),
+    and none of that is something an authoring agent can fix — it doesn't own the project's build
+    files. Re-authoring against it only burns the revise budget on errors the model can't address,
+    which is exactly what this gate exists to prevent."""
 
 
 async def run_preflight_gate(
@@ -725,8 +723,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         declared_args: dict[str, Any] | None = None,
         setup_result: str | None = None,
-        program_crate: ProgramCrate | None = None,
-        idl: str | None = None,
+        project: "ProjectFacts | None" = None,
     ):
         super().__init__(RustFormalResult, descriptor.backend_tag)
         self._module = module
@@ -742,15 +739,10 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # declares a ``setup`` step reaches here only through :class:`RustStagedFormalizer`, which
         # authors the artifact before constructing this.
         self._setup_result = setup_result
-        # Where the analyzed source's compilation unit lives (see ``program_crate_of``), carried
-        # on every ``AuthorInput`` and mirrored into ``finalize`` — the delivered crate must
-        # declare the same dependency the gated builds did. ``idl`` likewise: where workspace prep
-        # placed the program's IDL, when the wheel asked for one instead of a crate dependency.
-        self._program_crate = program_crate or ProgramCrate()
-        # ``None`` = prep placed no IDL (so the wheel depends on the program's crate directly), which
-        # is a different fact from "it placed one at the empty path". The wire form flattens it to
-        # ``""`` in ``finalize`` below, because that is the shape the payload promises.
-        self._idl = idl
+        # What the preflight established about the project (see :class:`ProjectFacts`), carried on
+        # every ``AuthorInput`` and mirrored into ``finalize`` — what ships must name the same
+        # dependency the gated builds did.
+        self._project = project or ProjectFacts()
 
     async def _sandbox_spec(self, workdir: Path) -> BackendSpec:
         if self._sandbox is None or not self._sandbox.enabled:
@@ -772,11 +764,11 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         slugs = unique_slugs(props)
         input_json = ComponentInput(
             program=str(run.source.contract_name),
-            program_crate=self._program_crate,
+            source_unit=self._project.source_unit,
             unit=feat.feature_json(),
             props=_properties(props, slugs),
             setup=self._setup_result,
-            idl=self._idl,
+            prep_facts=self._project.prep_facts,
             args=self._declared_args,
         ).model_dump_json()
         sandbox_dict = await self._sandbox_spec(workdir)
@@ -912,8 +904,8 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         ]
         payload = FinalizeInput(
             program=str(run.source.contract_name),
-            program_crate=self._program_crate,
-            idl=self._idl,
+            source_unit=self._project.source_unit,
+            prep_facts=self._project.prep_facts,
             components=components,
             setup=self._setup_result,
         )
@@ -929,19 +921,24 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
 
 
 @dataclass(frozen=True)
-class RustPreflight:
-    """What :meth:`RustBackend.preflight` established, handed forward to ``prepare_system``.
+class ProjectFacts:
+    """What the host established about the project under analysis — the outcome of
+    :meth:`RustBackend.preflight`, handed forward to ``prepare_system`` and carried on every callout
+    from there.
 
-    Both fields are inputs every later callout needs, and neither follows from the analyzed model:
-    the compilation unit the analyzed source belongs to, and where the workspace prep placed the
-    program's IDL (``None`` = it placed none, so the wheel depends on the program's crate directly).
-    Carried rather than recomputed so the gated preflight build, every authoring turn, and the
-    delivered artifact all name the same dependency."""
+    Both fields are inputs every later callout needs, and neither follows from the analyzed model.
+    Both are also **chain-shaped**: this is the one part of the seam whose vocabulary belongs to the
+    analyzed project's build system rather than to the framework, so the host transports them without
+    a schema (see :mod:`composer.rustapp.toolchain`). Carried rather than recomputed so the gated
+    preflight build, every authoring turn, and the delivered artifact all agree on what they are
+    building against."""
 
-    program_crate: ProgramCrate
-    #: Where the prep placed the program's IDL; ``None`` = it placed none, which is the signal the
-    #: wheel reads to decide how it sources the program's types.
-    idl: str | None
+    #: Where the analyzed source lives as a unit of its own build system, from the chain's toolchain
+    #: (:func:`source_unit_of`). Empty = nothing resolved, and the wheel applies its own convention.
+    source_unit: dict[str, Any] = field(default_factory=dict)
+    #: What the workspace prep established (:func:`run_workspace_prep`). Empty = it established
+    #: nothing, which is what the wheel reads to decide how it sources the program's types.
+    prep_facts: dict[str, Any] = field(default_factory=dict)
 
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
@@ -996,7 +993,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
     rather than subclassing."""
 
     backend: "RustBackend"
-    preflight: RustPreflight
+    preflight: ProjectFacts
     analyzed: BaseApplication | None = None
 
     @override
@@ -1010,11 +1007,11 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         descriptor = b.descriptor
         workdir = Path(run.source.project_root)
         program = str(run.source.contract_name)
-        # One shared crate / target dir → serialize the toolchain runs (declared by the wheel).
+        # One shared workspace / build dir → serialize the toolchain runs (declared by the wheel).
         command_sem = asyncio.Semaphore(1) if descriptor.serialize_toolchain else None
 
         analyzed_json = self.analyzed.model_dump(mode="json") if self.analyzed is not None else {}
-        program_crate = self.preflight.program_crate
+        project = self.preflight
 
         def build(setup_result: str | None) -> RustFormalizer:
             """The formalizer, around a shared setup artifact that is either already authored or
@@ -1023,8 +1020,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
                 b.module, b.descriptor, sandbox=b.sandbox,
                 command_timeout_s=b.command_timeout_s,
                 command_sem=command_sem, declared_args=b.declared_args,
-                setup_result=setup_result,
-                program_crate=program_crate, idl=self.preflight.idl,
+                setup_result=setup_result, project=project,
             )
 
         setup = descriptor.step(PhaseRole.SETUP)
@@ -1032,8 +1028,8 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             return build(None)
         # The base for the setup artifact's own input; ``author_setup`` adds the properties.
         prep_input = SetupInput(
-            program=program, program_crate=program_crate, model=analyzed_json,
-            idl=self.preflight.idl, args=b.declared_args,
+            program=program, source_unit=project.source_unit, model=analyzed_json,
+            prep_facts=project.prep_facts, args=b.declared_args,
         )
 
         async def author_setup(props: list[PropertyFormulation], run: PipelineRun) -> str:
@@ -1073,7 +1069,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
 class RustBackend(
     PipelineBackend[
         enum.Enum, RustFormalResult, Any, RustArtifact, FeatureUnit, Any, BaseApplication,
-        RustPreflight,
+        ProjectFacts,
     ]
 ):
     """A :class:`PipelineBackend` backed by a Rust wheel. Ecosystem-agnostic: it locates the main
@@ -1098,8 +1094,8 @@ class RustBackend(
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     # How to confine every toolchain run (docs/command-sandbox.md). None → unsandboxed.
     sandbox: SandboxConfig | None = None
-    # Parsed values of the descriptor's declared CLI args, injected into every component's
-    # ``AuthorInput.context`` (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
+    # Parsed values of the descriptor's declared CLI args, put on every component's
+    # ``AuthorInput.args`` (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
     declared_args: dict[str, Any] = field(default_factory=dict)
 
     # Both are the wheel's to state, so they are derived from its descriptor rather than passed.
@@ -1127,22 +1123,22 @@ class RustBackend(
         )
 
     @override
-    async def preflight(self, run: PipelineRun) -> RustPreflight:
+    async def preflight(self, run: PipelineRun) -> ProjectFacts:
         """Prepare the wheel's workspace and gate it — everything buildable before the program has
         been analyzed, run concurrently with system analysis (``docs/rust-applications.md`` §4.2).
 
         Two steps, both *declared* by the wheel and executed here (``docs/rust-applications.md`` §7):
 
-        1. :func:`run_workspace_prep` — place the crate's build files, and (through the ecosystem's
-           :class:`~composer.rustapp.toolchain.WorkspaceToolchain`) warm its dependencies, build the
-           program, place its IDL. Already the run's slowest non-LLM step.
+        1. :func:`run_workspace_prep` — place the wheel's build files, and (through the chain's
+           :class:`~composer.rustapp.toolchain.ProjectToolchain`) carry out whatever preparing the
+           analyzed project takes. Already the run's slowest non-LLM step.
         2. :func:`run_preflight_gate`, when the descriptor declares a ``preflight`` — build a
            skeleton artifact *the wheel authors itself* through the real toolchain, in the real
-           sandbox. This is what turns step 1 from "we placed a manifest" into "this workspace
-           compiles": a `cargo fetch` resolves a dependency graph but compiles nothing, and its
+           sandbox. This is what turns step 1 from "we placed some build files" into "this workspace
+           compiles": warming a dependency cache resolves a graph but compiles nothing, and its
            failures are deliberately non-fatal. Without the gate the first *check* of the workspace
            is the first authored draft's build — after the whole extraction phase, and reported as
-           compiler errors an authoring agent cannot fix because it does not own the manifest.
+           compiler errors an authoring agent cannot fix because it does not own the build files.
 
         Neither step reads the analyzed model or any property, which is what makes the overlap safe.
         A failure raises (:class:`PreflightFailed` from the gate, or the workspace toolchain's own
@@ -1151,27 +1147,28 @@ class RustBackend(
         gate = descriptor.step(PhaseRole.PREFLIGHT)
         workdir = Path(run.source.project_root)
         # Resolved once per run and carried on every AuthorInput from here on: the wheel renders its
-        # crate from this, so prep, every gated build, and the deliverable name one dependency.
-        program_crate = program_crate_of(self.ecosystem, run.source)
+        # build files from this, so prep, every gated build, and the deliverable agree on what they
+        # are building against.
+        unit = source_unit_of(self.ecosystem, run.source)
         # Declared args are in scope from the start: prep may need one (Crucible reads
         # ``program_idl`` when deciding how to source the program's types).
         prep_input = PreflightInput(
             program=str(run.source.contract_name),
-            program_crate=program_crate, args=dict(self.declared_args),
+            source_unit=unit, args=dict(self.declared_args),
         )
 
-        async def prep() -> RustPreflight:
-            idl = await run_workspace_prep(
+        async def prep() -> ProjectFacts:
+            prep_facts = await run_workspace_prep(
                 self.module, prep_input, chain=self.ecosystem.name, source=run.source,
                 sandbox=self.sandbox, command_timeout_s=self.command_timeout_s,
             )
-            result = RustPreflight(program_crate=program_crate, idl=idl)
+            result = ProjectFacts(source_unit=unit, prep_facts=prep_facts)
             if gate is not None:
-                # The gate renders the same crate the prep just set up — including, under the IDL
-                # path, the file it placed — so it must see the reported `idl`.
+                # The gate renders the same workspace the prep just set up — including whatever it
+                # established — so it must see the reported facts.
                 await run_preflight_gate(
                     self.module,
-                    prep_input.with_idl(result.idl),
+                    prep_input.with_prep_facts(result.prep_facts),
                     workdir=workdir,
                     sandbox_dict=await self.sandbox_spec(workdir),
                     emit=make_emitter(),
@@ -1193,7 +1190,7 @@ class RustBackend(
 
     @override
     async def prepare_system(
-        self, analyzed: BaseApplication, run: PipelineRun, preflight: RustPreflight
+        self, analyzed: BaseApplication, run: PipelineRun, preflight: ProjectFacts
     ) -> PreparedSystem[RustFormalResult, FeatureUnit, Any]:
         return RustPreparedSystem(
             self.ecosystem.locate_main(analyzed, run.source), self, preflight, analyzed

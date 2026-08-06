@@ -74,7 +74,6 @@ from composer.rustapp.wire import (
     Failure,
     FinalizeComponent,
     FinalizeInput,
-    ProgramCrate,
     Prompt,
     Property,
     SandboxGrants,
@@ -463,7 +462,6 @@ def test_generator_reaches_every_field_the_host_declares(case: Root, wire_echo: 
 #: struct's, and are not field names at all, so comparing each struct's own top level is what keeps
 #: that assertion exact.
 NESTED = [
-    Root("program_crate", ProgramCrate),
     _UNITS,
     Root("property", Property),
     Root("finalize_component", FinalizeComponent),

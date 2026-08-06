@@ -29,7 +29,6 @@ from composer.rustapp.wire import (
     ComponentInput,
     FailureKind,
     PreflightInput,
-    ProgramCrate,
     SetupInput,
     RustAppModule,
     Unit,
@@ -111,9 +110,10 @@ def test_a_workspace_plan_that_only_places_files_needs_no_toolchain():
     files_only = parse_workspace_prep(json.dumps(
         wire_workspace_prep(files={"fuzz/Cargo.toml": "[package]"})))
     assert files_only.files and not files_only.needs_toolchain
-    for asking in ({"warm_dirs": ["fuzz"]}, {"build_program": "lend"}, {"idl_dest": "idl.json"}):
-        plan = parse_workspace_prep(json.dumps(wire_workspace_prep(**asking)))
-        assert plan.needs_toolchain
+    # Whatever the request *says* is the chain's business; that there is one at all is the host's.
+    asking = parse_workspace_prep(json.dumps(
+        wire_workspace_prep(toolchain_request={"build_program": "lend"})))
+    assert asking.needs_toolchain
 
 
 def test_author_input_requires_what_the_wheel_requires():
@@ -151,11 +151,12 @@ def test_author_input_serializes_the_shape_the_wheel_deserializes():
     assert inp.model_dump() == {
         "kind": "preflight",
         "program": "vault",
-        # Every part empty — the SDK's FFI boundary fills them from its own convention.
-        "program_crate": {"dir": "", "package": "", "lib": "", "anchor": ""},
+        # Empty rather than absent: the wheel is told the host resolved nothing and established
+        # nothing, and applies its own convention. Nothing here is filled in for it.
+        "source_unit": {},
         "props": [],
         "setup": None,
-        "idl": None,
+        "prep_facts": {},
         "args": {},
     }
 
@@ -167,12 +168,18 @@ def test_failure_kind_defaults_to_the_compile_gate():
     assert FailureKind.JUDGE.value == "judge"
 
 
-def test_program_crate_carries_the_three_independent_names():
-    crate = ProgramCrate(dir="programs/lend", package="example-lending", lib="example_lending")
-    # None follows from another — the point of resolving them from the manifest.
-    assert (crate.dir, crate.package, crate.lib, crate.anchor) == (
-        "programs/lend", "example-lending", "example_lending", ""
-    )
+def test_the_chain_shaped_payloads_cross_the_seam_uninterpreted():
+    # source_unit / prep_facts / toolchain_request belong to the analyzed project's build system, and
+    # this side declares no schema for any of them: two chains with nothing in common go through
+    # unchanged. A field here would be the framework taking sides between them.
+    cargo = {"dir": "programs/lend", "package": "example-lending", "lib": "example_lending"}
+    move = {"package_dir": "sources", "named_addresses": {"vault": "0x1"}}
+    for unit in (cargo, move):
+        inp = TypeAdapter(AuthorInput).validate_json(
+            SetupInput(program="vault", source_unit=unit, prep_facts={"idl": "a.json"})
+            .model_dump_json()
+        )
+        assert inp.source_unit == unit and inp.prep_facts == {"idl": "a.json"}
 
 
 def test_the_callout_list_is_derived_from_the_protocol():

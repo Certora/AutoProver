@@ -48,7 +48,7 @@ from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.cli import root_cache_key
 from composer.pipeline.core import CorePipelineResult
 from composer.rag.models import get_model
-from composer.rustapp.adapter import program_crate_of
+from composer.rustapp.adapter import source_unit_of
 from composer.rustapp.descriptor import ArgSpec, BoolDefault, IntDefault, PhaseRole, StrDefault
 from composer.rustapp.wire import AppArgs, parse_sandbox_grants
 from composer.rustapp.host import RustApplication, build_application, run_application
@@ -254,7 +254,7 @@ async def rust_entry_point(
     )
 
     # The run's inputs as both argument-shaped callouts see them, resolved once here: the wheel
-    # gets each part as a field rather than re-deriving any of them (``program_crate`` is the same
+    # gets each part as a field rather than re-deriving any of them (``source_unit`` is the same
     # blob every ``AuthorInput`` carries, so a wheel can check up-front that the code it will
     # depend on is where the host says it is — Crucible: the program crate must exist).
     declared_args = _declared_args(args, descriptor.args)
@@ -263,7 +263,7 @@ async def rust_entry_point(
         program=str(contract_name),
         source_path=relative_path,
         system_doc=args.system_doc or None,
-        program_crate=program_crate_of(app.ecosystem, init_source),
+        source_unit=source_unit_of(app.ecosystem, init_source),
         declared=declared_args,
     )
 

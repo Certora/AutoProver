@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use autoprover_sdk::args::AppArgs;
-use autoprover_sdk::authoring::{AuthorInput, Failure, ProgramCrate, Prompt, Property};
+use autoprover_sdk::authoring::{AuthorInput, Failure, Prompt, Property};
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::finalize::{ComponentOutcome, FinalizeComponent, FinalizeInput};
 use autoprover_sdk::outcome::{CompileResult, Target, Unit, ValidateOutcome};
@@ -57,7 +57,6 @@ enum WireType {
     // Nested — never a whole message. Addressable anyway so the field-set check can generate one on
     // its own and compare its keys against the host's mirror, rather than having to find them at
     // some depth inside a parent, below opaque payloads whose keys are not field names at all.
-    ProgramCrate,
     Property,
     FinalizeComponent,
     ComponentOutcome,
@@ -90,7 +89,6 @@ fn dispatch<O: Op>(ty: WireType, op: O) -> Result<Value, Fault> {
         WireType::Units => op.run::<Vec<Unit>>(),
         WireType::WorkspacePrep => op.run::<WorkspacePrep>(),
         WireType::SandboxGrants => op.run::<SandboxGrants>(),
-        WireType::ProgramCrate => op.run::<ProgramCrate>(),
         WireType::Property => op.run::<Property>(),
         WireType::FinalizeComponent => op.run::<FinalizeComponent>(),
         WireType::ComponentOutcome => op.run::<ComponentOutcome>(),

@@ -141,7 +141,7 @@ Two exceptions, both structural: [`AuthorInput`](../rust/autoprover-sdk/src/auth
 carry `deny_unknown_fields` because serde rejects it alongside the `flatten` that `Authored` needs
 (so a host-only field there is caught by the round trip rather than at the callout), and the outbound
 *pydantic* models keep their defaults — Python only serializes those, `model_dump_json` writes every
-field regardless, and an all-empty `ProgramCrate` is how the host says its resolver found none.
+field regardless, and an empty `source_unit` is how the host says it resolved none.
 
 `RustAppModule` is that surface as a Protocol, and `CALLOUTS` is derived from its annotations — so
 [`load_module`](../composer/rustapp/host.py) rejects a module that isn't an AutoProver wheel (or is
@@ -254,7 +254,7 @@ wheel bug, not something to discover mid-run.
 
 [`rust_entry_point`](../composer/rustapp/entry.py) then does the irreducibly imperative half —
 parse args, call `validate_preconditions` (with the run's inputs as `AppArgs` — the resolved
-`program_crate`, so a wheel can check up-front that the code it will depend on is where the host
+`source_unit`, so a wheel can check up-front that the code it will depend on is where the host
 says it is, and the program/source path already split out of `path:Name`), open the four
 Postgres-backed pools + RAG + async tool context + thread logger, build the `ServiceHost` env and
 `WorkflowContext`, resolve or discover the design doc, apply `confine_by_default`, and yield the
@@ -287,7 +287,7 @@ agent does not own the manifest:
 |---|---|
 | Dependency graph won't co-resolve | compiler errors in draft #1 |
 | The harness crate won't link (program on another Anchor major) | compiler errors in draft #1 |
-| IDL codegen rejects the program | compiler errors in draft #1 |
+| Codegen from the program rejects it | compiler errors in draft #1 |
 | The built program isn't where the fixture expects, or won't load | a mystery panic at setup |
 
 So a failure is **terminal**: `run_preflight_gate` raises
@@ -295,9 +295,9 @@ So a failure is **terminal**: `run_preflight_gate` raises
 there is no re-author. Two side benefits: the gate proves the built artifact actually runs, and it
 leaves the target dir warm, so the first *authored* compile builds one crate instead of a graph.
 
-What the step establishes is carried forward as `RustPreflight { program_crate, idl }` — the driver
-holds it opaquely and hands it to `prepare_system` — so the gated build, every authoring turn and
-the delivered artifact all name the same dependency.
+What the step establishes is carried forward as `ProjectFacts { source_unit, prep_facts }` — the driver
+holds it opaquely and hands it to `prepare_system` — so the gated build, every authoring turn and the
+delivered artifact all agree on what they are building against. Both halves are chain-shaped (§7).
 
 ### 4.3 Setup: the shared artifact
 
@@ -443,53 +443,57 @@ accounts for every component.
 
 ---
 
-## 7. The toolchain seams
+## 7. The project seam
 
-Two things the host needs to know about a project it does not itself understand — where its code
-lives as a compilation unit, and how to prepare/build its workspace. Both are knowledge about the
-**ecosystem under analysis**, not about implementing a backend in Rust, so
-[toolchain.py](../composer/rustapp/toolchain.py) declares the seams and the application that needs
-one registers an implementation per chain (shared by every wheel targeting it, exactly like the
-ecosystem and RAG registries).
+Two things the host needs to know about a project it does not itself understand — where its code lives
+as a unit of that project's build system, and how to prepare/build its workspace. Both are knowledge
+about the **ecosystem under analysis**, not about implementing a backend in Rust: an application is
+written in Rust, but the project it analyzes need not be. So
+[toolchain.py](../composer/rustapp/toolchain.py) declares one seam, `ProjectToolchain`, and the
+application that needs it registers an implementation per chain (shared by every wheel targeting it,
+exactly like the ecosystem and RAG registries).
+
+**Everything project-shaped crosses that seam opaquely.** A Cargo package name, an Anchor IDL, a Move
+package's named addresses are one ecosystem's vocabulary; a framework that declared fields for them
+would make the next ecosystem an edit to [wire.py](../composer/rustapp/wire.py). So three payloads are
+carried without a schema — `source_unit`, `prep_facts` and `WorkspacePrep.toolchain_request` (Rust:
+`autoprover_sdk::chain::ChainData`, a JSON object and nothing more). They are typed at both *ends* and
+nowhere in between: the chain's registered implementation and the wheels targeting that chain share
+those types through the chain's own support crate — where that chain's Cargo/Anchor vocabulary and
+its layout conventions live. Which type is inside follows from the wheel's declared `ecosystem`, not
+from inspecting keys. It is the same treatment `AuthorInput`'s `model` and `unit` already get, for
+the same reason.
 
 **`workspace_prep` is a pure plan the host executes.** The wheel returns
-`WorkspacePrep { files, warm_dirs, build_program, idl_dest }` — file *contents* and declarative
-intent, never a command line — and [`run_workspace_prep`](../composer/rustapp/adapter.py) writes the
-files itself (path-confined) and hands the rest to the chain's `WorkspaceToolchain`. The split is
-load-bearing for the network posture: the sandbox **never** gives a confined process network access,
-so dependency fetches run *unconfined* (a fetch executes no untrusted code) and anything that
-compiles runs *confined + offline*. Handing the wheel a confined-with-network policy would be a
-brand-new security capability; declaring a plan is not.
+`WorkspacePrep { files, toolchain_request }` — file *contents* and declarative intent, never a command
+line — and [`run_workspace_prep`](../composer/rustapp/adapter.py) writes the files itself
+(path-confined) and hands the request to the chain's `ProjectToolchain`. The split is load-bearing for
+the network posture: the sandbox **never** gives a confined process network access, so dependency
+fetches run *unconfined* (a fetch executes no untrusted code) and anything that compiles runs
+*confined + offline*. Handing the wheel a confined-with-network policy would be a brand-new security
+capability; declaring a plan is not.
 
-`idl_dest` is the same shape for a derived *input* rather than an artifact: the toolchain resolves
-the program's IDL (an operator-supplied file, else its own IDL build), writes it there, and the host
-echoes the path back as `AuthorInput.idl` on every later callout — so a set `idl` means "the file is
-in place". A hard error if it can't be produced: the wheel only asks when it
-cannot proceed without one. This is what lets a harness target a program whose toolchain it cannot
-link against — types generated from the IDL belong to the *wheel's* stack, so the program's own
-dependency graph never enters the harness build.
+What the toolchain establishes comes back as `prep_facts` on every later callout, so a fact there means
+*the thing it describes is in place* — Solana's `{idl: <path>}` is what routes a harness to generated
+types instead of a dependency on a program crate it may not be able to link. A request that cannot be
+carried out is a hard error: a wheel only asks when it cannot proceed without the result.
 
-**`ProgramCrate`** answers the other question. `AuthorInput.program` is only the *analysis*
-identifier (the `Name` in `path:Name`); a crate's directory, package name and lib name are
-independent of it and of each other (a real lending program: directory `programs/lend`, package
-`example-lending`, lib `example_lending`). So the host resolves `{dir, package, lib, anchor}` from
-the manifest that owns the main source file and carries it on every `AuthorInput`. `anchor` is the
-crate's declared `anchor-lang` requirement, because a dependent wheel can only link the crate when
-its Anchor *compatibility unit* matches (`anchor_compat`, where a `0.x` minor counts as a major):
-Anchor's generated `InstructionData`/`ToAccountMetas` impls are tied to the exact `anchor-lang` that
-generated them, so no amount of pinning makes a different major satisfy the trait bounds. That is
-the fact that routes a wheel to the IDL path instead.
+`AuthorInput.program` is not part of any of this. It is only the *analysis* identifier (the `Name` in
+`path:Name`) — a label and a namespace — and nothing about a build-system unit follows from it (a real
+lending program: directory `programs/lend`, package `example-lending`, lib `example_lending`). That is
+exactly why `source_unit` is resolved once and carried rather than derived per callout.
 
-**Neither map has an entry today**, and they are unregistered in deliberately different ways:
+**No chain has an entry today.** The seam's two halves are therefore reached in deliberately different
+ways:
 
-- `source_crate` **degrades**. An all-empty `ProgramCrate` is already a documented state — it is
-  what Solidity yields, and what an unreadable Rust layout yields — and the SDK's
-  `ProgramCrate::resolved` fills the gaps from the `programs/<program>` convention. "No resolver" is
-  indistinguishable from "nothing to resolve", which is the honest answer.
-- `workspace_toolchain` **raises**. A plan that only places files never reaches it
-  (`WorkspacePrep.needs_toolchain`), so getting there means the wheel asked for a warm/build/IDL
-  nothing can perform. Skipping it silently would resurface much later as a mystifying compile error
-  in the first authored draft — read as the authoring agent's fault.
+- `source_unit` **degrades**. An empty answer is already a documented state — it is what Solidity
+  yields, and what an unreadable layout yields — and the wheel fills the gaps from its own convention
+  (`SolanaSourceUnit::resolved`). "No toolchain" is indistinguishable from "nothing to resolve", which
+  is the honest answer.
+- `project_toolchain` **raises**. A plan that only places files never reaches it
+  (`WorkspacePrep.needs_toolchain`), so getting there means the wheel asked for preparation nothing can
+  perform. Skipping it silently would resurface much later as a mystifying compile error in the first
+  authored draft — read as the authoring agent's fault.
 
 ---
 

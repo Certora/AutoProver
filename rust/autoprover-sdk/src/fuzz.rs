@@ -4,14 +4,15 @@
 //!
 //! Everything else derives `Arbitrary` at its definition. What needs a hand-written impl is
 //! either a field holding a `serde_json::Value` (no `Arbitrary` impl, and none would know how
-//! deep to go) or a field whose wire domain is narrower than its Rust type — the three cases
-//! below, each of which would otherwise fail as a false positive.
+//! deep to go) or a field whose wire domain is narrower than its Rust type — the cases below,
+//! each of which would otherwise fail as a false positive.
 
 use arbitrary::{Arbitrary, Result, Unstructured};
 use serde_json::{Map, Value};
 
 use crate::args::DeclaredArgs;
 use crate::authoring::Authored;
+use crate::chain::ChainData;
 use crate::descriptor::{
     AppDescriptor, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseSpec,
 };
@@ -71,6 +72,14 @@ fn object(u: &mut Unstructured, depth: u32) -> Result<Map<String, Value>> {
 /// Opaque on both sides (the wheel declares the flags, so the host has no schema for them), which
 /// makes any JSON object a legal value.
 impl<'a> Arbitrary<'a> for DeclaredArgs {
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        Ok(object(u, JSON_DEPTH)?.into())
+    }
+}
+
+/// The project's own build-system vocabulary, opaque to this seam (`chain::ChainData`) — so, like
+/// the declared flags, any JSON object is a legal value.
+impl<'a> Arbitrary<'a> for ChainData {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
         Ok(object(u, JSON_DEPTH)?.into())
     }

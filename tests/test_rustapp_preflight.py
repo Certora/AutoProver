@@ -2,16 +2,16 @@
 exists, concurrently with system analysis (``composer.rustapp.adapter``).
 
 The gate is what makes the prep mean something. Placing a manifest and running ``cargo fetch``
-resolves a dependency graph but compiles nothing, and the fetch is deliberately best-effort — so
+resolves a dependency graph but compiles nothing, and warming is deliberately best-effort — so
 until this existed, the first thing that actually *built* the workspace was the compile of the first
 LLM-authored draft, at the far end of the extraction phase. A dependency graph that won't resolve, a
-harness that won't link, or IDL codegen the generator rejects would surface there as compiler errors
-an authoring agent cannot fix (it does not own the manifest) and would consume every one of its
-revise attempts.
+harness that won't link, or codegen the generator rejects would surface there as compiler errors
+an authoring agent cannot fix (it does not own the project's build files) and would consume every one
+of its revise attempts.
 
 So: the wheel renders its own skeleton, the host builds it through the same ``compile`` callout the
-authored artifacts use, and a failure is terminal. Fake wheel, fake workspace toolchain — no
-toolchain, no LLM.
+authored artifacts use, and a failure is terminal. Fake wheel, fake project toolchain — no toolchain,
+no LLM.
 """
 
 import json
@@ -20,32 +20,36 @@ from typing import Any, cast
 
 import pytest
 
-from composer.rustapp.adapter import PreflightFailed, RustPreflight
+from composer.rustapp.adapter import PreflightFailed, ProjectFacts
 from composer.rustapp.descriptor import AppDescriptor
 from tests.conftest import (
     wire_descriptor, wire_phase, wire_required_phases, wire_workspace_prep,
 )
 from composer.rustapp.host import build_backend
-from composer.rustapp.toolchain import SOURCE_CRATES, WORKSPACE_TOOLCHAINS
-from composer.rustapp.wire import ProgramCrate
+from composer.rustapp.toolchain import PROJECT_TOOLCHAINS
 from composer.spec.context import SourceCode
 from composer.spec.system_model import SolidityIdentifier
 
 pytestmark = pytest.mark.asyncio
 
 CRATE_DIR = "programs/lend"
-#: What the chain's registered resolver reports for this project. Framework-side these are opaque
-#: strings — resolving them from a Cargo manifest is the registered resolver's business.
-CRATE = ProgramCrate(dir=CRATE_DIR, package="example-lending", lib="example_lending")
+#: What the chain's registered toolchain reports for this project. Framework-side this is an opaque
+#: object — that these keys spell a Cargo crate is the chain implementation's business.
+SOURCE_UNIT = {"dir": CRATE_DIR, "package": "example-lending", "lib": "example_lending"}
 IDL_DEST = "fuzz/vault/idls/example_lending.json"
+#: A prep request in the chain's own shape, and the facts carrying it out establishes.
+BUILD = {"build_program": "example_lending"}
+BUILD_WITH_IDL = {**BUILD, "idl_dest": IDL_DEST}
 ADDR = "LendvUkXRmuDKxGCCFJra9uxWMdMooPEmJk3qp7Tg1Z"
 
 
 class FakeWheel:
     """A wheel with a fixed ``workspace_prep`` plan and a scripted ``compile``."""
 
-    def __init__(self, plan: dict, *, compile_errors: str | None = None):
-        self._plan = wire_workspace_prep(warm_dirs=["fuzz/vault"], **plan)
+    def __init__(self, request: dict, *, compile_errors: str | None = None):
+        self._plan = wire_workspace_prep(
+            toolchain_request={"warm_dirs": ["fuzz/vault"], **request}
+        )
         self._compile_errors = compile_errors
         #: Every ``compile`` call, as ``(input, spec)`` — the assertion surface for these tests.
         self.compiles: list[tuple[dict, str]] = []
@@ -109,22 +113,27 @@ def _project(root: Path) -> None:
     (root / CRATE_DIR / "src" / "lib.rs").write_text("// program")
 
 
-def _fake_chain(monkeypatch):
-    """Register a fake crate resolver + workspace toolchain for the chain the descriptor names — the
-    seams the real Solana ones are registered at (``composer.rustapp.toolchain``). The toolchain does
-    what any implementation must: place the IDL where the plan asked and report the path back."""
+class _FakeToolchain:
+    """A stand-in for the chain implementation the real Solana one is registered as
+    (``composer.rustapp.toolchain``). It does what any implementation must: read the request in its
+    own shape, do the work, and report what it established."""
 
-    async def fake_prepare(plan, _input, *, source, sandbox, timeout_s):
-        assert plan.build_program  # what these plans all ask for
-        if plan.idl_dest is None:
-            return None
-        dest = Path(source.project_root) / plan.idl_dest
+    def source_unit(self, _source):
+        return SOURCE_UNIT
+
+    async def prepare(self, plan, _input, *, source, sandbox, timeout_s):
+        request = plan.toolchain_request
+        assert request["build_program"]  # what these plans all ask for
+        if (idl_dest := request.get("idl_dest")) is None:
+            return {}
+        dest = Path(source.project_root) / idl_dest
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps({"metadata": {"address": ADDR}}))
-        return plan.idl_dest
+        return {"idl": idl_dest}
 
-    monkeypatch.setitem(SOURCE_CRATES, "solana", lambda _source: CRATE)
-    monkeypatch.setitem(WORKSPACE_TOOLCHAINS, "solana", fake_prepare)
+
+def _fake_chain(monkeypatch):
+    monkeypatch.setitem(PROJECT_TOOLCHAINS, "solana", _FakeToolchain())
 
 
 async def _preflight(monkeypatch, tmp_path, wheel, *, with_preflight=True, declared=None):
@@ -138,10 +147,10 @@ async def _preflight(monkeypatch, tmp_path, wheel, *, with_preflight=True, decla
 
 
 async def test_the_gate_compiles_a_wheel_authored_skeleton_with_no_spec(tmp_path, monkeypatch):
-    wheel = FakeWheel({"build_program": "example_lending"})
+    wheel = FakeWheel(BUILD)
     result, _run = await _preflight(monkeypatch, tmp_path, wheel)
 
-    assert isinstance(result, RustPreflight)
+    assert isinstance(result, ProjectFacts)
     assert len(wheel.compiles) == 1
     gate_input, spec = wheel.compiles[0]
     # `kind` is what the wheel dispatches on, and the spec is empty: nothing has been authored yet,
@@ -151,40 +160,43 @@ async def test_the_gate_compiles_a_wheel_authored_skeleton_with_no_spec(tmp_path
     assert gate_input["props"] == []
 
 
-async def test_the_resolved_program_crate_is_carried_forward(tmp_path, monkeypatch):
-    wheel = FakeWheel({"build_program": "example_lending"})
+async def test_the_resolved_source_unit_is_carried_forward(tmp_path, monkeypatch):
+    wheel = FakeWheel(BUILD)
     result, _run = await _preflight(monkeypatch, tmp_path, wheel)
 
-    # Whatever the chain's resolver reported — none of it follows from the analysis identifier
+    # Whatever the chain's toolchain reported — none of it follows from the analysis identifier
     # ("vault"), and the gated build, every authoring turn and the deliverable must all agree on it.
-    assert result.program_crate == CRATE
-    assert wheel.compiles[0][0]["program_crate"] == result.program_crate.model_dump()
+    assert result.source_unit == SOURCE_UNIT
+    assert wheel.compiles[0][0]["source_unit"] == SOURCE_UNIT
 
 
-async def test_a_placed_idl_reaches_the_gate_that_builds_against_it(tmp_path, monkeypatch):
-    wheel = FakeWheel({"build_program": "example_lending", "idl_dest": IDL_DEST})
+async def test_what_the_prep_established_reaches_the_gate_that_builds_against_it(
+    tmp_path, monkeypatch
+):
+    wheel = FakeWheel(BUILD_WITH_IDL)
     result, _run = await _preflight(monkeypatch, tmp_path, wheel)
 
-    assert result.idl == IDL_DEST
-    # The gate renders the same crate the prep just set up, so it must see where the IDL landed —
-    # under the IDL path the harness generates its types from that file rather than linking the crate.
-    assert wheel.compiles[0][0]["idl"] == IDL_DEST
+    assert result.prep_facts == {"idl": IDL_DEST}
+    # The gate renders the same workspace the prep just set up, so it must see what the prep
+    # established — here, that the harness can generate its types from a placed file rather than
+    # linking the program's crate.
+    assert wheel.compiles[0][0]["prep_facts"] == {"idl": IDL_DEST}
 
 
-async def test_no_idl_means_null_rather_than_an_empty_path(tmp_path, monkeypatch):
-    wheel = FakeWheel({"build_program": "example_lending"})
+async def test_a_prep_that_established_nothing_says_so_with_an_empty_answer(tmp_path, monkeypatch):
+    wheel = FakeWheel(BUILD)
     result, _run = await _preflight(monkeypatch, tmp_path, wheel)
 
-    # A set `idl` is the signal the wheel reads to mean "the file is in place"; an empty string
-    # would read as the crate path either way, but only by accident.
-    assert result.idl is None
-    assert wheel.compiles[0][0]["idl"] is None
+    # Empty is the whole spelling of "nothing established" — a fact present but empty would read as
+    # something being in place at an empty path.
+    assert result.prep_facts == {}
+    assert wheel.compiles[0][0]["prep_facts"] == {}
 
 
 async def test_declared_args_are_in_scope_for_the_gate(tmp_path, monkeypatch):
     # Prep may need one (Crucible reads `program_idl` when deciding how to source the types), so they
     # are on the input from the very first callout.
-    wheel = FakeWheel({"build_program": "example_lending"})
+    wheel = FakeWheel(BUILD)
     _result, _run = await _preflight(
         monkeypatch, tmp_path, wheel, declared={"fuzz_timeout": 30}
     )
@@ -193,23 +205,23 @@ async def test_declared_args_are_in_scope_for_the_gate(tmp_path, monkeypatch):
 
 async def test_a_failing_gate_raises_with_the_diagnostics_and_does_not_retry(tmp_path, monkeypatch):
     errors = "error[E0432]: unresolved import `example_lending::instruction`"
-    wheel = FakeWheel({"build_program": "example_lending"}, compile_errors=errors)
+    wheel = FakeWheel(BUILD, compile_errors=errors)
 
     with pytest.raises(PreflightFailed) as excinfo:
         await _preflight(monkeypatch, tmp_path, wheel)
 
     assert errors in str(excinfo.value)
-    # One attempt. There is nothing to re-author: the failure is in the manifest/toolchain, and the
+    # One attempt. There is nothing to re-author: the failure is in the build files/toolchain, and the
     # message says so rather than letting a later authoring loop discover it the expensive way.
     assert len(wheel.compiles) == 1
 
 
 async def test_without_a_declared_preflight_the_prep_runs_but_nothing_is_gated(tmp_path, monkeypatch):
     # The gate is opt-in per wheel; the workspace prep is not.
-    wheel = FakeWheel({"build_program": "example_lending", "idl_dest": IDL_DEST})
+    wheel = FakeWheel(BUILD_WITH_IDL)
     result, run = await _preflight(monkeypatch, tmp_path, wheel, with_preflight=False)
 
-    assert result.idl == IDL_DEST  # the prep still ran
+    assert result.prep_facts == {"idl": IDL_DEST}  # the prep still ran
     assert wheel.compiles == []
     assert run.metered == [] and run.unmetered == []  # the prep is silent, so there is no task
 
@@ -217,7 +229,7 @@ async def test_without_a_declared_preflight_the_prep_runs_but_nothing_is_gated(t
 async def test_the_build_does_not_spend_an_agent_slot(tmp_path, monkeypatch):
     # The run's semaphore budgets concurrent *agents*; a multi-minute cargo build charged to it would
     # silently take a quarter of the default concurrency away from the analysis it overlaps.
-    wheel = FakeWheel({"build_program": "example_lending"})
+    wheel = FakeWheel(BUILD)
     _result, run = await _preflight(monkeypatch, tmp_path, wheel)
 
     assert run.unmetered == ["demoprover-preflight"]
@@ -229,7 +241,7 @@ async def test_the_gate_is_tagged_with_the_declared_phase_member(tmp_path, monke
     # against the backend's own synthesized enum. That identity is load-bearing: the frontend looks
     # up section labels by enum *member*, so a member from any other copy of the enum would land the
     # task in no section at all. `RustBackend.task_info` is the only thing that resolves it.
-    wheel = FakeWheel({"build_program": "example_lending"})
+    wheel = FakeWheel(BUILD)
     _project(tmp_path)
     _fake_chain(monkeypatch)
     source = _source(tmp_path)

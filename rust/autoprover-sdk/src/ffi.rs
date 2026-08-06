@@ -12,13 +12,14 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Result<T, St
     serde_json::from_str(json).map_err(|e| format!("invalid {what} JSON: {e}"))
 }
 
-/// Parse an [`AuthorInput`] with its `program_crate` normalized, so the partly-empty shape a host
-/// that resolved nothing may send never reaches a backend. This is the one place
-/// [`ProgramCrate::resolved`](crate::authoring::ProgramCrate::resolved) has to be remembered.
+/// Parse an [`AuthorInput`].
+///
+/// Nothing is normalized on the way through: the project facts a payload carries are
+/// [chain-shaped](crate::chain::ChainData), so filling in an unresolved one means applying *one
+/// ecosystem's* layout convention — which is the wheel's business, or its chain support crate's, not
+/// this boundary's.
 fn parse_input(json: &str) -> Result<AuthorInput, String> {
-    let mut input: AuthorInput = parse(json, "AuthorInput")?;
-    input.program_crate = input.program_crate.resolved(&input.program);
-    Ok(input)
+    parse(json, "AuthorInput")
 }
 
 /// The workspace a blocking callout runs in, from the two strings the host sends it as.
@@ -29,11 +30,8 @@ fn workspace(workdir: &str, sandbox_json: &str) -> Workspace {
     }
 }
 
-/// Parse [`AppArgs`], normalizing its `program_crate` for the same reason as [`parse_input`].
 fn parse_args(json: &str) -> Result<AppArgs, String> {
-    let mut args: AppArgs = parse(json, "AppArgs")?;
-    args.program_crate = args.program_crate.resolved(&args.program);
-    Ok(args)
+    parse(json, "AppArgs")
 }
 
 /// `descriptor() -> str` (JSON).
@@ -136,8 +134,7 @@ pub fn workspace_prep(b: &dyn Backend, input_json: &str) -> String {
 
 /// `finalize(outcomes_json) -> str | None` (JSON `{relpath: contents}`, or None).
 pub fn finalize(b: &dyn Backend, outcomes_json: &str) -> Option<String> {
-    let mut outcomes: FinalizeInput = parse(outcomes_json, "FinalizeInput").ok()?;
-    outcomes.program_crate = outcomes.program_crate.resolved(&outcomes.program);
+    let outcomes: FinalizeInput = parse(outcomes_json, "FinalizeInput").ok()?;
     let files = b.finalize(&outcomes);
     if files.is_empty() {
         None
@@ -148,20 +145,43 @@ pub fn finalize(b: &dyn Backend, outcomes_json: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    //! The boundary's own guarantees: what a backend receives is normalized, whatever the host
-    //! managed to resolve.
+    //! The boundary's own guarantees: what a backend receives is what the host sent, and a payload's
+    //! `kind` decides what there is to read.
     use super::*;
-    use crate::authoring::ProgramCrate;
+    use crate::chain::ChainData;
     use crate::descriptor::AppDescriptor;
     use crate::finalize::ComponentOutcome;
     use crate::outcome::{Unit, ValidateOutcome};
     use crate::prep::WorkspacePrep;
+    use serde::{Deserialize, Serialize};
     use std::sync::Mutex;
 
-    /// Records the crate each callout was handed, so a test can assert on what crossed the seam.
+    /// Stands in for the type a chain's support crate defines. The SDK cannot name a real one — that
+    /// it doesn't have to is the property these tests cover — so the Cargo shape is spelled here,
+    /// where it is just another wheel's idea of what a project is.
+    #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+    struct CargoUnit {
+        dir: String,
+        package: String,
+        lib: String,
+    }
+
+    /// One `AuthorInput` with every field the wire requires, so a test can vary the one it is about.
+    /// Absence is an error on this seam (see `crate::required`), which is exactly why a fixture that
+    /// spells only what it cares about would fail to parse.
+    fn component_json(source_unit: &str, prep_facts: &str) -> String {
+        format!(
+            r#"{{"kind":"component","program":"vault","unit":{{"slug":"farms"}},
+                "source_unit":{source_unit},"prep_facts":{prep_facts},
+                "props":[],"setup":null,"args":{{}}}}"#
+        )
+    }
+
+    /// Records the project facts each callout was handed, so a test can assert on what crossed the
+    /// seam rather than on what a backend chose to do with them.
     #[derive(Default)]
     struct Spy {
-        seen: Mutex<Vec<ProgramCrate>>,
+        seen: Mutex<Vec<ChainData>>,
     }
 
     impl Backend for Spy {
@@ -169,7 +189,7 @@ mod tests {
             unimplemented!("not exercised")
         }
         fn units(&self, input: &AuthorInput) -> Vec<Unit> {
-            self.seen.lock().unwrap().push(input.program_crate.clone());
+            self.seen.lock().unwrap().push(input.source_unit.clone());
             Vec::new()
         }
         fn author_prompt(&self, _input: &AuthorInput, _failure: Option<&Failure>) -> Prompt {
@@ -188,47 +208,58 @@ mod tests {
             unimplemented!("not exercised")
         }
         fn workspace_prep(&self, input: &AuthorInput) -> WorkspacePrep {
-            self.seen.lock().unwrap().push(input.program_crate.clone());
+            self.seen.lock().unwrap().push(input.source_unit.clone());
             WorkspacePrep::default()
         }
         fn validate_preconditions(&self, args: &AppArgs) -> Result<(), String> {
-            self.seen.lock().unwrap().push(args.program_crate.clone());
+            self.seen.lock().unwrap().push(args.source_unit.clone());
             Ok(())
         }
     }
 
     #[test]
-    fn a_backend_never_sees_an_unresolved_program_crate() {
-        // The host resolved nothing (no manifest, or a language with no compilation unit). Every
-        // callout still gets the `programs/<program>` fallback filled in — the whole point of
-        // normalizing here rather than trusting each wheel to remember `resolved()`.
+    fn the_projects_own_shape_crosses_the_boundary_untouched() {
+        // The lend shape: directory, package and lib all differ from the analysis identifier and
+        // from each other. Every callout carrying project facts gets them verbatim — this boundary
+        // knows no layout convention to "helpfully" apply, which is what lets a wheel for a chain
+        // with no crates use the same seam.
         let spy = Spy::default();
-        units(&spy, r#"{"kind":"component","program":"vault"}"#);
-        workspace_prep(&spy, r#"{"kind":"preflight","program":"vault"}"#);
-        validate_preconditions(&spy, r#"{"project_root":"/p","program":"vault"}"#);
-        for cr in spy.seen.lock().unwrap().iter() {
-            assert_eq!(cr.dir, "programs/vault");
-            assert_eq!(cr.package, "vault");
-            assert_eq!(cr.lib, "vault");
+        let unit = r#"{"dir":"programs/lend","package":"example-lending","lib":"example_lending"}"#;
+        units(&spy, &component_json(unit, "{}"));
+        workspace_prep(&spy, &component_json(unit, "{}"));
+        validate_preconditions(
+            &spy,
+            &format!(
+                r#"{{"project_root":"/p","program":"vault","source_path":"src/lib.rs",
+                     "system_doc":null,"source_unit":{unit},"declared":{{}}}}"#
+            ),
+        );
+        let seen = spy.seen.lock().unwrap();
+        assert_eq!(seen.len(), 3, "every callout that carries project facts was exercised");
+        for data in seen.iter() {
+            assert_eq!(
+                data.parse::<CargoUnit>().expect("the chain's own shape"),
+                CargoUnit {
+                    dir: "programs/lend".into(),
+                    package: "example-lending".into(),
+                    lib: "example_lending".into(),
+                }
+            );
         }
     }
 
     #[test]
-    fn a_resolved_crate_crosses_the_boundary_untouched() {
-        // The lend shape: directory, package and lib all differ from the analysis identifier, and
-        // the convention would have got every one of them wrong.
+    fn an_unresolved_project_reaches_the_backend_empty() {
+        // The host resolved nothing (no toolchain registered for the chain, no such unit in the
+        // language, an unreadable layout). The wheel is told exactly that, and applies its own
+        // convention if it has one — the alternative, filling it in here, would mean this seam
+        // choosing one ecosystem's layout for every wheel.
         let spy = Spy::default();
-        units(
-            &spy,
-            r#"{"kind":"component","program":"vault","program_crate":
-                {"dir":"programs/lend","package":"example-lending","lib":"example_lending",
-                 "anchor":"0.29.0"}}"#,
-        );
+        units(&spy, &component_json("{}", "{}"));
         let seen = spy.seen.lock().unwrap();
-        let cr = seen.first().expect("units was called");
-        assert_eq!((cr.dir.as_str(), cr.package.as_str(), cr.lib.as_str()),
-                   ("programs/lend", "example-lending", "example_lending"));
-        assert_eq!(cr.anchor_compat(), Some((0, 29)));
+        let data = seen.first().expect("units was called");
+        assert!(data.is_empty());
+        assert!(data.parse::<CargoUnit>().is_err(), "empty is not a resolved unit");
     }
 
     #[test]
@@ -238,26 +269,30 @@ mod tests {
         // preflight has neither — it runs before anything is analyzed.
         let comp: AuthorInput = serde_json::from_str(
             r#"{"kind":"component","program":"vault","unit":{"slug":"farms"},
-                "setup":"struct Fixture {}","idl":"fuzz/vault/idls/vault.json",
-                "args":{"fuzz_timeout":900}}"#,
+                "source_unit":{},"prep_facts":{"idl":"fuzz/vault/idls/vault.json"},
+                "props":[],"setup":"struct Fixture {}","args":{"fuzz_timeout":900}}"#,
         )
         .expect("parse");
         assert_eq!(comp.unit().and_then(|u| u.get("slug")).and_then(|v| v.as_str()), Some("farms"));
         assert!(comp.model().is_none());
         assert_eq!(comp.setup.as_deref(), Some("struct Fixture {}"));
-        assert_eq!(comp.idl.as_deref(), Some("fuzz/vault/idls/vault.json"));
         assert_eq!(comp.args.get::<u64>("fuzz_timeout"), Some(900));
         // An absent flag and one left at a null default are the same answer.
         assert_eq!(comp.args.get::<u64>("nope"), None);
 
-        let setup: AuthorInput =
-            serde_json::from_str(r#"{"kind":"setup","program":"vault","model":{"components":[]}}"#)
-                .expect("parse");
+        let setup: AuthorInput = serde_json::from_str(
+            r#"{"kind":"setup","program":"vault","model":{"components":[]},
+                "source_unit":{},"prep_facts":{},"props":[],"setup":null,"args":{}}"#,
+        )
+        .expect("parse");
         assert!(setup.model().is_some() && setup.unit().is_none());
-        assert_eq!(setup.idl, None, "no IDL placed is not the same as one at the empty path");
+        assert!(setup.prep_facts.is_empty(), "a prep that established nothing says so");
 
-        let pre: AuthorInput =
-            serde_json::from_str(r#"{"kind":"preflight","program":"vault"}"#).expect("parse");
+        let pre: AuthorInput = serde_json::from_str(
+            r#"{"kind":"preflight","program":"vault","source_unit":{},"prep_facts":{},
+                "props":[],"setup":null,"args":{}}"#,
+        )
+        .expect("parse");
         assert!(pre.unit().is_none() && pre.model().is_none() && pre.props.is_empty());
 
         // …and it round-trips flat, which is what the host parses back.
@@ -276,14 +311,18 @@ mod tests {
     #[test]
     fn the_outcome_set_parses_the_hosts_payload() {
         let input: FinalizeInput = serde_json::from_str(
-            r#"{"program":"lending","program_crate":{"dir":"p","package":"l","lib":"l"},
-                "idl":null,"setup":"struct Fixture {}","components":[
+            r#"{"program":"lending",
+                "source_unit":{"dir":"p","package":"l","lib":"l"},"prep_facts":{},
+                "setup":"struct Fixture {}","components":[
                   {"name":"Farms","outcome":{"status":"delivered","artifact_text":"fn c_farms(){}",
-                   "targets":["c_farms"],"property_units":[["fifo",["c_fifo"]]]}},
+                   "targets":["c_farms"],"property_units":[["fifo",["c_fifo"]]],
+                   "unit_file":null,"run_link":null}},
                   {"name":"Referrals","outcome":{"status":"gave_up"}}]}"#,
         )
         .expect("parse");
-        assert_eq!(input.idl, None);
+        // What ships is rendered from the same facts the gated builds used.
+        assert_eq!(input.source_unit.parse::<CargoUnit>().expect("the chain's shape").package, "l");
+        assert!(input.prep_facts.is_empty());
         assert_eq!(input.setup.as_deref(), Some("struct Fixture {}"));
         // A component that gave up carries nothing to read, and `delivered` skips it.
         let delivered: Vec<&str> = input.delivered().map(|(name, _)| name).collect();

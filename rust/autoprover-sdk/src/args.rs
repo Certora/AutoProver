@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::authoring::ProgramCrate;
+use crate::chain::ChainData;
 
 /// The parsed values of the descriptor's declared CLI flags, keyed the way the host's argparse
 /// keys them: leading dashes stripped and `-` folded to `_` (`--fuzz-timeout` → `fuzz_timeout`).
@@ -47,17 +47,21 @@ impl From<serde_json::Map<String, serde_json::Value>> for DeclaredArgs {
 pub struct AppArgs {
     /// The project root, absolute.
     pub project_root: PathBuf,
-    /// The analysis identifier of the program/contract under test — a label and a namespace, NOT a
-    /// Cargo name: see [`ProgramCrate`].
+    /// The analysis identifier of the program/contract under test — a label and a namespace, never
+    /// the name of a build-system unit: see [`AppArgs::source_unit`].
     pub program: String,
     /// The main source file, project-root-relative.
     pub source_path: String,
     /// The design doc, when one was named on the command line.
     #[serde(deserialize_with = "crate::required::present")]
     pub system_doc: Option<String>,
-    /// The compilation unit holding the program's source, already
-    /// [resolved](ProgramCrate::resolved) by the FFI boundary.
-    pub program_crate: ProgramCrate,
+    /// Where the analyzed code lives as a unit of its own build system —
+    /// [chain-shaped](ChainData), and the same value every later callout receives as
+    /// [`AuthorInput::source_unit`](crate::authoring::AuthorInput::source_unit). Empty when nothing
+    /// was resolved.
+    ///
+    /// These two callouts run before workspace prep, so there are no prep facts to accompany it.
+    pub source_unit: ChainData,
     /// The wheel's own declared flags.
     pub declared: DeclaredArgs,
 }

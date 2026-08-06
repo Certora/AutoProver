@@ -29,7 +29,7 @@ from composer.rustapp.adapter import (
 )
 from composer.rustapp.descriptor import AppDescriptor
 from tests.conftest import wire_descriptor, wire_phase, wire_required_phases
-from composer.rustapp.wire import ProgramCrate, Property, SetupInput
+from composer.rustapp.wire import Property, SetupInput
 from composer.spec.context import WorkflowContext
 
 pytestmark = pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def _formalizer(
         return FIXTURE
 
     async def fake_prep(_module, _input, **_kw):
-        return None  # no IDL requested
+        return {}  # a plan that asked for nothing establishes nothing
 
     monkeypatch.setattr(adapter, "author_and_compile", fake_author_and_compile)
     monkeypatch.setattr(adapter, "run_workspace_prep", fake_prep)
@@ -245,11 +245,11 @@ async def test_without_a_cache_namespace_nothing_is_stored(monkeypatch, tmp_path
 def test_the_setup_key_covers_what_it_is_authored_from_and_not_run_knobs():
     base = SetupInput(
         program="example_lending",
-        program_crate=ProgramCrate(dir="programs/lend", lib="example_lending"),
+        source_unit={"dir": "programs/lend", "lib": "example_lending"},
         model={"programs": [{"name": "example_lending"}]},
         props=[Property(title="no overflow", sort="invariant", description="d")],
         args={"fuzz_timeout": 30},
-        idl="fuzz/x/idls/example_lending.json",
+        prep_facts={"idl": "fuzz/x/idls/example_lending.json"},
     )
     same = _setup_identity(base)
 
@@ -261,11 +261,11 @@ def test_the_setup_key_covers_what_it_is_authored_from_and_not_run_knobs():
     # Everything the prompt is built from does.
     assert varied(program="other") != same
     assert varied(model={"programs": []}) != same
-    assert varied(program_crate=ProgramCrate(dir="programs/other")) != same
+    assert varied(source_unit={"dir": "programs/other"}) != same
     # …including the properties: they are what the fixture is designed around.
     assert varied(props=[]) != same
-    # …including which source the types come from: crate deps and IDL generation differ.
-    assert varied(idl=None) != same
+    # …including what the prep established, which is what decides where the types come from.
+    assert varied(prep_facts={}) != same
     # Stable across key ordering *within* the opaque model — it arrives as JSON, and the wire model
     # fixes the order of everything else.
     model = {"programs": [{"name": "example_lending"}], "extra": {"a": 1, "b": 2}}
