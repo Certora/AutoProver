@@ -7,7 +7,7 @@
 //!
 //! The backend is a **passive service**, not a driver: the Python pipeline owns the
 //! author→compile→judge→validate loop and every LLM turn, and calls the backend's
-//! callouts. Most are pure ([`Backend::descriptor`], [`Backend::units`],
+//! callouts. Most are pure ([`Backend::descriptor`], [`Backend::checks`],
 //! [`Backend::author_prompt`], [`Backend::judge_prompt`], [`Backend::finalize`]). The
 //! two gating callouts ([`Backend::compile`], [`Backend::validate`]) run the toolchain
 //! directly — each spawns the `run-confined` launcher via
@@ -28,7 +28,7 @@
 //!  * [`chain`] — the payload this seam carries without a schema: what the analyzed project's own
 //!    build system calls things.
 //!  * [`authoring`] — what the host sends into a callout, and the prompt it gets back.
-//!  * [`outcome`] — the compile verdict, the property→unit map, the per-unit verdicts.
+//!  * [`outcome`] — the compile verdict, the property→check map, the per-check verdicts.
 //!  * [`finalize`] — the full outcome set the run-level deliverable is rendered from.
 //!  * [`prep`] — pure plans the host executes for the wheel (workspace prep, sandbox grants).
 //!  * [`sandbox`] — where a blocking callout runs its toolchain, and how it spawns.

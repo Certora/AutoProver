@@ -22,7 +22,6 @@ from graphcore.graph import FlowInput
 from composer.authoring.buffer import SpecBufferSet
 from composer.authoring.state import SkippedProperty
 from composer.spec.context import WorkflowContext
-from composer.spec.gen_types import TemplateInstantiation
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.service_host import ServiceHost
 from composer.spec.util import uniq_thread_id
@@ -92,12 +91,22 @@ def _did_rough_draft_read(s: JudgeState, _: Any) -> str | None:
     return None
 
 
+#: Applies a prompt to the judge's builder. A backend that renders templates binds its params and
+#: calls ``with_*_prompt_template``; one whose prompts are plain strings (a Rust wheel's) calls
+#: ``with_sys_prompt`` / ``with_initial_prompt``. Either way the judge itself holds no opinion about
+#: where prompt text comes from.
+type ApplySystem = Callable[[Any], Any]
+type ApplyPrompt[R: RebuttalBase] = Callable[
+    [Any, str, Sequence[SkippedProperty], Sequence[R]], Any
+]
+
+
 def build_feedback_judge[R: RebuttalBase](
     *,
     ctx: WorkflowContext[Any],
     env: ServiceHost,
-    system_prompt: TemplateInstantiation,
-    render_prompt: Callable[[Sequence[SkippedProperty], Sequence[R]], TemplateInstantiation],
+    apply_system: ApplySystem,
+    apply_prompt: ApplyPrompt[R],
     input_parts: Callable[[str, Sequence[SkippedProperty], Sequence[R]], list[str | dict]],
     readback: BaseTool,
     description: str,
@@ -106,10 +115,10 @@ def build_feedback_judge[R: RebuttalBase](
 ) -> FeedbackThunk[R]:
     """Compile the judge sub-graph and return the thunk a feedback tool invokes.
 
-    ``render_prompt`` and ``input_parts`` are the two places a backend decides how the review is
-    framed: whichever of the skips and rebuttals belong in the rendered prompt template go through
-    the first, and whatever is better said as plain input text goes through the second. Both are
-    called per review, so a prompt that varies with the round can.
+    ``apply_prompt`` and ``input_parts`` are the two places a backend decides how the review is
+    framed: whatever belongs in the prompt itself goes through the first, and whatever is better
+    said as plain input text goes through the second. Both are called per review and both see the
+    draft, the skips and the rebuttals, so a prompt that varies with the round can.
 
     ``readback`` is the backend's own read-back tool over ``curr_spec``, built with
     :func:`composer.authoring.buffer.get_spec_tool` against :class:`JudgeState` — it keeps the tool
@@ -122,7 +131,7 @@ def build_feedback_judge[R: RebuttalBase](
     ).with_input(
         JudgeInput
     ).inject(
-        lambda g: system_prompt.render_to(g.with_sys_prompt_template)
+        apply_system
     ).with_tools(
         [*get_rough_draft_tools(JudgeState), ctx.get_memory_tool(), readback, *extra_tools]
     )
@@ -134,7 +143,7 @@ def build_feedback_judge[R: RebuttalBase](
         within_tool: str,
     ) -> PropertyFeedbackProtocol:
         workflow: Any = staged.inject(
-            lambda b: render_prompt(skipped, rebuttals).render_to(b.with_initial_prompt_template)
+            lambda b: apply_prompt(b, spec, skipped, rebuttals)
         ).compile_async()
         res = await run_to_completion(
             workflow,

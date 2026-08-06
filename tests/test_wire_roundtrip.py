@@ -71,14 +71,14 @@ from composer.rustapp.wire import (
     AuthorInput,
     CompileResult,
     ComponentOutcome,
-    Failure,
     FinalizeComponent,
     FinalizeInput,
     Prompt,
     Property,
+    SkippedProperty,
     SandboxGrants,
     Target,
-    Unit,
+    Check,
     ValidateOutcome,
     WireModel,
     WorkspacePrep,
@@ -328,7 +328,6 @@ class Root:
 OUTBOUND = [
     Root("app_args", AppArgs),
     Root("author_input", AuthorInput),
-    Root("failure", Failure),
     Root("target", Target),
     Root("finalize_input", FinalizeInput),
     Root("sandbox", BackendSpec),
@@ -336,7 +335,7 @@ OUTBOUND = [
 
 #: Both an inbound root of its own (what the ``units`` callout returns) and nested inside the
 #: outbound :class:`Target`, so it appears in both lists below — one root, two roles.
-_UNITS = Root("units", list[Unit])
+_CHECKS = Root("checks", list[Check])
 
 #: Wheel → host.
 INBOUND = [
@@ -344,7 +343,7 @@ INBOUND = [
     Root("compile_result", CompileResult),
     Root("validate_outcome", ValidateOutcome),
     Root("prompt", Prompt),
-    _UNITS,
+    _CHECKS,
     Root("workspace_prep", WorkspacePrep),
     Root("sandbox_grants", SandboxGrants),
 ]
@@ -462,8 +461,9 @@ def test_generator_reaches_every_field_the_host_declares(case: Root, wire_echo: 
 #: struct's, and are not field names at all, so comparing each struct's own top level is what keeps
 #: that assertion exact.
 NESTED = [
-    _UNITS,
+    _CHECKS,
     Root("property", Property),
+    Root("skipped_property", SkippedProperty),
     Root("finalize_component", FinalizeComponent),
     Root("component_outcome", ComponentOutcome),
 ]
@@ -523,7 +523,7 @@ def test_every_outbound_mirror_has_its_own_field_set_check() -> None:
     """Every struct reachable on an outbound payload is compared in its *own* right.
 
     :data:`MIRRORS` has to name each nested struct, because the field-set check compares only a
-    struct's own top level — reach `Target` and you see ``{name, units}``, never a `Unit`'s fields.
+    struct's own top level — reach `Target` and you see ``{name, units}``, never a `Check`'s fields.
     The wire names are the Rust type names, which nothing here can derive without munging a string,
     so the list stays declared and this is the half that keeps it complete."""
     reached: set[Any] = set()
@@ -590,15 +590,15 @@ def test_an_empty_optional_is_spelled_null_on_both_sides(wire_echo: WireEcho) ->
     default nothing, so absence is an error on whichever side reads it rather than a second way to
     say "nothing". That is what lets the round trips above compare documents directly — they are
     comparing content, not two conventions for the same value."""
-    row = {"property": "p", "unit": "u", "target": None}
-    assert wire_echo.echo("units", [row]) == [row]
-    assert Unit.model_validate(row) == Unit(property="p", unit="u", target=None)
+    row = {"property": "p", "name": "u", "target": None}
+    assert wire_echo.echo("checks", [row]) == [row]
+    assert Check.model_validate(row) == Check(property="p", name="u", target=None)
 
-    absent = {"property": "p", "unit": "u"}
+    absent = {"property": "p", "name": "u"}
     with pytest.raises(WireFault, match="missing field"):
-        wire_echo.echo("units", [absent])
+        wire_echo.echo("checks", [absent])
     with pytest.raises(ValidationError):
-        Unit.model_validate(absent)
+        Check.model_validate(absent)
 
 
 def test_descriptor_rejects_unknown_tags(wire_echo: WireEcho) -> None:

@@ -34,7 +34,6 @@ framework deliberately holds no schema for — see :mod:`composer.rustapp.toolch
 treatment ``model`` and ``unit`` already get, and for the same reason.
 """
 
-import enum
 from typing import Annotated, Any, Callable, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -90,22 +89,6 @@ class AppArgs(WireModel):
     #: The wheel's own declared flags, keyed by argparse dest (``--fuzz-timeout`` →
     #: ``fuzz_timeout``). Untyped: the *wheel* declares these, so the host has no schema for them.
     declared: dict[str, Any] = Field(default_factory=dict)
-
-
-class FailureKind(str, enum.Enum):
-    """Which gate rejected a draft — a judge rejection is *not* a build failure (it compiled)."""
-
-    COMPILE = "compile"
-    JUDGE = "judge"
-
-
-class Failure(WireModel):
-    """Why a draft was rejected, fed into the next ``author_prompt`` as revise context. ``draft`` is
-    carried because each authoring turn is fresh — the model has no memory of its prior attempt."""
-
-    draft: str
-    errors: str
-    kind: FailureKind = FailureKind.COMPILE
 
 
 class _AuthorInputBase(WireModel):
@@ -178,15 +161,26 @@ AuthorInput = Annotated[
 ]
 
 
+class SkippedProperty(WireModel):
+    """A property the author declined to formalize, with its justification. Mirrors the Rust
+    ``SkippedProperty`` and carries the same fields as the host's own
+    :class:`composer.authoring.state.SkippedProperty`, which is what it is built from."""
+
+    property_title: str
+    reason: str
+
+
 class Delivered(WireModel):
     """What a component that reached the deliverable produced. Mirrors the Rust ``Delivered``."""
 
     status: Literal["delivered"] = "delivered"
     artifact_text: str = ""
-    #: The validation targets this component's rows were checked by, in the order they ran — what a
+    #: The validation targets this component's checks ran under, in the order they ran — what a
     #: callout-mode wheel keys its deliverable sections and declared features on.
     targets: list[str] = Field(default_factory=list)
-    property_units: list[tuple[str, list[str]]] = Field(default_factory=list)
+    property_checks: list[tuple[str, list[str]]] = Field(default_factory=list)
+    #: What the author declined to formalize, and why — disjoint from :attr:`property_checks`.
+    skipped: list[SkippedProperty] = Field(default_factory=list)
     unit_file: str | None = None
     run_link: str | None = None
 
@@ -254,39 +248,41 @@ class CompileFailed(WireModel):
 CompileResult = Annotated[CompileOk | CompileFailed, Field(discriminator="status")]
 
 
-class Unit(WireModel):
-    """One report row: a property title and the backend's unit name for it (the rule the report keys
-    by). ``target`` is the validation target the *host runs*; several units may share one, so the
-    host runs each distinct target once and the wheel attributes the outcome back to each unit."""
+class Check(WireModel):
+    """One report row: a property title and the backend's name for the check that carries it — a CVL
+    rule, a foundry test, a fuzz harness function. A check yields a :class:`Verdict`.
+
+    ``target`` is the validation target the *host runs*; several checks may share one, so the host
+    runs each distinct target once and the wheel attributes the outcome back to each check."""
 
     property: str
-    unit: str
+    name: str
     target: str | None
 
     # A method, not a ``@property``: the ``property`` field above shadows that builtin inside this
-    # class body. Mirrors the Rust ``Unit::target_or_unit``.
-    def target_or_unit(self) -> str:
-        """The target this unit is checked by — its own name unless it shares one."""
-        return self.target or self.unit
+    # class body. Mirrors the Rust ``Check::target_or_name``.
+    def target_or_name(self) -> str:
+        """The target this check runs under — its own name unless it shares one."""
+        return self.target or self.name
 
 
 class Target(WireModel):
-    """One validation target the host runs, and the report units it covers — what ``validate`` must
-    return a verdict for. Mirrors the Rust ``Target``.
+    """One validation target the host runs, and the checks it covers — what ``validate`` must return
+    a verdict for. Mirrors the Rust ``Target``.
 
     The host owns the grouping (it decides what to run, and in what order), so it hands the answer
-    over rather than leaving the wheel to recover it by re-deriving its own ``units`` and filtering
+    over rather than leaving the wheel to recover it by re-deriving its own ``checks`` and filtering
     them by name."""
 
     #: What the backend selects when it runs the checker (Crucible: the component's ``c_<slug>``
     #: harness fn, which is also its Cargo feature).
     name: str
-    #: Usually one row; several when a backend checks a whole property set in one run.
-    units: list[Unit] = Field(default_factory=list)
+    #: Usually one; several when a backend checks a whole property set in one run.
+    checks: list[Check] = Field(default_factory=list)
 
 
 class Verdict(WireModel):
-    """One unit's outcome. Mirrors the Rust ``Verdict`` and maps onto the report's
+    """One check's outcome. Mirrors the Rust ``Verdict`` and maps onto the report's
     :class:`composer.spec.source.report.collect.Verdict` (whose ``message`` is this ``detail``)."""
 
     outcome: Outcome
@@ -306,14 +302,14 @@ class Verdict(WireModel):
 
 
 class ValidateBuildFailed(WireModel):
-    """The shared build failed, so the whole spec is re-authored — no unit got a verdict."""
+    """The shared build failed, so nothing was checked — no check got a verdict."""
 
     kind: Literal["build_failed"]
     errors: str
 
 
 class ValidateVerdicts(WireModel):
-    """It built, and every report unit the target covers got a verdict, ``(unit, verdict)``."""
+    """It built, and every check the target covers got a verdict, ``(check_name, verdict)``."""
 
     kind: Literal["verdicts"]
     verdicts: list[tuple[str, Verdict]]
@@ -373,16 +369,19 @@ class RustAppModule(Protocol):
     descriptor: Callable[[], str]
     #: ``(args_json) -> error | None``. A precondition the wheel checks before the run starts.
     validate_preconditions: Callable[[str], str | None]
-    #: ``(input_json) -> list[Unit]`` JSON. The report rows this input formalizes.
-    units: Callable[[str], str]
-    #: ``(input_json, failure_json | None) -> Prompt`` JSON.
-    author_prompt: Callable[[str, str | None], str]
+    #: ``(input_json) -> list[Check]`` JSON. The checks this input formalizes.
+    checks: Callable[[str], str]
+    #: ``(input_json) -> Prompt`` JSON. Asked once per authoring session — the session keeps its
+    #: own history, so there is no per-attempt revise prompt.
+    author_prompt: Callable[[str], str]
+    #: ``(input_json, spec) -> error | None``. Pure and cheap: the put-time gate on the buffer.
+    check_syntax: Callable[[str, str], str | None]
     #: ``(input_json, spec) -> Prompt | None`` JSON. ``None`` ⇒ this wheel has no judge.
     judge_prompt: Callable[[str, str], str | None]
     #: ``(input_json, spec, workdir, sandbox_json) -> CompileResult`` JSON. **Blocking.**
     compile: Callable[[str, str, str, str], str]
     #: ``(input_json, spec, target_json, workdir, sandbox_json) -> ValidateOutcome`` JSON, where
-    #: ``target_json`` is a :class:`Target` — the target to run and the rows it covers.
+    #: ``target_json`` is a :class:`Target` — the target to run and the checks it covers.
     #: **Blocking.**
     validate: Callable[[str, str, str, str, str], str]
     #: ``(input_json) -> WorkspacePrep`` JSON. Pure — the host executes the plan.
@@ -406,7 +405,7 @@ CALLOUTS: tuple[str, ...] = tuple(RustAppModule.__annotations__)
 
 _COMPILE_RESULT: TypeAdapter[CompileOk | CompileFailed] = TypeAdapter(CompileResult)
 _VALIDATE_OUTCOME: TypeAdapter[ValidateBuildFailed | ValidateVerdicts] = TypeAdapter(ValidateOutcome)
-_UNITS: TypeAdapter[list[Unit]] = TypeAdapter(list[Unit])
+_CHECKS: TypeAdapter[list[Check]] = TypeAdapter(list[Check])
 _FILES: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, str])
 
 
@@ -418,8 +417,8 @@ def parse_validate(raw: str) -> ValidateBuildFailed | ValidateVerdicts:
     return _VALIDATE_OUTCOME.validate_json(raw)
 
 
-def parse_units(raw: str) -> list[Unit]:
-    return _UNITS.validate_json(raw)
+def parse_checks(raw: str) -> list[Check]:
+    return _CHECKS.validate_json(raw)
 
 
 def parse_prompt(raw: str) -> Prompt:

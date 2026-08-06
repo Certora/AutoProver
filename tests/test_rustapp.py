@@ -1,7 +1,7 @@
 """End-to-end tests for the Rust application/backend framework (composer.rustapp).
 
 These drive the ``echoprover`` demo wheel (built from ``rust/example-app``) as a
-:class:`~autoprover_sdk.Backend`: the pure callouts (``descriptor`` / ``units`` /
+:class:`~autoprover_sdk.Backend`: the pure callouts (``descriptor`` / ``checks`` /
 ``author_prompt`` / ``compile`` / ``validate``) plus the descriptor synthesis and the
 host wiring. They need the ``echoprover`` wheel importable — ``uv sync`` builds it (the
 ``apps`` group, pulled in via ``dev``); tests skip cleanly otherwise.
@@ -23,7 +23,7 @@ echoprover = pytest.importorskip(
 
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole
 from composer.rustapp.result import RustFormalResult
-from composer.rustapp.wire import ComponentInput, Property, Target, Unit, Verdict
+from composer.rustapp.wire import ComponentInput, Property, Target, Check, Verdict
 from composer.authoring.state import SkippedProperty
 from composer.spec.source.report.schema import Outcome
 from tests.conftest import wire_verdict
@@ -40,10 +40,10 @@ def _component_input(*titles: str) -> str:
     ).model_dump_json()
 
 
-def _target(*units: str) -> str:
+def _target(*checks: str) -> str:
     """A target and the report rows it covers — what the host passes ``validate``."""
     return Target(
-        name=units[0], units=[Unit(property="p", unit=u, target=None) for u in units]
+        name=checks[0], checks=[Check(property="p", name=c, target=None) for c in checks]
     ).model_dump_json()
 
 
@@ -68,18 +68,18 @@ def test_descriptor_parses_and_maps_core_phases():
     assert keys == ["analysis", "extraction", "solving", "formalization", "report"]
 
 
-def test_units_are_one_per_property():
-    units = json.loads(echoprover.units(_component_input("increment_increases", "never_overflows")))
-    assert units == [
+def test_checks_are_one_per_property():
+    checks = json.loads(echoprover.checks(_component_input("increment_increases", "never_overflows")))
+    assert checks == [
         # `target` null: each unit is its own validation target. Present, not absent — an omitted
         # key is not a spelling of anything on this seam.
-        {"property": "increment_increases", "unit": "rule_increment_increases", "target": None},
-        {"property": "never_overflows", "unit": "rule_never_overflows", "target": None},
+        {"property": "increment_increases", "name": "rule_increment_increases", "target": None},
+        {"property": "never_overflows", "name": "rule_never_overflows", "target": None},
     ]
 
 
 def test_author_prompt_lists_the_properties():
-    prompt = json.loads(echoprover.author_prompt(_component_input("increment_increases"), None))
+    prompt = json.loads(echoprover.author_prompt(_component_input("increment_increases")))
     assert "increment_increases" in prompt["instruction"]
     assert prompt.get("system") is None
 
@@ -108,18 +108,18 @@ def test_validate_returns_a_verdict_for_every_row_the_target_covers():
 
 def test_result_round_trips_through_cache_serialization():
     # The driver caches by model_dump/validate, so everything the loop accumulates has to survive
-    # that — including the nested per-unit verdicts the wheel published.
+    # that — including the nested per-check verdicts the wheel published.
     res = RustFormalResult(
         commentary="c",
         artifact_text="spec",
-        units=[("p", ["rule_p"])],
+        checks=[("p", ["rule_p"])],
         skipped=[SkippedProperty(property_title="q", reason="n/a")],
         output_link="local://x",
         verdicts={"rule_p": Verdict(outcome=Outcome.BAD, line=7, detail="counterexample",
                                     duration_seconds=None, unit_file=None)},
     )
     reloaded = RustFormalResult.model_validate_json(res.model_dump_json())
-    assert reloaded.property_units() == [("p", ["rule_p"])]
+    assert reloaded.property_checks() == [("p", ["rule_p"])]
     assert reloaded.artifact_text == "spec"
     assert reloaded.skipped[0].property_title == "q"
     assert reloaded.verdicts["rule_p"].outcome is Outcome.BAD

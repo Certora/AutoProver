@@ -27,15 +27,14 @@ from composer.rustapp.wire import (
     CompileFailed,
     CompileOk,
     ComponentInput,
-    FailureKind,
     PreflightInput,
     SetupInput,
     RustAppModule,
-    Unit,
+    Check,
     ValidateBuildFailed,
     ValidateVerdicts,
     parse_compile,
-    parse_units,
+    parse_checks,
     parse_validate,
     parse_workspace_prep,
 )
@@ -88,14 +87,14 @@ def test_a_field_the_host_does_not_declare_is_refused():
         parse_compile('{"status": "ok", "warnings": ["unused"]}')
 
 
-def test_a_null_target_means_a_unit_is_its_own_validation_target():
-    # `target` must be *present*; null is how a wheel says the unit is checked on its own. Absence is
+def test_a_null_target_means_a_check_is_its_own_validation_target():
+    # `target` must be *present*; null is how a wheel says the check runs on its own. Absence is
     # not a third spelling of that — see the test above.
-    units = parse_units('[{"property": "p", "unit": "rule_p", "target": null}]')
-    assert units == [Unit(property="p", unit="rule_p", target=None)]
-    assert units[0].target_or_unit() == "rule_p"
-    # …and a shared target is what the host runs once for several units.
-    assert Unit(property="p", unit="rule_p", target="c_vault").target_or_unit() == "c_vault"
+    checks = parse_checks('[{"property": "p", "name": "rule_p", "target": null}]')
+    assert checks == [Check(property="p", name="rule_p", target=None)]
+    assert checks[0].target_or_name() == "rule_p"
+    # …and a shared target is what the host runs once for several checks.
+    assert Check(property="p", name="rule_p", target="c_vault").target_or_name() == "c_vault"
 
 
 def test_an_outcome_the_host_does_not_know_is_refused():
@@ -159,13 +158,6 @@ def test_author_input_serializes_the_shape_the_wheel_deserializes():
         "prep_facts": {},
         "args": {},
     }
-
-
-def test_failure_kind_defaults_to_the_compile_gate():
-    # A judge rejection has to be distinguishable: the draft compiled, so a revise prompt that
-    # framed it as a build error would be misleading.
-    assert FailureKind("compile") is FailureKind.COMPILE
-    assert FailureKind.JUDGE.value == "judge"
 
 
 def test_the_chain_shaped_payloads_cross_the_seam_uninterpreted():

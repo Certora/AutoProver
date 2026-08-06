@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 
 use crate::args::AppArgs;
-use crate::authoring::{AuthorInput, Failure, Prompt};
+use crate::authoring::{AuthorInput, Prompt};
 use crate::descriptor::AppDescriptor;
 use crate::finalize::FinalizeInput;
-use crate::outcome::{CompileResult, Target, Unit, ValidateOutcome};
+use crate::outcome::{Check, CompileResult, Target, ValidateOutcome};
 use crate::prep::{SandboxGrants, WorkspacePrep};
 use crate::sandbox::Workspace;
 
@@ -23,14 +23,32 @@ pub trait Backend: Send + Sync + 'static {
         Ok(())
     }
 
-    /// The units this input formalizes — one per property — each a property title and its
-    /// unit name (Crucible: `c_<slug>`). Pure and pre-authoring: the prompt requires exactly
-    /// these fn names, the host validates each, and it is the report's property→unit map.
-    fn units(&self, input: &AuthorInput) -> Vec<Unit>;
+    /// The checks this input formalizes — one or more per property — each a property title and the
+    /// name of the check that carries it. Pure and pre-authoring: the author is required to produce
+    /// exactly these names, the publish gate validates its mapping against them, and they are the
+    /// report's property→check map.
+    fn checks(&self, input: &AuthorInput) -> Vec<Check>;
 
-    /// The instruction (+ optional system prompt) to author `input.kind`'s spec, covering all
-    /// its units. `failure = Some(..)` on a re-author after a compile failure / judge rejection.
-    fn author_prompt(&self, input: &AuthorInput, failure: Option<&Failure>) -> Prompt;
+    /// The instruction (+ optional system prompt) to author `input.kind`'s spec, covering all its
+    /// units.
+    ///
+    /// Asked once per authoring session, not once per attempt: the host runs a stateful agent that
+    /// keeps its buffer and its history across revisions, so build errors and review feedback reach
+    /// the author as tool results rather than as a re-rendered prompt. `system` is the *domain*
+    /// half of the system prompt — the host prepends the session protocol (the tools, the publish
+    /// gate, the citation rules) so no wheel restates it.
+    fn author_prompt(&self, input: &AuthorInput) -> Prompt;
+
+    /// Reject a spec at write time, cheaply and purely — `Some(complaint)` refuses the write and
+    /// the buffer keeps its previous contents. Default: accept anything, and let `validate` be the
+    /// only judge.
+    ///
+    /// This is for what can be decided without a toolchain (a parser, a required declaration). It
+    /// is not a build: it runs on every put and edit, so it must be fast, and it must not spawn
+    /// anything.
+    fn check_syntax(&self, _input: &AuthorInput, _spec: &str) -> Option<String> {
+        None
+    }
 
     /// Optional LLM review of a compiled spec, before validation. `None` (the default) skips
     /// judging — the compiler + checker are the judges.
@@ -47,10 +65,10 @@ pub trait Backend: Send + Sync + 'static {
     fn compile(&self, input: &AuthorInput, spec: &str, ws: &Workspace) -> CompileResult;
 
     /// Build + check ONE target against the spec (the fused build gate — no separate compile for
-    /// components). Returns [`ValidateOutcome::BuildFailed`] to trigger a re-author of the whole
+    /// components). Returns [`ValidateOutcome::BuildFailed`] to trigger a revision of the whole
     /// spec (the build is shared across targets), or a [`Verdict`](crate::outcome::Verdict) for
-    /// each unit the target covers — [`Target::units`], which the host already grouped. Per-target
-    /// so the host owns enumeration and scheduling. BLOCKING.
+    /// each check the target covers — [`Target::checks`], which the host already grouped.
+    /// Per-target so the host owns enumeration and scheduling. BLOCKING.
     fn validate(
         &self,
         input: &AuthorInput,

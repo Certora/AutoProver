@@ -47,7 +47,7 @@ line this draws:
 
 ## 2. The FFI surface
 
-Ten callouts, all **synchronous**, all speaking JSON strings.
+Eleven callouts, all **synchronous**, all speaking JSON strings.
 [`export_app!`](../rust/autoprover-sdk/src/export.rs) generates every one of them from a `Backend`
 impl.
 
@@ -55,8 +55,9 @@ impl.
 |---|---|---|
 | `descriptor() -> str` | pure | the declarative spine (§3), read once at load |
 | `validate_preconditions(args_json) -> str \| None` | pure | fail before any service opens; `None` = ok |
-| `units(input_json) -> str` | pure | the report rows this input formalizes, pre-authoring (§6) |
-| `author_prompt(input_json, failure_json \| None) -> str` | pure | the instruction for one authoring turn; `failure` = revise context |
+| `checks(input_json) -> str` | pure | the checks this input formalizes, pre-authoring (§6) |
+| `author_prompt(input_json) -> str` | pure | the instruction (+ domain system prompt) for one authoring *session* (§5) |
+| `check_syntax(input_json, spec) -> str \| None` | pure | reject a spec at write time; `None` = accept. Cheap — it runs on every put/edit |
 | `judge_prompt(input_json, spec) -> str \| None` | pure | optional LLM review; `None` = this wheel has no judge |
 | `compile(input_json, spec, workdir, sandbox_json) -> str` | **blocking** | build the whole spec once — the setup and preflight gate |
 | `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` | **blocking** | build + check one target — which arrives with the rows it covers — returning a verdict per row (§6) |
@@ -67,7 +68,7 @@ impl.
 `compile` and `validate` run the real toolchain: each spawns `run-confined` and waits, for minutes.
 They stay off the event loop without a bridge, by the pair that makes this whole design work — the
 `#[pyfunction]` wraps its work in `py.allow_threads(…)`, and Python calls it with
-`await asyncio.to_thread(...)` (via [`_run_blocking`](../composer/rustapp/adapter.py)). The wheel
+`await asyncio.to_thread(...)` (via [`_blocking`](../composer/rustapp/session.py)). The wheel
 just spawns and waits; Python moves the wait to a thread. That is also why the wheel spawns the
 sandbox launcher *directly* rather than awaiting a Python runner: `run-confined` is a standalone
 binary, so the wheel needs nothing from Python at run time except the policy data.
@@ -80,7 +81,7 @@ proper, plus the confinement wrapper, which belongs to the sandbox layer:
 - [descriptor.py](../composer/rustapp/descriptor.py) — the declarative half (`AppDescriptor` and
   friends), mirroring the Rust structs.
 - [wire.py](../composer/rustapp/wire.py) — the runtime half: `AuthorInput`, `Prompt`, `Failure`,
-  `Unit`, `Verdict`, `CompileResult`, `ValidateOutcome`, `WorkspacePrep`, `SandboxGrants`,
+  `Check`, `Verdict`, `CompileResult`, `ValidateOutcome`, `WorkspacePrep`, `SandboxGrants`,
   `FinalizeInput`. Every `json.loads` of a wheel's answer happens in one of its `parse_*`
   functions, so a renamed field fails at the boundary naming the field, not three frames later as
   an empty string.
@@ -174,7 +175,9 @@ One struct, serialized at load time, that drives everything non-backend.
 | `backend_tag` | the report's backend vocabulary. Typed as `ReportBackend`, so a wheel declaring a tag the report doesn't know fails at descriptor load, before the run starts |
 | `backend_guidance` | prose injected into the property-extraction prompt: what this verifier can check |
 | `analysis_key` | the system-analysis cache key |
-| `component_noun` | the human noun for one formalized unit in the console/TUI ("instruction"); `None` → "component", read through `unit_noun()` |
+| `component_noun` | the human noun for one formalized component in the console/TUI ("instruction"); `None` → "component", read through `unit_noun()` |
+| `check_noun` | what this backend calls one check **to the model** ("rule", "harness function"); `None` → "check", read through `check_label()` |
+| `evidence_kinds` | the closed set an author may cite when rebutting the judge (§5) |
 
 **Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host synthesizes
 `enum.Enum(f"{Name}Phase", …)` from the keys ([`build_phase_enum`](../composer/rustapp/host.py)).
@@ -214,7 +217,7 @@ one-shot important results such as a verdict — rather than a line in the colla
 | Field | Effect |
 |---|---|
 | a phase with `role: preflight` | run the workspace gate as its own visible task (§4.2). No such phase: the prep still runs, silently, with no gate |
-| a phase with `role: setup` | author one shared artifact before the per-unit fan-out and hand it to every component as `AuthorInput.setup` (§4.3) |
+| a phase with `role: setup` | author one shared artifact before the per-component fan-out and hand it to every component as `AuthorInput.setup` (§4.3) |
 | `deliverable_mode` | `per_component` (default), or `callout { primary? }` — where `primary` is the `{program}`-templated path used as each component's report link (§9) |
 | `serialize_toolchain` | put the blocking callouts behind one `Semaphore(1)` — for an app sharing a single crate / target dir |
 | `confine_by_default` | build the fail-closed `launcher` sandbox config by default (§8) |
@@ -236,7 +239,7 @@ load ─ entry point ─┬─ preflight  (workspace_prep → toolchain → comp
    ─┬─ prepare_formalization ─────────────────┐
     └─ property extraction ───────────────────┴─ setup (author+compile, cached) ─ fan out
                                                                                     │
-                          per unit: author ⇄ validate(target) → verdicts ───────────┘
+                     per component: author ⇄ validate(target) → verdicts ───────────┘
                                                                     │
                                             report ─ store ─ finalize
 ```
@@ -301,17 +304,17 @@ delivered artifact all agree on what they are building against. Both halves are 
 
 ### 4.3 Setup: the shared artifact
 
-A wheel that declares `setup` has one artifact every unit builds on (a fixture, a shared module).
-It must be authored from the **union of every unit's properties** — that union is what makes them
+A wheel that declares `setup` has one artifact every component builds on (a fixture, a shared
+module). It must be authored from the **union of every component's properties** — that union is what makes them
 checkable — which pins it to exactly one point in the run, and
 [`prepare_formalization`](../composer/rustapp/adapter.py) is not it: that overlaps extraction, so no
-properties exist there yet. Nor can it be lazy on first `formalize`: whichever unit won the race
+properties exist there yet. Nor can it be lazy on first `formalize`: whichever component won the race
 would decide the artifact all the others are then told to work within.
 
 So `prepare_formalization` returns a `StagedFormalizer` instead of a `Formalizer`, and the driver
 calls [`RustStagedFormalizer.begin`](../composer/rustapp/adapter.py) between extraction and the
-fan-out. `begin` de-duplicates properties by title (units are disjoint, but two components can
-surface the same property), runs `author_and_compile` under the declared step's task, and hands back
+fan-out. `begin` de-duplicates properties by title (components are disjoint, but two of them can
+surface the same property), runs a `setup` session under the declared step's task, and hands back
 the `RustFormalizer` built around the result — the artifact is threaded through the constructor
 rather than assigned onto a live formalizer, so the formalizer is constructed once and never
 mutated.
@@ -327,35 +330,32 @@ caches, changing the *prompt* does not invalidate; clear the namespace for that.
 A wheel with no `setup` gets its `RustFormalizer` directly from `prepare_formalization` and never
 mentions staging.
 
-### 4.4 Formalization: author → validate
+### 4.4 Formalization: the authoring session
 
-Per unit, in [`RustFormalizer.formalize`](../composer/rustapp/adapter.py):
+Per component, [`RustFormalizer.formalize`](../composer/rustapp/adapter.py) asks the wheel for its
+checks and hands them to one session (§5):
 
 ```python
-units = parse_units(module.units(input_json))        # pure: the report rows, before authoring
-for _ in range(max_attempts):                        # DEFAULT_MAX_ATTEMPTS = 7
-    spec = await author_turn(module, input_json, failure)          # LLM turn, Python
-    if spec is None:                                 # the agent never called `result`
-        failure = Failure(errors=_NO_ARTIFACT); continue
-    for target in distinct_targets(units):           # host owns enumeration + scheduling
-        res = await run_blocking(module.validate(input_json, spec, target, workdir, sandbox))
-                                                     # `target` = {name, units it covers}
-        if isinstance(res, ValidateBuildFailed):     # the build is shared ⇒ re-author everything
-            failure = Failure(draft=spec, errors=res.errors); break
-        record(res.verdicts); emit("verdict", …)      # live, per target
-    else:
-        return RustFormalResult(artifact_text=spec, units=…, verdicts=…, targets=…)
-return GaveUp(…)
+checks = parse_checks(module.checks(input_json))  # pure: the checks, before authoring
+outcome = await run_session(module=…, input=…, kind="component", checks=checks, titles=…)
+# inside the session, driven by the agent:
+#   put_spec / edit_spec        → the buffer, gated by the wheel's check_syntax
+#   validate_spec(checks=None)  → one run per DISTINCT target, each carrying the checks it covers;
+#                                 stamps the buffer's digest when every live check is accounted for
+#   expect_check_failure(c,why) → a failure that IS the finding stops blocking the gate
+#   record_skip(p, why)         → drops that property's checks from the run and the mapping
+#   feedback_tool(rebuttals=…)  → the wheel's judge, structured; stamps on acceptance
+#   result(commentary, mapping) → refused unless every stamp matches the CURRENT buffer
+#   give_up(reason)             → a real outcome, reported
 ```
 
 The component path has **no separate `compile`**: `validate`'s build *is* the compile gate. Fusing
 them is the efficiency win — a per-component dry-run before the first fuzz roughly doubled the e2e
-— and it is why `ValidateOutcome` has a `BuildFailed` arm at all. Because the units share one
-build, a `BuildFailed` from any target re-authors the whole spec.
+— and it is why `ValidateOutcome` has a `BuildFailed` arm at all. Because the checks share one
+build, a `BuildFailed` from any target fails the whole run and the author revises.
 
-`compile` is therefore called only for the two kinds that have no units to validate: `setup`
-(via `author_and_compile`, which retries on compile failure and consults the judge post-compile) and
-`preflight`.
+`compile` is therefore called only for the two kinds that have no checks to validate: `setup` (whose
+session is gated by `compile_spec`) and `preflight`.
 
 An authoring turn that produces nothing costs an attempt like any other, but the toolchain never
 sees it — there is nothing to build — so the next prompt is told exactly that (`_NO_ARTIFACT`).
@@ -374,58 +374,83 @@ path-confined.
 
 ## 5. Authoring and review
 
-The authoring turn is Python's ([`run_llm_agent`](../composer/rustapp/adapter.py)): it binds the
-env's tool belt (source navigation + the declared corpus's RAG search) and a `result` tool, and runs
-a bounded agent to completion. The wheel supplies only the prompt. `Prompt.system` is
-backend-definable; `None` means the host's neutral default, which conveys the tool-using-agent and
-result-tool contract and nothing domain-specific. The reply has any code fence stripped, because it
-is written verbatim into a source file.
+Authoring is the **shared session** of [`composer/authoring/`](../composer/authoring/) — the same
+workflow the CVL and foundry backends run — assembled for a wheel in
+[`session.py`](../composer/rustapp/session.py). One stateful agent per spec: it owns a `curr_spec`
+buffer, edits it, calls the gate, asks for review, and publishes. The wheel supplies the prompts and
+answers the callouts; it is still a passive service.
 
-`Failure { draft, errors, kind }` is the revise context. The `draft` travels because each authoring
-turn is fresh — the model has no memory of its prior attempt — and `kind` distinguishes
-`Compile` from `Judge` so the wheel's revise prompt can frame review feedback as something other
-than compiler errors (a judge rejection means the draft *did* compile).
+**The prompt is two halves.** The host owns the protocol half — the tools, what the publish gate
+requires, what a skip and a give-up mean — rendered from
+[`authoring_protocol.j2`](../composer/templates/authoring_protocol.j2). `Prompt.system` is the
+*domain* half and is prepended to nothing else.
 
-**The judge runs in-loop.** When `judge_prompt` returns a prompt for an input (probed once with an
-empty spec), the host binds a `request_review` tool into the author's own session and gates the
-`result` tool on a draft the reviewer accepted — so the author self-revises against feedback within
-one session instead of losing its context to a fresh retry. A wheel with no judge gets the plain
-single-shot author. Three properties keep this from hanging:
+**The wheel supplies its own noun.** Every prompt and tool description says what `check_noun`
+declares — Crucible's author reads about *harness functions*, another wheel's about *invariants* —
+because an author writes better when the prompt speaks the language its own generated code uses. The
+tool *names* stay generic (`validate_spec`, `expect_check_failure`) so the protocol can name them
+literally; only prose moves. The host renders this through `CheckVocab`, which re-describes each
+schema per session.
 
-- **A bounded budget** (`MAX_REVIEW_ROUNDS = 3`), because the loop can be *unwinnable*: when the
-  objection is something the author has no power to change, revise-and-re-review never converges,
-  it just re-spends a growing context per round.
-- **Relenting is honest.** On the last round the hook returns a real `Accepted` carrying the open
-  concerns labelled as unresolved — the author's gate opens, the draft goes forward, and the reason
-  lands in the transcript. The compile gate and the checker still judge the result.
-- **The verdict is a type, not a flag.** `Review = Accepted | Rejected`: the feedback string means
-  different things on either side of an accept, and absence ("this wheel declares no judge") is
-  `None` rather than a verdict standing in for it.
+> A schema that is re-described must not carry `@tool_display`: that decorator rebinds
+> `as_tool`/`bind` closed over the class it decorated, so a *subclass* of a decorated schema hands
+> back the base's fields with no error at all. The factories in
+> [`session.py`](../composer/rustapp/session.py) apply the display themselves for exactly this
+> reason, and `test_rust_llm_agent.py` guards it. A wheel that spelled the protocol itself could drift
+from what the host enforces, so it is never asked to. The instruction is likewise augmented: the host
+appends the exact property titles and check names from `checks()`, because the publish gate compares
+the declared mapping against those strings literally.
 
-The reviewer is an **advisory** gate in front of the gates that actually decide, so it fails open:
-an unparseable reply, or a judge turn that ends without stating a verdict, is read as acceptance
-rather than burning a revise round on a verdict nobody stated. A JSON `{accept, feedback}` is
-authoritative when present. Flipping that default is a policy decision, not a cleanup.
+**The gate is a tool, not a loop.** A component session gets `validate_spec` (the wheel's `validate`,
+per target); a setup session gets `compile_spec` (the wheel's `compile`). A run that passes *stamps a
+digest of the buffer it saw* into the session's validations, so any later edit invalidates it
+without anything having to remember to clear it. A partial run — `validate_spec(checks=[…])`, for
+iterating on one problem — never stamps.
+
+**A failure blocks unless it is the finding.** A check that did not come back `GOOD` keeps the gate
+unstamped, unless the author marked it with `expect_check_failure(check, reason)`. That is how a real
+counterexample reaches the report *as a finding with a justification* rather than as a row nobody
+examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
+`expect_test_failure`.
+
+**The judge is structured.** When `judge_prompt` returns a prompt for an input (probed once with an
+empty spec), the session binds `feedback_tool`; a wheel with no judge gets no review machinery and
+no feedback stamp among its required validations. The judge is a sub-agent that must read the draft
+back through `get_spec` (`did_read`) and must call `result` with a `PropertyFeedback` — `good` is a
+field it had to set, so there is no unparseable reply to interpret and no fail-open default. Its
+acceptance is a stamp like any other. The author may answer a prior round with a `rebuttal`, typed
+by the wheel's declared `evidence_kinds`.
+
+**Publishing** requires every stamp to match the current buffer and the property→checks mapping to
+account for every property that was not skipped, checked against the checks the wheel declared.
+`give_up(reason)` is the honest exit and is reported as a real outcome.
 
 ---
 
-## 6. Units, targets and verdicts
+## 6. Checks, targets and verdicts
 
-`units(input)` is **pure and pre-authoring**: it is the report's property→unit map, the set of names
-the prompt requires the author to produce, and the list the host validates against. It runs before
-the first turn, so the report's shape never depends on what the model happened to write.
+A **check** is the backend's named, runnable verification of one property — a CVL rule, a foundry
+test, a fuzz harness function. It is what the report keys a row by, and it is the concept the whole
+seam is organized around: a check yields a `Verdict`. (A *component* is the thing system analysis
+produced and the pipeline fans out over; one component's session authors many checks.)
 
-A `Unit` is `{ property, unit, target? }`. `target` is the **validation target the host runs**, and
-several report rows may share one — a wheel can put a component's whole property set in a single
-target. The host runs each *distinct* target once (`target_or_unit()`) and passes it as a
-`Target { name, units }` carrying the rows it covers, so the grouping the host just computed is not
-something the wheel has to reconstruct; the wheel returns a verdict **per unit in it**. Attribution is the wheel's: it owns its result
-format, so it decides which unit a counterexample belongs to; the host records the verdicts
-verbatim and does no verdict logic of its own, never parsing a tool's output.
+`checks(input)` is **pure and pre-authoring**: it is the report's property→check map, the set of
+names the prompt requires the author to produce, and the list the publish gate validates the
+declared mapping against. It runs before the first turn, so the report's shape never depends on what
+the model happened to write.
 
-Verdicts are grouped by property, not appended as singletons — two units checking the same property
-are two unit names under one report row, and as singletons they would be two rows with the same key
-that the store's `dict()` would silently collapse.
+A `Check` is `{ property, name, target? }`. `target` is the **validation target the host runs**, and
+several checks may share one — a wheel can put a component's whole property set in a single target.
+The host runs each *distinct* target once (`target_or_name()`) and passes it as a
+`Target { name, checks }` carrying the checks it covers, so the grouping the host just computed is
+not something the wheel has to reconstruct; the wheel returns a verdict **per check in it**.
+Attribution is the wheel's: it owns its result format, so it decides which check a counterexample
+belongs to; the host records the verdicts verbatim and does no verdict logic of its own, never
+parsing a tool's output.
+
+Verdicts are grouped by property, not appended as singletons — two checks verifying the same
+property are two check names under one report row, and as singletons they would be two rows with the
+same key that the store's `dict()` would silently collapse.
 
 `Outcome` is a closed enum on both sides (`GOOD` / `BAD` / `ERROR` / `TIMEOUT` / `UNKNOWN`) — the
 report's backend-agnostic vocabulary, whose human wording ("No counterexample" vs "Verified") is
@@ -437,7 +462,7 @@ that looks merely inconclusive. `Verdict.detail` carries the counterexample or e
 `BAD` is never unexplained.
 
 [`results.py`](../composer/rustapp/results.py) rolls these up for the console/TUI: one row per
-*unit*, named by the property title it checks, with the tally in the report's own display order and
+*check*, named by the property title it verifies, with the tally in the report's own display order and
 wording. A delivered component that bakes no verdicts contributes one `UNKNOWN` row so the listing
 accounts for every component.
 
@@ -547,7 +572,7 @@ No seam gives the LLM argv control, and none lets the wheel invent a policy. Ful
 
 [`RustArtifactStore`](../composer/rustapp/store.py) is a thin `ArtifactStore` subclass; the base
 already writes everything identical across backends (`properties.json`, `commentary.md`, the
-property→units map, `token_usage.json`). All the subclass supplies is the descriptor's layout — and
+property→checks map, `token_usage.json`). All the subclass supplies is the descriptor's layout — and
 the choice of how the *source* deliverable lands:
 
 - **`per_component`** (default) — one `{prefix}_{slug}.{ext}` file per component, written from its
@@ -608,7 +633,7 @@ for cp312+.
    (`features = ["extension-module", "abi3-py312"]`). The `[lib] name` MUST match the `export_app!`
    module ident and the maturin module name. Copy
    [example-app/Cargo.toml](../rust/example-app/Cargo.toml).
-2. **Implement `Backend`** — `descriptor` + `units` + `author_prompt` + `compile` + `validate` are
+2. **Implement `Backend`** — `descriptor` + `checks` + `author_prompt` + `compile` + `validate` are
    required; `validate_preconditions`, `judge_prompt`, `workspace_prep`, `sandbox_grants` and
    `finalize` have defaults. Every callout is directly unit-testable in Rust with no Python.
 3. **Export it** — `autoprover_sdk::export_app!(my_app, MyApp::new());`
@@ -648,8 +673,9 @@ Facts about the seam as it stands, not open design questions:
   backend).
 - **No HITL.** The generic task handler raises on an interrupt prompt; an interactive Rust
   application would need a new mechanism.
-- **The judge is advisory and fails open** (§5), and its budget relents rather than blocking
-  finalization.
+- **A skipped property is not re-planned.** `checks()` is asked for once, before authoring; a skip
+  removes its checks from the run and from the mapping, but nothing re-derives what the remaining
+  checks should be.
 - **Prompt changes don't invalidate caches** — neither the setup artifact's nor the driver's. Clear
   the namespace.
 
@@ -664,7 +690,9 @@ Facts about the seam as it stands, not open design questions:
 | The sandbox launcher | [rust/run-confined/src/main.rs](../rust/run-confined/src/main.rs) |
 | Declarative ABI mirror | [composer/rustapp/descriptor.py](../composer/rustapp/descriptor.py) |
 | Runtime ABI mirror + parsers | [composer/rustapp/wire.py](../composer/rustapp/wire.py) |
-| The backend, loop, preflight, prep | [composer/rustapp/adapter.py](../composer/rustapp/adapter.py) |
+| The backend, preflight, prep, report | [composer/rustapp/adapter.py](../composer/rustapp/adapter.py) |
+| The authoring session (buffer, gate, review, publish) | [composer/rustapp/session.py](../composer/rustapp/session.py) |
+| The shared authoring workflow | [composer/authoring/](../composer/authoring/) |
 | Application assembly (enum, phases, store, backend) | [composer/rustapp/host.py](../composer/rustapp/host.py) |
 | Entry point / argparse / env | [composer/rustapp/entry.py](../composer/rustapp/entry.py) |
 | Frontend, CLI, verdict rollup, store, result | [frontend.py](../composer/rustapp/frontend.py) · [cli.py](../composer/rustapp/cli.py) · [results.py](../composer/rustapp/results.py) · [store.py](../composer/rustapp/store.py) · [result.py](../composer/rustapp/result.py) |
@@ -676,6 +704,7 @@ Tests: `tests/test_rustapp.py` (the wheel round-trip, end to end through the hos
 `test_rustapp_wire.py` (ABI), `test_wire_roundtrip.py` (both directions of the ABI under
 Hypothesis, against the real serde types), `test_rustapp_preflight.py`, `test_rustapp_workspace_prep.py`,
 `test_rustapp_setup_cache.py`, `test_rustapp_verdicts.py`, `test_rustapp_toolchain_sem.py`,
-`test_rustapp_review_budget.py`, `test_rustapp_discovery_phase.py`, `test_rust_llm_agent.py`,
+`test_rustapp_gate.py`, `test_rustapp_validate_target.py`, `test_rustapp_discovery_phase.py`,
+`test_rust_llm_agent.py`,
 `test_rust_frontend.py`, plus `test_sandbox_run_confined.py` / `test_sandbox_escape.py` for the
 launcher contract.

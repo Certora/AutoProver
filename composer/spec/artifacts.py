@@ -60,7 +60,7 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         self._write_commentary(i.stem, artifact.commentary)
         self._write_property_map(
             i.stem, self._property_suffix,
-            {k: v for (k,v) in artifact.property_units()},
+            {k: v for (k,v) in artifact.property_checks()},
         )
         return target_path.relative_to(self._project_root)
 

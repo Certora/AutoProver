@@ -149,7 +149,7 @@ pub struct ArtifactLayout {
     pub artifact_prefix: String,
     /// Artifact file extension, no dot (e.g. `spec`, `t.sol`).
     pub artifact_extension: String,
-    /// The store's term for the property→units map file suffix (`property_rules`, `property_tests`).
+    /// The store's term for the property→check map file suffix (`property_rules`, `property_tests`).
     pub property_suffix: String,
 }
 
@@ -200,14 +200,41 @@ pub struct AppDescriptor {
     /// How the source deliverable is written (see [`DeliverableMode`]).
     pub deliverable_mode: DeliverableMode,
     /// Serialize the blocking toolchain callouts (`prepare_workspace`/`compile`/`validate`) on
-    /// one semaphore — set when the app shares a single build dir / target across units.
+    /// one semaphore — set when the app shares a single build dir / target across components.
     pub serialize_toolchain: bool,
     /// Default to the fail-closed `launcher` sandbox provider (still overridable by
     /// `COMPOSER_SANDBOX_PROVIDER`). Set by any wheel that runs untrusted native toolchains.
     pub confine_by_default: bool,
-    /// Human noun for one formalized unit in the console/TUI summary ("instruction" for
+    /// Human noun for one formalized component in the console/TUI summary ("instruction" for
     /// Crucible). Defaults to "component".
     #[serde(deserialize_with = "crate::required::present")]
     pub component_noun: Option<String>,
+    /// What this backend calls one [`Check`](crate::outcome::Check) *to the model* — "rule",
+    /// "harness function", "invariant". It is the word the authoring prompts use throughout, so it
+    /// should be the word the wheel's own prompts and its generated code already use.
+    ///
+    /// Declared rather than fixed because an author writes better when the prompt speaks its
+    /// domain's language; the host's tool *names* stay `check`-worded either way, so this changes
+    /// prose, not the API the model calls. `None` → "check".
+    #[serde(deserialize_with = "crate::required::present")]
+    pub check_noun: Option<String>,
+    /// What an author may cite when it rebuts the judge's prior-round feedback. The host builds the
+    /// rebuttal tool's `evidence_type` from this, so it is a closed set the model picks from.
+    ///
+    /// Declared per wheel because the evidence a backend can actually produce is a property of that
+    /// backend: a fuzzing wheel can show a counterexample, a typechecking one an error from a
+    /// checker that never runs code. See [`EVIDENCE_KINDS`] for the default set.
+    pub evidence_kinds: Vec<String>,
+}
+
+/// The evidence an author can usually offer, for a wheel with no reason to name its own: the build
+/// failed, the checker said so, the checker produced a counterexample, the manual says so, or the
+/// author is arguing. The last is deliberately last — an argument is a conversation, not a veto.
+pub const EVIDENCE_KINDS: [&str; 5] =
+    ["build_failure", "check_output", "counterexample", "manual_citation", "reasoned"];
+
+/// [`EVIDENCE_KINDS`] as the descriptor field wants it.
+pub fn default_evidence_kinds() -> Vec<String> {
+    EVIDENCE_KINDS.iter().map(|s| (*s).to_string()).collect()
 }
 

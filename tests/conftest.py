@@ -429,13 +429,15 @@ def wire_descriptor(**overrides: Any) -> dict[str, Any]:
         "serialize_toolchain": False,
         "confine_by_default": False,
         "component_noun": None,
+        "check_noun": None,
+        "evidence_kinds": ["build_failure", "check_output", "counterexample", "reasoned"],
         **overrides,
     }
 
 
-def wire_unit(prop: str, unit: str, target: str | None = None) -> dict[str, Any]:
-    """One report row (``Unit``); ``target`` null means the unit is its own validation target."""
-    return {"property": prop, "unit": unit, "target": target}
+def wire_check(prop: str, name: str, target: str | None = None) -> dict[str, Any]:
+    """One check (``Check``); ``target`` null means the check is its own validation target."""
+    return {"property": prop, "name": name, "target": target}
 
 
 def wire_verdict(outcome: str, **overrides: Any) -> dict[str, Any]:

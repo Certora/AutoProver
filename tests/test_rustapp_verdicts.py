@@ -35,7 +35,7 @@ def _delivered(**verdicts: Outcome) -> Delivered[RustFormalResult]:
     """A delivered component whose units check one property each, named ``<unit>_prop``."""
     return Delivered(
         RustFormalResult(
-            units=[(f"{unit}_prop", [unit]) for unit in verdicts],
+            checks=[(f"{name}_prop", [name]) for name in verdicts],
             verdicts={unit: Verdict.with_outcome(outcome) for unit, outcome in verdicts.items()},
         ),
         pathlib.Path("harness.rs"),

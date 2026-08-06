@@ -53,6 +53,12 @@
     "template_name": "solana/property_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.rustapp.session:ProtocolTemplate": {
+    "module": "composer.rustapp.session",
+    "qualname": "ProtocolTemplate",
+    "template_name": "authoring_protocol.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.cvl_research:_ResearchSys": {
     "module": "composer.spec.cvl_research",
     "qualname": "_ResearchSys",

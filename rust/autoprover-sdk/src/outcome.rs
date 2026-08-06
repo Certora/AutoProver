@@ -1,5 +1,5 @@
-//! What the gating callouts hand back: the compile verdict, the report's property→unit map,
-//! and the per-unit validation outcomes.
+//! What the gating callouts hand back: the compile verdict, the report's property→check map,
+//! and the per-check validation outcomes.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,35 +13,49 @@ pub enum CompileResult {
     Failed { errors: String },
 }
 
-/// One report row: a property title and its backend-specific unit name (the rule the report keys
-/// by). `target` is the *validation target the host runs* — several report units may share one
-/// target (e.g. Crucible puts a component's whole property set in one `c_<slug>` target), so the host runs the
-/// target once and the backend attributes the outcome back to each unit. `None` ⇒ the unit is its
-/// own target (one run per unit, the default).
+/// A property the author declined to formalize, with its justification. Carried into
+/// [`Delivered`](crate::finalize::Delivered) so the deliverable and the report can both say what was
+/// left out and why — a property that is absent for a stated reason is a different thing from one
+/// that was silently dropped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
-pub struct Unit {
+pub struct SkippedProperty {
+    pub property_title: String,
+    pub reason: String,
+}
+
+/// One report row: a property title and the backend's name for the check that carries it — a CVL
+/// rule, a foundry test, a fuzz harness function. A check yields a [`Verdict`].
+///
+/// `target` is the *validation target the host runs*, and several checks may share one (e.g.
+/// Crucible puts a component's whole property set in a single fuzz target), so the host runs the
+/// target once and the backend attributes the outcome back to each check. `None` ⇒ the check is its
+/// own target (one run per check, the default).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct Check {
     pub property: String,
-    pub unit: String,
+    pub name: String,
     #[serde(deserialize_with = "crate::required::present")]
     pub target: Option<String>,
 }
 
-impl Unit {
-    /// The validation target this unit is checked by — its own `unit` name unless it shares a
-    /// target with others.
-    pub fn target_or_unit(&self) -> &str {
-        self.target.as_deref().unwrap_or(&self.unit)
+impl Check {
+    /// The validation target this check runs under — its own `name` unless it shares a target with
+    /// others.
+    pub fn target_or_name(&self) -> &str {
+        self.target.as_deref().unwrap_or(&self.name)
     }
 }
 
-/// One validation target the host runs, and the report units that target covers — the units
+/// One validation target the host runs, and the checks that target covers — the checks
 /// [`Backend::validate`](crate::Backend::validate) must return a verdict for.
 ///
-/// The host computes the grouping from [`Backend::units`](crate::Backend::units) (it decides what
+/// The host computes the grouping from [`Backend::checks`](crate::Backend::checks) (it decides what
 /// to run, and in what order), so it hands the answer over rather than leaving each backend to
-/// recover it by re-deriving its own units and filtering them by name.
+/// recover it by re-deriving its own checks and filtering them by name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
@@ -49,31 +63,31 @@ pub struct Target {
     /// The target's name — what the backend selects when it runs the checker (Crucible: the
     /// component's `c_<slug>` harness fn, which is also its Cargo feature).
     pub name: String,
-    /// The report rows this run must produce a verdict for. Usually one; several when a backend
-    /// checks a whole property set in one run.
-    pub units: Vec<Unit>,
+    /// The checks this run must produce a verdict for. Usually one; several when a backend checks
+    /// a whole property set in one run.
+    pub checks: Vec<Check>,
 }
 
 impl Target {
-    /// The same verdict for every covered unit — what a run that concluded one thing about the
+    /// The same verdict for every covered check — what a run that concluded one thing about the
     /// whole target produces (it passed; it errored; it timed out).
     pub fn all(&self, outcome: Outcome, detail: Option<String>) -> ValidateOutcome {
         self.verdicts(|_| Verdict::with_outcome(outcome).with_detail(detail.clone()))
     }
 
-    /// A verdict per covered unit, keyed by unit name so a backend never spells one itself.
-    pub fn verdicts(&self, mut of: impl FnMut(&Unit) -> Verdict) -> ValidateOutcome {
+    /// A verdict per covered check, keyed by check name so a backend never spells one itself.
+    pub fn verdicts(&self, mut of: impl FnMut(&Check) -> Verdict) -> ValidateOutcome {
         ValidateOutcome::Verdicts {
-            verdicts: self.units.iter().map(|u| (u.unit.clone(), of(u))).collect(),
+            verdicts: self.checks.iter().map(|c| (c.name.clone(), of(c))).collect(),
         }
     }
 }
 
 /// The result of `validate` — the fused build+check for one validation **target**. Either the
 /// build failed (so the whole spec must be re-authored — the build is shared), or it built and
-/// produced a `Verdict` **per report unit the target covers** (`(unit, verdict)`). A target may
-/// cover several units (e.g. Crucible runs every invariant in one target), and the backend — which
-/// owns its own result/failure format — attributes the run to those units; the host records the
+/// produced a `Verdict` **per check the target covers** (`(check_name, verdict)`). A target may
+/// cover several checks (e.g. Crucible runs every invariant in one target), and the backend — which
+/// owns its own result/failure format — attributes the run to those checks; the host records the
 /// verdicts verbatim (it does no verdict logic). The build gate is fused in here rather than run as
 /// a separate `compile` dry-run, so a component pays for one build (docs/rust-applications.md §4.4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +99,7 @@ pub enum ValidateOutcome {
     Verdicts { verdicts: Vec<(String, Verdict)> },
 }
 
-/// What checking one unit concluded — the report's backend-agnostic vocabulary (mirrors
+/// What one check concluded — the report's backend-agnostic vocabulary (mirrors
 /// `composer…report.schema.Outcome`), which every backend's native status maps into. The
 /// human-facing wording ("No counterexample" vs "Verified") is picked at render time from the
 /// application's `backend_tag`, so a backend never spells it out here.
@@ -108,7 +122,7 @@ pub enum Outcome {
     Unknown,
 }
 
-/// A per-unit outcome (mirrors `composer…report.collect.Verdict`).
+/// One check's outcome (mirrors `composer…report.collect.Verdict`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Verdict {

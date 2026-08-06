@@ -267,3 +267,19 @@ practice.
   backend, not of the judge; a wheel declaring its own is the same call, made once more.
 - **The counterexample gate follows CVL/Foundry** (§5.1) — publish is blocked on a `BAD` until it
   is fixed, marked with a reason, or given up on.
+- **A property's verification is a "check".** The concept had four names across the stack — `Unit`
+  on the Rust ABI, `UnitName` / `property_units()` in the pipeline protocol, `RuleName` in the
+  report, and `rules` / `tests` per backend. It is one thing: the backend's named, runnable
+  verification of one property, which yields a `Verdict`. "Check" is the verb all three backends
+  share, where "rule" is prover-flavoured and "test" is exactly what a prover is not.
+
+  The ABI and the pipeline protocol are renamed (`Check { property, name, target }`, `checks()`,
+  `property_checks()`, `CheckName`, `expect_check_failure`). Two things deliberately keep their own
+  words: each backend's LLM-facing noun, carried by `MappingVocab` — the model does better with
+  "rule" / "test" than with the framework's generic term — and `FeatureUnit`, which now
+  unambiguously means the *component* system analysis produced.
+
+  **The report schema is left alone.** `RuleName`, `total_rules` and `FormalizedProperty.rules` are
+  fields of `certora/ap_report/report.json`, which the standalone renderer reads back, so renaming
+  them changes an output format. That is a separate decision; until it is made, `fetch_verdicts` is
+  the one translation point between the two vocabularies.

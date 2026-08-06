@@ -1,10 +1,10 @@
-"""Human-facing rollup of a Rust backend's per-unit verdicts for the console / TUI.
+"""Human-facing rollup of a Rust backend's per-check verdicts for the console / TUI.
 
 The canonical results artifact is ``report.json`` (the shared report phase). But — as with the
 CVL and Foundry backends — the console/TUI otherwise surface only a counts block, so a completed
-run reads as "success" with no visible verdicts. This turns the per-unit verdicts baked into the
+run reads as "success" with no visible verdicts. This turns the per-check verdicts baked into the
 pipeline result (:attr:`RustFormalResult.verdicts`, published by ``validate``) into a compact
-tally + per-unit listing, using the report's own outcome labels so the wording matches the HTML
+tally + per-check listing, using the report's own outcome labels so the wording matches the HTML
 report.
 
 Backend-agnostic: the outcome wording is parametrized by the descriptor's ``backend_tag``, so any
@@ -26,7 +26,7 @@ _ORDER = [Outcome.GOOD, Outcome.BAD, Outcome.TIMEOUT, Outcome.ERROR, Outcome.UNK
 
 @dataclass(frozen=True)
 class UnitVerdict:
-    """One unit's outcome: its display name and the neutral ``Outcome``."""
+    """One check's outcome: its display name and the neutral ``Outcome``."""
 
     name: str
     outcome: Outcome
@@ -34,7 +34,7 @@ class UnitVerdict:
 
 @dataclass(frozen=True)
 class VerdictSummary:
-    """The delivered units' verdicts, in pipeline order, plus the report backend tag for wording."""
+    """The delivered checks' verdicts, in pipeline order, plus the report backend tag for wording."""
 
     verdicts: list[UnitVerdict]
     backend_tag: ReportBackend
@@ -56,7 +56,7 @@ class VerdictSummary:
 def summarize_verdicts(
     result: CorePipelineResult[RustFormalResult], backend_tag: ReportBackend
 ) -> VerdictSummary:
-    """Extract the per-unit verdicts baked into a completed run's ``outcomes``.
+    """Extract the per-check verdicts baked into a completed run's ``outcomes``.
 
     One row per *unit*, not per component: ``units()`` is one unit per property, so a component
     with five properties bakes five verdicts and contributes five rows (reading only the first
@@ -75,7 +75,7 @@ def summarize_verdicts(
         if not formalized.verdicts:
             verdicts.append(UnitVerdict(o.feat.display_name, Outcome.UNKNOWN))
             continue
-        titles = formalized.unit_titles()
+        titles = formalized.check_titles()
         verdicts.extend(
             UnitVerdict(titles.get(unit, unit), baked.outcome)
             for unit, baked in formalized.verdicts.items()
