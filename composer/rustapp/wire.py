@@ -57,7 +57,8 @@ class WireModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 class Property(WireModel):
-    """One property to formalize, plus the host-assigned unique ``slug`` that names its unit."""
+    """One property to formalize, plus the ``slug`` the host assigned it — unique within the batch,
+    and what a backend names this property's :class:`Check` after (Crucible: ``c_<slug>``)."""
 
     title: str
     #: The shared vocabulary (:data:`~composer.spec.types.PropertyType`), mirrored by the Rust

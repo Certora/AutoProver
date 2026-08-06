@@ -34,8 +34,12 @@ impl std::fmt::Display for PropertyKind {
     }
 }
 
-/// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), plus a
-/// host-assigned unique `slug` used to name its unit/artifact (Crucible: `c_<slug>`).
+/// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), plus the `slug`
+/// the host assigned it: unique within the batch, and what a backend names this property's
+/// [`Check`](crate::outcome::Check) after (Crucible: `c_<slug>`; the example app: `rule_<slug>`).
+///
+/// The slug is only guaranteed *filesystem*-safe, which is weaker than identifier-safe — a backend
+/// that spells it into generated code folds it first.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
