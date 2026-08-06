@@ -110,7 +110,7 @@ async def test_solana_vault_front_half(pg_container: "PostgresContainer", monkey
 
         import asyncio
         backend = NullSolanaBackend(NullSolanaArtifactStore(str(_SCENARIO)))
-        run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(4), env=env)
+        run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _agent_semaphore=asyncio.Semaphore(4), _cpu_semaphore=asyncio.Semaphore(2), env=env)
         result = await run_pipeline(backend, run, ecosystem=SOLANA, interactive=False, threat_model=None, max_bug_rounds=1)
 
     # Pass: front half ran and extracted properties.

@@ -46,7 +46,7 @@ from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
 from composer.io.thread_logging import default_logging_ns, thread_logger
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.cli import root_cache_key
-from composer.pipeline.core import CorePipelineResult
+from composer.pipeline.core import CorePipelineResult, DEFAULT_MAX_CPU_TASKS
 from composer.rag.models import get_model
 from composer.rustapp.adapter import source_unit_of
 from composer.rustapp.descriptor import ArgSpec, BoolDefault, IntDefault, PhaseRole, StrDefault
@@ -197,6 +197,7 @@ def build_arg_parser(app: RustApplication) -> argparse.ArgumentParser:
         help="Path to the design document (text or PDF); auto-discovered if omitted",
     )
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
+    parser.add_argument("--max-cpu-tasks", type=int, default=DEFAULT_MAX_CPU_TASKS, help=f"Max concurrent CPU-bound tasks — toolchain builds and the like (default: {DEFAULT_MAX_CPU_TASKS})")
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
     parser.add_argument("--interactive", action="store_true", help="Interactively refine extracted properties")
@@ -409,6 +410,7 @@ async def rust_entry_point(
                 handler_factory=handler,
                 env=env,
                 max_concurrent=args.max_concurrent,
+                max_cpu_tasks=args.max_cpu_tasks,
                 max_bug_rounds=args.max_bug_rounds,
                 interactive=args.interactive,
             )

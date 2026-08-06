@@ -85,6 +85,7 @@ def _make_args(rag_conn: str, scenario_dir: Path, system_doc: str | None) -> Aut
         main_contract=f"{scenario_dir / "src/Counter.sol"}:Counter",
         system_doc=system_doc,
         max_concurrent=4,
+        max_cpu_tasks=2,
         cache_ns=None,
         memory_ns=None,
         cloud=True,

@@ -80,19 +80,19 @@ class _Run:
         self.source = source
         self.env = None
         self.ctx = None
-        self.metered: list[str] = []
-        self.unmetered: list[str] = []
+        self.agent_tasks: list[str] = []
+        self.cpu_tasks: list[str] = []
         #: Every ``TaskInfo`` the backend built, in order — the phase member matters as much as the
         #: id (see the phase-tagging test).
         self.tasks: list[Any] = []
 
     async def runner(self, task_info, job):
-        self.metered.append(task_info.task_id)
+        self.agent_tasks.append(task_info.task_id)
         self.tasks.append(task_info)
         return await job()
 
-    async def unmetered_runner(self, task_info, job):
-        self.unmetered.append(task_info.task_id)
+    async def cpu_runner(self, task_info, job):
+        self.cpu_tasks.append(task_info.task_id)
         self.tasks.append(task_info)
         return await job()
 
@@ -223,17 +223,18 @@ async def test_without_a_declared_preflight_the_prep_runs_but_nothing_is_gated(t
 
     assert result.prep_facts == {"idl": IDL_DEST}  # the prep still ran
     assert wheel.compiles == []
-    assert run.metered == [] and run.unmetered == []  # the prep is silent, so there is no task
+    assert run.agent_tasks == [] and run.cpu_tasks == []  # the prep is silent, so there is no task
 
 
-async def test_the_build_does_not_spend_an_agent_slot(tmp_path, monkeypatch):
-    # The run's semaphore budgets concurrent *agents*; a multi-minute cargo build charged to it would
-    # silently take a quarter of the default concurrency away from the analysis it overlaps.
+async def test_the_build_spends_a_cpu_slot_not_an_agent_slot(tmp_path, monkeypatch):
+    # The agent semaphore budgets concurrent *agents*; a multi-minute cargo build charged to it would
+    # silently take a quarter of the default concurrency away from the analysis it overlaps. It is
+    # throttled all the same — against the CPU budget, which is what it actually spends.
     wheel = FakeWheel(BUILD)
     _result, run = await _preflight(monkeypatch, tmp_path, wheel)
 
-    assert run.unmetered == ["demoprover-preflight"]
-    assert run.metered == []
+    assert run.cpu_tasks == ["demoprover-preflight"]
+    assert run.agent_tasks == []
 
 
 async def test_the_gate_is_tagged_with_the_declared_phase_member(tmp_path, monkeypatch):

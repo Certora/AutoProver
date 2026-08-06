@@ -195,7 +195,8 @@ async def test_component_grouping_on_a_real_program(pg_container: "PostgresConta
             ctx=ctx,
             source=source,
             _handler_factory=GenericRustConsoleHandler(set()).make_handler,
-            _semaphore=asyncio.Semaphore(4),
+            _agent_semaphore=asyncio.Semaphore(4),
+            _cpu_semaphore=asyncio.Semaphore(2),
             env=env,
         )
         analyzed = await run.runner(
