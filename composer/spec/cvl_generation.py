@@ -6,10 +6,8 @@ Parameterized by:
 - with_memory: whether to persist memory across runs
 """
 
-import hashlib
 from dataclasses import dataclass
-from typing import Annotated, Callable, Literal, NotRequired, override, Awaitable, Any, Protocol
-from typing_extensions import TypedDict
+from typing import Callable, Literal, NotRequired, override, Awaitable, Any
 
 from pydantic import BaseModel, Field
 
@@ -23,21 +21,17 @@ from langgraph.runtime import get_runtime
 from graphcore.graph import FlowInput, tool_state_update, tool_return
 from graphcore.tools.schemas import WithImplementation, WithInjectedState, WithInjectedId, WithAsyncImplementation
 
+from composer.authoring.judge import PropertyFeedbackProtocol, RebuttalBase
+from composer.authoring.state import (
+    AuthoringExtra, MappingVocab, SkippedProperty, spec_digest, validate_unit_mapping,
+)
 from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
 )
 from composer.spec.guidance import ERC20TokenGuidance, UnresolvedCallGuidance
-from composer.core.state import merge_validation
 from composer.spec.graph_builder import run_to_completion
 from composer.cvl.tools import put_cvl_raw, put_cvl, get_cvl, edit_cvl
 from composer.ui.tool_display import tool_display, suppress_ack
-
-class PropertyFeedbackProtocol(Protocol):
-    @property
-    def good(self) -> bool: ...
-
-    @property
-    def feedback(self) -> str: ...
 
 CVL_JUDGE_KEY = CacheKey[CVLGeneration, CVLJudge]("judge")
 
@@ -46,34 +40,10 @@ CVL_JUDGE_KEY = CacheKey[CVLGeneration, CVLJudge]("judge")
 # Feedback types
 # ---------------------------------------------------------------------------
 
-class SkippedProperty(BaseModel):
-    """A property the agent explicitly decided not to formalize."""
-    property_title: str = Field(description="The unique snake_case title of the property from the batch listing")
-    reason: str = Field(description="Justification for why this property was skipped")
-
-
 class PropertyRuleMapping(BaseModel):
     """The rules/invariants in the spec that verify a given property."""
     property_title: str = Field(description="The unique snake_case title of the property (from the batch listing) that these rules verify")
     rules: list[str] = Field(description="The names of the rules/invariants in the spec that verify this property")
-
-class RebuttalBase(BaseModel):
-    prior_feedback_reference: str = Field(
-        description=(
-            "A brief quote from, or clear pointer to, the piece of prior-round feedback "
-            "this rebuttal addresses. Just enough for the judge to identify which prior "
-            "suggestion you are responding to — not a full transcript."
-        )
-    )
-    evidence: str = Field(
-        description=(
-            "The concrete artifact backing the rebuttal: typecheck error text, a "
-            "counterexample summary, a manual quote with location, or a brief reasoned "
-            "argument. Keep it short and specific — the judge reads this verbatim."
-        )
-    )
-
-
 
 class Rebuttal(RebuttalBase):
     """A rebuttal to a specific piece of feedback from a prior round, backed by evidence.
@@ -95,24 +65,6 @@ class Rebuttal(RebuttalBase):
             "only use `reasoned` when you genuinely cannot produce tool output or a "
             "manual citation."
         )
-    )
-
-
-def _merge_skips(
-    left: list[SkippedProperty],
-    right: list[SkippedProperty],
-) -> list[SkippedProperty]:
-    """State reducer: merge by property_title (new justification replaces old).
-
-    An entry with an empty reason is a sentinel for "unskipped" — it removes
-    the property from the skip list.
-    """
-    by_title = {s.property_title: s for s in left}
-    for s in right:
-        by_title[s.property_title] = s
-    return sorted(
-        (s for s in by_title.values() if s.reason),
-        key=lambda s: s.property_title,
     )
 
 
@@ -155,36 +107,14 @@ class GeneratedCVL(BaseModel):
 # Completion validation
 # ---------------------------------------------------------------------------
 
-class CVLGenerationExtra(TypedDict):
-    curr_spec: str | None
-    skipped: Annotated[list[SkippedProperty], _merge_skips]
+class CVLGenerationExtra(AuthoringExtra):
     property_rules: list[PropertyRuleMapping]
-    validations: Annotated[dict[str, str], merge_validation]
-    required_validations: list[str]
 
 
-def _compute_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
-    digester = hashlib.md5()
-    digester.update(curr_spec.encode())
-    for s in skipped:
-        digester.update(f"{s.property_title}:{s.reason}".encode())
-    return digester.hexdigest()
-
-
-def check_completion(
-    state: CVLGenerationExtra,
-) -> str | None:
-    """Returns None if valid, error string if not."""
-    spec = state["curr_spec"]
-    if spec is None:
-        return "Completion REJECTED: no spec written yet."
-    digest = _compute_digest(spec, state["skipped"])
-    validations = state["validations"]
-    required = state["required_validations"]
-    for key in required:
-        if key not in validations or validations[key] != digest:
-            return f"Completion REJECTED: {key} validation not satisfied or stale."
-    return None
+#: How the CVL author words its publish-time mapping. The prover reports no rule-name ground truth
+#: (unlike forge), so ``validate_property_rules`` passes no ``ran`` set and the mapping is checked
+#: for coverage only.
+_CVL_MAPPING = MappingVocab(unit_noun="rule", field_name="property_rules")
 
 
 def validate_property_rules(
@@ -192,57 +122,11 @@ def validate_property_rules(
     skipped: list[SkippedProperty],
     titles: list[str],
 ) -> str | None:
-    """Validate the property->rules mapping declared at completion time.
-
-    ``titles`` is the batch's full set of property titles. Returns None if valid, otherwise
-    a single message enumerating all problems. A mapping is valid when every non-skipped
-    property (referenced by its unique title) is mapped to at least one rule, no skipped
-    property is mapped, every referenced title exists, and no title is mapped twice.
-    """
-    valid_titles = set(titles)
-    skipped_titles = {s.property_title for s in skipped}
-    errors: list[str] = []
-    mapped: set[str] = set()
-    for m in property_rules:
-        if m.property_title not in valid_titles:
-            errors.append(f"Unknown property title {m.property_title!r} (not one of the batch's properties).")
-            continue
-        if m.property_title in mapped:
-            errors.append(f"Property {m.property_title!r} appears more than once in the mapping.")
-            continue
-        mapped.add(m.property_title)
-        if m.property_title in skipped_titles:
-            errors.append(
-                f"Property {m.property_title!r} is marked as skipped and must not appear "
-                "in the mapping (un-skip it or remove it)."
-            )
-            continue
-        if not any(r.strip() for r in m.rules):
-            errors.append(f"Property {m.property_title!r} must map to at least one non-empty rule name.")
-    for t in titles:
-        if t in skipped_titles or t in mapped:
-            continue
-        errors.append(f"Property {t!r} is neither skipped nor mapped to any rules.")
-    if errors:
-        return (
-            "Completion REJECTED: the property_rules mapping is invalid. Fix all of the "
-            "following and resubmit:\n- " + "\n- ".join(errors)
-        )
-    return None
-
-
-def make_validation_stamper(key: str) -> Callable[[CVLGenerationExtra], dict[str, str]]:
-    """Create a stamper for future prover tool integration.
-
-    The stamper reads curr_spec/skipped from state and returns
-    a dict suitable for merging into the validations state key.
-    """
-    def stamp(state: CVLGenerationExtra) -> dict[str, str]:
-        return {key: _compute_digest(
-            state["curr_spec"] or "",
-            state["skipped"],
-        )}
-    return stamp
+    """Validate the property->rules mapping declared at completion time. ``titles`` is the batch's
+    full set of property titles; returns None if valid, else one message enumerating all problems."""
+    return validate_unit_mapping(
+        [(m.property_title, m.rules) for m in property_rules], skipped, titles, _CVL_MAPPING,
+    )
 
 
 class CVLGenerationInput(FlowInput, CVLGenerationExtra):
@@ -314,7 +198,7 @@ class _FeedbackSchema(WithInjectedState[CVLGenerationState], WithInjectedId, Wit
         t = await feedback(spec, skipped, self.rebuttals, self.tool_call_id)
         msg = f"Good? {t.good}\nFeedback {t.feedback}"
         if t.good:
-            digest = _compute_digest(spec, skipped)
+            digest = spec_digest(spec, skipped)
             return tool_state_update(
                 self.tool_call_id, msg,
                 validations={FEEDBACK_VALIDATION_KEY: digest},

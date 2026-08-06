@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 
 from composer.rustapp.wire import Verdict
-from composer.spec.cvl_generation import SkippedProperty
+from composer.authoring.state import SkippedProperty
 
 
 class RustSetupArtifact(BaseModel):

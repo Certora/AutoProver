@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 
-from composer.spec.cvl_generation import SkippedProperty
+from composer.authoring.state import SkippedProperty
 from composer.spec.types import PropertyFormulation
 from composer.spec.source.report.schema import (
     ComponentName, FormalizedProperty, GaveUpComponent, Outcome, PropertyTitle, RuleName, RuleRef,

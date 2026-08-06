@@ -30,7 +30,7 @@ from composer.pipeline.core import (
 )
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
-from composer.spec.cvl_generation import SkippedProperty
+from composer.authoring.state import SkippedProperty
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
