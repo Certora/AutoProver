@@ -196,6 +196,7 @@ version = "0.1.0"
 dependencies = [
  "askama",
  "autoprover-sdk",
+ "autoprover-solana",
  "pyo3",
  "serde",
  "serde_json",

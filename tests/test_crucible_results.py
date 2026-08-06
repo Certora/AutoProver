@@ -17,6 +17,7 @@ from composer.rustapp.results import (
 from composer.pipeline.core import ComponentOutcome, CorePipelineResult, Delivered, GaveUp
 from composer.rustapp.result import RustFormalResult
 from composer.spec.source.report.schema import Outcome
+from tests.conftest import wire_verdict
 
 
 class _Feat:
@@ -32,7 +33,7 @@ def _feat(name: str) -> Any:
 
 
 def _delivered(name: str, outcome: str) -> ComponentOutcome:
-    res = RustFormalResult(verdicts={name: {"outcome": outcome}})
+    res = RustFormalResult(verdicts={name: wire_verdict(outcome)})
     return ComponentOutcome(_feat(name), [], Delivered(res, Path(f"fuzz/{name}.rs")))
 
 

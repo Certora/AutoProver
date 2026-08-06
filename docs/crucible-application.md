@@ -359,10 +359,16 @@ Where the harness gets the program's Anchor types from is the one axis the crate
 | fixture writes | `use <lib>::*` | `use <lib>::*` (identical: the generated module is named for the crate's lib target) |
 
 **The choice is made once**, in `workspace_prep`, from the program crate's own declared `anchor-lang`
-requirement (`ProgramCrate::anchor`, resolved from its manifest by `composer/spec/cargo.py` — through
-workspace inheritance). Later callouts don't re-derive it: the host places the IDL where the plan's
-`idl_dest` asked and reports the path back as the `idl` context key, so prep, every gated build, and the
-delivered crate render the same crate.
+requirement (`SolanaSourceUnit::anchor`, resolved from its manifest by `composer/spec/cargo.py` —
+through workspace inheritance). Later callouts don't re-derive it: the host places the IDL where the
+plan's `idl_dest` asked and reports the path back as the `idl` prep *fact*, so prep, every gated build,
+and the delivered crate render the same crate.
+
+Both of those names belong to **this chain**, not to the framework — a Cargo package and an Anchor IDL
+mean nothing to a wheel analyzing another ecosystem. They are declared once in
+[autoprover-solana](../rust/autoprover-solana) and read from there by this wheel and by the host's
+[`SolanaToolchain`](../composer/spec/solana/project.py); the framework carries them as opaque objects
+(`rust-applications.md` §7).
 
 Why the program's Anchor version *forces* the choice rather than merely suggesting it — using a real program
 (`anchor-lang 0.29`, `solana-program ~1.17.18`) against Crucible's stack as the worked example:

@@ -35,7 +35,9 @@ _CRATE = {
 #: The same crate as it really is: an Anchor major Crucible cannot link, so the types must come
 #: from the IDL instead.
 _SKEWED = {**_CRATE, "anchor": "0.29.0"}
-#: Where the host reports it placed the IDL (workdir-relative), as ``workspace_prep`` asked.
+#: Where the host reports it placed the IDL (workdir-relative), as ``workspace_prep`` asked. It
+#: travels as one of this chain's prep *facts* (``autoprover_solana::SolanaPrepFacts``) — the
+#: framework carries the object without knowing what an IDL is.
 _IDL_AT = "fuzz/vault/idls/example_lending.json"
 
 
@@ -49,8 +51,8 @@ def _finalize(*sections: tuple[str, str], idl: str | None = None) -> dict[str, s
     """
     payload = {
         "program": "vault",
-        "program_crate": _CRATE,
-        "idl": idl,
+        "source_unit": _CRATE,
+        "prep_facts": {"idl": idl} if idl is not None else {},
         "setup": "// FIXTURE\nstruct Fixture {}",
         "components": [
             {
@@ -60,6 +62,8 @@ def _finalize(*sections: tuple[str, str], idl: str | None = None) -> dict[str, s
                     "artifact_text": src,
                     "targets": [fn],
                     "property_units": [[f"p {fn}", [f"c_p_{i}"]]],
+                    "unit_file": None,
+                    "run_link": None,
                 },
             }
             for i, (fn, src) in enumerate(sections)
@@ -68,15 +72,19 @@ def _finalize(*sections: tuple[str, str], idl: str | None = None) -> dict[str, s
     return json.loads(crucible_app.finalize(json.dumps(payload)))
 
 
-def _prep(program_crate: dict | None = None, args: dict | None = None) -> dict:
-    return json.loads(
+def _prep(source_unit: dict | None = None, args: dict | None = None) -> dict:
+    """The wheel's plan, with its chain-shaped ``toolchain_request`` lifted out — that object is what
+    the host's Solana toolchain reads, and the only place ``warm_dirs``/``build_program``/``idl_dest``
+    are named on either side."""
+    plan = json.loads(
         crucible_app.workspace_prep(
             json.dumps({
-                "kind": "preflight", "program": "vault",
-                "program_crate": program_crate or {}, "args": args or {},
+                "kind": "preflight", "program": "vault", "props": [], "setup": None,
+                "source_unit": source_unit or {}, "prep_facts": {}, "args": args or {},
             })
         )
     )
+    return {"files": plan["files"], **plan["toolchain_request"]}
 
 
 def test_workspace_prep_places_deps_only_manifest_and_warm_plan():
@@ -98,7 +106,8 @@ def test_workspace_prep_places_deps_only_manifest_and_warm_plan():
 
 
 def test_workspace_prep_falls_back_to_the_programs_convention_without_a_crate():
-    # A host that resolves no crate (or predates the field) keeps the old behaviour.
+    # A host that resolved nothing sends an empty object, and the wheel applies its own layout
+    # convention (`SolanaSourceUnit::resolved`) — the framework has none to apply for it.
     plan = _prep(None)
     assert plan["build_program"] == "vault"
     cargo = plan["files"]["fuzz/vault/Cargo.toml"]
@@ -136,7 +145,10 @@ def test_finalize_emits_the_shared_harness_fn_once_not_once_per_property():
 
 def test_finalize_skips_undelivered_and_is_empty_without_sections():
     # No delivered components → nothing to assemble; finalize returns None (the host skips it).
-    raw = crucible_app.finalize(json.dumps({"program": "vault", "setup": "// F", "components": []}))
+    raw = crucible_app.finalize(json.dumps({
+        "program": "vault", "setup": "// F", "components": [],
+        "source_unit": _CRATE, "prep_facts": {},
+    }))
     assert raw is None
 
 
@@ -180,8 +192,9 @@ def _compile_crate(tmp_path, *, spec: str = "", idl: str | None = None) -> dict[
     result = json.loads(
         crucible_app.compile(
             json.dumps({
-                "kind": "preflight", "program": "vault", "program_crate": _CRATE,
-                "props": [], "idl": idl,
+                "kind": "preflight", "program": "vault", "source_unit": _CRATE,
+                "props": [], "setup": None, "args": {},
+                "prep_facts": {"idl": idl} if idl is not None else {},
             }),
             spec, str(tmp_path), _NO_LAUNCH,
         )

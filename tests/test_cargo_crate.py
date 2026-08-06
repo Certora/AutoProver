@@ -8,8 +8,7 @@ the program under test (Crucible) must get the first two from the manifest, neve
 import pytest
 
 from composer.pipeline.ecosystem import EVM, SOLANA
-from composer.rustapp.adapter import program_crate_of
-from composer.rustapp.wire import ProgramCrate as WireCrate
+from composer.rustapp.adapter import source_unit_of
 from composer.spec.cargo import ProgramCrate, resolve_program_crate
 from composer.spec.context import SourceFields
 from composer.spec.system_model import SolidityIdentifier
@@ -120,18 +119,20 @@ def _source(root, relative_path: str) -> SourceFields:
     )
 
 
-def test_the_author_input_field_comes_from_the_chains_registered_resolver(tmp_path):
+def test_the_author_input_field_comes_from_the_chains_registered_toolchain(tmp_path):
     _member(
         tmp_path, "lend", '[package]\nname = "example_lending"\n\n[dependencies]\nanchor-lang = "0.29.0"\n'
     )
-    # Rust (Solana) resolves the crate; this is what every AuthorInput carries.
-    assert program_crate_of(SOLANA, _source(tmp_path, "programs/lend/src/lib.rs")) == WireCrate(
-        dir="programs/lend", package="example_lending", lib="example_lending", anchor="0.29.0"
-    )
-    # EVM has no registered resolver (and no compilation unit to locate), and an unresolvable Rust
-    # layout is not fatal — both yield an all-empty crate, which the wheel reads through its own
-    # ``resolved()`` fallback.
-    # Empty strings rather than absent keys: the Rust struct defaults every field, so the two
-    # deserialize identically.
-    assert program_crate_of(EVM, _source(tmp_path, "programs/lend/src/lib.rs")) == WireCrate()
-    assert program_crate_of(SOLANA, _source(tmp_path, "nowhere/src/lib.rs")) == WireCrate()
+    # Rust (Solana) resolves the crate, flattened to the chain-shaped object every AuthorInput
+    # carries. Every key present, including an empty one: this is the shape `SolanaSourceUnit`
+    # deserializes on the wheel's side.
+    assert source_unit_of(SOLANA, _source(tmp_path, "programs/lend/src/lib.rs")) == {
+        "dir": "programs/lend", "package": "example_lending", "lib": "example_lending",
+        "anchor": "0.29.0",
+    }
+    # EVM has no registered toolchain (and no compilation unit to locate), and an unresolvable Rust
+    # layout is not fatal — both answer *empty*, which is the seam's spelling of "nothing resolved"
+    # and what sends the wheel to its own convention. Deliberately not an all-empty unit, which
+    # would claim a crate at the project root named "".
+    assert source_unit_of(EVM, _source(tmp_path, "programs/lend/src/lib.rs")) == {}
+    assert source_unit_of(SOLANA, _source(tmp_path, "nowhere/src/lib.rs")) == {}

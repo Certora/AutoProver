@@ -13,9 +13,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use autoprover_sdk::args::AppArgs;
-use autoprover_sdk::authoring::{
-    anchor_compat_key, AuthorInput, Authored, Failure, FailureKind, ProgramCrate, Prompt,
-};
+use autoprover_sdk::authoring::{AuthorInput, Authored, Failure, FailureKind, Prompt};
+use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::descriptor::{
     AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
     PhaseSpec,
@@ -25,6 +24,7 @@ use autoprover_sdk::outcome::{CompileResult, Outcome, Target, Unit, ValidateOutc
 use autoprover_sdk::prep::{SandboxGrants, WorkspacePrep};
 use autoprover_sdk::sandbox::{CommandOutput, Workspace};
 use autoprover_sdk::Backend;
+use autoprover_solana::{anchor_compat_key, SolanaPrep, SolanaPrepFacts, SolanaSourceUnit};
 
 use askama::Template;
 
@@ -129,7 +129,7 @@ struct BackendGuidance;
 
 /// Concise Crucible harness API reference for the fixture-authoring prompt (§7.5 cheat-sheet).
 /// `crate_id` is the program crate's **lib** name — the fixture's `use <id>::*` and the `.so` it
-/// loads — which is not the analysis identifier (see `ProgramCrate`). `idl` says those items are
+/// loads — which is not the analysis identifier (see `SolanaSourceUnit`). `idl` says those items are
 /// IDL-generated rather than the program crate's own, which narrows what the fixture may reach for.
 #[derive(Template)]
 #[template(path = "harness_cheat_sheet.j2", escape = "none")]
@@ -348,7 +348,7 @@ fn crucible_repo() -> Option<PathBuf> {
 ///
 /// An unknown requirement (no `anchor-lang`, or a git/path dep) keeps the crate path: that is the
 /// historical behaviour, and the compiler reports it precisely if it turns out to be wrong.
-fn crate_dep_usable(cr: &ProgramCrate) -> bool {
+fn crate_dep_usable(cr: &SolanaSourceUnit) -> bool {
     match (cr.anchor_compat(), anchor_compat_key(ANCHOR_VERSION)) {
         (Some(theirs), Some(ours)) => theirs == ours,
         _ => true,
@@ -373,28 +373,29 @@ struct HarnessSpec {
     /// The analysis identifier. Names the harness crate itself — `fuzz/<program>/`, package
     /// `<program>_fuzz`, and the selector `crucible run <program>` resolves — nothing else.
     program: String,
-    /// The program under test's crate — every part populated, the SDK boundary having resolved it.
-    /// Used for the path dep under [`ProgramTypes::Crate`]; its `lib` is the module holding the
-    /// program's types under *either* mode, so the authored fixture's `use <id>::*` is identical.
-    cr: ProgramCrate,
+    /// The program under test's crate — every part populated, `SolanaSourceUnit::of` having applied
+    /// the layout convention to whatever the host resolved. Used for the path dep under
+    /// [`ProgramTypes::Crate`]; its `lib` is the module holding the program's types under *either*
+    /// mode, so the authored fixture's `use <id>::*` is identical.
+    cr: SolanaSourceUnit,
     types: ProgramTypes,
 }
 
 impl HarnessSpec {
-    /// The spec for `input`. The mode follows the host's report — a non-empty `idl` context key
-    /// means the host placed an IDL at that (workdir-relative) path because `workspace_prep` asked
-    /// for one, so the types are generated. See [`CrucibleApp::workspace_prep`], which makes the
+    /// The spec for `input`. The mode follows what the host reports the prep established — an `idl`
+    /// fact means it placed one at that (workdir-relative) path because `workspace_prep` asked for
+    /// one, so the types are generated. See [`CrucibleApp::workspace_prep`], which makes the
     /// decision.
     fn of(input: &AuthorInput) -> Self {
         Self::new(
             &input.program,
-            input.program_crate.clone(),
-            input.idl.clone().unwrap_or_default(),
+            SolanaSourceUnit::from_input(input),
+            SolanaPrepFacts::from_input(input).idl.unwrap_or_default(),
         )
     }
 
     /// `idl_at` is the IDL's workdir-relative path, or empty for the crate path.
-    fn new(program: &str, cr: ProgramCrate, idl_at: String) -> Self {
+    fn new(program: &str, cr: SolanaSourceUnit, idl_at: String) -> Self {
         let types = if idl_at.is_empty() {
             ProgramTypes::Crate
         } else {
@@ -600,7 +601,7 @@ fn api_facts(analyzed: &serde_json::Value, program: &str, crate_id: &str) -> Str
     };
 
     let str_of = |v: Option<&serde_json::Value>| v.and_then(|x| x.as_str()).unwrap_or("?").to_string();
-    // The crate id is the dependency's actual *lib* name (`ProgramCrate::lib`), NOT the analysis's
+    // The crate id is the dependency's actual *lib* name (`SolanaSourceUnit::lib`), NOT the analysis's
     // `program_identifier` — which may be the `#[program] pub mod` name, or just the label the user
     // passed — either of which would mis-resolve `use <id>::*`. Surface the module name as a note
     // only when it differs (the template renders it iff `analysis_id` is `Some`).
@@ -1029,7 +1030,7 @@ impl Backend for CrucibleApp {
         // The harness declares the program under test as a path dep, so its crate must exist:
         // check it here rather than let a wrong directory surface as a confusing "failed to
         // load manifest for dependency" deep in an offline build.
-        let cr = &args.program_crate;
+        let cr = SolanaSourceUnit::of(&args.source_unit, &args.program);
         if !root.join(&cr.dir).join("Cargo.toml").is_file() {
             problems.push(format!(
                 "no Cargo crate for the program under test at {}/Cargo.toml — Crucible \
@@ -1283,24 +1284,30 @@ impl Backend for CrucibleApp {
         //
         // This is also where the crate-vs-IDL decision is made, ONCE: the program's own Anchor
         // version decides it (`crate_dep_usable`), or the operator forces the IDL path by supplying
-        // one. Later callouts don't re-derive it — they read the `idl` the host reports after
+        // one. Later callouts don't re-derive it — they read the `idl` fact the host reports after
         // placing the file, so the whole run renders one consistent crate.
         let program = &input.program;
-        let cr = &input.program_crate;
+        let cr = SolanaSourceUnit::from_input(input);
         let forced = input.args.text("program_idl").is_some();
         let dest = HarnessSpec::new(program, cr.clone(), String::new()).idl_dest();
-        let idl_dest = (forced || !crate_dep_usable(cr)).then_some(dest);
+        let idl_dest = (forced || !crate_dep_usable(&cr)).then_some(dest);
         // Render the manifest for the mode just decided — warming must fetch the deps the real
         // builds will use (under the IDL path the program's own graph is never resolved at all) —
         // and pin the toolchain, so the fetch resolves with the cargo that will do the building.
         let spec = HarnessSpec::new(program, cr.clone(), idl_dest.clone().unwrap_or_default());
-        WorkspacePrep {
-            files: spec.manifest_files(std::slice::from_ref(&"c_probe".to_string())),
+        // What the host's Solana toolchain is asked to do, in the shape the two of them share
+        // (`autoprover-solana`). The SDK carries it without a schema, so this is the only place the
+        // request's fields are named on this side.
+        let request = SolanaPrep {
             warm_dirs: vec![format!("fuzz/{program}")],
             // The `.so` is named after the crate's lib target, not the analysis identifier. Needed
             // under both paths: LiteSVM loads the compiled program either way.
             build_program: Some(cr.lib.clone()),
             idl_dest,
+        };
+        WorkspacePrep {
+            files: spec.manifest_files(std::slice::from_ref(&"c_probe".to_string())),
+            toolchain_request: ChainData::of(&request).unwrap_or_default(),
         }
     }
 
@@ -1309,13 +1316,12 @@ impl Backend for CrucibleApp {
         // test section, keyed by its feature (was Python's `CrucibleHarness`/`CrucibleArtifactStore`).
         let program = &outcomes.program;
         let fixture = outcomes.setup.as_deref().unwrap_or_default();
-        // The outcome set carries the same `program_crate` and placed `idl` every callout saw —
-        // the delivered crate must be the one the gated builds used, or it won't compile for the
-        // user.
+        // The outcome set carries the same project facts every callout saw — the delivered crate
+        // must be the one the gated builds used, or it won't compile for the user.
         let spec = HarnessSpec::new(
             program,
-            outcomes.program_crate.clone(),
-            outcomes.idl.clone().unwrap_or_default(),
+            SolanaSourceUnit::of(&outcomes.source_unit, program),
+            SolanaPrepFacts::of(&outcomes.prep_facts).idl.unwrap_or_default(),
         );
 
         let sections = delivered_sections(outcomes);
@@ -1440,8 +1446,8 @@ mod template_parity {
     /// A crate whose directory, package and lib names all differ from the analysis identifier —
     /// the lend shape (`programs/lend`, package `example_lending`), which is what the
     /// `programs/<program>` convention got wrong. `anchor` is ours, so it stays linkable.
-    fn distinct_crate() -> ProgramCrate {
-        ProgramCrate {
+    fn distinct_crate() -> SolanaSourceUnit {
+        SolanaSourceUnit {
             dir: "programs/lend".into(),
             package: "example-lending".into(),
             lib: "example_lending".into(),
@@ -1450,11 +1456,11 @@ mod template_parity {
     }
 
     /// The same crate on an Anchor major this harness cannot link — lend's real one.
-    fn skewed_crate() -> ProgramCrate {
-        ProgramCrate { anchor: "0.29.0".into(), ..distinct_crate() }
+    fn skewed_crate() -> SolanaSourceUnit {
+        SolanaSourceUnit { anchor: "0.29.0".into(), ..distinct_crate() }
     }
 
-    fn spec_of(cr: ProgramCrate, idl_at: &str) -> HarnessSpec {
+    fn spec_of(cr: SolanaSourceUnit, idl_at: &str) -> HarnessSpec {
         HarnessSpec::new("vault", cr, idl_at.to_string())
     }
 
@@ -1469,24 +1475,52 @@ mod template_parity {
         serde_json::from_value(v).expect("outcome set")
     }
 
+    /// One delivered component's line in that payload, with every field the wire requires — absence
+    /// is an error on this seam (`autoprover_sdk::required`), so a fixture spelling only the fields
+    /// its own test reads would fail to parse. Spelled once here rather than in each fixture, which
+    /// pins the shape just as well and cannot drift field by field.
+    pub(super) fn delivered_component(
+        name: &str, targets: &[&str], artifact_text: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "outcome": {
+                "status": "delivered",
+                "targets": targets,
+                "artifact_text": artifact_text,
+                "property_units": [],
+                "unit_file": null,
+                "run_link": null,
+            },
+        })
+    }
+
     /// The input the host sends `workspace_prep`: the preflight one, before anything is analyzed.
-    fn prep_input(cr: ProgramCrate, args: serde_json::Value) -> AuthorInput {
+    /// The crate goes through `ChainData` exactly as it does on the wire, so these tests exercise the
+    /// wheel's own parse of the chain payload rather than a struct the host never sends.
+    fn prep_input(cr: SolanaSourceUnit, args: serde_json::Value) -> AuthorInput {
         AuthorInput {
             authored: Authored::Preflight,
             program: "vault".into(),
-            program_crate: cr,
+            source_unit: ChainData::of(&cr).expect("an object"),
             props: vec![],
             setup: None,
-            idl: None,
+            prep_facts: ChainData::default(),
             args: declared(args),
         }
+    }
+
+    /// The plan's request, in the shape this chain agreed with the host — the wheel writes it as
+    /// `ChainData`, so a test reading it back is checking the same thing the toolchain will.
+    fn prep_request(plan: &WorkspacePrep) -> SolanaPrep {
+        plan.toolchain_request.parse().expect("Solana's own request shape")
     }
 
     #[test]
     fn crate_files_render_the_expected_manifest() {
         let repo = Path::new("/home/user/crucible");
         let specs = [
-            spec_of(ProgramCrate::default().resolved("vault"), ""),
+            spec_of(SolanaSourceUnit::default().resolved("vault"), ""),
             spec_of(distinct_crate(), ""),
             spec_of(skewed_crate(), "fuzz/vault/idls/example_lending.json"),
         ];
@@ -1519,8 +1553,8 @@ mod template_parity {
             ),
             "unexpected program dep in:\n{deps}"
         );
-        // The pre-`program_crate` convention still holds when the host resolved nothing.
-        let legacy = spec_of(ProgramCrate::default().resolved("vault"), "").deps(repo);
+        // The layout convention still holds when the host resolved nothing.
+        let legacy = spec_of(SolanaSourceUnit::default().resolved("vault"), "").deps(repo);
         assert!(
             legacy.contains(
                 "vault = { path = \"../../programs/vault\", features = [\"no-entrypoint\"] }"
@@ -1573,13 +1607,15 @@ mod template_parity {
 
     #[test]
     fn workspace_prep_builds_the_lib_artifact_and_warms_the_harness_dir() {
-        let plan = CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::json!({})));
+        let request = prep_request(
+            &CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::json!({}))),
+        );
         // The harness dir follows the identifier (`crucible run vault`)…
-        assert_eq!(plan.warm_dirs, vec!["fuzz/vault".to_string()]);
+        assert_eq!(request.warm_dirs, vec!["fuzz/vault".to_string()]);
         // …but the `.so` to build is the program crate's lib target.
-        assert_eq!(plan.build_program.as_deref(), Some("example_lending"));
+        assert_eq!(request.build_program.as_deref(), Some("example_lending"));
         // A linkable program needs no IDL.
-        assert_eq!(plan.idl_dest, None);
+        assert_eq!(request.idl_dest, None);
     }
 
     #[test]
@@ -1588,7 +1624,10 @@ mod template_parity {
         // renders the warming manifest for the IDL path (else warming would resolve — and fail on —
         // the program's own dependency graph).
         let plan = CrucibleApp.workspace_prep(&prep_input(skewed_crate(), serde_json::json!({})));
-        assert_eq!(plan.idl_dest.as_deref(), Some("fuzz/vault/idls/example_lending.json"));
+        assert_eq!(
+            prep_request(&plan).idl_dest.as_deref(),
+            Some("fuzz/vault/idls/example_lending.json")
+        );
         if let Some(repo) = crucible_repo() {
             let cargo = &plan.files["fuzz/vault/Cargo.toml"];
             assert!(cargo.contains("crucible-idl-gen"), "warming manifest not on the IDL path");
@@ -1596,18 +1635,21 @@ mod template_parity {
             let _ = repo;
         }
         // The `.so` is still built: LiteSVM loads the real program either way.
-        assert_eq!(plan.build_program.as_deref(), Some("example_lending"));
+        assert_eq!(prep_request(&plan).build_program.as_deref(), Some("example_lending"));
         // An operator can force the IDL path for a program that *is* linkable.
         let forced = CrucibleApp.workspace_prep(&prep_input(
             distinct_crate(),
             serde_json::json!({ "program_idl": "/tmp/lend.json" }),
         ));
-        assert_eq!(forced.idl_dest.as_deref(), Some("fuzz/vault/idls/example_lending.json"));
+        assert_eq!(
+            prep_request(&forced).idl_dest.as_deref(),
+            Some("fuzz/vault/idls/example_lending.json")
+        );
     }
 
     #[test]
     fn crate_dep_usability_tracks_the_anchor_compatibility_unit() {
-        let with = |anchor: &str| ProgramCrate { anchor: anchor.into(), ..distinct_crate() };
+        let with = |anchor: &str| SolanaSourceUnit { anchor: anchor.into(), ..distinct_crate() };
         // Same major as ours (1.0.1) — patch/minor differences are compatible.
         for ok in [ANCHOR_VERSION, "1.0.0", "^1.2", "=1.9.9"] {
             assert!(crate_dep_usable(&with(ok)), "{ok} should be linkable");
@@ -1718,7 +1760,7 @@ mod template_parity {
         let setup = AuthorInput {
             authored: Authored::Setup { model: component.clone() },
             props: vec![prop.clone()],
-            ..prep_input(ProgramCrate::default(), serde_json::json!({}))
+            ..prep_input(SolanaSourceUnit::default(), serde_json::json!({}))
         };
         let compile_fail = Failure {
             draft: "prior fixture src".into(),
@@ -1751,7 +1793,7 @@ mod template_parity {
             authored: Authored::Component { unit: component.clone() },
             props: vec![prop],
             setup: Some("struct Fixture { ctx: TestContext }".into()),
-            ..prep_input(ProgramCrate::default(), serde_json::json!({}))
+            ..prep_input(SolanaSourceUnit::default(), serde_json::json!({}))
         };
         let judge_fail = Failure {
             draft: "prior tests".into(),
@@ -1794,7 +1836,7 @@ mod template_parity {
             program: "lending".into(),
             props,
             setup: Some("struct Fixture { ctx: TestContext }".into()),
-            ..prep_input(ProgramCrate::default(), serde_json::json!({}))
+            ..prep_input(SolanaSourceUnit::default(), serde_json::json!({}))
         }
     }
 
@@ -1986,13 +2028,14 @@ Error: Build failed
         let outcomes = outcomes(serde_json::json!({
             "program": "lending",
             "setup": "struct Fixture {}",
-            "program_crate": { "dir": "programs/lending", "lib": "lending_program", "package": "lending_program" },
+            "source_unit": { "dir": "programs/lending", "lib": "lending_program",
+                             "package": "lending_program", "anchor": "" },
+            "prep_facts": {},
             "components": [
-                { "name": "Withdraw Queue", "outcome": { "status": "delivered",
-                  "targets": ["c_withdraw_queue"],
-                  "artifact_text": "fn c_withdraw_queue() { /* q */ }" } },
-                { "name": "Farms", "outcome": { "status": "delivered", "targets": ["c_farms"],
-                  "artifact_text": "fn c_farms() { /* f */ }" } },
+                delivered_component(
+                    "Withdraw Queue", &["c_withdraw_queue"], "fn c_withdraw_queue() { /* q */ }",
+                ),
+                delivered_component("Farms", &["c_farms"], "fn c_farms() { /* f */ }"),
                 // A component that gave up contributes nothing — not an empty fn, not a feature,
                 // and the variant carries nothing for one to be read from.
                 { "name": "Referrals", "outcome": { "status": "gave_up" } },
@@ -2028,10 +2071,11 @@ Error: Build failed
         let outcomes = outcomes(serde_json::json!({
             "program": "lending",
             "setup": "struct Fixture {}",
-            "program_crate": { "dir": "programs/lending", "lib": "lending_program", "package": "lending_program" },
+            "source_unit": { "dir": "programs/lending", "lib": "lending_program",
+                             "package": "lending_program", "anchor": "" },
+            "prep_facts": {},
             "components": [
-                { "name": "A", "outcome": { "status": "delivered", "targets": ["c_a", "c_b"],
-                  "artifact_text": "fn c_a() {}" } },
+                delivered_component("A", &["c_a", "c_b"], "fn c_a() {}"),
             ],
         }));
         let main_rs = app.finalize(&outcomes);
@@ -2047,6 +2091,7 @@ mod section_isolation {
     //! 2026-08-03, where two components each emitted an ungated
     //! `impl Fixture { fn read_token_balance }` and the delivered crate compiled for **no**
     //! feature — while all 14 gated builds had passed, because each assembled only its own section.
+    use super::template_parity::delivered_component;
     use super::*;
 
     /// Two components' sections, each with its own same-named private helper — verbatim the shape
@@ -2067,7 +2112,9 @@ mod section_isolation {
         let outcomes: FinalizeInput = serde_json::from_value(serde_json::json!({
             "program": "lending",
             "setup": "struct Fixture {}",
-            "program_crate": { "dir": "p", "lib": "lending_program", "package": "lending_program" },
+            "source_unit": { "dir": "p", "lib": "lending_program",
+                             "package": "lending_program", "anchor": "" },
+            "prep_facts": {},
             "components": components,
         }))
         .expect("outcome set");
@@ -2122,10 +2169,8 @@ mod section_isolation {
     #[test]
     fn two_components_may_define_the_same_helper_name() {
         let main_rs = delivered(serde_json::json!([
-            { "name": "A", "outcome": { "status": "delivered", "targets": ["c_a"],
-              "artifact_text": SEC_A } },
-            { "name": "B", "outcome": { "status": "delivered", "targets": ["c_b"],
-              "artifact_text": SEC_B } },
+            delivered_component("A", &["c_a"], SEC_A),
+            delivered_component("B", &["c_b"], SEC_B),
         ]));
         let code = code_only(&main_rs);
         // Both helpers are present in the source…
@@ -2144,8 +2189,7 @@ mod section_isolation {
         // and `finalize` now go through the same `SectionModule::wrap`, and this pins that.
         let gate_section = SectionModule::wrap("c_a", SEC_A);
         let main_rs = delivered(serde_json::json!([
-            { "name": "A", "outcome": { "status": "delivered", "targets": ["c_a"],
-              "artifact_text": SEC_A } },
+            delivered_component("A", &["c_a"], SEC_A),
         ]));
         assert!(
             main_rs.contains(gate_section.trim()),
@@ -2158,8 +2202,7 @@ mod section_isolation {
         // Wrapping it twice would emit an entry delegating to a fn the source never defines, and
         // declaring a feature with no `main()` is a link error, not a usable fuzz target.
         let code = code_only(&delivered(serde_json::json!([
-            { "name": "A", "outcome": { "status": "delivered", "targets": ["c_a", "c_b"],
-              "artifact_text": SEC_A } },
+            delivered_component("A", &["c_a", "c_b"], SEC_A),
         ])));
         assert_eq!(code.matches("mod section_").count(), 1, "{code}");
         // `c_b` is not emitted at all — and since the declared feature list is built in the same

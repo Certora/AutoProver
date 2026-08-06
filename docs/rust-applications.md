@@ -791,8 +791,8 @@ Facts about the seam as it stands, not open design questions:
   with `asyncio.gather` is a Python-side change with no API impact — but a wheel sharing one crate
   hits binary-name collisions, which is what `serialize_toolchain` exists for. Real parallelism
   needs the wheel to separate build from run first.
-- **No registered chain implementations.** `SOURCE_CRATES` and `WORKSPACE_TOOLCHAINS` are both
-  empty here (§7): a files-only prep plan works, a plan asking for a warm/build/IDL raises.
+- **One registered chain implementation.** `PROJECT_TOOLCHAINS` holds Solana's (§7); for any other
+  chain a files-only prep plan works and a plan asking for more raises.
 - **Self-contained backends only.** This shape fits a checker that is a **local tool**. A backend
   whose "validate" is a remote/Python service cannot spawn it under `run-confined`; there is no
   `run_prover`-style host effect, so such a backend would need one added (or stays a Python

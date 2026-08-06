@@ -130,7 +130,7 @@ Command execution funnels through one of two launch paths, and **both consume th
 
 - [`run_local_command`](../composer/sandbox/command.py) — the Python runner, used by trusted Python
   build steps (the Solana sBPF build / IDL step, now behind the
-  [`WorkspaceToolchain`](../composer/rustapp/toolchain.py) seam). It lives in the backend-agnostic
+  [`ProjectToolchain`](../composer/rustapp/toolchain.py) seam). It lives in the backend-agnostic
   [`composer/sandbox`](../composer/sandbox/) package — outside `rustapp` — so Python-based backends
   can run confined commands too.
 - A **Rust wheel's own `compile`/`validate`**, which spawn the launcher directly via
@@ -203,8 +203,9 @@ through each tool ([recipes.py](../composer/sandbox/recipes.py), `offline=True` 
 must be exactly `true`: cargo parses it as a config boolean and rejects anything else, so a truthy
 `1` aborts the build *and* leaves it online. "Fetch outside" is a `cargo fetch` run *unsandboxed*
 (no provider → network on) before the confined build.
-Both halves of that prep are now **declared, not called**: a wheel's `workspace_prep` names the dirs
-to warm and the program to build, and the chain's registered `WorkspaceToolchain` performs them —
+Both halves of that prep are now **declared, not called**: a wheel's `workspace_prep` carries a
+chain-shaped request naming the dirs to warm and the program to build (Solana:
+`autoprover_solana::SolanaPrep`), and the chain's registered `ProjectToolchain` performs them —
 fetch unconfined, build confined + offline (see
 [rust-applications.md §7](./rust-applications.md)). That keeps the network posture Python-owned while
 the wheel supplies no command line. All of it is inert until a sandbox is enabled.
@@ -456,7 +457,7 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
 4. **Offline prep (§5)** — *done*: a `cargo fetch` run outside the sandbox (network on) warms the
    registry, and the policy sets `CARGO_NET_OFFLINE=true` so the confined build — and any nested cargo a
    checker spawns — run offline. Both are now declared by the wheel's `workspace_prep` and performed
-   by the chain's `WorkspaceToolchain` (§5). `CARGO_HOME` is granted rw (pointed at the private
+   by the chain's `ProjectToolchain` (§5). `CARGO_HOME` is granted rw (pointed at the private
    per-run home, §11 item 5) so cargo can extract crate sources offline.
 5. **The escape suite (§10 A)** — *done*, and a wheel that declares `confine_by_default` gets the
    `launcher` provider by default (override with `COMPOSER_SANDBOX_PROVIDER=none`). Validated:

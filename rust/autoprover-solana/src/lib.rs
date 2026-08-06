@@ -20,6 +20,7 @@
 //!   ([`AuthorInput::prep_facts`](autoprover_sdk::authoring::AuthorInput::prep_facts)).
 
 use autoprover_sdk::authoring::AuthorInput;
+use autoprover_sdk::chain::ChainData;
 use serde::{Deserialize, Serialize};
 
 /// Where the code under analysis lives as a Cargo compilation unit, for a wheel that must *depend*
@@ -60,11 +61,16 @@ impl SolanaSourceUnit {
     /// a wheel that wants to tell those apart reads
     /// [`ChainData`](autoprover_sdk::chain::ChainData) itself.
     pub fn from_input(input: &AuthorInput) -> Self {
-        input
-            .source_unit
-            .parse::<Self>()
-            .unwrap_or_default()
-            .resolved(&input.program)
+        Self::of(&input.source_unit, &input.program)
+    }
+
+    /// As [`SolanaSourceUnit::from_input`], for the two payloads that carry project facts without
+    /// being an `AuthorInput`: [`AppArgs`](autoprover_sdk::args::AppArgs) before the run starts, and
+    /// [`FinalizeInput`](autoprover_sdk::finalize::FinalizeInput) at the end of it. All three must
+    /// read one value — what ships has to be what was checked — which is why they share a function
+    /// rather than each unwrapping their own way.
+    pub fn of(data: &ChainData, program: &str) -> Self {
+        data.parse::<Self>().unwrap_or_default().resolved(program)
     }
 
     /// This unit with every empty part filled from the conventional layout: the crate sits at
@@ -146,7 +152,13 @@ impl SolanaPrepFacts {
     /// What the prep established, as this wheel should read it — nothing established and facts this
     /// wheel doesn't recognize both read as "no IDL", which is the state it must handle anyway.
     pub fn from_input(input: &AuthorInput) -> Self {
-        input.prep_facts.parse().unwrap_or_default()
+        Self::of(&input.prep_facts)
+    }
+
+    /// As [`SolanaPrepFacts::from_input`], for the outcome set `finalize` renders from — the
+    /// deliverable must source its types the way the gated builds did.
+    pub fn of(data: &ChainData) -> Self {
+        data.parse().unwrap_or_default()
     }
 }
 

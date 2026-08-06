@@ -9,31 +9,47 @@ import json
 
 import pytest
 
+from tests.conftest import wire_verdict
+
 crucible_app = pytest.importorskip(
     "crucible_app",
     reason="crucible_app wheel not built (uv run maturin develop -m rust/crucible-app/Cargo.toml)",
 )
 
 
+def _author_input(**payload) -> str:
+    """One `AuthorInput` with every field the wire requires, plus the kind's own payload.
+
+    Spelled in full because absence is an error on this seam: `AuthorInput` is the one wire type that
+    cannot carry `deny_unknown_fields` (serde rejects it beside the `flatten` its kind needs), so a
+    stale key here would be *ignored* rather than reported — which is exactly how a fixture ends up
+    asserting less than it looks like it does.
+    """
+    return json.dumps({
+        "program": "vault",
+        "source_unit": {},
+        "prep_facts": {},
+        "props": [],
+        "setup": None,
+        "args": {"fuzz_timeout": 5},
+        **payload,
+    })
+
+
 def _component_input(*slugs: str) -> str:
-    return json.dumps(
-        {
-            "kind": "component",
-            "program": "vault",
-            "component": {"name": "vault", "program": "vault"},
-            "props": [
-                {"title": f"p {s}", "sort": "invariant", "description": "d", "slug": s}
-                for s in slugs
-            ],
-            "context": {"fixture": "struct Fixture {}", "fuzz_timeout": 5},
-        }
+    return _author_input(
+        kind="component",
+        unit={"name": "vault", "program": "vault"},
+        props=[
+            {"title": f"p {s}", "sort": "invariant", "description": "d", "slug": s}
+            for s in slugs
+        ],
+        setup="struct Fixture {}",
     )
 
 
 def _setup_input() -> str:
-    return json.dumps(
-        {"kind": "setup", "program": "vault", "component": {"programs": []}, "props": [], "context": {}}
-    )
+    return _author_input(kind="setup", model={"programs": []})
 
 
 def test_descriptor_declares_design_doc_discovery_phase():
@@ -75,7 +91,12 @@ def test_setup_author_prompt_asks_for_a_fixture():
 
 
 def test_author_prompt_failure_appends_revise_context():
-    failure = json.dumps({"draft": "fn c_x() {}", "errors": "error[E0425]: cannot find value"})
+    # `kind` included: the wheel parses the whole payload or none of it, and a `Failure` it cannot
+    # read is indistinguishable from no failure at all — the prompt would silently lose its revise
+    # context.
+    failure = json.dumps({
+        "draft": "fn c_x() {}", "errors": "error[E0425]: cannot find value", "kind": "compile",
+    })
     prompt = json.loads(crucible_app.author_prompt(_component_input("x"), failure))
     assert "FAILED" in prompt["instruction"] and "E0425" in prompt["instruction"]
 
@@ -136,8 +157,8 @@ def test_fetch_verdicts_threads_finding_detail_into_message():
     fz = RustFormalizer(crucible_app, desc)
     res = RustFormalResult(
         verdicts={
-            "c_x": {"outcome": "BAD", "detail": "crash abc: deposit(5) — expected 105 got 100"},
-            "c_y": {"outcome": "GOOD"},
+            "c_x": wire_verdict("BAD", detail="crash abc: deposit(5) — expected 105 got 100"),
+            "c_y": wire_verdict("GOOD"),
         }
     )
     inp = ReportComponentInput(
@@ -166,7 +187,8 @@ def test_validate_returns_per_unit_verdicts_and_the_host_records_them():
     # A parse error still yields the per-unit `verdicts` shape the host consumes — keyed by the
     # rows the target it was handed covers, which is the one part of the payload that did parse.
     target = json.dumps(
-        {"name": "c_invariants", "units": [{"property": "p", "unit": "c_invariants"}]}
+        {"name": "c_invariants",
+         "units": [{"property": "p", "unit": "c_invariants", "target": None}]}
     )
     out = json.loads(crucible_app.validate("not json", "spec", target, "/tmp", "{}"))
     assert out["kind"] == "verdicts"
@@ -178,8 +200,8 @@ def test_validate_returns_per_unit_verdicts_and_the_host_records_them():
     res = RustFormalResult(
         units=[("solvency", ["c_solvency"]), ("conservation", ["c_conservation"])],
         verdicts={
-            "c_conservation": {"outcome": "BAD", "detail": "crash abc: [conservation] drift"},
-            "c_solvency": {"outcome": "GOOD"},
+            "c_conservation": wire_verdict("BAD", detail="crash abc: [conservation] drift"),
+            "c_solvency": wire_verdict("GOOD"),
         },
     )
     inp = ReportComponentInput(

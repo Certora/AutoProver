@@ -7,11 +7,11 @@ Certora-Prover/CVLR backend will call it in *munge-and-rebuild* mode (rewrite th
 source first). Both route through the same :func:`run_local_command` choke point
 the ``RunCommand`` effect uses, so phase-6 sandboxing (§7.4) wraps one path.
 
-:func:`prepare_workspace` is this chain's
-:class:`~composer.rustapp.toolchain.WorkspaceToolchain` — the seam by which a Rust wheel's declared
-``workspace_prep`` plan reaches these helpers. The framework registers no implementation of its own
-(see that module); everything here is knowledge about the *analyzed* program's toolchain, which is
-why it lands with the application that first needs it rather than with the framework.
+:mod:`composer.spec.solana.project` is what reaches these helpers from a Rust wheel's declared
+``workspace_prep`` plan — this chain's
+:class:`~composer.rustapp.toolchain.ProjectToolchain`. Everything in both modules is knowledge about
+the *analyzed* program's toolchain, which is why it lives with the ecosystem rather than with the
+framework.
 """
 
 import json
@@ -21,16 +21,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from composer.rustapp.adapter import confined_target
-from composer.rustapp.wire import AuthorInput, WorkspacePrep
 from composer.sandbox.command import CommandResult, run_local_command
 from composer.sandbox.config import SandboxConfig
-from composer.spec.cargo import ProgramCrate, resolve_program_crate
-from composer.spec.context import SourceFields
+from composer.spec.cargo import ProgramCrate
 from composer.sandbox.recipes import (
     CARGO_REGISTRY_PROTOCOL,
     CARGO_REGISTRY_PROTOCOL_VAR,
-    sandbox_cargo_home,
 )
 
 _log = logging.getLogger(__name__)
@@ -285,78 +281,3 @@ async def build_program(
             )
 
     return BuiltProgram(program=program, so_path=so, idl_path=idl_path)
-
-
-async def prepare_workspace(
-    plan: WorkspacePrep,
-    input: AuthorInput,
-    *,
-    source: SourceFields,
-    sandbox: SandboxConfig | None,
-    timeout_s: int,
-) -> str | None:
-    """Solana's :class:`~composer.rustapp.toolchain.WorkspaceToolchain`: execute the toolchain half
-    of a wheel's ``workspace_prep`` plan (``docs/rust-pure-app.md`` §4) with this chain's tools.
-
-    Only reached when the plan asks for more than files, and only after the host has written them
-    (the manifest a warm or build reads is usually one). In order: ``cargo fetch`` each
-    ``warm_dirs`` — but only when a sandbox is enabled, since the point of warming is that the later
-    confined+offline build finds its deps already there — then build ``build_program``, then place
-    the program's IDL if the wheel asked for one. Returns where the IDL was placed
-    (workdir-relative), which the host reports back as the ``idl`` context key, else ``None``.
-
-    Network stays Python-owned and the posture is the one §5 describes: fetches run *unconfined* (a
-    fetch executes no untrusted code), the code-executing build runs *confined + offline*
-    (:func:`build_program` handles both). The wheel supplies only which dirs/program — never a
-    command line — and every path it names goes through
-    :func:`~composer.rustapp.adapter.confined_target`, as the host's own writes do.
-
-    The crate is resolved here rather than taken as an argument: ``input.program_crate`` is the lossy
-    wire copy (unknown spelled ``""``), and filling in an IDL's program id needs to know whether
-    anything was resolved at all. Same function, same inputs as the resolver that produced the wire
-    copy — :func:`composer.rustapp.toolchain.source_crate`'s Solana entry — so the two agree.
-    """
-    workdir = Path(source.project_root)
-    crate = resolve_program_crate(source.project_root, source.relative_path)
-    idl_dest = plan.idl_dest
-
-    if plan.warm_dirs and sandbox is not None and sandbox.enabled:
-        # Warm into the SAME private CARGO_HOME the confined offline build will read.
-        cargo_home = sandbox_cargo_home(str(workdir))
-        for d in plan.warm_dirs:
-            await warm_cargo_cache(
-                confined_target(workdir, d), cargo_home=cargo_home, timeout_s=timeout_s
-            )
-
-    # An operator-supplied IDL wins over building one — for a program whose own toolchain isn't
-    # installed (the usual reason the wheel wants an IDL at all), `anchor idl build` can't run.
-    supplied = input.args.get("program_idl") or None
-    idl_src = Path(supplied) if (idl_dest and supplied) else None
-    if idl_src is not None and not idl_src.is_file():
-        raise RuntimeError(f"--program-idl: no such file: {idl_src}")
-
-    if plan.build_program:
-        built = await build_program(
-            str(workdir), plan.build_program, with_idl=bool(idl_dest) and idl_src is None,
-            timeout_s=timeout_s, sandbox=sandbox,
-        )
-        if idl_dest and idl_src is None:
-            idl_src = built.idl_path
-
-    if not idl_dest:
-        return None
-    if idl_src is None:
-        raise RuntimeError(
-            "the harness must generate the program's types from its IDL (it cannot link the "
-            "program's crate directly), but no IDL could be produced: `anchor idl build` did not "
-            "emit one, which usually means the program's own anchor CLI version isn't installed. "
-            "Supply one with --program-idl <file> — any Anchor IDL format, including the pre-0.30 "
-            "layout."
-        )
-    dest = confined_target(workdir, idl_dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    # Normalized on the way in: an IDL must name the program's address, and the one `anchor idl
-    # build` emits for a pre-0.30 program doesn't (see ``idl_with_program_id``).
-    dest.write_text(idl_with_program_id(idl_src.read_text(), project_root=workdir, crate=crate))
-    _log.info("harness IDL: %s -> %s", idl_src, idl_dest)
-    return idl_dest
