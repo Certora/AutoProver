@@ -126,9 +126,9 @@ class BackendResult(FormalResult, ReportableResult, Protocol): ...
 ```
 
 - **`FormalResult`** ([types.py](../composer/spec/types.py)) — what *persistence*
-  needs: `property_units()`, `commentary`, `artifact_text`.
+  needs: `property_checks()`, `commentary`, `artifact_text`.
 - **`ReportableResult`** ([report/collect.py](../composer/spec/source/report/collect.py))
-  — what the *report* needs: `skipped`, `property_units()`, `output_link`.
+  — what the *report* needs: `skipped`, `property_checks()`, `output_link`.
 
 A backend's concrete result (for CVL, `GeneratedCVL`) structurally satisfies both. The
 driver only ever holds it as an opaque `FormT`; it never reads a field.
@@ -503,7 +503,7 @@ class GeneratedCVL(BaseModel):
     config: dict | None = None
     final_link: str | None = None
 
-    def property_units(self) -> list[tuple[str, list[str]]]:        # FormalResult + ReportableResult
+    def property_checks(self) -> list[tuple[str, list[str]]]:       # FormalResult + ReportableResult
         return [(m.property_title, m.rules) for m in self.property_rules]
 
     @property
@@ -521,8 +521,8 @@ from disagreeing:
 | Consumer | Uses | Via |
 |---|---|---|
 | **Cache** | the *type* `GeneratedCVL` | `formalizer.formalized_type` → `cache_get`/`cache_put` |
-| **Artifact store** | `artifact_text`, `commentary`, `property_units()` | `ArtifactStore.write_artifact` |
-| **Report** | `skipped`, `property_units()`, `output_link` | `ReportableResult` |
+| **Artifact store** | `artifact_text`, `commentary`, `property_checks()` | `ArtifactStore.write_artifact` |
+| **Report** | `skipped`, `property_checks()`, `output_link` | `ReportableResult` |
 | **Run-link map** | the persisted `final_link` | `finalize` |
 
 ---

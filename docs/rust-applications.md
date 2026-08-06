@@ -366,8 +366,8 @@ sees it — there is nothing to build — so the next prompt is told exactly tha
 `Verdict` (its `message` is the wire `detail`), filling `unit_file` from the component when the
 wheel didn't name one. The store writes the per-component artifacts and metadata (§9), and
 `finalize` receives the whole outcome set as `FinalizeInput` — program, crate, IDL path, the shared
-setup artifact, and per component its `artifact_text`, `property_units` and the `targets` its rows
-were validated by — and returns `{relpath: contents}` the host writes under the project root,
+setup artifact, and per component its `artifact_text`, `property_checks` and the `targets` its
+checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
 
 ---
@@ -581,7 +581,7 @@ the choice of how the *source* deliverable lands:
 - **`callout`** — the store writes **no** per-component source; it writes the shared metadata and
   returns the mode's `primary` (`{program}`-templated) as the component's report link. The whole
   deliverable comes from `finalize`, which is handed every component's `artifact_text`,
-  `property_units` and `targets` plus the shared setup artifact, and can therefore assemble one
+  `property_checks` and `targets` plus the shared setup artifact, and can therefore assemble one
   artifact (a single crate with a section per property) as the single source of truth for its layout.
 
 The tradeoff of `callout` mode is that the deliverable lands on disk only at finalize, not
