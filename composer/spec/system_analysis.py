@@ -4,7 +4,7 @@ from graphcore.graph import MessagesState, FlowInput
 
 
 from composer.spec.context import (
-    WorkflowContext, SystemDoc
+    WorkflowContext, SystemDoc, SourceCode
 )
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
@@ -69,7 +69,7 @@ def validate_solidity_connectivity(
             if c.name in known_external:
                 errors.append(f"Duplicate external component name: {c.name}")
             known_external.add(c.name)
-    
+
     if expected_main_id is not None and expected_main_id not in known_solidity_ids:
         errors.append(f"Expected an explicit contract instance with solidity identifier: {expected_main_id}")
 
@@ -109,7 +109,7 @@ def validate_solidity_connectivity(
 async def run_component_analysis[T: BaseApplication](
     ty: type[T],
     child_ctxt: WorkflowContext[T],
-    input: SystemDoc | None,
+    input: SystemDoc | SourceCode | None,
     env: ServiceHost,
     extra_input: list[str | dict],
     expected_main_id: SourceIdentifier | None = None,
@@ -118,11 +118,20 @@ async def run_component_analysis[T: BaseApplication](
     initial_template: TypedTemplate[AnalysisPromptParams],
     validate: Callable[[T, SourceIdentifier | None], str | None],
 ) -> T | None:
-    """Analyze application components from a system doc and optionally source code."""
+    """Analyze application components from a system doc and optionally source code.
+
+    ``input`` may be a bare ``SystemDoc`` (natspec mode), a ``SourceCode`` (source
+    mode — whose ``content`` may be ``None`` for a source-only run), or ``None``.
+    ``has_doc`` below reflects whether a design document is actually present, not
+    merely whether an ``input`` object was passed, so a source-only run renders the
+    no-doc prompt branch and never dereferences a missing ``content``.
+    """
     if (cached := await child_ctxt.cache_get(ty)) is not None:
         return cached
 
-    assert input is not None or env.sort != "greenfield"
+    has_doc = input is not None and input.content is not None
+    # greenfield has no source tools, so a design doc is mandatory there.
+    assert has_doc or env.sort != "greenfield"
 
     memory = child_ctxt.get_memory_tool()
 
@@ -138,7 +147,7 @@ async def run_component_analysis[T: BaseApplication](
     ) -> str | None:
         return validate(app, expected_main_id)
 
-    prompt_params: AnalysisPromptParams = {"sort": env.sort, "has_doc": input is not None}
+    prompt_params: AnalysisPromptParams = {"sort": env.sort, "has_doc": has_doc}
     b = bind_standard(
         builder=env.builder_lite(),
         state_type=AnalysisState,
@@ -155,10 +164,13 @@ async def run_component_analysis[T: BaseApplication](
 
     graph = b.compile_async()
     inputs : list[str | dict] = []
-    if input is not None:
+    if has_doc:
+        assert input is not None
+        doc = input.content
+        assert doc is not None
         inputs.extend([
             "The system document is as follows",
-            input.content.to_dict()
+            doc.to_dict()
         ])
     inputs.extend(extra_input)
 

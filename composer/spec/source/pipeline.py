@@ -47,9 +47,14 @@ from composer.spec.source.prover import get_prover_tool, materializing_project
 from composer.spec.source.author import batch_cvl_generation, SourceEditing
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
-from composer.spec.source.report.collect import ReportComponentInput, Verdict, VerdictFetcher
+from composer.spec.source.report.collect import (
+    EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
+)
+from composer.spec.source.report.schema import RuleName
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.report.schema import AppliedEditRecord, RuleName, SourceEditRecord
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
+
 from composer.spec.source.task_ids import (
     HARNESS_TASK_ID, AUTOSETUP_TASK_ID, SUMMARIES_TASK_ID,
     INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
@@ -112,6 +117,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
     _invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None
     _fetch: VerdictFetcher[GeneratedCVL]
     _editing: SourceEditing
+    _analysis_store: CexAnalysisStore
 
     @override
     async def formalize(
@@ -174,6 +180,19 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         return records
 
     @override
+    def findings_evidence(self) -> EvidenceFetcher | None:
+        # Prover runs capture per-rule counterexample analysis, so this backend opts into findings.
+        return self._fetch_evidence
+
+    async def _fetch_evidence(self, rule_name: str) -> list[RuleEvidence]:
+        # Every instantiation the run analyzed, not just one: a parametric rule can fail differently
+        # per binding while the report shows a single row for the whole rule.
+        return [
+            RuleEvidence(label=r.label, analysis=r.analysis, counterexample=r.counterexample)
+            for r in await self._analysis_store.for_rule(rule_name)
+        ]
+
+    @override
     async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]], run: PipelineRun) -> None:
         # components_to_prover_runs.json: {run_key (slug): prover /output/ link}.
         runs: dict[str, str] = {
@@ -199,6 +218,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
     _prover_opts: ProverOptions
     _analyzed: SourceApplication
     _editing: SourceEditing
+    _analysis_store: CexAnalysisStore
 
     @override
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL, ContractComponentInstance]:
@@ -209,7 +229,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
         )
 
         invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None = None
-        if invariants.inv and False:
+        if invariants.inv:
             inv_props = [
                 PropertyFormulation(title=inv.name, description=inv.description, sort="invariant")
                 for inv in invariants.inv
@@ -264,7 +284,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
         return ProverRunner(
             GeneratedCVL, "prover",
             self._store, self._prover_tool, setup_config.prover_config, resources, invariant,
-            make_prover_fetcher(), self._editing,
+            make_prover_fetcher(), self._editing, self._analysis_store,
         )
 
     async def _autosetup(self, run: PipelineRun) -> tuple[SetupSuccess, list[CVLResource]]:
@@ -319,6 +339,7 @@ class ProverBackend:
     artifact_store: ProverArtifactStore
     _prover_opts: ProverOptions
     editing: SourceEditing
+    analysis_store: CexAnalysisStore
 
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
@@ -332,14 +353,13 @@ class ProverBackend:
         # VFS (invariants, or an author that never edited) runs in-situ; a
         # non-empty one runs in a temp materialization of the working copy.
         prover_tool = get_prover_tool(
-            run.env.llm_heavy(), run.source.contract_name,
-            materializing_project(run.source.project_root, self.editing.live.mat),
-            prover_opts=self._prover_opts,
+            run.env.llm_heavy(), run.source.contract_name, materializing_project(run.source.project_root, self.editing.live.mat),
+            prover_opts=self._prover_opts, analysis_store=self.analysis_store,
         )
         return ProverPrepared(
             main_instance(harnessed, run.source),
             self.artifact_store, sys_desc, harnessed, prover_tool,
-            self._prover_opts, analyzed, self.editing,
+            self._prover_opts, analyzed, self.editing, self.analysis_store,
         )
 
     def to_artifact_id(self, c: ContractComponentInstance) -> ComponentSpec:

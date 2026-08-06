@@ -48,8 +48,17 @@ class SourceFields:
     forbidden_read: GlobalExcludeArg
 
 @dataclass
-class SourceCode(SystemDoc, SourceFields):
-    ...
+class SourceCode(SourceFields):
+    """Input when source code is available (source_spec).
+
+    ``content`` is the design document if one was supplied or discovered, or
+    ``None`` for a source-only run. When no design doc exists the pipeline
+    degrades gracefully: component analysis derives the breakdown from source
+    alone (see ``run_component_analysis``), which is the sole consumer of the
+    doc on the source/prover path. Kept separate from ``SystemDoc`` — whose
+    ``content`` is always present — so the natspec-only mode keeps its invariant.
+    """
+    content: Document | None
 
 # ---------------------------------------------------------------------------
 # Services protocol
