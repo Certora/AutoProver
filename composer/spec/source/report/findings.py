@@ -55,9 +55,7 @@ class FindingsSystemParams(TypedDict):
 
 
 class FindingsPromptParams(TypedDict):
-    """The full, typed context of ``autoprove_report_findings_prompt.j2``. Every key is required;
-    the nullable ones carry ``None`` when the backend supplied no evidence (the template guards them
-    with ``{% if %}``)."""
+    """The full, typed context of ``autoprove_report_findings_prompt.j2``. Every key is required."""
     contract_name: str
     rule_name: str
     properties: list[FormalizedProperty]
