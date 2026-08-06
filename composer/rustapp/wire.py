@@ -252,8 +252,9 @@ class Check(WireModel):
     """One report row: a property title and the backend's name for the check that carries it — a CVL
     rule, a foundry test, a fuzz harness function. A check yields a :class:`Verdict`.
 
-    ``target`` is the validation target the *host runs*; several checks may share one, so the host
-    runs each distinct target once and the wheel attributes the outcome back to each check."""
+    ``target`` names the :class:`Target` this check runs under — one invocation of the checker.
+    Several checks may share one, so the host runs each distinct target once and the wheel
+    attributes the outcome back to each check."""
 
     property: str
     name: str
@@ -267,15 +268,19 @@ class Check(WireModel):
 
 
 class Target(WireModel):
-    """One validation target the host runs, and the checks it covers — what ``validate`` must return
-    a verdict for. Mirrors the Rust ``Target``.
+    """One invocation of the checker — one build + one run — and the checks it covers, which is what
+    ``validate`` must return a verdict for. Mirrors the Rust ``Target``.
+
+    Targets group *running*; checks group *reporting*. A target sits inside one unit's session, so
+    the three nest: a unit's checks partition into its targets. A backend that checks a whole
+    property set in one run therefore pays for one build and still reports a row per property.
 
     The host owns the grouping (it decides what to run, and in what order), so it hands the answer
     over rather than leaving the wheel to recover it by re-deriving its own ``checks`` and filtering
     them by name."""
 
-    #: What the backend selects when it runs the checker (Crucible: the component's ``c_<slug>``
-    #: harness fn, which is also its Cargo feature).
+    #: What the backend selects when it runs the checker (Crucible: the component's harness fn, which is also its Cargo
+    #: feature).
     name: str
     #: Usually one; several when a backend checks a whole property set in one run.
     checks: list[Check] = Field(default_factory=list)

@@ -440,8 +440,13 @@ names the prompt requires the author to produce, and the list the publish gate v
 declared mapping against. It runs before the first turn, so the report's shape never depends on what
 the model happened to write.
 
-A `Check` is `{ property, name, target? }`. `target` is the **validation target the host runs**, and
-several checks may share one — a wheel can put a component's whole property set in a single target.
+A `Check` is `{ property, name, target? }`. A **target** is **one invocation of the checker** — one
+build + one run — and several checks may share one, so a wheel can put a component's whole property
+set in a single target. That is the run-vs-report split: targets group what *runs*, checks group
+what is *reported*, and a target sits inside one component's session, so the three nest
+(`component ⊇ target ⊇ check`). `target: None` makes the check its own target — one invocation per
+check, the default.
+
 The host runs each *distinct* target once (`target_or_name()`) and passes it as a
 `Target { name, checks }` carrying the checks it covers, so the grouping the host just computed is
 not something the wheel has to reconstruct; the wheel returns a verdict **per check in it**.
