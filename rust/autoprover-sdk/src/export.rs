@@ -9,7 +9,8 @@
 /// ```
 ///
 /// `module_ident` MUST match the wheel's module name. The expansion defines the pure callouts
-/// (`descriptor`/`validate_preconditions`/`units`/`author_prompt`/`judge_prompt`/`finalize`) and
+/// (`descriptor`/`validate_preconditions`/`checks`/`author_prompt`/`check_syntax`/`judge_prompt`/
+/// `finalize`) and
 /// the two BLOCKING ones (`compile`/`validate`, which release the GIL while `run-confined` runs),
 /// all delegating to the [`ffi`](crate::ffi) helpers of the same name.
 #[macro_export]
@@ -34,17 +35,21 @@ macro_rules! export_app {
         }
 
         #[$crate::pyo3::pyfunction]
-        fn units(input_json: ::std::string::String) -> ::std::string::String {
-            $crate::ffi::units(__autoprover_app(), &input_json)
+        fn checks(input_json: ::std::string::String) -> ::std::string::String {
+            $crate::ffi::checks(__autoprover_app(), &input_json)
         }
 
         #[$crate::pyo3::pyfunction]
-        #[pyo3(signature = (input_json, failure_json=None))]
-        fn author_prompt(
+        fn author_prompt(input_json: ::std::string::String) -> ::std::string::String {
+            $crate::ffi::author_prompt(__autoprover_app(), &input_json)
+        }
+
+        #[$crate::pyo3::pyfunction]
+        fn check_syntax(
             input_json: ::std::string::String,
-            failure_json: ::std::option::Option<::std::string::String>,
-        ) -> ::std::string::String {
-            $crate::ffi::author_prompt(__autoprover_app(), &input_json, failure_json.as_deref())
+            spec: ::std::string::String,
+        ) -> ::std::option::Option<::std::string::String> {
+            $crate::ffi::check_syntax(__autoprover_app(), &input_json, &spec)
         }
 
         #[$crate::pyo3::pyfunction]
@@ -114,8 +119,9 @@ macro_rules! export_app {
             use $crate::pyo3::types::PyModuleMethods as _;
             m.add_function($crate::pyo3::wrap_pyfunction!(descriptor, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(validate_preconditions, m)?)?;
-            m.add_function($crate::pyo3::wrap_pyfunction!(units, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(checks, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(author_prompt, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(check_syntax, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(judge_prompt, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(compile, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(validate, m)?)?;

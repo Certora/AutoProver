@@ -2,7 +2,7 @@
 //! `#[pyfunction]`s (compile/validate release the GIL); also unit-testable without Python.
 
 use crate::args::AppArgs;
-use crate::authoring::{AuthorInput, Failure, Prompt};
+use crate::authoring::{AuthorInput, Prompt};
 use crate::backend::Backend;
 use crate::finalize::FinalizeInput;
 use crate::outcome::{CompileResult, Outcome, Target};
@@ -49,16 +49,16 @@ pub fn validate_preconditions(b: &dyn Backend, args_json: &str) -> Option<String
     }
 }
 
-/// `units(input_json) -> str` (JSON `[Unit]`).
-pub fn units(b: &dyn Backend, input_json: &str) -> String {
+/// `checks(input_json) -> str` (JSON `[Check]`).
+pub fn checks(b: &dyn Backend, input_json: &str) -> String {
     match parse_input(input_json) {
-        Ok(input) => serde_json::to_string(&b.units(&input)).unwrap_or_else(|_| "[]".into()),
+        Ok(input) => serde_json::to_string(&b.checks(&input)).unwrap_or_else(|_| "[]".into()),
         Err(_) => "[]".into(),
     }
 }
 
-/// `author_prompt(input_json, failure_json | None) -> str` (JSON `Prompt`).
-pub fn author_prompt(b: &dyn Backend, input_json: &str, failure_json: Option<&str>) -> String {
+/// `author_prompt(input_json) -> str` (JSON `Prompt`).
+pub fn author_prompt(b: &dyn Backend, input_json: &str) -> String {
     let input = match parse_input(input_json) {
         Ok(v) => v,
         Err(e) => {
@@ -66,9 +66,17 @@ pub fn author_prompt(b: &dyn Backend, input_json: &str, failure_json: Option<&st
                 .unwrap_or_default()
         }
     };
-    let failure: Option<Failure> = failure_json.and_then(|s| serde_json::from_str(s).ok());
-    let prompt = b.author_prompt(&input, failure.as_ref());
-    serde_json::to_string(&prompt).unwrap_or_default()
+    serde_json::to_string(&b.author_prompt(&input)).unwrap_or_default()
+}
+
+/// `check_syntax(input_json, spec) -> str | None` (None = the spec may be written). A payload this
+/// can't parse rejects the write, naming the parse error: the alternative is accepting a spec no
+/// backend ever saw.
+pub fn check_syntax(b: &dyn Backend, input_json: &str, spec: &str) -> Option<String> {
+    match parse_input(input_json) {
+        Ok(input) => b.check_syntax(&input, spec),
+        Err(e) => Some(e),
+    }
 }
 
 /// `judge_prompt(input_json, spec) -> str | None` (None = skip judging).
@@ -99,9 +107,9 @@ pub fn compile(
 /// `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` (JSON
 /// `ValidateOutcome`). BLOCKING.
 ///
-/// An unparseable target is the one payload with nowhere to report to — the units a verdict would
-/// be keyed by are exactly what failed to parse — so it yields no verdicts, and the host records
-/// the rows it asked about as UNKNOWN.
+/// An unparseable target is the one payload with nowhere to report to — the check names a verdict
+/// would be keyed by are exactly what failed to parse — so it yields no verdicts, and the host
+/// records the checks it asked about as UNKNOWN.
 pub fn validate(
     b: &dyn Backend,
     input_json: &str,
@@ -151,7 +159,7 @@ mod tests {
     use crate::chain::ChainData;
     use crate::descriptor::AppDescriptor;
     use crate::finalize::ComponentOutcome;
-    use crate::outcome::{Unit, ValidateOutcome};
+    use crate::outcome::{Check, ValidateOutcome};
     use crate::prep::WorkspacePrep;
     use serde::{Deserialize, Serialize};
     use std::sync::Mutex;
@@ -188,11 +196,11 @@ mod tests {
         fn descriptor(&self) -> AppDescriptor {
             unimplemented!("not exercised")
         }
-        fn units(&self, input: &AuthorInput) -> Vec<Unit> {
+        fn checks(&self, input: &AuthorInput) -> Vec<Check> {
             self.seen.lock().unwrap().push(input.source_unit.clone());
             Vec::new()
         }
-        fn author_prompt(&self, _input: &AuthorInput, _failure: Option<&Failure>) -> Prompt {
+        fn author_prompt(&self, _input: &AuthorInput) -> Prompt {
             unimplemented!("not exercised")
         }
         fn compile(&self, _input: &AuthorInput, _spec: &str, _ws: &Workspace) -> CompileResult {
@@ -225,7 +233,7 @@ mod tests {
         // with no crates use the same seam.
         let spy = Spy::default();
         let unit = r#"{"dir":"programs/lend","package":"example-lending","lib":"example_lending"}"#;
-        units(&spy, &component_json(unit, "{}"));
+        checks(&spy, &component_json(unit, "{}"));
         workspace_prep(&spy, &component_json(unit, "{}"));
         validate_preconditions(
             &spy,
@@ -255,9 +263,9 @@ mod tests {
         // convention if it has one — the alternative, filling it in here, would mean this seam
         // choosing one ecosystem's layout for every wheel.
         let spy = Spy::default();
-        units(&spy, &component_json("{}", "{}"));
+        checks(&spy, &component_json("{}", "{}"));
         let seen = spy.seen.lock().unwrap();
-        let data = seen.first().expect("units was called");
+        let data = seen.first().expect("checks was called");
         assert!(data.is_empty());
         assert!(data.parse::<CargoUnit>().is_err(), "empty is not a resolved unit");
     }
@@ -315,8 +323,8 @@ mod tests {
                 "source_unit":{"dir":"p","package":"l","lib":"l"},"prep_facts":{},
                 "setup":"struct Fixture {}","components":[
                   {"name":"Farms","outcome":{"status":"delivered","artifact_text":"fn c_farms(){}",
-                   "targets":["c_farms"],"property_units":[["fifo",["c_fifo"]]],
-                   "unit_file":null,"run_link":null}},
+                   "targets":["c_farms"],"property_checks":[["fifo",["c_fifo"]]],
+                   "skipped":[],"unit_file":null,"run_link":null}},
                   {"name":"Referrals","outcome":{"status":"gave_up"}}]}"#,
         )
         .expect("parse");

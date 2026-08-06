@@ -32,9 +32,11 @@ else:
     ContractName = str
     ProgramName = str
 
-type UnitName = str
+type CheckName = str
+"""The backend's name for one check — a CVL rule, a foundry test, a fuzz harness function.
+``FormalResult.property_checks()`` maps each property title onto the checks that verify it."""
 
-type RuleName = UnitName
+type RuleName = CheckName
 """A CVL rule/invariant identifier as it appears in the prover report and in a component's
 ``property_rules`` mapping."""
 
@@ -52,7 +54,7 @@ class ArtifactIdentifier(Protocol):
     def artifact_file(self) -> str: ...
 
 class FormalResult(Protocol):
-    def property_units(self) -> list[tuple[PropertyTitle, list[UnitName]]]: ...
+    def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]: ...
 
     @property
     def commentary(self) -> str: ...

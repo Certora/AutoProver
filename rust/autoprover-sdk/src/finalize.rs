@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chain::ChainData;
+use crate::outcome::SkippedProperty;
 
 /// What one component's formalization produced, when it produced anything.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,12 +15,16 @@ pub struct Delivered {
     /// [`DeliverableMode::Callout`](crate::descriptor::DeliverableMode::Callout) wheel assembles its
     /// deliverable from.
     pub artifact_text: String,
-    /// The validation targets this component's rows were checked by, in the order they ran. The
-    /// key a callout-mode wheel writes its sections under: they are what the gated builds
-    /// selected, unlike `property_units`, which are report rows and gate nothing.
+    /// The validation targets this component's checks ran under, in the order they ran. The key a
+    /// callout-mode wheel writes its sections under: they are what the gated builds selected,
+    /// unlike `property_checks`, which are report rows and gate nothing.
     pub targets: Vec<String>,
-    /// Each property title and the unit names carrying it — the report's property→units map.
-    pub property_units: Vec<(String, Vec<String>)>,
+    /// Each property title and the names of the checks carrying it — the report's property→check
+    /// map.
+    pub property_checks: Vec<(String, Vec<String>)>,
+    /// The properties the author declined to formalize, each with its justification. Disjoint from
+    /// `property_units`: the publish gate rejects a mapping that claims a skipped property.
+    pub skipped: Vec<SkippedProperty>,
     #[serde(deserialize_with = "crate::required::present")]
     pub unit_file: Option<String>,
     #[serde(deserialize_with = "crate::required::present")]
@@ -27,7 +32,7 @@ pub struct Delivered {
 }
 
 /// Whether a component reached the deliverable. An enum rather than a `delivered` flag beside
-/// always-present fields: a component that gave up has no spec, no targets and no rows, so there
+/// always-present fields: a component that gave up has no spec, no targets and no checks, so there
 /// is nothing for a caller to read past the name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]

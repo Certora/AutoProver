@@ -23,7 +23,7 @@ from graphcore.tools.schemas import WithImplementation, WithInjectedState, WithI
 
 from composer.authoring.judge import PropertyFeedbackProtocol, RebuttalBase
 from composer.authoring.state import (
-    AuthoringExtra, MappingVocab, SkippedProperty, spec_digest, validate_unit_mapping,
+    AuthoringExtra, MappingVocab, SkippedProperty, spec_digest, validate_check_mapping,
 )
 from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
@@ -87,8 +87,8 @@ class GeneratedCVL(BaseModel):
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
 
-    def property_units(self) -> list[tuple[str, list[str]]]:
-        """Property title -> the CVL rule names that formalize it (the report's `ReportableResult`
+    def property_checks(self) -> list[tuple[str, list[str]]]:
+        """Property title -> the CVL rule names that verify it (the report's `ReportableResult`
         adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.rules) for m in self.property_rules]
     
@@ -114,7 +114,7 @@ class CVLGenerationExtra(AuthoringExtra):
 #: How the CVL author words its publish-time mapping. The prover reports no rule-name ground truth
 #: (unlike forge), so ``validate_property_rules`` passes no ``ran`` set and the mapping is checked
 #: for coverage only.
-_CVL_MAPPING = MappingVocab(unit_noun="rule", field_name="property_rules")
+_CVL_MAPPING = MappingVocab(check_noun="rule", field_name="property_rules")
 
 
 def validate_property_rules(
@@ -124,7 +124,7 @@ def validate_property_rules(
 ) -> str | None:
     """Validate the property->rules mapping declared at completion time. ``titles`` is the batch's
     full set of property titles; returns None if valid, else one message enumerating all problems."""
-    return validate_unit_mapping(
+    return validate_check_mapping(
         [(m.property_title, m.rules) for m in property_rules], skipped, titles, _CVL_MAPPING,
     )
 

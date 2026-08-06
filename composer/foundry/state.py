@@ -11,7 +11,7 @@ the validation stamps and the digest gate. What is foundry's own:
   recent ``forge_test`` run (parsed from forge's JSON output). The runner
   records this unconditionally on every run that produced parseable
   results; the publish gate uses it as the ground truth
-  :func:`~composer.authoring.state.validate_unit_mapping` checks the declared property→test
+  :func:`~composer.authoring.state.validate_check_mapping` checks the declared property→test
   mapping against, rather than trusting the agent's transcription.
 * ``property_tests`` — that mapping.
 """
@@ -25,7 +25,7 @@ from graphcore.graph import FlowInput
 
 from composer.authoring.state import (
     AuthoringExtra, MappingVocab, SkippedProperty, check_completion,
-    merge_expected_failures, validate_unit_mapping,
+    merge_expected_failures, validate_check_mapping,
 )
 from composer.spec.context import CacheKey, FoundryGeneration, FoundryJudge
 
@@ -76,7 +76,7 @@ def check_foundry_completion(state: FoundryGenerationExtra) -> str | None:
 #: How the foundry author words its publish-time mapping. Unlike CVL, forge names every test it
 #: ran, so the mapping is checked against that ground truth in both directions.
 _FOUNDRY_MAPPING = MappingVocab(
-    unit_noun="test",
+    check_noun="test",
     field_name="property_tests",
     ran_source="the stamping forge_test invocation",
 )
@@ -90,7 +90,7 @@ def validate_property_tests(
 ) -> str | None:
     """Validate the property→tests mapping declared at completion time, against the tests forge
     actually ran."""
-    return validate_unit_mapping(
+    return validate_check_mapping(
         [(m.property_title, m.tests) for m in property_tests],
         skipped,
         titles,

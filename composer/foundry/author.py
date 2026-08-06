@@ -48,7 +48,7 @@ from composer.authoring.state import SkippedProperty
 from composer.authoring.tools import give_up_tool
 from composer.pipeline.core import GaveUp
 from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
-from composer.spec.gen_types import TemplateInstantiation, TypedTemplate
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import run_to_completion
 from composer.spec.types import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance, component_context
@@ -88,7 +88,7 @@ class GeneratedFoundryTest(BaseModel):
     expected_failures: dict[str, str] = Field(default_factory=dict)
     ran_tests: list[str] = Field(default_factory=list)
 
-    def property_units(self) -> list[tuple[str, list[str]]]:
+    def property_checks(self) -> list[tuple[str, list[str]]]:
         """Property title -> the foundry test names that demonstrate it (the report's
         `ReportableResult` adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.tests) for m in self.property_tests]
@@ -422,12 +422,12 @@ def _build_feedback_thunk(
     prompt pair and the fact that the skips and rebuttals are stated as input text rather than
     rendered into the prompt template."""
 
-    def render_prompt(
-        _skipped: Sequence[SkippedProperty], _rebuttals: Sequence[Rebuttal]
-    ) -> TemplateInstantiation:
+    def apply_prompt(
+        builder, _spec: str, _skipped: Sequence[SkippedProperty], _rebuttals: Sequence[Rebuttal]
+    ):
         return _FoundryJudgeTemplate.bind({
             "properties": props, "context": component, "sort": "existing",
-        })
+        }).render_to(builder.with_initial_prompt_template)
 
     def input_parts(
         test_source: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
@@ -460,8 +460,10 @@ def _build_feedback_thunk(
     return build_feedback_judge(
         ctx=judge_ctx,
         env=env,
-        system_prompt=_FoundryJudgeSystemTemplate.bind({}),
-        render_prompt=render_prompt,
+        apply_system=lambda b: _FoundryJudgeSystemTemplate.bind({}).render_to(
+            b.with_sys_prompt_template
+        ),
+        apply_prompt=apply_prompt,
         input_parts=input_parts,
         readback=get_test_tool(JudgeState),
         description="Foundry test feedback judge",

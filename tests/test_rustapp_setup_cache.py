@@ -28,6 +28,7 @@ from composer.rustapp.adapter import (
     RustFormalizer, RustPreparedSystem, RustStagedFormalizer, _setup_identity
 )
 from composer.rustapp.descriptor import AppDescriptor
+from composer.rustapp.session import SessionResult
 from tests.conftest import wire_descriptor, wire_phase, wire_required_phases
 from composer.rustapp.wire import Property, SetupInput
 from composer.spec.context import WorkflowContext
@@ -98,14 +99,17 @@ async def _formalizer(
     from composer.spec.context import SourceCode
     from composer.spec.system_model import SolidityIdentifier
 
-    async def fake_author_and_compile(_module, input, **_kw):
+    async def fake_session(*, input, **_kw):
         authored.append(input)
-        return FIXTURE
+        return SessionResult(
+            commentary="", spec=FIXTURE, skipped=[], property_checks=[],
+            verdicts={}, expected_failures={},
+        )
 
     async def fake_prep(_module, _input, **_kw):
         return {}  # a plan that asked for nothing establishes nothing
 
-    monkeypatch.setattr(adapter, "author_and_compile", fake_author_and_compile)
+    monkeypatch.setattr(adapter, "run_session", fake_session)
     monkeypatch.setattr(adapter, "run_workspace_prep", fake_prep)
 
     source = SourceCode(

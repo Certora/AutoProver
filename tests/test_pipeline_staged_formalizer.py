@@ -46,7 +46,7 @@ class _Result:
     artifact_text = ""
     unit_file = None
     run_link = None
-    def property_units(self): return []
+    def property_checks(self): return []
 
 
 class _Formalizer:

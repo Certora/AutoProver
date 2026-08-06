@@ -1,11 +1,16 @@
 """Adapter: wrap a Rust wheel (a :class:`~autoprover_sdk.Backend`) as a
 :class:`~composer.pipeline.core.PipelineBackend`.
 
-The Rust wheel is a **passive service** (``docs/rust-applications.md``): Python owns the
-author→compile→judge→validate loop and every LLM turn, and calls the wheel's pure callouts
-(``descriptor`` / ``units`` / ``author_prompt`` / ``judge_prompt`` / ``finalize``) plus the two
-blocking ones (``compile`` / ``validate``) that run the toolchain via ``run-confined``. There is
-no IoC ``resume`` loop and no ``Effects`` protocol.
+The Rust wheel is a **passive service** (``docs/rust-applications.md``): Python owns every LLM turn
+and calls the wheel's pure callouts (``descriptor`` / ``units`` / ``author_prompt`` /
+``check_syntax`` / ``judge_prompt`` / ``finalize``) plus the two blocking ones (``compile`` /
+``validate``) that run the toolchain via ``run-confined``. There is no IoC ``resume`` loop and no
+``Effects`` protocol.
+
+Authoring itself is the shared session of :mod:`composer.authoring`, assembled for a wheel in
+:mod:`composer.rustapp.session`: the agent owns a spec buffer, the wheel's ``validate`` is a tool it
+calls, and publishing is gated on stamps over the buffer as it stands. This module is what connects
+that session to the pipeline — phases, preflight, the setup artifact's cache, and the report.
 
 Three phase objects mirror the CVL / foundry backends:
 
@@ -31,17 +36,10 @@ import enum
 import json
 import logging
 from collections.abc import Sequence
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, NotRequired, override
+from typing import Any, Awaitable, Callable, override
 
-from langchain_core.tools import BaseTool
-from pydantic import Field
-from graphcore.graph import FlowInput, tool_state_update
-from graphcore.tools.schemas import WithAsyncDependencies, WithInjectedId
-from langgraph.graph import MessagesState
-from langgraph.types import Command
 
 from composer.diagnostics.timing import get_current_task_id
 from composer.io.context import push_custom_update
@@ -65,280 +63,41 @@ from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupArtifact
 from composer.rustapp.toolchain import project_toolchain, source_unit
+from composer.rustapp.session import (
+    live_checks,
+    run_session,
+    targets_of,
+)
 from composer.rustapp.wire import (
     AuthorInput,
     CompileOk,
     ComponentGaveUp,
     ComponentInput,
-    Failure,
-    FailureKind,
     FinalizeComponent,
     FinalizeInput,
     PreflightInput,
-    Prompt,
     Property,
     RustAppModule,
     SetupInput,
-    Target,
-    ValidateBuildFailed,
     parse_compile,
     parse_files,
-    parse_prompt,
-    parse_units,
-    parse_validate,
+    parse_checks,
     parse_workspace_prep,
 )
 # The wheel's per-unit verdict and the *report's* per-unit verdict are different types with the same
 # name (``fetch_verdicts`` maps one to the other), so the wire one is aliased here. Likewise
 # ``Delivered``: the pipeline's component outcome and the wire's payload for one.
 from composer.rustapp.wire import Delivered as WireDelivered
-from composer.rustapp.wire import Verdict as WireVerdict
+from composer.rustapp.wire import SkippedProperty as WireSkipped
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import CacheKey, SourceFields, WorkflowContext
-from composer.spec.service_host import ServiceHost
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
-from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.ui.tool_display import tool_display
-from composer.spec.source.report.schema import Outcome, RuleName
+from composer.spec.source.report.schema import RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import PropertyFormulation
-from composer.spec.util import slugify_filename, string_hash, uniq_thread_id
+from composer.spec.util import slugify_filename, string_hash
 
 _log = logging.getLogger(__name__)
-
-# Author→compile revise attempts per artifact.
-DEFAULT_MAX_ATTEMPTS = 7
-
-# ---------------------------------------------------------------------------
-# The LLM authoring turn — the "author" step of the author→compile→judge→validate loop, and
-# the peer of composer/foundry/author.py. Python runs it; the backend only supplies the
-# prompt, through its author_prompt/judge_prompt callouts.
-# ---------------------------------------------------------------------------
-
-# Neutral fallback system prompt. The backend's prompt payload carries the task-specific
-# `instruction` and MAY carry its own `system` prompt; when it doesn't, this applies. It
-# conveys only the tool-using-agent + result-tool contract — no domain/language specifics
-# (those belong in the backend's prompt).
-_DEFAULT_SYS_PROMPT = (
-    "You are an authoring agent. Use the available tools to explore the target "
-    "program's source and any reference material, then produce the requested artifact. "
-    "When done, call the `result` tool with your complete final answer as a single "
-    "string — the artifact source only, with no surrounding prose or code fences."
-)
-
-
-# WARNING: `bind_standard` introspects this state class's ``__annotations__`` at runtime to
-# unwrap ``result: NotRequired[T]``, so the annotation must stay a real object — a stringized
-# one breaks the unwrap.
-class _LlmState(MessagesState):
-    result: NotRequired[str]
-
-
-# In-loop-judge author state: `reviewed_text`/`review_ok` record the last draft the author sent
-# to `request_review` and the judge's verdict on it; the result gate (`_review_gate`) blocks
-# finalization until the submitted draft is one the judge accepted.
-class _JudgedAuthorState(MessagesState):
-    result: NotRequired[str]
-    reviewed_text: NotRequired[str]
-    review_ok: NotRequired[bool]
-
-
-class _LlmInput(FlowInput):
-    pass
-
-
-@dataclass(frozen=True)
-class Accepted:
-    """The reviewer accepted the draft. ``feedback`` is whatever it said while accepting — often
-    empty, and never something the author has to act on."""
-
-    feedback: str = ""
-
-
-@dataclass(frozen=True)
-class Rejected:
-    """The reviewer rejected the draft. ``feedback`` is what to revise against, and is the only
-    thing the next authoring turn gets told about the rejection — so it is never empty."""
-
-    feedback: str
-
-
-#: One review's verdict. A wheel that declares no judge produces ``None`` instead — "nothing to
-#: review", which is not a verdict and must not be read as a favourable one.
-type Review = Accepted | Rejected
-
-# Reviews a candidate artifact. The host builds it (see :func:`_make_judge_hook`) around the wheel's
-# ``judge_prompt``; it only exists when the wheel declared a judge for that input, so unlike
-# :func:`_judge_turn` it always produces a verdict.
-type _JudgeHook = Callable[[str], Awaitable[Review]]
-
-# Authors the shared setup artifact for a run, given the properties it must make checkable. Built
-# by :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for
-# why it runs between extraction and the per-unit fan-out rather than during prep or on first use.
-type SetupAuthor = Callable[[list[PropertyFormulation], PipelineRun], Awaitable[str]]
-
-
-# How many times one authoring session may be reviewed before its draft is taken as-is. The loop
-# has to be bounded because it can be *unwinnable*: when the reviewer's objection is something the
-# author has no power to change, "revise and re-review" never converges — it just re-spends a
-# whole (and steadily growing) context per round until the graph's recursion limit. Three rounds
-# buys the revision the feedback is for; the compile gate and the fuzzer still judge the result.
-MAX_REVIEW_ROUNDS = 3
-
-
-@dataclass
-class _ReviewBudget:
-    """The review rounds left in one authoring session, shared by the judge hook and the gate."""
-
-    limit: int = MAX_REVIEW_ROUNDS
-    used: int = 0
-
-    @property
-    def spent(self) -> bool:
-        return self.used >= self.limit
-
-    @property
-    def left(self) -> int:
-        return max(0, self.limit - self.used)
-
-
-# Appended to the system prompt when the judge runs in-loop, so the author knows the review
-# protocol and the finalize gate. Kept generic (no backend/domain specifics).
-_REVIEW_PROTOCOL = (
-    "\n\nBefore you finalize, a reviewer must accept your work. Call the `request_review` tool "
-    "with the exact artifact text you intend to submit; if the review is REJECTED, revise and "
-    "call `request_review` again. Only call `result` with a draft the reviewer ACCEPTED — the "
-    f"`result` call is rejected otherwise. You get at most {MAX_REVIEW_ROUNDS} reviews: if a "
-    "concern is one you cannot address (it needs something outside what this task lets you "
-    "change), say so in a comment in the artifact rather than asserting something weaker to "
-    "satisfy it — a note the next stage can act on beats a check that only looks like one."
-)
-
-
-def _review_gate(
-    state: _JudgedAuthorState, result_value: str, budget: _ReviewBudget
-) -> str | None:
-    """Block ``result`` until the judge has accepted this exact draft — or the budget is spent.
-
-    Spending the budget releases the gate deliberately: the alternative is an author that cannot
-    finalize and cannot improve, cycling review→result→review at full context each time."""
-    if budget.spent or (state.get("review_ok") and state.get("reviewed_text") == result_value):
-        return None
-    return (
-        "Not accepted yet: call `request_review` with this exact draft and get an ACCEPTED "
-        f"review before calling `result` ({budget.left} review(s) left; revise first — after the "
-        "last one your draft is submitted as-is)."
-    )
-
-
-def _budgeted(judge: "_JudgeHook", budget: _ReviewBudget) -> "_JudgeHook":
-    """``judge``, counted against ``budget`` — and on the last round, relenting.
-
-    Relenting is a real :class:`Accepted`, not a rejection dressed up as one: the author's gate opens
-    and the draft goes forward. What it carries is the honest reason — the open concerns, labelled as
-    unresolved — which is what the author reads and what lands in the transcript for a human."""
-
-    async def reviewed(draft: str) -> Review:
-        budget.used += 1
-        review = await judge(draft)
-        if isinstance(review, Accepted) or not budget.spent:
-            return review
-        _log.warning(
-            "review budget spent (%d rounds) with the draft still rejected; submitting as-is",
-            budget.used,
-        )
-        return Accepted(
-            f"{review.feedback}\n\nNo review rounds left ({budget.used} used) — this draft is being "
-            "submitted with the concerns above unresolved. Call `result` with it now."
-        )
-
-    return reviewed
-
-
-@tool_display("Requesting review", "Review")
-class _RequestReview(WithInjectedId, WithAsyncDependencies[Command, "_JudgeHook"]):
-    """Ask the reviewer to evaluate your current draft against the task's criteria. Returns the
-    verdict and any feedback; if REJECTED, revise and call this again before finalizing."""
-
-    draft: str = Field(
-        description="The complete candidate artifact source to review — the exact text you intend "
-        "to submit via `result`, no surrounding prose or code fences."
-    )
-
-    @override
-    async def run(self) -> Command:
-        with self.tool_deps() as judge:
-            review = await judge(self.draft)
-        accepted = isinstance(review, Accepted)
-        verdict = "ACCEPTED" if accepted else "REJECTED"
-        content = (
-            f"Review {verdict}.\n\n{review.feedback}" if review.feedback else f"Review {verdict}."
-        )
-        return tool_state_update(
-            tool_call_id=self.tool_call_id, content=content,
-            reviewed_text=self.draft, review_ok=accepted,
-        )
-
-
-async def run_llm_agent(
-    env: ServiceHost, prompt: Prompt, *, recursion_limit: int, backend_name: str = "rust",
-    turn_label: str = "authoring", judge: "_JudgeHook | None" = None,
-    memory_tool: BaseTool | None = None, exclude_tools: frozenset[str] = frozenset(),
-) -> str | None:
-    """Run one bounded, tool-enabled turn and return its final text, or ``None`` if the turn ended
-    without one. ``turn_label`` names the turn's role ("authoring" / "judge") for the UI/log panel.
-
-    Binds the env's tool belt (source navigation + RAG search over the backend's
-    knowledge base) and a result tool, and runs an agent to completion — so the
-    prompt can pull in framework docs / read the program. Must run inside a
-    ``with_handler`` scope (the caller wraps it in ``run.runner``).
-
-    When ``judge`` is given, the turn becomes an in-loop-review author (docs/crucible-judge-in-loop.md (PR3)):
-    a ``request_review`` tool runs the judge in-session and ``result`` is gated on an accepted draft,
-    so the author self-revises against feedback. ``memory_tool`` (when given) is added to the belt so
-    facts persist across turns/components. ``exclude_tools`` drops named tools from the belt (used to
-    clamp the review sub-agent's exploration — docs/crucible-judge-cost.md (PR3) §3)."""
-    tools = [t for t in env.all_tools if t.name not in exclude_tools]
-    if memory_tool is not None:
-        tools.append(memory_tool)
-    system = prompt.system
-    doc = "Your complete final answer as a single string (e.g. the authored source file)."
-    if judge is None:
-        builder = bind_standard(env.builder_heavy(), _LlmState, doc=doc)
-        state_input: FlowInput = _LlmInput(input=[])
-    else:
-        # One budget per session, shared by the hook (which counts and finally relents) and the
-        # gate (which stops blocking once it is spent) — so the two can't disagree about when the
-        # author is allowed to finalize.
-        budget = _ReviewBudget()
-
-        def gate(state: _JudgedAuthorState, value: str) -> str | None:
-            return _review_gate(state, value, budget)
-
-        builder = bind_standard(env.builder_heavy(), _JudgedAuthorState, doc=doc, validator=gate)
-        tools = [*tools, _RequestReview.bind(_budgeted(judge, budget)).as_tool("request_review")]
-        system = (system or _DEFAULT_SYS_PROMPT) + _REVIEW_PROTOCOL
-        state_input = _LlmInput(input=[])
-    graph: Any = (
-        builder
-        .with_input(_LlmInput)
-        .with_sys_prompt(system or _DEFAULT_SYS_PROMPT)
-        .with_initial_prompt(prompt.instruction)
-        .with_tools(tools)
-        .compile_async()
-    )
-    res = await run_to_completion(
-        graph,
-        state_input,
-        thread_id=uniq_thread_id(f"{backend_name}-llm"),
-        recursion_limit=recursion_limit,
-        description=f"{backend_name} {turn_label} turn",
-    )
-    result = res.get("result")
-    # ``result`` is ``NotRequired``: the agent may end its turn without ever calling the result tool
-    # (it ran out of recursion, or just stopped). ``None`` says so, rather than handing the caller a
-    # placeholder the toolchain would spend an attempt building.
-    return result if isinstance(result, str) else None
 
 
 # ---------------------------------------------------------------------------
@@ -354,17 +113,6 @@ def make_emitter() -> Callable[[str, dict], None]:
         push_custom_update({"type": kind, **payload}, thread_id=get_current_task_id() or "rust")
 
     return emit
-
-
-def _strip_fence(text: str) -> str:
-    """Strip a leading/trailing ``​```lang`` code fence if the model wrapped its answer
-    (the authored artifact is written verbatim into a source file, so a fence would break it)."""
-    t = text.strip()
-    if t.startswith("```"):
-        first_nl = t.find("\n")
-        body = t[first_nl + 1 :] if first_nl != -1 else t
-        return body.removesuffix("```").rstrip().removesuffix("```").rstrip()
-    return t
 
 
 def unique_slugs(props: list[PropertyFormulation]) -> list[str]:
@@ -391,184 +139,6 @@ def _properties(props: list[PropertyFormulation], slugs: list[str]) -> list[Prop
 
 def _first_line(s: str) -> str:
     return next((ln for ln in s.splitlines() if ln.strip()), "").strip()
-
-
-#: What a rejection with nothing to revise against is reported as. A judge that says "no" and gives
-#: no reason would otherwise send the author into a revise round with an empty instruction; saying so
-#: at least tells it (and a human reading the transcript) what happened.
-_UNEXPLAINED_REJECTION = (
-    "The reviewer rejected the draft without giving a reason. Re-read the task's criteria and "
-    "strengthen whatever you are least sure of."
-)
-
-
-def _parse_judge(reply: str) -> Review:
-    """Interpret a judge's reply as a verdict. A JSON ``{accept, feedback}`` (what the Crucible judge
-    emits) is authoritative; otherwise the reply is read as prose led by ``ACCEPT`` / ``REJECT``.
-
-    NOTE: prose that leads with neither is taken as an **acceptance** — the reviewer is an advisory
-    gate in front of the compile/validate gates that actually decide, so an unparseable reply lets
-    the draft through rather than burning a revise round on a verdict nobody stated. Flipping that
-    default is a policy decision, not a cleanup."""
-    try:
-        obj = json.loads(reply)
-    except (json.JSONDecodeError, ValueError):
-        obj = None
-    if isinstance(obj, dict):
-        feedback = str(obj.get("feedback", ""))
-        return Accepted(feedback) if obj.get("accept") else Rejected(feedback or _UNEXPLAINED_REJECTION)
-    return Rejected(reply) if reply.strip().upper().startswith("REJECT") else Accepted(reply)
-
-
-#: What the next authoring turn is told when the previous one produced no artifact at all. It is a
-#: failure like any other — it costs an attempt — but the toolchain never sees it, because there is
-#: nothing to build.
-_NO_ARTIFACT = (
-    "The previous attempt ended without calling the `result` tool, so it produced no artifact. "
-    "Explore less and finalize: call `result` with your complete artifact source."
-)
-
-
-async def _author_turn(
-    module: RustAppModule, input_json: str, failure: Failure | None, *, env: ServiceHost,
-    recursion_limit: int, backend_name: str, judge: "_JudgeHook | None" = None,
-    memory_tool: BaseTool | None = None,
-) -> str | None:
-    """One authoring turn: render the backend's prompt (with any prior failure as revise
-    context), run the tool-enabled LLM agent, and strip a code fence off the result. ``None`` when
-    the agent ended its turn without producing one. When ``judge`` is given, the author reviews and
-    self-revises in-session (docs/crucible-judge-in-loop.md (PR3))."""
-    prompt = parse_prompt(
-        module.author_prompt(input_json, failure.model_dump_json() if failure is not None else None)
-    )
-    reply = await run_llm_agent(
-        env, prompt, recursion_limit=recursion_limit, backend_name=backend_name,
-        judge=judge, memory_tool=memory_tool,
-    )
-    return _strip_fence(reply) if reply is not None else None
-
-
-# The review sub-agent gets the program API + fixture in its prompt and shares the run memory, so
-# it doesn't need the expensive `code_explorer` exploration sub-agent — direct file reads
-# (`get_file`/`grep`) cover its spot-checks. Dropping it is the bulk of the review cost
-# (docs/crucible-judge-cost.md (PR3) §3): each `code_explorer` call is itself a multi-call sub-agent.
-_JUDGE_EXCLUDE_TOOLS = frozenset({"code_explorer"})
-
-
-async def _judge_turn(
-    module: RustAppModule, input_json: str, spec: str, *, env: ServiceHost, recursion_limit: int,
-    backend_name: str, emit: Callable[[str, dict], None] | None = None,
-    memory_tool: BaseTool | None = None,
-) -> Review | None:
-    """One optional LLM review of a spec. ``None`` — *no verdict*, not a favourable one — when the
-    backend declares no judge for this input (``judge_prompt`` → ``None``, the default).
-
-    When a review does run, emit a ``judge`` event carrying the verdict so the frontend surfaces
-    accept/reject."""
-    jp = module.judge_prompt(input_json, spec)
-    if not jp:
-        return None
-    reply = await run_llm_agent(
-        env, parse_prompt(jp), recursion_limit=recursion_limit,
-        backend_name=backend_name, turn_label="judge", memory_tool=memory_tool,
-        exclude_tools=_JUDGE_EXCLUDE_TOOLS,
-    )
-    if reply is None:
-        # A reviewer that never stated a verdict has not rejected anything. Same reasoning as an
-        # unparseable reply (see :func:`_parse_judge`): it is an advisory gate, so it fails open.
-        _log.warning("%s: judge turn ended without a verdict; treating as accepted", backend_name)
-        return Accepted()
-    review = _parse_judge(reply)
-    accepted = isinstance(review, Accepted)
-    if emit is not None:
-        emit("judge", {
-            "line": "reviewer accepted the tests" if accepted
-            else f"reviewer rejected — revising: {_first_line(review.feedback)}",
-            "outcome": (Outcome.GOOD if accepted else Outcome.BAD).value,
-        })
-    return review
-
-
-def _make_judge_hook(
-    module: RustAppModule, input_json: str, *, env: ServiceHost, recursion_limit: int,
-    backend_name: str, emit: Callable[[str, dict], None] | None, memory_tool: BaseTool | None,
-) -> "_JudgeHook":
-    """Wrap the wheel's judge as a ``(draft) -> Review`` callable for the in-loop ``request_review``
-    tool. Reuses :func:`_judge_turn` so the verdict event still fires."""
-    async def judge(draft: str) -> Review:
-        review = await _judge_turn(
-            module, input_json, draft, env=env, recursion_limit=recursion_limit,
-            backend_name=backend_name, emit=emit, memory_tool=memory_tool,
-        )
-        # This hook is only built for an input the wheel *did* declare a judge for, and
-        # ``judge_prompt`` is pure — so "no verdict" can't happen here. If it somehow did, a review
-        # that isn't running must not be what keeps the author from finalizing.
-        return review if review is not None else Accepted()
-    return judge
-
-
-async def author_and_compile(
-    module: RustAppModule,
-    input: AuthorInput,
-    *,
-    env: ServiceHost,
-    sandbox_dict: BackendSpec,
-    workdir: Path,
-    recursion_limit: int,
-    backend_name: str,
-    emit: Callable[[str, dict], None],
-    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
-    command_sem: asyncio.Semaphore | None = None,
-) -> str | GaveUp:
-    """Author an artifact's spec, gate it with the backend's ``compile`` (retry on failure) and
-    optional ``judge``. Returns the compiled spec text, or :class:`GaveUp`. Used for artifacts
-    that have no report units to validate — e.g. Crucible's shared setup fixture (a compile-only
-    gate). The component path fuses the build gate into ``validate`` instead (see
-    :meth:`RustFormalizer.formalize`)."""
-    input_json = input.model_dump_json()
-    sandbox_json = json.dumps(sandbox_dict)
-    failure: Failure | None = None
-    for _ in range(max_attempts):
-        spec = await _author_turn(
-            module, input_json, failure, env=env, recursion_limit=recursion_limit, backend_name=backend_name
-        )
-        if spec is None:
-            _log.warning("%s: authoring turn produced no artifact; retrying", backend_name)
-            failure = Failure(draft="", errors=_NO_ARTIFACT)
-            continue
-        result = parse_compile(
-            await _run_blocking(
-                # ``spec=spec`` binds this attempt's draft (the name is rebound each round), the
-                # same capture the per-target ``validate`` loop makes.
-                lambda spec=spec: module.compile(input_json, spec, str(workdir), sandbox_json),
-                command_sem,
-            )
-        )
-        if not isinstance(result, CompileOk):
-            failure = Failure(draft=spec, errors=result.errors)
-            emit("build_output", {"line": _first_line(result.errors) or "build failed; revising"})
-            continue
-        review = await _judge_turn(
-            module, input_json, spec, env=env, recursion_limit=recursion_limit,
-            backend_name=backend_name, emit=emit,
-        )
-        # No judge (``None``) and an accepting one both mean "nothing left to fix" — only an actual
-        # rejection sends this back for a revise, and it is flagged as a *judge* failure so the next
-        # prompt frames it as review feedback rather than as compiler errors.
-        if isinstance(review, Rejected):
-            failure = Failure(draft=spec, errors=review.feedback, kind=FailureKind.JUDGE)
-            continue
-        return spec
-    return GaveUp(reason=f"{backend_name}: did not pass compile/judge in {max_attempts} attempts")
-
-
-async def _run_blocking(thunk: Callable[[], str], sem: asyncio.Semaphore | None) -> str:
-    """Run a blocking wheel call (``compile``/``validate`` — they spawn ``run-confined`` and
-    release the GIL) off the event loop, serialized by ``sem`` when the backend shares one
-    workdir/crate across concurrent units."""
-    guard = sem if sem is not None else nullcontext()
-    async with guard:
-        return await asyncio.to_thread(thunk)
 
 
 def confined_target(root: Path, rel: str) -> Path:
@@ -708,9 +278,8 @@ async def run_preflight_gate(
 # ---------------------------------------------------------------------------
 
 class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
-    """Drives a Rust :class:`~autoprover_sdk.Backend` through the author→compile→judge→validate
-    loop. Ecosystem-agnostic: the unit is any :class:`FeatureUnit`, marshalled via
-    ``feature_json()``."""
+    """Drives a Rust :class:`~autoprover_sdk.Backend` through one authoring session per unit.
+    Ecosystem-agnostic: the unit is any :class:`FeatureUnit`, marshalled via ``feature_json()``."""
 
     def __init__(
         self,
@@ -720,7 +289,6 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         sandbox: SandboxConfig | None = None,
         command_timeout_s: int = DEFAULT_TIMEOUT_S,
         command_sem: asyncio.Semaphore | None = None,
-        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         declared_args: dict[str, Any] | None = None,
         setup_result: str | None = None,
         project: "ProjectFacts | None" = None,
@@ -731,7 +299,6 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         self._sandbox = sandbox
         self._command_timeout_s = command_timeout_s
         self._command_sem = command_sem
-        self._max_attempts = max_attempts
         # The run's values for the wheel's own declared flags, put on every component's input.
         self._declared_args = declared_args or {}
         # The compiled setup spec (Crucible's fixture): on every component's input, and forwarded
@@ -749,7 +316,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             return {"argv_prefix": [], "timeout_s": self._command_timeout_s}
         return await self._sandbox.backend_spec(workdir, timeout_s=self._command_timeout_s)
 
-    # -- the loop ----------------------------------------------------------
+    # -- the session -------------------------------------------------------
 
     @override
     async def formalize(
@@ -761,105 +328,47 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         run: PipelineRun,
     ) -> RustFormalResult | GaveUp:
         workdir = Path(run.source.project_root)
-        slugs = unique_slugs(props)
-        input_json = ComponentInput(
+        input = ComponentInput(
             program=str(run.source.contract_name),
             source_unit=self._project.source_unit,
             unit=feat.feature_json(),
-            props=_properties(props, slugs),
+            props=_properties(props, unique_slugs(props)),
             setup=self._setup_result,
             prep_facts=self._project.prep_facts,
             args=self._declared_args,
-        ).model_dump_json()
-        sandbox_dict = await self._sandbox_spec(workdir)
-        sandbox_json = json.dumps(sandbox_dict)
-        emit = make_emitter()
-        units = parse_units(self._module.units(input_json))
-
-        # When the wheel supplies a judge for this input, it runs in-loop: a `request_review` tool
-        # inside the author session, which self-revises against feedback and can only finalize an
-        # accepted draft (docs/crucible-judge-in-loop.md (PR3)). The author and judge share the run
-        # memory across components. Probe the pure callout — `judge_prompt` returns None exactly
-        # when there is no judge for this kind, so no review machinery is bound then.
-        has_judge = self._module.judge_prompt(input_json, "") is not None
-        memory_tool = ctx.get_memory_tool() if has_judge else None
-        judge_hook = _make_judge_hook(
-            self._module, input_json, env=run.env, recursion_limit=ctx.recursion_limit,
-            backend_name=self._descriptor.name, emit=emit, memory_tool=memory_tool,
-        ) if has_judge else None
-
-        # Fused author → validate loop: validate's build IS the compile gate, so a component pays
-        # for one build rather than a dry-run plus a check. The units share that build, so a
-        # BuildFailed from any unit re-authors the whole spec.
-        failure: Failure | None = None
-        for _ in range(self._max_attempts):
-            spec = await _author_turn(
-                self._module, input_json, failure, env=run.env,
-                recursion_limit=ctx.recursion_limit, backend_name=self._descriptor.name,
-                judge=judge_hook, memory_tool=memory_tool,
-            )
-            if spec is None:
-                _log.warning(
-                    "%s: authoring turn for %s produced no artifact; retrying",
-                    self._descriptor.name, label,
-                )
-                failure = Failure(draft="", errors=_NO_ARTIFACT)
-                continue
-
-            # Each report unit declares the *target* that validates it (its own name by default;
-            # e.g. Crucible shares one `c_<component>` target across that component's units). Run each
-            # DISTINCT target once, handing the wheel the rows that target covers; it returns a
-            # verdict per row — it owns attribution (how a failure maps to units), the host records
-            # verbatim.
-            targets = list(dict.fromkeys(u.target_or_unit() for u in units))
-            prop_of = {u.unit: u.property for u in units}
-            covered = {
-                name: Target(name=name, units=[u for u in units if u.target_or_unit() == name])
-                for name in targets
-            }
-
-            verdicts: dict[str, WireVerdict] = {}
-            # Grouped by property, not appended as singletons: two units checking the same property
-            # are two unit names under ONE report row — as singletons they would be two rows with
-            # the same key, and the store's ``dict()`` of this list would silently keep the last.
-            units_by_prop: dict[str, list[str]] = {}
-            build_failed: ValidateBuildFailed | None = None
-            for target in targets:
-                res = parse_validate(
-                    await _run_blocking(
-                        lambda target=covered[target], spec=spec: self._module.validate(
-                            input_json, spec, target.model_dump_json(), str(workdir), sandbox_json
-                        ),
-                        self._command_sem,
-                    )
-                )
-                if isinstance(res, ValidateBuildFailed):
-                    build_failed = res
-                    break
-                for unit, verdict in res.verdicts:
-                    verdicts[unit] = verdict
-                    prop = prop_of.get(unit, unit)
-                    units_by_prop.setdefault(prop, []).append(unit)
-                    line = f"{prop}: {verdict.outcome.value}"
-                    emit(
-                        "verdict",
-                        {"outcome": verdict.outcome.value, "name": prop,
-                         "line": f"{line} — {verdict.detail}" if verdict.detail else line},
-                    )
-            if build_failed is not None:
-                failure = Failure(draft=spec, errors=build_failed.errors)
-                emit(
-                    "build_output",
-                    {"line": _first_line(build_failed.errors) or "build failed; revising"},
-                )
-                continue
-            return RustFormalResult(
-                artifact_text=spec, units=list(units_by_prop.items()),
-                verdicts=verdicts, targets=targets,
-            )
-
-        return GaveUp(
-            reason=f"{self._descriptor.name}: did not compile/pass judge in {self._max_attempts} attempts"
+        )
+        # Pure and pre-authoring: the report's shape is fixed before the first turn, so it never
+        # depends on what the model happened to write. The session hands these to the author as the
+        # names it must produce, and to the publish gate as the names it checks the mapping against.
+        checks = parse_checks(self._module.checks(input.model_dump_json()))
+        outcome = await run_session(
+            module=self._module,
+            input=input,
+            kind="component",
+            checks=checks,
+            titles=[p.title for p in props],
+            env=run.env,
+            ctx=ctx,
+            run=run,
+            workdir=workdir,
+            sandbox_dict=await self._sandbox_spec(workdir),
+            descriptor=self._descriptor,
+            emit=make_emitter(),
+            command_sem=self._command_sem,
+            description=label,
+        )
+        if isinstance(outcome, GaveUp):
+            return outcome
+        return RustFormalResult(
+            commentary=outcome.commentary,
+            artifact_text=outcome.spec,
+            checks=outcome.property_checks,
+            skipped=outcome.skipped,
+            verdicts=outcome.verdicts,
+            # The targets the gating run covered, in the order the host ran them — what a
+            # callout-mode wheel keys its deliverable sections on. Derived from the checks that were
+            # live at publish, so a skipped property's target is not claimed as checked.
+            targets=[t.name for t in targets_of(live_checks(checks, outcome.skipped))],
         )
 
     @override
@@ -888,15 +397,19 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             FinalizeComponent(name=o.feat.display_name, outcome=ComponentGaveUp())
             if not isinstance(o.result, Delivered)
             # A callout-mode wheel renders the whole deliverable from these (Crucible: folds each
-            # section into the shared crate, keyed by its property_units feature) — including the
-            # targets each row was validated by, which its sections and declared features key on.
+            # section into the shared crate, keyed by its property_checks feature) — including the
+            # targets each check ran under, which its sections and declared features key on.
             else FinalizeComponent(
                 name=o.feat.display_name,
                 outcome=WireDelivered(
                     unit_file=o.result.unit_file,
                     run_link=o.result.run_link,
                     artifact_text=o.result.result.artifact_text,
-                    property_units=o.result.result.property_units(),
+                    property_checks=o.result.result.property_checks(),
+                    skipped=[
+                        WireSkipped(property_title=sk.property_title, reason=sk.reason)
+                        for sk in o.result.result.skipped
+                    ],
                     targets=list(o.result.result.targets),
                 ),
             )
@@ -939,6 +452,12 @@ class ProjectFacts:
     #: What the workspace prep established (:func:`run_workspace_prep`). Empty = it established
     #: nothing, which is what the wheel reads to decide how it sources the program's types.
     prep_facts: dict[str, Any] = field(default_factory=dict)
+
+
+# Authors the shared setup artifact for a run, given the properties it must make checkable. Built by
+# :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for why
+# it runs between extraction and the per-unit fan-out rather than during prep or on first use.
+type SetupAuthor = Callable[[list[PropertyFormulation], PipelineRun], Awaitable[str]]
 
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
@@ -1048,19 +567,29 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             if (hit := await setup_ctx.cache_get(RustSetupArtifact)) is not None:
                 return hit.source
             sandbox_dict = await b.sandbox_spec(workdir)
-            emit = make_emitter()
             fixture = await run.runner(
                 b.task_info(setup),
-                lambda: author_and_compile(
-                    b.module, setup_input, env=run.env, sandbox_dict=sandbox_dict,
-                    workdir=workdir, recursion_limit=run.ctx.recursion_limit,
-                    backend_name=descriptor.name, emit=emit, command_sem=command_sem,
+                lambda: run_session(
+                    module=b.module,
+                    input=setup_input,
+                    kind="setup",
+                    checks=[],
+                    titles=[p.title for p in props],
+                    env=run.env,
+                    ctx=setup_ctx,
+                    run=run,
+                    workdir=workdir,
+                    sandbox_dict=sandbox_dict,
+                    descriptor=descriptor,
+                    emit=make_emitter(),
+                    command_sem=command_sem,
+                    description=setup.label,
                 ),
             )
             if isinstance(fixture, GaveUp):
                 raise RuntimeError(f"{descriptor.name} setup gave up: {fixture.reason}")
-            await setup_ctx.cache_put(RustSetupArtifact(source=fixture))
-            return fixture
+            await setup_ctx.cache_put(RustSetupArtifact(source=fixture.spec))
+            return fixture.spec
 
         return RustStagedFormalizer(author_setup, build)
 

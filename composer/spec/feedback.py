@@ -61,14 +61,14 @@ def property_feedback_judge(
     if system_prompt is None:
         system_prompt = FeedbackSystemTemplate.bind({"sort": env.sort})
 
-    def render_prompt(
-        skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
-    ) -> TemplateInstantiation:
+    def apply_prompt(
+        builder, _cvl: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
+    ):
         return prompt.bind({
             "properties": props,
             "rebuttals": rebuttals,
             "skipped": skipped,
-        })
+        }).render_to(builder.with_initial_prompt_template)
 
     def input_parts(
         cvl: str, _skipped: Sequence[SkippedProperty], _rebuttals: Sequence[Rebuttal]
@@ -87,8 +87,8 @@ def property_feedback_judge(
         feedback_thunk=build_feedback_judge(
             ctx=ctx,
             env=env,
-            system_prompt=system_prompt,
-            render_prompt=render_prompt,
+            apply_system=lambda b: system_prompt.render_to(b.with_sys_prompt_template),
+            apply_prompt=apply_prompt,
             input_parts=input_parts,
             readback=get_cvl(JudgeState),
             description="Property feedback judge",

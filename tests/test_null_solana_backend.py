@@ -90,7 +90,7 @@ async def test_formalize_echoes_properties_into_result():
 
     assert isinstance(result, NullResult)
     # Every property is echoed back verbatim as its own single-rule mapping.
-    assert result.property_units() == [
+    assert result.property_checks() == [
         ("balance_conserved", ["balance_conserved"]),
         ("only_authority_withdraws", ["only_authority_withdraws"]),
     ]
@@ -112,7 +112,7 @@ async def test_formalize_with_no_properties_records_empty():
         "batch", _unit(), [], cast(Any, None), cast(Any, None)
     )
     assert isinstance(result, NullResult)
-    assert result.property_units() == []
+    assert result.property_checks() == []
     assert "0 properties" in result.commentary
 
 

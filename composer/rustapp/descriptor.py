@@ -198,14 +198,29 @@ class AppDescriptor(WireModel):
     #: Default to the fail-closed ``launcher`` sandbox provider (still overridable by
     #: ``COMPOSER_SANDBOX_PROVIDER``). Set by any wheel that runs untrusted native toolchains.
     confine_by_default: bool
-    #: Human noun for one formalized unit in the console/TUI summary ("instruction" for
+    #: Human noun for one formalized component in the console/TUI summary ("instruction" for
     #: Crucible). ``None`` → "component"; read it through :meth:`unit_noun`.
     component_noun: str | None
+    #: What this backend calls one check *to the model* ("rule", "harness function", "invariant") —
+    #: the word the authoring prompts use throughout. ``None`` → "check"; read it through
+    #: :meth:`check_label`. Declared rather than fixed because an author writes better when the
+    #: prompt speaks its domain's language.
+    check_noun: str | None
+    #: What an author may cite when rebutting the judge's prior-round feedback — the closed set the
+    #: rebuttal tool's ``evidence_type`` is built from. Declared per wheel because the evidence a
+    #: backend can produce is a property of that backend.
+    evidence_kinds: list[str]
 
     def unit_noun(self, *, plural: bool = False) -> str:
         """The noun for a formalized unit, with the generic default applied — so no frontend
         spells the ``or "component"`` fallback (nor the pluralization) itself."""
         noun = self.component_noun or "component"
+        return f"{noun}s" if plural else noun
+
+    def check_label(self, *, plural: bool = False) -> str:
+        """The noun for one check, with the generic default applied — so no prompt spells the
+        ``or "check"`` fallback (nor the pluralization) itself."""
+        noun = self.check_noun or "check"
         return f"{noun}s" if plural else noun
 
     def ordered_phases(self) -> list[PhaseSpec]:

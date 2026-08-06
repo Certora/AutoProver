@@ -22,10 +22,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use autoprover_sdk::args::AppArgs;
-use autoprover_sdk::authoring::{AuthorInput, Failure, Prompt, Property};
+use autoprover_sdk::authoring::{AuthorInput, Prompt, Property};
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::finalize::{ComponentOutcome, FinalizeComponent, FinalizeInput};
-use autoprover_sdk::outcome::{CompileResult, Target, Unit, ValidateOutcome};
+use autoprover_sdk::outcome::{Check, CompileResult, SkippedProperty, Target, ValidateOutcome};
 use autoprover_sdk::prep::{SandboxGrants, WorkspacePrep};
 use autoprover_sdk::sandbox::Sandbox;
 
@@ -40,7 +40,6 @@ enum WireType {
     // Outbound — the host sends these, so this side only ever deserializes them.
     AppArgs,
     AuthorInput,
-    Failure,
     Target,
     FinalizeInput,
     /// The confinement wrapper, mirrored by a `TypedDict` rather than a pydantic model
@@ -51,13 +50,14 @@ enum WireType {
     CompileResult,
     ValidateOutcome,
     Prompt,
-    Units,
+    Checks,
     WorkspacePrep,
     SandboxGrants,
     // Nested — never a whole message. Addressable anyway so the field-set check can generate one on
     // its own and compare its keys against the host's mirror, rather than having to find them at
     // some depth inside a parent, below opaque payloads whose keys are not field names at all.
     Property,
+    SkippedProperty,
     FinalizeComponent,
     ComponentOutcome,
 }
@@ -78,7 +78,6 @@ fn dispatch<O: Op>(ty: WireType, op: O) -> Result<Value, Fault> {
     match ty {
         WireType::AppArgs => op.run::<AppArgs>(),
         WireType::AuthorInput => op.run::<AuthorInput>(),
-        WireType::Failure => op.run::<Failure>(),
         WireType::Target => op.run::<Target>(),
         WireType::FinalizeInput => op.run::<FinalizeInput>(),
         WireType::Sandbox => op.run::<Sandbox>(),
@@ -86,10 +85,11 @@ fn dispatch<O: Op>(ty: WireType, op: O) -> Result<Value, Fault> {
         WireType::CompileResult => op.run::<CompileResult>(),
         WireType::ValidateOutcome => op.run::<ValidateOutcome>(),
         WireType::Prompt => op.run::<Prompt>(),
-        WireType::Units => op.run::<Vec<Unit>>(),
+        WireType::Checks => op.run::<Vec<Check>>(),
         WireType::WorkspacePrep => op.run::<WorkspacePrep>(),
         WireType::SandboxGrants => op.run::<SandboxGrants>(),
         WireType::Property => op.run::<Property>(),
+        WireType::SkippedProperty => op.run::<SkippedProperty>(),
         WireType::FinalizeComponent => op.run::<FinalizeComponent>(),
         WireType::ComponentOutcome => op.run::<ComponentOutcome>(),
     }

@@ -63,13 +63,13 @@ class NullResult(BaseModel):
     property_rules: list[tuple[str, list[str]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
 
-    def property_units(self) -> list[tuple[str, list[str]]]:
+    def property_checks(self) -> list[tuple[str, list[str]]]:
         return [(t, list(u)) for t, u in self.property_rules]
 
     @property
     def artifact_text(self) -> str:
         return json.dumps(
-            {"commentary": self.commentary, "properties": self.property_units()}, indent=2
+            {"commentary": self.commentary, "properties": self.property_checks()}, indent=2
         )
 
     @property
@@ -94,7 +94,7 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
     def __init__(self, project_root: str):
         super().__init__(
             project_root,
-            "property_units",
+            "property_checks",
             deliverable_dir="certora/solana_null",
             internal_dir=".certora_internal/solana_null",
             report_dir="certora/solana_null/reports",

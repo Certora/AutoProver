@@ -2,16 +2,16 @@
 //! AutoProver [`Backend`] on `autoprover-sdk`. It is intentionally not a real
 //! verifier: it authors a "spec" from an LLM turn, treats compilation as a no-op,
 //! and validates every unit as GOOD — enough to exercise the Python host + FFI
-//! round-trip (descriptor, units, author_prompt, compile, validate) without any real
+//! round-trip (descriptor, checks, author_prompt, compile, validate) without any real
 //! toolchain. A production backend keeps this exact shape and swaps the callouts for
 //! real ones (see `docs/rust-applications.md`).
 
-use autoprover_sdk::authoring::{AuthorInput, Failure, Prompt};
+use autoprover_sdk::authoring::{AuthorInput, Prompt};
 use autoprover_sdk::descriptor::{
-    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
-    PhaseSpec,
+    default_evidence_kinds, AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode,
+    EventKind, PhaseRole, PhaseSpec,
 };
-use autoprover_sdk::outcome::{CompileResult, Outcome, Target, Unit, ValidateOutcome};
+use autoprover_sdk::outcome::{Check, CompileResult, Outcome, Target, ValidateOutcome};
 use autoprover_sdk::sandbox::Workspace;
 use autoprover_sdk::Backend;
 
@@ -65,31 +65,33 @@ impl Backend for EchoApp {
             serialize_toolchain: false,
             confine_by_default: false,
             component_noun: None,
+            // The demo authors `rule_<slug>` checks, so that is what its prompts should call them.
+            check_noun: Some("rule".into()),
+            evidence_kinds: default_evidence_kinds(),
         }
     }
 
-    fn units(&self, input: &AuthorInput) -> Vec<Unit> {
+    fn checks(&self, input: &AuthorInput) -> Vec<Check> {
         input
             .props
             .iter()
             .enumerate()
             .map(|(i, p)| {
                 let slug = if p.slug.is_empty() { format!("p{i}") } else { p.slug.clone() };
-                Unit { property: p.title.clone(), unit: format!("rule_{slug}"), target: None }
+                Check { property: p.title.clone(), name: format!("rule_{slug}"), target: None }
             })
             .collect()
     }
 
-    fn author_prompt(&self, input: &AuthorInput, failure: Option<&Failure>) -> Prompt {
+    fn author_prompt(&self, input: &AuthorInput) -> Prompt {
         let titles: Vec<&str> = input.props.iter().map(|p| p.title.as_str()).collect();
-        let mut instruction = format!(
-            "Author a spec with a rule per property: {}. Return the spec source only.",
-            titles.join(", ")
-        );
-        if let Some(f) = failure {
-            instruction.push_str(&format!("\n\nThe previous attempt was rejected: {}", f.errors));
+        Prompt {
+            system: None,
+            instruction: format!(
+                "Author a spec with a rule per property: {}.",
+                titles.join(", ")
+            ),
         }
-        Prompt { system: None, instruction }
     }
 
     fn compile(&self, _input: &AuthorInput, _spec: &str, _ws: &Workspace) -> CompileResult {
@@ -104,7 +106,7 @@ impl Backend for EchoApp {
         target: &Target,
         _ws: &Workspace,
     ) -> ValidateOutcome {
-        // Self-contained: any well-formed spec builds, so every unit the target covers "passes".
+        // Self-contained: any well-formed spec builds, so every check the target covers "passes".
         target.all(Outcome::Good, None)
     }
 }

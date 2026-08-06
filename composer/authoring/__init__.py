@@ -12,9 +12,10 @@ foundry test file, a Rust harness — under the same protocol whichever backend 
   **as it now stands** — so an edit after a green checker run invalidates that run.
 
 What a backend supplies is the part that genuinely differs: what makes a spec valid at put time,
-which tools gate it, and what ground truth the property→unit mapping is checked against. Those are
+which tools gate it, and what ground truth the property→check mapping is checked against. Those are
 parameters here, not subclasses; the per-backend assembly (which tools, which prompts, which cache)
 stays in the backend's own entry point.
 
-Nothing in this package knows what a CVL rule, a foundry test or a Rust unit *is*.
+Nothing in this package knows what a CVL rule, a foundry test or a fuzz harness function *is* —
+only that each is a *check* carrying a property.
 """

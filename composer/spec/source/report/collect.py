@@ -25,12 +25,12 @@ _log = logging.getLogger(__name__)
 class ReportableResult(Protocol):
     """The backend-agnostic view the report needs of a successful generation result. Both
     `GeneratedCVL` and `GeneratedFoundryTest` satisfy it: ``skipped`` are the properties the author
-    declined, and ``property_units()`` is the property->formalizing-units adapter (CVL rules /
+    declined, and ``property_checks()`` is the property->checks adapter (CVL rules /
     foundry tests — the underlying field names differ, hence the method rather than structural
     matching)."""
     skipped: list[SkippedProperty]
 
-    def property_units(self) -> list[tuple[PropertyTitle, list[RuleName]]]: ...
+    def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]: ...
 
     @property
     def output_link(self) -> str | None:
@@ -136,7 +136,7 @@ async def collect[R: ReportableResult](
         unit_file = inp.formalized.unit_file
         run_link = inp.formalized.run_link
         skip_reasons = {s.property_title: s.reason for s in res.skipped}
-        mapping = dict(res.property_units())
+        mapping = dict(res.property_checks())
 
         def _ref(unit_name: str) -> RuleRef:
             v = verdicts.get(unit_name)

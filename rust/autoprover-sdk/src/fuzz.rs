@@ -141,6 +141,8 @@ impl<'a> Arbitrary<'a> for AppDescriptor {
             serialize_toolchain: bool::arbitrary(u)?,
             confine_by_default: bool::arbitrary(u)?,
             component_noun: Option::arbitrary(u)?,
+            check_noun: Option::arbitrary(u)?,
+            evidence_kinds: Vec::<String>::arbitrary(u)?,
         })
     }
 }

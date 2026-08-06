@@ -45,7 +45,7 @@ def merge_skips(
 
 
 def merge_expected_failures(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
-    """State reducer for the unit-name → reason map of units expected to fail.
+    """State reducer for the check-name → reason map of checks expected to fail.
 
     An empty reason removes the marking — the marking tool rejects an empty reason at the tool
     boundary, so an empty value can only mean the unmarking tool's delete."""
@@ -107,19 +107,20 @@ def check_completion(
 
 @dataclass(frozen=True)
 class MappingVocab:
-    """How one backend words the property→unit mapping it validates at publish time. Only wording:
+    """How one backend words the property→check mapping it validates at publish time. Only wording:
     the checks themselves are the same everywhere."""
 
-    #: What one unit is called to the agent — "rule", "test", "unit".
-    unit_noun: str
+    #: What one check is called to the agent — "rule", "test", "check". Per-backend because the
+    #: model does better with its own domain's word than with the framework's generic one.
+    check_noun: str
     #: The name of the publish tool's mapping argument, so a rejection names the field to fix.
     field_name: str
-    #: Where ground truth came from, for the message that rejects a unit that never ran. Only read
-    #: when :func:`validate_unit_mapping` is given a ``ran`` set.
+    #: Where ground truth came from, for the message that rejects a check that never ran. Only read
+    #: when :func:`validate_check_mapping` is given a ``ran`` set.
     ran_source: str = ""
 
 
-def validate_unit_mapping(
+def validate_check_mapping(
     mapping: Sequence[tuple[str, Sequence[str]]],
     skipped: list[SkippedProperty],
     titles: list[str],
@@ -127,27 +128,27 @@ def validate_unit_mapping(
     *,
     ran: Sequence[str] | None = None,
 ) -> str | None:
-    """Validate the property→units mapping declared at completion time. None if valid, otherwise one
-    message enumerating every problem.
+    """Validate the property→checks mapping declared at completion time. None if valid, otherwise
+    one message enumerating every problem.
 
-    Always checked: every non-skipped property is mapped to at least one non-empty unit name, no
+    Always checked: every non-skipped property is mapped to at least one non-empty check name, no
     skipped property is mapped, every referenced title is one of the batch's, and no title appears
     twice.
 
-    ``ran`` is the set of unit names the gating run actually executed, when the backend's checker
+    ``ran`` is the set of check names the gating run actually executed, when the backend's checker
     reports them (forge names every test it ran; a backend whose checker does not is passed
     ``None``). Given it, the mapping is checked against ground truth in *both* directions — no
-    claimed unit that didn't run, no unit that ran without being tied back to a property — which is
-    what stops the agent from mapping a property to a unit it never wrote.
+    claimed check that didn't run, no check that ran without being tied back to a property — which
+    is what stops the agent from mapping a property to a check it never wrote.
     """
     valid_titles = set(titles)
     skipped_titles = {s.property_title for s in skipped}
     ran_names = set(ran) if ran is not None else None
-    noun = vocab.unit_noun
+    noun = vocab.check_noun
     errors: list[str] = []
     mapped: set[str] = set()
     claimed: set[str] = set()
-    for title, units in mapping:
+    for title, names_declared in mapping:
         if title not in valid_titles:
             errors.append(f"Unknown property title {title!r} (not one of the batch's properties).")
             continue
@@ -161,7 +162,7 @@ def validate_unit_mapping(
                 "in the mapping (un-skip it or remove it)."
             )
             continue
-        names = [u.strip() for u in units if u.strip()]
+        names = [n.strip() for n in names_declared if n.strip()]
         if not names:
             errors.append(f"Property {title!r} must map to at least one non-empty {noun} name.")
             continue

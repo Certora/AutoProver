@@ -146,28 +146,3 @@ pub struct Prompt {
     pub system: Option<String>,
     pub instruction: String,
 }
-
-/// Whether a draft was rejected by the toolchain or by the optional LLM judge — so a
-/// re-author can frame the retry correctly (a judge rejection is NOT a build failure: the
-/// draft compiled).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
-pub enum FailureKind {
-    #[default]
-    Compile,
-    Judge,
-}
-
-/// Why a draft was rejected — the failing `draft` plus the compiler errors / judge feedback
-/// — fed into the next `author_prompt` as revise context. `draft` is carried because each
-/// authoring turn is fresh (no LLM-side memory of the prior attempt). `kind` says which gate
-/// rejected it so the revise prompt can distinguish compiler errors from review feedback.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
-#[serde(deny_unknown_fields)]
-pub struct Failure {
-    pub draft: String,
-    pub errors: String,
-    pub kind: FailureKind,
-}
