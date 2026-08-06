@@ -647,9 +647,9 @@ def test_findings_prompt_lists_all_properties_a_rule_formalizes():
     user = load_jinja_template(
         "autoprove_report_findings_prompt.j2",
         contract_name="Vault", rule_name="allowDeposits_revert_characteristic",
-        properties=[_prop("revert_on_non_admin", "reverts if caller is not an admin"),
-                    _prop("revert_on_zero_actor", "reverts if allowedActor is address(0)")],
-        groups=[], analysis=None, counterexample="<cex/>",
+        properties=[_fp("C", "revert_on_non_admin", [], desc="reverts if caller is not an admin"),
+                    _fp("C", "revert_on_zero_actor", [], desc="reverts if allowedActor is address(0)")],
+        groups=[], instances=[RuleEvidence(analysis="the admin check is skipped", counterexample="<cex/>")],
     )
     assert "reverts if caller is not an admin" in user
     assert "reverts if allowedActor is address(0)" in user
