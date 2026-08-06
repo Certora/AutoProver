@@ -21,7 +21,8 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
 from composer.spec.types import PropertyFormulation, PropertyType
-from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping, SkippedProperty
+from composer.authoring.state import SkippedProperty
+from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping
 
 from composer.pipeline.core import Delivered
 

@@ -24,7 +24,7 @@ echoprover = pytest.importorskip(
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.wire import ComponentInput, Property, Target, Unit, Verdict
-from composer.spec.cvl_generation import SkippedProperty
+from composer.authoring.state import SkippedProperty
 from composer.spec.source.report.schema import Outcome
 from tests.conftest import wire_verdict
 

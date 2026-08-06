@@ -8,7 +8,7 @@ feedback judge, the publish gate, and the batch entry point
 
 Workflow shape:
 
-* Single ``curr_test: str`` buffer per batch (one ``.t.sol`` file), written
+* Single ``curr_spec`` buffer per batch (one ``.t.sol`` file), written
   via ``put_test_raw``. No put-time compile check; ``forge_test`` is the gate.
 * A feedback judge (``feedback_tool``) reviews the draft against the batch's
   properties. Publish requires both a green unseeded ``forge_test`` run AND a
@@ -24,48 +24,49 @@ Workflow shape:
 from dataclasses import dataclass
 import asyncio
 from typing import (
-    Awaitable, Callable, Literal, NotRequired, Protocol, override
+    Callable, Literal, Sequence, overload, override
 )
 from typing_extensions import TypedDict
 
-from langgraph.graph import MessagesState
+from langchain_core.tools import BaseTool
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from graphcore.graph import FlowInput, tool_state_update
+from graphcore.graph import tool_state_update
 from graphcore.summary import SummaryConfig
 from graphcore.tools.schemas import (
     WithAsyncDependencies, WithAsyncImplementation, WithImplementation,
     WithInjectedId, WithInjectedState,
 )
+from composer.authoring.buffer import (
+    SpecBuffer, SpecBufferSet, apply_spec_update, get_spec_tool,
+)
+from composer.authoring.judge import (
+    FeedbackThunk, JudgeState, RebuttalBase, build_feedback_judge,
+)
+from composer.authoring.state import SkippedProperty
+from composer.authoring.tools import give_up_tool
 from composer.pipeline.core import GaveUp
 from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
-from composer.spec.cvl_generation import (
-    PropertyFeedbackProtocol, RebuttalBase, SkippedProperty,
-)
-from composer.spec.feedback import PropertyFeedback
-from composer.spec.gen_types import TypedTemplate
-from composer.spec.graph_builder import bind_standard, run_to_completion
+from composer.spec.gen_types import TemplateInstantiation, TypedTemplate
+from composer.spec.graph_builder import run_to_completion
 from composer.spec.types import PropertyFormulation
 from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.spec.service_host import ServiceHost
-from composer.spec.util import uniq_thread_id
-from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.ui.tool_display import (
-    suppress_ack, tool_display,
+    ToolDisplay, suppress_ack, tool_display,
 )
 
 from composer.foundry.runner import get_forge_test_tool
+from composer.authoring.state import make_validation_stamper
 from composer.foundry.state import (
     FEEDBACK,
     FORGE_TEST_VALIDATION_KEY,
     FOUNDRY_JUDGE_KEY,
-    FoundryTestExtra,
     FoundryGenerationInput,
     FoundryGenerationState,
     PropertyTestMapping,
     check_foundry_completion,
-    make_foundry_validation_stamper,
     validate_property_tests,
 )
 
@@ -113,11 +114,11 @@ type BatchFoundryResult = GeneratedFoundryTest | GaveUp
     label=lambda p: f"Putting test draft ({len(p.get('test_source', ''))} chars)",
     result=suppress_ack("Put test result", ("Accepted",)),
 )
-class PutTestRaw(WithImplementation[Command], WithInjectedId):
+class PutTestRaw(WithImplementation[Command | str], WithInjectedId):
     """
     Put a foundry test file into the working buffer.
 
-    The provided source replaces the entire ``curr_test`` buffer. There is no
+    The provided source replaces the entire test buffer. There is no
     put-time compile check — call ``forge_test`` to verify the draft actually
     builds and passes. ``forge_test``'s green stamp is invalidated by any
     subsequent ``put_test_raw``, so call ``forge_test`` *after* you're done
@@ -133,23 +134,34 @@ class PutTestRaw(WithImplementation[Command], WithInjectedId):
     )
 
     @override
-    def run(self) -> Command:
-        return tool_state_update(
-            tool_call_id=self.tool_call_id,
-            content="Accepted",
-            curr_test=self.test_source,
-        )
+    def run(self) -> Command | str:
+        return apply_spec_update(tool_call_id=self.tool_call_id, text=self.test_source)
 
 
-@tool_display("Reading current test draft", None)
-class GetTestTool(WithInjectedState[FoundryTestExtra], WithImplementation):
-    """
+_GET_TEST_DESCRIPTION = """
     Retrieve the textual representation of the current foundry test.
     """
-    def run(self) -> str:
-        if self.state["curr_test"] is None:
-            return "No test draft written"
-        return self.state["curr_test"]
+
+
+@overload
+def get_test_tool[S: SpecBufferSet](ty: type[S]) -> BaseTool: ...
+
+
+@overload
+def get_test_tool[S: SpecBuffer](ty: type[S]) -> BaseTool: ...
+
+
+def get_test_tool(ty: type) -> BaseTool:
+    """The read-back tool over the test buffer, named ``get_test`` for both the author and its
+    judge."""
+    return get_spec_tool(
+        ty,
+        name="get_test",
+        description=_GET_TEST_DESCRIPTION,
+        missing="No test draft written",
+        display=ToolDisplay("Reading current test draft", None),
+        title="GetTestTool",
+    )
 
 @tool_display(
     lambda p: f"Skipping property `{p.get('property_title', '?')}`",
@@ -225,7 +237,7 @@ class _UnskipSchema(
                     f"Unknown property title {self.property_title!r}. Must be one "
                     f"of: {', '.join(titles)}.",
                 )
-        # Sentinel reason "" — _merge_skips drops empty-reason entries.
+        # Sentinel reason "" — merge_skips drops empty-reason entries.
         skip = SkippedProperty(property_title=self.property_title, reason="")
         return tool_state_update(
             self.tool_call_id,
@@ -321,19 +333,9 @@ class Rebuttal(RebuttalBase):
     )
 
 
-type _FeedbackImplThunk = Callable[
-    [str, list[SkippedProperty], list[Rebuttal], str],
-    Awaitable[PropertyFeedbackProtocol],
-]
-"""``(test_source, skipped, rebuttals, within_tool) -> PropertyFeedback``.
-``within_tool`` is the calling ``FeedbackTool``'s ``tool_call_id``, plumbed
-through to the judge's ``run_to_completion`` so its UI panel anchors under
-the parent tool widget."""
-
-
 @dataclass
 class FeedbackDependencies:
-    thunk: _FeedbackImplThunk
+    thunk: FeedbackThunk[Rebuttal]
     stamper: Callable[[FoundryGenerationState], dict[str, str]]
 
 
@@ -369,11 +371,11 @@ class FeedbackTool(
 
     @override
     async def run(self) -> Command | str:
-        if self.state["curr_test"] is None:
+        if self.state["curr_spec"] is None:
             return "No test written"
         with self.tool_deps() as deps:
             res = await deps.thunk(
-                self.state["curr_test"],
+                self.state["curr_spec"],
                 self.state["skipped"],
                 self.rebuttals,
                 self.tool_call_id,
@@ -388,62 +390,58 @@ class FeedbackTool(
             return result
 
 
+@component_context
+class _FoundryJudgeParams(TypedDict):
+    """Render variables for ``foundry_feedback_prompt.j2``.
+
+    ``sort`` is what the shared application-context partial gates its "pre-existing codebase being
+    extended" wording on. Foundry only ever verifies an existing project, so it is fixed here —
+    naming it also keeps the template renderable under ``COMPOSER_STRICT_TEMPLATES``, which is what
+    the fuzzer runs it as now that the template is declared."""
+    properties: list[PropertyFormulation]
+    context: ContractComponentInstance | None
+    sort: Literal["existing"]
+
+
+_FoundryJudgeTemplate = TypedTemplate[_FoundryJudgeParams]("foundry_feedback_prompt.j2")
+class _NoParams(TypedDict):
+    pass
+
+
+_FoundryJudgeSystemTemplate = TypedTemplate[_NoParams]("foundry_property_judge_system_prompt.j2")
+
+
 def _build_feedback_thunk(
     judge_ctx: WorkflowContext[FoundryJudge],
     env: ServiceHost,
     props: list[PropertyFormulation],
     component: ContractComponentInstance | None,
-) -> _FeedbackImplThunk:
-    """Compile the feedback-judge graph and wrap it in the thunk
-    ``FeedbackTool`` invokes. The judge follows the CVL property judge's
-    review protocol (rough draft + persistent memory + read-back of the
-    artifact under review) with the foundry tool surface: project source
-    tools + the cheatcode RAG."""
+) -> FeedbackThunk[Rebuttal]:
+    """The foundry feedback judge. The shared judge supplies the review protocol (rough draft +
+    persistent memory + enforced read-back of the file under review); what is foundry's own is the
+    prompt pair and the fact that the skips and rebuttals are stated as input text rather than
+    rendered into the prompt template."""
 
-    class JudgeExtra(RoughDraftState):
-        curr_test: str
+    def render_prompt(
+        _skipped: Sequence[SkippedProperty], _rebuttals: Sequence[Rebuttal]
+    ) -> TemplateInstantiation:
+        return _FoundryJudgeTemplate.bind({
+            "properties": props, "context": component, "sort": "existing",
+        })
 
-    class ST(MessagesState, JudgeExtra):
-        result: NotRequired[PropertyFeedback]
-
-    class TestJudgeInput(FlowInput, JudgeExtra):
-        pass
-
-    def did_rough_draft_read(s: ST, _) -> str | None:
-        if not s["did_read"]:
-            return "Completion REJECTED: never read rough draft for review"
-        return None
-
-    workflow = bind_standard(
-        env.builder_heavy().with_tools(env.source_tools).with_tools(env.rag_tools),
-        ST,
-        validator=did_rough_draft_read,
-    ).with_input(
-        TestJudgeInput
-    ).with_initial_prompt_template(
-        "foundry_feedback_prompt.j2", properties=props, context=component,
-    ).with_sys_prompt_template(
-        "foundry_property_judge_system_prompt.j2"
-    ).with_tools(
-        [*get_rough_draft_tools(ST), judge_ctx.get_memory_tool(), GetTestTool.as_tool("get_test")]
-    ).compile_async()
-
-    async def thunk(
-        test_source: str,
-        skipped: list[SkippedProperty],
-        rebuttals: list[Rebuttal],
-        within_tool: str,
-    ) -> PropertyFeedbackProtocol:
-        input_parts: list[str | dict] = [
+    def input_parts(
+        test_source: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
+    ) -> list[str | dict]:
+        parts: list[str | dict] = [
             "The proposed foundry test file is",
             test_source,
         ]
         if skipped:
-            input_parts.append("The following properties were explicitly skipped by the author:")
+            parts.append("The following properties were explicitly skipped by the author:")
             for s in skipped:
-                input_parts.append(f"  Property {s.property_title}: {s.reason}")
+                parts.append(f"  Property {s.property_title}: {s.reason}")
         if rebuttals:
-            input_parts.append(
+            parts.append(
                 "The author has filed the following rebuttals against feedback "
                 "from prior rounds. Evaluate each per the rebuttal rules in your "
                 "instructions. Empirical evidence types (`compilation_failure`, "
@@ -452,26 +450,23 @@ def _build_feedback_thunk(
                 "not a veto."
             )
             for i, r in enumerate(rebuttals, 1):
-                input_parts.append(
+                parts.append(
                     f"  Rebuttal {i} [{r.evidence_type}]\n"
                     f"    Addressing: {r.prior_feedback_reference}\n"
                     f"    Evidence: {r.evidence}"
                 )
-        res = await run_to_completion(
-            workflow,
-            TestJudgeInput(
-                input=input_parts, curr_test=test_source,
-                memory=None, did_read=False,
-            ),
-            thread_id=uniq_thread_id("foundry-feedback"),
-            recursion_limit=judge_ctx.recursion_limit,
-            description="Foundry test feedback judge",
-            within_tool=within_tool,
-        )
-        assert "result" in res
-        return res["result"]
+        return parts
 
-    return thunk
+    return build_feedback_judge(
+        ctx=judge_ctx,
+        env=env,
+        system_prompt=_FoundryJudgeSystemTemplate.bind({}),
+        render_prompt=render_prompt,
+        input_parts=input_parts,
+        readback=get_test_tool(JudgeState),
+        description="Foundry test feedback judge",
+        thread_prefix="foundry-feedback",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -533,25 +528,10 @@ class PublishResultTool(
         )
 
 
-@tool_display(
-    label=lambda p: f"Giving up on foundry-test generation: {p['reason']}",
-    result=None,
-)
-class GiveUpTool(WithImplementation[Command], WithInjectedId):
-    """
+_GIVE_UP_DESCRIPTION = """
     Last-resort exit when you've exhausted other mechanisms to complete
     the task. The batch will be reported as failed with your ``reason``.
     """
-    reason: str = Field(description="Why you are giving up on this batch")
-
-    @override
-    def run(self) -> Command:
-        return tool_state_update(
-            self.tool_call_id,
-            "Accepted",
-            failed=True,
-            result=self.reason,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +542,7 @@ class GiveUpTool(WithImplementation[Command], WithInjectedId):
 class FoundryGenerationSummaryConfig(SummaryConfig[FoundryGenerationState]):
     """Summarization prompts for the foundry author when the context window
     fills up. Same role as ``PropertyGenerationConfig`` in the CVL author,
-    reworded for the foundry workflow (``curr_test`` not ``curr_spec``)."""
+    reworded for the foundry workflow (a test file, not a CVL spec)."""
 
     @override
     def get_summarization_prompt(self, state: FoundryGenerationState) -> str:
@@ -643,7 +623,7 @@ async def batch_foundry_test_generation(
 
     The graph terminates when the agent calls ``result`` (publish) or
     ``give_up``. Both ``forge_test`` and the feedback judge must have stamped
-    the *current* ``curr_test`` for ``result`` to be accepted.
+    the *current* buffer for ``result`` to be accepted.
 
     Caller responsibilities:
 
@@ -675,7 +655,7 @@ async def batch_foundry_test_generation(
     judge_ctx = ctx.child(FOUNDRY_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=_build_feedback_thunk(judge_ctx, env, props, component),
-        stamper=make_foundry_validation_stamper(FEEDBACK),
+        stamper=make_validation_stamper(FEEDBACK),
     )
 
     builder = (
@@ -687,7 +667,7 @@ async def batch_foundry_test_generation(
         .with_tools(env.rag_tools)
         .with_tools([
             PutTestRaw.as_tool("put_test_raw"),
-            GetTestTool.as_tool("get_test"),
+            get_test_tool(FoundryGenerationState),
             _RecordSkipSchema.bind(titles).as_tool("record_skip"),
             _UnskipSchema.bind(titles).as_tool("unskip_property"),
             ExpectTestFailure.as_tool("expect_test_failure"),
@@ -695,7 +675,11 @@ async def batch_foundry_test_generation(
             forge_test_tool,
             FeedbackTool.bind(feedback_deps).as_tool("feedback_tool"),
             PublishResultTool.bind(titles).as_tool("result"),
-            GiveUpTool.as_tool("give_up"),
+            give_up_tool(
+                name="give_up", description=_GIVE_UP_DESCRIPTION,
+                label="foundry-test generation",
+                reason_description="Why you are giving up on this batch",
+            ),
             ctx.get_memory_tool(),
         ])
         .with_sys_prompt_template("foundry_property_generation_system_prompt.j2")
@@ -705,7 +689,7 @@ async def batch_foundry_test_generation(
     graph = builder.compile_async()
 
     init_state = FoundryGenerationInput(
-        curr_test=None,
+        curr_spec=None,
         input=[],
         required_validations=[FORGE_TEST_VALIDATION_KEY, FEEDBACK],
         skipped=[],
@@ -729,7 +713,7 @@ async def batch_foundry_test_generation(
     assert res_state["failed"] is not None
     if res_state["failed"]:
         return GaveUp(reason=res_state["result"])
-    draft = res_state["curr_test"]
+    draft = res_state["curr_spec"]
     assert draft is not None
     return GeneratedFoundryTest(
         commentary=res_state["result"],
