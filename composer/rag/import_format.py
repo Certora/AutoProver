@@ -12,7 +12,6 @@ length. See the design doc for why this is the right cut.
 """
 
 import enum
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,20 +21,28 @@ SCHEMA_VERSION = 1
 
 
 class BlockKind(str, enum.Enum):
-    """The two content kinds a section is built from."""
+    """The two content kinds a section is built from.
 
+    They differ in how the importer is allowed to *cut* the body, and whether the body reaches the
+    embedding at all."""
+
+    #: Prose. Lands in the chunk verbatim and is splittable: an overlong body is broken at a spaCy
+    #: sentence boundary rather than mid-sentence.
     TEXT = "text"
+    #: A code sample. Stays atomic — never sentence-split, and never embedded as prose: the body is
+    #: held aside in the chunk's ``code_refs`` and a ``<code-ref-N>`` placeholder takes its place in
+    #: the chunk text, for retrieval to substitute back.
     CODE = "code"
 
 
 class Block(BaseModel):
-    """One ordered piece of a section: prose (``text``) or a code sample (``code``).
+    """One ordered piece of a section.
 
-    Maps 1:1 onto the two ``BlockBuilder`` operations the importer drives — ``text`` →
-    ``append_text`` (spaCy-split prose), ``code`` → ``add_code`` (gets a ``<code-ref-N>`` tag
-    assigned by the importer, so producers never touch the tag scheme)."""
+    Maps 1:1 onto the two ``BlockBuilder`` operations the importer drives — :attr:`BlockKind.TEXT`
+    → ``append_text``, :attr:`BlockKind.CODE` → ``add_code`` (which assigns the ``<code-ref-N>``
+    tag, so producers never touch the tag scheme)."""
 
-    kind: Literal["text", "code"]
+    kind: BlockKind
     body: str
 
 
