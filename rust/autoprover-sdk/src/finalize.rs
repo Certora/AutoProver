@@ -23,7 +23,7 @@ pub struct Delivered {
     /// map.
     pub property_checks: Vec<(String, Vec<String>)>,
     /// The properties the author declined to formalize, each with its justification. Disjoint from
-    /// `property_units`: the publish gate rejects a mapping that claims a skipped property.
+    /// `property_checks`: the publish gate rejects a mapping that claims a skipped property.
     pub skipped: Vec<SkippedProperty>,
     #[serde(deserialize_with = "crate::required::present")]
     pub unit_file: Option<String>,
