@@ -116,8 +116,11 @@ def make_emitter() -> Callable[[str, dict], None]:
 
 
 def unique_slugs(props: list[PropertyFormulation]) -> list[str]:
-    """One unique kebab slug per property (basis for its unit/feature name). Titles are unique
-    at extraction; a slug collision (punctuation/casing) gets a numeric suffix."""
+    """One unique kebab slug per property — what a wheel names that property's check after. Titles
+    are unique at extraction; a slug collision (punctuation/casing) gets a numeric suffix.
+
+    Not the artifact's name: a deliverable file is named from the *component's* slug
+    (:meth:`RustBackend.to_artifact_id`), which is a different thing entirely."""
     slugs: list[str] = []
     seen: dict[str, int] = {}
     for p in props:
@@ -129,8 +132,8 @@ def unique_slugs(props: list[PropertyFormulation]) -> list[str]:
 
 
 def _properties(props: list[PropertyFormulation], slugs: list[str]) -> list[Property]:
-    """The wire form of the properties one artifact must make checkable, each with the host-assigned
-    slug that names its unit (see :func:`unique_slugs`)."""
+    """The wire form of the properties one spec must make checkable, each with the host-assigned
+    slug a wheel names its check after (see :func:`unique_slugs`)."""
     return [
         Property(title=p.title, sort=p.sort, description=p.description, slug=s)
         for p, s in zip(props, slugs)
