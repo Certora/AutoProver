@@ -92,7 +92,7 @@ from composer.rustapp.adapter import (
     RustPreparedSystem,
     RustStagedFormalizer,
     confined_target,
-    make_emitter,
+    emit_event,
     source_unit_of,
     unique_slugs,
 )
@@ -173,7 +173,7 @@ __all__ = [
     "SessionResult",
     "run_session",
     "confined_target",
-    "make_emitter",
+    "emit_event",
     "source_unit_of",
     "unique_slugs",
     "RustArtifactStore",
