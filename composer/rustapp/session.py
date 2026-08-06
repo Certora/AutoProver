@@ -6,7 +6,7 @@ Two session kinds, differing only in what gates them and what they publish:
 * a **component** session authors one component's spec, gated by ``validate_spec`` (the wheel's
   ``validate``, run per target), and publishes a property→checks mapping plus the verdicts the
   gating run produced;
-* a **setup** session authors the one shared artifact every component builds on, gated by
+* a **setup** session authors the one shared spec every component builds on, gated by
   ``compile_spec`` (the wheel's ``compile``). It formalizes no properties of its own, so it declares
   no mapping and has nothing to skip.
 
@@ -602,7 +602,7 @@ class PublishSetup(
     WithAsyncImplementation[Command | str],
 ):
     """
-    Publish the shared artifact. Refused unless every required check has accepted the buffer as it
+    Publish the shared spec. Refused unless every required gate has accepted the buffer as it
     now stands.
     """
     commentary: str = Field(description="Human-readable commentary on the artifact you authored")

@@ -56,7 +56,7 @@ pub trait Backend: Send + Sync + 'static {
         None
     }
 
-    /// Compile/typecheck the whole spec once (all units share one build). BLOCKING.
+    /// Compile/typecheck the whole spec once (every check in it shares one build). BLOCKING.
     ///
     /// Also the preflight gate: for [`Authored::Preflight`](crate::authoring::Authored::Preflight)
     /// the `spec` is empty and the wheel supplies its own skeleton, so one implementation covers
@@ -94,7 +94,7 @@ pub trait Backend: Send + Sync + 'static {
     ///
     /// Under [`DeliverableMode::Callout`](crate::descriptor::DeliverableMode::Callout) this renders
     /// the whole source deliverable (Crucible's one crate) — which is why the outcome set carries
-    /// each component's authored spec and targets alongside the setup artifact and the crate.
+    /// each component's authored spec and targets alongside the setup spec and the crate.
     fn finalize(&self, _outcomes: &FinalizeInput) -> BTreeMap<String, String> {
         BTreeMap::new()
     }

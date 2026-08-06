@@ -245,7 +245,7 @@ load ─ entry point ─┬─ preflight  (workspace_prep → toolchain → comp
 ```
 
 The two build-shaped steps are overlapped with the LLM steps that don't need them, and the shared
-setup artifact is authored at the one point in the run where it can be (§4.3).
+setup spec is authored at the one point in the run where it can be (§4.3).
 
 ### 4.1 Load and entry
 
@@ -319,7 +319,7 @@ the `RustFormalizer` built around the result — the artifact is threaded throug
 rather than assigned onto a live formalizer, so the formalizer is constructed once and never
 mutated.
 
-The artifact is **cached** like a formalization result (`RustSetupArtifact`), keyed by
+The artifact is **cached** like a formalization result (`RustSetupSpec`), keyed by
 [`_setup_identity`](../composer/rustapp/adapter.py): the program and its crate, the analyzed model,
 the property set, and whether types come from the crate or a generated IDL. Deliberately not the
 whole input — `args` also carries run knobs (a fuzz budget) that don't change what gets authored.
@@ -366,7 +366,7 @@ sees it — there is nothing to build — so the next prompt is told exactly tha
 `Verdict` (its `message` is the wire `detail`), filling `unit_file` from the component when the
 wheel didn't name one. The store writes the per-component artifacts and metadata (§9), and
 `finalize` receives the whole outcome set as `FinalizeInput` — program, crate, IDL path, the shared
-setup artifact, and per component its `artifact_text`, `property_checks` and the `targets` its
+setup spec, and per component its `artifact_text`, `property_checks` and the `targets` its
 checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
 
@@ -586,7 +586,7 @@ the choice of how the *source* deliverable lands:
 - **`callout`** — the store writes **no** per-component source; it writes the shared metadata and
   returns the mode's `primary` (`{program}`-templated) as the component's report link. The whole
   deliverable comes from `finalize`, which is handed every component's `artifact_text`,
-  `property_checks` and `targets` plus the shared setup artifact, and can therefore assemble one
+  `property_checks` and `targets` plus the shared setup spec, and can therefore assemble one
   artifact (a single crate with a section per property) as the single source of truth for its layout.
 
 The tradeoff of `callout` mode is that the deliverable lands on disk only at finalize, not
@@ -686,7 +686,7 @@ Facts about the seam as it stands, not open design questions:
 - **A skipped property is not re-planned.** `checks()` is asked for once, before authoring; a skip
   removes its checks from the run and from the mapping, but nothing re-derives what the remaining
   checks should be.
-- **Prompt changes don't invalidate caches** — neither the setup artifact's nor the driver's. Clear
+- **Prompt changes don't invalidate caches** — neither the setup spec's nor the driver's. Clear
   the namespace.
 
 ---

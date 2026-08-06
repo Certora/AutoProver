@@ -106,7 +106,7 @@ class _AuthorInputBase(WireModel):
     source_unit: dict[str, Any] = Field(default_factory=dict)
     #: The properties this artifact must make checkable.
     props: list[Property] = Field(default_factory=list)
-    #: The compiled shared setup artifact, for a wheel that declared a
+    #: The compiled shared setup spec, for a wheel that declared a
     #: :class:`~composer.rustapp.descriptor.SetupSpec`.
     setup: str | None = None
     #: What workspace prep established from the wheel's own
@@ -120,7 +120,7 @@ class _AuthorInputBase(WireModel):
     args: dict[str, Any] = Field(default_factory=dict)
 
     def with_props(self, props: list[Property]) -> Self:
-        """This input with ``props`` replaced — the setup artifact's base input plus the properties
+        """This input with ``props`` replaced — the setup spec's base input plus the properties
         it has to make checkable, which only exist after extraction."""
         return self.model_copy(update={"props": props})
 
@@ -138,8 +138,8 @@ class PreflightInput(_AuthorInputBase):
 
 
 class SetupInput(_AuthorInputBase):
-    """Author the one shared artifact every unit builds on, from the analyzed model and *every*
-    unit's properties."""
+    """Author the one shared spec every unit builds on, from the analyzed model and *every* unit's
+    properties."""
 
     kind: Literal["setup"] = "setup"
     #: The analyzed system model. Opaque to the host seam — its shape is the ecosystem's.
@@ -215,7 +215,7 @@ class FinalizeInput(WireModel):
     #: As every authoring callout received it — see :attr:`_AuthorInputBase.prep_facts`.
     prep_facts: dict[str, Any] = Field(default_factory=dict)
     components: list[FinalizeComponent] = Field(default_factory=list)
-    #: The compiled shared setup artifact, when the wheel declared one.
+    #: The compiled shared setup spec, when the wheel declared one.
     setup: str | None = None
 
 
@@ -250,8 +250,9 @@ CompileResult = Annotated[CompileOk | CompileFailed, Field(discriminator="status
 
 
 class Check(WireModel):
-    """One report row: a property title and the backend's name for the check that carries it — a CVL
-    rule, a foundry test, a fuzz harness function. A check yields a :class:`Verdict`.
+    """One check: a property title and the backend's name for the thing that verifies it — a CVL
+    rule, a foundry test, a fuzz harness function. A check yields a :class:`Verdict` and becomes one
+    row of the report.
 
     ``target`` names the :class:`Target` this check runs under — one invocation of the checker.
     Several checks may share one, so the host runs each distinct target once and the wheel

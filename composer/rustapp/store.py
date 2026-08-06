@@ -2,7 +2,7 @@
 
 A thin :class:`composer.spec.artifacts.ArtifactStore` subclass: the base already
 writes everything identical across backends (``properties.json``,
-``commentary.md``, the property→units map, ``token_usage.json``) and materializes
+``commentary.md``, the property→checks map, ``token_usage.json``) and materializes
 the artifact bytes from ``result.artifact_text``. All this subclass supplies is
 the on-disk layout, taken from the descriptor's :class:`ArtifactLayout`.
 """
@@ -23,7 +23,7 @@ class RustArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
     ``per_component`` (the default) writes one ``{prefix}_{slug}.{ext}`` file per component from
     its ``artifact_text``; ``callout`` writes no per-component source — the wheel's ``finalize``
     renders the whole deliverable (e.g. Crucible's one shared crate). Either way the shared
-    metadata (``commentary.md`` / the property→units map) is written per component."""
+    metadata (``commentary.md`` / the property→checks map) is written per component."""
 
     def __init__(
         self,

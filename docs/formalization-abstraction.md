@@ -543,7 +543,7 @@ Delivered(result, backend.artifact_store.write_artifact(result_key, result))   #
 The store is generic over `(ArtifactIdentifier, FormalResult)`
 ([artifacts.py](../composer/spec/artifacts.py)). The base writes everything that is
 identical across backends — `properties.json`, `commentary.md`, the
-`{property title → demonstrating units}` map — keyed off the identifier's `stem`. The CVL
+`{property title → the checks demonstrating it}` map — keyed off the identifier's `stem`. The CVL
 subclass [ProverArtifactStore](../composer/spec/source/artifacts.py) adds the
 CVL-specific bundle: it overrides `write_artifact` to also emit a `.conf` (base config +
 fixed run overlay) alongside the `.spec`.

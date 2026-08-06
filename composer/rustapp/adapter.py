@@ -2,7 +2,7 @@
 :class:`~composer.pipeline.core.PipelineBackend`.
 
 The Rust wheel is a **passive service** (``docs/rust-applications.md``): Python owns every LLM turn
-and calls the wheel's pure callouts (``descriptor`` / ``units`` / ``author_prompt`` /
+and calls the wheel's pure callouts (``descriptor`` / ``checks`` / ``author_prompt`` /
 ``check_syntax`` / ``judge_prompt`` / ``finalize``) plus the two blocking ones (``compile`` /
 ``validate``) that run the toolchain via ``run-confined``. There is no IoC ``resume`` loop and no
 ``Effects`` protocol.
@@ -10,7 +10,7 @@ and calls the wheel's pure callouts (``descriptor`` / ``units`` / ``author_promp
 Authoring itself is the shared session of :mod:`composer.authoring`, assembled for a wheel in
 :mod:`composer.rustapp.session`: the agent owns a spec buffer, the wheel's ``validate`` is a tool it
 calls, and publishing is gated on stamps over the buffer as it stands. This module is what connects
-that session to the pipeline — phases, preflight, the setup artifact's cache, and the report.
+that session to the pipeline — phases, preflight, the setup spec's cache, and the report.
 
 Three phase objects mirror the CVL / foundry backends:
 
@@ -20,14 +20,14 @@ Three phase objects mirror the CVL / foundry backends:
 * :class:`RustFormalizer`     — ``formalize`` runs the loop; ``fetch_verdicts`` reads the verdicts
   ``validate`` baked into the result.
 
-App-specific orchestration (a shared setup artifact, workspace prep + its gate, crate assembly) is
+App-specific orchestration (a shared setup spec, workspace prep + its gate, crate assembly) is
 descriptor-driven here — no per-application Python package (``docs/rust-applications.md``): the wheel
 declares ``preflight`` / ``setup`` / ``workspace_prep`` / ``deliverable_mode=callout`` / ``finalize``
 and the generic host runs them.
 
 The two build-shaped steps are overlapped with the LLM steps that don't need them:
 :meth:`RustBackend.preflight` (prepare the workspace, then *gate* it — a wheel-authored skeleton
-built by the real toolchain) runs alongside system analysis, and the shared setup artifact is
+built by the real toolchain) runs alongside system analysis, and the shared setup spec is
 authored after extraction, when the properties it must make checkable finally exist.
 """
 
@@ -61,7 +61,7 @@ from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
-from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupArtifact
+from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupSpec
 from composer.rustapp.toolchain import project_toolchain, source_unit
 from composer.rustapp.session import (
     live_checks,
@@ -84,7 +84,7 @@ from composer.rustapp.wire import (
     parse_checks,
     parse_workspace_prep,
 )
-# The wheel's per-unit verdict and the *report's* per-unit verdict are different types with the same
+# The wheel's per-check verdict and the *report's* per-check verdict are different types with the same
 # name (``fetch_verdicts`` maps one to the other), so the wire one is aliased here. Likewise
 # ``Delivered``: the pipeline's component outcome and the wire's payload for one.
 from composer.rustapp.wire import Delivered as WireDelivered
@@ -101,7 +101,7 @@ _log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Shared loop helpers (used by RustFormalizer.formalize and app setup artifacts).
+# Shared loop helpers (used by RustFormalizer.formalize and app setup specs).
 # ---------------------------------------------------------------------------
 
 def make_emitter() -> Callable[[str, dict], None]:
@@ -175,7 +175,7 @@ def source_unit_of(
 
 
 def _setup_identity(input: SetupInput) -> str:
-    """A cache key for the shared setup artifact: a hash of what it is authored *from*.
+    """A cache key for the shared setup spec: a hash of what it is authored *from*.
 
     Exactly the inputs the wheel renders the artifact from — the program, the project facts (where its
     code lives, and what the prep established, which is what decides where its types come from), the
@@ -382,14 +382,14 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         if formalized is None:
             return {}
         return {
-            unit: Verdict(
+            name: Verdict(
                 outcome=v.outcome,
                 line=v.line,
                 duration_seconds=v.duration_seconds,
                 unit_file=v.unit_file or formalized.unit_file,
                 message=v.detail,
             )
-            for unit, v in formalized.result.verdicts.items()
+            for name, v in formalized.result.verdicts.items()
         }
 
     @override
@@ -457,14 +457,14 @@ class ProjectFacts:
     prep_facts: dict[str, Any] = field(default_factory=dict)
 
 
-# Authors the shared setup artifact for a run, given the properties it must make checkable. Built by
+# Authors the shared setup spec for a run, given the properties it must make checkable. Built by
 # :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for why
 # it runs between extraction and the per-unit fan-out rather than during prep or on first use.
 type SetupAuthor = Callable[[list[PropertyFormulation], PipelineRun], Awaitable[str]]
 
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
-    """The formalizer for a wheel that declares a ``setup`` step, before its shared artifact exists.
+    """The formalizer for a wheel that declares a ``setup`` step, before its shared spec exists.
 
     ``author`` writes and compiles the artifact from the properties it must make checkable;
     ``build`` turns that artifact into the :class:`RustFormalizer` (see
@@ -480,7 +480,7 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
     async def begin(
         self, jobs: Sequence[BackendJob[FeatureUnit]], run: PipelineRun
     ) -> RustFormalizer:
-        """Author the shared setup artifact from **every** unit's properties, and hand back the
+        """Author the shared setup spec from **every** unit's properties, and hand back the
         formalizer built around it.
 
         Two constraints fix this point in the run. It cannot happen in ``prepare_formalization``
@@ -536,7 +536,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         project = self.preflight
 
         def build(setup_result: str | None) -> RustFormalizer:
-            """The formalizer, around a shared setup artifact that is either already authored or
+            """The formalizer, around a shared setup spec that is either already authored or
             not called for."""
             return RustFormalizer(
                 b.module, b.descriptor, sandbox=b.sandbox,
@@ -548,7 +548,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         setup = descriptor.step(PhaseRole.SETUP)
         if setup is None:
             return build(None)
-        # The base for the setup artifact's own input; ``author_setup`` adds the properties.
+        # The base for the setup spec's own input; ``author_setup`` adds the properties.
         prep_input = SetupInput(
             program=program, source_unit=project.source_unit, model=analyzed_json,
             prep_facts=project.prep_facts, args=b.declared_args,
@@ -564,10 +564,10 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             # by what it is authored *from*, so a changed model, program crate, type source
             # (crate vs IDL) or property set re-authors it. As with the driver's other caches, a
             # change to the *prompt* does not invalidate — clear the namespace for that.
-            setup_ctx: WorkflowContext[RustSetupArtifact] = run.ctx.child(
+            setup_ctx: WorkflowContext[RustSetupSpec] = run.ctx.child(
                 CacheKey(f"{descriptor.name}-setup-{_setup_identity(setup_input)}")
             )
-            if (hit := await setup_ctx.cache_get(RustSetupArtifact)) is not None:
+            if (hit := await setup_ctx.cache_get(RustSetupSpec)) is not None:
                 return hit.source
             sandbox_dict = await b.sandbox_spec(workdir)
             fixture = await run.runner(
@@ -591,7 +591,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             )
             if isinstance(fixture, GaveUp):
                 raise RuntimeError(f"{descriptor.name} setup gave up: {fixture.reason}")
-            await setup_ctx.cache_put(RustSetupArtifact(source=fixture.spec))
+            await setup_ctx.cache_put(RustSetupSpec(source=fixture.spec))
             return fixture.spec
 
         return RustStagedFormalizer(author_setup, build)

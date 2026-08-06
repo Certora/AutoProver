@@ -25,7 +25,7 @@ _ORDER = [Outcome.GOOD, Outcome.BAD, Outcome.TIMEOUT, Outcome.ERROR, Outcome.UNK
 
 
 @dataclass(frozen=True)
-class UnitVerdict:
+class CheckVerdict:
     """One check's outcome: its display name and the neutral ``Outcome``."""
 
     name: str
@@ -36,7 +36,7 @@ class UnitVerdict:
 class VerdictSummary:
     """The delivered checks' verdicts, in pipeline order, plus the report backend tag for wording."""
 
-    verdicts: list[UnitVerdict]
+    verdicts: list[CheckVerdict]
     backend_tag: ReportBackend
 
     @property
@@ -58,34 +58,34 @@ def summarize_verdicts(
 ) -> VerdictSummary:
     """Extract the per-check verdicts baked into a completed run's ``outcomes``.
 
-    One row per *unit*, not per component: ``units()`` is one unit per property, so a component
+    One row per *check*, not per component: ``checks()`` is one check per property, so a component
     with five properties bakes five verdicts and contributes five rows (reading only the first
-    would report one check where five ran). Rows are named by the property title the unit checks,
-    falling back to the unit name.
+    would report one check where five ran). Rows are named by the property title the check
+    verifies, falling back to the check's own name.
 
     Only *delivered* components carry verdicts; give-ups / exceptions are already surfaced in
     ``result.failures`` and skipped here. A delivered component that bakes none at all (a
     run-service-backed wheel, which reports through ``fetch_verdicts`` instead) still contributes
     one UNKNOWN row, so the listing accounts for every delivered component."""
-    verdicts: list[UnitVerdict] = []
+    verdicts: list[CheckVerdict] = []
     for o in result.outcomes:
         if not isinstance(o.result, Delivered):
             continue
         formalized = o.result.result
         if not formalized.verdicts:
-            verdicts.append(UnitVerdict(o.feat.display_name, Outcome.UNKNOWN))
+            verdicts.append(CheckVerdict(o.feat.display_name, Outcome.UNKNOWN))
             continue
         titles = formalized.check_titles()
         verdicts.extend(
-            UnitVerdict(titles.get(unit, unit), baked.outcome)
-            for unit, baked in formalized.verdicts.items()
+            CheckVerdict(titles.get(name, name), baked.outcome)
+            for name, baked in formalized.verdicts.items()
         )
     return VerdictSummary(verdicts, backend_tag)
 
 
 def format_verdict_lines(summary: VerdictSummary, *, indent: str = "  ") -> list[str]:
-    """The ``Verdicts:`` tally line plus a per-unit listing, in the console counts-block style.
-    Empty when no unit was delivered (the counts/failures block already conveys that)."""
+    """The ``Verdicts:`` tally line plus a per-check listing, in the console counts-block style.
+    Empty when nothing was delivered (the counts/failures block already conveys that)."""
     if not summary.verdicts:
         return []
     lines = [f"{indent}Verdicts:     {summary.tally}"]

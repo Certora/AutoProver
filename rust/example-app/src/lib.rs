@@ -1,7 +1,7 @@
 //! The "echo prover" — a minimal, self-contained demonstration of a Rust-based
 //! AutoProver [`Backend`] on `autoprover-sdk`. It is intentionally not a real
 //! verifier: it authors a "spec" from an LLM turn, treats compilation as a no-op,
-//! and validates every unit as GOOD — enough to exercise the Python host + FFI
+//! and validates every check as GOOD — enough to exercise the Python host + FFI
 //! round-trip (descriptor, checks, author_prompt, compile, validate) without any real
 //! toolchain. A production backend keeps this exact shape and swaps the callouts for
 //! real ones (see `docs/rust-applications.md`).
