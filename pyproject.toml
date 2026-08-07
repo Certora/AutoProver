@@ -2,6 +2,8 @@
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# please let me land this stupid PR
+
 [project]
 name = "ai-composer"
 version = "0.1.0"
