@@ -466,6 +466,18 @@ Attribution is the wheel's: it owns its result format, so it decides which check
 belongs to; the host records the verdicts verbatim and does no verdict logic of its own, never
 parsing a tool's output.
 
+A verdict is keyed by **check name**, not by a restated `Check`. The wheel picks from the checks it
+was just handed rather than echoing them back, so it cannot contradict the property→check map the
+host published, and the host resolves each name to the `Check` it sent before anything upstream sees
+it. Both ends hold that key to the target's own checks. On the Rust side `ValidateOutcome::Verdicts`
+wraps a private `CheckVerdicts`, so the only ways to build one are `Target::all` and
+`Target::verdicts`, which take the names from `self.checks` — a backend attributes a run instead of
+spelling names. On the host side `ValidateVerdicts.resolve(target)` requires the answer to be
+*exactly* the target's check set: a name no check has, a covered check left unanswered, or the same
+check twice raises `ValidateCoverageError`. The unanswered case is the one worth the machinery — a
+missing verdict is not a failing verdict, so it gives the publish gate nothing to object to, and a
+wheel that answered for nothing would stamp a component nothing had checked.
+
 Verdicts are grouped by property, not appended as singletons — two checks verifying the same
 property are two check names under one report row, and as singletons they would be two rows with the
 same key that the store's `dict()` would silently collapse.

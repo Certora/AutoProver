@@ -24,7 +24,7 @@ from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.session import (
     VALIDATE_KEY, GateDeps, RustSessionState, SessionResult, ValidateSpec,
 )
-from composer.rustapp.wire import Target, Check
+from composer.rustapp.wire import Target, Check, ValidateCoverageError
 from composer.spec.source.report.schema import Outcome
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor, wire_verdict
@@ -46,6 +46,8 @@ class _Wheel:
     #: Every ``Target`` the host passed, in call order.
     targets: list[Target] = field(default_factory=list)
     outcome: str = "GOOD"
+    #: Checks the wheel leaves without a verdict though its target covers them.
+    omit: frozenset[str] = frozenset()
 
     def checks(self, _input_json: str) -> str:
         return json.dumps([c.model_dump() for c in CHECKS])
@@ -60,7 +62,10 @@ class _Wheel:
         self.targets.append(target)
         return json.dumps({
             "kind": "verdicts",
-            "verdicts": [[c.name, wire_verdict(self.outcome)] for c in target.checks],
+            "verdicts": [
+                [c.name, wire_verdict(self.outcome)]
+                for c in target.checks if c.name not in self.omit
+            ],
         })
 
 
@@ -176,6 +181,17 @@ async def test_a_failure_the_author_marked_as_the_finding_stamps(tmp_path):
     marked = _state(expected_failures={c.name: "the program really does allow it" for c in CHECKS})
     command = await _validate(_Wheel(outcome="BAD"), tmp_path, state=marked)
     assert VALIDATE_KEY in command.update["validations"]
+
+
+@pytest.mark.asyncio
+async def test_a_wheel_that_leaves_a_covered_check_unanswered_is_refused(tmp_path):
+    # An unanswered check is not a failing check: nothing downstream has anything to object to, so
+    # silence would read as a clean run. A wheel that answers for none of a target's checks is the
+    # extreme of it — the gate would stamp a component nothing had checked.
+    with pytest.raises(ValidateCoverageError, match="c_dbl"):
+        await _validate(_Wheel(omit=frozenset({"c_dbl"})), tmp_path)
+    with pytest.raises(ValidateCoverageError):
+        await _validate(_Wheel(omit=frozenset({"c_stake", "c_dbl", "c_fees"})), tmp_path)
 
 
 @pytest.mark.asyncio

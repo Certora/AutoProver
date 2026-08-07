@@ -120,8 +120,9 @@ pub fn compile(
 /// `ValidateOutcome`). BLOCKING.
 ///
 /// An unparseable target is the one payload with nowhere to report to — the check names a verdict
-/// would be keyed by are exactly what failed to parse — so it yields no verdicts, and the host
-/// records the checks it asked about as UNKNOWN.
+/// would be keyed by are exactly what failed to parse — so it yields no verdicts. The host sent that
+/// target and knows what it covers, so an answer covering nothing is refused there as the protocol
+/// failure it is, rather than read as a run with nothing to object to.
 pub fn validate(
     b: &dyn Backend,
     input_json: &str,

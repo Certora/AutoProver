@@ -86,8 +86,27 @@ impl Target {
     /// A verdict per covered check, keyed by check name so a backend never spells one itself.
     pub fn verdicts(&self, mut of: impl FnMut(&Check) -> Verdict) -> ValidateOutcome {
         ValidateOutcome::Verdicts {
-            verdicts: self.checks.iter().map(|c| (c.name.clone(), of(c))).collect(),
+            verdicts: CheckVerdicts(self.checks.iter().map(|c| (c.name.clone(), of(c))).collect()),
         }
+    }
+}
+
+/// What a target's run concluded, as `(check_name, verdict)` for every check the target covers.
+///
+/// The payload is private, so the only way a backend builds one is [`Target::all`] or
+/// [`Target::verdicts`] — both of which take the names from the target's own checks. A backend
+/// therefore attributes its run to the checks it was handed instead of naming them: it can neither
+/// invent a check the target does not cover nor leave one of them without a verdict, and the host
+/// resolves each name back to the [`Check`] it sent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+pub struct CheckVerdicts(Vec<(String, Verdict)>);
+
+impl CheckVerdicts {
+    /// Each covered check's name and what it concluded.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Verdict)> {
+        self.0.iter().map(|(name, verdict)| (name.as_str(), verdict))
     }
 }
 
@@ -104,7 +123,7 @@ impl Target {
 #[serde(deny_unknown_fields)]
 pub enum ValidateOutcome {
     BuildFailed { errors: String },
-    Verdicts { verdicts: Vec<(String, Verdict)> },
+    Verdicts { verdicts: CheckVerdicts },
 }
 
 /// What one check concluded — the report's backend-agnostic vocabulary (mirrors
