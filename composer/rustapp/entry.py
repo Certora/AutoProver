@@ -137,13 +137,12 @@ def _user_ns(*parts: str | None) -> tuple[str, ...]:
 def _root_cache_key(
     project_root: str, system_doc_path: pathlib.Path | None, relative_path: str, contract_name: str
 ) -> str:
-    """The pipeline's root key, truncated to keep the Rust cache namespaces readable."""
     return root_cache_key(
         project_root=project_root,
         system_doc_path=system_doc_path,
         relative_path=relative_path,
         contract_name=contract_name,
-    )[:16]
+    )
 
 
 def _arg_dest(spec: ArgSpec) -> str:
