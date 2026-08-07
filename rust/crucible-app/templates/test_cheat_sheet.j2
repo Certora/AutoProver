@@ -6,9 +6,13 @@ exists as `Fixture`):
   runs AFTER EACH fuzzed action. Put EVERY listed property's checks in this one fn (conservation,
   solvency, bounds, access control, …). One fn = one build = one fuzz run for this component.
   The fuzzer drives the WHOLE program, so the sequence interleaves other components' actions too.
-- Do NOT write `#[invariant_test]` yourself. Your code is placed inside a private, feature-gated
-  module and the host generates the `#[invariant_test]` entry point that calls your fn (the macro
-  expands `fn main()` next to itself, so it has to sit at the crate root, outside your module).
+- Write the ITEMS ONLY — no file scaffolding. Your code is placed inside a module file the host
+  writes, which already opens with that module's `//!` docs and `use super::*;`. Do not write either
+  yourself: a `//!` below them is `error[E0753]: expected outer doc comment`, and a second
+  `use super::*;` is redundant. Use `//` for any comments of your own.
+- Do NOT write `#[invariant_test]` yourself. The host generates the `#[invariant_test]` entry point
+  that calls your fn (the macro expands `fn main()` next to itself, so it has to sit at the crate
+  root, outside your module).
   Helper items are welcome — `impl Fixture { ... }` blocks, free fns, consts — and because the
   module is gated, a name you choose can never clash with another component's.
 - Assert against ON-CHAIN state, not local mirrors:

@@ -313,6 +313,7 @@ impl Section {
         } else {
             body.replace(&format!("fn {SECTION_FN}"), &format!("pub fn {SECTION_FN}"))
         };
+        let body = as_module_body(&body);
         SectionFile { feature, section_fn: SECTION_FN, body: body.trim() }
             .render()
             .expect("render section_file")
@@ -332,6 +333,36 @@ impl Section {
             .render()
             .expect("render gave_up_section")
     }
+}
+
+/// Fix up text authored as though it were a whole file, for placement *inside* one.
+///
+/// A model writing what looks like a module file naturally opens it with `//!` docs and a
+/// `use super::*;`. The prompt asks for neither, but both arrive anyway, and below the header and
+/// `use` that `section_file.j2` already supplies they are:
+///
+/// * **`//!` → `//`.** An inner doc comment is only legal before any item, so an authored one is
+///   `E0753: expected outer doc comment`. Observed on *both* components of the first e2e run after
+///   sections moved into their own files — the same text was harmless when a section was
+///   concatenated at crate root, which is why moving it introduced the failure. Self-healing (the
+///   revise loop fixes it) but it costs a round per component, which is exactly what the other
+///   normalizations here exist to avoid.
+/// * **A repeated `use super::*;` is dropped.** Legal — glob imports may repeat — but noise in a
+///   file a user reads, and it is what the revise loop left behind when it fixed the doc comments.
+///
+/// Anchored at line starts, so a `//!` inside a string literal is left alone.
+fn as_module_body(body: &str) -> String {
+    body.lines()
+        .filter(|l| l.trim() != "use super::*;")
+        .map(|l| {
+            let trimmed = l.trim_start();
+            match trimmed.strip_prefix("//!") {
+                Some(rest) => format!("{}//{rest}", &l[..l.len() - trimmed.len()]),
+                None => l.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The probe's section file — written by both the gates that build it and the crate root that ships
@@ -2386,6 +2417,36 @@ mod section_isolation {
         // unit plus the wheel's own probe.
         let main_rs = code_only(&scaffold(&["a"])["fuzz/lending/src/main.rs"]);
         assert_eq!(main_rs.matches("#[invariant_test]").count(), 2, "{main_rs}");
+    }
+
+    #[test]
+    fn authored_file_scaffolding_is_stripped_rather_than_costing_a_revise_round() {
+        // Verbatim the shape both components produced in the 2026-08-07 e2e run: the model wrote
+        // what looks like a whole module file, opening with `//!` docs and a `use super::*;`. Below
+        // the header this template already supplies, the `//!` is E0753 and the `use` is a duplicate.
+        // Harmless when a section was concatenated at crate root; introduced by moving sections into
+        // files of their own, so it is this wrapper's to absorb.
+        let authored = "//! Authored invariants for the `Vault_Initialization` component.\n\
+                        //!\n\
+                        //! Called once after every fuzzed action.\n\
+                        \n\
+                        use super::*;\n\
+                        \n\
+                        pub fn invariants(fixture: &mut Fixture) {\n\
+                        \x20   fuzz_assert!(true, \"[p] //! not a doc comment\");\n\
+                        }";
+        let section = &gated("c_a", authored)["fuzz/lending/src/c_a.rs"];
+        // No inner doc comment survives below the header — that is the E0753.
+        assert!(
+            !section.lines().skip(4).any(|l| l.trim_start().starts_with("//!")),
+            "an authored inner doc comment reached the body:\n{section}",
+        );
+        // The text is kept, just as an ordinary comment.
+        assert!(section.contains("// Authored invariants for the `Vault_Initialization`"), "{section}");
+        // Exactly one `use super::*;` — ours.
+        assert_eq!(section.matches("use super::*;").count(), 1, "{section}");
+        // Anchored at line starts, so a `//!` inside a string literal is untouched.
+        assert!(section.contains(r#""[p] //! not a doc comment""#), "{section}");
     }
 
     #[test]
