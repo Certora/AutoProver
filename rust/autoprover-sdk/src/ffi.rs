@@ -79,18 +79,30 @@ pub fn check_syntax(b: &dyn Backend, input_json: &str, spec: &str) -> Option<Str
     }
 }
 
-/// `judge_prompt(input_json, spec) -> str | None` (None = skip judging).
-pub fn judge_prompt(b: &dyn Backend, input_json: &str, spec: &str) -> Option<String> {
+/// `judge(input_json) -> str | None` (JSON `Judge`; None = this wheel does not review this input).
+/// Takes no spec: it is asked once, before anything is authored.
+pub fn judge(b: &dyn Backend, input_json: &str) -> Option<String> {
     let input = parse_input(input_json).ok()?;
-    b.judge_prompt(&input, spec)
-        .map(|p| serde_json::to_string(&p).unwrap_or_default())
+    b.judge(&input)
+        .map(|j| serde_json::to_string(&j).unwrap_or_default())
 }
 
-/// `compile(input_json, spec, workdir, sandbox_json) -> str` (JSON `CompileResult`). BLOCKING.
+/// `judge_instruction(input_json, spec) -> str` — the instruction itself, not JSON. Asked per review
+/// round, only for an input `judge` claimed. An unparseable payload reaches the reviewer as its
+/// instruction, as in `author_prompt`: a host bug is better read than reviewed around.
+pub fn judge_instruction(b: &dyn Backend, input_json: &str, spec: &str) -> String {
+    match parse_input(input_json) {
+        Ok(input) => b.judge_instruction(&input, spec),
+        Err(e) => format!("ERROR: {e}"),
+    }
+}
+
+/// `compile(input_json, spec | None, workdir, sandbox_json) -> str` (JSON `CompileResult`).
+/// BLOCKING. `None` is the preflight: nothing has been authored, so there is no spec at all.
 pub fn compile(
     b: &dyn Backend,
     input_json: &str,
-    spec: &str,
+    spec: Option<&str>,
     workdir: &str,
     sandbox_json: &str,
 ) -> String {
@@ -203,7 +215,12 @@ mod tests {
         fn author_prompt(&self, _input: &AuthorInput) -> Prompt {
             unimplemented!("not exercised")
         }
-        fn compile(&self, _input: &AuthorInput, _spec: &str, _ws: &Workspace) -> CompileResult {
+        fn compile(
+            &self,
+            _input: &AuthorInput,
+            _spec: Option<&str>,
+            _ws: &Workspace,
+        ) -> CompileResult {
             unimplemented!("not exercised")
         }
         fn validate(

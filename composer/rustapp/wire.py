@@ -231,6 +231,16 @@ class Prompt(WireModel):
     system: str | None
 
 
+class Judge(WireModel):
+    """The reviewer a wheel declares for an input — what is fixed for the whole authoring session,
+    which is why ``judge`` is asked once and without a draft. What to ask about a *particular* draft
+    is the per-round ``judge_instruction``."""
+
+    #: The domain half of the reviewer's system prompt (``None`` → the host's neutral role). The
+    #: host appends the review protocol either way.
+    system: str | None
+
+
 class CompileOk(WireModel):
     """The spec (or, in a preflight, the wheel's own skeleton) built."""
 
@@ -383,10 +393,17 @@ class RustAppModule(Protocol):
     author_prompt: Callable[[str], str]
     #: ``(input_json, spec) -> error | None``. Pure and cheap: the put-time gate on the buffer.
     check_syntax: Callable[[str, str], str | None]
-    #: ``(input_json, spec) -> Prompt | None`` JSON. ``None`` ⇒ this wheel has no judge.
-    judge_prompt: Callable[[str, str], str | None]
-    #: ``(input_json, spec, workdir, sandbox_json) -> CompileResult`` JSON. **Blocking.**
-    compile: Callable[[str, str, str, str], str]
+    #: ``(input_json) -> Judge | None`` JSON. ``None`` ⇒ this wheel does not review this input.
+    #: Takes no spec: it is asked once, when the session is built, and neither answer depends on a
+    #: draft.
+    judge: Callable[[str], str | None]
+    #: ``(input_json, spec) -> str``. The instruction for one review round — the text itself, not
+    #: JSON. Called only for an input ``judge`` claimed.
+    judge_instruction: Callable[[str, str], str]
+    #: ``(input_json, spec | None, workdir, sandbox_json) -> CompileResult`` JSON. ``None`` is the
+    #: preflight, where nothing has been authored and the wheel builds its own skeleton — distinct
+    #: from an authored spec that happens to be empty. **Blocking.**
+    compile: Callable[[str, str | None, str, str], str]
     #: ``(input_json, spec, target_json, workdir, sandbox_json) -> ValidateOutcome`` JSON, where
     #: ``target_json`` is a :class:`Target` — the target to run and the checks it covers.
     #: **Blocking.**
@@ -430,6 +447,10 @@ def parse_checks(raw: str) -> list[Check]:
 
 def parse_prompt(raw: str) -> Prompt:
     return Prompt.model_validate_json(raw)
+
+
+def parse_judge(raw: str) -> Judge:
+    return Judge.model_validate_json(raw)
 
 
 def parse_workspace_prep(raw: str) -> WorkspacePrep:

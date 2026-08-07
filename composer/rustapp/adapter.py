@@ -3,7 +3,7 @@
 
 The Rust wheel is a **passive service** (``docs/rust-applications.md``): Python owns every LLM turn
 and calls the wheel's pure callouts (``descriptor`` / ``checks`` / ``author_prompt`` /
-``check_syntax`` / ``judge_prompt`` / ``finalize``) plus the two blocking ones (``compile`` /
+``check_syntax`` / ``judge`` / ``finalize``) plus the two blocking ones (``compile`` /
 ``validate``) that run the toolchain via ``run-confined``. There is no IoC ``resume`` loop and no
 ``Effects`` protocol.
 
@@ -250,16 +250,17 @@ async def run_preflight_gate(
     """Gate the prepared workspace with a ``kind="preflight"`` ``compile`` — the wheel's own
     skeleton artifact, built by the real toolchain under the real sandbox.
 
-    The ``spec`` is empty on purpose: nothing has been authored yet (this runs alongside system
-    analysis), so the wheel renders the smallest artifact that still exercises what an authored one
-    will depend on. Raises :class:`PreflightFailed` with the compiler diagnostics the wheel
-    extracted; there is no retry.
+    There is no ``spec`` at all — ``None``, not an empty one: nothing has been authored yet (this
+    runs alongside system analysis), so the wheel renders the smallest artifact that still exercises
+    what an authored one will depend on, and a wheel whose toolchain would take an empty spec file
+    for a real one can tell the two apart. Raises :class:`PreflightFailed` with the compiler
+    diagnostics the wheel extracted; there is no retry.
 
     Nothing is streamed as it goes: this is not a graph run, so there is no stream writer to emit
     on, and the one thing worth showing — the diagnostics — is what the exception carries."""
     result = parse_compile(
         await asyncio.to_thread(
-            module.compile, input.model_dump_json(), "", str(workdir), json.dumps(sandbox_dict)
+            module.compile, input.model_dump_json(), None, str(workdir), json.dumps(sandbox_dict)
         )
     )
     if isinstance(result, CompileOk):

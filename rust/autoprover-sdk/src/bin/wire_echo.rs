@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use autoprover_sdk::args::AppArgs;
-use autoprover_sdk::authoring::{AuthorInput, Prompt, Property};
+use autoprover_sdk::authoring::{AuthorInput, Judge, Prompt, Property};
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::finalize::{ComponentOutcome, FinalizeComponent, FinalizeInput};
 use autoprover_sdk::outcome::{Check, CompileResult, SkippedProperty, Target, ValidateOutcome};
@@ -50,6 +50,7 @@ enum WireType {
     CompileResult,
     ValidateOutcome,
     Prompt,
+    Judge,
     Checks,
     WorkspacePrep,
     SandboxGrants,
@@ -85,6 +86,7 @@ fn dispatch<O: Op>(ty: WireType, op: O) -> Result<Value, Fault> {
         WireType::CompileResult => op.run::<CompileResult>(),
         WireType::ValidateOutcome => op.run::<ValidateOutcome>(),
         WireType::Prompt => op.run::<Prompt>(),
+        WireType::Judge => op.run::<Judge>(),
         WireType::Checks => op.run::<Vec<Check>>(),
         WireType::WorkspacePrep => op.run::<WorkspacePrep>(),
         WireType::SandboxGrants => op.run::<SandboxGrants>(),

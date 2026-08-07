@@ -150,3 +150,18 @@ pub struct Prompt {
     pub system: Option<String>,
     pub instruction: String,
 }
+
+/// The reviewer a wheel declares for an input — everything about a review that is fixed for the
+/// whole authoring session, which is why [`Backend::judge`](crate::Backend::judge) is asked once
+/// and without a draft. What to ask about a *particular* draft is
+/// [`Backend::judge_instruction`](crate::Backend::judge_instruction), per round.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct Judge {
+    /// The *domain* half of the reviewer's system prompt — who is reviewing and what they know.
+    /// The host appends the review protocol (how the verdict comes back) and falls back to a
+    /// neutral role when this is `None`.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub system: Option<String>,
+}

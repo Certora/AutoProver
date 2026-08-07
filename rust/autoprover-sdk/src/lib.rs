@@ -8,7 +8,7 @@
 //! The backend is a **passive service**, not a driver: the Python pipeline owns the
 //! author→compile→judge→validate loop and every LLM turn, and calls the backend's
 //! callouts. Most are pure ([`Backend::descriptor`], [`Backend::checks`],
-//! [`Backend::author_prompt`], [`Backend::judge_prompt`], [`Backend::finalize`]). The
+//! [`Backend::author_prompt`], [`Backend::judge`], [`Backend::finalize`]). The
 //! two gating callouts ([`Backend::compile`], [`Backend::validate`]) run the toolchain
 //! directly — each spawns the `run-confined` launcher via
 //! [`Workspace::run`](sandbox::Workspace::run) — and BLOCK; the host calls them off the event

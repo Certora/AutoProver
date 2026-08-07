@@ -47,7 +47,7 @@ from composer.pipeline.core import GaveUp, PipelineRun
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.wire import (
     AuthorInput, CompileOk, Prompt, RustAppModule, Target, Check, ValidateBuildFailed,
-    parse_compile, parse_prompt, parse_validate,
+    parse_compile, parse_judge, parse_prompt, parse_validate,
 )
 from composer.rustapp.wire import Verdict as WireVerdict
 from composer.sandbox.config import BackendSpec
@@ -438,11 +438,6 @@ _JUDGE_PROTOCOL = (
 JUDGE_EXCLUDE_TOOLS = frozenset({"code_explorer"})
 
 
-def _judge_prompts(module: RustAppModule, input_json: str, spec: str) -> Prompt | None:
-    raw = module.judge_prompt(input_json, spec)
-    return parse_prompt(raw) if raw else None
-
-
 def build_judge(
     module: RustAppModule,
     input_json: str,
@@ -451,25 +446,24 @@ def build_judge(
     env: ServiceHost,
     backend_name: str,
 ) -> FeedbackThunk[Any] | None:
-    """The wheel's judge as the shared feedback thunk, or ``None`` when it declares none.
+    """The wheel's judge as the shared feedback thunk, or ``None`` when it declares none for this
+    input — a wheel may review components and not the shared setup spec.
 
-    Probed with an empty spec, exactly as the wheel's ``judge_prompt`` contract allows: it returns
-    ``None`` for a kind it does not review, and that answer does not depend on the draft."""
-    probe = _judge_prompts(module, input_json, "")
-    if probe is None:
+    Asked without a draft because it is asked before there is one: whether this input is reviewed
+    and who reviews it are both fixed for the session. What to ask about a particular draft is
+    ``judge_instruction``, below, once per round."""
+    declared = module.judge(input_json)
+    if declared is None:
         return None
-
-    # The role half is asked for once — it says what this reviewer is, which cannot depend on the
-    # draft. The instruction is asked for per review, because it is *about* the draft.
-    system = (probe.system or "You are reviewing a formal specification.") + _JUDGE_PROTOCOL
+    system = (
+        parse_judge(declared).system or "You are reviewing a formal specification."
+    ) + _JUDGE_PROTOCOL
 
     def apply_system(builder):
         return builder.with_sys_prompt(system)
 
     def apply_prompt(builder, spec: str, skipped, rebuttals):
-        prompt = _judge_prompts(module, input_json, spec)
-        assert prompt is not None, "the wheel declared a judge for this input"
-        return builder.with_initial_prompt(prompt.instruction)
+        return builder.with_initial_prompt(module.judge_instruction(input_json, spec))
 
     def input_parts(spec: str, skipped, rebuttals) -> list[str | dict]:
         parts: list[str | dict] = ["The proposed spec is", spec]

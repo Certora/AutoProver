@@ -16,8 +16,9 @@ This package is the Python side of the seam described in
     validate_preconditions(args_json) -> str|None
     checks(input_json) -> str                   # the checks this input formalizes
     author_prompt(input_json, failure_json|None) -> str
-    judge_prompt(input_json, spec) -> str|None
-    compile(input_json, spec, workdir, sandbox_json) -> str      # BLOCKING (run-confined)
+    judge(input_json) -> str|None               # None ⇒ no judge for this input
+    judge_instruction(input_json, spec) -> str  # one review round's instruction
+    compile(input_json, spec|None, workdir, sandbox_json) -> str # BLOCKING (run-confined)
     validate(input_json, spec, target, workdir, sandbox_json) -> str  # BLOCKING (run-confined)
     workspace_prep(input_json) -> str           # the declarative prep plan the host executes
     sandbox_grants(args_json) -> str            # extra grants for the host-authored policy
@@ -66,6 +67,7 @@ from composer.rustapp.wire import (
     CompileResult,
     FinalizeComponent,
     FinalizeInput,
+    Judge,
     Prompt,
     Property,
     RustAppModule,
@@ -149,6 +151,7 @@ __all__ = [
     "CompileResult",
     "FinalizeComponent",
     "FinalizeInput",
+    "Judge",
     "Prompt",
     "Property",
     "RustAppModule",
