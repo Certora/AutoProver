@@ -244,7 +244,7 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
         )
 
         # No manifest pre-placement needed: `compile`/`validate` materialize the harness crate
-        # (Cargo.toml + main.rs) themselves per run (docs/rust-pure-app.md §4).
+        # (Cargo.toml + main.rs) themselves per run (docs/rust-applications.md).
         module = load_module("crucible_app")
         descriptor = load_descriptor(module)
         phases = build_phase_model(descriptor)

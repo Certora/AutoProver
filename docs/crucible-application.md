@@ -144,7 +144,7 @@ its own test — just as CVL builds `invariants.spec` once and each per-componen
 
 The pre-work a Crucible harness needs because it must *compile against a built program*. None of it
 reads the analyzed model, so it runs **concurrently with system analysis** (`backend.preflight` — see
-[rust-backend-api.md §3.1](./rust-backend-api.md)), and it ends in a gate:
+[rust-applications.md §4.2](./rust-applications.md)), and it ends in a gate:
 
 1. Place the harness crate's build files (`Cargo.toml` for the decided type-source mode +
    `rust-toolchain.toml`) and `cargo fetch` them into the run's private `CARGO_HOME`.

@@ -1,6 +1,6 @@
 """Unit tests for the Crucible backend's pure callouts (no toolchain / LLM).
 
-The Rust wheel is now a passive service (docs/rust-backend-api.md): these exercise the pure
+The Rust wheel is now a passive service (docs/rust-applications.md): these exercise the pure
 callouts (`units` / `author_prompt` / `judge` / `judge_instruction` / `checks` / `validate`)
 directly.
 """
@@ -97,13 +97,18 @@ def test_component_judge_reviews_the_suite():
     raw = crucible_app.judge(component)
     assert raw is not None
     assert "Solana security engineer" in json.loads(raw)["system"]
-    # The per-round instruction is the criteria-based task, listing the properties under review and
-    # the accept/reject JSON contract the host's _parse_judge consumes.
+    # The per-round instruction is the criteria-based task: the properties under review, the draft,
+    # and what makes the suite unacceptable.
     ins = crucible_app.judge_instruction(component, spec)
     assert "p solvency" in ins and "c_invariants" in ins
     assert "Criterion 3 — Reachability" in ins
-    assert '{"accept": false' in ins
+    assert "Reject the suite if" in ins
     assert spec in ins
+    # …and NOT how the verdict comes back. That is the host's protocol, appended to the reviewer's
+    # system prompt (`session._JUDGE_PROTOCOL`) because the host is what reads the verdict. The
+    # wheel answering that half is how this drifted: it kept asking for a `{"accept": …}` final
+    # message long after the host had moved to the `result` tool, so nothing read what it asked for.
+    assert '{"accept"' not in ins and "FINAL message" not in ins
 
 
 def test_setup_has_no_judge():

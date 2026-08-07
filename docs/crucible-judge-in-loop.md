@@ -23,7 +23,7 @@ Rust wheel is passive, but the **author loop already runs in Python**: `_author_
 `run_llm_agent` → `bind_standard(...).with_tools(...)` + `run_to_completion` is a full tool-enabled
 agent. The wheel only supplies the *prompt string* (`author_prompt`); Python owns the agent
 machinery and the tool belt. So Python can bind a judge/`request_review` tool into that loop that
-invokes the wheel's existing `judge_prompt` — a **host-side change; the wheel API does not change**.
+invokes the wheel's existing review callout — a **host-side change; the wheel API does not change**.
 The judge is pure LLM review (no toolchain), so nothing about the sandbox boundary ("the LLM controls
 file contents, never argv") is in the way — that constraint only pins `compile`/`validate`, which stay
 host-driven.
@@ -40,7 +40,8 @@ write → review → revise → publish agent, with the judge behind a tool and 
   `get_test`). The author writes its candidate spec into agent state instead of returning it as the
   final answer.
 - **A `request_review` tool** (the peer of `feedback_tool`). When called, it runs the **judge
-  sub-agent** built from the wheel's `judge_prompt(input, current_draft)`, with the run's memory
+  sub-agent** built from the wheel's review callouts (`judge` for the reviewer, `judge_instruction`
+  for the round's ask), with the run's memory
   (`ctx.get_memory_tool()`), `get_spec`, and a *bounded* source/rag belt; it returns the feedback and
   records whether the **current** draft was accepted. This is the direct analogue of
   `_build_feedback_thunk`.
@@ -62,11 +63,13 @@ write → review → revise → publish agent, with the judge behind a tool and 
 *judge* rejection is now handled **inside** the author session — the author self-revises against the
 feedback rather than being re-invoked fresh.
 
-**The wheel is unchanged.** `judge_prompt(input, spec)` is reused verbatim as the sub-agent's prompt;
-no new callout. A descriptor flag (e.g. `judge_in_loop: bool`) can gate the behavior so the host
+**The wheel is unchanged.** The review callout is reused verbatim as the sub-agent's prompt; no new
+callout. (The SDK has since split it into `judge` + `judge_instruction` — for its own reasons, not
+this refactor's: whether an input is reviewed is fixed for the session, so it is asked once and
+without a draft.) A descriptor flag (e.g. `judge_in_loop: bool`) can gate the behavior so the host
 knows whether to bind the tool.
 
-**Non-judge wheels are unaffected.** `echoprover` returns `judge_prompt → None`; the author keeps its
+**Non-judge wheels are unaffected.** `echoprover` returns `judge → None`; the author keeps its
 current single-shot `doc` shape and none of the buffer/review/gate machinery is bound.
 
 ### Sketch
@@ -76,7 +79,8 @@ run_llm_agent(env, author_prompt, ..., judge=JudgeSpec(module, input))   # judge
   bind_standard(builder_heavy, ST, validator=require_judge_accepted)
     .with_tools(bounded_source + rag + memory + [put_spec, get_spec,
                                                  request_review, result])
-  # request_review -> run_to_completion(judge sub-agent from module.judge_prompt(input, get_spec()),
+  # request_review -> run_to_completion(judge sub-agent from module.judge(input) +
+  #                                     module.judge_instruction(input, get_spec()),
   #                                     tools = memory + get_spec + bounded source/rag)
   # result -> allowed only if the last request_review accepted the current draft
 returns: the judge-accepted spec
@@ -110,9 +114,9 @@ them.
 
 - **More machinery in the *generic* host.** The `rustapp` author gains a buffer + review tool + gate,
   moving it closer to Foundry's bespoke author. Genericity is preserved (all driven by the wheel's
-  `judge_prompt`), but the shared loop is heavier and less "single-shot".
+  `judge`/`judge_instruction`), but the shared loop is heavier and less "single-shot".
 - **Loop-ownership shift.** The author/judge micro-loop moves from the host into the agent; the
-  `docs/rust-backend-api.md` "Python owns the loop" story now applies to author→compile→validate, with
+  `docs/rust-applications.md` §1 "Python owns the loop" story now applies to author→compile→validate, with
   the author owning the inner review cycle. Compile/validate stay host-driven.
 - **Gaming the judge.** The author decides *when* to review; the completion gate (must be accepted
   before `result`) is what prevents a perfunctory pass — same safeguard Foundry relies on.
@@ -121,7 +125,8 @@ them.
 ## 6. Rollout
 
 1. Add the buffer + `request_review` + gate to `run_llm_agent` behind a `judge` parameter; wire the
-   judge sub-agent from `module.judge_prompt`. Add the run memory tool to the author loop.
+   judge sub-agent from `module.judge` + `module.judge_instruction`. Add the run memory tool to the
+   author loop.
 2. Gate on a descriptor flag (`judge_in_loop`) so it can be enabled per wheel and A/B'd against the
    current host-driven judge.
 3. Remove `_judge_turn` from the host loop for in-loop wheels; keep the compile/validate host steps.

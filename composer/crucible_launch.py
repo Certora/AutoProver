@@ -1,6 +1,6 @@
 """Console entry points for the Crucible (Solana fuzzing) application.
 
-Crucible is now a *pure-Rust app* (``docs/rust-pure-app.md``): the ``crucible_app`` wheel + its
+Crucible is now a *pure-Rust app* (``docs/rust-applications.md``): the ``crucible_app`` wheel + its
 descriptor define everything (the shared fixture, crate deliverable, workspace prep, sandbox
 grants, verdict summary), so these are the same two-line shims echoprover uses — no
 Crucible-specific Python package. ``import composer.bind`` runs first (inside

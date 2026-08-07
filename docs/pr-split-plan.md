@@ -79,7 +79,7 @@ The generic wheel host, built on the command-sandbox seam **already upstream**
 - **Consumes (upstream, not in this PR):** `composer/sandbox/{policy,command,config}.py`
   — the seam + `none` provider from #73. `rustapp` reads `SandboxConfig.backend_spec`,
   whose master shape is `{argv_prefix, timeout_s}` (async; `config.BackendSpec`), and
-  the SDK just prepends `argv_prefix` (see `docs/rust-backend-api.md`).
+  the SDK just prepends `argv_prefix` (see `docs/rust-applications.md` §8).
 - **Docs:** `rust-applications.md`, `rust-formalization-backends.md`, `rag-import-format.md`
 - **Gate:** `test_rustapp` (echoprover decider round-trip; sandbox is a passthrough here)
 - **Depends on:** PR 1 (+ the sandbox seam on `master`)
@@ -113,7 +113,7 @@ merged `master`. It is therefore **done**, and everything it shipped is upstream
 
 - **Code:** `composer/sandbox/{policy,command,config,launcher,recipes}.py`,
   `rust/run-confined`, `scripts/Dockerfile` + Docker sandbox overlay
-- **Docs:** `docs/command-sandbox.md`, `docs/rust-backend-api.md`
+- **Docs:** `docs/command-sandbox.md`, `docs/rust-applications.md`
 - **Gate (already green on master):** `test_sandbox_escape` (all vectors denied +
   unconfined control) and the rest of `test_sandbox_*`
 

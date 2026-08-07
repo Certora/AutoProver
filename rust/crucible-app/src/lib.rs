@@ -3,7 +3,7 @@
 //! and gates them with the local `crucible` CLI. Pairs with the shared `solana`
 //! ecosystem front half (see `docs/crucible-application.md`).
 //!
-//! A passive [`Backend`] (`docs/rust-backend-api.md`): it supplies the descriptor,
+//! A passive [`Backend`] (`docs/rust-applications.md`): it supplies the descriptor,
 //! toolchain precondition checks, the per-invariant `units`, the authoring prompts
 //! (fixture + tests), and the two gating callouts — `compile` (a `crucible … --dry-run`
 //! build) and `validate` (one `crucible … --mode explore` fuzz run per unit) — which run

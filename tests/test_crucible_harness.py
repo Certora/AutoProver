@@ -1,6 +1,6 @@
 """Unit tests for the crucible wheel's crate rendering (was Python's `CrucibleHarness`).
 
-Pure/fast (no build, no LLM): the wheel now owns crate assembly (`docs/rust-pure-app.md`).
+Pure/fast (no build, no LLM): the wheel now owns crate assembly (`docs/rust-applications.md`).
 `workspace_prep` places a deps-only manifest for warming, and `finalize` renders the whole crate
 (shared fixture + one feature-gated test section per delivered invariant) from the outcome set.
 These pin that rendering — including that the manifest declares each invariant's feature, which

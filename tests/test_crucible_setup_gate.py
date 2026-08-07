@@ -183,7 +183,7 @@ async def test_crucible_fixture_authoring(pg_container: "PostgresContainer", mon
         )
 
         # No manifest pre-placement needed: `compile` materializes the harness crate
-        # (Cargo.toml + main.rs) itself per run (docs/rust-pure-app.md §4).
+        # (Cargo.toml + main.rs) itself per run (docs/rust-applications.md).
         module = load_module("crucible_app")
         descriptor = load_descriptor(module)
         phases = build_phase_model(descriptor)

@@ -256,7 +256,7 @@ async def test_crucible_phase2_store_assembles_crate():
     evm_sentinel.parent.mkdir(parents=True, exist_ok=True)
     evm_sentinel.write_text("// pretend EVM output\n")
 
-    # The deliverable is now split (docs/rust-pure-app.md): the generic callout-mode store
+    # The deliverable is now split (docs/rust-applications.md §9): the generic callout-mode store
     # writes the per-component metadata + returns the crate report link; the wheel's `finalize`
     # renders the one crate (fixture + sections) from the full result set. Drive both, exactly
     # as the pipeline does.

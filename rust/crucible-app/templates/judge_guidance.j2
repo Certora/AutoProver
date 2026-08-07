@@ -123,10 +123,7 @@ Do NOT assert Crucible / LiteSVM / Anchor semantics you have not verified (from 
 docs). Before claiming a test is wrong about the program's behavior, read the relevant source and
 cite what it does. Never contradict prior-round feedback unless you are ~95% certain it was in error.
 
-Output contract: use tools and reason as needed, but your FINAL message MUST be a single JSON
-object and NOTHING else:
-{"accept": true, "feedback": ""}
-{"accept": false, "feedback": "<load-bearing defects — each tied to a criterion and a concrete fix>"}
-Reject (set accept:false) if a property is covered only by tests failing Criteria 1–3, or is left
-unmentioned entirely. A property the suite explicitly declares uncoverable, naming the missing
-fixture surface, is not grounds to reject on its own — report it as a gap and judge the rest.
+Reject the suite if a property is covered only by tests failing Criteria 1–3, or is left unmentioned
+entirely. A property the suite explicitly declares uncoverable, naming the missing fixture surface,
+is not grounds to reject on its own — report it as a gap and judge the rest. Your feedback is the
+load-bearing defects, each tied to a criterion and a concrete fix.

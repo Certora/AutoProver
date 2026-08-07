@@ -1,10 +1,15 @@
 # Plan — reducing the Crucible judge's runtime cost
 
-**Status:** proposed. The Crucible reviewer/judge turn (added in the formalization loop — see
-`docs/rust-backend-api.md` §4) is correct and e2e-verified, but it roughly **5×'d** the end-to-end
-wall-clock (a `solana_vault` gate went from ~22 min to **1:53:04**). This plan measures where the
-cost goes, contrasts the approach with the CVL and Foundry backends' judges, and proposes a phased
-reduction that keeps the judge's catch rate.
+**Status:** superseded by `docs/crucible-judge-in-loop.md`, which shipped. This doc's **diagnosis**
+(§§1–2) is what motivated that change and still stands; its **phased plan** (§3) does not — the
+alternate it names in §5 was taken instead, and the host-driven judge turn it proposes to tune no
+longer exists. Read §§1–2 for why the judge cost what it did, and the in-loop doc for what replaced it.
+
+The Crucible reviewer/judge turn (added in the formalization loop — see `docs/rust-applications.md`
+§5) was correct and e2e-verified, but it roughly **5×'d** the end-to-end wall-clock (a `solana_vault`
+gate went from ~22 min to **1:53:04**). This plan measured where the cost went, contrasted the
+approach with the CVL and Foundry backends' judges, and proposed a phased reduction that kept the
+judge's catch rate.
 
 ## 1. Where the cost goes (measured, from the e2e run)
 
@@ -32,7 +37,11 @@ All three backends run essentially the same *kind* of review (a "are these tests
 evidence?" pass with the full `source_tools + rag_tools` belt on the heavy model). The cost gap is
 **architectural**, not prompt size.
 
-| Aspect | CVL / prover (`property_feedback_judge`) | Foundry (`feedback_tool`) | Crucible (`judge_prompt`) |
+The Crucible column is the architecture **as diagnosed** — the host-driven turn this doc set out to
+make cheaper. It is what the in-loop refactor removed; Crucible's judge is now the author-invoked
+tool the other two columns describe.
+
+| Aspect | CVL / prover (`property_feedback_judge`) | Foundry (`feedback_tool`) | Crucible (then: the host-driven judge turn) |
 |---|---|---|---|
 | **Driver** | author-invoked **tool** (in-graph) | author-invoked **tool** (in-graph) | **host-driven** turn (out-of-graph) |
 | **Cadence** | when the author calls it; feedback can be addressed *without* re-invoking | when the author calls it | **unconditional — every author attempt**, before validate |
@@ -45,21 +54,26 @@ The decisive differences:
 
 - **In-graph, author-invoked (CVL/Foundry) vs. host-driven, unconditional (Crucible).** Because the
   CVL/Foundry judge is a tool the author calls *when it is ready*, it runs deliberately (often once)
-  and inside the authoring conversation. Crucible's judge — by the **passive-service design**
-  (`docs/rust-pure-app.md`: the wheel is stateless pure callouts, Python owns the loop) — is a
-  *separate* turn the host fires after **every** author attempt.
+  and inside the authoring conversation. Crucible's judge was a *separate* turn the host fired after
+  **every** author attempt — read at the time as forced by the **passive-service design**
+  (`docs/rust-applications.md` §1: the wheel is stateless pure callouts, Python owns the loop), which
+  §5 shows it was not.
 - **Memory / context continuity.** CVL and Foundry judges attach `ctx.get_memory_tool()` and are
   handed the artifact under review, so they don't re-mine framework facts (the Foundry prompt even
-  says prior-round memory "MAY be assumed still valid"). Crucible's judge turn binds only
-  `all_tools` (= `source_tools + rag_tools`, **no memory**) and gets no authoring context, so it
-  re-explores the program from zero — the 53 `code_explorer` calls.
+  says prior-round memory "MAY be assumed still valid"). Crucible's judge turn bound only
+  `all_tools` (= `source_tools + rag_tools`, **no memory**) and got no authoring context, so it
+  re-explored the program from zero — the 53 `code_explorer` calls.
 
-So Crucible's cost is largely the price of statelessness: the same review, but re-derived from
-scratch, unconditionally, on the heavy model. **Most of the plan below is about recovering the
-context-sharing that CVL/Foundry get for free from being in-graph — within the service-shaped
-constraint that the wheel stays a set of pure callouts.**
+So Crucible's cost was largely the price of statelessness: the same review, but re-derived from
+scratch, unconditionally, on the heavy model. **Recovering the context-sharing that CVL/Foundry get
+for free from being in-graph is what both the plan below and the in-loop refactor are about; the
+refactor got it by moving in-graph rather than by simulating it from outside.**
 
-## 3. Plan
+## 3. Plan (largely overtaken — see §5)
+
+Phase 1's two levers landed, both inside the in-loop refactor rather than as tuning of the turn this
+doc assumed. Phase 2 is moot: cadence is no longer the host's to schedule, because the author decides
+when to review. Phase 3 was never built.
 
 ### Phase 1 — close the statelessness gap (biggest win, lowest risk)
 Give the judge what authoring already knows, so it stops re-deriving:
@@ -74,8 +88,10 @@ Give the judge what authoring already knows, so it stops re-deriving:
   property carry to the next instead of being re-derived per component. **[Done]** in the in-loop
   refactor (`docs/crucible-judge-in-loop.md`).
 
-### Phase 2 — fix the cadence (match the author-invoked pattern)
-- **Don't judge unconditionally every attempt.** Today every attempt is author→judge→validate, so a
+### Phase 2 — fix the cadence (match the author-invoked pattern) — **moot**
+Superseded rather than done: the author now calls the judge as a tool, so there is no unconditional
+cadence left to suppress and no host-side round counter to cap.
+- **Don't judge unconditionally every attempt.** Every attempt was author→judge→validate, so a
   build-fail re-author re-judges. Only judge new *logic* (`failure is None or
   failure.kind == "judge"`) — a mechanical compile fix doesn't need re-review. (The `TEST_CHEAT_SHEET`
   lamports fix already reduces build-fail retries.)
@@ -97,16 +113,16 @@ Each phase re-runs `test_crucible_e2e_gate` and compares **wall-clock + verdict 
 `TEST_CHEAT_SHEET` fix is in)? The gate is ~2 h and paid, so iterate Phases 1–2 on a **smaller
 scenario** (fewer properties) first and use the full gate only to confirm.
 
-## 5. Architectural note
+## 5. Architectural note — and what was actually done
 
-The judge is currently a separate host-driven turn because the current host loop runs it that way —
-**not** because the passive-service design forbids the CVL/Foundry `feedback_tool` (author-invoked,
-in-graph) pattern. The author loop already runs in Python (`run_llm_agent`), so the host *could* bind
-a judge tool into it that reuses the wheel's `judge_prompt` — a host-side change that leaves the wheel
-API untouched. That alternative is written up in **`docs/crucible-judge-in-loop.md`**.
+The judge was a separate host-driven turn because the host loop ran it that way — **not** because the
+passive-service design forbids the CVL/Foundry `feedback_tool` (author-invoked, in-graph) pattern.
+The author loop already runs in Python (`run_llm_agent`), so the host could bind a judge tool into it
+that reuses the wheel's review callouts — a host-side change leaving the wheel API untouched. That
+alternative is written up in **`docs/crucible-judge-in-loop.md`**, and **it is what shipped**: the
+host-driven turn is gone, and Crucible's judge is a `request_review` tool the author calls.
 
-The two paths trade off effort vs. shape: this doc's Phases 1–2 recover the bulk of the in-graph
-efficiency (shared context, memory continuity, deliberate cadence) with a localized change to the
-current single-shot author; the in-loop proposal removes the cost at its architectural source but
-refactors the authoring loop. A reasonable sequence is Phase 1 now, converging toward the in-loop
-design.
+So the sequence this section proposed (Phase 1 now, converging toward the in-loop design) collapsed
+into going straight to the in-loop design, which carried Phase 1's two levers with it. What remains
+open from this doc is the recursion cap (§3 Phase 1) and the tunability knobs (§3 Phase 3); the
+wall-clock claim the whole plan rests on has **not** been re-measured since the refactor.
