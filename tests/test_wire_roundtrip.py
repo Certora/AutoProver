@@ -71,7 +71,9 @@ from composer.rustapp.wire import (
     AuthorInput,
     CalloutError,
     CompileResult,
+    ComponentGaveUp,
     ComponentOutcome,
+    CrateRootInput,
     FinalizeComponent,
     FinalizeInput,
     Judge,
@@ -332,6 +334,7 @@ OUTBOUND = [
     Root("author_input", AuthorInput),
     Root("target", Target),
     Root("finalize_input", FinalizeInput),
+    Root("crate_root_input", CrateRootInput),
     Root("sandbox", BackendSpec),
 ]
 
@@ -468,6 +471,7 @@ NESTED = [
     Root("property", Property),
     Root("skipped_property", SkippedProperty),
     Root("finalize_component", FinalizeComponent),
+    Root("gave_up", ComponentGaveUp),
     Root("component_outcome", ComponentOutcome),
 ]
 

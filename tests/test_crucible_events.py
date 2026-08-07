@@ -80,8 +80,10 @@ def test_component_author_prompt_asks_for_one_invariant_fn_covering_all_props():
     prompt = json.loads(crucible_app.author_prompt(_component_input("solvency", "conservation")))
     assert prompt.get("system") is None
     ins = prompt["instruction"]
-    # One c_invariants fn asserting ALL listed properties.
-    assert "c_invariants" in ins
+    # One `invariants` fn asserting ALL listed properties. The name is constant across components —
+    # the per-component `c_<slug>` belongs to the wheel-generated entry and never reaches the model.
+    assert "named EXACTLY `invariants`" in ins
+    assert "c_invariants" not in ins
     assert "p solvency" in ins and "p conservation" in ins
 
 

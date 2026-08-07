@@ -1,0 +1,14 @@
+// The crate root the PREFLIGHT and SETUP gates built — kept as the record of what they proved.
+//
+// Both gates run before the deliverable's crate root can exist: preflight before the program has
+// even been analyzed, and setup being the step that authors the fixture that root is built around.
+// So they build a root of their own, under the same `[[bin]]` NAME as the deliverable (the crucible
+// CLI only ever executes `target/<profile>/invariant_test`) at a different path. That is what lets
+// `src/main.rs` be written exactly once per run, and never exist as a half-finished crate.
+//
+// In the delivered crate this file is NOT a build target — `Cargo.toml` points `[[bin]]` at
+// `src/main.rs`. The probe itself is still live there, as a section like any other:
+//
+//     crucible run {{ program }} {{ probe_feature }} --release --dry-run
+//
+{{ root }}

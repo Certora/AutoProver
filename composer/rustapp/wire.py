@@ -217,14 +217,44 @@ class Delivered(WireModel):
 
 
 class ComponentGaveUp(WireModel):
-    """Formalization gave up on this component; it contributes nothing to the deliverable."""
+    """Formalization gave up on this component: the author reached the point where anything it could
+    publish would only *look* checked, and said so instead. Mirrors the Rust ``GaveUp``.
+
+    It produced no spec and ran no build, so unlike :class:`Delivered` it has no ``targets`` — which
+    is why it carries its ``unit``. A wheel whose deliverable declares a build target per unit needs
+    to name the one behind this component, and re-deriving that name by re-slugifying ``name`` would
+    put the host's slug rule in a second language."""
 
     status: Literal["gave_up"] = "gave_up"
+    #: The unit being formalized, as its component callouts received it (``FeatureUnit.feature_json``).
+    unit: dict[str, Any] = Field(default_factory=dict)
+    #: The author's own account of why it stopped, from the give-up tool. Surfaced to the user, so it
+    #: must not be reshaped into something that reads like a finding.
+    reason: str = ""
 
 
 #: A component's outcome — tagged on ``status`` (Rust ``ComponentOutcome``). A variant rather than a
-#: ``delivered`` flag beside always-present fields: there is nothing to read on one that gave up.
+#: ``delivered`` flag beside always-present fields: the two share no data.
 ComponentOutcome = Annotated[Delivered | ComponentGaveUp, Field(discriminator="status")]
+
+
+class CrateRootInput(WireModel):
+    """What a wheel needs to render its build's scaffolding once, at the one point both halves are
+    known: after the shared setup spec is authored, and before the units fan out (Rust
+    ``CrateRootInput``).
+
+    Scaffolding for a multi-unit build depends on the **whole unit set** — a Cargo manifest's feature
+    list, a crate root's module declarations — which no per-unit callout can see. The host writes
+    what comes back and does not write it again, so the wheel's per-unit callouts can emit only that
+    unit's own files."""
+
+    program: str
+    source_unit: dict[str, Any] = Field(default_factory=dict)
+    prep_facts: dict[str, Any] = Field(default_factory=dict)
+    setup: str | None = None
+    #: Every unit about to be formalized, in fan-out order — each the same object a component
+    #: callout receives. The field the hook exists for.
+    units: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FinalizeComponent(WireModel):
@@ -504,6 +534,10 @@ class RustAppModule(Protocol):
     workspace_prep: Callable[[str], str]
     #: ``(args_json) -> SandboxGrants`` JSON.
     sandbox_grants: Callable[[str], str]
+    #: ``(input_json) -> {relpath: contents} | None`` JSON, from a :class:`CrateRootInput`. Pure.
+    #: Called once per run, between the setup step and fan-out; the host writes the result and does
+    #: not rewrite it, so a wheel that implements this emits only per-unit files from its gates.
+    crate_root: Callable[[str], str | None]
     #: ``(outcomes_json) -> {relpath: contents} | None`` JSON.
     finalize: Callable[[str], str | None]
 

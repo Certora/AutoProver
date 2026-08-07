@@ -35,9 +35,10 @@ import asyncio
 import enum
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, override, Sequence
+from typing import Any, Awaitable, Callable, override
 
 
 from langgraph.config import get_stream_writer
@@ -71,6 +72,7 @@ from composer.rustapp.wire import (
     CompileOk,
     ComponentGaveUp,
     ComponentInput,
+    CrateRootInput,
     FinalizeComponent,
     FinalizeInput,
     PreflightInput,
@@ -171,6 +173,18 @@ def confined_target(root: Path, rel: str) -> Path:
     return root / p
 
 
+def write_wheel_files(root: Path, files: Mapping[str, str]) -> None:
+    """Write a wheel's ``{relpath: contents}`` under ``root``, path-confined.
+
+    Every set of files a wheel hands back — the workspace prep's, the crate root's, the
+    deliverable's — lands the same way, so they share one writer rather than three loops that could
+    drift on confinement or on parent-directory creation."""
+    for rel, contents in files.items():
+        target = confined_target(root, rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(contents)
+
+
 def source_unit_of(
     ecosystem: Ecosystem[Any, Any, Any], source: SourceFields
 ) -> dict[str, Any]:
@@ -242,10 +256,7 @@ async def run_workspace_prep(
     program id), which is knowledge the framework would otherwise have to hold a shape for."""
     workdir = Path(source.project_root)
     plan = parse_workspace_prep(module.workspace_prep(input.model_dump_json()))
-    for rel, contents in plan.files.items():
-        target = confined_target(workdir, rel)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(contents)
+    write_wheel_files(workdir, plan.files)
 
     if not plan.needs_toolchain:
         return {}
@@ -430,7 +441,17 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]], run: PipelineRun
     ) -> None:
         components = [
-            FinalizeComponent(name=o.feat.display_name, outcome=ComponentGaveUp())
+            FinalizeComponent(
+                name=o.feat.display_name,
+                # It ran no build, so it has no targets to key on — the wheel names its build target
+                # from the unit, by the same rule the gated builds' selectors came from. The reason
+                # travels with it: a wheel whose deliverable declares a target per unit has to put
+                # something behind this one, and what it puts there should say why.
+                outcome=ComponentGaveUp(
+                    unit=o.feat.feature_json(),
+                    reason=o.result.reason if isinstance(o.result, GaveUp) else str(o.result),
+                ),
+            )
             if not isinstance(o.result, Delivered)
             # A callout-mode wheel renders the whole deliverable from these (Crucible: folds each
             # section into the shared crate, keyed by its property_checks feature) — including the
@@ -461,12 +482,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         raw = await asyncio.to_thread(self._module.finalize, payload.model_dump_json())
         if not raw:
             return
-        files = parse_files(raw)
-        root = Path(run.source.project_root)
-        for rel, contents in files.items():
-            target = confined_target(root, rel)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(contents)
+        write_wheel_files(Path(run.source.project_root), parse_files(raw))
 
 
 @dataclass(frozen=True)
@@ -497,26 +513,37 @@ type SetupAuthor = Callable[
     [list[UnitProperty], Sequence[FeatureUnit], PipelineRun], Awaitable[str]
 ]
 
+# Writes the wheel's build scaffolding for the run, given the authored setup spec and every unit
+# about to be formalized. Same seam as :data:`SetupAuthor`, one step later — and it takes no
+# ``PipelineRun``, because unlike authoring it runs no LLM turn and needs no cache.
+type CrateRootWriter = Callable[[str | None, Sequence[FeatureUnit]], Awaitable[None]]
+
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
     """The formalizer for a wheel that declares a ``setup`` step, before its shared spec exists.
 
     ``author`` writes and compiles the artifact from the properties it must make checkable;
-    ``build`` turns that artifact into the :class:`RustFormalizer` (see
-    :meth:`RustPreparedSystem.prepare_formalization`, which closes over everything else the
-    formalizer needs). Splitting it this way means the artifact is never assigned onto a live
-    formalizer — the only formalizer that exists already has it."""
+    ``scaffold`` writes the build scaffolding that spec and the unit set imply; ``build`` turns the
+    artifact into the :class:`RustFormalizer` (see :meth:`RustPreparedSystem.prepare_formalization`,
+    which closes over everything else the formalizer needs). Splitting it this way means the artifact
+    is never assigned onto a live formalizer — the only formalizer that exists already has it."""
 
-    def __init__(self, author: SetupAuthor, build: Callable[[str], RustFormalizer]):
+    def __init__(
+        self,
+        author: SetupAuthor,
+        scaffold: CrateRootWriter,
+        build: Callable[[str], RustFormalizer],
+    ):
         self._author = author
+        self._scaffold = scaffold
         self._build = build
 
     @override
     async def begin(
         self, jobs: Sequence[BackendJob[FeatureUnit]], run: PipelineRun
     ) -> RustFormalizer:
-        """Author the shared setup spec from **every** unit's properties, and hand back the
-        formalizer built around it.
+        """Author the shared setup spec from **every** unit's properties, write the build scaffolding
+        both of those imply, and hand back the formalizer built around the spec.
 
         Two constraints fix this point in the run. It cannot happen in ``prepare_formalization``
         (which overlaps property extraction, so no properties exist yet), and it cannot happen
@@ -524,11 +551,16 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         rest are then told to work within — see :class:`StagedFormalizer` and
         docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two.
 
-        It is also the only moment the whole **unit set** is known, so that goes to the author too:
-        scaffolding for a multi-unit build is a function of the set rather than of any one unit, and
-        a wheel whose setup gate builds it needs the set to build the real thing."""
+        It is also the first moment the whole **unit set** is known, and scaffolding for a multi-unit
+        build (a manifest's feature list, a crate root's module declarations) is a function of the set
+        rather than of any one unit. Both callouts below get it: a wheel whose setup gate builds the
+        crate needs the set to build the real thing, and the scaffolding write is what lets the
+        per-unit gates emit only their own files."""
         union = [UnitProperty(job.feat.display_name, prop) for job in jobs for prop in job.props]
-        return self._build(await self._author(union, [job.feat for job in jobs], run))
+        units = [job.feat for job in jobs]
+        setup = await self._author(union, units, run)
+        await self._scaffold(setup, units)
+        return self._build(setup)
 
 
 @dataclass
@@ -626,7 +658,26 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             await setup_ctx.cache_put(RustSetupSpec(source=fixture.spec))
             return fixture.spec
 
-        return RustStagedFormalizer(author_setup, build)
+        async def write_crate_root(
+            setup_result: str | None, units: Sequence[FeatureUnit]
+        ) -> None:
+            """Ask the wheel for the run's build scaffolding and write it.
+
+            Not cached alongside the setup spec: this is a few small files rendered from values the
+            host already holds, and it must land on disk even when the expensive half above was a
+            cache hit — the per-unit gates compile against it."""
+            payload = CrateRootInput(
+                program=program,
+                source_unit=project.source_unit,
+                prep_facts=project.prep_facts,
+                setup=setup_result,
+                units=[u.feature_json() for u in units],
+            )
+            raw = await asyncio.to_thread(b.module.crate_root, payload.model_dump_json())
+            if raw:
+                write_wheel_files(workdir, parse_files(raw))
+
+        return RustStagedFormalizer(author_setup, write_crate_root, build)
 
 
 @dataclass

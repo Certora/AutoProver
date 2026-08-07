@@ -122,6 +122,13 @@ macro_rules! export_app {
         }
 
         #[$crate::pyo3::pyfunction]
+        fn crate_root(
+            input_json: ::std::string::String,
+        ) -> ::std::option::Option<::std::string::String> {
+            $crate::ffi::crate_root(__autoprover_app(), &input_json)
+        }
+
+        #[$crate::pyo3::pyfunction]
         fn finalize(
             outcomes_json: ::std::string::String,
         ) -> ::std::option::Option<::std::string::String> {
@@ -144,6 +151,7 @@ macro_rules! export_app {
             m.add_function($crate::pyo3::wrap_pyfunction!(validate, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(sandbox_grants, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(workspace_prep, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(crate_root, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(finalize, m)?)?;
             ::std::result::Result::Ok(())
         }

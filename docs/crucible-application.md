@@ -152,9 +152,25 @@ reads the analyzed model, so it runs **concurrently with system analysis** (`bac
 3. Generate/collect the IDL when the program's Anchor major can't be linked (§6.1): `anchor idl build`
    (or convert/accept a supplied one) → `fuzz/<program>/idls/<lib>.json`; the harness then uses
    `crucible_idl_gen::declare_fuzz_program!`.
-4. **Gate it**: `crucible run <program> c_probe --release --dry-run` against a fixture the *wheel*
+4. **Gate it**: `crucible run <program> probe --release --dry-run` against a fixture the *wheel*
    authors (`skeleton_fixture.j2` — a `Fixture` that loads the `.so`, one no-op action, and the
-   `c_probe` invariant test). No LLM is involved.
+   `probe` invariant test). No LLM is involved.
+
+This gate and the setup gate build a crate root of their own, `src/gate_root.rs`, rather than the
+deliverable's `src/main.rs` — they run before the unit set is known, so the real root does not exist
+yet, and writing it here would leave a half-crate behind at the deliverable's path whenever a run
+died mid-setup. Both roots are declared under the same `[[bin]]` **name**, `invariant_test`, because
+that is the only binary the crucible CLI executes; only the path differs, and `crate_root` repoints
+it when it writes the real root.
+
+`probe` is a section like any component's, so the check survives into the delivered crate: a user
+can re-run it with `crucible run <program> probe --release --dry-run` to confirm the harness still
+compiles and the program still loads, without running a campaign.
+
+Its name sits **outside** the `c_` prefix every component target carries (`feature_of` is the only
+thing that names one). That is not cosmetic: a component named "probe" slugs to `c_probe`, so without
+the split it would declare the same Cargo feature as this gate and its section file would silently
+overwrite the probe's. The two namespaces are disjoint by construction.
 
 Step 4 is what makes steps 1–3 mean something. `cargo fetch` resolves a dependency graph but compiles
 nothing, so without it the first real build of the harness crate is the compile of the first

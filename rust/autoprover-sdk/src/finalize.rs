@@ -32,16 +32,36 @@ pub struct Delivered {
 }
 
 /// Whether a component reached the deliverable. An enum rather than a `delivered` flag beside
-/// always-present fields: a component that gave up has no spec, no targets and no checks, so there
-/// is nothing for a caller to read past the name.
+/// always-present fields: the two outcomes share no data — a component that gave up has no spec, no
+/// targets and no checks, and what it does have (the unit, the reason) means nothing for one that
+/// delivered.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
 pub enum ComponentOutcome {
     Delivered(Delivered),
-    /// Formalization gave up on this component; it contributes nothing to the deliverable.
-    GaveUp,
+    /// Formalization gave up on this component: the author reached the point where anything it could
+    /// publish would only *look* checked, and said so instead.
+    GaveUp(GaveUp),
+}
+
+/// What a component that gave up contributes: not a spec, but enough to say so in the deliverable.
+///
+/// A [`Delivered`] component is keyed by the targets its gated builds actually selected. One that
+/// gave up ran no build, so it has no targets — which is why it carries its unit instead. Re-deriving
+/// a key from the display name would put the host's slug rule in a second language, and the wheel
+/// already owns unit → build-target naming.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct GaveUp {
+    /// The unit that was being formalized — the same [chain-shaped](ChainData) value its component
+    /// callouts received.
+    pub unit: ChainData,
+    /// The author's own account of why it stopped, as recorded by the give-up tool. Reported to the
+    /// user, so it must never be paraphrased into something that reads like a finding.
+    pub reason: String,
 }
 
 /// One component's line in the outcome set.
@@ -79,7 +99,17 @@ impl FinalizeInput {
     pub fn delivered(&self) -> impl Iterator<Item = (&str, &Delivered)> {
         self.components.iter().filter_map(|c| match &c.outcome {
             ComponentOutcome::Delivered(d) => Some((c.name.as_str(), d)),
-            ComponentOutcome::GaveUp => None,
+            ComponentOutcome::GaveUp(_) => None,
+        })
+    }
+
+    /// The components formalization gave up on, as `(name, gave_up)`. A deliverable that declares a
+    /// build target per unit needs these: the target exists either way, and what a user gets when
+    /// they select it should say why there is nothing behind it.
+    pub fn gave_up(&self) -> impl Iterator<Item = (&str, &GaveUp)> {
+        self.components.iter().filter_map(|c| match &c.outcome {
+            ComponentOutcome::GaveUp(g) => Some((c.name.as_str(), g)),
+            ComponentOutcome::Delivered(_) => None,
         })
     }
 }

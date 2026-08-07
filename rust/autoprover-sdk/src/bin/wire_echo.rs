@@ -26,9 +26,9 @@ use autoprover_sdk::args::AppArgs;
 use autoprover_sdk::authoring::{AuthorInput, Judge, Prompt, Property};
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::ffi::CalloutError;
-use autoprover_sdk::finalize::{ComponentOutcome, FinalizeComponent, FinalizeInput};
+use autoprover_sdk::finalize::{ComponentOutcome, FinalizeComponent, FinalizeInput, GaveUp};
 use autoprover_sdk::outcome::{Check, CompileResult, SkippedProperty, Target, ValidateOutcome};
-use autoprover_sdk::prep::{SandboxGrants, WorkspacePrep};
+use autoprover_sdk::prep::{CrateRootInput, SandboxGrants, WorkspacePrep};
 use autoprover_sdk::sandbox::Sandbox;
 
 /// Every payload root that crosses the FFI as a whole message, named the way the host names it.
@@ -44,6 +44,7 @@ enum WireType {
     AuthorInput,
     Target,
     FinalizeInput,
+    CrateRootInput,
     /// The confinement wrapper, mirrored by a `TypedDict` rather than a pydantic model
     /// (`composer.sandbox.config.BackendSpec`) — a mirror all the same.
     Sandbox,
@@ -65,6 +66,7 @@ enum WireType {
     SkippedProperty,
     FinalizeComponent,
     ComponentOutcome,
+    GaveUp,
 }
 
 /// What both operations need of a payload type: the host's two directions, plus generation.
@@ -85,6 +87,7 @@ fn dispatch<O: Op>(ty: WireType, op: O) -> Result<Value, Fault> {
         WireType::AuthorInput => op.run::<AuthorInput>(),
         WireType::Target => op.run::<Target>(),
         WireType::FinalizeInput => op.run::<FinalizeInput>(),
+        WireType::CrateRootInput => op.run::<CrateRootInput>(),
         WireType::Sandbox => op.run::<Sandbox>(),
         WireType::AppDescriptor => op.run::<AppDescriptor>(),
         WireType::CompileResult => op.run::<CompileResult>(),
@@ -99,6 +102,7 @@ fn dispatch<O: Op>(ty: WireType, op: O) -> Result<Value, Fault> {
         WireType::SkippedProperty => op.run::<SkippedProperty>(),
         WireType::FinalizeComponent => op.run::<FinalizeComponent>(),
         WireType::ComponentOutcome => op.run::<ComponentOutcome>(),
+        WireType::GaveUp => op.run::<GaveUp>(),
     }
 }
 

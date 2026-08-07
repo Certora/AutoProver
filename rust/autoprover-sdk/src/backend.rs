@@ -7,7 +7,7 @@ use crate::authoring::{AuthorInput, Judge, Prompt};
 use crate::descriptor::AppDescriptor;
 use crate::finalize::FinalizeInput;
 use crate::outcome::{CompileResult, Target, ValidateOutcome};
-use crate::prep::{SandboxGrants, WorkspacePrep};
+use crate::prep::{CrateRootInput, SandboxGrants, WorkspacePrep};
 use crate::sandbox::Workspace;
 
 /// A Rust AutoProver backend — a **passive service** the Python pipeline drives. One instance
@@ -128,6 +128,20 @@ pub trait Backend: Send + Sync + 'static {
     /// stays Python-owned. Default: nothing to prepare.
     fn workspace_prep(&self, _input: &AuthorInput) -> WorkspacePrep {
         WorkspacePrep::default()
+    }
+
+    /// Render the build's scaffolding once, as `{relpath: contents}`, at the point the unit set is
+    /// first known (see [`CrateRootInput`]). Pure; the host writes what comes back.
+    ///
+    /// Called between the setup step and fan-out, and **only then** — the host does not rewrite
+    /// these files, so whatever a wheel returns here is what every gated build compiles against and,
+    /// unless [`Backend::finalize`] replaces it, what ships. A wheel implementing this should stop
+    /// emitting the same paths from [`Backend::compile`]/[`Backend::validate`], which is the point:
+    /// the scaffolding is assembled once, from the whole unit set, instead of N times from one unit.
+    ///
+    /// Default: nothing, for an application whose units share no build scaffolding.
+    fn crate_root(&self, _input: &CrateRootInput) -> BTreeMap<String, String> {
+        BTreeMap::new()
     }
 
     /// Optional run-level artifacts from the full outcome set, as `{relpath: contents}`.

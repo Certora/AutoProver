@@ -1,7 +1,6 @@
-
-
-#[invariant_test]
-fn c_probe(fixture: &mut Fixture) {
+// Drives no state and asserts nothing: what it proves is that the fixture COMPILES and that its
+// program loads under LiteSVM. Behaves as a component section so the delivered crate can re-run
+// that check the same way it runs any other target.
+pub fn {{ section_fn }}(fixture: &mut Fixture) {
     let _ = fixture;
 }
-

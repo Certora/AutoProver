@@ -2,7 +2,7 @@
 Write ONE invariant function holding ALL of this component's properties (no fixture — it already
 exists as `Fixture`):
 
-- `pub fn {{ harness_fn }}(fixture: &mut Fixture) { ... }` — named EXACTLY that, and `pub` —
+- `pub fn invariants(fixture: &mut Fixture) { ... }` — named EXACTLY that, and `pub` —
   runs AFTER EACH fuzzed action. Put EVERY listed property's checks in this one fn (conservation,
   solvency, bounds, access control, …). One fn = one build = one fuzz run for this component.
   The fuzzer drives the WHOLE program, so the sequence interleaves other components' actions too.
@@ -41,5 +41,5 @@ exists as `Fixture`):
   Prefer the comparison macros (`fuzz_assert_{eq,ne,lt,le,gt,ge}`) over a bare `fuzz_assert!` so
   the operands are explicit, and when the check LOOPS over accounts include the account key too —
   otherwise the message cannot say which one failed.
-- Return ONLY the one annotated `fn {{ harness_fn }}`.
+- Return ONLY the one `pub fn invariants`.
 

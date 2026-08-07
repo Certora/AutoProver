@@ -8,6 +8,7 @@
 use crate::args::AppArgs;
 use crate::authoring::AuthorInput;
 use crate::backend::Backend;
+use crate::prep::CrateRootInput;
 use crate::sandbox::Workspace;
 use serde::{Deserialize, Serialize};
 
@@ -180,6 +181,17 @@ pub fn sandbox_grants(b: &dyn Backend, args_json: &str) -> String {
 /// `workspace_prep(input_json) -> str` (JSON `WorkspacePrep`). Pure.
 pub fn workspace_prep(b: &dyn Backend, input_json: &str) -> String {
     encode(parse_input(input_json).map(|input| b.workspace_prep(&input)))
+}
+
+/// `crate_root(input_json) -> str | None` (JSON `{relpath: contents}`, or None). Pure.
+pub fn crate_root(b: &dyn Backend, input_json: &str) -> Option<String> {
+    let input: CrateRootInput = parse(input_json, "CrateRootInput").ok()?;
+    let files = b.crate_root(&input);
+    if files.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&files).ok()
+    }
 }
 
 /// `finalize(outcomes_json) -> str | None` (JSON `{relpath: contents}`, or None).
@@ -458,7 +470,8 @@ mod tests {
                   {"name":"Farms","outcome":{"status":"delivered","artifact_text":"fn c_farms(){}",
                    "targets":["c_farms"],"property_checks":[["fifo",["c_fifo"]]],
                    "skipped":[],"unit_file":null,"run_link":null}},
-                  {"name":"Referrals","outcome":{"status":"gave_up"}}]}"#,
+                  {"name":"Referrals","outcome":{"status":"gave_up",
+                   "unit":{"slug":"referrals"},"reason":"no action mints referral fees"}}]}"#,
         )
         .expect("parse");
         // What ships is rendered from the same facts the gated builds used.
@@ -472,12 +485,14 @@ mod tests {
         );
         assert!(input.prep_facts.is_empty());
         assert_eq!(input.setup.as_deref(), Some("struct Fixture {}"));
-        // A component that gave up carries nothing to read, and `delivered` skips it.
+        // The two outcomes partition the set, and each iterator reads only its own variant.
         let delivered: Vec<&str> = input.delivered().map(|(name, _)| name).collect();
         assert_eq!(delivered, vec!["Farms"]);
-        assert!(matches!(
-            input.components[1].outcome,
-            ComponentOutcome::GaveUp
-        ));
+        let gave_up: Vec<(&str, &str)> =
+            input.gave_up().map(|(name, g)| (name, g.reason.as_str())).collect();
+        assert_eq!(gave_up, vec![("Referrals", "no action mints referral fees")]);
+        // Its unit travels with it: a deliverable declaring a target per unit needs to name this one,
+        // and it has no `targets` of its own because it ran no build.
+        assert!(matches!(input.components[1].outcome, ComponentOutcome::GaveUp(_)));
     }
 }

@@ -63,6 +63,7 @@ impl.
 | `compile(input_json, spec \| None, workdir, sandbox_json) -> str` | **blocking** | build the whole spec once — how setup and preflight build; `None` is the preflight, which has no spec |
 | `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` | **blocking** | build + check one target — which arrives with the rows it covers — returning a verdict per row (§6) |
 | `workspace_prep(input_json) -> str` | pure | a *plan* the host executes (§7) |
+| `crate_root(input_json) -> str \| None` | pure | the run's build scaffolding, rendered once from the whole unit set (§9) |
 | `sandbox_grants(args_json) -> str` | pure | extra grants to union into the host's policy (§8) |
 | `finalize(outcomes_json) -> str \| None` | pure | run-level artifact files, `{relpath: contents}` (§9) |
 
@@ -710,10 +711,25 @@ the choice of how the *source* deliverable lands:
   `property_checks` and `targets` plus the shared setup spec, and can therefore assemble one
   artifact (a single crate with a section per property) as the single source of truth for its layout.
 
-The tradeoff of `callout` mode is that the deliverable lands on disk only at finalize, not
-incrementally: the assembled artifact is only *runnable* once complete, and `validate` already
-materializes a transient copy per run via the `files` map. Streaming partial deliverables would be a
-deliberate follow-up.
+**`crate_root` is what keeps a callout deliverable from being assembled twice.** Scaffolding for a
+multi-unit build — a manifest's feature list, a crate root's module declarations — is a function of
+the *whole unit set*, which no per-unit callout can see. Without the hook a wheel must re-render it
+on every gated build from the one unit it happens to hold, and the real artifact is only ever
+assembled at the end, where nothing has built it (`docs/crucible-component-units.md` §17 is what that
+cost). The host calls `crate_root` once, in `StagedFormalizer.begin` — the first point both the
+shared setup spec and the unit set exist — writes the result, and never rewrites it. A wheel that
+implements it should emit only per-unit files from `compile`/`validate`, so a gated build *is* the
+deliverable with one target selected.
+
+Because the scaffolding is written before any outcome exists, it necessarily declares a target for
+every unit — including ones formalization later gives up on. `ComponentOutcome::GaveUp` therefore
+carries the unit and the author's reason, so `finalize` can put something honest behind such a
+target rather than leaving it dangling.
+
+The remaining tradeoff of `callout` mode is that the *sections* land on disk only at finalize: the
+assembled artifact is only fully runnable once complete, and `validate` already materializes a
+transient copy per run via the `files` map. Streaming partial deliverables would be a deliberate
+follow-up.
 
 ---
 
@@ -762,7 +778,7 @@ for cp312+.
    [example-app/Cargo.toml](../rust/example-app/Cargo.toml).
 2. **Implement `Backend`** — `descriptor` + `author_prompt` + `compile` + `validate` are
    required; `validate_preconditions`, `judge`, `judge_instruction`, `workspace_prep`,
-   `sandbox_grants` and `finalize` have defaults. Every callout is directly unit-testable in Rust with no Python.
+   `sandbox_grants`, `crate_root` and `finalize` have defaults. Every callout is directly unit-testable in Rust with no Python.
 3. **Export it** — `autoprover_sdk::export_app!(my_app, MyApp::new());`
 4. **Wire the build** — a maturin `pyproject.toml` (`module-name = "my_app"`) with a `[tool.uv]
    cache-keys` block over its `.rs` sources, then one line each in the root `pyproject.toml`'s

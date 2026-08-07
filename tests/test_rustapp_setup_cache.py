@@ -86,11 +86,24 @@ PROPS = [
 ]
 
 
+class _Module:
+    """Stands in for the compiled wheel. Only ``crate_root`` is reachable from these tests — ``begin``
+    asks for the run's build scaffolding once it knows the unit set — and this app declares none."""
+
+    #: Every payload ``begin`` sent, so a test can assert what the wheel was told.
+    def __init__(self):
+        self.crate_root_calls: list[dict] = []
+
+    def crate_root(self, input_json: str) -> str | None:
+        self.crate_root_calls.append(json.loads(input_json))
+        return None
+
+
 @dataclass(frozen=True)
 class _Unit:
-    """The two `FeatureUnit` members `begin` reads: the name of the unit a property was inferred for,
-    which is what each property carries onto the wire, and the unit's own semantic content, which is
-    what the run's unit set carries."""
+    """The two `FeatureUnit` members `begin` reads: the display name a property carries onto the
+    wire, and the unit object itself — which the setup turn and the crate-root write both send, so a
+    wheel can name the build target for a unit that has not been formalized yet."""
     display_name: str
 
     def feature_json(self) -> dict[str, object]:
@@ -106,7 +119,7 @@ def _jobs(*prop_lists: list[PropertyFormulation], names: list[str] | None = None
 
 
 async def _formalizer(
-    monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None, run=None
+    monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None, run=None, module=None
 ) -> RustFormalizer:
     """Drive prepare→begin with the LLM authoring stubbed, returning the formalizer ``begin`` built
     around the authored fixture."""
@@ -136,7 +149,7 @@ async def _formalizer(
     )
     descriptor = _descriptor()
     backend = build_backend(
-        object(),  # type: ignore[arg-type]  — no callout
+        module or _Module(),  # type: ignore[arg-type]
         descriptor, source, phases=build_phase_model(descriptor),
     )
     run = run or _Run(ctx)
@@ -155,9 +168,11 @@ async def _formalizer(
     return await staged.begin(jobs or _jobs(props if props is not None else PROPS), run)  # type: ignore[arg-type]
 
 
-async def _prepare(monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None) -> str | None:
+async def _prepare(
+    monkeypatch, ctx, authored: list[str], tmp_path, *, props=None, jobs=None, module=None
+) -> str | None:
     """As :func:`_formalizer`, narrowed to the authored fixture itself."""
-    f = await _formalizer(monkeypatch, ctx, authored, tmp_path, props=props, jobs=jobs)
+    f = await _formalizer(monkeypatch, ctx, authored, tmp_path, props=props, jobs=jobs, module=module)
     return f._setup_result
 
 
@@ -229,6 +244,26 @@ async def test_the_artifact_is_authored_from_every_unit_s_properties(monkeypatch
     assert [p.title for p in authored[0].props] == [
         "deposit_conserves", "only_admin_sets_fee", "stake_matches_position"
     ]
+
+
+async def test_the_crate_root_is_written_once_from_the_whole_unit_set(monkeypatch, tmp_path):
+    # The other half of what `begin` is for. Scaffolding for a multi-unit build (a manifest's feature
+    # list, a crate root's module declarations) is a function of the SET, so it can only be written
+    # here — after the setup spec exists and before the units fan out. Writing it once is what lets
+    # each per-unit gate emit only its own files instead of re-rendering the whole crate.
+    store, authored, module = _Store(), [], _Module()
+    props = [PropertyFormulation(title="p", sort="invariant", description="d")]
+    await _prepare(
+        monkeypatch, _ctx(store, namespace=None), authored, tmp_path,
+        jobs=_jobs(props, props, names=["deposits", "farms"]), module=module,
+    )
+    assert len(module.crate_root_calls) == 1, "written once per run, not once per unit"
+    sent = module.crate_root_calls[0]
+    # Every unit, whole — including ones that will later give up, since the declaration cannot wait
+    # for an outcome.
+    assert [u["slug"] for u in sent["units"]] == ["deposits", "farms"]
+    # …alongside the authored fixture, which is the other input the scaffolding needs.
+    assert sent["setup"] == FIXTURE
 
 
 async def test_same_titled_properties_of_two_components_are_both_carried(monkeypatch, tmp_path):
