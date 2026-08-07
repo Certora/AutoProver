@@ -30,7 +30,7 @@ from composer.pipeline.core import (
 )
 from composer.pipeline.ecosystem import ECOSYSTEMS, Ecosystem
 from composer.rustapp.adapter import RustBackend
-from composer.rustapp.descriptor import AppDescriptor, PhaseRole
+from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.store import RustArtifactStore
 from composer.rustapp.wire import CALLOUTS, AppArgs, RustAppModule
@@ -95,22 +95,60 @@ def resolve_ecosystem(descriptor: AppDescriptor) -> Ecosystem[Any, Any, Any]:
     return eco
 
 
-def build_phase_enum(descriptor: AppDescriptor) -> type[enum.Enum]:
-    """Synthesize the pipeline's phase enum from the descriptor. Safe: the code
-    only ever uses phase members for ``.name`` and as dict keys (no isinstance /
-    identity checks against a static class)."""
+@dataclass(frozen=True)
+class PhaseModel:
+    """The descriptor's phase declarations, resolved once into everything the pipeline and the
+    frontend need: the synthesized enum, the driver's core-phase mapping, the frontend's labels
+    and section order.
+
+    :func:`build_phase_model` is the *only* place that synthesizes the enum, and every consumer
+    takes a built model rather than a descriptor. That is not tidiness: ``enum.Enum(...)`` mints a
+    fresh class per call, and both the frontend's label lookup and the driver's phase tagging match
+    members by identity — a second model built from the same descriptor would compare unequal to the
+    first and silently lose every label.
+    """
+
+    phase: type[enum.Enum]
+    #: The four slots the driver tags, as members of :attr:`phase`.
+    core: CorePhases
+    ordered: tuple[PhaseSpec, ...]
+
+    @property
+    def labels(self) -> dict[Any, str]:
+        """Every declared phase's label, keyed by the enum member — what a frontend looks up."""
+        return {self.phase[p.key]: p.label for p in self.ordered}
+
+    @property
+    def section_order(self) -> list[str]:
+        """The labels in declared order — the frontend's section layout."""
+        return [p.label for p in self.ordered]
+
+    def member(self, key: str) -> enum.Enum:
+        """The member for a declared phase ``key``."""
+        return self.phase[key]
+
+    def role_member(self, role: PhaseRole) -> enum.Enum | None:
+        """The member of the phase claiming ``role``, or ``None`` when no phase claims it."""
+        return next((self.phase[p.key] for p in self.ordered if p.role is role), None)
+
+    @property
+    def first_member(self) -> enum.Enum:
+        """The first declared phase — where a task with no phase of its own is grouped."""
+        return self.phase[self.ordered[0].key]
+
+
+def build_phase_model(descriptor: AppDescriptor) -> PhaseModel:
+    """Synthesize an application's phase model from its descriptor.
+
+    The enum is safe to synthesize: the code only ever uses phase members for ``.name`` and as dict
+    keys (no isinstance / identity checks against a static class). Every *required* role must be
+    claimed — the driver tags all four (the optional ones fall back; see :class:`PhaseRole`)."""
     ordered = descriptor.ordered_phases()
     name = "".join(part.capitalize() for part in descriptor.name.split("_")) + "Phase"
     # enum.Enum's functional API is typed as returning an ``Enum`` instance, not the new
     # class; it does return a class at runtime.
-    return cast(type[enum.Enum], enum.Enum(name, {p.key: p.key for p in ordered}))
+    phase = cast(type[enum.Enum], enum.Enum(name, {p.key: p.key for p in ordered}))
 
-
-def build_core_phases(
-    descriptor: AppDescriptor, phase: type[enum.Enum]
-) -> CorePhases:
-    """Map the descriptor's phase roles onto the synthesized enum. Every *required* role must be
-    claimed — the driver tags all four (the optional ones fall back; see :class:`PhaseRole`)."""
     role_to_key = descriptor.role_map()
     missing = [r.value for r in PhaseRole.required() if r not in role_to_key]
     if missing:
@@ -118,12 +156,13 @@ def build_core_phases(
             f"descriptor {descriptor.name!r} is missing core phase(s): {missing}. "
             "Every application must map analysis/extraction/formalization/report."
         )
-    return CorePhases(
+    core = CorePhases(
         analysis=phase[role_to_key[PhaseRole.ANALYSIS]],
         extraction=phase[role_to_key[PhaseRole.EXTRACTION]],
         formalization=phase[role_to_key[PhaseRole.FORMALIZATION]],
         report=phase[role_to_key[PhaseRole.REPORT]],
     )
+    return PhaseModel(phase=phase, core=core, ordered=tuple(ordered))
 
 
 def _default_store(source: SourceCode, descriptor: AppDescriptor) -> RustArtifactStore:
@@ -140,26 +179,24 @@ def build_backend(
     descriptor: AppDescriptor,
     source: SourceCode,
     *,
-    phase: type[enum.Enum] | None = None,
-    core_phases: CorePhases | None = None,
+    phases: PhaseModel,
     store_factory: StoreFactory | None = None,
     backend_cls: type[RustBackend] = RustBackend,
     options: BackendOptions | None = None,
 ) -> RustBackend:
-    """Construct a :class:`RustBackend` (phase enum + core phases + store + ecosystem).
+    """Construct a :class:`RustBackend` around an already-built :class:`PhaseModel`.
 
-    Prefer :func:`build_application` + :meth:`RustApplication.make_backend` so the
-    frontend and pipeline share one phase enum. This is the headless path.
+    The model is required, not defaulted: a backend that synthesized its own would tag tasks with
+    enum members no frontend's labels are keyed by. :meth:`RustApplication.make_backend` is the
+    usual caller; this is the headless path.
     """
     opts = options or BackendOptions()
-    ph = phase if phase is not None else build_phase_enum(descriptor)
-    core = core_phases if core_phases is not None else build_core_phases(descriptor, ph)
     sf = store_factory or _default_store
     return backend_cls(
         module=module,
         descriptor=descriptor,
-        phase=ph,
-        core_phases=core,
+        phase=phases.phase,
+        core_phases=phases.core,
         store=sf(source, descriptor),
         ecosystem=resolve_ecosystem(descriptor),
         command_timeout_s=opts.command_timeout_s,
@@ -183,10 +220,10 @@ async def run_rust_pipeline(
     """Build the backend from ``module_name`` and run the shared driver — the Rust
     analogue of ``run_autoprove_pipeline`` / ``run_foundry_pipeline``.
 
-    This synthesizes a *fresh* phase enum internal to the backend. It is the right
-    entry for headless callers whose handler ignores phases; for a TUI/console
-    frontend, build a :class:`RustApplication` once and use :func:`run_application`
-    so the frontend's labels and the backend's phases share one enum object."""
+    This builds the application (and so its phase model) per call. It is the right entry for
+    headless callers whose handler ignores phases; for a TUI/console frontend, build a
+    :class:`RustApplication` once and use :func:`run_application`, so the frontend's labels and the
+    backend's phases come from the one model."""
     app = build_application(module_name)
     return await run_application(
         app,
@@ -232,21 +269,17 @@ async def run_application(
 class RustApplication:
     """Everything a frontend / ``main()`` needs, synthesized from the descriptor.
 
-    ``phase_labels`` is keyed by the synthesized enum members (member identity
-    drives the frontend's label lookup), and ``section_order`` lists every phase
-    label in declared order — the two inputs a ``MultiJobApp`` frontend consumes.
+    ``phases`` is the single :class:`PhaseModel` this application runs on — the backend's phases and
+    the frontend's labels both come from it, which is what keeps their members identical.
 
     ``options`` is mutable so the CLI can apply parsed flags (timeouts, sandbox)
-    before :func:`run_application` without rebuilding the phase enum.
+    before :func:`run_application` without rebuilding the phase model.
     """
 
     descriptor: AppDescriptor
     module: RustAppModule
     ecosystem: Ecosystem[Any, Any, Any]
-    phase: type[enum.Enum]
-    core_phases: CorePhases
-    phase_labels: dict[Any, str]
-    section_order: list[str]
+    phases: PhaseModel
     options: BackendOptions = field(default_factory=BackendOptions)
     store_factory: StoreFactory = field(default=_default_store)
     backend_cls: type[RustBackend] = RustBackend
@@ -264,13 +297,12 @@ class RustApplication:
         return self.module.validate_preconditions(args.model_dump_json())
 
     def make_backend(self, source: SourceCode) -> RustBackend:
-        """Build the backend for this run — same phase enum as :attr:`phase_labels`."""
+        """Build the backend for this run — on this application's own :attr:`phases`."""
         return build_backend(
             self.module,
             self.descriptor,
             source,
-            phase=self.phase,
-            core_phases=self.core_phases,
+            phases=self.phases,
             store_factory=self.store_factory,
             backend_cls=self.backend_cls,
             options=self.options,
@@ -298,20 +330,12 @@ def build_application(
     # anything: an unknown ecosystem or an unregistered RAG corpus is a wheel bug, not something to
     # discover mid-run (an unavailable corpus, in contrast, degrades — see ``rag_env``).
     validate_rag_db(descriptor.rag_db_default)
-    phase = build_phase_enum(descriptor)
-    core = build_core_phases(descriptor, phase)
-    ordered = descriptor.ordered_phases()
-    phase_labels = {phase[p.key]: p.label for p in ordered}
-    section_order = [p.label for p in ordered]
 
     return RustApplication(
         descriptor=descriptor,
         module=module,
         ecosystem=ecosystem,
-        phase=phase,
-        core_phases=core,
-        phase_labels=phase_labels,
-        section_order=section_order,
+        phases=build_phase_model(descriptor),
         options=BackendOptions(
             command_timeout_s=command_timeout_s,
             sandbox=sandbox,

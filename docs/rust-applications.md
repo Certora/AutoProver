@@ -180,12 +180,13 @@ One struct, serialized at load time, that drives everything non-backend.
 | `check_noun` | what this backend calls one check **to the model** ("rule", "harness function"); `None` → "check", read through `check_label()` |
 | `evidence_kinds` | the closed set an author may cite when rebutting the judge (§5) |
 
-**Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host synthesizes
-`enum.Enum(f"{Name}Phase", …)` from the keys ([`build_phase_enum`](../composer/rustapp/host.py)).
-This is safe because phase members are only ever used for `.name` and as dict keys — there are no
-`isinstance` or identity checks against a static class — and the *one* rule (`phase_labels` must be
-keyed by the same synthesized members) holds by construction: the frontend's labels and the
-backend's `TaskInfo`s come from one `RustApplication`.
+**Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host resolves these once into a
+`PhaseModel` ([`build_phase_model`](../composer/rustapp/host.py)) — the synthesized
+`enum.Enum(f"{Name}Phase", …)`, the driver's core-phase mapping, and the frontend's labels and
+section order. Synthesizing the enum is safe because phase members are only ever used for `.name`
+and as dict keys — there are no `isinstance` or identity checks against a static class — and the
+*one* rule (labels must be keyed by the same synthesized members) holds by construction: nothing
+else builds a model, and `build_backend` requires one rather than defaulting to its own.
 
 `role` says **which step of the run the phase groups**, and for the steps the host runs as their own
 visible task it is also the declaration *of* that step: the task is the phase's own label, under the
@@ -193,7 +194,7 @@ phase itself, with id `{app}-{role}`. `grouping` (the default) declares no step 
 organizes the UI, like autoprove's harness/autosetup.
 
 The four the driver itself tags — `analysis`, `extraction`, `formalization`, `report` — are
-`PhaseRole.required()` and every descriptor must claim them (`build_core_phases` raises otherwise).
+`PhaseRole.required()` and every descriptor must claim them (`build_phase_model` raises otherwise).
 The rest are optional, and **a role no phase claims is a step the application does not have**:
 `discovery` groups the design-doc task the *entry point* runs before the pipeline (unclaimed, it
 falls back to the first declared phase), `preflight` declares the toolchain check (§4.2), and `setup`

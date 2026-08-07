@@ -25,7 +25,7 @@ from composer.rustapp.descriptor import AppDescriptor
 from tests.conftest import (
     wire_descriptor, wire_phase, wire_required_phases, wire_workspace_prep,
 )
-from composer.rustapp.host import build_backend
+from composer.rustapp.host import build_backend, build_phase_model
 from composer.rustapp.toolchain import PROJECT_TOOLCHAINS
 from composer.spec.context import SourceCode
 from composer.spec.system_model import SolidityIdentifier
@@ -142,7 +142,8 @@ async def _preflight(monkeypatch, tmp_path, wheel, *, with_preflight=True, decla
     _project(tmp_path)
     _fake_chain(monkeypatch)
     source = _source(tmp_path)
-    backend = build_backend(wheel, _descriptor(with_preflight=with_preflight), source)
+    descriptor = _descriptor(with_preflight=with_preflight)
+    backend = build_backend(wheel, descriptor, source, phases=build_phase_model(descriptor))
     backend.declared_args = declared or {}
     run = _Run(source)
     return await backend.preflight(cast(Any, run)), run
@@ -249,7 +250,8 @@ async def test_the_gate_is_tagged_with_the_declared_phase_member(tmp_path, monke
     _project(tmp_path)
     _fake_chain(monkeypatch)
     source = _source(tmp_path)
-    backend = build_backend(wheel, _descriptor(), source)
+    descriptor = _descriptor()
+    backend = build_backend(wheel, descriptor, source, phases=build_phase_model(descriptor))
     run = _Run(source)
     await backend.preflight(cast(Any, run))
 

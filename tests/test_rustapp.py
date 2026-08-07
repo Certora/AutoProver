@@ -223,7 +223,7 @@ def test_system_doc_is_optional_with_discovery_phase_fallback():
 
     # A wheel that declares no discover_design_doc phase falls back to its first phase.
     first_key = app.descriptor.ordered_phases()[0].key
-    assert _discovery_phase(app) is app.phase[first_key]
+    assert _discovery_phase(app) is app.phases.member(first_key)
 
 
 def test_frontend_labels_and_backend_phases_share_one_enum():
@@ -247,9 +247,9 @@ def test_frontend_labels_and_backend_phases_share_one_enum():
     )
     backend = app.make_backend(source)
     for slot, member in backend.core_phases.items():
-        assert member in app.phase_labels, (slot, member)
+        assert member in app.phases.labels, (slot, member)
     # Section order lists every declared phase's label.
-    assert set(app.section_order) == set(app.phase_labels.values())
+    assert set(app.phases.section_order) == set(app.phases.labels.values())
 
 
 def test_generic_console_handler_renders_declared_events(capsys):
@@ -274,8 +274,8 @@ def test_generic_tui_app_constructs():
 
     app = host.build_application("echoprover")
     tui = GenericRustApp(
-        phase_labels=app.phase_labels,
-        section_order=app.section_order,
+        phase_labels=app.phases.labels,
+        section_order=app.phases.section_order,
         header_text=app.header_text,
         event_kinds={e.kind for e in app.descriptor.event_kinds},
     )

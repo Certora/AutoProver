@@ -106,7 +106,7 @@ async def _formalizer(
 ) -> RustFormalizer:
     """Drive prepare→begin with the LLM authoring stubbed, returning the formalizer ``begin`` built
     around the authored fixture."""
-    from composer.rustapp.host import build_backend
+    from composer.rustapp.host import build_backend, build_phase_model
     from composer.spec.context import SourceCode
     from composer.spec.system_model import SolidityIdentifier
 
@@ -130,7 +130,11 @@ async def _formalizer(
         relative_path="programs/lend/src/lib.rs",
         forbidden_read="",
     )
-    backend = build_backend(object(), _descriptor(), source)  # type: ignore[arg-type]  — no callout
+    descriptor = _descriptor()
+    backend = build_backend(
+        object(),  # type: ignore[arg-type]  — no callout
+        descriptor, source, phases=build_phase_model(descriptor),
+    )
     run = run or _Run(ctx)
     run.source = source  # type: ignore[assignment]
     # The workspace prep happens in the backend's preflight (concurrently with analysis, before this
