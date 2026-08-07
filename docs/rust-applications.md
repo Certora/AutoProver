@@ -667,10 +667,9 @@ for cp312+.
 
    For headless/programmatic use: `await run_rust_pipeline("my_app", source, ctx, handler, env)`.
 
-Three escape hatches exist for an app the descriptor cannot express, and none is needed by an app
+Two escape hatches exist for an app the descriptor cannot express, and neither is needed by an app
 that fits it: `build_application(store_factory=…, backend_cls=…)` for a specialized store or
-prepared-system path, `env_builder=` for a bespoke tool surface, and `run_pipeline_fn=` for a
-bespoke pipeline wrapper.
+prepared-system path, and `env_builder=` for a bespoke tool surface.
 
 ---
 

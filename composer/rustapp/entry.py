@@ -225,7 +225,6 @@ async def rust_entry_point(
     *,
     argv: list[str] | None = None,
     env_builder: EnvBuilder | None = None,
-    run_pipeline_fn: Callable[..., Awaitable[CorePipelineResult[RustFormalResult]]] | None = None,
 ) -> AsyncIterator[RustRunner]:
     """Parse args, open services, and yield the Executor for ``app``.
 
@@ -396,13 +395,6 @@ async def rust_entry_point(
             if app.options.sandbox is None and app.descriptor.confine_by_default:
                 app.options.sandbox = _build_confinement(app, app_args)
 
-            # 3. A backend that needs a bespoke store/pipeline (e.g. Crucible's crate
-            #    store) supplies run_pipeline_fn; everything else uses the generic host.
-            if run_pipeline_fn is not None:
-                return await run_pipeline_fn(
-                    source_input=source_input, ctx=ctx, handler_factory=handler,
-                    env=env, args=args,
-                )
             return await run_application(
                 app,
                 source_input=source_input,
