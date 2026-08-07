@@ -14,6 +14,12 @@ Concretely, for that list:
   an unauthorized caller, a flash borrow with no repay, an operation while paused), write an action
   that *attempts* X and asserts it failed — `fuzz_assert!(res.is_err(), "[<property title>] …")`. A
   rejected call changes nothing, so this is safe inside an action. It cannot go in the test.
+  **Such an action must `return true`.** The bool reports whether the ACTION did what it was designed
+  to do — not whether the instruction succeeded — and for this one the rejection *is* it working.
+  Returning `false` costs you twice: Crucible reads `false` as a dead-end state and **ends the action
+  sequence there**, so every draw of this action truncates the campaign; and a violation reported on
+  a `false` action is auto-labelled a suspected harness bug, which is precisely backwards for an
+  action whose entire purpose is the rejection.
 - **Enough actors and accounts to make the property non-degenerate.** A property about "only the
   owner may X" needs a second, non-owner signer; "at most N positions" needs enough reserves/markets
   to reach N; a per-user property needs two users. One of each is a fixture that proves nothing.

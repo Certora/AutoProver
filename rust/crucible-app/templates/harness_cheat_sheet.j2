@@ -31,6 +31,21 @@ Crucible harness API (author a FIXTURE only — no test fns):
             .signers(&[&*self.some_keypair])
             .send().map(|o| o.is_success()).unwrap_or(false)
     }
+    // The `-> bool` is "did this ACTION do what it was designed to do". For the positive action
+    // above that is the instruction succeeding. For a NEGATIVE action — one that attempts something
+    // the program must reject — a correct rejection is the action working, so it returns `true`:
+    pub fn action_<name>_unauthorized(&mut self) -> bool {
+        let res = self.ctx.program(self.program_id)
+            .call(instruction::<Name> { /* ... */ })
+            .accounts(accounts::<Name> { /* the wrong signer */ })
+            .signers(&[&*self.other_signer])
+            .send();
+        fuzz_assert!(res.is_err(), "[<property title>] <what must be rejected> must fail");
+        true   // NOT false — see below
+    }
+    // Return `false` only when the action could not be attempted at all. Crucible treats `false` as
+    // a dead-end state and STOPS the action sequence there, so a negative action returning `false`
+    // truncates every campaign that draws it.
 
 - Anchor path conventions (use the API FACTS below — do NOT guess these):
     * `use {{ crate_id }}::*;` brings the crate's generated items into scope. `{{ crate_id }}` is

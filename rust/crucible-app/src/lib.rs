@@ -1907,6 +1907,13 @@ mod template_parity {
         assert!(!out.contains("{{"), "leftover askama expression");
         // On the crate path the fixture may use the program's own items, so say nothing about IDLs.
         assert!(!out.contains("GENERATED"), "crate path mentions IDL generation:\n{out}");
+        // The `-> bool` contract, which the sheet is the only place to state: it reports whether the
+        // ACTION worked, so a correctly-rejected negative attempt returns `true`. The 2026-08-07 e2e
+        // fixture returned `false` from all five of its negative actions, which both truncated every
+        // campaign that drew one and got their violations auto-labelled harness bugs.
+        assert!(out.contains("did this ACTION do what it was designed to do"), "{out}");
+        assert!(out.contains("true   // NOT false"), "{out}");
+        assert!(out.contains("STOPS the action sequence there"), "{out}");
 
         // On the IDL path the same `use` holds, plus what the generated module does NOT carry.
         let out = HarnessCheatSheet { crate_id: "example_lending", idl: true }.render().unwrap();
@@ -1997,6 +2004,13 @@ mod template_parity {
         has(&p.instruction, "- [invariant] no overflow: balance never overflows");
         has(&p.instruction, "One `action_*` per instruction those properties exercise");
         has(&p.instruction, "Negative attempts are actions too");
+        // …and that such an action reports `true`. A negative action returning `false` is read by
+        // Crucible as a dead-end and ENDS the action sequence, so every draw of it truncates the
+        // campaign — and any violation on it is auto-labelled a suspected harness bug, which is
+        // backwards for an action whose purpose is the rejection. Both were observed in the
+        // 2026-08-07 e2e run, where the fixture's five negative actions all returned `false`.
+        has(&p.instruction, "Such an action must `return true`");
+        has(&p.instruction, "ends the action sequence there");
         has(&p.instruction, "Never set a limit, cap or threshold to `u64::MAX`");
 
         // component branch (exercises author_component.j2).
