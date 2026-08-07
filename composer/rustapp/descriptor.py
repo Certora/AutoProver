@@ -42,8 +42,8 @@ class PhaseRole(str, enum.Enum):
     DISCOVERY = "discovery"
     #: The analysis-independent gate on the prepared workspace, run concurrently with system
     #: analysis. The host follows the wheel's ``workspace_prep`` with a ``preflight`` ``compile``
-    #: whose ``spec`` is empty: the wheel renders its own minimal skeleton, since nothing has been
-    #: authored yet.
+    #: that carries no ``spec`` at all: the wheel renders its own minimal skeleton, since nothing
+    #: has been authored yet.
     #:
     #: It exists to fail on a *toolchain* problem — an unresolvable dependency graph, a harness that
     #: doesn't link, IDL codegen the generator rejects — while the run has spent almost no LLM

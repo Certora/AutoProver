@@ -94,7 +94,7 @@ impl Backend for EchoApp {
         }
     }
 
-    fn compile(&self, _input: &AuthorInput, _spec: &str, _ws: &Workspace) -> CompileResult {
+    fn compile(&self, _input: &AuthorInput, _spec: Option<&str>, _ws: &Workspace) -> CompileResult {
         // The demo accepts any well-formed spec — no build gate.
         CompileResult::Ok
     }

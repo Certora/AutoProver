@@ -58,8 +58,9 @@ impl.
 | `checks(input_json) -> str` | pure | the checks this input formalizes, pre-authoring (§6) |
 | `author_prompt(input_json) -> str` | pure | the instruction (+ domain system prompt) for one authoring *session* (§5) |
 | `check_syntax(input_json, spec) -> str \| None` | pure | reject a spec at write time; `None` = accept. Cheap — it runs on every put/edit |
-| `judge_prompt(input_json, spec) -> str \| None` | pure | optional LLM review; `None` = this wheel has no judge |
-| `compile(input_json, spec, workdir, sandbox_json) -> str` | **blocking** | build the whole spec once — how setup and preflight build |
+| `judge(input_json) -> str \| None` | pure | who reviews this input's drafts; `None` = no judge. Asked once, before anything is authored |
+| `judge_instruction(input_json, spec) -> str` | pure | what to ask that reviewer about this draft, per round (text, not JSON) |
+| `compile(input_json, spec \| None, workdir, sandbox_json) -> str` | **blocking** | build the whole spec once — how setup and preflight build; `None` is the preflight, which has no spec |
 | `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` | **blocking** | build + check one target — which arrives with the rows it covers — returning a verdict per row (§6) |
 | `workspace_prep(input_json) -> str` | pure | a *plan* the host executes (§7) |
 | `sandbox_grants(args_json) -> str` | pure | extra grants to union into the host's policy (§8) |
@@ -278,10 +279,10 @@ Two steps, both *declared* by the wheel and executed here:
 1. **`workspace_prep`** (§7) — write the plan's files, then warm dependencies / build the program /
    place its IDL through the chain's registered toolchain. Already the run's slowest non-LLM step.
 2. **The toolchain check**, when the descriptor declares `preflight` — an `Authored::Preflight`
-   `compile` whose `spec` is **empty**: nothing has been authored yet, so the wheel renders its own
-   throwaway skeleton, the smallest artifact that still exercises what an authored one will depend
-   on. This step is optional; a wheel whose toolchain has nothing worth checking early omits the
-   phase and keeps only step 1.
+   `compile` with **no `spec` at all** (`None`, not an empty one): nothing has been authored yet, so
+   the wheel renders its own throwaway skeleton, the smallest artifact that still exercises what an
+   authored one will depend on. This step is optional; a wheel whose toolchain has nothing worth
+   checking early omits the phase and keeps only step 1.
 
 Why check, and not just prep: `cargo fetch` resolves a dependency graph and **compiles
 nothing**, and a failed warm is deliberately non-fatal. Without the check, the first thing that
@@ -417,9 +418,11 @@ counterexample reaches the report *as a finding with a justification* rather tha
 examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 `expect_test_failure`.
 
-**The judge is structured.** When `judge_prompt` returns a prompt for an input (probed once with an
-empty spec), the session binds `feedback_tool`; a wheel with no judge gets no review machinery and
-no feedback stamp among its required validations. The judge is a sub-agent that must read the draft
+**The judge is structured.** When `judge` names a reviewer for an input, the session binds
+`feedback_tool`; a wheel with no judge gets no review machinery and no feedback stamp among its
+required validations. That question is asked once, when the session is built, and takes no spec —
+whether an input is reviewed and who reviews it are both fixed before anything is authored, so only
+`judge_instruction` is given a draft, once per round. The judge is a sub-agent that must read the draft
 back through `get_spec` (`did_read`) and must call `result` with a `PropertyFeedback` — `good` is a
 field it had to set, so there is no unparseable reply to interpret and no fail-open default. Its
 acceptance is a stamp like any other. The author may answer a prior round with a `rebuttal`, typed
@@ -643,8 +646,8 @@ for cp312+.
    module ident and the maturin module name. Copy
    [example-app/Cargo.toml](../rust/example-app/Cargo.toml).
 2. **Implement `Backend`** — `descriptor` + `checks` + `author_prompt` + `compile` + `validate` are
-   required; `validate_preconditions`, `judge_prompt`, `workspace_prep`, `sandbox_grants` and
-   `finalize` have defaults. Every callout is directly unit-testable in Rust with no Python.
+   required; `validate_preconditions`, `judge`, `judge_instruction`, `workspace_prep`,
+   `sandbox_grants` and `finalize` have defaults. Every callout is directly unit-testable in Rust with no Python.
 3. **Export it** — `autoprover_sdk::export_app!(my_app, MyApp::new());`
 4. **Wire the build** — a maturin `pyproject.toml` (`module-name = "my_app"`) with a `[tool.uv]
    cache-keys` block over its `.rs` sources, then one line each in the root `pyproject.toml`'s

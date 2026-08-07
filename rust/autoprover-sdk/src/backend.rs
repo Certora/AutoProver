@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::args::AppArgs;
-use crate::authoring::{AuthorInput, Prompt};
+use crate::authoring::{AuthorInput, Judge, Prompt};
 use crate::descriptor::AppDescriptor;
 use crate::finalize::FinalizeInput;
 use crate::outcome::{Check, CompileResult, Target, ValidateOutcome};
@@ -50,19 +50,31 @@ pub trait Backend: Send + Sync + 'static {
         None
     }
 
-    /// Optional LLM review of a compiled spec, before validation. `None` (the default) skips
-    /// judging — the compiler + checker are the judges.
-    fn judge_prompt(&self, _input: &AuthorInput, _spec: &str) -> Option<Prompt> {
+    /// Who reviews this input's drafts, before validation — `None` (the default) skips judging, and
+    /// the compiler + checker are the judges.
+    ///
+    /// Asked once, when the authoring session is built: whether this kind of input is reviewed at
+    /// all and who reviews it are both fixed for the session, so neither is given a draft — none
+    /// exists yet. A wheel can answer per kind (review components, not the shared setup spec).
+    fn judge(&self, _input: &AuthorInput) -> Option<Judge> {
         None
+    }
+
+    /// What to ask the reviewer about this draft — asked once per review round, and only for an
+    /// input [`Backend::judge`] claimed. The default asks for a plain review, which is what a wheel
+    /// with nothing input-specific to say wants.
+    fn judge_instruction(&self, _input: &AuthorInput, _spec: &str) -> String {
+        "Review the proposed specification and decide whether it is acceptable as it stands.".into()
     }
 
     /// Compile/typecheck the whole spec once (every check in it shares one build). BLOCKING.
     ///
     /// Also the preflight gate: for [`Authored::Preflight`](crate::authoring::Authored::Preflight)
-    /// the `spec` is empty and the wheel supplies its own skeleton, so one implementation covers
-    /// "does the authored artifact build" and "could *any* artifact build here" (see
-    /// [`PhaseRole::Preflight`](crate::descriptor::PhaseRole::Preflight)).
-    fn compile(&self, input: &AuthorInput, spec: &str, ws: &Workspace) -> CompileResult;
+    /// the `spec` is `None` — nothing is authored, and the wheel supplies its own skeleton — so one
+    /// implementation covers "does the authored artifact build" and "could *any* artifact build
+    /// here" (see [`PhaseRole::Preflight`](crate::descriptor::PhaseRole::Preflight)). A wheel whose
+    /// toolchain would take an empty spec file for a real one can tell the two apart.
+    fn compile(&self, input: &AuthorInput, spec: Option<&str>, ws: &Workspace) -> CompileResult;
 
     /// Build + check ONE target against the spec (the fused build gate — no separate compile for
     /// components). Returns [`ValidateOutcome::BuildFailed`] to trigger a revision of the whole

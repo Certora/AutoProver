@@ -9,8 +9,8 @@
 /// ```
 ///
 /// `module_ident` MUST match the wheel's module name. The expansion defines the pure callouts
-/// (`descriptor`/`validate_preconditions`/`checks`/`author_prompt`/`check_syntax`/`judge_prompt`/
-/// `finalize`) and
+/// (`descriptor`/`validate_preconditions`/`checks`/`author_prompt`/`check_syntax`/`judge`/
+/// `judge_instruction`/`finalize`) and
 /// the two BLOCKING ones (`compile`/`validate`, which release the GIL while `run-confined` runs),
 /// all delegating to the [`ffi`](crate::ffi) helpers of the same name.
 #[macro_export]
@@ -53,24 +53,37 @@ macro_rules! export_app {
         }
 
         #[$crate::pyo3::pyfunction]
-        fn judge_prompt(
+        fn judge(
+            input_json: ::std::string::String,
+        ) -> ::std::option::Option<::std::string::String> {
+            $crate::ffi::judge(__autoprover_app(), &input_json)
+        }
+
+        #[$crate::pyo3::pyfunction]
+        fn judge_instruction(
             input_json: ::std::string::String,
             spec: ::std::string::String,
-        ) -> ::std::option::Option<::std::string::String> {
-            $crate::ffi::judge_prompt(__autoprover_app(), &input_json, &spec)
+        ) -> ::std::string::String {
+            $crate::ffi::judge_instruction(__autoprover_app(), &input_json, &spec)
         }
 
         #[$crate::pyo3::pyfunction]
         fn compile(
             py: $crate::pyo3::Python<'_>,
             input_json: ::std::string::String,
-            spec: ::std::string::String,
+            spec: ::std::option::Option<::std::string::String>,
             workdir: ::std::string::String,
             sandbox_json: ::std::string::String,
         ) -> ::std::string::String {
             // Release the GIL for the (minutes-long) build — no async runtime needed.
             py.allow_threads(move || {
-                $crate::ffi::compile(__autoprover_app(), &input_json, &spec, &workdir, &sandbox_json)
+                $crate::ffi::compile(
+                    __autoprover_app(),
+                    &input_json,
+                    spec.as_deref(),
+                    &workdir,
+                    &sandbox_json,
+                )
             })
         }
 
@@ -122,7 +135,8 @@ macro_rules! export_app {
             m.add_function($crate::pyo3::wrap_pyfunction!(checks, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(author_prompt, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(check_syntax, m)?)?;
-            m.add_function($crate::pyo3::wrap_pyfunction!(judge_prompt, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(judge, m)?)?;
+            m.add_function($crate::pyo3::wrap_pyfunction!(judge_instruction, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(compile, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(validate, m)?)?;
             m.add_function($crate::pyo3::wrap_pyfunction!(sandbox_grants, m)?)?;

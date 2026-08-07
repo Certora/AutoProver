@@ -90,6 +90,14 @@ def test_compile_is_a_noop_ok():
     assert r == {"status": "ok"}
 
 
+def test_compile_takes_no_spec_at_all_for_a_preflight():
+    # The preflight has nothing authored to build, so the callout crosses the FFI with `None` —
+    # what tells a wheel whose toolchain writes the spec to a file to render its own skeleton
+    # instead of writing an empty one.
+    r = json.loads(echoprover.compile(_component_input("p"), None, "/tmp", _sandbox()))
+    assert r == {"status": "ok"}
+
+
 def test_validate_returns_a_verdict_for_every_row_the_target_covers():
     sandbox = _sandbox()
     res = json.loads(

@@ -50,7 +50,7 @@ class _Wheel:
     def checks(self, _input_json: str) -> str:
         return json.dumps([c.model_dump() for c in CHECKS])
 
-    def judge_prompt(self, _input_json: str, _spec: str) -> str | None:
+    def judge(self, _input_json: str) -> str | None:
         return None  # no judge, so no review machinery is bound
 
     def validate(

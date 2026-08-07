@@ -52,12 +52,14 @@ class FakeWheel:
         )
         self._compile_errors = compile_errors
         #: Every ``compile`` call, as ``(input, spec)`` — the assertion surface for these tests.
-        self.compiles: list[tuple[dict, str]] = []
+        self.compiles: list[tuple[dict, str | None]] = []
 
     def workspace_prep(self, _input_json: str) -> str:
         return json.dumps(self._plan)
 
-    def compile(self, input_json: str, spec: str, _workdir: str, _sandbox_json: str) -> str:
+    def compile(
+        self, input_json: str, spec: str | None, _workdir: str, _sandbox_json: str
+    ) -> str:
         self.compiles.append((json.loads(input_json), spec))
         if self._compile_errors is None:
             return json.dumps({"status": "ok"})
@@ -153,10 +155,11 @@ async def test_the_gate_compiles_a_wheel_authored_skeleton_with_no_spec(tmp_path
     assert isinstance(result, ProjectFacts)
     assert len(wheel.compiles) == 1
     gate_input, spec = wheel.compiles[0]
-    # `kind` is what the wheel dispatches on, and the spec is empty: nothing has been authored yet,
-    # so the wheel renders the skeleton itself.
+    # `kind` is what the wheel dispatches on, and there is no spec — not an empty one, which a
+    # toolchain could take for a real spec file: nothing has been authored yet, so the wheel renders
+    # the skeleton itself.
     assert gate_input["kind"] == "preflight"
-    assert spec == ""
+    assert spec is None
     assert gate_input["props"] == []
 
 
