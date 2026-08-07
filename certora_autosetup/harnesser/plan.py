@@ -174,9 +174,24 @@ def _external_location(param: LibParam) -> str:
     return LOC_MEMORY if param.is_reference else ""
 
 
-def _owned_var_name(solidity_type: str) -> str:
+def short_type_name(solidity_type: str, library_name: str) -> str:
+    """Identifier fragment for a type, without the wrapped library's own qualifier.
+
+    Every storage receiver belongs to the library being wrapped, so repeating its name in
+    each generated identifier only makes them long: ``at_Bytes32Set`` says as much as
+    ``at_EnumerableSet_Bytes32Set`` and reads like the hand-written harnesses it sits
+    beside. A type from elsewhere keeps its qualifier, which is what still tells it apart.
+    """
+    unqualified = solidity_type
+    prefix = f"{library_name}."
+    if unqualified.startswith(prefix):
+        unqualified = unqualified[len(prefix):]
+    return sanitize_identifier(unqualified)
+
+
+def _owned_var_name(solidity_type: str, library_name: str) -> str:
     """Name the harness state variable that backs a given storage type."""
-    return f"_certoraStore_{sanitize_identifier(solidity_type)}"
+    return f"_certoraStore_{short_type_name(solidity_type, library_name)}"
 
 
 def _mutated_memory_param(fn: LibFunction) -> Optional[LibParam]:
@@ -275,7 +290,7 @@ def _suffixed(name: str, suffix: str) -> str:
 
 
 def _mangle_collisions(
-    wrappers: Sequence[Wrapper], originals: Sequence[LibFunction]
+    wrappers: Sequence[Wrapper], originals: Sequence[LibFunction], library_name: str
 ) -> List[Wrapper]:
     """Give colliding wrappers distinct names, leaving unique ones untouched.
 
@@ -306,7 +321,9 @@ def _mangle_collisions(
                 wrapper = resolved[index]
                 receivers = originals[index].storage_params
                 if receivers:
-                    suffix = "_".join(sanitize_identifier(p.solidity_type) for p in receivers)
+                    suffix = "_".join(
+                        short_type_name(p.solidity_type, library_name) for p in receivers
+                    )
                 else:
                     suffix = str(ordinal)
                 resolved[index] = Wrapper(
@@ -381,7 +398,9 @@ def _walk_member(
 
 
 def _storage_readers(
-    owned: Sequence[OwnedVar], struct_members: Mapping[str, tuple[MemberNode, ...]]
+    owned: Sequence[OwnedVar],
+    struct_members: Mapping[str, tuple[MemberNode, ...]],
+    library_name: str,
 ) -> List[StorageReader]:
     """Expose the owned structs' representation so a spec can state properties about it.
 
@@ -393,11 +412,15 @@ def _storage_readers(
     """
     readers: List[StorageReader] = []
     for var in owned:
+        # Named after the type and member path rather than the state variable, so a
+        # reader reads as an accessor (``Bytes32Set_inner_indexes``) instead of repeating
+        # the storage plumbing in every name.
+        root = short_type_name(var.solidity_type, library_name)
         for member in struct_members.get(var.solidity_type, ()):
             _walk_member(
                 member,
                 f"{var.var_name}.{member.name}",
-                [var.var_name, member.name],
+                [root, member.name],
                 [],
                 readers,
                 0,
@@ -439,7 +462,7 @@ def build_plan(
         for param in fn.storage_params:
             if param.solidity_type not in owned:
                 owned[param.solidity_type] = OwnedVar(
-                    var_name=_owned_var_name(param.solidity_type),
+                    var_name=_owned_var_name(param.solidity_type, api.name),
                     solidity_type=param.solidity_type,
                 )
 
@@ -458,7 +481,7 @@ def build_plan(
         )
         for w in wrappers
     ]
-    wrappers = _mangle_collisions(wrappers, wrappable)
+    wrappers = _mangle_collisions(wrappers, wrappable, api.name)
 
     owned_vars = tuple(owned[key] for key in sorted(owned))
     return HarnessPlan(
@@ -471,6 +494,6 @@ def build_plan(
         import_lines=tuple(import_lines),
         owned_vars=owned_vars,
         wrappers=tuple(wrappers),
-        readers=tuple(_storage_readers(owned_vars, api.struct_members)),
+        readers=tuple(_storage_readers(owned_vars, api.struct_members, api.name)),
         skipped=tuple(skipped),
     )
