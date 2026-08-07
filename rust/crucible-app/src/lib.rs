@@ -888,9 +888,16 @@ fn is_build_error(out: &str) -> bool {
 }
 
 /// One action in a crash's reproducing sequence, as Crucible records it in
-/// `crash_<id>.meta.json`. `success` is whether the *instruction* succeeded, which is the field
-/// that makes a finding triageable: a violation whose action failed cannot have been caused by
-/// the state transition the property is scoped to.
+/// `crash_<id>.meta.json`.
+///
+/// The two fields answer different questions, and conflating them is what makes a sequence
+/// unreadable. `success` is the **action's own report** — Crucible records the `-> bool` the
+/// `action_*` returned ("did this action do what it was designed to do"). `error_code` is the
+/// **transaction's** result, present when the last instruction the action sent errored.
+///
+/// For a positive action the two coincide. For a *negative* one — an action whose purpose is an
+/// attempt the program must reject — they deliberately diverge: it returns `true` because making
+/// the attempt is it working (see `author_setup.j2`), while the transaction is expected to error.
 #[derive(serde::Deserialize)]
 struct CrashAction {
     name: String,
@@ -902,20 +909,31 @@ struct CrashAction {
 
 impl std::fmt::Display for CrashAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The code is shown only on failure: Crucible sometimes reports `success: true` *with* an
-        // `error_code` (seen on the klend run), and rendering that as `OK(3007)` reads like a bug
-        // in this formatter rather than the upstream inconsistency it is.
+        // An error code beside a successful action is NOT an upstream inconsistency (this once
+        // suppressed it as one, on evidence from the klend run) — it is a negative action
+        // reporting that it ran while its transaction was correctly rejected. Suppressing it made
+        // the sequence contradict the verdict table: the 2026-08-07 rerun rendered
+        // `reinitialize -> OK` beside a GOOD verdict for the very property that says re-init must
+        // fail. This is the only field in the record that separates "the attempt was rejected"
+        // from "the attempt went through", which for a negative action IS the finding. Never hide
+        // it.
         match (self.success, self.error_code) {
+            (true, Some(c)) => write!(f, "{} -> OK (tx rejected: {c})", self.name),
+            (true, None) => write!(f, "{} -> OK", self.name),
             (false, Some(c)) => write!(f, "{} -> FAIL({c})", self.name),
             (false, None) => write!(f, "{} -> FAIL", self.name),
-            (true, _) => write!(f, "{} -> OK", self.name),
         }
     }
 }
 
-/// The reproducing sequence Crucible writes next to a crash payload. `iteration` is the fuzzer
-/// iteration the violation fired on: `0` means nothing had been mutated yet, so the violation is
-/// in the *post-setup fixture state*.
+/// The reproducing sequence Crucible writes next to a crash payload.
+///
+/// `iteration` is the fuzzer's **global test-case counter** — which input this was, not how much
+/// ran within it. It is reported for reference and is NOT a smell: `0` is simply the first test
+/// case, which carries a full action sequence like any other, and Crucible resets it to `0`
+/// outright when replaying a saved crash. Reading it as "nothing had been mutated yet" labelled a
+/// genuine one-action finding a suspected harness bug on the 2026-08-07 rerun; what the sequence
+/// ran is in `actions`, and that is what [`CrashRepro::suspicion`] reads.
 #[derive(serde::Deserialize)]
 struct CrashRepro {
     #[serde(default)]
@@ -931,8 +949,9 @@ struct CrashRepro {
 /// An enum rather than a bool-plus-string: each variant carries exactly the evidence that
 /// justifies it, so a reader gets the specific smell instead of an unexplained "suspect".
 enum HarnessSuspicion {
-    /// Fired on iteration 0 — before the fuzzer changed anything. The fixture's own initial
-    /// state violates the invariant, so no program behaviour is implicated.
+    /// Fired on a sequence where NO action succeeded — an empty one, or one whose every step
+    /// failed. Nothing moved the chain off the fixture's post-setup state, so that state itself
+    /// violates the invariant and no program behaviour is implicated.
     InitialState,
     /// Fired on an action that did not succeed. A property scoped to "after a successful X"
     /// cannot be refuted by an X that reverted; the assertion is running outside its
@@ -945,10 +964,10 @@ impl std::fmt::Display for HarnessSuspicion {
         match self {
             Self::InitialState => write!(
                 f,
-                "the violation fired on iteration 0, before the fuzzer changed any state — so \
-                 the post-setup FIXTURE state already violates this invariant, and no program \
-                 behaviour is implicated. Assert only after the action the property is scoped \
-                 to, or exclude the fixture state the property does not cover."
+                "not one action in the sequence succeeded, so nothing moved the chain off the \
+                 fixture's post-setup state — that state already violates this invariant, and no \
+                 program behaviour is implicated. Assert only after the action the property is \
+                 scoped to, or exclude the fixture state the property does not cover."
             ),
             Self::ViolatingActionFailed(a) => write!(
                 f,
@@ -982,13 +1001,21 @@ impl CrashRepro {
             .and_then(|s| serde_json::from_str(&s).ok())
     }
 
-    /// The smell, if the metadata shows one. `iteration == 0` is checked first because it is the
-    /// stronger statement: nothing was mutated at all, so the sequence is irrelevant.
+    /// The smell, if the metadata shows one — read off the action sequence, which is the only
+    /// part of the metadata that says what actually ran.
+    ///
+    /// **No action succeeded** (including an empty sequence) is the initial-state smell: nothing
+    /// moved the chain off the fixture's post-setup state, so the invariant was already false
+    /// there and no program behaviour is implicated. Checked first because it is the stronger
+    /// statement — it says the whole sequence was inert, not just its last step.
+    ///
+    /// Otherwise the violation fired on the LAST executed action (Crucible stops the sequence
+    /// there), and an action that did not do its job cannot have produced the transition the
+    /// property is scoped to.
     fn suspicion(&self) -> Option<HarnessSuspicion> {
-        if self.iteration == 0 {
+        if !self.actions.iter().any(|a| a.success) {
             return Some(HarnessSuspicion::InitialState);
         }
-        // The violation fires on the LAST executed action — Crucible stops the sequence there.
         match self.actions.last() {
             Some(a) if !a.success => Some(HarnessSuspicion::ViolatingActionFailed(a.to_string())),
             _ => None,
@@ -2833,9 +2860,9 @@ mod crash_triage {
     //! the regression cases.
     use super::*;
 
-    /// `crash_ad707f0d6fef8cca` — `deposit_limit_not_exceeded`. Fired at iteration 0 on an action
-    /// that failed: the fixture seeded 1000 liquidity into reserves left at `deposit_limit = 0`,
-    /// so the invariant was false before the fuzzer did anything.
+    /// `crash_ad707f0d6fef8cca` — `deposit_limit_not_exceeded`. Its one action FAILED, so nothing
+    /// moved the chain: the fixture seeded 1000 liquidity into reserves left at `deposit_limit =
+    /// 0`, and the invariant was false in the post-setup state before the fuzzer did anything.
     const KLEND_INITIAL_STATE: &str = r#"{
         "test_name": "c_liquidity_supply_ctoken_exchange",
         "iteration": 0,
@@ -2876,9 +2903,26 @@ mod crash_triage {
     }
 
     #[test]
-    fn iteration_zero_is_the_fixtures_own_state_not_a_program_bug() {
+    fn a_sequence_where_nothing_succeeded_is_the_fixtures_own_state_not_a_program_bug() {
+        // klend's case: one action, and it failed. Nothing moved the chain off the post-setup
+        // state, so that state is what violates the invariant.
         let s = repro(KLEND_INITIAL_STATE).suspicion();
         assert!(matches!(s, Some(HarnessSuspicion::InitialState)), "expected InitialState");
+    }
+
+    #[test]
+    fn a_first_test_case_that_actually_ran_is_a_finding_not_an_initial_state_smell() {
+        // This smell used to key on `iteration == 0`. But Crucible's `iteration` is the fuzzer's
+        // GLOBAL test-case counter — not a count of what ran inside this one — and it is reset to
+        // 0 outright when replaying a saved crash. The metadata below is real: the 2026-08-07
+        // rerun's `crash_752c6358904f0e14`, where the first test case drew a one-action sequence,
+        // the action RAN, and the invariant failed after it. A genuine finding, and the old rule
+        // would have stamped it a suspected harness bug — the exact inversion this flag exists to
+        // avoid.
+        let r = repro(r#"{"iteration": 0, "actions": [
+            {"name": "init_without_signer", "params": {}, "success": true}
+        ]}"#);
+        assert!(r.suspicion().is_none(), "a first-iteration finding is still a finding");
     }
 
     #[test]
@@ -2903,25 +2947,70 @@ mod crash_triage {
     }
 
     #[test]
-    fn an_empty_sequence_is_not_flagged_as_a_failed_action() {
-        // `actions: []` must not panic or invent a smell; iteration 0 still flags on its own.
-        let empty = r#"{"iteration": 5, "actions": []}"#;
-        assert!(repro(empty).suspicion().is_none());
-        let empty_at_zero = r#"{"iteration": 0, "actions": []}"#;
-        assert!(matches!(
-            repro(empty_at_zero).suspicion(),
-            Some(HarnessSuspicion::InitialState)
-        ));
+    fn an_empty_sequence_is_the_initial_state_smell_whenever_it_surfaces() {
+        // Nothing ran at all — the strongest form of "the post-setup state violates this". It
+        // must not panic, and it must not depend on where in the campaign the crash landed.
+        for meta in [r#"{"iteration": 0, "actions": []}"#, r#"{"iteration": 4096, "actions": []}"#]
+        {
+            assert!(
+                matches!(repro(meta).suspicion(), Some(HarnessSuspicion::InitialState)),
+                "{meta}"
+            );
+        }
     }
 
     #[test]
-    fn an_error_code_on_a_successful_action_is_not_rendered() {
-        // Crucible emitted `success: true` alongside `error_code: 3007` on the klend run. Showing
-        // it would read as a formatter bug; the code only carries meaning on a failure.
-        let contradictory = r#"{"iteration": 3, "actions": [
-            {"name": "flash_borrow_and_repay", "params": {}, "success": true, "error_code": 3007}
+    fn a_rejected_transaction_shows_even_when_the_action_reports_success() {
+        // `success` is the ACTION's own report; `error_code` is the TRANSACTION's. A negative
+        // action returns `true` while its instruction is correctly rejected, so the two diverge by
+        // design — this was read as an upstream inconsistency and suppressed. Suppressing it made
+        // the report contradict itself on the 2026-08-07 rerun, which printed
+        // `reinitialize -> OK` beside a GOOD verdict for the property saying re-init must fail.
+        let meta = r#"{"iteration": 3, "actions": [
+            {"name": "reinitialize", "params": {}, "success": true, "error_code": 0},
+            {"name": "init_without_signer", "params": {}, "success": true}
         ]}"#;
-        assert!(repro(contradictory).render_sequence().ends_with("1. flash_borrow_and_repay -> OK"));
+        let seq = repro(meta).render_sequence();
+        assert!(seq.contains("1. reinitialize -> OK (tx rejected: 0)"), "{seq}");
+        // …while an attempt that went THROUGH stays bare. For a negative action that difference
+        // IS the finding, so the two must not render alike.
+        assert!(seq.ends_with("2. init_without_signer -> OK"), "{seq}");
+    }
+
+    /// `crash_e953b49e3a4dca3b` — the crash the 2026-08-07 rerun actually reported, verbatim. Two
+    /// correctly-rejected re-inits, then an unsigned init that went through. Every action reports
+    /// `success: true`, because that field is the action's own `-> bool` and a negative action
+    /// returns `true` for making the attempt; the transaction outcomes are in `error_code`.
+    const VAULT_UNSIGNED_INIT: &str = r#"{
+        "test_name": "c_vault_initialization",
+        "iteration": 3,
+        "actions": [
+            {"name": "reinitialize", "params": {}, "success": true, "error_code": 0},
+            {"name": "reinitialize", "params": {}, "success": true, "error_code": 0},
+            {"name": "init_without_signer", "params": {}, "success": true}
+        ]
+    }"#;
+
+    #[test]
+    fn the_reported_sequence_distinguishes_a_rejected_attempt_from_one_that_went_through() {
+        // The whole verdict rests on this distinction, and the report used to erase it: all three
+        // rows printed `-> OK`, so the sequence said re-init succeeded while the table reported
+        // GOOD for the property that says re-init must fail.
+        let wd = workdir_with_meta("vault", "crash_e953", VAULT_UNSIGNED_INIT);
+        let out = finding_line(
+            "crash_e953",
+            "[authority_must_sign_initialization] initialize without the authority signing \
+             was accepted (accepted.init_without_signer=true)",
+        );
+        let detail =
+            finding_detail(&out, &wd, "vault", "c_vault_initialization").expect("detail");
+
+        // A real finding: something ran and succeeded, and the last action did its job.
+        assert!(!detail.contains("SUSPECT HARNESS BUG"), "{detail}");
+        // The two rejected attempts are visibly rejected…
+        assert_eq!(detail.matches("reinitialize -> OK (tx rejected: 0)").count(), 2, "{detail}");
+        // …and the one that went through is visibly different.
+        assert!(detail.ends_with("3. init_without_signer -> OK"), "{detail}");
     }
 
     #[test]
@@ -2945,7 +3034,9 @@ mod crash_triage {
         // The console shows only this line, so the deciding signal has to be on it.
         assert!(first.starts_with("crash crash_ad70: [deposit_limit_not_exceeded]"), "{first}");
         assert!(first.contains("SUSPECT HARNESS BUG"), "{first}");
-        assert!(first.contains("iteration 0"), "{first}");
+        // The smell names what the metadata showed — that nothing in the sequence ran — rather
+        // than the iteration number, which says only which test case this was.
+        assert!(first.contains("not one action in the sequence succeeded"), "{first}");
         // …and the sequence follows, for the report.
         assert!(rest.starts_with("reproducing sequence (iteration 0, 1 action(s)):"), "{rest}");
         assert!(rest.contains("mark_deleveraging_unauthorized -> FAIL(3007)"), "{rest}");
