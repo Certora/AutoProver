@@ -33,6 +33,7 @@ from graphcore.tools.results import result_tool_generator
 
 from composer.diagnostics.timing import get_run_summary
 from composer.spec.graph_builder import run_to_completion, bind_standard
+from certora_autosetup.harnesser.run import is_generated_library_harness
 from composer.spec.source.autosetup import run_autosetup, read_autosetup_usage, read_autosetup_prover_usage, SetupFailure, SetupSuccess
 from composer.spec.service_host import ServiceHost
 from composer.spec.context import WorkflowContext, SourceCode, CacheKey
@@ -507,6 +508,14 @@ async def run_and_apply_part1(
     for c in res.transitive_closure:
         if c.harness_definition is not None:
             tgt = Path(source.project_root) / c.path
+            if is_generated_library_harness(tgt):
+                # The library harness is the verification target itself, generated
+                # mechanically from the library's compiled API. Overwriting it with an
+                # LLM-authored wrapper would replace the contract the whole run is about.
+                _logger.warning(
+                    "Refusing to overwrite generated library harness %s", c.path
+                )
+                continue
             tgt.parent.mkdir(parents=True, exist_ok=True)
             tgt.write_text(c.harness_definition.harness_source)
     return res

@@ -11,6 +11,7 @@ not enough — an imported-but-unused library is not compiled as its own contrac
 build reports its structs but none of its functions.
 """
 
+import json
 import os
 import subprocess
 from dataclasses import dataclass
@@ -202,7 +203,12 @@ def ensure_library_harness(
             certora_run_command,
         )
 
-    return _result(plan)
+    result = _result(plan)
+    # Written beside the harness, under certora/, because that is the tree a cloud run
+    # uploads — the skipped list is the only record of what the harness does not cover.
+    manifest = harness_file.with_suffix(".manifest.json")
+    manifest.write_text(json.dumps(result.to_dict(), indent=2) + "\n")
+    return result
 
 
 def _result(plan: HarnessPlan) -> HarnessResult:
@@ -219,6 +225,20 @@ def _result(plan: HarnessPlan) -> HarnessResult:
             for s in plan.skipped
         ],
     )
+
+
+def is_generated_library_harness(path: Path) -> bool:
+    """Whether ``path`` is a harness this module generated.
+
+    Decided by the sentinel in the file, not by its name, so a hand-written file that
+    happens to match the naming convention is still the author's to overwrite.
+    """
+    if not path.exists() or path.suffix != ".sol":
+        return False
+    try:
+        return read_sentinel(path.read_text(errors="replace")) is not None
+    except OSError:
+        return False
 
 
 def existing_harness_provenance(project_root: Path, library_name: str) -> Optional[dict]:
