@@ -77,6 +77,26 @@ def methods_from_build(build_json_path) -> list[dict]:
     return out
 
 
+def canonical_arg_types(build_json_path, contract: str, fn: str) -> list[str] | None:
+    """The CANONICAL (underlying) arg types of `contract.fn` from `.certora_build.json`, REUSING
+    autosetup's `parse_type_descriptor` in CANONICAL mode — which recurses a UDVT into its `underlying`
+    (so a uint256-backed UDVT array -> `uint256[]`, a bytes31-backed UDVT -> `bytes31`). Lets the
+    deterministic-memo summary (detsummary) resolve an array element's base type + cast WITHOUT grepping
+    source. None if not found."""
+    from certora_autosetup.utils.types import parse_type_descriptor, TypeParseMode
+    C = TypeParseMode.CANONICAL
+    data = json.loads(Path(build_json_path).read_text())
+    for obj in data.values():
+        if not (isinstance(obj, dict) and "contracts" in obj):
+            continue
+        for c in obj.get("contracts", []) or []:
+            for m in c.get("allMethods", []) or []:
+                mc = m.get("contractName", c.get("name", ""))
+                if m.get("name") == fn and mc == contract:
+                    return [parse_type_descriptor(a.get("typeDesc", {}), C, mc) for a in m.get("fullArgs", [])]
+    return None
+
+
 def _newest_build_json(sources_root) -> Path | None:
     cands = sorted(Path(sources_root, ".certora_internal").glob("*/.certora_build.json"),
                    key=lambda p: p.stat().st_mtime)

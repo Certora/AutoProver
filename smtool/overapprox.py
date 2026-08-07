@@ -55,6 +55,14 @@ class OverApproxTarget:
     result_name: str = "res"
     phi_spec_name: str | None = None      # file the Phi spec is written as / imported (default <fn>Phi.spec)
     model_spec_import: str | None = None  # optional model spec Phi/summary read ghosts from
+    setup_spec_import: str | None = None  # the scene's setup spec the CONFORMANCE spec imports (scene
+                                          # aliases/summaries + the CUT declaration); None => self-contained
+    goal: str = ""                        # NL description of what Phi should preserve (agent-facing; drives
+                                          # the goal-directed fill — with no goal the agent settles on `true`)
+    envfree: bool | None = None           # override env-freeness. None => derive from mutability
+                                          # (pure/view). But view != envfree: a `view` fn that reads
+                                          # block.timestamp / a getter is env-DEPENDENT and must be
+                                          # env-threaded (set False), else the envfree static check fails.
 
     @property
     def phi_import(self) -> str:
@@ -80,9 +88,13 @@ def build_phi_spec(t: OverApproxTarget) -> S.CVLFile:
 
 
 def _envfree(t: OverApproxTarget) -> bool:
-    """A pure/view `f_sol` is summarized ENVFREE — no `env` threaded through summary, binding, or proof.
-    This is both the natural shape for the over-approx targets (pure nonlinear math) and avoids emitting
-    an `env`-typed param. State-changing `f_sol` uses the env form."""
+    """Whether to summarize `f_sol` ENVFREE (no `env` threaded through summary, binding, or proof).
+    Honors an explicit `t.envfree` override; otherwise DERIVES from mutability (pure/view). NB view !=
+    envfree — a `view` that reads `block.timestamp` or storage is env-DEPENDENT; declaring it envfree
+    makes the prover's envfree static check fail, so pass `envfree=False` for those. (Deriving this
+    automatically from the body is the proper fix; the override is the escape hatch until then.)"""
+    if t.envfree is not None:
+        return t.envfree
     return t.sig.mutability in ("pure", "view")
 
 
@@ -148,8 +160,9 @@ def build_conformance_rule(t: OverApproxTarget) -> S.RuleBlock | None:
 
 
 def build_conformance_spec(t: OverApproxTarget) -> S.CVLFile:
-    """The conformance spec: imports Phi + (for an envfree target) an envfree decl of `f_sol` + the
-    over-approx rule (real `f_sol`, no summary imported)."""
+    """The conformance spec: imports the scene setup spec (if any, for the scene's aliases/summaries +
+    the CUT declaration) + Phi + (for an envfree target) an envfree decl of `f_sol` + the over-approx
+    rule (real `f_sol`, no summary imported)."""
     rule = build_conformance_rule(t)
     blocks: list = []
     if _envfree(t):
@@ -157,4 +170,5 @@ def build_conformance_spec(t: OverApproxTarget) -> S.CVLFile:
                                                    [p.type for p in t.sig.params], list(t.sig.returns))]))
     if rule is not None:
         blocks.append(rule)
-    return x.spec_file(imports=[t.phi_import], contracts=(), blocks=blocks)
+    imports = ([t.setup_spec_import] if t.setup_spec_import else []) + [t.phi_import]
+    return x.spec_file(imports=imports, contracts=(), blocks=blocks)

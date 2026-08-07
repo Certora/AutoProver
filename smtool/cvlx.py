@@ -193,6 +193,19 @@ def ghost_scalar(name: str, val_type: str, *, persistent=True, axioms=()) -> S.G
     )
 
 
+def ghost_fn(name: str, param_types, ret: str, *, persistent=True, axioms=()) -> S.GhostDef:
+    """A ghost FUNCTION `[persistent] ghost name(<param_types>) returns ret;` (optionally with axioms).
+    Keyed on value types (like the model's ghosts — `driver._nested_ghost`; key = param types, nothing to
+    resolve). Used by the deterministic-memo summary (detsummary): a read-only ghost function IS the memo
+    — same key, same value — and persistent so a havoc/revert can't re-havoc it mid-proof."""
+    return S.GhostDef(
+        type="ghost_def", ghost_name=name, persistent=persistent,
+        ghost_type=S.GhostFunction(type="ghost_fun", params=[ty(t) for t in param_types],
+                                   result_type=ty(ret)),
+        axioms=list(axioms),
+    )
+
+
 def axiom(exp, *, initial=False) -> S.GhostAxiom:
     return S.GhostAxiom(initial=initial, exp=exp)
 

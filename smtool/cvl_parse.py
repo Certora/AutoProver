@@ -77,8 +77,12 @@ def _expr(j: dict) -> "S.Expression":
         return x.idx(_expr(j["array"]), _expr(j["index"]))
     if t == "FieldSelectExp":          # struct/env field access: premiumDelta.sharesDelta, e.msg.sender
         return x.field(_expr(j["structExp"]), j["fieldName"])
-    if t == "CastExpr":                # require_uint256(...) / assert_uint256(...) parse as casts
-        cast = "assert" if "assert" in str(j.get("castType", "")).lower() else "require"
+    if t == "CastExpr":                # to_mathint(...) / require_uint256(...) / assert_uint256(...)
+        # castType is TO (safe/widening: to_mathint, to_bytesN) | REQUIRE | ASSERT — one cast-fn family
+        # each. Mapping TO to `require_` (the old default) corrupts the round-trip (require_bytes31 /
+        # require_mathint are not CVL functions), so decode the kind explicitly.
+        ct = str(j.get("castType", "")).upper()
+        cast = {"TO": "to", "ASSERT": "assert"}.get(ct, "require")
         return x.call(f"{cast}_{_type(j['toCastType'])}", [_expr(j["arg"])])
     if t == "UnresolvedApplyExp":      # a CVL function call: methodId(args...)
         base = j.get("base")
