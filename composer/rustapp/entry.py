@@ -214,8 +214,7 @@ def _discovery_phase(app: RustApplication) -> enum.Enum:
     Claimed by slot rather than by a phase *key* the host recognizes: the descriptor already has a
     mechanism for "this declared phase fills that role", and a magic key would be a convention a
     wheel author has to know to spell exactly right — with no error if they didn't."""
-    key = app.descriptor.role_map().get(PhaseRole.DISCOVERY)
-    return app.phase[key or app.descriptor.ordered_phases()[0].key]
+    return app.phases.role_member(PhaseRole.DISCOVERY) or app.phases.first_member
 
 
 @asynccontextmanager
