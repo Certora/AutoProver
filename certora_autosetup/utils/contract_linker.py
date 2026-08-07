@@ -33,22 +33,36 @@ class ContractLink:
 
 def render_wrapper_contract(
     harness_name: str,
-    parent_name: str,
+    parent_name: Optional[str],
     pragma_line: str,
     import_lines: List[str],
     ctor_forward: Optional[Tuple[str, List[str]]],
     body_blocks: Optional[List[str]] = None,
     header_comment_lines: Optional[List[str]] = None,
+    extra_pragma_lines: Optional[List[str]] = None,
 ) -> str:
-    """Render the source of a ``contract <harness_name> is <parent_name>`` wrapper.
+    """Render the source of a ``contract <harness_name>`` wrapper.
 
-    Emits the SPDX header, the pragma (omitted when empty), the import lines,
-    an optional constructor forwarding to the parent, and optional extra body blocks.
+    Emits the SPDX header, the pragma (omitted when empty), any extra pragmas, the
+    import lines, an optional constructor forwarding to the parent, and optional
+    extra body blocks.
+
+    ``parent_name`` names the contract to inherit from; None emits a standalone
+    ``contract <harness_name> {`` — a library harness holds the library at arm's
+    length (a library cannot be a base contract) rather than extending it.
 
     ``ctor_forward`` is a ``(params_source, arg_names)`` pair; None means the
     parent needs no constructor arguments and the implicit default constructor
-    suffices.
+    suffices. It requires a ``parent_name`` to forward to.
+
+    ``extra_pragma_lines`` carries file-scoped pragmas beyond the version pragma —
+    ``pragma abicoder v2;`` is per-file and is not inherited from an imported
+    library, so a wrapper whose signatures use structs or nested arrays must
+    declare it itself under solc < 0.8.
     """
+    if ctor_forward is not None and parent_name is None:
+        raise ValueError("ctor_forward requires a parent_name to forward to")
+
     body_parts: List[str] = []
     if ctor_forward is not None:
         params_src, arg_names = ctor_forward
@@ -57,14 +71,20 @@ def render_wrapper_contract(
         )
     body_parts.extend(body_blocks or [])
 
+    declaration = (
+        f"contract {harness_name} {{" if parent_name is None
+        else f"contract {harness_name} is {parent_name} {{"
+    )
+
     lines = [
         "// SPDX-License-Identifier: UNLICENSED",
         *([pragma_line] if pragma_line else []),
+        *(extra_pragma_lines or []),
         "",
         *import_lines,
         "",
         *(header_comment_lines or []),
-        f"contract {harness_name} is {parent_name} {{",
+        declaration,
         *body_parts,
         "}",
         "",
