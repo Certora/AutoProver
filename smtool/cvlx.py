@@ -107,6 +107,13 @@ def cond(c, then_e, else_e) -> S.ConditionalExp:
     return S.ConditionalExp(type="conditional", condition=c, then_expr=then_e, else_expr=else_e)
 
 
+def forall(var_type: str, var_name: str, body) -> S.QuantifierExp:
+    """`forall <var_type> <var_name>. <body>`. Nest calls for multiple binders. Used to state ghost
+    axioms (e.g. monotonicity of a memo ghost over its key components)."""
+    return S.QuantifierExp(type="quantifier", is_forall=True,
+                           variable=S.TypeAndId(decl_type=ty(var_type), id=var_name), body=body)
+
+
 # ---------------------------------------------------------------- commands
 def declare(type_name: str, name: str, init=None) -> S.DeclarationCmd:
     return S.DeclarationCmd(type="declaration", variable=tid(type_name, name), initial_value=init)

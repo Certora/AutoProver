@@ -36,6 +36,28 @@ def test_key_len_defaults_to_3():
     assert "uint256 a2 = n > 2 ? assert_uint256(xs[2]) : 0;" in txt and "a3" not in txt
 
 
+def test_monotone_ghost_axiom():
+    """A PROVED relational property (monotonicity) rides on the memo ghost as a CLOSED axiom — the
+    `forall`s are the free i,j bound for axiom syntax (a rule leaves them free; a ghost axiom must
+    bind them). Scalar-keyed, numeric return."""
+    t = MemoTarget(cut="C", fn="feeOut", params=[("uint24", "fee"), ("uint256", "amount")], ret="uint256",
+                   monotone=((0, True),))
+    txt = render(t)
+    assert "persistent ghost feeOutGhost(uint24, uint256) returns uint256 {" in txt   # axiom block, not bare decl
+    assert "forall uint24 k0." in txt and "forall uint256 k1." in txt and "forall uint24 k0hi." in txt
+    assert "k0 <= k0hi => feeOutGhost(k0, k1) <= feeOutGhost(k0hi, k1)" in txt         # monotone in fee
+
+
+def test_monotone_ignored_for_array_key():
+    """v1: monotonicity axioms apply to scalar-keyed memos only (an array-prefix key has no natural
+    per-component monotonicity) — silently not emitted, so a bare ghost decl (no axiom)."""
+    t = MemoTarget(cut="C", fn="digest", params=[("M.Item[]", "xs")], ret="uint256", key_len=2,
+                   monotone=((0, True),))
+    txt = render(t)
+    assert "persistent ghost digestGhost(uint256, uint256, uint256) returns uint256;" in txt  # bare decl
+    assert "forall" not in txt
+
+
 def test_scalar_target_keys_on_param_types_directly():
     """Scalar inputs: key the ghost on the param CVL types directly (like driver._nested_ghost) — no
     prefix, no cast."""

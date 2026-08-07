@@ -60,6 +60,10 @@ class MemoTarget:
     # optional re-imposition of the conformance-proven output property Phi:
     phi_of: Callable[[str], S.Expression] | None = None  # given a var name, the Phi boolean expression
     ret_pin: tuple | None = None      # (uintType, to_bytesFn) to pin a bytesN result to `v` before phi_of("v")
+    # PROVED relational properties encoded as ghost axioms (each gated on its relational.build_*_rule
+    # discharging). monotone: list of (key_arg_index, increasing) — the memo ghost is monotone in that key
+    # component. Scalar-keyed + numeric-return only (v1); each axiom is sound iff the real f has it.
+    monotone: tuple = ()
 
     @property
     def array_param(self):
@@ -89,9 +93,36 @@ def _key_and_body_scalar(t: MemoTarget):
     return key_types, [], key_args
 
 
+def _monotone_axiom(ghost: str, key_types: list, arg: int, increasing: bool) -> S.GhostAxiom:
+    """`fGhost` is monotone in key component `arg`: raising it (others fixed) does not lower (increasing)
+    / not raise (decreasing) the result. As a CLOSED ghost axiom (CVL requires it closed):
+        forall k0..kn. forall k<arg>hi. k<arg> <= k<arg>hi => fGhost(..k<arg>..) <op> fGhost(..k<arg>hi..)
+    The `forall`s are just the free `i,j` bound for axiom syntax; sound iff the real f has the property
+    (proved by relational.build_monotonicity_rule). Numeric ret only (`<=`/`>=` on the ghost result)."""
+    kv = [f"k{i}" for i in range(len(key_types))]
+    khi = f"k{arg}hi"
+    lo = [x.ident(v) for v in kv]
+    hi = [x.ident(v) if i != arg else x.ident(khi) for i, v in enumerate(kv)]
+    body = x.binop("implies",
+                   x.binop("le", x.ident(kv[arg]), x.ident(khi)),
+                   x.binop("le" if increasing else "ge", x.call(ghost, lo), x.call(ghost, hi)))
+    expr = x.forall(key_types[arg], khi, body)            # bind the raised value ...
+    for i in reversed(range(len(key_types))):             # ... then every key component (all universal)
+        expr = x.forall(key_types[i], kv[i], expr)
+    return x.axiom(expr)
+
+
+def _ghost_axioms(ghost: str, key_types: list, t: MemoTarget) -> list:
+    """Ghost axioms for the PROVED relational properties on this memo. v1: monotonicity, scalar-keyed
+    only (an array-prefix key has no natural per-component monotonicity)."""
+    if t.array_param is not None or not t.monotone:
+        return []
+    return [_monotone_axiom(ghost, key_types, arg, inc) for arg, inc in t.monotone]
+
+
 def build_memo_summary(t: MemoTarget) -> S.CVLFile:
-    """The deterministic-memo summary as a CVL AST file: the persistent ghost function + `<fn>CVL` +
-    the internal methods bindings. No injectivity."""
+    """The deterministic-memo summary as a CVL AST file: the persistent ghost function (with any PROVED
+    relational axioms, e.g. monotonicity) + `<fn>CVL` + the internal methods bindings."""
     g = ghost_name(t.fn)
     if t.array_param is not None:
         key_types, body, key_args = _key_and_body_array(t)
@@ -113,7 +144,7 @@ def build_memo_summary(t: MemoTarget) -> S.CVLFile:
     body.append(x.ret([x.ident("res")]))
 
     summary_fn = x.func(summary_fn_name(t.fn), t.params, [t.ret], body)
-    ghost = x.ghost_fn(g, key_types, t.ret)
+    ghost = x.ghost_fn(g, key_types, t.ret, axioms=_ghost_axioms(g, key_types, t))
     bindings = [_internal_binding(t, m) for m in [t.fn, *t.also_bind]]
     return x.spec_file(blocks=[ghost, summary_fn, x.methods_block(bindings)])
 
