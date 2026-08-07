@@ -94,7 +94,7 @@ from composer.spec.context import CacheKey, SourceFields, WorkflowContext
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import ComponentName, PropertyFormulation
 from composer.spec.util import slugify_filename, string_hash
 
 _log = logging.getLogger(__name__)
@@ -113,9 +113,23 @@ def emit_event(kind: str, payload: dict) -> None:
     get_stream_writer()({"type": kind, **payload})
 
 
+@dataclass(frozen=True)
+class UnitProperty:
+    """A property and the unit whose analysis produced it — the two halves of what identifies a
+    property across a run (the report's ``PropertyKey``).
+
+    Titles are unique only within a unit, so wherever properties from more than one unit meet — the
+    shared setup spec's input — they travel paired with their unit rather than as bare
+    formulations."""
+
+    component: ComponentName
+    prop: PropertyFormulation
+
+
 def unique_slugs(props: list[PropertyFormulation]) -> list[str]:
-    """One unique kebab slug per property — what a wheel names that property's check after. Titles
-    are unique at extraction; a slug collision (punctuation/casing) gets a numeric suffix.
+    """One unique kebab slug per property — what a wheel names that property's check after. A
+    collision gets a numeric suffix, whether it comes from punctuation/casing or from two units
+    genuinely sharing a title (the setup spec's input spans units, where that is allowed).
 
     Not the artifact's name: a deliverable file is named from the *component's* slug
     (:meth:`RustBackend.to_artifact_id`), which is a different thing entirely."""
@@ -129,12 +143,16 @@ def unique_slugs(props: list[PropertyFormulation]) -> list[str]:
     return slugs
 
 
-def _properties(props: list[PropertyFormulation], slugs: list[str]) -> list[Property]:
-    """The wire form of the properties one spec must make checkable, each with the host-assigned
-    slug a wheel names its check after (see :func:`unique_slugs`)."""
+def _properties(owned: Sequence[UnitProperty]) -> list[Property]:
+    """The wire form of the properties one spec must make checkable — each naming the unit it was
+    inferred for, and the host-assigned slug a wheel names its check after (see
+    :func:`unique_slugs`)."""
     return [
-        Property(title=p.title, sort=p.sort, description=p.description, slug=s)
-        for p, s in zip(props, slugs)
+        Property(
+            component=o.component, title=o.prop.title, sort=o.prop.sort,
+            description=o.prop.description, slug=slug,
+        )
+        for o, slug in zip(owned, unique_slugs([o.prop for o in owned]))
     ]
 
 
@@ -331,7 +349,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             program=str(run.source.contract_name),
             source_unit=self._project.source_unit,
             unit=feat.feature_json(),
-            props=_properties(props, unique_slugs(props)),
+            props=_properties([UnitProperty(feat.display_name, p) for p in props]),
             setup=self._setup_result,
             prep_facts=self._project.prep_facts,
             args=self._declared_args,
@@ -456,7 +474,7 @@ class ProjectFacts:
 # Authors the shared setup spec for a run, given the properties it must make checkable. Built by
 # :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for why
 # it runs between extraction and the per-unit fan-out rather than during prep or on first use.
-type SetupAuthor = Callable[[list[PropertyFormulation], PipelineRun], Awaitable[str]]
+type SetupAuthor = Callable[[list[UnitProperty], PipelineRun], Awaitable[str]]
 
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
@@ -483,18 +501,8 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         (which overlaps property extraction, so no properties exist yet), and it cannot happen
         lazily on first ``formalize`` (whichever unit won the race would decide the artifact the
         rest are then told to work within — see :class:`StagedFormalizer` and
-        docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two.
-
-        Properties are de-duplicated by title, keeping first-seen order: the units are disjoint, but
-        two components can legitimately surface the same property, and the artifact's cache identity
-        is built from this list."""
-        seen: set[str] = set()
-        union: list[PropertyFormulation] = []
-        for job in jobs:
-            for prop in job.props:
-                if prop.title not in seen:
-                    seen.add(prop.title)
-                    union.append(prop)
+        docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two."""
+        union = [UnitProperty(job.feat.display_name, prop) for job in jobs for prop in job.props]
         return self._build(await self._author(union, run))
 
 
@@ -550,10 +558,10 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             prep_facts=project.prep_facts, args=b.declared_args,
         )
 
-        async def author_setup(props: list[PropertyFormulation], run: PipelineRun) -> str:
+        async def author_setup(props: list[UnitProperty], run: PipelineRun) -> str:
             # The properties are what the artifact must make checkable, so they are part of both
-            # the prompt and the cache identity.
-            setup_input = prep_input.with_props(_properties(props, unique_slugs(props)))
+            # the prompt and the cache identity
+            setup_input = prep_input.with_props(_properties(props))
             # Cached like a formalization result (and skipped entirely on a hit): authoring +
             # compiling this is a full LLM loop, and on a large program the longest single step
             # of a run — so a re-run after a failure downstream must not pay for it twice. Keyed
@@ -573,7 +581,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
                     input=setup_input,
                     kind="setup",
                     checks=[],
-                    titles=[p.title for p in props],
+                    titles=[o.prop.title for o in props],
                     env=run.env,
                     ctx=setup_ctx,
                     run=run,
