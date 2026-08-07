@@ -30,6 +30,7 @@ def _author_input(**payload) -> str:
         "source_unit": {},
         "prep_facts": {},
         "props": [],
+        "run_props": [],
         "setup": None,
         "args": {"fuzz_timeout": 5},
         **payload,

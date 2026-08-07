@@ -217,6 +217,7 @@ def test_author_input_serializes_the_shape_the_wheel_deserializes():
         # nothing, and applies its own convention. Nothing here is filled in for it.
         "source_unit": {},
         "props": [],
+        "run_props": [],
         "setup": None,
         "prep_facts": {},
         "args": {},

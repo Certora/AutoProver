@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use autoprover_sdk::args::AppArgs;
-use autoprover_sdk::authoring::{AuthorInput, Authored, Judge, Prompt};
+use autoprover_sdk::authoring::{AuthorInput, Authored, Judge, Prompt, Property};
 use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::descriptor::{
     AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
@@ -1044,23 +1044,60 @@ fn finding_detail(out: &str, workdir: &Path, program: &str, unit: &str) -> Optio
     Some(detail)
 }
 
+/// The run property whose title the finding names but this target does not check — the owner of a
+/// foreign assertion. Longest title wins, so one title being a prefix of another resolves to the
+/// more specific of the two.
+fn foreign_owner<'a>(target: &Target, run_props: &'a [Property], detail: &str) -> Option<&'a Property> {
+    let mine = |title: &str| target.checks.iter().any(|c| c.property == title);
+    run_props
+        .iter()
+        .filter(|p| !p.title.is_empty() && detail.contains(&p.title) && !mine(&p.title))
+        .max_by_key(|p| p.title.len())
+}
+
 /// Attribute a shared-target counterexample across the rows the target covers. Crucible tags each
 /// assertion message with its property title (`[<title>]`), so the finding names the invariant it
-/// refutes: that unit gets `BAD` (carrying the finding); the rest held over the explored space, so
-/// `GOOD`. If nothing can be attributed (no tagged title matched), mark them all `BAD` rather than
-/// silently pass a real counterexample. This is the backend's own attribution — the host never
-/// parses the finding.
-fn attribute_finding(target: &Target, detail: Option<String>) -> ValidateOutcome {
+/// refutes, and there are three things that title can be. This is the backend's own attribution —
+/// the host never parses the finding.
+///
+/// **One of this target's own properties.** That row is `BAD` (carrying the finding); the rest held
+/// over the explored space, so `GOOD`.
+///
+/// **Another component's.** The shared fixture is built into every component's target, so an
+/// assertion it carries fires in campaigns that never asked about it — and its title is one this
+/// target has no row for. Refuting all of them would be a false report: the counterexample says
+/// nothing about them, and the component that *does* own the title reports it from its own campaign.
+/// `UNKNOWN` rather than `GOOD` because the campaign really did stop there, so these properties were
+/// not explored to budget.
+///
+/// **Unknown to the whole run.** No one can place it, so mark them all `BAD` rather than silently
+/// pass a real counterexample. This is the case [`AuthorInput::run_props`] exists to separate out
+/// from the one above; a wheel run without it degrades to exactly this.
+fn attribute_finding(
+    target: &Target, run_props: &[Property], detail: Option<String>,
+) -> ValidateOutcome {
     let d = detail.clone().unwrap_or_default();
     let refuted = |c: &Check| !c.property.is_empty() && d.contains(&c.property);
-    let unattributable = !target.checks.iter().any(refuted);
-    target.verdicts(|c| {
-        if unattributable || refuted(c) {
-            Verdict::with_outcome(Outcome::Bad).with_detail(detail.clone())
-        } else {
-            Verdict::with_outcome(Outcome::Good)
-        }
-    })
+    if target.checks.iter().any(refuted) {
+        return target.verdicts(|c| {
+            if refuted(c) {
+                Verdict::with_outcome(Outcome::Bad).with_detail(detail.clone())
+            } else {
+                Verdict::with_outcome(Outcome::Good)
+            }
+        });
+    }
+    match foreign_owner(target, run_props, &d) {
+        Some(p) => target.all(
+            Outcome::Unknown,
+            Some(format!(
+                "campaign ended on a violation of {}'s property `{}`, which this component does \
+                 not check — its own properties were not explored to budget.\n{d}",
+                p.component, p.title,
+            )),
+        ),
+        None => target.all(Outcome::Bad, detail),
+    }
 }
 
 // ===========================================================================
@@ -1440,9 +1477,11 @@ impl Backend for CrucibleApp {
                 if combined.contains("[FUZZ_FINDING]") {
                     // A crash refutes ONE invariant — pin BAD to the property the finding names
                     // (each assertion is tagged `[<title>]`), holding the rest GOOD over the
-                    // explored space. If it can't be attributed, mark all BAD (never hide it).
+                    // explored space. A title belonging to another component leaves this one
+                    // undetermined; one nobody in the run owns marks all BAD (never hide it).
                     attribute_finding(
                         target,
+                        &input.run_props,
                         finding_detail(&combined, &ws.dir, program, fname),
                     )
                 } else if out.exit_code == 0 {
@@ -1576,7 +1615,7 @@ mod template_parity {
     //! prose templates must preserve their bytes. Prompts are checked for template residue only.
     use super::*;
     use autoprover_sdk::args::DeclaredArgs;
-    use autoprover_sdk::authoring::{Property, PropertyKind};
+    use autoprover_sdk::authoring::PropertyKind;
 
     /// The expected `[dependencies]` block, spelled out independently of the template (originally
     /// the `crucible_deps` `format!` body, kept as the oracle across the askama migration). The
@@ -1713,6 +1752,7 @@ mod template_parity {
             program: "vault".into(),
             source_unit: ChainData::of(&cr).expect("an object"),
             props: vec![],
+            run_props: vec![],
             setup: None,
             prep_facts: ChainData::default(),
             args: declared(args),
@@ -2246,6 +2286,123 @@ Error: Build failed
         // account deserializes into a default struct rather than failing.
         assert!(norm.contains("DEFAULT struct"), "{norm}");
         assert!(norm.contains("iteration 0"), "{norm}");
+    }
+
+    // --- attributing a shared-target finding (docs/crucible-cross-component-attribution.md) ------
+
+    fn owned(component: &str, title: &str, slug: &str) -> Property {
+        Property {
+            component: component.into(), title: title.into(),
+            sort: PropertyKind::Invariant, description: "d".into(), slug: slug.into(),
+        }
+    }
+
+    /// The target one component's properties share, exactly as `checks()` builds it.
+    fn target_over(feature: &str, props: &[Property]) -> Target {
+        Target {
+            name: feature.into(),
+            checks: props
+                .iter()
+                .map(|p| Check {
+                    property: p.title.clone(),
+                    name: format!("c_{}", p.slug),
+                    target: Some(feature.into()),
+                })
+                .collect(),
+        }
+    }
+
+    fn verdicts_of(v: &ValidateOutcome) -> Vec<(String, Outcome, String)> {
+        let ValidateOutcome::Verdicts { verdicts } = v else { panic!("not a verdict set: {v:?}") };
+        verdicts
+            .iter()
+            .map(|(n, ver)| (n.to_string(), ver.outcome, ver.detail.clone().unwrap_or_default()))
+            .collect()
+    }
+
+    /// The whole run's properties: two components, and the fixture's negative actions tagged with
+    /// titles from both — the shape the 2026-08-07 e2e run had.
+    fn two_component_run() -> (Vec<Property>, Target) {
+        let run = vec![
+            owned("Vault Initialization", "authority_must_sign_initialization", "auth_signs"),
+            owned("Lamport Management", "deposit_overflow_prevented", "no_overflow"),
+            owned("Lamport Management", "withdrawal_authority_only", "wd_auth"),
+        ];
+        let target = target_over("c_lamport_management", &run[1..]);
+        (run, target)
+    }
+
+    #[test]
+    fn a_finding_naming_this_targets_own_property_refutes_only_that_one() {
+        let (run, target) = two_component_run();
+        let detail = "crash abc: [deposit_overflow_prevented] total=2 exceeds cap=1";
+        let got = verdicts_of(&attribute_finding(&target, &run, Some(detail.into())));
+
+        assert_eq!(got[0].0, "c_no_overflow");
+        assert_eq!(got[0].1, Outcome::Bad);
+        assert_eq!(got[0].2, detail, "the refuted row carries the counterexample");
+        // The rest held over the space the campaign explored, which is the whole point of running
+        // a component's properties in one target.
+        assert_eq!(got[1].1, Outcome::Good);
+    }
+
+    #[test]
+    fn a_finding_naming_another_components_property_leaves_this_one_undetermined() {
+        // The shared fixture is in EVERY component's build, so an assertion it carries fires in
+        // campaigns that never asked about it. Before this, Lamport Management's whole suite was
+        // reported BAD on a counterexample about Vault Initialization — a false refutation in a
+        // green run.
+        let (run, target) = two_component_run();
+        let detail = "crash def: [authority_must_sign_initialization] init without the authority \
+                      signing must fail";
+        let got = verdicts_of(&attribute_finding(&target, &run, Some(detail.into())));
+
+        assert!(got.iter().all(|(_, o, _)| *o == Outcome::Unknown), "{got:?}");
+        // UNKNOWN rather than GOOD because the campaign really did stop there — and the row has to
+        // say whose property ended it, or an unexplained UNKNOWN is no better than a wrong BAD.
+        let said = &got[0].2;
+        assert!(said.contains("Vault Initialization"), "{said}");
+        assert!(said.contains("authority_must_sign_initialization"), "{said}");
+        assert!(said.contains(detail), "the finding itself is still carried:\n{said}");
+    }
+
+    #[test]
+    fn a_finding_no_one_in_the_run_owns_still_condemns_the_whole_target() {
+        // The safety net, unchanged: an unplaceable counterexample is real until shown otherwise,
+        // and silently passing it is the one failure this must never have.
+        let (run, target) = two_component_run();
+        let detail = "crash 999: assertion failed at fixture.rs:42";
+        let got = verdicts_of(&attribute_finding(&target, &run, Some(detail.into())));
+
+        assert!(got.iter().all(|(_, o, d)| *o == Outcome::Bad && d == detail), "{got:?}");
+    }
+
+    #[test]
+    fn without_the_runs_properties_attribution_degrades_to_the_safety_net() {
+        // A wheel driven by a host that declares no setup step gets an empty `run_props`, so a
+        // foreign title is indistinguishable from an unknown one. That must read as the old
+        // behaviour, not as a panic or a silent pass.
+        let (_, target) = two_component_run();
+        let detail = "crash def: [authority_must_sign_initialization] init must fail";
+        let got = verdicts_of(&attribute_finding(&target, &[], Some(detail.into())));
+
+        assert!(got.iter().all(|(_, o, _)| *o == Outcome::Bad), "{got:?}");
+    }
+
+    #[test]
+    fn the_more_specific_of_two_overlapping_titles_names_the_owner() {
+        // Titles are free text, so one can be a prefix of another. Matching is by substring — the
+        // finding is a rendered message, not a structured field — so the longer match wins.
+        let run = vec![
+            owned("Deposits", "deposit_bounded", "bounded"),
+            owned("Overflow Guards", "deposit_bounded_by_reserve_cap", "bounded_cap"),
+        ];
+        let target = target_over("c_withdrawals", &[owned("Withdrawals", "fifo", "fifo")]);
+        let detail = "crash 1: [deposit_bounded_by_reserve_cap] total=9 cap=8";
+        let got = verdicts_of(&attribute_finding(&target, &run, Some(detail.into())));
+
+        assert_eq!(got[0].1, Outcome::Unknown);
+        assert!(got[0].2.contains("Overflow Guards"), "{}", got[0].2);
     }
 
     #[test]

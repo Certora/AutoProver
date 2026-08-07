@@ -123,6 +123,20 @@ pub struct AuthorInput {
     /// The properties this spec must make checkable. Empty for a preflight; for a setup, every
     /// unit's.
     pub props: Vec<Property>,
+    /// **Every** property the run extracted, across all units, each naming the unit that owns it
+    /// (`Property::component`) — run-level context, like [`AuthorInput::prep_facts`], rather than
+    /// anything this spec is answerable for.
+    ///
+    /// What it is for: a shared setup spec is built into every unit's target, so a failure it
+    /// reports can name a property belonging to a *different* unit. Without the run's set a backend
+    /// cannot tell that from a title it has never seen, and the safe reading of an unplaceable
+    /// failure — refute everything the target covers — is exactly wrong for the first case.
+    ///
+    /// Empty wherever the host does not hold the whole set at once: a preflight (nothing is
+    /// analyzed yet), and any wheel that declares no
+    /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase, whose units are formalized
+    /// without the host ever gathering them. On a setup turn it is exactly [`AuthorInput::props`].
+    pub run_props: Vec<Property>,
     /// The compiled shared setup spec, for a wheel that declared a
     /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase — the fixture a component's
     /// spec builds on.

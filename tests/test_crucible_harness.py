@@ -108,7 +108,8 @@ def _prep(source_unit: dict | None = None, args: dict | None = None) -> dict:
     plan = json.loads(
         crucible_app.workspace_prep(
             json.dumps({
-                "kind": "preflight", "program": "vault", "props": [], "setup": None,
+                "kind": "preflight", "program": "vault", "props": [], "run_props": [],
+                "setup": None,
                 "source_unit": source_unit or {}, "prep_facts": {}, "args": args or {},
             })
         )
@@ -260,7 +261,7 @@ def _compile_crate(tmp_path, *, spec: str | None = None, idl: str | None = None)
         crucible_app.compile(
             json.dumps({
                 "kind": "preflight", "program": "vault", "source_unit": _CRATE,
-                "props": [], "setup": None, "args": {},
+                "props": [], "run_props": [], "setup": None, "args": {},
                 "prep_facts": {"idl": idl} if idl is not None else {},
             }),
             spec, str(tmp_path), _NO_LAUNCH,

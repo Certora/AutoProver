@@ -329,6 +329,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         command_sem: asyncio.Semaphore | None = None,
         declared_args: dict[str, Any] | None = None,
         setup_result: str | None = None,
+        run_props: list[Property] | None = None,
         project: "ProjectFacts | None" = None,
     ):
         super().__init__(RustFormalResult, descriptor.backend_tag)
@@ -344,6 +345,11 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # declares a ``setup`` step reaches here only through :class:`RustStagedFormalizer`, which
         # authors the artifact before constructing this.
         self._setup_result = setup_result
+        # Every unit's properties, on every component's input — what lets a wheel tell a failure
+        # naming *another* unit's property from one it cannot place at all (see
+        # :attr:`_AuthorInputBase.run_props`). Known only once the whole unit set is in hand, which
+        # is why it arrives with the setup spec; empty for a wheel that declares no setup step.
+        self._run_props = run_props or []
         # What the preflight established about the project (see :class:`ProjectFacts`), carried on
         # every ``AuthorInput`` and mirrored into ``finalize`` — what ships must name the same
         # dependency the gated builds did.
@@ -372,6 +378,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             source_unit=self._project.source_unit,
             unit=feat.feature_json(),
             props=_properties([UnitProperty(feat.display_name, p) for p in props]),
+            run_props=self._run_props,
             setup=self._setup_result,
             prep_facts=self._project.prep_facts,
             args=self._declared_args,
@@ -510,7 +517,7 @@ class ProjectFacts:
 # :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for why
 # it runs between extraction and the per-unit fan-out rather than during prep or on first use.
 type SetupAuthor = Callable[
-    [list[UnitProperty], Sequence[FeatureUnit], PipelineRun], Awaitable[str]
+    [list[Property], Sequence[FeatureUnit], PipelineRun], Awaitable[str]
 ]
 
 # Writes the wheel's build scaffolding for the run, given the authored setup spec and every unit
@@ -532,7 +539,7 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         self,
         author: SetupAuthor,
         scaffold: CrateRootWriter,
-        build: Callable[[str], RustFormalizer],
+        build: Callable[[str, list[Property]], RustFormalizer],
     ):
         self._author = author
         self._scaffold = scaffold
@@ -555,12 +562,19 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         build (a manifest's feature list, a crate root's module declarations) is a function of the set
         rather than of any one unit. Both callouts below get it: a wheel whose setup gate builds the
         crate needs the set to build the real thing, and the scaffolding write is what lets the
-        per-unit gates emit only their own files."""
-        union = [UnitProperty(job.feat.display_name, prop) for job in jobs for prop in job.props]
+        per-unit gates emit only their own files.
+
+        The run's property set is the other thing only this moment holds, and it goes to the
+        formalizer for the same reason it goes to the setup spec: the artifact authored from every
+        unit's properties can fail naming any of them, so every unit's gate has to be able to
+        recognize a title that is not its own."""
+        run_props = _properties(
+            [UnitProperty(job.feat.display_name, prop) for job in jobs for prop in job.props]
+        )
         units = [job.feat for job in jobs]
-        setup = await self._author(union, units, run)
+        setup = await self._author(run_props, units, run)
         await self._scaffold(setup, units)
-        return self._build(setup)
+        return self._build(setup, run_props)
 
 
 @dataclass
@@ -596,14 +610,18 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         analyzed_json = self.analyzed.model_dump(mode="json") if self.analyzed is not None else {}
         project = self.preflight
 
-        def build(setup_result: str | None) -> RustFormalizer:
+        def build(
+            setup_result: str | None, run_props: list[Property] | None = None
+        ) -> RustFormalizer:
             """The formalizer, around a shared setup spec that is either already authored or
-            not called for."""
+            not called for. The run's property set arrives with the spec, from the one step that
+            holds every unit at once; a wheel with no setup step has no such step, and its gates
+            see only their own properties."""
             return RustFormalizer(
                 b.module, b.descriptor, sandbox=b.sandbox,
                 command_timeout_s=b.command_timeout_s,
                 command_sem=command_sem, declared_args=b.declared_args,
-                setup_result=setup_result, project=project,
+                setup_result=setup_result, run_props=run_props, project=project,
             )
 
         setup = descriptor.step(PhaseRole.SETUP)
@@ -616,11 +634,11 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         )
 
         async def author_setup(
-            props: list[UnitProperty], units: Sequence[FeatureUnit], run: PipelineRun
+            props: list[Property], units: Sequence[FeatureUnit], run: PipelineRun
         ) -> str:
             # The properties are what the artifact must make checkable, so they are part of both
             # the prompt and the cache identity
-            setup_input = prep_input.with_props(_properties(props))
+            setup_input = prep_input.with_props(props)
             # Cached like a formalization result (and skipped entirely on a hit): authoring +
             # compiling this is a full LLM loop, and on a large program the longest single step
             # of a run — so a re-run after a failure downstream must not pay for it twice. Keyed
@@ -641,7 +659,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
                     module=b.module,
                     input=setup_input,
                     kind="setup",
-                    titles=[o.prop.title for o in props],
+                    titles=[p.title for p in props],
                     env=run.env,
                     ctx=setup_ctx,
                     run=run,

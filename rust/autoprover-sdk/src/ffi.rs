@@ -233,7 +233,7 @@ mod tests {
         format!(
             r#"{{"kind":"component","program":"vault","unit":{{"slug":"farms"}},
                 "source_unit":{source_unit},"prep_facts":{prep_facts},
-                "props":[],"setup":null,"args":{{}}}}"#
+                "props":[],"run_props":[],"setup":null,"args":{{}}}}"#
         )
     }
 
@@ -342,7 +342,7 @@ mod tests {
         let comp: AuthorInput = serde_json::from_str(
             r#"{"kind":"component","program":"vault","unit":{"slug":"farms"},
                 "source_unit":{},"prep_facts":{"idl":"fuzz/vault/idls/vault.json"},
-                "props":[],"setup":"struct Fixture {}","args":{"fuzz_timeout":900}}"#,
+                "props":[],"run_props":[],"setup":"struct Fixture {}","args":{"fuzz_timeout":900}}"#,
         )
         .expect("parse");
         assert_eq!(
@@ -360,7 +360,8 @@ mod tests {
         let setup: AuthorInput = serde_json::from_str(
             r#"{"kind":"setup","program":"vault","model":{"components":[]},
                 "units":[{"slug":"farms"},{"slug":"vaults"}],
-                "source_unit":{},"prep_facts":{},"props":[],"setup":null,"args":{}}"#,
+                "source_unit":{},"prep_facts":{},"props":[],"run_props":[],"setup":null,
+                "args":{}}"#,
         )
         .expect("parse");
         assert!(setup.model().is_some() && setup.unit().is_none());
@@ -378,7 +379,7 @@ mod tests {
 
         let pre: AuthorInput = serde_json::from_str(
             r#"{"kind":"preflight","program":"vault","source_unit":{},"prep_facts":{},
-                "props":[],"setup":null,"args":{}}"#,
+                "props":[],"run_props":[],"setup":null,"args":{}}"#,
         )
         .expect("parse");
         assert!(pre.unit().is_none() && pre.model().is_none() && pre.props.is_empty());

@@ -172,7 +172,7 @@ mod tests {
         serde_json::from_str(&format!(
             r#"{{"kind":"component","program":"vault","unit":{{}},
                  "source_unit":{source_unit},"prep_facts":{prep_facts},
-                 "props":[],"setup":null,"args":{{}}}}"#
+                 "props":[],"run_props":[],"setup":null,"args":{{}}}}"#
         ))
         .expect("parse")
     }

@@ -1,6 +1,6 @@
 # A fixture assertion condemns every component that does not own it
 
-> **Status: proposed.** Found by the 2026-08-07 Crucible e2e run, which passed. Eight of one
+> **Status: §4.1 landed; §4.2 open.** Found by the 2026-08-07 Crucible e2e run, which passed. Eight of one
 > component's twelve properties were reported **BAD** — refuted by a counterexample that says nothing
 > about them. Nothing in the run failed; the report is simply wrong.
 >

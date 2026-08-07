@@ -124,6 +124,15 @@ class _AuthorInputBase(WireModel):
     source_unit: dict[str, Any] = Field(default_factory=dict)
     #: The properties this artifact must make checkable.
     props: list[Property] = Field(default_factory=list)
+    #: **Every** property the run extracted, across all units, each naming the unit that owns it —
+    #: run-level context like :attr:`prep_facts`, not something this artifact is answerable for.
+    #: A shared setup spec is built into every unit's target, so a failure it reports can name a
+    #: property belonging to a *different* unit; without the run's set a wheel cannot tell that from
+    #: a title it has never seen, and the safe reading of an unplaceable failure — refute everything
+    #: the target covers — is exactly wrong for the first case. Empty wherever the host does not hold
+    #: the whole set at once: a preflight, and any wheel declaring no
+    #: :class:`~composer.rustapp.descriptor.SetupSpec`.
+    run_props: list[Property] = Field(default_factory=list)
     #: The compiled shared setup spec, for a wheel that declared a
     #: :class:`~composer.rustapp.descriptor.SetupSpec`.
     setup: str | None = None
@@ -139,8 +148,11 @@ class _AuthorInputBase(WireModel):
 
     def with_props(self, props: list[Property]) -> Self:
         """This input with ``props`` replaced — the setup spec's base input plus the properties
-        it has to make checkable, which only exist after extraction."""
-        return self.model_copy(update={"props": props})
+        it has to make checkable, which only exist after extraction.
+
+        Sets :attr:`run_props` to the same list: the setup spec is authored from *every* unit's
+        properties, so on that turn the two coincide."""
+        return self.model_copy(update={"props": props, "run_props": props})
 
     def with_prep_facts(self, prep_facts: dict[str, Any]) -> Self:
         """This input with what the workspace prep just established (the preflight gate re-renders

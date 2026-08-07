@@ -98,6 +98,9 @@ class _Module:
         self.crate_root_calls.append(json.loads(input_json))
         return None
 
+    def checks(self, _input_json: str) -> str:
+        return "[]"
+
 
 @dataclass(frozen=True)
 class _Unit:
@@ -264,6 +267,34 @@ async def test_the_crate_root_is_written_once_from_the_whole_unit_set(monkeypatc
     assert [u["slug"] for u in sent["units"]] == ["deposits", "farms"]
     # …alongside the authored fixture, which is the other input the scaffolding needs.
     assert sent["setup"] == FIXTURE
+
+
+async def test_every_units_properties_reach_every_components_own_input(monkeypatch, tmp_path):
+    # The other thing only `begin` holds. The shared artifact is authored from every unit's
+    # properties, so a failure it reports can name any of them — including one belonging to a unit
+    # other than the one whose target is running. A gate told only its own properties cannot tell
+    # that from a title nobody owns, and the safe reading of an unplaceable failure (refute
+    # everything) is exactly wrong for the first case
+    # (docs/crucible-cross-component-attribution.md).
+    store, authored = _Store(), []
+    ctx = _ctx(store, namespace=None)
+    run = _Run(ctx)
+    deposits = [PropertyFormulation(title="deposit_conserves", sort="invariant", description="d")]
+    admin = [PropertyFormulation(title="only_admin_sets_fee", sort="safety_property", description="a")]
+    f = await _formalizer(
+        monkeypatch, ctx, authored, tmp_path, run=run,
+        jobs=_jobs(deposits, admin, names=["deposits", "admin"]),
+    )
+    await f.formalize("Deposits", cast(object, _Unit("deposits")), deposits, ctx, run)  # type: ignore[arg-type]
+
+    component = authored[-1]
+    assert component.kind == "component"
+    # Its own properties are what it must formalize…
+    assert [p.title for p in component.props] == ["deposit_conserves"]
+    # …and the run's are context beside them, each naming the unit that owns it.
+    assert [(p.component, p.title) for p in component.run_props] == [
+        ("deposits", "deposit_conserves"), ("admin", "only_admin_sets_fee"),
+    ]
 
 
 async def test_same_titled_properties_of_two_components_are_both_carried(monkeypatch, tmp_path):
