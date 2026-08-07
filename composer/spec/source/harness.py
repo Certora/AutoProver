@@ -204,12 +204,6 @@ async def classifier_agent(
     await child.cache_put(res["result"])
     return res["result"]
 
-_HARNESS_DIR = "certora/harnesses"
-# The compile gate builds its candidates from here rather than from
-# ``certora/harnesses`` itself: same depth, so the relative imports the
-# harnesses use resolve identically, while rejected attempts never reach the
-# directory the agent (and, later, AutoSetup) reads.
-_HARNESS_CHECK_DIR = "certora/harness_typecheck"
 _HARNESS_CHECK_TIMEOUT_S = 900
 
 
@@ -234,29 +228,22 @@ def _forge_errors(forge_json: str) -> list[str] | None:
     ]
 
 
-def _compile_check(project_root: str, sources: dict[str, str]) -> str | None:
-    """Type-check candidate harness sources against the real project.
+def _compile_check(project_dir: str, harness_paths: list[str]) -> str | None:
+    """Type-check the named harnesses within a materialized copy of the project.
 
-    Returns the compiler's error output, or None when the harnesses compile —
-    or when the project offers nothing to check them with (not a foundry
-    project, no forge binary, or a build that never produced a report), in
-    which case the candidates are accepted unchecked.
+    Returns the compiler's error output, or None when they compile — or when
+    the project offers nothing to check them with (not a foundry project, no
+    forge binary, or a build that never produced a report), in which case the
+    candidates are accepted unchecked.
     """
-    root = Path(project_root)
+    root = Path(project_dir)
     forge = shutil.which("forge")
     if forge is None or not (root / "foundry.toml").is_file():
         _logger.info("Harness compile check skipped: needs forge and a foundry project")
         return None
-    check_dir = root / _HARNESS_CHECK_DIR
     try:
-        check_dir.mkdir(parents=True, exist_ok=True)
-        relative_paths = []
-        for (path, source_text) in sources.items():
-            target = check_dir / Path(path).name
-            target.write_text(source_text)
-            relative_paths.append(str(target.relative_to(root)))
         proc = subprocess.run(
-            [forge, "build", "--json", *sorted(relative_paths)],
+            [forge, "build", "--json", *sorted(harness_paths)],
             cwd=root,
             capture_output=True,
             text=True,
@@ -267,8 +254,6 @@ def _compile_check(project_root: str, sources: dict[str, str]) -> str | None:
             "Harness compile check skipped: forge build exceeded %ds", _HARNESS_CHECK_TIMEOUT_S
         )
         return None
-    finally:
-        shutil.rmtree(check_dir, ignore_errors=True)
 
     errors = _forge_errors(proc.stdout)
     if errors is None:
@@ -276,9 +261,7 @@ def _compile_check(project_root: str, sources: dict[str, str]) -> str | None:
         return None
     if not errors:
         return None
-    # The agent knows its harnesses by their `certora/harnesses` paths; report
-    # the diagnostics against those rather than the scratch directory.
-    return "\n".join(errors).replace(f"{_HARNESS_CHECK_DIR}/", f"{_HARNESS_DIR}/")
+    return "\n".join(errors)
 
 
 class GeneratedHarness(BaseModel):
@@ -371,24 +354,28 @@ async def generate_harnesses(
         tid: str
     ) -> str | None:
         check_copy = expected.copy()
-        harness_sources: dict[str, str] = {}
+        harness_paths: list[str] = []
         for (nm, r) in res.identifier_to_source.items():
             if nm not in check_copy:
                 return f"Delivered result for contract {nm}, but no instructions were given to harness it"
             if len(r) != check_copy[nm]:
                 return f"Delivered {len(r)} harnesses for {nm}, but {check_copy[nm]} were required"
             for res_c in r:
-                delivered = mat.get(s, res_c.path)
-                if delivered is None:
+                if mat.get(s, res_c.path) is None:
                     return f"Delivered harness {res_c.harness_name} at {res_c.path} for {nm}, but it doesn't exist on the VFS"
-                harness_sources[res_c.path] = delivered.decode("utf-8")
+                harness_paths.append(res_c.path)
             del check_copy[nm]
         if len(check_copy) != 0:
             error = ", ".join(
                 [ f"contract {k} ({n} copies)" for (k,n) in check_copy.items() ]
             )
             return f"Missing harnesses in results: {error}"
-        if (compile_errors := _compile_check(source.project_root, harness_sources)) is not None:
+        # Compile the agent's view of the project, not the project on disk: the
+        # harnesses it wrote live on the VFS, and a helper it wrote but did not
+        # deliver still has to be there for their imports to resolve.
+        with mat.materialize(s) as project_dir:
+            compile_errors = _compile_check(project_dir, harness_paths)
+        if compile_errors is not None:
             return (
                 "The delivered harnesses do not compile. Repair them and deliver again; "
                 "the compiler reported:\n" + compile_errors
