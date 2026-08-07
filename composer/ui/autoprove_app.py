@@ -57,6 +57,7 @@ AUTOPROVE_PHASE_LABELS: dict[AutoProvePhase, str] = {
     AutoProvePhase.COMPONENT_ANALYSIS: "Component Analysis",
     AutoProvePhase.BUG_ANALYSIS: "Property Extraction",
     AutoProvePhase.CVL_GEN: "CVL Generation",
+    AutoProvePhase.REPORT: "Report Generation"
 }
 
 AUTOPROVE_SECTION_ORDER: list[str] = [

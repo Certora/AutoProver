@@ -1,0 +1,37 @@
+Contract: {{ contract_name }}
+
+Violated rule: {{ rule_name }}
+
+{% if properties -%}
+Properties this rule formalizes (the counterexample breaks at least one of them — determine which):
+{% for p in properties %}
+  - ({{ p.sort }}) {{ p.title }}: {{ p.description }}
+{%- endfor %}
+{% endif -%}
+{% if groups -%}
+Audit-level claim(s) it belongs to:
+{% for g in groups %}
+  - {{ g.title }}: {{ g.description }}
+{%- endfor %}
+{% endif %}
+{% if instances -%}
+{% if instances | length > 1 -%}
+This rule failed for {{ instances | length }} separate instantiations. They may share one root cause or
+be genuinely different problems — read them all and say which is the case.
+{% endif -%}
+{% for i in instances %}
+--- Failing instantiation{% if i.label %}: {{ i.label }}{% endif %} ---
+{% if i.analysis -%}
+Prover's counterexample analysis (root cause + suggested fix), produced during the run:
+{{ i.analysis }}
+{%- else -%}
+(No counterexample analysis was captured for this instantiation.)
+{%- endif %}
+{% if i.counterexample %}
+Counterexample trace:
+{{ i.counterexample }}
+{% endif %}
+{%- endfor %}
+{%- else -%}
+(No counterexample evidence was captured for this rule — reason conservatively from the properties.)
+{%- endif %}

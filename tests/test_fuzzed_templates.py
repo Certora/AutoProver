@@ -17,16 +17,21 @@ from composer.spec.system_model import (
     HarnessedApplication, _context_marker_attr,
     BaseApplication
 )
+
 from composer.spec.solana.model import (
     SolanaApplication, SolanaComponentInstance, SolanaProgramInstance
 )
+
 from composer.spec.soroban.model import (
     SorobanApplication, SorobanComponentInstance, SorobanContractInstance
 )
+
+from composer.templates.loader import _patch_environment_filters
 from composer.spec.service_host import Sort # defined here? huh?
 import hypothesis.strategies._internal.core as hcore
 
 import os
+
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 
@@ -35,6 +40,7 @@ TEMPLATES_DIR = REPO_ROOT / "composer" / "templates"
 MANIFEST = Manifest.validate_json((REPO_ROOT / "template_manifest.json").read_text())
 
 env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), undefined=StrictUndefined)
+_patch_environment_filters(env)
 
 #: Cap on any drawn list field (see ``_field_strategy``). Templates iterate these; a handful of
 #: elements covers the same branches as an unbounded draw, at a fraction of the entropy.
@@ -200,17 +206,43 @@ def _make_cursed_patcher(wrapped: _TypeResolver) -> _TypeResolver:
         return next((m.pattern for m in field_info.metadata
                  if getattr(m, "pattern", None)), None)
 
+    def _len_bounds_of(field_info: FieldInfo) -> tuple[int | None, int | None]:
+        """The field's ``(min_length, max_length)`` — ``MinLen``/``MaxLen`` in the same metadata that
+        hides ``pattern=``; ``None`` where unconstrained."""
+        def bound(attr: str) -> int | None:
+            return next((v for m in field_info.metadata
+                         if (v := getattr(m, attr, None)) is not None), None)
+        return bound("min_length"), bound("max_length")
+
     def _field_strategy[T: BaseModel](n: str, f: FieldInfo, cls: type[T]):
         """Strategy for a single model field ``n`` of ``cls``, overriding
         Hypothesis's annotation-only inference wherever that inference would
         produce a value Pydantic rejects or the downstream code cannot use."""
+        (lo, hi) = _len_bounds_of(f)
         # A `pattern=` constraint lives in FieldInfo.metadata, invisible to the
         # annotation Hypothesis inspects; generate straight from the regex so the
         # value passes validation (e.g. `solidity_identifier`).
         if (p := _pattern_of(f)):
+            assert (lo, hi) == (None, None), (
+                f"{cls.__name__}.{n} constrains pattern *and* length; `from_regex` honors only the "
+                f"pattern. Combine them here."
+            )
             return st.from_regex(p, fullmatch=True)
         ann = f.annotation
         assert ann is not None
+        # Same invisible metadata: Hypothesis draws the `''`/`[]` these forbid, so every draw of the
+        # owning model dies in validation and the template never renders (`PropertyGroup.slug`,
+        # min_length=1). Assert on anything else constrained, so the next one names itself.
+        if (lo, hi) != (None, None):
+            if ann is str:
+                return st.text(min_size=lo or 0, max_size=hi)
+            assert typing.get_origin(ann) is list, (
+                f"unhandled length constraint on {cls.__name__}.{n}: {ann}"
+            )
+            (elem,) = typing.get_args(ann)
+            # Capped at `_MAX_LIST` (see below), never below the declared minimum.
+            return st.lists(st.from_type(elem), min_size=lo or 0,
+                            max_size=max(lo or 0, min(hi or _MAX_LIST, _MAX_LIST)))
         # `components` is `list[<unit-bearing | other union>]` (EVM: contract | external actor;
         # Solana: program | authority). Force at least one unit-bearing component (downstream
         # indexing and `contract_components`/`programs` need a non-empty set) plus a bounded mix
