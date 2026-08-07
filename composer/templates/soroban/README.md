@@ -17,12 +17,17 @@ Templates for Soroban/Stellar smart contracts. The structure is similar to
 Rust-level issues are in `rust/_vulnerability_patterns.j2`; Soroban-specific
 issues are here.
 
-## Expected Model
+## Model
 
-These templates assume a `SorobanApplication` model similar to
-`composer/spec/solana/model.py`. `ChainTag` already contains `"soroban"` as a possible blockchain name.
+These templates render against `SorobanApplication`, defined in
+[composer/spec/soroban/model.py](../../spec/soroban/model.py) and bound into the seam as `SOROBAN`
+in [composer/pipeline/ecosystem.py](../../pipeline/ecosystem.py). That module is authoritative; the
+sketch below is a reading aid. Because the four templates are registered in
+`template_manifest.json`, [tests/test_fuzzed_templates.py](../../../tests/test_fuzzed_templates.py)
+renders each of them against hundreds of generated models — an undefined variable or a field rename
+that breaks a template fails CI.
 
-Required fields:
+Fields:
 
 ```text
 SorobanApplication:
@@ -53,7 +58,7 @@ AuthRequirement:
   kind: "require_auth" | "require_auth_for_args"
   description
 
-StorageAccess:
+StorageAccessSite:
   key
   durability
   access: "read" | "write" | "remove" | "extend_ttl"
@@ -71,11 +76,15 @@ SorobanAuthority:
 
 `component_context.j2` expects a resolved context with `app`, `contract`,
 `component`, `functions`, `storage_entries`, `sibling_components`, and
-`sibling_contracts`.
+`sibling_contracts` — that is `SorobanComponentInstance`, the ecosystem's `Unit`. It resolves the
+component's `functions` and `storage_keys` name lists into objects, because a bare storage key
+without its durability is not interpretable. `_soroban_validate` rejects a name that would not
+resolve, so the templates never have to render a hole.
 
 ## Backend Boundary
 
-`property_prompt.j2` includes `{{ backend_guidance }}`. For Certora Sunbeam,
+`property_system.j2` includes `{{ backend_guidance }}` — the system prompt, not the initial one,
+because the guidance is fixed for a whole run and so belongs inside the cached prefix. For Certora Sunbeam,
 that guidance should cover Rust `#[rule]` specs using Cavalier/CVLR macros
 (`cvlr_assert!`, `cvlr_assume!`, `cvlr_satisfy!`), nondeterministic inputs, and
 `certoraSorobanProver` config. The Soroban templates should identify

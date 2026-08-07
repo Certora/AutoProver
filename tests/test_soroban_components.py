@@ -1,12 +1,3 @@
-"""The Soroban ecosystem's model and its analysis-time validation.
-
-The peer of ``tests/test_solana_components.py``: the same rules over
-``ContractComponent`` (unique names/slugs, the component→entry-point mapping valid and total,
-interactions resolving), plus the two rules Soroban adds because its storage is
-durability-tagged — a component's ``storage_keys`` must resolve, and a key may not be declared
-twice. See docs/ecosystem-abstraction.md §5.
-"""
-
 from typing import Any, cast
 
 import pytest
@@ -24,7 +15,6 @@ VAULT_ID = RustIdentifier("vault")
 
 
 def _raw() -> dict[str, Any]:
-    """A well-formed two-component vault, as the analysis agent would emit it."""
     return {
         "application_type": "Vault",
         "description": "A single-contract token vault.",
@@ -118,22 +108,15 @@ def _components(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return _contract(raw)["components"]
 
 
-# --- the model ---------------------------------------------------------------------
-
-
 def test_components_parse_and_functions_resolve_through_the_contract():
     contract = _app().contracts[0]
     assert [c.name for c in contract.components] == ["Deposits", "Withdrawals"]
-    # A component references its functions by name; the contract stays authoritative for the
-    # objects, and `functions_by_name` is the one place the names resolve.
     deposits = contract.components[0]
     resolved = [contract.functions_by_name[n] for n in deposits.functions]
     assert [f.description for f in resolved] == ["record the admin", "move tokens in"]
 
 
 def test_absent_auth_is_recorded_as_empty_not_missing():
-    """The Soroban peer of Solana's unconstrained account: nothing else authenticates a caller,
-    so `auth == []` is the finding, and it must survive parsing rather than defaulting away."""
     by_name = _app().contracts[0].functions_by_name
     assert by_name["withdraw"].auth == []
     assert [a.address for a in by_name["deposit"].auth] == ["from"]
@@ -148,8 +131,6 @@ def test_interaction_union_discriminates_by_shape():
 
 
 def test_unit_resolves_functions_and_durability_tagged_storage():
-    """``storage_entries`` resolves names to entries because a key without its durability is not
-    interpretable — the reason this ecosystem validates ``storage_keys`` at all."""
     (deposits, withdrawals) = SOROBAN.units(SorobanContractInstance(0, _app()))
     assert deposits.display_name == "Deposits" and deposits.slug == "Deposits"
     assert [f.name for f in withdrawals.functions] == ["withdraw"]
@@ -157,17 +138,12 @@ def test_unit_resolves_functions_and_durability_tagged_storage():
         ("Balance(Address)", "persistent"),
         ("Admin", "instance"),
     ]
-    # `feature_json` is the ecosystem-agnostic `dict[str, object]` a backend marshals, so the
-    # resolved lists come back untyped — narrow them here rather than widen the protocol.
     feature = deposits.feature_json()
     assert feature["slug"] == "Deposits"
     functions = cast(list[dict[str, Any]], feature["functions"])
     storage = cast(list[dict[str, Any]], feature["storage_entries"])
     assert [f["name"] for f in functions] == ["initialize", "deposit"]
     assert [e["durability"] for e in storage] == ["persistent", "instance"]
-
-
-# --- validation: the happy path and the shared rules -------------------------------
 
 
 def test_well_formed_application_validates():
@@ -188,7 +164,6 @@ def test_duplicate_component_names_rejected():
 
 
 def test_component_slug_collision_rejected():
-    # "Deposits!" and "Deposits" are distinct names that slugify to the same artifact id.
     def collide(raw):
         _components(raw)[1]["name"] = "Deposits!"
 
@@ -251,12 +226,7 @@ def test_unresolvable_interactions_rejected(interaction, expected):
     assert problem is not None and expected in problem
 
 
-# --- validation: the Soroban-specific storage rules ----------------------------------
-
-
 def test_unknown_storage_key_reference_rejected():
-    """Unlike Solana's bare-name ``account_types``, a component's ``storage_keys`` are references
-    the unit wrapper resolves; a dangling one renders as nothing at all."""
     def typo(raw):
         _components(raw)[1]["storage_keys"] = ["Blance(Address)"]
 
@@ -266,8 +236,6 @@ def test_unknown_storage_key_reference_rejected():
 
 
 def test_a_key_declared_under_two_durabilities_rejected():
-    """The two are distinct entries on-chain, but ``storage_by_key`` is keyed by name — so one
-    would shadow the other and the prompt would attribute the wrong expiry semantics."""
     def shadow(raw):
         _contract(raw)["storage_entries"].append(
             {
@@ -284,15 +252,10 @@ def test_a_key_declared_under_two_durabilities_rejected():
 
 
 def test_a_component_need_not_claim_every_storage_key():
-    """Totality is required of the function mapping, not of storage: an entry only one component
-    touches, or that no component lists, is ordinary."""
     def drop(raw):
         _components(raw)[0]["storage_keys"] = []
 
     assert _soroban_validate(_app(drop), VAULT_ID) is None
-
-
-# --- the registry --------------------------------------------------------------------
 
 
 def test_soroban_is_registered_and_locates_its_main():
