@@ -16,6 +16,7 @@ Stubs throughout: the "author" step is a counter, the store is a dict.
 """
 
 import json
+from dataclasses import dataclass
 from typing import cast
 
 import pytest
@@ -85,9 +86,19 @@ PROPS = [
 ]
 
 
-def _jobs(*prop_lists: list[PropertyFormulation]) -> list[BackendJob]:
+@dataclass(frozen=True)
+class _Unit:
+    """The one `FeatureUnit` member `begin` reads: the name of the unit a property was inferred
+    for, which is what each property carries onto the wire."""
+    display_name: str
+
+
+def _jobs(*prop_lists: list[PropertyFormulation], names: list[str] | None = None) -> list[BackendJob]:
     """One `BackendJob` per unit — what the driver hands `begin` after extraction."""
-    return [BackendJob(feat=cast(object, f"unit{i}"), props=p) for i, p in enumerate(prop_lists)]
+    units = names or [f"unit{i}" for i in range(len(prop_lists))]
+    return [
+        BackendJob(feat=cast(object, _Unit(n)), props=p) for n, p in zip(units, prop_lists)
+    ]
 
 
 async def _formalizer(
@@ -212,17 +223,26 @@ async def test_the_artifact_is_authored_from_every_unit_s_properties(monkeypatch
     ]
 
 
-async def test_a_property_two_components_share_is_carried_once(monkeypatch, tmp_path):
-    # Units are disjoint but their properties need not be; the union is de-duplicated by title so
-    # the artifact's cache identity doesn't change just because two components agreed.
+async def test_same_titled_properties_of_two_components_are_both_carried(monkeypatch, tmp_path):
+    # A title is unique only within the component it was inferred for (extraction validates that
+    # much), so two components can each carry a "solvency" property and mean different things by it.
+    # Both are properties the fixture has to make checkable, and both are properties their component
+    # will be asked to formalize — merging them by title would author the artifact around one.
     store, authored = _Store(), []
-    shared = PropertyFormulation(title="solvency", sort="invariant", description="s")
+    pool = PropertyFormulation(title="solvency", sort="invariant", description="the pool is solvent")
+    vault = PropertyFormulation(title="solvency", sort="invariant", description="the vault is solvent")
     other = PropertyFormulation(title="only_admin", sort="safety_property", description="a")
     await _prepare(
         monkeypatch, _ctx(store, namespace=None), authored, tmp_path,
-        jobs=_jobs([shared], [shared, other]),
+        jobs=_jobs([pool], [vault, other], names=["Pool", "Vault"]),
     )
-    assert [p.title for p in authored[0].props] == ["solvency", "only_admin"]
+    # Each carries the unit that inferred it, which is what tells the two "solvency" apart — the
+    # wheel is authoring one artifact for both and has to know whose surface each is stated over.
+    assert [(p.component, p.title) for p in authored[0].props] == [
+        ("Pool", "solvency"), ("Vault", "solvency"), ("Vault", "only_admin"),
+    ]
+    # …and the wheel can still name a check per property: the host-assigned slugs stay distinct.
+    assert len({p.slug for p in authored[0].props}) == 3
 
 
 async def test_a_different_property_set_authors_a_different_artifact(monkeypatch, tmp_path):
@@ -251,7 +271,9 @@ def test_the_setup_key_covers_what_it_is_authored_from_and_not_run_knobs():
         program="example_lending",
         source_unit={"dir": "programs/lend", "lib": "example_lending"},
         model={"programs": [{"name": "example_lending"}]},
-        props=[Property(title="no overflow", sort="invariant", description="d")],
+        props=[
+            Property(component="Lend", title="no overflow", sort="invariant", description="d")
+        ],
         args={"fuzz_timeout": 30},
         prep_facts={"idl": "fuzz/x/idls/example_lending.json"},
     )
@@ -268,6 +290,9 @@ def test_the_setup_key_covers_what_it_is_authored_from_and_not_run_knobs():
     assert varied(source_unit={"dir": "programs/other"}) != same
     # …including the properties: they are what the fixture is designed around.
     assert varied(props=[]) != same
+    # …down to the unit each was inferred for: the same title stated over another unit's surface is
+    # another property, and the fixture has to support it there too.
+    assert varied(props=[base.props[0].model_copy(update={"component": "Farms"})]) != same
     # …including what the prep established, which is what decides where the types come from.
     assert varied(prep_facts={}) != same
     # Stable across key ordering *within* the opaque model — it arrives as JSON, and the wire model

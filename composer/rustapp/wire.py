@@ -57,9 +57,15 @@ class WireModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 class Property(WireModel):
-    """One property to formalize, plus the ``slug`` the host assigned it — unique within the batch,
-    and what a backend names this property's :class:`Check` after (Crucible: ``c_<slug>``)."""
+    """One property to formalize, the unit it was inferred for, and the ``slug`` the host assigned
+    it — unique within the batch, and what a backend names this property's :class:`Check` after
+    (Crucible: ``c_<slug>``)."""
 
+    #: The unit whose analysis produced this property (``FeatureUnit.display_name``, the report's
+    #: component name). A title identifies a property only within its own unit, so a setup spec —
+    #: which is sent every unit's properties at once — needs this to tell two same-titled ones apart
+    #: and to know which unit's surface each has to be checkable against.
+    component: str
     title: str
     #: The shared vocabulary (:data:`~composer.spec.types.PropertyType`), mirrored by the Rust
     #: ``PropertyKind`` — a closed set on both sides rather than a free string.

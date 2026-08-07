@@ -34,9 +34,10 @@ impl std::fmt::Display for PropertyKind {
     }
 }
 
-/// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), plus the `slug`
-/// the host assigned it: unique within the batch, and what a backend names this property's
-/// [`Check`](crate::outcome::Check) after (Crucible: `c_<slug>`; the example app: `rule_<slug>`).
+/// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), the unit it was
+/// inferred for, and the `slug` the host assigned it: unique within the batch, and what a backend
+/// names this property's [`Check`](crate::outcome::Check) after (Crucible: `c_<slug>`; the example
+/// app: `rule_<slug>`).
 ///
 /// The slug is only guaranteed *filesystem*-safe, which is weaker than identifier-safe — a backend
 /// that spells it into generated code folds it first.
@@ -44,6 +45,14 @@ impl std::fmt::Display for PropertyKind {
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
 pub struct Property {
+    /// The unit whose analysis produced this property (the host's `FeatureUnit::display_name`).
+    ///
+    /// A title identifies a property only within its own unit, so the two together are what
+    /// identifies one across a run. On a component turn every property names that turn's unit; on a
+    /// [setup](Authored::Setup) turn, which is sent every unit's properties at once, this is how two
+    /// same-titled properties are told apart and how each is tied to the surface it must be
+    /// checkable against.
+    pub component: String,
     pub title: String,
     pub sort: PropertyKind,
     pub description: String,

@@ -34,7 +34,10 @@ def _component_input(*titles: str) -> str:
         program="Counter",
         unit={"name": "Counter"},
         props=[
-            Property(title=t, sort="invariant", description="x", slug=t.replace(" ", "_"))
+            Property(
+                component="Counter", title=t, sort="invariant", description="x",
+                slug=t.replace(" ", "_"),
+            )
             for t in titles
         ],
     ).model_dump_json()

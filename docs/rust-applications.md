@@ -317,11 +317,16 @@ would decide the artifact all the others are then told to work within.
 
 So `prepare_formalization` returns a `StagedFormalizer` instead of a `Formalizer`, and the driver
 calls [`RustStagedFormalizer.begin`](../composer/rustapp/adapter.py) between extraction and the
-fan-out. `begin` de-duplicates properties by title (components are disjoint, but two of them can
-surface the same property), runs a `setup` session under the declared step's task, and hands back
-the `RustFormalizer` built around the result — the artifact is threaded through the constructor
-rather than assigned onto a live formalizer, so the formalizer is constructed once and never
-mutated.
+fan-out. `begin` takes every unit's properties unmerged, runs a `setup` session under the declared
+step's task, and hands back the `RustFormalizer` built around the result — the artifact is threaded
+through the constructor rather than assigned onto a live formalizer, so the formalizer is constructed
+once and never mutated.
+
+Each wire `Property` names the unit it was inferred for (`Property.component`), because a title
+identifies a property only *within* a unit — the two together are the report's `PropertyKey`. So two
+units' same-titled properties are two different properties: both reach the artifact, the wheel can
+tell them apart, and each is tied to the surface it has to be checkable against. On a component turn
+the field is that turn's own unit; the setup turn is the one that sees more than one.
 
 The artifact is **cached** like a formalization result (`RustSetupSpec`), keyed by
 [`_setup_identity`](../composer/rustapp/adapter.py): the program and its crate, the analyzed model,
