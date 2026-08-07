@@ -31,7 +31,9 @@ from composer.rustapp.wire import (
     SetupInput,
     RustAppModule,
     Check,
+    Target,
     ValidateBuildFailed,
+    ValidateCoverageError,
     ValidateVerdicts,
     parse_compile,
     parse_checks,
@@ -103,6 +105,52 @@ def test_an_outcome_the_host_does_not_know_is_refused():
     with pytest.raises(ValidationError):
         parse_validate(json.dumps({"kind": "verdicts",
                                    "verdicts": [["u", wire_verdict("FLAKY")]]}))
+
+
+def _verdicts(*named: tuple[str, str]) -> ValidateVerdicts:
+    parsed = parse_validate(json.dumps(
+        {"kind": "verdicts", "verdicts": [[n, wire_verdict(o)] for n, o in named]}))
+    assert isinstance(parsed, ValidateVerdicts)
+    return parsed
+
+
+_SHARED = Target(name="c_vault", checks=[
+    Check(property="p", name="rule_p", target="c_vault"),
+    Check(property="q", name="rule_q", target="c_vault"),
+])
+
+
+def test_a_verdict_resolves_to_the_check_the_host_sent():
+    # The wire keys a verdict by name; upstream wants the `Check` — the property title a row is
+    # reported under comes from the host's own map, never from what the wheel echoed back. Order is
+    # the target's, not the wheel's answer's.
+    resolved = _verdicts(("rule_q", "BAD"), ("rule_p", "GOOD")).resolve(_SHARED)
+    assert [(c.property, v.outcome) for c, v in resolved] == [
+        ("p", Outcome.GOOD), ("q", Outcome.BAD),
+    ]
+
+
+def test_a_check_left_without_a_verdict_is_refused():
+    # The one that matters: an unanswered check is not a failing check, so nothing downstream has
+    # anything to object to — a wheel that answered for none of them would otherwise stamp the
+    # publish gate on a component it never checked.
+    with pytest.raises(ValidateCoverageError, match="rule_q"):
+        _verdicts(("rule_p", "GOOD")).resolve(_SHARED)
+    with pytest.raises(ValidateCoverageError):
+        _verdicts().resolve(_SHARED)
+
+
+def test_a_verdict_for_a_check_the_target_does_not_cover_is_refused():
+    # A name no check has can only be a wheel that invented one or misspelled one, and either way
+    # the verdict is about nothing the host can report under.
+    with pytest.raises(ValidateCoverageError, match="rule_r"):
+        _verdicts(("rule_p", "GOOD"), ("rule_q", "GOOD"), ("rule_r", "GOOD")).resolve(_SHARED)
+
+
+def test_two_verdicts_for_one_check_are_refused_rather_than_one_winning():
+    # Keying by name would quietly keep the last, which is how a BAD becomes a GOOD.
+    with pytest.raises(ValidateCoverageError, match="rule_p"):
+        _verdicts(("rule_p", "BAD"), ("rule_p", "GOOD"), ("rule_q", "GOOD")).resolve(_SHARED)
 
 
 def test_a_workspace_plan_that_only_places_files_needs_no_toolchain():

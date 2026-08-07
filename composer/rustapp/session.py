@@ -284,9 +284,9 @@ class ValidateSpec(
                         {"line": _first_line(res.errors) or "build failed"},
                     )
                     return f"The build FAILED, so nothing was checked.\n\n{res.errors}"
-                for name, verdict in res.verdicts:
-                    verdicts[name] = verdict
-                    _emit_verdict(deps, wanted, name, verdict)
+                for check, verdict in res.resolve(target):
+                    verdicts[check.name] = verdict
+                    _emit_verdict(deps, check, verdict)
 
         report = _verdict_report(verdicts, self.state["expected_failures"])
         partial = self.checks is not None
@@ -322,10 +322,8 @@ def targets_of(checks: Sequence[Check]) -> list[Target]:
     ]
 
 
-def _emit_verdict(
-    deps: GateDeps, checks: Sequence[Check], name: str, verdict: WireVerdict
-) -> None:
-    prop = next((c.property for c in checks if c.name == name), name)
+def _emit_verdict(deps: GateDeps, check: Check, verdict: WireVerdict) -> None:
+    prop = check.property
     line = f"{prop}: {verdict.outcome.value}"
     deps.emit(
         "verdict",

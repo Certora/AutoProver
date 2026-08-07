@@ -34,6 +34,7 @@ framework deliberately holds no schema for — see :mod:`composer.rustapp.toolch
 treatment ``model`` and ``unit`` already get, and for the same reason.
 """
 
+from collections import Counter
 from typing import Annotated, Any, Callable, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -331,11 +332,46 @@ class ValidateBuildFailed(WireModel):
     errors: str
 
 
+class ValidateCoverageError(RuntimeError):
+    """``validate`` answered with a verdict set that is not the target's check set.
+
+    A wheel bug, not a spec the author can fix, so it raises where a build failure returns a revise
+    prompt."""
+
+
 class ValidateVerdicts(WireModel):
     """It built, and every check the target covers got a verdict, ``(check_name, verdict)``."""
 
     kind: Literal["verdicts"]
     verdicts: list[tuple[str, Verdict]]
+
+    def resolve(self, target: Target) -> list[tuple[Check, Verdict]]:
+        """Each of the target's checks paired with the verdict the wheel returned for it, in the
+        target's own order.
+
+        A verdict is keyed by check name on the wire so a wheel picks from the checks the host sent
+        rather than restating them (a restated :class:`Check` could contradict the property→check
+        map the host published). Resolving that key here is what makes the pairing a `Check` for
+        everything upstream, and is the only place the docstring's "every check got a verdict" is
+        established: a name no check has, a check left without a verdict, or the same check twice
+        raises. Silence would be worse than a wrong verdict — a check whose verdict never arrives is
+        one the publish gate has nothing to object to, so an empty answer would stamp a component
+        nothing checked."""
+        covered = [c.name for c in target.checks]
+        answered = Counter(name for name, _ in self.verdicts)
+        by_name = {name: verdict for name, verdict in self.verdicts}
+        missing = [n for n in covered if n not in by_name]
+        unknown = sorted(set(by_name) - set(covered))
+        repeated = sorted(n for n, count in answered.items() if count > 1)
+        if missing or unknown or repeated:
+            raise ValidateCoverageError(
+                f"target {target.name!r} covers {covered}, but validate answered for "
+                f"{list(answered)}"
+                + (f"; no verdict for {missing}" if missing else "")
+                + (f"; no such check {unknown}" if unknown else "")
+                + (f"; more than one verdict for {repeated}" if repeated else "")
+            )
+        return [(c, by_name[c.name]) for c in target.checks]
 
 
 #: ``validate``'s result — tagged on ``kind`` (Rust ``ValidateOutcome``).
