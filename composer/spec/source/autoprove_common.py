@@ -20,10 +20,15 @@ from composer.spec.context import (
 from composer.pipeline.cli import cli_pipeline, user_ns
 from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
+from composer.spec.source.author import SourceEditing
+from composer.spec.source.live_explorer import setup_live_edits
+from composer.spec.source.munge.edit_store import EditStore
+from composer.spec.source.munge.edit_oracle import mk_oracle
 from composer.spec.source.artifacts import ProverArtifactStore
-from composer.spec.agent_index import agent_index_config_from_env
+from composer.spec.agent_index import AgentIndex, AgentIndexConfig, agent_index_config_from_env
 from composer.core.user import get_uid
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.autoprove_app import AutoProvePhase
@@ -115,7 +120,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
 
     async def callback(
         handler: HandlerFactory[AutoProvePhase, None]
-    ) -> CorePipelineResult[GeneratedCVL]:    
+    ) -> CorePipelineResult[GeneratedCVL]:
         async with (
             cli_pipeline(
                 args=args, design_doc_phase=design_phase,
@@ -141,9 +146,35 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 recursion_limit=args.recursion_limit,
                 cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
             )
+            # Source-editing kit: the edit snapshot store, the live (vfs-aware)
+            # tool suite with its versioned explorer, and the migration oracle
+            # that caveats cached explorer findings with the files edited since
+            # they were recorded. The base index shares the frozen explorer's
+            # namespace, so pre-edit (V0) findings stay visible to the live
+            # explorer.
+            edit_store = EditStore(
+                staged.conns.store, user_ns("edit_snapshots", staged.root_key)
+            )
+            editing = SourceEditing(
+                live=setup_live_edits(
+                    builder=staged.llm_models.builder_lite(),
+                    sc=staged.source,
+                    base_store=AgentIndex(
+                        store=staged.conns.indexed_store,
+                        config=AgentIndexConfig(base_layer=source_data_ns),
+                    ),
+                    store=staged.conns.indexed_store,
+                    source_key=staged.root_key,
+                    oracle=mk_oracle(edit_store, staged.source),
+                    recursion_limit=args.recursion_limit,
+                ),
+                store=edit_store,
+            )
             backend = ProverBackend(
                 ProverArtifactStore(staged.source.project_root, staged.source.contract_name),
-                make_prover_options(cloud=args.cloud)
+                make_prover_options(cloud=args.cloud),
+                editing,
+                CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
             return await cont(source_env, backend, EVM)
     yield callback
