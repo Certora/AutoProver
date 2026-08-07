@@ -41,6 +41,7 @@ from composer.input.parsing import add_protocol_args
 from composer.input.types import (
     DEFAULT_RECURSION_LIMIT,
     ExtendedModelOptions,
+    TieredModelOptions,
 )
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
 from composer.io.thread_logging import default_logging_ns, thread_logger
@@ -278,9 +279,8 @@ async def rust_entry_point(
     print(f"{descriptor.name} logs: {text_log}\n         events: {events_log}", file=sys.stderr)
     install_run_summary(summary)
 
-    # argparse Namespace duck-types the ModelConfiguration protocol (the model flags come from
-    # ExtendedModelOptions); the built-in entries cast their args the same way.
-    tiered = get_provider_for(tiered=cast(Any, args))
+    # argparse Namespace duck-types the protocol: the model flags come from ExtendedModelOptions.
+    tiered = get_provider_for(tiered=cast(TieredModelOptions, args))
     discovery_phase = _discovery_phase(app)
 
     async with (
