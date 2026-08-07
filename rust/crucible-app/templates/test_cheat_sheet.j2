@@ -31,6 +31,17 @@ exists as `Fixture`):
   subtract the fee or assert a bound (`<=`) instead of `==`.
 - Drive state via the fixture's existing `action_*` methods; do not re-`send()`
   instructions yourself unless necessary.
+- A "must be rejected" property is checked HERE, not in the fixture. The fixture's negative actions
+  attempt the thing and record the outcome in a field (`self.accepted.<attempt> |= …`); they
+  deliberately do not assert, because the fixture is built into every component's fuzz target and an
+  assertion there fires in campaigns that never asked about your property. Read the recorded field
+  and assert on it, tagged like any other:
+      fuzz_assert!(!fixture.accepted.init_without_signer,
+          "[authority_must_sign_initialization] init without the authority signing was accepted");
+  A recorded flag is the one assertion with no operands to interpolate (see the next bullet) — name
+  the attempt that was wrongly accepted instead. If one of your properties is about a rejection and
+  the fixture records nothing for it, that is a fixture gap: say so in a `// UNCOVERABLE:` comment
+  rather than asserting something vacuous.
 - EVERY assertion message MUST do two things: (a) START with its property title in brackets
   (`"[<title>] ..."`) so a counterexample names which property it refutes, and (b) INTERPOLATE THE
   OPERAND VALUES via format args. Passing a custom message makes `fuzz_assert*` use that message

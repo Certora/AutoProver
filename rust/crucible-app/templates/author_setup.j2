@@ -10,16 +10,37 @@ matter what the program does. Design it for these {{ n }} properties:
 Concretely, for that list:
 - **One `action_*` per instruction those properties exercise.** An instruction with no action is
   unreachable state the fuzzer can never explore.
-- **Negative attempts are actions too.** For a property of the form "X must be rejected" (re-init,
-  an unauthorized caller, a flash borrow with no repay, an operation while paused), write an action
-  that *attempts* X and asserts it failed — `fuzz_assert!(res.is_err(), "[<property title>] …")`. A
-  rejected call changes nothing, so this is safe inside an action. It cannot go in the test.
-  **Such an action must `return true`.** The bool reports whether the ACTION did what it was designed
-  to do — not whether the instruction succeeded — and for this one the rejection *is* it working.
-  Returning `false` costs you twice: Crucible reads `false` as a dead-end state and **ends the action
-  sequence there**, so every draw of this action truncates the campaign; and a violation reported on
-  a `false` action is auto-labelled a suspected harness bug, which is precisely backwards for an
-  action whose entire purpose is the rejection.
+- **Negative attempts are actions too — but the action ATTEMPTS, it never JUDGES.** For a property of
+  the form "X must be rejected" (re-init, an unauthorized caller, a flash borrow with no repay, an
+  operation while paused), write an action that *attempts* X and **records what happened** in a
+  `pub(crate)` field. A rejected call changes nothing, so the attempt is safe here — and the
+  assertion belongs to the test that owns the property:
+
+      pub fn action_init_without_signer(&mut self) -> bool {
+          let res = self.ctx.program(self.program_id)
+              .call(instruction::Initialize {})
+              .accounts(accounts::Initialize { /* … */ })
+              .signers(&[&*self.intruder])          // NOT the authority
+              .send();
+          // Record. Do not assert.
+          self.accepted.init_without_signer |= res.map(|o| o.is_success()).unwrap_or(false);
+          true
+      }
+
+  Group the flags in one `#[derive(Clone, Default)] pub(crate) struct Accepted { … }` field so
+  `Fixture` stays readable, and give each one the name of the attempt it records.
+- **Never assert a property in the fixture.** No `fuzz_assert*` inside an `action_*`, and no
+  `"[<property title>] …"` message anywhere in this file. This is a reporting rule, not a style one:
+  the fixture is compiled into **every** component's fuzz target, so an assertion here fires in
+  campaigns that never asked about the property it names — and the components that do not own that
+  title cannot place the counterexample. (Panicking in `setup()` when setup itself fails is fine:
+  that is the harness failing, not a property.)
+- **A negative action must `return true`.** The bool reports whether the ACTION did what it was
+  designed to do — not whether the instruction succeeded — and for this one making the attempt *is*
+  it working. Returning `false` costs you twice: Crucible reads `false` as a dead-end state and
+  **ends the action sequence there**, so every draw of this action truncates the campaign; and a
+  violation reported on a `false` action is auto-labelled a suspected harness bug, which is precisely
+  backwards for an action whose entire purpose is the rejection.
 - **Enough actors and accounts to make the property non-degenerate.** A property about "only the
   owner may X" needs a second, non-owner signer; "at most N positions" needs enough reserves/markets
   to reach N; a per-user property needs two users. One of each is a fixture that proves nothing.

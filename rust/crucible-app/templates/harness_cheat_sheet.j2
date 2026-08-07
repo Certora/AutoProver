@@ -10,7 +10,12 @@ Crucible harness API (author a FIXTURE only — no test fns):
 
 - The fixture struct MUST be named `Fixture` and derive Clone; keypairs go in `Rc`:
     #[derive(Clone)]
-    struct Fixture { ctx: TestContext, program_id: Pubkey, /* pdas, users (Rc<Keypair>) */ }
+    struct Fixture {
+        ctx: TestContext, program_id: Pubkey, /* pdas, users (Rc<Keypair>) */
+        pub(crate) accepted: Accepted,   // what the negative actions recorded — see below
+    }
+    #[derive(Clone, Default)]
+    pub(crate) struct Accepted { /* one bool per negative action, named after the attempt */ }
 
 - #[fuzz_fixture] impl Fixture { ... } with:
     pub fn setup() -> Self {
@@ -33,19 +38,27 @@ Crucible harness API (author a FIXTURE only — no test fns):
     }
     // The `-> bool` is "did this ACTION do what it was designed to do". For the positive action
     // above that is the instruction succeeding. For a NEGATIVE action — one that attempts something
-    // the program must reject — a correct rejection is the action working, so it returns `true`:
+    // the program must reject — making the attempt is the action working, so it returns `true`,
+    // and it RECORDS the outcome instead of asserting on it:
     pub fn action_<name>_unauthorized(&mut self) -> bool {
         let res = self.ctx.program(self.program_id)
             .call(instruction::<Name> { /* ... */ })
             .accounts(accounts::<Name> { /* the wrong signer */ })
             .signers(&[&*self.other_signer])
             .send();
-        fuzz_assert!(res.is_err(), "[<property title>] <what must be rejected> must fail");
+        self.accepted.<name>_unauthorized |= res.map(|o| o.is_success()).unwrap_or(false);
         true   // NOT false — see below
     }
     // Return `false` only when the action could not be attempted at all. Crucible treats `false` as
     // a dead-end state and STOPS the action sequence there, so a negative action returning `false`
     // truncates every campaign that draws it.
+
+- The fixture NEVER asserts a property: no `fuzz_assert*` inside an `action_*`, and no
+  `"[<property title>] ..."` message anywhere in it. The fixture is built into EVERY component's
+  fuzz target, so an assertion here fires in campaigns that never asked about the property it names.
+  Record the outcome in a `pub(crate)` field (group them in one `#[derive(Clone, Default)]` struct)
+  and the owning component's test asserts on it. Panicking in `setup()` is fine — that is the
+  harness failing, not a property.
 
 - Anchor path conventions (use the API FACTS below — do NOT guess these):
     * `use {{ crate_id }}::*;` brings the crate's generated items into scope. `{{ crate_id }}` is

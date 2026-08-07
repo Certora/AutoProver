@@ -1,6 +1,6 @@
 # A fixture assertion condemns every component that does not own it
 
-> **Status: §4.1 landed; §4.2 open.** Found by the 2026-08-07 Crucible e2e run, which passed. Eight of one
+> **Status: §4.1 and §4.2 both landed.** Found by the 2026-08-07 Crucible e2e run, which passed. Eight of one
 > component's twelve properties were reported **BAD** — refuted by a counterexample that says nothing
 > about them. Nothing in the run failed; the report is simply wrong.
 >
@@ -114,7 +114,7 @@ receives every job with its properties (that is how the fixture is authored from
 union of titles is stashed on the formalizer beside `_setup_result` and threaded onto
 `ComponentInput`.
 
-### 4.2 Keep property assertions out of the shared fixture — the principled direction
+### 4.2 Keep property assertions out of the shared fixture — the principled direction *(landed)*
 
 Split the *attempt* from the *assertion*. The fixture action attempts X and **records** the outcome;
 the owning component's invariant fn asserts on that record. Then a tagged assertion always sits in
@@ -128,6 +128,26 @@ is observable.
 Costs: the fixture must expose per-attempt outcomes, the setup prompt grows a more subtle rule, and —
 decisively — it depends on a model following it. A model can still write a tagged assertion in the
 fixture, and then §4.1 is the only thing standing between that and eight false refutations.
+
+**As landed.** The recorded outcome is a `pub(crate) accepted: Accepted` field on the fixture, one
+`bool` per negative action named after the attempt, set with `|=` so a single wrong acceptance
+anywhere in the sequence sticks. Four prompts move together, and all four have to:
+
+- `author_setup.j2` — the action attempts and records; a separate rule forbids `fuzz_assert*` in an
+  `action_*` and any `[<title>]` message in the fixture at all, stated as a *reporting* rule with its
+  reason, since a rule whose cost is invisible reads as style advice. Panicking in `setup()` stays
+  legal: that is the harness failing, not a property.
+- `harness_cheat_sheet.j2` — the worked negative action, and the `Accepted` struct on `Fixture`.
+- `test_cheat_sheet.j2` — the other half. A "must be rejected" property is now the *component's* to
+  assert, from the recorded field; a fixture that records nothing for one is a fixture gap and gets
+  the existing `// UNCOVERABLE:` treatment rather than a vacuous assertion.
+- `judge_guidance.j2` C6 — a recorded outcome nothing in the suite asserts on is an uncovered
+  property (C8), however thorough the action looks. The judge sees both halves and the authors do
+  not, so this is where the split can actually be caught.
+
+The third and fourth are the load-bearing ones. Moving the assertion out of the fixture without
+moving it *into* the test would not fix the false refutation — it would trade it for a silent
+non-check, which is worse.
 
 ### 4.3 Feature-gate the fixture's assertions — rejected
 
@@ -148,6 +168,10 @@ design explicitly refuses: silently passing a real counterexample.
 **Treat §4.2 as the direction**, not a substitute. The two compose: §4.2 makes a fixture assertion
 rare, §4.1 makes it harmless. Shipping only §4.2 would leave the report one disobedient model away
 from the same eight wrong rows.
+
+Both landed, in that order and as separate commits. The composition is the point: §4.2 is prompt
+prose and a model can ignore it; §4.1 is executable and cannot be. Neither has been through the e2e
+gate, which is the only thing that exercises either — both need a live model to author a fixture.
 
 ## 6. Change list
 

@@ -2044,12 +2044,19 @@ mod template_parity {
         has(&p.instruction, "- [invariant] no overflow: balance never overflows");
         has(&p.instruction, "One `action_*` per instruction those properties exercise");
         has(&p.instruction, "Negative attempts are actions too");
-        // …and that such an action reports `true`. A negative action returning `false` is read by
-        // Crucible as a dead-end and ENDS the action sequence, so every draw of it truncates the
-        // campaign — and any violation on it is auto-labelled a suspected harness bug, which is
-        // backwards for an action whose purpose is the rejection. Both were observed in the
-        // 2026-08-07 e2e run, where the fixture's five negative actions all returned `false`.
-        has(&p.instruction, "Such an action must `return true`");
+        // …that such an action RECORDS the outcome rather than asserting on it. A tagged assertion
+        // in the fixture fires in every component's campaign, and the components that do not own
+        // the title cannot place the counterexample
+        // (docs/crucible-cross-component-attribution.md §4.2).
+        has(&p.instruction, "the action ATTEMPTS, it never JUDGES");
+        has(&p.instruction, "Never assert a property in the fixture");
+        has(&p.instruction, "compiled into **every** component's fuzz target");
+        // …and that it reports `true`. A negative action returning `false` is read by Crucible as a
+        // dead-end and ENDS the action sequence, so every draw of it truncates the campaign — and
+        // any violation on it is auto-labelled a suspected harness bug, which is backwards for an
+        // action whose purpose is the rejection. Both were observed in the 2026-08-07 e2e run,
+        // where the fixture's five negative actions all returned `false`.
+        has(&p.instruction, "A negative action must `return true`");
         has(&p.instruction, "ends the action sequence there");
         has(&p.instruction, "Never set a limit, cap or threshold to `u64::MAX`");
 
@@ -2073,6 +2080,11 @@ mod template_parity {
         has(&p.instruction, "Do not send instructions from the test");
         has(&p.instruction, "do not fake it");
         has(&p.instruction, "// UNCOVERABLE:");
+        // The other half of §4.2: the fixture only records a negative attempt's outcome, so the
+        // assertion for a "must be rejected" property is this component's. Without this the split
+        // moves the check nowhere and silently drops it.
+        has(&p.instruction, "checked HERE, not in the fixture");
+        has(&p.instruction, "fixture.accepted.init_without_signer");
 
         // judge prompt (exercises judge_instruction.j2 + the judge_guidance.j2 include + system).
         let reviewer = app.judge(&comp).expect("component judge");
@@ -2286,6 +2298,9 @@ Error: Build failed
         // account deserializes into a default struct rather than failing.
         assert!(norm.contains("DEFAULT struct"), "{norm}");
         assert!(norm.contains("iteration 0"), "{norm}");
+        // A rejection the fixture recorded but this suite never asserts on is an uncovered
+        // property, not a covered one — the judge is the only thing that sees both halves.
+        assert!(norm.contains("The assertion must be in THIS suite"), "{norm}");
     }
 
     // --- attributing a shared-target finding (docs/crucible-cross-component-attribution.md) ------

@@ -68,7 +68,9 @@ instruction can fail for reasons unrelated to the property (missing signer, unfu
 wrong PDA, arithmetic overflow in setup). Assert the specific failure — a custom program error,
 or that the guarded on-chain state is unchanged — and confirm a CONTROL action SUCCEEDS when the
 guarded condition is absent. `action_*` returning `false` is not, by itself, evidence the
-program's own check rejected the call.
+program's own check rejected the call. The assertion must be in THIS suite: the fixture's negative
+actions only *record* what the attempt did (a `pub(crate)` flag), by design — a recorded outcome
+nothing here asserts on leaves the property uncovered (C8), however thorough the action looks.
 
 ## Criterion 7 — Fuzz / invariant mechanics
 - Right macro for the property: `#[invariant_test]` runs after EACH action (preservation
