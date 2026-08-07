@@ -56,10 +56,8 @@ Consider these vulnerability patterns:
 
 {% include "soroban/_vulnerability_patterns.j2" %}
 
-{{ backend_guidance }}
-
 Do not write specs. Keep only properties the downstream verifier can reasonably
-check.
+check — its capabilities are described in your system prompt's backend guidance.
 
 ## Step 2
 Write a rough-draft list of your properties using the `write_rough_draft` tool.
