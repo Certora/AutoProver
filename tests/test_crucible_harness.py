@@ -188,7 +188,7 @@ def test_finalize_delivers_the_idl_path_crate_when_prep_placed_an_idl():
 _NO_LAUNCH = json.dumps({"argv_prefix": ["/nonexistent/run-confined", "--"], "timeout_s": 5})
 
 
-def _compile_crate(tmp_path, *, spec: str = "", idl: str | None = None) -> dict[str, str]:
+def _compile_crate(tmp_path, *, spec: str | None = None, idl: str | None = None) -> dict[str, str]:
     """Ask the wheel to compile a preflight input; return the crate it wrote."""
     result = json.loads(
         crucible_app.compile(
@@ -210,8 +210,8 @@ def _compile_crate(tmp_path, *, spec: str = "", idl: str | None = None) -> dict[
 
 def test_preflight_renders_a_skeleton_that_needs_no_program_knowledge(tmp_path):
     # The preflight runs alongside system analysis, so nothing is known about the program's API and
-    # nothing has been authored — the wheel supplies the whole `main.rs` itself, and the empty spec
-    # the host sends contributes nothing.
+    # nothing has been authored — the wheel supplies the whole `main.rs` itself, and there is no
+    # spec for the host to send.
     files = _compile_crate(tmp_path)
     main_rs = files["fuzz/vault/src/main.rs"]
 
@@ -232,8 +232,8 @@ def test_preflight_renders_a_skeleton_that_needs_no_program_knowledge(tmp_path):
 
 
 def test_a_preflight_spec_from_the_host_is_ignored(tmp_path):
-    # The host has nothing to send (it passes ""), but the skeleton is the wheel's regardless — the
-    # `compile` signature is shared with the authoring gates and this must not become a way in.
+    # The host has nothing to send (it passes `None`), but the skeleton is the wheel's regardless —
+    # the `compile` signature is shared with the authoring gates and this must not become a way in.
     files = _compile_crate(tmp_path, spec="// NOT THE SKELETON")
     assert "NOT THE SKELETON" not in files["fuzz/vault/src/main.rs"]
 

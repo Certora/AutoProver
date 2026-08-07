@@ -8,9 +8,9 @@ already work, removing the statelessness and the unconditional cadence at their 
 the e2e; see the cost doc §1).
 
 **What shipped:** a `request_review` tool (`composer/rustapp/adapter.py`) bound into the author agent
-**whenever the wheel supplies a judge for the input** (detected by probing the pure `judge_prompt`
-callout — it returns `None` exactly when there is no judge), running that `judge_prompt` as an
-in-session sub-agent; a `bind_standard` `_review_gate` validator that blocks `result` until the
+**whenever the wheel supplies a judge for the input** (the pure `judge` callout answers with the
+reviewer, or `None` exactly when there is no judge), running it as an in-session sub-agent whose
+per-round ask is `judge_instruction`; a `bind_standard` `_review_gate` validator that blocks `result` until the
 submitted draft was accepted; the run memory tool shared across author/judge/components; and the host
 loop no longer runs a separate `_judge_turn`. `crucible_app` has a component judge, so it always runs
 in-loop; `echoprover` (no judge) keeps the single-shot author. The final validation below (e2e

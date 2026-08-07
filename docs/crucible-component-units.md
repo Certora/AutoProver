@@ -683,7 +683,7 @@ Each step is independently shippable and revertable.
    `program_context.j2` / `instruction_context.j2` are deleted.
 5. ✅ **Per-component harness fn in the Crucible wheel** (§8.1) — **done.** `harness_fn(input)`
    reads the unit's slug (`c_<slug>`), `units()` targets it, `compile`/`author_prompt`/
-   `judge_prompt` follow, and `finalize` emits one section and one declared feature per delivered
+   `judge_instruction` follow, and `finalize` emits one section and one declared feature per delivered
    component off the host's mirrored `targets`. `component_noun` drops to the SDK default.
    The e2e gate asserts the delivered crate compiles, **one build per feature** rather than one
    build with all K: each `#[invariant_test]` expands to its own `#[cfg(feature = …)] fn main()` and

@@ -30,11 +30,11 @@ from composer.io.multi_job import TaskInfo
 from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
-from composer.rustapp.adapter import make_emitter
+from composer.rustapp.adapter import emit_event
 from composer.rustapp.session import run_session, targets_of
 from composer.rustapp.wire import ComponentInput, Property, parse_checks
 from composer.rustapp.frontend import GenericRustConsoleHandler
-from composer.rustapp.host import build_phase_enum, load_descriptor, load_module
+from composer.rustapp.host import build_phase_model, load_descriptor, load_module
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost
 from composer.llm.registry import get_provider_for
@@ -151,6 +151,7 @@ _COMPONENT = {
 }
 _PROPS = [
     {
+        "component": "vault",
         "title": "recorded balance never exceeds deposited funds",
         "sort": "invariant",
         "slug": _SLUG,  # host-assigned unit slug (the pipeline sets this via unique_slugs)
@@ -246,7 +247,7 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
         # (Cargo.toml + main.rs) themselves per run (docs/rust-pure-app.md §4).
         module = load_module("crucible_app")
         descriptor = load_descriptor(module)
-        phase = build_phase_enum(descriptor)
+        phases = build_phase_model(descriptor)
 
         # The component artifact: author the test(s), `compile` (dry-run), then `validate`
         # the unit (fuzz). Unsandboxed here (trusted inputs), so the argv prefix is empty.
@@ -264,12 +265,12 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
 
         run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
         outcome = await run.runner(
-            TaskInfo("crucible_fmz", "Harness Authoring", phase["formalization"]),
+            TaskInfo("crucible_fmz", "Harness Authoring", phases.member("formalization")),
             lambda: run_session(
                 module=module, input=component_input, kind="component", checks=checks,
                 titles=[p["title"] for p in _PROPS], env=env, ctx=ctx, run=run,
                 workdir=Path(_SCENARIO), sandbox_dict=sandbox_dict, descriptor=descriptor,
-                emit=make_emitter(), description="Harness Authoring",
+                emit=emit_event, description="Harness Authoring",
             ),
         )
         if isinstance(outcome, GaveUp):

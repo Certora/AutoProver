@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use autoprover_sdk::args::AppArgs;
-use autoprover_sdk::authoring::{AuthorInput, Authored, Prompt};
+use autoprover_sdk::authoring::{AuthorInput, Authored, Judge, Prompt};
 use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::descriptor::{
     AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
@@ -153,7 +153,7 @@ struct TestCheatSheet<'a> {
     harness_fn: &'a str,
 }
 
-/// Reviewer persona for the `judge_prompt` turn (peer of Foundry's judge system prompt).
+/// Reviewer persona for the review turn (peer of Foundry's judge system prompt).
 #[derive(Template)]
 #[template(path = "judge_system.j2", escape = "none")]
 struct JudgeSystem;
@@ -1112,18 +1112,24 @@ impl Backend for CrucibleApp {
         Prompt { system: None, instruction }
     }
 
-    fn judge_prompt(&self, input: &AuthorInput, spec: &str) -> Option<Prompt> {
+    fn judge(&self, input: &AuthorInput) -> Option<Judge> {
         // The shared fixture is scaffolding, not test evidence — the compile/dry-run gate
         // already vets it, and there is no property to judge it against. Judge only the
         // per-component test suites (the peer of Foundry's feedback judge).
-        let Authored::Component { unit } = &input.authored else {
-            return None;
-        };
+        input.unit()?;
+        let system = JudgeSystem.render().expect("render judge_system");
+        Some(Judge { system: Some(system) })
+    }
+
+    fn judge_instruction(&self, input: &AuthorInput, spec: &str) -> String {
         let program = &input.program;
         let listed = listed_props(input);
-        let component = serde_json::to_string_pretty(unit).unwrap_or_else(|_| unit.to_string());
+        let component = input
+            .unit()
+            .map(|u| serde_json::to_string_pretty(u).unwrap_or_else(|_| u.to_string()))
+            .unwrap_or_default();
         let fixture = fixture_of(input);
-        let instruction = JudgeInstruction {
+        JudgeInstruction {
             program,
             harness_fn: &harness_fn(input),
             listed: &listed,
@@ -1132,18 +1138,17 @@ impl Backend for CrucibleApp {
             spec,
         }
         .render()
-        .expect("render judge_instruction");
-        let system = JudgeSystem.render().expect("render judge_system");
-        Some(Prompt { system: Some(system), instruction })
+        .expect("render judge_instruction")
     }
 
-    fn compile(&self, input: &AuthorInput, spec: &str, ws: &Workspace) -> CompileResult {
+    fn compile(&self, input: &AuthorInput, spec: Option<&str>, ws: &Workspace) -> CompileResult {
         let program = &input.program;
         let hspec = HarnessSpec::of(input);
         let probe = || ProbeFn.render().expect("render probe_fn");
-        // Preflight: the wheel's OWN skeleton — `spec` is empty, nothing has been authored yet.
+        // Preflight: the wheel's OWN skeleton — `spec` is `None`, nothing has been authored yet.
         // Setup: dry-run the authored fixture behind that same probe test. Component: fixture + the
         // authored tests, dry-run behind that component's harness feature (which gates `main`).
+        let authored_spec = spec.unwrap_or_default();
         let (main_rs, feature) = match &input.authored {
             Authored::Preflight => {
                 let skeleton = SkeletonFixture { crate_id: hspec.crate_id() }
@@ -1151,14 +1156,17 @@ impl Backend for CrucibleApp {
                     .expect("render skeleton_fixture");
                 (format!("{skeleton}{}", probe()), "c_probe".to_string())
             }
-            Authored::Setup { .. } => (format!("{spec}{}", probe()), "c_probe".to_string()),
+            Authored::Setup { .. } => {
+                (format!("{authored_spec}{}", probe()), "c_probe".to_string())
+            }
             Authored::Component { .. } => {
                 // Same shape the deliverable gets (`finalize`): the section sealed behind its
                 // feature. Assembling it differently here is what let a green gate ship a crate
                 // that did not build — see docs/crucible-component-units.md and the e2e gate.
                 let fixture = fixture_of(input);
                 let fname = harness_fn(input);
-                (format!("{fixture}\n\n{}", SectionModule::wrap(&fname, spec)), fname)
+                let section = SectionModule::wrap(&fname, authored_spec);
+                (format!("{fixture}\n\n{section}"), fname)
             }
         };
         let files = hspec.files(&main_rs, std::slice::from_ref(&feature));
@@ -1713,6 +1721,7 @@ mod template_parity {
         let app = CrucibleApp;
         let component = serde_json::json!({ "instructions": [{ "name": "deposit" }] });
         let prop = Property {
+            component: "Deposits".into(),
             title: "no overflow".into(),
             sort: PropertyKind::Invariant,
             description: "balance never overflows".into(),
@@ -1766,13 +1775,14 @@ mod template_parity {
         has(&p.instruction, "// UNCOVERABLE:");
 
         // judge prompt (exercises judge_instruction.j2 + the judge_guidance.j2 include + system).
-        let jp = app.judge_prompt(&comp, "fn c_invariants(f: &mut Fixture) {}").expect("component judge");
-        assert_no_residue(&jp.instruction);
-        has(&jp.instruction, "Evaluate the Crucible fuzz-test suite");
-        has(&jp.instruction, "Criterion 1");
-        has(jp.system.as_deref().unwrap(), "senior Solana security engineer");
+        let reviewer = app.judge(&comp).expect("component judge");
+        let ji = app.judge_instruction(&comp, "fn c_invariants(f: &mut Fixture) {}");
+        assert_no_residue(&ji);
+        has(&ji, "Evaluate the Crucible fuzz-test suite");
+        has(&ji, "Criterion 1");
+        has(reviewer.system.as_deref().unwrap(), "senior Solana security engineer");
         // setup has no judge turn.
-        assert!(app.judge_prompt(&setup, "x").is_none());
+        assert!(app.judge(&setup).is_none());
     }
 
     // --- per-component harness fns (docs/crucible-component-units.md §8.1) -------------------
@@ -1794,8 +1804,8 @@ mod template_parity {
 
     fn prop(title: &str, slug: &str) -> Property {
         Property {
-            title: title.into(), sort: PropertyKind::Invariant,
-            description: "d".into(), slug: slug.into(),
+            component: "Withdraw Queue".into(), title: title.into(),
+            sort: PropertyKind::Invariant, description: "d".into(), slug: slug.into(),
         }
     }
 
@@ -1931,9 +1941,9 @@ Error: Build failed
         );
         assert!(!p.instruction.contains("c_invariants"), "stale fn name in:\n{}", p.instruction);
 
-        let jp = app.judge_prompt(&input, "fn c_withdraw_queue() {}").expect("judge");
-        assert_no_residue(&jp.instruction);
-        assert!(norm(&jp.instruction).contains("c_withdraw_queue"));
+        let ji = app.judge_instruction(&input, "fn c_withdraw_queue() {}");
+        assert_no_residue(&ji);
+        assert!(norm(&ji).contains("c_withdraw_queue"));
     }
 
     #[test]
@@ -1960,8 +1970,8 @@ Error: Build failed
         // them at the judge is cheaper than reporting them as findings a human must triage.
         let app = CrucibleApp;
         let input = component_input("withdraw_queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
-        let jp = app.judge_prompt(&input, "fn c_withdraw_queue() {}").expect("judge");
-        let norm = jp.instruction.split_whitespace().collect::<Vec<_>>().join(" ");
+        let ji = app.judge_instruction(&input, "fn c_withdraw_queue() {}");
+        let norm = ji.split_whitespace().collect::<Vec<_>>().join(" ");
 
         assert!(norm.contains("Diagnosable failure messages"), "{norm}");
         assert!(norm.contains("Precondition scope"), "{norm}");

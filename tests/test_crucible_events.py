@@ -1,8 +1,8 @@
-"""Unit tests for the Crucible backend's pure callouts + the event routing (no toolchain / LLM).
+"""Unit tests for the Crucible backend's pure callouts (no toolchain / LLM).
 
 The Rust wheel is now a passive service (docs/rust-backend-api.md): these exercise the pure
-callouts (`units` / `author_prompt` / `judge_prompt`) directly, and — separately — the
-out-of-graph `push_custom_update` routing the Python loop's `emit` relies on.
+callouts (`units` / `author_prompt` / `judge` / `judge_instruction` / `checks` / `validate`)
+directly.
 """
 
 import json
@@ -41,7 +41,7 @@ def _component_input(*slugs: str) -> str:
         kind="component",
         unit={"name": "vault", "program": "vault"},
         props=[
-            {"title": f"p {s}", "sort": "invariant", "description": "d", "slug": s}
+            {"component": "vault", "title": f"p {s}", "sort": "invariant", "description": "d", "slug": s}
             for s in slugs
         ],
         setup="struct Fixture {}",
@@ -57,8 +57,8 @@ def test_descriptor_declares_design_doc_discovery_phase():
     from composer.rustapp.host import build_application
 
     app = build_application("crucible_app")
-    assert app.section_order[0] == "Design Doc Discovery"
-    assert _discovery_phase(app) is app.phase["discover_design_doc"]
+    assert app.phases.section_order[0] == "Design Doc Discovery"
+    assert _discovery_phase(app) is app.phases.member("discover_design_doc")
 
 
 def test_each_property_is_its_own_check_sharing_one_fuzz_target():
@@ -90,24 +90,25 @@ def test_setup_author_prompt_asks_for_a_fixture():
     assert "FIXTURE" in prompt["instruction"]
 
 
-def test_component_judge_prompt_reviews_the_suite():
+def test_component_judge_reviews_the_suite():
     spec = "#[invariant_test]\nfn c_invariants(fixture: &mut Fixture) {}"
-    raw = crucible_app.judge_prompt(_component_input("solvency"), spec)
+    component = _component_input("solvency")
+    # The reviewer is declared once for the session, without a draft: a persona, no instruction.
+    raw = crucible_app.judge(component)
     assert raw is not None
-    prompt = json.loads(raw)
-    # A reviewer persona + the criteria-based task, listing the properties under review and the
-    # accept/reject JSON contract the host's _parse_judge consumes.
-    assert "Solana security engineer" in prompt["system"]
-    ins = prompt["instruction"]
+    assert "Solana security engineer" in json.loads(raw)["system"]
+    # The per-round instruction is the criteria-based task, listing the properties under review and
+    # the accept/reject JSON contract the host's _parse_judge consumes.
+    ins = crucible_app.judge_instruction(component, spec)
     assert "p solvency" in ins and "c_invariants" in ins
     assert "Criterion 3 — Reachability" in ins
     assert '{"accept": false' in ins
     assert spec in ins
 
 
-def test_setup_has_no_judge_prompt():
+def test_setup_has_no_judge():
     # The shared fixture is scaffolding, not test evidence — nothing to judge.
-    assert crucible_app.judge_prompt(_setup_input(), "spec") is None
+    assert crucible_app.judge(_setup_input()) is None
 
 
 def test_the_publish_gate_blocks_until_this_exact_draft_was_accepted():
@@ -203,9 +204,3 @@ def test_validate_returns_per_check_verdicts_and_the_host_records_them():
     assert verdicts["c_conservation"].outcome == Outcome.BAD
     assert "conservation" in verdicts["c_conservation"].message
     assert verdicts["c_solvency"].outcome == Outcome.GOOD
-
-
-def test_push_custom_update_without_scope_is_dropped_not_raised():
-    from composer.io.context import push_custom_update
-
-    assert push_custom_update({"type": "x"}, thread_id="t") is False
