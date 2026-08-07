@@ -4,7 +4,7 @@ patterns (AMM constant-product bounds, integer sqrt, mulDiv) used to check the o
 builders, and to PIN the current v1 boundaries (multi-return) as known+tested, not silent.
 """
 from smtool.ir import Signature, Param as P
-from smtool.overapprox import OverApproxTarget, build_conformance_rule
+from smtool.overapprox import OverApproxTarget
 from smtool.overapprox_project import OverApproxProject
 from smtool.detsummary import MemoTarget, render
 
@@ -55,13 +55,21 @@ def test_muldiv_memo_scalar_keys():
     assert "function C.mulDiv(uint256 _a, uint256 _b, uint256 _d) internal returns (uint256) => mulDivCVL(_a, _b, _d);" in txt
 
 
-# ---------------------------------------------------------------- v1 boundary: multi-return
-def test_multireturn_target_has_no_conformance_rule_yet():
-    """A multi-return fn (e.g. a swap quote returning (amount, fee, feeAmount)). v1 over-approx is
-    single-return, so no conformance rule is emitted — a KNOWN boundary (Phi over a tuple is the next
-    generalization), pinned here so it can't regress silently."""
-    t = OverApproxTarget(cut="C", sig=Signature(
+# ---------------------------------------------------------------- multi-return: Phi over the tuple
+def test_multireturn_conformance_over_tuple():
+    """A multi-return fn (e.g. a swap quote -> (amount, fee, feeAmount)): Phi ranges over the whole tuple,
+    the rule binds it via a multi-assignment `(retSol0, retSol1, retSol2) = f@withrevert(...)`, and the
+    summary returns the tuple with `expect (...)`."""
+    pr = _proj(OverApproxTarget(cut="C", sig=Signature(
         name="quote", params=[P("bool", "flag"), P("uint256", "amountIn")],
-        returns=["uint256", "uint24", "uint256"], mutability="view"))
-    assert build_conformance_rule(t) is None
-    assert _proj(t).provable_targets() == []
+        returns=["uint256", "uint24", "uint256"], mutability="view")))
+    assert pr.provable_targets() == ["quote"]                        # multi-return IS provable now
+    pr.set_phi("quote", "return res1 < 1000000 && (res0 > 0 => res2 <= amountIn);")
+    phi = pr.render_phi("quote")
+    assert "function quotePhi(bool flag, uint256 amountIn, uint256 res0, uint24 res1, uint256 res2)" in phi
+    conf = pr.render_conformance("quote")
+    assert "(retSol0, retSol1, retSol2) = quote@withrevert(flag, amountIn);" in conf   # tuple assignment
+    assert "quotePhi(flag, amountIn, retSol0, retSol1, retSol2)" in conf               # Phi over the tuple
+    summ = pr.render_summary("quote")
+    assert "return (res0, res1, res2);" in summ
+    assert "=> quoteCVL(flag, amountIn) expect (uint256, uint24, uint256);" in summ    # tuple binding

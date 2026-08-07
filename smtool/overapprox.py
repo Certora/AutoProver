@@ -69,9 +69,17 @@ class OverApproxTarget:
         return self.phi_spec_name or (phi_name(self.sig.name) + ".spec")
 
 
+def _names(base: str, n: int) -> list:
+    """Result-variable names: `[base]` for a single return, `[base0, base1, ...]` for multi-return.
+    Single-return keeps the bare `base` (back-compat with the emitted single-return specs)."""
+    return [base] if n == 1 else [f"{base}{i}" for i in range(n)]
+
+
 def _phi_params(t: OverApproxTarget) -> list:
-    """Phi's parameter list: the function's params followed by the result — `(<params>, <rt> res)`."""
-    return [(p.type, p.name) for p in t.sig.params] + [(t.sig.returns[0], t.result_name)]
+    """Phi's parameter list: the function's params followed by ITS RETURNS — `(<params>, <rt> res)` for a
+    single return, `(<params>, T0 res0, T1 res1, ...)` for multi-return (Phi over the whole tuple)."""
+    resn = _names(t.result_name, len(t.sig.returns))
+    return [(p.type, p.name) for p in t.sig.params] + list(zip(t.sig.returns, resn))
 
 
 def build_phi(t: OverApproxTarget) -> S.FunctionDef:
@@ -99,20 +107,18 @@ def _envfree(t: OverApproxTarget) -> bool:
 
 
 def build_summary(t: OverApproxTarget) -> S.FunctionDef:
-    """The over-approximating summary body: havoc `res`, `require Phi(params, res)`, `return res`.
-    Takes a trailing `env e` param only for a non-envfree `f_sol`."""
-    rt = t.sig.returns[0]
-    res = t.result_name
-    phi_args = [x.ident(p.name) for p in t.sig.params] + [x.ident(res)]
-    cmds = [
-        x.declare(rt, res),                                                     # havoc the result
-        x.require(x.call(phi_name(t.sig.name), phi_args), "over-approx: result satisfies Phi"),
-        x.ret([x.ident(res)]),
-    ]
+    """The over-approximating summary body: havoc each result, `require Phi(params, res...)`, return the
+    (tuple of) result(s). Takes a trailing `env e` param only for a non-envfree `f_sol`."""
+    rets = list(t.sig.returns)
+    resn = _names(t.result_name, len(rets))
+    phi_args = [x.ident(p.name) for p in t.sig.params] + [x.ident(n) for n in resn]
+    cmds = [x.declare(rt, n) for rt, n in zip(rets, resn)]                       # havoc each result
+    cmds.append(x.require(x.call(phi_name(t.sig.name), phi_args), "over-approx: result satisfies Phi"))
+    cmds.append(x.ret([x.ident(n) for n in resn]))                              # return res / (res0, res1, ...)
     params = [(p.type, p.name) for p in t.sig.params]
     if not _envfree(t):
         params = params + [("env", "e")]
-    return x.func(summary_fn_name(t.sig.name), params, [rt], cmds)
+    return x.func(summary_fn_name(t.sig.name), params, rets, cmds)
 
 
 def build_summary_spec(t: OverApproxTarget) -> S.CVLFile:
@@ -137,18 +143,24 @@ def _call_real(t: OverApproxTarget) -> S.FunctionCall:
 
 def build_conformance_rule(t: OverApproxTarget) -> S.RuleBlock | None:
     """`overApprox_<fn>`: call the real function and assert its output satisfies Phi on real success —
-    `assert !realReverted => Phi(params, retSol)`. Proves `f_cvl` over-approximates `f_sol`. Returns None
-    for a void function (no result to constrain). Single-return in v1."""
-    if len(t.sig.returns) != 1:
-        return None
-    rt = t.sig.returns[0]
+    `assert !realReverted => Phi(params, retSol...)`. Proves `f_cvl` over-approximates `f_sol`. Returns
+    None for a VOID function (no result to constrain). Handles multi-return: the tuple is bound via a
+    multi-assignment `(retSol0, retSol1, ...) = f@withrevert(...)` and Phi ranges over all components."""
+    rets = list(t.sig.returns)
+    if not rets:
+        return None                                                            # void: nothing to constrain
+    retn = _names("retSol", len(rets))
     params = [(p.type, p.name) for p in t.sig.params]
-    phi_args = [x.ident(p.name) for p in t.sig.params] + [x.ident("retSol")]
+    phi_args = [x.ident(p.name) for p in t.sig.params] + [x.ident(n) for n in retn]
     cmds: list = []
     if not _envfree(t):
         cmds.append(x.declare("env", "e"))
+    if len(rets) == 1:
+        cmds.append(x.declare(rets[0], retn[0], _call_real(t)))                # single: declare + init
+    else:
+        cmds += [x.declare(rt, n) for rt, n in zip(rets, retn)]                # multi: declare each ...
+        cmds.append(x.assign_multi(retn, _call_real(t)))                       # ... then (r0, r1, ...) = f@withrevert(...)
     cmds += [
-        x.declare(rt, "retSol", _call_real(t)),
         x.declare("bool", "realRev", x.ident("lastReverted")),
         x.assert_(
             x.binop("implies", x.unop_not(x.ident("realRev")),
