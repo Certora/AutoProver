@@ -1,7 +1,5 @@
 """Expression nodes of the Solidity compact AST (members of the Expression union)."""
 
-from __future__ import annotations
-
 # The AST node class `Literal` below shadows typing.Literal, so this module uses
 # `typing.Literal[...]` for all tag/enum annotations instead of importing the name.
 import typing

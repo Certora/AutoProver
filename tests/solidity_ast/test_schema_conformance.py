@@ -11,8 +11,6 @@ lazily via ``models()`` so this file stays usable while the model package is bei
 built.
 """
 
-from __future__ import annotations
-
 import json
 from collections import Counter
 from dataclasses import dataclass, field as dc_field, replace

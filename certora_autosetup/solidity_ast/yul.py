@@ -5,8 +5,6 @@ Self-contained: unlike the Solidity node modules, the union aliases
 are rebuilt at import time, so this module validates on its own.
 """
 
-from __future__ import annotations
-
 from typing import Annotated, Literal, Union
 
 from pydantic import Discriminator, Tag
@@ -15,13 +13,13 @@ from .base import UNKNOWN_TAG, UnknownNode, YulNode, tag_by_node_type
 
 
 class YulAssignment(YulNode):
-    value: YulExpression
-    variableNames: list[YulIdentifier]
+    value: "YulExpression"
+    variableNames: list["YulIdentifier"]
     nodeType: Literal["YulAssignment"]
 
 
 class YulBlock(YulNode):
-    statements: list[YulStatement]
+    statements: list["YulStatement"]
     nodeType: Literal["YulBlock"]
 
 
@@ -31,7 +29,7 @@ class YulBreak(YulNode):
 
 class YulCase(YulNode):
     body: YulBlock
-    value: Literal["default"] | YulLiteral
+    value: "Literal['default'] | YulLiteral"
     nodeType: Literal["YulCase"]
 
 
@@ -40,29 +38,29 @@ class YulContinue(YulNode):
 
 
 class YulExpressionStatement(YulNode):
-    expression: YulExpression
+    expression: "YulExpression"
     nodeType: Literal["YulExpressionStatement"]
 
 
 class YulForLoop(YulNode):
     body: YulBlock
-    condition: YulExpression
+    condition: "YulExpression"
     post: YulBlock
     pre: YulBlock
     nodeType: Literal["YulForLoop"]
 
 
 class YulFunctionCall(YulNode):
-    arguments: list[YulExpression]
-    functionName: YulIdentifier
+    arguments: list["YulExpression"]
+    functionName: "YulIdentifier"
     nodeType: Literal["YulFunctionCall"]
 
 
 class YulFunctionDefinition(YulNode):
     body: YulBlock
     name: str
-    parameters: list[YulTypedName] | None = None
-    returnVariables: list[YulTypedName] | None = None
+    parameters: "list[YulTypedName] | None" = None
+    returnVariables: "list[YulTypedName] | None" = None
     nodeType: Literal["YulFunctionDefinition"]
 
 
@@ -73,7 +71,7 @@ class YulIdentifier(YulNode):
 
 class YulIf(YulNode):
     body: YulBlock
-    condition: YulExpression
+    condition: "YulExpression"
     nodeType: Literal["YulIf"]
 
 
@@ -98,7 +96,7 @@ class YulLiteralHexValue(YulNode):
 
 class YulSwitch(YulNode):
     cases: list[YulCase]
-    expression: YulExpression
+    expression: "YulExpression"
     nodeType: Literal["YulSwitch"]
 
 
@@ -109,7 +107,7 @@ class YulTypedName(YulNode):
 
 
 class YulVariableDeclaration(YulNode):
-    value: YulExpression | None = None
+    value: "YulExpression | None" = None
     variables: list[YulTypedName]
     nodeType: Literal["YulVariableDeclaration"]
 

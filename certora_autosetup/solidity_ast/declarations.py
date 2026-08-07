@@ -4,8 +4,6 @@ Also defines ``SourceUnit`` itself, transcribed from the schema root (it is the
 schema's top-level object, not a member of ``definitions``).
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator

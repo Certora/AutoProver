@@ -1,7 +1,5 @@
 """Type-name nodes of the Solidity compact AST (members of the TypeName union)."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Literal
 
 from .base import SolcNode, StateMutability, TypeDescriptions, Visibility

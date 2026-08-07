@@ -8,8 +8,6 @@ so ASTs from solc versions newer than the vendored schema degrade per-node inste
 of failing whole-file validation.
 """
 
-from __future__ import annotations
-
 from typing import Annotated, Union
 
 from pydantic import Discriminator, Tag
