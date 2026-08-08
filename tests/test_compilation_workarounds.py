@@ -727,6 +727,66 @@ def test_no_installed_candidate_blocks_instead_of_guessing(
         )
 
 
+# The two halves of a real cycle. A contract is pinned to a compiler that is not
+# installed; the fallback substitutes the default one; the next compile reports the
+# pragma mismatch and pins the missing compiler again. The two fire on mutually
+# exclusive outputs, so they land in different passes and neither pass repeats its
+# own conf state — the within-pass no-op guard cannot see it.
+MISSING_PIN_OUTPUT = (
+    "attribute/flag 'compiler_map': Solidity executable solc6.4 not found in path\n"
+)
+
+PIN_DEMANDED_AGAIN_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.34 had an error:\n"
+    "contracts/Foo.sol:1:1: ParserError: Source file requires different compiler version "
+    "(current compiler is 0.8.34+commit.aaaaaaaa.Linux.g++)\n"
+    "pragma solidity 0.6.4;\n"
+)
+
+
+def test_a_change_repeated_across_passes_stops_the_loop(manager, monkeypatch, tmp_path) -> None:
+    # Foo's source is not on disk, so its pragma is unreadable and the fallback plan
+    # has no constraint to refuse on — the substitution is allowed and the cycle is
+    # reachable. This is the residual case the ledger exists for.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, _, _, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [MISSING_PIN_OUTPUT, PIN_DEMANDED_AGAIN_OUTPUT] * 5,
+        contracts,
+        extra_config={"compiler_map": {"Foo": "solc6.4"}},
+    )
+    assert success is False
+    # substitute, re-pin, then the substitution repeats and the loop stops.
+    assert fake_run.calls == 3
+
+
+def test_a_new_change_alongside_a_repeat_keeps_going(manager, monkeypatch, tmp_path) -> None:
+    # A pass that re-applies a known change while also landing a new one is still
+    # converging and must not be stopped.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [
+            MISSING_PIN_OUTPUT,
+            PIN_DEMANDED_AGAIN_OUTPUT,
+            MISSING_PIN_OUTPUT + UNNAMED_RETURN_WARNING_OUTPUT,
+            PIN_DEMANDED_AGAIN_OUTPUT,
+        ],
+        contracts,
+        extra_config={"compiler_map": {"Foo": "solc6.4"}},
+    )
+    assert success is False
+    assert fake_run.calls == 4
+    assert compilation_config.get("ignore_solidity_warnings") is True
+
+
 def test_yul_optimizer_rung_respects_project_optimize_map(
     manager, monkeypatch, tmp_path
 ) -> None:

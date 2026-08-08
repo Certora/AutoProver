@@ -105,6 +105,39 @@ def _path_from_source_location_line(line: str) -> Optional[str]:
     return match.group("path") if match else None
 
 
+def _flatten_conf(cmd: List[str], compilation_config: Dict, updated_config_dict: Dict) -> Dict[str, str]:
+    """Leaf path -> canonical JSON value, e.g. ``compilation_config.compiler_map.Foo``
+    -> ``'"solc6.4"'``. Recurses into dicts only; lists and scalars are leaves.
+    """
+    flat: Dict[str, str] = {}
+
+    def walk(prefix: str, value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                walk(f"{prefix}.{key}", child)
+        else:
+            flat[prefix] = json.dumps(value, sort_keys=True, default=str)
+
+    walk("cmd", cmd)
+    walk("compilation_config", compilation_config)
+    walk("updated_config_dict", updated_config_dict)
+    return flat
+
+
+def _conf_delta(before: Dict[str, str], after: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
+    """Sorted (path, new value) for every key an apply added or changed, plus
+    (path, '<removed>') for keys it deleted.
+
+    The previous value is deliberately absent: a change is identified by what it
+    sets, so "pin Foo to solc6.4" is the same change whichever value it replaced.
+    Including the old value would make each half of an A-undoes-B cycle look new
+    forever.
+    """
+    changes = [(path, value) for path, value in after.items() if before.get(path) != value]
+    changes += [(path, "<removed>") for path in before if path not in after]
+    return tuple(sorted(changes))
+
+
 def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
     """Walk backward from ``lines[idx]`` to the nearest preceding plain
     ``Compiling <path>...`` line and return its path, or None if there is none.
@@ -144,6 +177,11 @@ class CompilationWorkaround:
     exclusive: bool = False
     # Catch-all: only tried when no other workaround applied in the pass.
     last_resort: bool = False
+    # The workaround's progress lives outside the conf (generated sources on disk,
+    # the contracts list), so its conf delta repeats even when it is doing new work.
+    # Exempt from the repeat-detection below; such a workaround must carry its own
+    # termination guard.
+    progress_outside_conf: bool = False
 
 
 class CompilationWorkaroundManager:
@@ -172,6 +210,10 @@ class CompilationWorkaroundManager:
         # Installed compilers usable as a substitute, probed once (shutil.which +
         # subprocess per candidate) and reused across every pass of the loop.
         self._solc_candidates: Optional[List[Tuple[str, str]]] = None
+        # (workaround name, conf delta) for every application in this run. Seeing one
+        # twice means a later workaround undid it, so the loop is circling rather than
+        # converging — see the repeat check in run_compilation_with_workarounds.
+        self._applied_changes: Set[Tuple[str, str]] = set()
         # consumer -> [(lib_name, lib_path), ...] in insertion order. A second
         # firing for the same consumer (different missing library) regenerates the
         # consumer's harness covering every library it has needed so far.
@@ -524,6 +566,11 @@ class CompilationWorkaroundManager:
                 detect_fn=lambda output: self._detect_missing_library(output, contracts),
                 apply_fn=self._apply_missing_library_harness_to_config,
                 enabled=True,
+                # Firing again for the same consumer with a different library
+                # regenerates the harness source covering every library so far —
+                # real progress, but on disk and in the contracts list, leaving the
+                # conf delta unchanged. Its own _harnessed_libs guard bounds it.
+                progress_outside_conf=True,
             ),
             # Catch-all: final attempt before setup_prover falls back to the
             # import-patch pass.
@@ -604,6 +651,9 @@ class CompilationWorkaroundManager:
             # gated on conf/manager state (e.g. _remappings_workaround_applied)
             # see the pass's own effects.
             applied_this_pass.clear()
+            repeated_this_pass: List[Tuple[str, str]] = []
+            new_this_pass: List[Tuple[str, str]] = []
+            exempt_this_pass: Set[str] = set()
             state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
 
             def try_workaround(workaround: CompilationWorkaround) -> bool:
@@ -613,6 +663,7 @@ class CompilationWorkaroundManager:
                 if detect_result is None:
                     return False
                 self.log(f"Applying {workaround.name} workaround")
+                conf_before = _flatten_conf(cmd, compilation_config, updated_config_dict)
                 updated_config_dict = workaround.apply_fn(
                     detect_result,
                     updated_config_dict,
@@ -620,6 +671,14 @@ class CompilationWorkaroundManager:
                     config_file,
                     contracts,
                 )
+                if workaround.progress_outside_conf:
+                    exempt_this_pass.add(workaround.name)
+                else:
+                    delta = _conf_delta(conf_before, _flatten_conf(cmd, compilation_config, updated_config_dict))
+                    if delta:
+                        change = (workaround.name, json.dumps(delta))
+                        (repeated_this_pass if change in self._applied_changes else new_this_pass).append(change)
+                        self._applied_changes.add(change)
                 # If we disabled build_cache in config, also remove from CLI command
                 if workaround.name == "cached_autofinder_failure" and "--build_cache" in cmd:
                     cmd.remove("--build_cache")
@@ -657,6 +716,19 @@ class CompilationWorkaroundManager:
                 self.log(
                     f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf "
                     f"and command are unchanged — retrying would fail identically, giving up",
+                    "ERROR",
+                )
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                return False, output, updated_config_dict
+
+            # Every change this pass has been made before, so a later workaround has
+            # been undoing an earlier one and the loop is circling rather than
+            # converging. A pass that also lands a new change is still progressing.
+            if repeated_this_pass and not new_this_pass and not exempt_this_pass:
+                repeats = ", ".join(sorted(name for name, _ in repeated_this_pass))
+                self.log(
+                    f"Workarounds applied ({repeats}) only repeat changes already made earlier — "
+                    f"another workaround is undoing them, so retrying cannot converge, giving up",
                     "ERROR",
                 )
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
