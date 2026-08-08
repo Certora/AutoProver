@@ -155,6 +155,26 @@ def parse_pragma_constraint(pragma_spec: str) -> Optional[SpecifierSet]:
         return None
 
 
+def pragma_admits(pragma_spec: str, version: str) -> Optional[bool]:
+    """Whether ``version`` satisfies ``pragma_spec``.
+
+    ``None`` means the spec could not be parsed into a constraint — unknown, which
+    callers must treat as "no evidence either way" rather than as a contradiction.
+
+    Examples:
+        pragma_admits("0.6.4", "0.8.34") -> False   (exact pin, cannot be widened)
+        pragma_admits("^0.8.0", "0.8.34") -> True
+        pragma_admits("~0.6.4", "0.6.4")  -> None   (spec not understood)
+    """
+    constraint = parse_pragma_constraint(pragma_spec)
+    if constraint is None:
+        return None
+    try:
+        return Version(version) in constraint
+    except Exception:
+        return None
+
+
 def extract_pragma_spec(text: str) -> str | None:
     """
     Extract pragma solidity specification from source code or error output.

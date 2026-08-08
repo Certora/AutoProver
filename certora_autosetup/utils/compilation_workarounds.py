@@ -28,6 +28,8 @@ from certora_autosetup.utils.paths import user_harness_path, user_harnesses_dir
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.solc_version_resolver import (
     extract_pragma_spec,
+    pragma_admits,
+    read_pragma_from_source_file,
     resolve_pragma_to_version,
 )
 from certora_autosetup.utils.types import ContractHandle
@@ -36,6 +38,33 @@ from certora_autosetup.utils.types import ContractHandle
 class AbstractMainContractError(Exception):
     """Raised when the main (verify-target) contract compiled to no bytecode — it is
     abstract (or lacks a constructor) and therefore cannot be verified."""
+
+
+class UnsatisfiableSolcPinError(Exception):
+    """Raised when a contract's pinned solc binary is absent and no installed compiler
+    satisfies its pragma, so no substitution can make the project compile."""
+
+
+@dataclass(frozen=True)
+class BlockedPin:
+    """A contract whose pragma no installed compiler can satisfy."""
+
+    contract_name: str
+    pragma_spec: str
+
+
+@dataclass(frozen=True)
+class SolcFallbackPlan:
+    """Per-contract substitutions for a missing solc binary.
+
+    ``rewrites`` covers the contracts an installed compiler can serve; ``blocked``
+    the ones it cannot. A plan with any ``blocked`` entry is terminal: substituting
+    a compiler the pragma rejects would fail identically on the next compile.
+    """
+
+    failed_solc: str
+    rewrites: Dict[str, str]
+    blocked: Tuple[BlockedPin, ...]
 
 
 def _normalize_ws(text: str) -> str:
@@ -140,6 +169,9 @@ class CompilationWorkaroundManager:
         # Used as a loop guard — if the prover still reports the same pair after we
         # wrapped the consumer, the workaround stops firing to avoid spinning.
         self._harnessed_libs: Set[Tuple[str, str]] = set()
+        # Installed compilers usable as a substitute, probed once (shutil.which +
+        # subprocess per candidate) and reused across every pass of the loop.
+        self._solc_candidates: Optional[List[Tuple[str, str]]] = None
         # consumer -> [(lib_name, lib_path), ...] in insertion order. A second
         # firing for the same consumer (different missing library) regenerates the
         # consumer's harness covering every library it has needed so far.
@@ -328,6 +360,9 @@ class CompilationWorkaroundManager:
         # same (stale) output.
         applied_this_pass: Set[str] = set()
 
+        # Rebuilt from each failed output, before the workaround table runs.
+        solc_fallback_plan: Optional[SolcFallbackPlan] = None
+
         # Initialize workarounds list
         workarounds = [
             CompilationWorkaround(
@@ -346,7 +381,9 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="solc_not_found_fallback",
-                detect_fn=lambda output: self._detect_solc_not_found(output),
+                # The plan is built once per pass below, because a plan with no viable
+                # substitution is terminal and has to be acted on before this table runs.
+                detect_fn=lambda output: solc_fallback_plan if (solc_fallback_plan and solc_fallback_plan.rewrites) else None,
                 apply_fn=self._apply_solc_fallback_workaround,
                 enabled=solc_pinned,
             ),
@@ -543,6 +580,21 @@ class CompilationWorkaroundManager:
                     f"Main contract '{abstract_main_contract}' compiled to no bytecode: it is abstract "
                     f"(or is missing a constructor), so it is not deployable and cannot be "
                     f"verified. Re-run with a concrete implementation as the main contract."
+                )
+
+            # Terminal, non-recoverable case: a contract is pinned to a compiler that
+            # is not installed and none of the installed ones satisfy its pragma.
+            # Substituting one anyway reproduces this same failure next pass, so stop
+            # here and name the compiler that has to be installed.
+            solc_fallback_plan = self._plan_solc_fallback(output, updated_config_dict, contracts)
+            if solc_fallback_plan is not None and solc_fallback_plan.blocked:
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                installed = ", ".join(binary for binary, _ in self._solc_fallback_candidates()) or "none"
+                pins = "; ".join(f"{p.contract_name} requires '{p.pragma_spec}'" for p in solc_fallback_plan.blocked)
+                raise UnsatisfiableSolcPinError(
+                    f"Compiler '{solc_fallback_plan.failed_solc}' is not installed and no installed "
+                    f"compiler satisfies the pragma of: {pins}. Installed compilers considered: "
+                    f"{installed}. Install '{solc_fallback_plan.failed_solc}' to compile this project."
                 )
 
             # One pass over the failed output: apply EVERY applicable workaround
@@ -1273,20 +1325,13 @@ class CompilationWorkaroundManager:
 
     def _apply_solc_fallback_workaround(
         self,
-        failed_solc: str,
+        plan: SolcFallbackPlan,
         updated_config_dict: Dict,
         compilation_config: Dict,
         config_file: Path,
         _contracts: List[ContractHandle],
     ) -> Dict:
-        """Fall back from a missing versioned solc binary.
-
-        Checks if plain 'solc' provides the version we need; if not, uses the
-        default versioned binary (convention-aware, e.g. solc8.34 or solc-0.8.34).
-        """
-        fallback = self._pick_solc_fallback()
-        self.log(f"Falling back from '{failed_solc}' to '{fallback}'", "WARNING")
-
+        """Substitute a missing versioned solc binary per the plan."""
         # solc is seeded into compiler_map up front (see _seed_compile_maps), so
         # rewrite the bad binary there — every entry pinned to it — rather than
         # setting the scalar solc, which can't coexist with compiler_map. A
@@ -1295,29 +1340,67 @@ class CompilationWorkaroundManager:
         # so the in-place rewrite is visible in the disk write below too — no mirroring needed.
         cmap = updated_config_dict.get("compiler_map")
         assert isinstance(cmap, dict), "compiler_map is seeded before any workaround runs"
-        for name, version in cmap.items():
-            if version == failed_solc:
-                cmap[name] = fallback
+        for name, replacement in plan.rewrites.items():
+            self.log(f"Falling back from '{plan.failed_solc}' to '{replacement}' for {name}", "WARNING")
+            cmap[name] = replacement
 
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
 
         return updated_config_dict
 
-    def _pick_solc_fallback(self) -> str:
-        """Choose the best solc fallback: plain 'solc' if it matches the desired version, else the default."""
-        desired = self._extract_version_from_solc_name(self.solc_default_version)
-        if not desired:
-            return "solc"
+    def _solc_fallback_candidates(self) -> List[Tuple[str, str]]:
+        """Installed compilers that may stand in for a missing binary, as
+        (binary name, semantic version), best first.
 
-        plain_version = self._get_plain_solc_version()
-        if plain_version and plain_version == desired:
-            return "solc"
+        Only compilers whose version is known are offered: a substitution has to be
+        checkable against a contract's pragma, and one that cannot be checked cannot
+        be defended.
+        """
+        if self._solc_candidates is None:
+            candidates: List[Tuple[str, str]] = []
+            plain_version = self._get_plain_solc_version()
+            if plain_version:
+                candidates.append(("solc", plain_version))
+            default_version = self._extract_version_from_solc_name(self.solc_default_version)
+            if default_version and shutil.which(self.solc_default_version):
+                candidates.append((self.solc_default_version, default_version))
+            self._solc_candidates = candidates
+        return self._solc_candidates
 
-        if shutil.which(self.solc_default_version):
-            return self.solc_default_version
+    def _plan_solc_fallback(
+        self, output: str, updated_config_dict: Dict, contracts: List[ContractHandle]
+    ) -> Optional[SolcFallbackPlan]:
+        """Work out, per contract, which installed compiler may replace a missing one.
 
-        return "solc"
+        A contract is rewritten only to a compiler its pragma admits. An unreadable or
+        unparseable pragma is no evidence of a conflict, so those contracts take the
+        first candidate — the same substitution as before.
+        """
+        failed_solc = self._detect_solc_not_found(output)
+        if failed_solc is None:
+            return None
+
+        cmap = updated_config_dict.get("compiler_map") or {}
+        pinned = [name for name, version in cmap.items() if version == failed_solc]
+        pragma_by_contract = {
+            handle.contract_name: read_pragma_from_source_file(Path(handle.source_file), self.project_root)
+            for handle in contracts
+        }
+        candidates = self._solc_fallback_candidates()
+
+        rewrites: Dict[str, str] = {}
+        blocked: List[BlockedPin] = []
+        for name in pinned:
+            pragma = pragma_by_contract.get(name)
+            for binary, version in candidates:
+                if pragma is None or pragma_admits(pragma, version) is not False:
+                    rewrites[name] = binary
+                    break
+            else:
+                blocked.append(BlockedPin(contract_name=name, pragma_spec=pragma or "unknown"))
+
+        return SolcFallbackPlan(failed_solc=failed_solc, rewrites=rewrites, blocked=tuple(blocked))
 
     @staticmethod
     def _extract_version_from_solc_name(solc_name: str) -> Optional[str]:
