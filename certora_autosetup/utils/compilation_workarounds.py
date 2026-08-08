@@ -76,6 +76,28 @@ def _path_from_source_location_line(line: str) -> Optional[str]:
     return match.group("path") if match else None
 
 
+# The remediation hint solc attaches to every diagnostic whose fix is "compile this
+# with the IR pipeline", whatever the diagnostic itself is called: the flag spelling
+# (``--via-ir``), the Standard-JSON key (``viaIR: true``), or a mention of the pipeline
+# by name ("via-ir pipeline", "IR pipeline"). Keying on the hint rather than on one
+# diagnostic's wording covers the whole family.
+#
+# Written against whitespace-normalized text (see ``_normalize_ws``); ``-\s?`` absorbs a
+# solc hard-wrap inside a hyphenated token (``--via-\nir`` normalizes to ``--via- ir``).
+# The conf key ``solc_via_ir`` is deliberately outside the family — it appears in the
+# "unsupported solc version for solc_via_ir" error, which calls for the opposite fix —
+# so every alternative demands either the ``--`` flag spelling, the JSON key with its
+# colon, or the word "pipeline".
+_VIA_IR_HINT_RE = re.compile(
+    r"--\s?via-\s?ir\b|viaIR:\s?true|(?:via-\s?ir|IR)\s+pipeline",
+    re.IGNORECASE,
+)
+
+# Lines joined before matching ``_VIA_IR_HINT_RE`` against a window of the raw output:
+# enough to reassemble a hint solc wrapped across two breaks.
+_VIA_IR_HINT_WRAP_LINES = 3
+
+
 def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
     """Walk backward from ``lines[idx]`` to the nearest preceding plain
     ``Compiling <path>...`` line and return its path, or None if there is none.
@@ -773,17 +795,19 @@ class CompilationWorkaroundManager:
         the affected contract name.
 
         Contracts start on plain settings and gain via-ir strictly out of
-        necessity; this is the necessity signal for non-stack reasons, e.g.
-        "UnimplementedFeatureError: Require with a custom error is only
-        available using the via-ir pipeline." Matching is whitespace-normalized
-        per compiled unit, since solc hard-wraps the phrase.
+        necessity; this is the necessity signal for non-stack reasons. solc
+        spells the diagnostic several ways ("Require with a custom error is
+        only available using the via-ir pipeline.", "Copying of type ... to
+        storage is not supported in legacy (only supported by the IR
+        pipeline)."), so the detector keys on the remediation hint they share
+        (``_VIA_IR_HINT_RE``). Matching is whitespace-normalized per compiled
+        unit, since solc hard-wraps the text.
         """
-        marker = "only available using the via-ir pipeline"
         current_path: Optional[str] = None
         segment: List[str] = []
 
         def segment_hit() -> Optional[str]:
-            if current_path and marker in _normalize_ws("\n".join(segment)):
+            if current_path and _VIA_IR_HINT_RE.search(_normalize_ws("\n".join(segment))):
                 return self._get_contract_name_from_path(current_path, contracts)
             return None
 
@@ -801,7 +825,30 @@ class CompilationWorkaroundManager:
         hit = segment_hit()
         if hit:
             self.log(f"Detected via-ir-only feature for {hit} (path: {current_path})")
-        return hit
+            return hit
+
+        # Whole-project compile: certoraRun prints no per-file "Compiling <path>..."
+        # progress line, so no segment carries a path and the offending file is named
+        # only in the `-->` source-location line under the diagnostic. Runs last so a
+        # per-unit hit takes precedence. The hint itself may be wrapped, so it is
+        # matched over a small window of consecutive lines normalized together.
+        lines = output.split("\n")
+        for i in range(len(lines)):
+            window = _normalize_ws("\n".join(lines[i:i + _VIA_IR_HINT_WRAP_LINES]))
+            if not _VIA_IR_HINT_RE.search(window):
+                continue
+            for j in range(i + 1, min(i + 6, len(lines))):
+                src_path = _path_from_source_location_line(lines[j])
+                if src_path is None:
+                    continue
+                contract_name = self._get_contract_name_from_path(src_path, contracts)
+                if contract_name:
+                    self.log(f"Detected via-ir-only feature for {contract_name} (path: {src_path})")
+                    return contract_name
+                self.log(f"Warning: Could not map path '{src_path}' to contract name", "WARNING")
+                break
+
+        return None
 
     def _detect_yul_exception_stack_too_deep(self, output: str) -> bool:
         """Detect YulException with stack too deep error.

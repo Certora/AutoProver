@@ -369,6 +369,60 @@ def test_via_ir_added_out_of_necessity(manager, monkeypatch, tmp_path) -> None:
     assert updated["solc_via_ir"] is True
 
 
+# A second solc phrasing for the same condition — legacy codegen cannot do this copy,
+# the IR pipeline can — reported by a whole-project compile: no "Compiling <path>..."
+# progress line, so the file is named only in the `-->` source-location line. solc
+# hard-wraps both the "IR pipeline" phrase and the `--via-ir` flag token itself.
+BULK_VIA_IR_LEGACY_COPY = (
+    "solc8.28 had an error:\n"
+    "UnimplementedFeatureError: Copying of type struct Vault.RateTier memory[] memory \n"
+    "to storage is not supported in legacy (only supported by the IR \n"
+    "pipeline). Hint: try compiling with `--via-\n"
+    "ir` (CLI) or the equivalent `viaIR: true` (Standard JSON)\n"
+    "   --> contracts/Vault.sol:120:9:\n"
+)
+
+# The error calling for the OPPOSITE fix (turn via-ir OFF for an old compiler). It
+# names the conf key solc_via_ir, which must stay outside the via-ir-required family.
+UNSUPPORTED_SOLC_VIA_IR_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "Unsupported solc version 0.7.6 for solc_via_ir, please use 0.8.13 or later\n"
+)
+
+# A per-unit error: the "Compiling <path>..." line names Foo while the `-->` names an
+# unrelated inlined file.
+COMPILING_LINE_VIA_IR_REQUIRED = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: Require with a custom error is only available using \n"
+    "the via-ir pipeline.\n"
+    "   --> lib/somewhere/Inlined.sol:10:5:\n"
+)
+
+
+def test_detects_bulk_via_ir_required_via_source_location(manager) -> None:
+    # Whole-project compile: the affected file comes from `--> <path>:line:col`, and the
+    # wrapped `--via-\nir` hint must still be recognized.
+    contracts = [ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol")]
+    assert manager._detect_via_ir_required(BULK_VIA_IR_LEGACY_COPY, contracts) == "Vault"
+
+
+def test_unsupported_solc_via_ir_is_not_via_ir_required(manager) -> None:
+    # Enabling via-ir here would fight the workaround that must disable it.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_via_ir_required(UNSUPPORTED_SOLC_VIA_IR_OUTPUT, contracts) is None
+
+
+def test_via_ir_compiling_line_takes_precedence_over_source_location(manager) -> None:
+    # The compiled unit is what needs via-ir; the inlined file in the `-->` line is a
+    # scene contract too, so only precedence decides the answer.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Inlined", source_file="lib/somewhere/Inlined.sol"),
+    ]
+    assert manager._detect_via_ir_required(COMPILING_LINE_VIA_IR_REQUIRED, contracts) == "Foo"
+
+
 def test_yul_last_resort_keeps_compile_settings(manager, monkeypatch, tmp_path) -> None:
     # Pass 1 carries a plain stack-too-deep for Foo AND a YulException with the
     # optimizer already present (e.g. supplied by the project's foundry config):
