@@ -38,6 +38,20 @@ class AbstractMainContractError(Exception):
     abstract (or lacks a constructor) and therefore cannot be verified."""
 
 
+class UnimplementedContractError(Exception):
+    """Raised when a contract in the compilation input leaves a function it inherits
+    unimplemented, which Solidity accepts only on an ``abstract`` contract."""
+
+
+# The contract name is quoted by solc, so it survives the hard wrap that
+# ``_normalize_ws`` folds away; the source location that follows is optional
+# because only the diagnostic itself is guaranteed to be in the output.
+_UNIMPLEMENTED_CONTRACT_RE = re.compile(
+    r'Contract "(?P<name>[^"]+)" should be marked as abstract\.'
+    r"(?: --> (?P<path>[^\s:]+):\d+:\d+)?"
+)
+
+
 def _normalize_ws(text: str) -> str:
     """Collapse every run of whitespace (including solc's hard-wrap newlines) to a
     single space, so multi-substring detectors survive line wrapping.
@@ -263,6 +277,21 @@ class CompilationWorkaroundManager:
             return None
         no_bytecode = {m.group(1) for m in re.finditer(r"Contract (\S+) has no bytecode", output)}
         return main_contract if main_contract in no_bytecode else None
+
+    def _detect_unimplemented_contract(self, output: str) -> Optional[Tuple[str, Optional[str]]]:
+        """Return the (contract name, declaring file) a contract in the input was
+        rejected for: it inherits functions it does not implement, and is not declared
+        ``abstract``.
+
+        The file is None when the diagnostic carries no source location. This is a
+        source-level defect — most often in a generated harness, which is written
+        against the target's own file and misses the functions the target inherits
+        from elsewhere — so the compilation settings have no bearing on it.
+        The file is None when the diagnostic carries no source location.
+        match = _UNIMPLEMENTED_CONTRACT_RE.search(_normalize_ws(output))
+        if match is None:
+            return None
+        return match.group("name"), match.group("path")
 
     # =========================================================================
     # Main entry point for running compilation with workarounds
@@ -543,6 +572,22 @@ class CompilationWorkaroundManager:
                     f"Main contract '{abstract_main_contract}' compiled to no bytecode: it is abstract "
                     f"(or is missing a constructor), so it is not deployable and cannot be "
                     f"verified. Re-run with a concrete implementation as the main contract."
+                )
+
+            # Terminal for the same reason, one step earlier: a contract in the input
+            # inherits functions it never implements, so solc refuses to compile it at
+            # all. Only editing that contract fixes it; without this the catch-all
+            # workaround fires and spends further compilations reaching the same error.
+            unimplemented = self._detect_unimplemented_contract(output)
+            if unimplemented is not None:
+                contract_name, declared_in = unimplemented
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                location = f" ({declared_in})" if declared_in else ""
+                raise UnimplementedContractError(
+                    f"Contract '{contract_name}'{location} does not implement every function it "
+                    f"inherits, so Solidity requires it to be marked abstract and refuses to "
+                    f"compile it as written. See the 'Missing implementation' notes in the "
+                    f"compiler output for the functions it still owes."
                 )
 
             # One pass over the failed output: apply EVERY applicable workaround
