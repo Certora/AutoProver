@@ -45,3 +45,18 @@ def test_exact_pragma_ignores_installed_state(monkeypatch) -> None:
 def test_preferred_version_still_wins(monkeypatch) -> None:
     _with_installed(monkeypatch, {"solc8.35"})
     assert svr.resolve_pragma_to_version("^0.8.0", preferred_version="solc8.28") == "0.8.28"
+
+
+def test_pragma_admits_reports_true_false_or_unknown() -> None:
+    # An exact pin admits only itself, whichever way it is spelled.
+    assert svr.pragma_admits("0.6.4", "0.6.4") is True
+    assert svr.pragma_admits("0.6.4", "0.8.34") is False
+    assert svr.pragma_admits("=0.6.4", "0.8.34") is False
+    # Ranges admit what they cover.
+    assert svr.pragma_admits("^0.8.0", "0.8.34") is True
+    assert svr.pragma_admits("~0.6.4", "0.6.12") is True
+    assert svr.pragma_admits("~0.6.4", "0.7.0") is False
+    assert svr.pragma_admits(">=0.4.22 <0.9.0", "0.5.16") is True
+    # A disjunction is not expressible as one SpecifierSet, so it is unknown rather
+    # than a contradiction — callers must not read None as "rejected".
+    assert svr.pragma_admits("^0.6.0 || ^0.8.0", "0.8.34") is None
