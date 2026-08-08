@@ -113,10 +113,14 @@ def parse_pragma_constraint(pragma_spec: str) -> Optional[SpecifierSet]:
     Convert pragma solidity specification to packaging.SpecifierSet.
 
     Handles:
-    - Exact version: "0.8.26" -> "==0.8.26"
+    - Exact version: "0.8.26" or "=0.8.26" -> "==0.8.26"
     - Caret: "^0.8.0" -> ">=0.8.0,<0.9.0"
+    - Tilde: "~0.8.0" -> ">=0.8.0,<0.9.0"
     - Range: ">=0.8.0 <0.8.6" -> ">=0.8.0,<0.8.6"
     - GTE/LTE: ">=0.8.0" -> ">=0.8.0"
+
+    Disjunctions ("^0.6.0 || ^0.8.0") return None: a SpecifierSet is a conjunction
+    and cannot express them.
 
     Args:
         pragma_spec: Raw pragma specification string
@@ -125,9 +129,20 @@ def parse_pragma_constraint(pragma_spec: str) -> Optional[SpecifierSet]:
         SpecifierSet object or None if parsing fails
     """
     try:
-        # Handle exact version: "0.8.26"
-        if re.match(r"^\d+\.\d+\.\d+$", pragma_spec):
-            return SpecifierSet(f"=={pragma_spec}")
+        if "||" in pragma_spec:
+            return None
+
+        # Handle exact version, with or without the explicit "=": "0.8.26", "=0.8.26"
+        if re.match(r"^=?\d+\.\d+\.\d+$", pragma_spec):
+            return SpecifierSet(f"=={pragma_spec.lstrip('=')}")
+
+        # Handle tilde: "~0.8.0" -> ">=0.8.0,<0.9.0". solc follows npm semantics,
+        # where a 0.x tilde floats the patch only.
+        tilde_match = re.match(r"^~(\d+)\.(\d+)\.(\d+)$", pragma_spec)
+        if tilde_match:
+            major, minor, patch = tilde_match.groups()
+            next_minor = int(minor) + 1
+            return SpecifierSet(f">={major}.{minor}.{patch},<{major}.{next_minor}.0")
 
         # Handle caret: "^0.8.0" -> ">=0.8.0,<0.9.0"
         caret_match = re.match(r"^\^(\d+)\.(\d+)\.(\d+)$", pragma_spec)
@@ -215,7 +230,9 @@ def read_pragma_from_source_file(source_file: Path, project_root: Optional[Path]
         source_file = project_root / source_file
     try:
         return extract_pragma_spec(source_file.read_text())
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # A source carrying non-UTF-8 bytes (an accented name in a header comment is
+        # the usual cause) reads as "pragma unknown" rather than failing the caller.
         return None
 
 

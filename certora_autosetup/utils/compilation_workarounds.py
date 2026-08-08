@@ -405,6 +405,11 @@ class CompilationWorkaroundManager:
         # Rebuilt from each failed output, before the workaround table runs.
         solc_fallback_plan: Optional[SolcFallbackPlan] = None
 
+        # Scoped to this loop: a caller may run the loop again on the same manager
+        # (fixconf does, once either side of the import patch), and the second run
+        # legitimately re-applies what the first one did.
+        self._applied_changes.clear()
+
         # Initialize workarounds list
         workarounds = [
             CompilationWorkaround(
@@ -568,8 +573,11 @@ class CompilationWorkaroundManager:
                 enabled=True,
                 # Firing again for the same consumer with a different library
                 # regenerates the harness source covering every library so far —
-                # real progress, but on disk and in the contracts list, leaving the
-                # conf delta unchanged. Its own _harnessed_libs guard bounds it.
+                # real progress, but on disk and in the contracts list, so its conf
+                # delta can repeat while it is still doing new work. Bounded by
+                # max_retries: its _harnessed_libs guard is keyed on the consumer
+                # name, which this apply replaces with the harness's, so a recurring
+                # link error is looked up under a name that was never recorded.
                 progress_outside_conf=True,
             ),
             # Catch-all: final attempt before setup_prover falls back to the
@@ -633,7 +641,12 @@ class CompilationWorkaroundManager:
             # is not installed and none of the installed ones satisfy its pragma.
             # Substituting one anyway reproduces this same failure next pass, so stop
             # here and name the compiler that has to be installed.
-            solc_fallback_plan = self._plan_solc_fallback(output, updated_config_dict, contracts)
+            # Only for a pin the conf actually carries: _seed_compile_maps pins every
+            # contract to the default compiler, and refusing to proceed over a pin
+            # autosetup invented itself would fail runs the user never constrained.
+            solc_fallback_plan = (
+                self._plan_solc_fallback(output, updated_config_dict, contracts) if solc_pinned else None
+            )
             if solc_fallback_plan is not None and solc_fallback_plan.blocked:
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 installed = ", ".join(binary for binary, _ in self._solc_fallback_candidates()) or "none"
@@ -653,7 +666,6 @@ class CompilationWorkaroundManager:
             applied_this_pass.clear()
             repeated_this_pass: List[Tuple[str, str]] = []
             new_this_pass: List[Tuple[str, str]] = []
-            exempt_this_pass: Set[str] = set()
             state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
 
             def try_workaround(workaround: CompilationWorkaround) -> bool:
@@ -671,9 +683,7 @@ class CompilationWorkaroundManager:
                     config_file,
                     contracts,
                 )
-                if workaround.progress_outside_conf:
-                    exempt_this_pass.add(workaround.name)
-                else:
+                if not workaround.progress_outside_conf:
                     delta = _conf_delta(conf_before, _flatten_conf(cmd, compilation_config, updated_config_dict))
                     if delta:
                         change = (workaround.name, json.dumps(delta))
@@ -724,7 +734,7 @@ class CompilationWorkaroundManager:
             # Every change this pass has been made before, so a later workaround has
             # been undoing an earlier one and the loop is circling rather than
             # converging. A pass that also lands a new change is still progressing.
-            if repeated_this_pass and not new_this_pass and not exempt_this_pass:
+            if repeated_this_pass and not new_this_pass:
                 repeats = ", ".join(sorted(name for name, _ in repeated_this_pass))
                 self.log(
                     f"Workarounds applied ({repeats}) only repeat changes already made earlier — "
@@ -1431,12 +1441,15 @@ class CompilationWorkaroundManager:
         """
         if self._solc_candidates is None:
             candidates: List[Tuple[str, str]] = []
-            plain_version = self._get_plain_solc_version()
-            if plain_version:
-                candidates.append(("solc", plain_version))
+            # The project's own default comes first: whatever `solc` happens to be on
+            # PATH is unrelated to this project and may be years older, so it is only
+            # a last resort even when a wide pragma would accept it.
             default_version = self._extract_version_from_solc_name(self.solc_default_version)
             if default_version and shutil.which(self.solc_default_version):
                 candidates.append((self.solc_default_version, default_version))
+            plain_version = self._get_plain_solc_version()
+            if plain_version:
+                candidates.append(("solc", plain_version))
             self._solc_candidates = candidates
         return self._solc_candidates
 
@@ -1447,7 +1460,7 @@ class CompilationWorkaroundManager:
 
         A contract is rewritten only to a compiler its pragma admits. An unreadable or
         unparseable pragma is no evidence of a conflict, so those contracts take the
-        first candidate — the same substitution as before.
+        first candidate.
         """
         failed_solc = self._detect_solc_not_found(output)
         if failed_solc is None:
