@@ -287,7 +287,7 @@ class CompilationWorkaroundManager:
         source-level defect — most often in a generated harness, which is written
         against the target's own file and misses the functions the target inherits
         from elsewhere — so the compilation settings have no bearing on it.
-        """
+        The file is None when the diagnostic carries no source location.
         match = _UNIMPLEMENTED_CONTRACT_RE.search(_normalize_ws(output))
         if match is None:
             return None
