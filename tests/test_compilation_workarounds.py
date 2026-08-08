@@ -400,6 +400,54 @@ COMPILING_LINE_VIA_IR_REQUIRED = (
 )
 
 
+# Whole-project compile where an unrelated Warning with its own source location follows
+# the via-ir diagnostic, which names no file of its own.
+BULK_VIA_IR_FOLLOWED_BY_FOREIGN_WARNING = (
+    "solc8.28 had an error:\n"
+    "UnimplementedFeatureError: Copying of type struct Vault.RateTier memory[] memory \n"
+    "to storage is not supported in legacy (only supported by the IR pipeline).\n"
+    "Warning: Unused function parameter. Remove or comment out the variable name.\n"
+    "   --> lib/oz/ERC20.sol:80:5:\n"
+)
+
+# Each of the three hint spellings on its own, so no single fixture can cover for a
+# broken alternative. The diagnostic wording is the same in all three and mentions
+# neither the pipeline nor the flag.
+VIA_IR_HINT_FLAG_ONLY = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: This feature is not supported by the legacy code \n"
+    "generator. Hint: try compiling with `--via-ir` (CLI).\n"
+)
+
+# The flag token itself split by solc's hard wrap.
+VIA_IR_HINT_FLAG_WRAPPED = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: This feature is not supported by the legacy code \n"
+    "generator. Hint: try compiling with `--via-\n"
+    "ir` (CLI).\n"
+)
+
+VIA_IR_HINT_JSON_KEY_ONLY = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: This feature is not supported by the legacy code \n"
+    "generator. Hint: set `viaIR: true` (Standard JSON).\n"
+)
+
+# A diagnostic whose quoted source line happens to talk about a pipeline: prose in the
+# user's code, not a solc remediation hint.
+TYPE_ERROR_WITH_PIPELINE_PROSE = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    'TypeError: Member "route" not found or not visible after argument-dependent lookup.\n'
+    "   --> contracts/Foo.sol:42:9:\n"
+    "    |\n"
+    " 42 |         router.route(amount); // route through their pipeline\n"
+)
+
+
 def test_detects_bulk_via_ir_required_via_source_location(manager) -> None:
     # Whole-project compile: the affected file comes from `--> <path>:line:col`, and the
     # wrapped `--via-\nir` hint must still be recognized.
@@ -421,6 +469,49 @@ def test_via_ir_compiling_line_takes_precedence_over_source_location(manager) ->
         ContractHandle(contract_name="Inlined", source_file="lib/somewhere/Inlined.sol"),
     ]
     assert manager._detect_via_ir_required(COMPILING_LINE_VIA_IR_REQUIRED, contracts) == "Foo"
+
+
+def test_via_ir_fallback_ignores_another_diagnostics_source_location(manager) -> None:
+    # The `-->` belongs to the Warning below, not to the via-ir diagnostic — enabling
+    # via-ir for that file would fix nothing and change an unrelated contract's build.
+    contracts = [ContractHandle(contract_name="ERC20", source_file="lib/oz/ERC20.sol")]
+    assert (
+        manager._detect_via_ir_required(BULK_VIA_IR_FOLLOWED_BY_FOREIGN_WARNING, contracts) is None
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [VIA_IR_HINT_FLAG_ONLY, VIA_IR_HINT_FLAG_WRAPPED, VIA_IR_HINT_JSON_KEY_ONLY],
+    ids=["flag", "flag-wrapped", "json-key"],
+)
+def test_each_hint_spelling_detected_on_its_own(manager, output: str) -> None:
+    # One spelling per fixture: a broken alternative cannot hide behind another one
+    # matching first.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_via_ir_required(output, contracts) == "Foo"
+
+
+def test_pipeline_prose_in_source_line_is_not_a_hint(manager) -> None:
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_via_ir_required(TYPE_ERROR_WITH_PIPELINE_PROSE, contracts) is None
+
+
+def test_stack_too_deep_hint_is_not_via_ir_required(manager) -> None:
+    # solc appends the same via-ir hint to every stack-too-deep / YulException
+    # diagnostic, where via-ir is one remedy among several. Those must stay with
+    # stack_too_deep_via_ir and the yul rungs, which climb the optimizer ladder first.
+    foo = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    harness = [
+        ContractHandle(
+            contract_name="LMPStrategyInstance1",
+            source_file="certora/harnesses/LMPStrategyInstance1.sol",
+        )
+    ]
+    assert manager._detect_via_ir_required(WRAPPED_YUL_STACK_TOO_DEEP, harness) is None
+    assert manager._detect_via_ir_required(SINGLE_LINE_YUL_STACK_TOO_DEEP, foo) is None
+    assert manager._detect_via_ir_required(PERSISTENT_STACK_TOO_DEEP_OUTPUT, foo) is None
+    assert manager._detect_via_ir_required(BULK_STACK_TOO_DEEP, foo) is None
 
 
 def test_yul_last_resort_keeps_compile_settings(manager, monkeypatch, tmp_path) -> None:
