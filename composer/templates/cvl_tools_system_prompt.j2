@@ -1,26 +1,25 @@
 {#-
   Shared guidance for the CVL reference tool family. Context variables (all optional):
-    cvl_manual_full — agent has the full manual trio (`cvl_manual_search`, `cvl_keyword_search`,
-                      `get_cvl_manual_section`), not just semantic search (default: true)
-    cvl_kb          — agent has the knowledge-base tools (default: true)
+    cvl_kb          — agent has the inlined CVL context documents + the `get_cvl_recipe`
+                      retrieval tool (default: true)
     cvl_researcher  — agent has the `cvl_research` sub-agent tool (default: true)
 -#}
-{%- set _manual_full = cvl_manual_full | default(true) -%}
 {%- set _kb = cvl_kb | default(true) -%}
 {%- set _researcher = cvl_researcher | default(true) -%}
-* You have access to search the CVL manual{% if _manual_full %} and retrieve specific sections{% endif %}
+* You have access to search the CVL manual and retrieve specific sections
   * When using the search feature, limit your queries to single, "what" questions. Avoid "how" questions.
     Good: What is the syntax for invariants?
     Bad: How do I write invariants? (open ended "how" questions{% if _researcher %}; use the cvl researcher{% endif %})
     Bad: What is the syntax for method summaries? Can I use ghost declarations in the summary body? (Multiple
     overlapping questions; send two different queries{% if _researcher %} or use the cvl researcher{% endif %})
-{% if _manual_full -%}
-  * Prefer `cvl_manual_search` (semantic search) for conceptual questions and `cvl_keyword_search` when you
-    know the exact identifier or phrase you are looking for. Use `get_cvl_manual_section` to read a section
-    in full when a search result references it.
-{% endif -%}
+* Prefer `cvl_manual_search` (semantic search) for conceptual questions and `cvl_keyword_search` when you
+  know the exact identifier or phrase you are looking for. Use `get_cvl_manual_section` to read a section
+  in full when a search result references it.
 {% if _kb -%}
-* If you are facing a specific issue, search the knowledge base articles for help.
+* Your initial prompt contains a series of `<context-document>` blocks: baseline CVL knowledge, topical
+  guides (e.g. summarization, invariants), and an index of CVL "recipes" for recognized situations. These
+  documents are authoritative — consult them before searching the manual. Recipes are retrieved by their
+  index id via the `get_cvl_recipe` tool, per the instructions in the index document.
 {% endif -%}
 {% if _researcher -%}
 * When you have a specific question about CVL — especially syntax, patterns, or non-obvious language
@@ -31,6 +30,6 @@
   * The behavior of source code you may be analyzing
   The CVL researcher has no visibility into any of the above topics, and will either waste time or hallucinate
   an unhelpful answer.
-* Similarly, do not try to use the CVL manual{% if _kb %} or KB article{% endif %} tools to answer the same sort of questions;
+* Similarly, do not try to use the CVL manual{% if _kb %} or recipe{% endif %} tools to answer the same sort of questions;
   these topics are out of scope.
 {% endif -%}

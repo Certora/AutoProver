@@ -26,6 +26,7 @@ from composer.spec.system_model import ContractComponentInstance
 from composer.spec.gen_types import TemplateInstantiation, TypedTemplate, ITypedTemplate, PartialTemplate
 from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.spec.util import uniq_thread_id
+from composer.kb.kb_context import with_cvl_context
 
 class PropertyFeedback(BaseModel):
     """
@@ -190,12 +191,12 @@ def property_feedback_judge_generic[
         rebuttals: Sequence[Rebuttal],
         within_tool: str,
     ) -> PropertyFeedback:
-        workflow = staged_workflow.inject(
-            lambda b: prompt.bind({
+        workflow = staged_workflow.with_initial_prompt(
+            with_cvl_context(prompt.bind({
                 "properties": props,
                 "rebuttals": rebuttals,
                 "skipped": skipped
-            }).render_to(b.with_initial_prompt_template)
+            }).render_to)
         ).compile_async()
 
         input_parts: list[str | dict] = []

@@ -11,7 +11,6 @@ from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 from composer.diagnostics.timing import RunSummary
 from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
 from composer.input.parsing import add_protocol_args
-from composer.kb.knowledge_base import DEFAULT_KB_NS
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.pipeline.core import CorePipelineResult
 
@@ -141,7 +140,6 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 models=staged.llm_models,
                 db=rag_db,
                 forbidden_read=fs_forbidden_read,
-                kb_ns=DEFAULT_KB_NS,
                 root=staged.source.project_root,
                 store=staged.conns.indexed_store,
                 source_question_ns=source_data_ns,

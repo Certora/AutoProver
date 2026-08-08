@@ -719,8 +719,7 @@ _INVARIANTS_TAPE: list[BaseMessage] = [
     #   - cvl_authorship_tools (source_tools + rag_tools): list_files,
     #     get_file, grep_files, code_explorer, code_document_ref,
     #     cvl_manual_search, cvl_keyword_search, get_cvl_manual_section,
-    #     scan_knowledge_base, get_knowledge_base_article, cvl_research,
-    #     cvl_document_ref.
+    #     get_cvl_recipe, cvl_research, cvl_document_ref.
     #   - static_tools: put_cvl, put_cvl_raw, feedback_tool, record_skip,
     #     unskip_property, get_cvl, erc20_guidance, unresolved_call_guidance.
     #   - prover_tool: verify_spec.
@@ -757,24 +756,19 @@ _INVARIANT_CVL_TAPE: list[BaseMessage] = [
         _tc("cvl_keyword_search", query="invariant", min_depth=0, limit=5),
     ),
 
-    # Q2 — exercise section retrieval + knowledge-base scan.
+    # Q2 — exercise section retrieval + recipe retrieval (hit path).
     _ai(
-        "Fetching the Invariants section and scanning the knowledge base.",
+        "Fetching the Invariants section and retrieving a recipe.",
         _tc("get_cvl_manual_section", headers=["Invariants"]),
-        _tc(
-            "scan_knowledge_base",
-            symptom="structural invariant authoring",
-            limit=5,
-            offset=0,
-        ),
+        _tc("get_cvl_recipe", id="R1"),
     ),
 
-    # Q3 — exercise the direct KB fetch + both guidance tools + memory view.
-    # The KB article title is expected to miss — the harness only cares
+    # Q3 — exercise the recipe miss path + both guidance tools + memory view.
+    # The recipe id is expected to miss — the harness only cares
     # about exercising the tool dispatch, not the result value.
     _ai(
-        "Checking KB for prior notes and pulling guidance.",
-        _tc("get_knowledge_base_article", title="Structural invariant patterns"),
+        "Checking for a recipe and pulling guidance.",
+        _tc("get_cvl_recipe", id="R99"),
         _tc("erc20_guidance"),
         _tc("unresolved_call_guidance"),
         _tc("memory", command="view", path="/memories"),

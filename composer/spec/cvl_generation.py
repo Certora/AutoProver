@@ -9,6 +9,7 @@ Parameterized by:
 import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from functools import cache
 from typing import Annotated, Callable, Literal, NotRequired, Sequence, override, Awaitable, Any, Protocol
 from typing_extensions import TypedDict
 
