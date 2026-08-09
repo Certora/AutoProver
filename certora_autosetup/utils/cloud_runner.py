@@ -66,7 +66,6 @@ class CloudProverRunner(ProverRunner):
     # otherwise burn the whole JOB_TIMEOUT_SECONDS. Env-overridable; budget <= 0
     # disables the watchdog.
     PREPROCESSING_BUDGET_SECONDS = 1800
-    PREPROCESSING_GRACE_SECONDS = 300
     PREPROCESSING_PROBE_SECONDS = 90
 
     def __init__(
@@ -110,8 +109,6 @@ class CloudProverRunner(ProverRunner):
         self.job_wait_timeout = self.JOB_TIMEOUT_SECONDS
         self.preprocessing_budget = int(os.environ.get(
             "AUTOSETUP_PREPROCESSING_BUDGET_SECONDS", self.PREPROCESSING_BUDGET_SECONDS))
-        self.preprocessing_grace = int(os.environ.get(
-            "AUTOSETUP_PREPROCESSING_GRACE_SECONDS", self.PREPROCESSING_GRACE_SECONDS))
         self.preprocessing_probe_interval = int(os.environ.get(
             "AUTOSETUP_PREPROCESSING_PROBE_SECONDS", self.PREPROCESSING_PROBE_SECONDS))
 
@@ -1030,7 +1027,6 @@ class CloudProverRunner(ProverRunner):
         if self.preprocessing_budget > 0:
             watchdog = PreprocessingWatchdog(
                 budget_seconds=self.preprocessing_budget,
-                grace_seconds=self.preprocessing_grace,
                 probe_interval_seconds=self.preprocessing_probe_interval,
                 probe_treeview=lambda: prover_api.get_treeview_status(job_url),
                 log=self.log,

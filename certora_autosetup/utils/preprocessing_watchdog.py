@@ -11,12 +11,13 @@ until the prover's global timeout (~2h), and autosetup would otherwise burn its 
 per-job wait budget polling it.
 
 The watchdog piggy-backs on the existing status-poll loop: it starts a clock on the first
-RUNNING observation (queue time is free), and after a grace period probes the treeview at a
-bounded cadence. First probe showing a non-empty "rules" list ⇒ preprocessing passed,
-watchdog goes dormant. No rules within the budget ⇒ PREPROCESSING_TIMEOUT, and the caller
-cancels the job. Probe transport errors self-disable the watchdog so the loop degrades to
-the old behavior; a JobNotFoundError is NOT an error — it is the normal "treeview not
-served yet" response early in a run.
+RUNNING observation (queue time is free) and probes the treeview at a bounded cadence, the
+first probe one interval in. First probe showing a non-empty "rules" list ⇒ preprocessing
+passed, watchdog goes dormant. No rules within the budget ⇒ PREPROCESSING_TIMEOUT, and the
+caller cancels the job. Consecutive probe transport errors self-disable the watchdog so the
+loop degrades to the old behavior; a JobNotFoundError is NOT an error — it is the normal
+"treeview not served yet" response early in a run (the endpoint presigns the S3 object
+without checking that it exists, and a missing object answers 404; verified live).
 """
 
 import time
@@ -39,7 +40,6 @@ class PreprocessingWatchdog:
     def __init__(
         self,
         budget_seconds: float,
-        grace_seconds: float,
         probe_interval_seconds: float,
         probe_treeview: Callable[[], object],
         log: Callable[..., None],
@@ -47,7 +47,6 @@ class PreprocessingWatchdog:
         clock: Callable[[], float] = time.monotonic,
     ):
         self.budget_seconds = budget_seconds
-        self.grace_seconds = grace_seconds
         self.probe_interval_seconds = probe_interval_seconds
         self._probe_treeview = probe_treeview
         self._log = log
@@ -55,7 +54,7 @@ class PreprocessingWatchdog:
         self._clock = clock
 
         self._running_since: Optional[float] = None
-        self._last_probe: Optional[float] = None
+        self._last_probe: float = 0.0
         self._done = False
         self._disabled = False
         self._consecutive_probe_errors = 0
@@ -72,12 +71,14 @@ class PreprocessingWatchdog:
 
         now = self._clock()
         if self._running_since is None:
+            # First RUNNING tick. Start the clock, and hold the first probe one interval
+            # out: a job that has only just started running is still fetching the jar and
+            # booting the JVM, so no treeview of it can exist yet.
             self._running_since = now
-
-        running_for = now - self._running_since
-        if running_for < self.grace_seconds:
+            self._last_probe = now
             return WatchdogVerdict.WAITING
-        if self._last_probe is not None and now - self._last_probe < self.probe_interval_seconds:
+
+        if now - self._last_probe < self.probe_interval_seconds:
             # Between probes; the budget check only fires on probe ticks so the final
             # verdict is always backed by a fresh "still no treeview" observation.
             return WatchdogVerdict.WAITING
@@ -87,7 +88,6 @@ class PreprocessingWatchdog:
             tree_data = self._probe_treeview()
         except JobNotFoundError:
             # Treeview not served yet — expected early in a run.
-            self._consecutive_probe_errors = 0
             tree_data = None
         except Exception as e:
             self._consecutive_probe_errors += 1
@@ -106,12 +106,15 @@ class PreprocessingWatchdog:
                 return WatchdogVerdict.DISABLED
             return WatchdogVerdict.WAITING
 
+        # The endpoint answered, so any earlier failures were not a broken endpoint.
+        self._consecutive_probe_errors = 0
+
         # The treeview exists (with rules: []) throughout preprocessing; only a
         # non-empty rules list proves rule checking has started.
         if isinstance(tree_data, dict) and tree_data.get("rules"):
             self._done = True
             return WatchdogVerdict.PREPROCESSING_DONE
 
-        if running_for > self.budget_seconds:
+        if now - self._running_since > self.budget_seconds:
             return WatchdogVerdict.PREPROCESSING_TIMEOUT
         return WatchdogVerdict.WAITING

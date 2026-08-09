@@ -40,10 +40,9 @@ class FakeClock:
         self.now += seconds
 
 
-def make_watchdog(clock, probe, budget=1800, grace=300, interval=90, max_errors=3):
+def make_watchdog(clock, probe, budget=1800, interval=90, max_errors=3):
     return PreprocessingWatchdog(
         budget_seconds=budget,
-        grace_seconds=grace,
         probe_interval_seconds=interval,
         probe_treeview=probe,
         log=lambda *a, **k: None,
@@ -62,23 +61,32 @@ class TestWatchdogStateMachine:
             clock.advance(600)  # far beyond budget while queued
         probe.assert_not_called()
 
-    def test_no_probes_during_grace(self):
+    def test_first_probe_is_one_interval_into_running(self):
+        # A job that has only just entered RUNNING cannot have a treeview yet, so the
+        # first probe waits out one interval instead of firing on the first tick.
         clock = FakeClock()
-        probe = MagicMock()
-        wd = make_watchdog(clock, probe, grace=300)
-        assert wd.observe(is_running=True) is WatchdogVerdict.WAITING
-        clock.advance(299)
-        assert wd.observe(is_running=True) is WatchdogVerdict.WAITING
+        probe = MagicMock(side_effect=JobNotFoundError("not yet"))
+        wd = make_watchdog(clock, probe, interval=90)
+        for _ in range(9):  # 9 ticks x 10s = 80s of RUNNING
+            assert wd.observe(is_running=True) is WatchdogVerdict.WAITING
+            clock.advance(10)
         probe.assert_not_called()
+        clock.advance(10)
+        wd.observe(is_running=True)
+        assert probe.call_count == 1
 
     def test_probe_cadence_rate_limited(self):
         clock = FakeClock()
         probe = MagicMock(side_effect=JobNotFoundError("not yet"))
-        wd = make_watchdog(clock, probe, grace=0, interval=90)
-        for _ in range(9):  # 9 ticks x 10s = 80s after the first probe
-            wd.observe(is_running=True)
+        wd = make_watchdog(clock, probe, interval=90)
+        wd.observe(is_running=True)  # starts the clock; first probe is one interval out
+        clock.advance(90)
+        wd.observe(is_running=True)
+        assert probe.call_count == 1
+        for _ in range(8):  # 8 ticks x 10s = 80s after the first probe
             clock.advance(10)
-        assert probe.call_count == 1  # first probe only; next allowed at +90s
+            wd.observe(is_running=True)
+        assert probe.call_count == 1  # next probe only allowed at +90s
         clock.advance(10)
         wd.observe(is_running=True)
         assert probe.call_count == 2
@@ -86,7 +94,9 @@ class TestWatchdogStateMachine:
     def test_treeview_with_rules_makes_watchdog_dormant(self):
         clock = FakeClock()
         probe = MagicMock(return_value={"rules": [{"name": "sanity"}]})
-        wd = make_watchdog(clock, probe, grace=0)
+        wd = make_watchdog(clock, probe, interval=90)
+        assert wd.observe(is_running=True) is WatchdogVerdict.WAITING
+        clock.advance(90)
         assert wd.observe(is_running=True) is WatchdogVerdict.PREPROCESSING_DONE
         clock.advance(10_000)
         assert wd.observe(is_running=True) is WatchdogVerdict.PREPROCESSING_DONE
@@ -97,7 +107,7 @@ class TestWatchdogStateMachine:
         # whole preprocessing phase — existence alone must NOT count as done.
         clock = FakeClock()
         probe = MagicMock(return_value={"rules": [], "contract": "Vault"})
-        wd = make_watchdog(clock, probe, budget=1800, grace=0, interval=90)
+        wd = make_watchdog(clock, probe, budget=1800, interval=90)
         verdict = wd.observe(is_running=True)
         while verdict is WatchdogVerdict.WAITING and clock.now < 1000 + 3600:
             clock.advance(90)
@@ -107,7 +117,7 @@ class TestWatchdogStateMachine:
     def test_budget_exceeded_without_treeview(self):
         clock = FakeClock()
         probe = MagicMock(side_effect=JobNotFoundError("not yet"))
-        wd = make_watchdog(clock, probe, budget=1800, grace=0, interval=90)
+        wd = make_watchdog(clock, probe, budget=1800, interval=90)
         verdict = wd.observe(is_running=True)
         while verdict is WatchdogVerdict.WAITING and clock.now < 1000 + 3600:
             clock.advance(90)
@@ -117,28 +127,45 @@ class TestWatchdogStateMachine:
     def test_not_found_is_not_an_error(self):
         clock = FakeClock()
         probe = MagicMock(side_effect=JobNotFoundError("not yet"))
-        wd = make_watchdog(clock, probe, grace=0, interval=0, max_errors=3)
+        wd = make_watchdog(clock, probe, interval=0, max_errors=3)
         for _ in range(10):
             assert wd.observe(is_running=True) is not WatchdogVerdict.DISABLED
             clock.advance(1)
 
-    def test_disable_after_consecutive_errors_and_reset_on_success(self):
+    def _drain(self, wd, clock, ticks):
+        verdicts = []
+        for _ in range(ticks):
+            verdicts.append(wd.observe(is_running=True))
+            clock.advance(1)
+        return verdicts
+
+    def test_disable_only_after_consecutive_errors(self):
         clock = FakeClock()
-        # two transport errors, then a not-found (resets the counter), then more errors
+        # two transport errors, then a not-found (resets the counter), then three more
         probe = MagicMock(side_effect=[
             RuntimeError("boom"), RuntimeError("boom"), JobNotFoundError("not yet"),
             RuntimeError("boom"), RuntimeError("boom"), RuntimeError("boom"),
         ])
-        wd = make_watchdog(clock, probe, grace=0, interval=0, max_errors=3)
-        verdicts = []
-        for _ in range(6):
-            verdicts.append(wd.observe(is_running=True))
-            clock.advance(1)
+        wd = make_watchdog(clock, probe, interval=0, max_errors=3)
+        verdicts = self._drain(wd, clock, 7)[1:]  # first tick starts the clock
         assert verdicts[:5] == [WatchdogVerdict.WAITING] * 5
         assert verdicts[5] is WatchdogVerdict.DISABLED
         # disabled is terminal
         assert wd.observe(is_running=True) is WatchdogVerdict.DISABLED
         assert probe.call_count == 6
+
+    def test_answered_probe_resets_the_error_count(self):
+        # An endpoint that answers is not a broken endpoint: errors scattered between
+        # good probes must not accumulate into a permanent self-disable over a long run.
+        clock = FakeClock()
+        probe = MagicMock(side_effect=[
+            RuntimeError("blip"), {"rules": []}, RuntimeError("blip"), {"rules": []},
+            RuntimeError("blip"), {"rules": []}, RuntimeError("blip"),
+        ])
+        wd = make_watchdog(clock, probe, interval=0, max_errors=3)
+        verdicts = self._drain(wd, clock, 8)[1:]
+        assert WatchdogVerdict.DISABLED not in verdicts
+        assert probe.call_count == 7
 
 
 def _job_info(status):
@@ -168,7 +195,6 @@ class TestWaitLoopIntegration:
     def test_stuck_preprocessing_is_cancelled_and_classified(self, tmp_path):
         runner = make_cloud_runner(tmp_path)
         runner.preprocessing_budget = 1  # 1s of RUNNING without treeview
-        runner.preprocessing_grace = 0
         runner.preprocessing_probe_interval = 0
         runner._cancel_cloud_job = AsyncMock(return_value=True)
 
@@ -185,7 +211,6 @@ class TestWaitLoopIntegration:
     def test_treeview_appearance_prevents_cancellation(self, tmp_path):
         runner = make_cloud_runner(tmp_path)
         runner.preprocessing_budget = 1
-        runner.preprocessing_grace = 0
         runner.preprocessing_probe_interval = 0
         runner._cancel_cloud_job = AsyncMock(return_value=True)
 
