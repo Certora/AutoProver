@@ -2,6 +2,8 @@
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# please let me land this stupid PR
+
 [project]
 name = "ai-composer"
 version = "0.1.0"
@@ -15,7 +17,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@c8b3ae5615c648d47978006ae9d70ac4e6a2add4",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@5b295139242ba81ecc98ef986deb0ea31a240b68",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -38,6 +40,10 @@ dependencies = [
     # einops is provided by the [ml] extra; certora-prover-cli (above) ships the
     # prover_output_utility module AutoSetup imports.
     "tqdm>=4.65.0",
+    # keccak-256 for the editor's erc7201_slot tool (hashlib only has SHA-3).
+    "pycryptodome>=3.19",
+    # the report renderer's `markdown` jinja filter (also in the ragbuild group).
+    "markdown-it-py>=3.0",
     "anthropic>=0.18.0",
     "openai>=1.50.0",
     "wcmatch>=8.5.0",
@@ -163,7 +169,7 @@ include = ["composer*", "sanity_analyzer*", "analyzer*", "certora_autosetup*"]
 "" = "."
 
 [tool.setuptools.package-data]
-composer = ["templates/*.j2", "scripts/init-db.sql"]
+composer = ["templates/**/*.j2", "scripts/init-db.sql", "kb/resources/**/*.md", "kb/resources/*.yaml"]
 # Bundled CVL summaries, spec templates, mocks and conf templates the prover
 # reads directly off disk; ship them with the wheel.
 certora_autosetup = [

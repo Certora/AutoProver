@@ -30,6 +30,7 @@ from composer.spec.service_host import ServiceHost
 from composer.spec.source.harness import ContractSetup, ExternalInterface, HarnessDef
 from composer.spec.system_model import HarnessedApplication, ExternalActor
 from composer.spec.gen_types import TypedTemplate
+from composer.kb.kb_context import with_cvl_context
 from composer.ui.tool_display import tool_display
 
 
@@ -245,11 +246,11 @@ async def _setup_summaries_impl(
     })
 
     graph = bind_standard(
-        env.builder_lite(), ST, "The commentary on the generated specification", _validator
+        env.builder_heavy(), ST, "The commentary on the generated specification", _validator
     ).with_sys_prompt_template(
         "source_cvl_system_prompt.j2"
-    ).inject(
-        lambda g: bound.render_to(g.with_initial_prompt_template)
+    ).with_initial_prompt(
+        with_cvl_context(bound.render_to)
     ).with_tools(
         [ctx.get_memory_tool(), *env.all_tools]
     ).with_tools(

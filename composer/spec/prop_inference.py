@@ -9,9 +9,9 @@ from pydantic import BaseModel, Field
 from dataclasses import dataclass
 
 
-from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.messages import AnyMessage
 
-from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMessageType
+from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMessageType, PromptInput
 
 from composer.input.files import Document
 from composer.llm.types import CacheLevel
@@ -212,7 +212,7 @@ def get_initial_prompt_builder[U: FeatureUnit](
     extra_inputs: Sequence[AnyPropertyGenerationInput],
     component: U,
     render_initial: InitialPromptRenderer[U],
-) -> Callable[[list[_AgentRoundResult]], MessagePayloadType]:
+) -> Callable[[list[_AgentRoundResult]], PromptInput]:
     # Order priority (to facilitate caching)
     # Generic-always -> generic-first -> component-always -> component-first -> initial-prompt
     # within each group we sort cacheable things last, and then within THOSE groups we sort by UID
@@ -250,7 +250,7 @@ def get_initial_prompt_builder[U: FeatureUnit](
 
     extend(later_round_prefix, stable_component_always, cache_last=True)
 
-    def renderer(prev_results: list[_AgentRoundResult]) -> MessagePayloadType:
+    def renderer(prev_results: list[_AgentRoundResult]) -> PromptInput:
         rendered = render_initial(component, sort, prev_results)
         if len(prev_results) == 0:
             # first round
@@ -264,7 +264,7 @@ async def _run_bug_round(
     env: ServiceHost,
     ctx: WorkflowContext[_AgentResult],
     round: int,
-    prompt_render: Callable[[list[_AgentRoundResult]], MessagePayloadType],
+    prompt_render: Callable[[list[_AgentRoundResult]], PromptInput],
     prev: list[_AgentRoundResult],
     system_prompt: str
 ) -> _AgentRoundWithHistory:

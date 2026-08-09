@@ -28,9 +28,9 @@ from typing import TypedDict
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, CurtailedComponent, FormalizedProperty, GaveUpComponent,
-    GroupStatus, Outcome, PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict,
-    SkippedClaim,
+    AutoProverReport, CoverageReport, CurtailedComponent, Finding, FormalizedProperty, GaveUpComponent, GroupStatus, Outcome,
+    PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim,
+    SourceEditRecord,
 )
 
 
@@ -47,6 +47,14 @@ _GROUP_KIND: dict[GroupStatus, str] = {
     GroupStatus.BAD: "bad",
     GroupStatus.PARTIAL: "warn",
     GroupStatus.UNKNOWN: "muted",
+}
+# Finding severity -> CSS badge kind. Unknown severities render muted.
+_SEVERITY_KIND: dict[str, str] = {
+    "critical": "bad",
+    "high": "bad",
+    "medium": "warn",
+    "low": "info",
+    "informational": "muted",
 }
 
 # Per-backend human labels: the data carries the neutral `Outcome`; these turn it into the words an
@@ -135,6 +143,26 @@ class GroupView(TypedDict):
     label: str
     kind: str
     rows: list[RowView]
+    #: True when any member property's component was verified against edited source; renders
+    #: the "edited source" badge linking to the source-modifications appendix.
+    edited: bool
+
+
+class FindingView(TypedDict):
+    title: str
+    severity: str
+    severity_kind: str
+    impact_level: str | None
+    likelihood_level: str | None
+    risk_reasoning: str | None
+    summary: str
+    impact: str
+    description: str
+    attack_path: str | None
+    assumptions_and_uncertainties: str | None
+    link: LinkView
+    rule_name: str | None
+    spec_file: str | None
 
 
 class CurtailedRowView(TypedDict):
@@ -169,10 +197,12 @@ class ReportTemplateParams(TypedDict):
     prover_runs: list[RunView]
     rule_counts: list[ChipView]
     group_counts: list[ChipView]
+    findings: list[FindingView]
     groups: list[GroupView]
     skipped: list[SkippedClaim]
     gave_up: list[GaveUpComponent]
     curtailed: list[CurtailedView]
+    source_edits: list[SourceEditRecord]
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
@@ -215,6 +245,7 @@ def _group_view(
     rules_by_ref: dict[RuleRef, RuleVerdict],
     unit_labels: dict[Outcome, str],
     group_labels: dict[GroupStatus, str],
+    edited_components: set[str],
 ) -> GroupView:
     """Invert the group's members into rule rows: each rule the group's properties formalize, labelled
     with the descriptions of the in-group properties that pull it in (the edge labels). The same rule
@@ -251,6 +282,29 @@ def _group_view(
         "label": group_labels[group.status],
         "kind": _GROUP_KIND[group.status],
         "rows": rows,
+        "edited": any(component in edited_components for component, _ in group.members),
+    }
+
+
+def _finding_view(f: Finding) -> FindingView:
+    """Project a `Finding` into the template shape: the finding fields the page shows, plus a
+    severity->CSS kind and the prover-run link pulled from provenance."""
+    prov = f.provenance
+    return {
+        "title": f.title,
+        "severity": f.severity,
+        "severity_kind": _SEVERITY_KIND.get(f.severity, "muted"),
+        "impact_level": prov.impact if prov else None,
+        "likelihood_level": prov.likelihood if prov else None,
+        "risk_reasoning": prov.risk_reasoning if prov else None,
+        "summary": f.content.summary,
+        "impact": f.content.impact,
+        "description": f.content.description,
+        "attack_path": f.content.attack_path,
+        "assumptions_and_uncertainties": f.content.assumptions_and_uncertainties,
+        "link": _link_view(prov.prover_link if prov else None),
+        "rule_name": prov.rule_name if prov else None,
+        "spec_file": prov.spec_file if prov else None,
     }
 
 
@@ -303,6 +357,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
     rules_by_ref = {r.ref: r for r in report.rules}
     unit_labels = _OUTCOME_LABELS[report.backend]
     group_labels = _GROUP_LABELS[report.backend]
+    edited_components = {e.component for e in report.source_edits}
     return {
         "contract_name": report.contract_name,
         "run_timestamp_utc": report.run_timestamp_utc,
@@ -316,13 +371,15 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         ],
         "rule_counts": _outcome_counts([r.outcome for r in report.rules], unit_labels),
         "group_counts": _group_counts([g.status for g in report.groups], group_labels),
+        "findings": [_finding_view(f) for f in report.findings],
         "groups": [
-            _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels)
+            _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels, edited_components)
             for g in report.groups
         ],
         "skipped": report.skipped,
         "gave_up": report.gave_up_components,
         "curtailed": [_curtailed_view(c) for c in report.curtailed_components],
+        "source_edits": report.source_edits,
     }
 
 

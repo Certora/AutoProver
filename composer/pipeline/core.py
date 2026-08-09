@@ -6,9 +6,9 @@ a constructor dependency rather than a call-order convention; there is no half-i
     Backend ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
     (config, source)            (.main: structure)                        (formalize / persist / report)
 
-A backend whose units all build on one *shared* artifact inserts a link: ``prepare_formalization`` returns 
-a :class:`StagedFormalizer`, and its ``begin`` — handed every unit's properties — is what produces the 
-:class:`Formalizer`. 
+A backend whose units all build on one *shared* artifact inserts a link: ``prepare_formalization`` returns
+a :class:`StagedFormalizer`, and its ``begin`` — handed every unit's properties — is what produces the
+:class:`Formalizer`.
 
 The driver owns the genuinely-shared steps: system analysis, per-component property extraction, the
 result-type-keyed cache, and (since the report is backend-agnostic) building + persisting the
@@ -37,12 +37,17 @@ from composer.spec.system_model import (
 )
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
-from composer.spec.prop_inference import run_property_inference, AnyPropertyGenerationInput
+from composer.spec.prop_inference import (
+    run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
+)
+from composer.llm.types import CacheLevel
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import Formalized, ReportComponentInput, Verdict
-from composer.spec.source.report.schema import RuleName, ReportBackend
+from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
+from composer.spec.source.report.schema import (
+    AutoProverReport, RuleName, ReportBackend, SourceEditRecord,
+)
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
@@ -89,12 +94,25 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         'Structural Invariants' here. Default: none."""
         return []
 
+    async def source_edits(
+        self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        """Source-modification records for components whose verification ran against edited
+        source. Default: none (foundry; prover runs without editing)."""
+        return []
+
     @abstractmethod
     async def fetch_verdicts(self, formalized: Formalized[FormT]) -> dict[RuleName, Verdict]:
         """Per-unit outcomes for one delivered result. Prover: query ProverOutputUtility via
         ``formalized.run_link`` off-thread. Foundry: read straight off ``formalized.result``.
         Never called for gave-up or budget-curtailed components."""
         ...
+
+    def findings_evidence(self) -> EvidenceFetcher | None:
+        """The per-rule evidence source for findings synthesis, or None if this backend produces no
+        findings. Returning None is how a backend opts out — the report then builds no findings for
+        it, with no backend-specific branching in the report layer. Default: None."""
+        return None
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
@@ -286,7 +304,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         )
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
-    
+
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
     with named_budget_or_nop("system_preparation"):
         prepared = await backend.prepare_system(analyzed, run)
@@ -386,12 +404,20 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         )
         for o in outcomes
     ] + formalizer.extra_report_inputs()
+    findings_evidence = formalizer.findings_evidence()
     try:
-        report = await run.runner(
-            job=lambda: build_report(
+        async def _report() -> AutoProverReport:
+            return await build_report(
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
-            ),
+                source_edits=await formalizer.source_edits(outcomes, run),
+                # Findings only when the backend supplies evidence — skip the heavy model otherwise.
+                findings_llm=run.env.llm_heavy() if findings_evidence else None,
+                fetch_evidence=findings_evidence,
+
+            )
+        report = await run.runner(
+            job=_report,
             task_info=TaskInfo(REPORT_TASK_ID, label="Report Extraction", phase=backend.core_phases["report"])
         )
         backend.artifact_store.write_report(report)
@@ -461,6 +487,22 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
 
     async def _one(feat: U) -> _Batch[U] | None:
         pre_input = await _pre_plugin_inputs(feat)
+
+        # Mirrors the natspec path's `system_doc` injection (composer/spec/natspec/pipeline.py):
+        # the design doc, when supplied on the source/prover path too, should inform property
+        # inference the same way it informs component analysis, not just the latter.
+        design_doc = run.source.content
+        if design_doc is not None:
+            pre_input = [
+                *pre_input,
+                CacheablePropertyGenerationInput(
+                    "certora:system-doc", "generic", "always",
+                    lambda cache, doc=design_doc: [
+                        "For reference, the system document describing the entire application is as follows.",
+                        doc.to_dict(CacheLevel.SHORT if cache else CacheLevel.NONE)
+                    ]
+                ),
+            ]
 
         feat_ctx = await prop_ctx.child(
             _component_cache_key(feat, plugins.plugin_digest),

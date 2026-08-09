@@ -67,6 +67,7 @@ class _Formalizer:
         return _Result()
 
     def extra_report_inputs(self): return []
+    def findings_evidence(self): return None
     async def fetch_verdicts(self, _inp): return {}
     async def finalize(self, _outcomes, _run): return None
 
