@@ -140,7 +140,7 @@ def detect_artifacts_dir(project_root: Path, profile: Optional[str]) -> Path:
     """Detect build artifacts directory using BuildSystemDetector."""
     detected = BuildSystemDetector.detect(project_root)
     if detected == BuildSystem.UNKNOWN:
-        logger.error("No build system detected (no foundry.toml or hardhat.config). Cannot determine artifacts dir.", COMPONENT)
+        logger.error("No build system detected (no foundry.toml, hardhat.config or truffle config). Cannot determine artifacts dir.", COMPONENT)
         sys.exit(1)
 
     class MinimalScope:

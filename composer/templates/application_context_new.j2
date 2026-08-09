@@ -43,7 +43,7 @@ The status/tag of a contract in the source tree means the following:
 {% if context.component.interactions %}
 This component interacts with other parts of the application/external actors:
 {% for other in context.component.interactions %}
-  {% if other.contract_name %}
+  {% if other.contract_name is defined %}
 - The {{ other.component }} of {% if other.contract_name == context.contract.name %}this contract{%else%}the {{ other.contract_name }} contract{%endif%}.
   {% else %}
 - An external actor "{{ other.external_actor }}"

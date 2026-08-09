@@ -20,15 +20,19 @@ from composer.pipeline.ptypes import (
     CorePipelineResult
 )
 from composer.spec.artifacts import ArtifactIdentifier
+from composer.spec.system_model import FeatureUnit, BaseApplication
 from composer.spec.service_host import ModelProvider
-from composer.spec.system_analysis import SolidityIdentifier
+from composer.spec.types import SourceIdentifier
+from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
+from .plugins import applicable_plugin_manifest
+from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 from composer.ui.tool_display import async_tool_context
 from composer.core.user import user_data_ns, get_uid
 from composer.spec.source.design_doc_finder import (
@@ -37,17 +41,23 @@ from composer.spec.source.design_doc_finder import (
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 import hashlib
 
 
 def root_cache_key(
     project_root: str,
-    system_doc_path: pathlib.Path,
+    system_doc_path: pathlib.Path | None,
     relative_path: str,
-    contract_name: str,       
+    contract_name: str,
 ):
-    doc_hash = hashlib.sha256(system_doc_path.read_bytes()).hexdigest()
+    # A source-only run (no design doc) hashes a fixed sentinel in place of the doc
+    # bytes, so it gets a stable key that is distinct from any real document.
+    doc_hash = (
+        hashlib.sha256(system_doc_path.read_bytes()).hexdigest()
+        if system_doc_path is not None
+        else "no-design-doc"
+    )
     combined = "|".join([project_root, doc_hash, relative_path, contract_name])
     return hashlib.sha256(combined.encode()).hexdigest()
 
@@ -113,10 +123,11 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A]
+        backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+        ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
 
@@ -155,6 +166,7 @@ async def cli_pipeline[P: enum.Enum, H](
     model = get_model()
     text_log, events_log = setup_autoprove_logging(project_root, thread_id)
     print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
+    print(f"Selected run id: {summary.run_id}")
     install_run_summary(summary)
 
     disc_cache_ns: tuple[str, ...] | None = (
@@ -165,13 +177,13 @@ async def cli_pipeline[P: enum.Enum, H](
 
     init_source = SourceFields(
         relative_path=relative_path,
-        contract_name=SolidityIdentifier(contract_name),
-        forbidden_read=FS_FORBIDDEN_READ,
+        contract_name=SourceIdentifier(contract_name),
+        forbidden_read=fs_forbidden_read,
         project_root=str(project_root)
     )
 
     async with (
-        standard_connections(provider=tiered.provider_kind, embedder=DefaultEmbedder(model)) as conns,
+        standard_connections(provider=tiered.provider_service, embedder=DefaultEmbedder(model)) as conns,
         async_tool_context(),
         thread_logger(conns.store, {
             "root_thread_id": thread_id,
@@ -218,10 +230,14 @@ async def cli_pipeline[P: enum.Enum, H](
                 )
             else:
                 system_doc = pathlib.Path(args.system_doc)
-            
-            system_doc_doc = await conns.uploader.get_document(system_doc)
-            if system_doc_doc is None:
-                raise ValueError(f"Fatal error, failed to upload system doc: {system_doc}")
+
+            # ``system_doc`` is None only when discovery found nothing: run source-only.
+            if system_doc is not None:
+                system_doc_content = await conns.uploader.get_document(system_doc)
+                if system_doc_content is None:
+                    raise ValueError(f"Fatal error, failed to upload system doc: {system_doc}")
+            else:
+                system_doc_content = None
 
             root_key = root_cache_key(
                 project_root=str(project_root),
@@ -235,23 +251,27 @@ async def cli_pipeline[P: enum.Enum, H](
                 await conns.uploader.get_document(pathlib.Path(threat_path))
                 if (threat_path := args.threat_model) is not None else None
             )
-            await data_logger("cache_root", {
-                "cache_root": list(cache_root) if cache_root is not None else None,
-                "contract_name": str(contract_name),
-                "memory_ns": memory_ns,
-            })
             full_source = SourceCode(
-                content=system_doc_doc,
+                content=system_doc_content,
                 contract_name=init_source.contract_name,
                 forbidden_read=init_source.forbidden_read,
                 project_root=init_source.project_root,
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A]
+                backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+                ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
+                await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
+                    cache_root=list(cache_root) if cache_root is not None else None,
+                    contract_name=str(contract_name),
+                    memory_ns=memory_ns,
+                    plugins=applicable_plugin_manifest(ecosystem.unit_type),
+                    threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
+                    interactive=args.interactive,
+                ).model_dump())
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
                     thread_id=thread_id,
@@ -272,16 +292,16 @@ async def cli_pipeline[P: enum.Enum, H](
                     run=run,
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
-                    threat_model=threat_model
+                    threat_model=threat_model,
+                    ecosystem=ecosystem,
                 )
-                ...
 
             yield (StagedPipeline(
                 conns=conns, llm_models=models, logger=data_logger,
                 embed_model=model,
                 root_key=root_key,
                 source=SourceCode(
-                    content=system_doc_doc,
+                    content=system_doc_content,
                     contract_name=init_source.contract_name,
                     forbidden_read=init_source.forbidden_read,
                     project_root=init_source.project_root,

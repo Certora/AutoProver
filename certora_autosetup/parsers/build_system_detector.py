@@ -14,9 +14,11 @@ from typing import Optional, Type
 from certora_autosetup.build_systems.foundry import FoundryManager
 from certora_autosetup.build_systems.hardhat import HardhatManager
 from certora_autosetup.build_systems.manager import BuildSystemManager
+from certora_autosetup.build_systems.truffle import TruffleManager
 from certora_autosetup.parsers.base import ContractExtractor
 from certora_autosetup.parsers.foundry import FoundryContractExtractor
 from certora_autosetup.parsers.hardhat import HardhatContractExtractor
+from certora_autosetup.parsers.truffle import TruffleContractExtractor
 
 
 
@@ -24,6 +26,7 @@ class BuildSystem(Enum):
     """Supported build systems."""
     FOUNDRY = "foundry"
     HARDHAT = "hardhat"
+    TRUFFLE = "truffle"
     UNKNOWN = "unknown"
 
 
@@ -40,9 +43,13 @@ class BuildSystemDetector:
         Detection logic (in order of precedence):
         1. Check for foundry.toml → FOUNDRY
         2. Check for hardhat.config.js or hardhat.config.ts → HARDHAT
-        3. Check for package.json with hardhat dependency → HARDHAT
-        4. Check for artifact directory structures → FOUNDRY or HARDHAT
-        5. Return UNKNOWN if none found
+        3. Check for truffle-config.js or truffle.js → TRUFFLE
+        4. Check for package.json with a hardhat/truffle dependency → HARDHAT / TRUFFLE
+        5. Check for artifact directory structures → FOUNDRY, HARDHAT or TRUFFLE
+        6. Return UNKNOWN if none found
+
+        Truffle ranks below the other two throughout: a repo migrating off Truffle keeps its
+        stale truffle-config.js next to the foundry.toml/hardhat.config that now drives it.
 
         Args:
             project_root: Root directory of the project
@@ -82,6 +89,11 @@ class BuildSystemDetector:
         if hardhat_present:
             return BuildSystem.HARDHAT
 
+        truffle_config_js = project_root / "truffle-config.js"
+        truffle_config_legacy = project_root / "truffle.js"
+        if truffle_config_js.exists() or truffle_config_legacy.exists():
+            return BuildSystem.TRUFFLE
+
         # 2. Package.json detection
         package_json = project_root / "package.json"
         if package_json.exists():
@@ -96,6 +108,13 @@ class BuildSystemDetector:
                             "BuildSystemDetector"
                         )
                         return BuildSystem.HARDHAT
+                    if "truffle" in deps:
+                        logger.log(
+                            "Detected Truffle from package.json dependencies",
+                            "INFO",
+                            "BuildSystemDetector"
+                        )
+                        return BuildSystem.TRUFFLE
             except Exception as e:
                 logger.log(
                     f"Failed to parse package.json: {e}",
@@ -132,6 +151,16 @@ class BuildSystemDetector:
                 )
                 return BuildSystem.HARDHAT
 
+        # Check for Truffle structure: build/contracts/<ContractName>.json
+        truffle_build_dir = project_root / "build" / "contracts"
+        if truffle_build_dir.is_dir():
+            logger.log(
+                "Detected Truffle from build/contracts/ directory structure",
+                "INFO",
+                "BuildSystemDetector"
+            )
+            return BuildSystem.TRUFFLE
+
         return BuildSystem.UNKNOWN
 
     @staticmethod
@@ -160,7 +189,7 @@ class BuildSystemDetector:
             profile: Build system profile to use (e.g. Foundry profile name)
 
         Returns:
-            ContractExtractor instance (FoundryContractExtractor or HardhatContractExtractor)
+            ContractExtractor instance (Foundry/Hardhat/Truffle contract extractor)
 
         Raises:
             ValueError: If build system is not supported
@@ -169,13 +198,15 @@ class BuildSystemDetector:
             return FoundryContractExtractor(project_root, profile=profile)
         elif build_system == BuildSystem.HARDHAT:
             return HardhatContractExtractor(project_root)
+        elif build_system == BuildSystem.TRUFFLE:
+            return TruffleContractExtractor(project_root)
         else:
             raise ValueError(f"Unsupported build system: {build_system}")
 
     @staticmethod
     def get_manager_class(build_system: BuildSystem) -> Type[BuildSystemManager]:
         """
-        Get the appropriate manager class (FoundryManager or HardhatManager).
+        Get the appropriate manager class (FoundryManager, HardhatManager or TruffleManager).
 
         Args:
             build_system: The build system to get manager for
@@ -190,5 +221,7 @@ class BuildSystemDetector:
             return FoundryManager
         elif build_system == BuildSystem.HARDHAT:
             return HardhatManager
+        elif build_system == BuildSystem.TRUFFLE:
+            return TruffleManager
         else:
             raise ValueError(f"Unsupported build system: {build_system}")
