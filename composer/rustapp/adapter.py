@@ -705,29 +705,26 @@ class RustBackend(
             source_unit=unit, args=dict(self.declared_args),
         )
 
-        async def prep() -> ProjectFacts:
-            prep_facts = await run_workspace_prep(
-                self.module, prep_input, chain=self.ecosystem.name, source=run.source,
-                sandbox=self.sandbox, command_timeout_s=self.command_timeout_s,
-            )
-            result = ProjectFacts(source_unit=unit, prep_facts=prep_facts)
-            if gate is not None:
-                # The gate renders the same workspace the prep just set up — including whatever it
-                # established — so it must see the reported facts.
-                await run_preflight_gate(
-                    self.module,
-                    prep_input.with_prep_facts(result.prep_facts),
-                    workdir=workdir,
-                    sandbox_dict=await self.sandbox_spec(workdir),
-                )
+        prep_facts = await run_workspace_prep(
+            self.module, prep_input, chain=self.ecosystem.name, source=run.source,
+            sandbox=self.sandbox, command_timeout_s=self.command_timeout_s,
+        )
+        result = ProjectFacts(source_unit=unit, prep_facts=prep_facts)
+        if gate is None:
             return result
 
-        if gate is None:
-            # Nothing to show a task for: the prep is silent (it always was) and there is no gate.
-            return await prep()
+        async def gate_workspace() -> None:
+            await run_preflight_gate(
+                self.module,
+                prep_input.with_prep_facts(result.prep_facts),
+                workdir=workdir,
+                sandbox_dict=await self.sandbox_spec(workdir),
+            )
+
         # This is a build, not an agent: it belongs to the run's CPU budget, not to the
         # ``--max-concurrent`` agent slots it would otherwise hold for the whole of system analysis.
-        return await run.cpu_runner(self.task_info(gate), prep)
+        await run.cpu_runner(self.task_info(gate), gate_workspace)
+        return result
 
     async def sandbox_spec(self, workdir: Path) -> BackendSpec:
         """The confinement prefix the wheel's blocking callouts prepend, or the trusted empty one."""
