@@ -64,7 +64,7 @@ pub(crate) const CRATE_ROOT: &str = "src/main.rs";
 /// Under this backend's deliverable dir rather than crucible's own default (`./fuzz/`), so a run
 /// leaves ONE tree: the crate next to the reports and metadata rendered from the same run. The CLI
 /// defaults to `./fuzz/<program>/`, so every invocation passes `-C`
-/// ([`HarnessSpec::dir`](crate::harness::HarnessSpec::dir)).
+/// ([`HarnessSpec::dir_arg`](crate::harness::HarnessSpec::dir_arg)).
 pub(crate) const HARNESS_ROOT: &str = "certora/crucible/fuzz";
 
 /// The harness crate for `program`, relative to the project root.

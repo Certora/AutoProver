@@ -106,10 +106,23 @@ impl HarnessSpec {
         Self { program: program.to_string(), cr, types }
     }
 
-    /// The harness crate's directory, relative to the project root — what `crucible run -C` is
-    /// pointed at, and the prefix of every file this spec renders.
+    /// The harness crate's directory, relative to the project root — the prefix of every file this
+    /// spec renders. Pass [`HarnessSpec::dir_arg`] to `crucible run -C`, not this.
     pub(crate) fn dir(&self) -> String {
         harness_dir(&self.program)
+    }
+
+    /// The harness crate's directory as `crucible run -C` must receive it: **absolute**, resolved
+    /// against the workdir the host materialized the crate in.
+    ///
+    /// The CLI passes `-C` through unresolved (every *other* path it takes goes through its
+    /// `resolve_path`), then spawns the built binary with the harness dir as the child's cwd. On
+    /// Unix the chdir precedes the exec, so a relative `-C` makes the equally-relative binary path
+    /// resolve a second time against the crate — `<dir>/<dir>/target/release/invariant_test` — and
+    /// the spawn fails with a bare `No such file or directory`, *after* a successful build. An
+    /// absolute `-C` cannot be re-resolved, so it doesn't depend on that.
+    pub(crate) fn dir_arg(&self, workdir: &Path) -> String {
+        workdir.join(self.dir()).to_string_lossy().into_owned()
     }
 
     /// A crate-relative path spelled from the project root, the frame the host writes files in.
@@ -439,6 +452,17 @@ mod tests {
         for entry in ["target/", "crashes/"] {
             assert!(ignore.contains(entry), "{entry} not ignored in:\n{ignore}");
         }
+    }
+
+    #[test]
+    fn the_cli_is_pointed_at_the_crate_absolutely() {
+        // `-C` is the one path the CLI takes without resolving it, and it makes the harness dir the
+        // spawned binary's cwd — so a *relative* `-C` leaves the binary path (derived from it, and
+        // equally relative) to resolve a second time against the crate, and the spawn dies with a
+        // bare `No such file or directory` after a clean build. Absolute cannot be re-resolved.
+        let arg = spec_of(distinct_crate(), "").dir_arg(Path::new("/w"));
+        assert_eq!(arg, format!("/w/{}", harness_dir("vault")));
+        assert!(Path::new(&arg).is_absolute(), "a relative -C would be re-resolved: {arg}");
     }
 
     #[test]

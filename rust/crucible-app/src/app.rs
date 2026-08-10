@@ -108,7 +108,7 @@ impl Backend for CrucibleApp {
                 (hspec.section_files(&fname, authored_spec), fname)
             }
         };
-        let dir = hspec.dir();
+        let dir = hspec.dir_arg(&ws.dir);
         let args = ["-C", &dir, "run", program, &feature, "--release", "--dry-run"];
         match ws.run("crucible", args, &files) {
             Ok(out)
@@ -137,7 +137,7 @@ impl Backend for CrucibleApp {
         // is fuzzed is, byte for byte, what ships.
         let hspec = HarnessSpec::of(input);
         let files = hspec.section_files(fname, spec);
-        let dir = hspec.dir();
+        let dir = hspec.dir_arg(&ws.dir);
         let args = [
             "-C", &dir, "run", program, fname, "--release", "--mode", "explore", "--timeout",
             &timeout.to_string(),
