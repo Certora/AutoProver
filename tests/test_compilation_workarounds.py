@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 import certora_autosetup.utils.remappings as remappings_mod
-from certora_autosetup.utils.compilation_workarounds import CompilationWorkaroundManager
+from certora_autosetup.utils.compilation_workarounds import (
+    CompilationWorkaroundManager,
+    UnsatisfiableSolcPinError,
+)
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -603,7 +606,9 @@ def test_solc_fallback_fires_when_pin_is_in_compiler_map(
     # The pin can arrive already folded into compiler_map with no scalar "solc"
     # (precomputed from build artifacts) — the missing-binary fallback must
     # still be armed, keyed on the map contents rather than the scalar.
-    monkeypatch.setattr(manager, "_pick_solc_fallback", lambda: "solc8.30")
+    # No source file on disk here, so the pragma is unreadable and the substitution
+    # is taken on the first candidate.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.30", "0.8.30")])
     contracts = [ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol")]
     success, _, compilation_config, fake_run = _run_loop(
         manager,
@@ -618,6 +623,264 @@ def test_solc_fallback_fires_when_pin_is_in_compiler_map(
     # The uniform fallback map collapses back to a scalar on exit.
     assert compilation_config["solc"] == "solc8.30"
     assert "compiler_map" not in compilation_config
+
+
+def _write_pragma(tmp_path, contract: str, pragma: str) -> ContractHandle:
+    source = tmp_path / "contracts" / f"{contract}.sol"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(f"pragma solidity {pragma};\ncontract {contract} {{}}\n")
+    return ContractHandle(contract_name=contract, source_file=f"contracts/{contract}.sol")
+
+
+def test_solc_fallback_refused_when_it_contradicts_an_exact_pragma(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # An exact pragma admits exactly one compiler. Substituting any other reproduces
+    # the same ParserError next pass, so the run stops and names what to install.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [_write_pragma(tmp_path, "Vault", "0.6.4")]
+    with pytest.raises(UnsatisfiableSolcPinError) as excinfo:
+        _run_loop(
+            manager,
+            monkeypatch,
+            tmp_path,
+            [SOLC_NOT_FOUND_OUTPUT.replace("solc8.35", "solc6.4")],
+            contracts,
+            extra_config={"compiler_map": {"Vault": "solc6.4"}},
+        )
+    message = str(excinfo.value)
+    assert "Vault" in message and "0.6.4" in message and "solc6.4" in message
+
+
+def test_satisfiable_range_pragma_still_falls_back(manager, monkeypatch, tmp_path) -> None:
+    # A range pragma the installed compiler satisfies must keep substituting.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [_write_pragma(tmp_path, "Vault", "^0.8.0")]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert fake_run.calls == 2
+    assert compilation_config["solc"] == "solc8.34"
+
+
+def test_unparseable_pragma_is_not_treated_as_a_contradiction(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A disjunction cannot be expressed as one SpecifierSet, so the resolver returns
+    # no constraint. Unknown is not a conflict, and the substitution proceeds.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [_write_pragma(tmp_path, "Vault", "^0.6.0 || ^0.7.0")]
+    success, _, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert compilation_config["solc"] == "solc8.34"
+
+
+def test_fallback_is_decided_per_contract(manager, monkeypatch, tmp_path) -> None:
+    # One contract can be served and another cannot; the blocked one is named and
+    # the satisfiable one is not blamed.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [
+        _write_pragma(tmp_path, "Vault", "^0.8.0"),
+        _write_pragma(tmp_path, "Legacy", "0.6.4"),
+    ]
+    with pytest.raises(UnsatisfiableSolcPinError) as excinfo:
+        _run_loop(
+            manager,
+            monkeypatch,
+            tmp_path,
+            [SOLC_NOT_FOUND_OUTPUT],
+            contracts,
+            extra_config={"compiler_map": {"Vault": "solc8.35", "Legacy": "solc8.35"}},
+        )
+    message = str(excinfo.value)
+    assert "Legacy" in message
+    assert "Vault requires" not in message
+
+
+def test_project_default_is_preferred_over_whatever_solc_is_on_path(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # A wide pragma admits both, and plain `solc` may be any unrelated version the
+    # machine happens to carry, so the project's own default wins.
+    monkeypatch.setattr(manager, "_get_plain_solc_version", lambda: "0.5.16")
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.shutil.which", lambda _: "/usr/bin/solc8.34"
+    )
+    monkeypatch.setattr(manager, "solc_default_version", "solc8.34")
+    contracts = [_write_pragma(tmp_path, "Vault", ">=0.4.22 <0.9.0")]
+    success, _, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert compilation_config["solc"] == "solc8.34"
+
+
+def test_candidates_fall_through_to_the_next_when_the_pragma_rejects_the_first(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # Per-contract selection walks the candidate list rather than taking the head.
+    monkeypatch.setattr(
+        manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34"), ("solc6.12", "0.6.12")]
+    )
+    contracts = [_write_pragma(tmp_path, "Legacy", "^0.6.0")]
+    success, _, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Legacy": "solc8.35"}},
+    )
+    assert success is True
+    assert compilation_config["solc"] == "solc6.12"
+
+
+def test_a_source_that_is_not_utf8_reads_as_an_unknown_pragma(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # An accented byte in a header comment must not abort the loop.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    source = tmp_path / "contracts" / "Vault.sol"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"// auteur: Fran\xe7ois\npragma solidity 0.6.4;\ncontract Vault {}\n")
+    contracts = [ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol")]
+    success, _, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [SOLC_NOT_FOUND_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Vault": "solc8.35"}},
+    )
+    assert success is True
+    assert compilation_config["solc"] == "solc8.34"
+
+
+def test_a_pin_autosetup_seeded_itself_is_not_terminal(manager, monkeypatch, tmp_path) -> None:
+    # With no pin in the conf the seeding assigns the default compiler; refusing to
+    # proceed over that would fail a run the user never constrained.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [])
+    contracts = [_write_pragma(tmp_path, "Vault", "0.6.4")]
+    success, _, _, _ = _run_loop(
+        manager, monkeypatch, tmp_path, [SOLC_NOT_FOUND_OUTPUT] * 4, contracts
+    )
+    assert success is False
+
+
+def test_the_ledger_is_scoped_to_one_loop_not_to_the_manager(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # fixconf runs the loop twice on one manager, either side of the import patch;
+    # the second run must be free to re-apply what the first one did.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    for _ in range(2):
+        success, _, _, fake_run = _run_loop(
+            manager,
+            monkeypatch,
+            tmp_path,
+            [MISSING_PIN_OUTPUT, PIN_DEMANDED_AGAIN_OUTPUT] * 5,
+            contracts,
+            extra_config={"compiler_map": {"Foo": "solc6.4"}},
+        )
+        assert success is False
+        assert fake_run.calls == 3
+
+
+def test_no_installed_candidate_blocks_instead_of_guessing(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # With nothing installed there is no substitution to defend, so the run stops
+    # rather than pinning a compiler that is equally absent.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [])
+    contracts = [_write_pragma(tmp_path, "Vault", "^0.8.0")]
+    with pytest.raises(UnsatisfiableSolcPinError):
+        _run_loop(
+            manager,
+            monkeypatch,
+            tmp_path,
+            [SOLC_NOT_FOUND_OUTPUT],
+            contracts,
+            extra_config={"compiler_map": {"Vault": "solc8.35"}},
+        )
+
+
+# The two halves of a real cycle. A contract is pinned to a compiler that is not
+# installed; the fallback substitutes the default one; the next compile reports the
+# pragma mismatch and pins the missing compiler again. The two fire on mutually
+# exclusive outputs, so they land in different passes and neither pass repeats its
+# own conf state — the within-pass no-op guard cannot see it.
+MISSING_PIN_OUTPUT = (
+    "attribute/flag 'compiler_map': Solidity executable solc6.4 not found in path\n"
+)
+
+PIN_DEMANDED_AGAIN_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.34 had an error:\n"
+    "contracts/Foo.sol:1:1: ParserError: Source file requires different compiler version "
+    "(current compiler is 0.8.34+commit.aaaaaaaa.Linux.g++)\n"
+    "pragma solidity 0.6.4;\n"
+)
+
+
+def test_a_change_repeated_across_passes_stops_the_loop(manager, monkeypatch, tmp_path) -> None:
+    # Foo's source is not on disk, so its pragma is unreadable and the fallback plan
+    # has no constraint to refuse on — the substitution is allowed and the cycle is
+    # reachable. This is the residual case the ledger exists for.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, _, _, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [MISSING_PIN_OUTPUT, PIN_DEMANDED_AGAIN_OUTPUT] * 5,
+        contracts,
+        extra_config={"compiler_map": {"Foo": "solc6.4"}},
+    )
+    assert success is False
+    # substitute, re-pin, then the substitution repeats and the loop stops.
+    assert fake_run.calls == 3
+
+
+def test_a_new_change_alongside_a_repeat_keeps_going(manager, monkeypatch, tmp_path) -> None:
+    # A pass that re-applies a known change while also landing a new one is still
+    # converging and must not be stopped.
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [
+            MISSING_PIN_OUTPUT,
+            PIN_DEMANDED_AGAIN_OUTPUT,
+            MISSING_PIN_OUTPUT + UNNAMED_RETURN_WARNING_OUTPUT,
+            PIN_DEMANDED_AGAIN_OUTPUT,
+        ],
+        contracts,
+        extra_config={"compiler_map": {"Foo": "solc6.4"}},
+    )
+    assert success is False
+    assert fake_run.calls == 4
+    assert compilation_config.get("ignore_solidity_warnings") is True
 
 
 def test_yul_optimizer_rung_respects_project_optimize_map(
