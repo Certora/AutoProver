@@ -827,7 +827,7 @@ What each stage's claim looks like when it is actually run:
 |---|---|
 | 4 — per-component units | K = 2 on a 3-instruction program: *Vault Initialization*, *Lamport Custody* |
 | 3 — `begin` hook | **one** shared fixture with 11 `action_*` spanning *both* capabilities (init + custody) — a fixture authored from one component's properties would have covered one and starved the other |
-| 5 — per-component fns | two fns + two features in one delivered crate; fixture present once; no leftover `c_probe` (the gates' probe leaked into the deliverable as a *component* feature — it now ships deliberately, as `probe`, outside the `c_` namespace) |
+| 5 — per-component fns | two fns + two features in one delivered crate; fixture present once; no leftover `c_probe` (the gates' check leaked into the deliverable as a *component* feature — it now ships deliberately, as `preflight`, outside the `c_` namespace) |
 | 5 — per-feature build | `cargo build --features=<fn>` passed for each |
 | attribution | 19 per-property report rows, each pinned to its component's target |
 
@@ -906,25 +906,31 @@ per run** by the `Backend::crate_root` hook, which the host calls in `StagedForm
 first and only point where both the shared fixture and the whole unit set are known. `compile` and
 `validate` write nothing but their own section file.
 
-Two gates run *before* that point and so cannot use it: preflight (before analysis) and setup (which
-is what authors the fixture the root is built around). They get a crate root of their own at
-`src/gate_root.rs`, declared under the **same `[[bin]]` name** as the deliverable — `crucible run` only
-ever executes `target/<profile>/invariant_test` (`find_fuzz_binary` in the CLI), so the name is fixed
-while the path is ours. That is what makes `src/main.rs` write-once literally true: it is never
-clobbered by a gate, and a run that dies mid-setup leaves no half-crate at the deliverable's path.
+The **setup gate** reaches that point too: it is sent the unit set on `Authored::Setup`, so with the
+fixture it has just authored it holds both halves and writes the real `src/main.rs` itself. The
+`crate_root` hook then renders the same files from the same two inputs, byte-identically — not a
+second assembly, but the same one repeated for the run whose setup spec came from cache and so never
+reached that gate. Declaring every component's `mod` before a single section file exists costs the
+setup build nothing: a `#[cfg]`-disabled `mod` is stripped before rustc resolves its file.
 
-The probe those gates build is a **section like any component's** (`probe`), not a one-off. So it
-survives into the delivered crate as a real target: `crucible run <program> probe --dry-run` re-runs
-the setup gate — fixture compiles, program loads, nothing asserted — through exactly the mechanism
-that runs a suite. `src/gate_root.rs` stays behind as the record of what those gates built; the
-delivered manifest points `[[bin]]` at `src/main.rs`, so it is not a build target there, and its
-header says so.
+Only **preflight** runs earlier than that, before analysis, when there is no fixture and no unit set.
+It builds a crate of exactly one file, `src/preflight.rs`, declared under the **same `[[bin]]` name**
+as the deliverable — `crucible run` only ever executes `target/<profile>/invariant_test`
+(`find_fuzz_binary` in the CLI), so the name is fixed while the path is ours. Writing `src/main.rs`
+that early would leave a half-crate at the deliverable's path; from the setup gate on the manifest
+points there instead, and `src/preflight.rs` stays behind as the record of what the preflight proved.
+
+The check those gates build is a **target like any component's** (`preflight`), not a one-off. So it
+survives into the delivered crate: `crucible run <program> preflight --dry-run` re-runs the setup
+gate — fixture compiles, program loads, nothing asserted — through exactly the mechanism that runs a
+suite. Its body is inline in the crate root rather than in a section file of its own, so there is
+nothing that can drift from what the gates ran.
 
 The scaffolding's names sit **outside** the `c_` prefix that every component target carries, since
-`feature_of` is the only thing that names one. A component called "probe" therefore slugs to
-`c_probe` and is simply a different target — where a shared namespace would have had it declare the
-probe's Cargo feature twice and overwrite the probe's section file, which is the §17 failure wearing
-a new hat. `the_scaffolding_and_component_namespaces_cannot_collide` pins it.
+`feature_of` is the only thing that names one. A component called "preflight" therefore slugs to
+`c_preflight` and is simply a different target — where a shared namespace would have had it declare
+the preflight's Cargo feature twice and land its section file on the preflight root, which is the §17
+failure wearing a new hat. `the_scaffolding_and_component_namespaces_cannot_collide` pins it.
 
 So **a gated build is the delivered crate with one feature selected** — not a differently-shaped
 artifact that resembles it, and not two renders kept in step by argument. Two consequences:

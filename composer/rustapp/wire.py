@@ -174,12 +174,11 @@ class SetupInput(_AuthorInputBase):
     kind: Literal["setup"] = "setup"
     #: The analyzed system model. Opaque to the host seam — its shape is the ecosystem's.
     model: dict[str, Any] = Field(default_factory=dict)
-    #: Every unit the run is about to formalize (``FeatureUnit.feature_json()``). This is the only
-    #: callout that sees the set whole — a component turn holds one, a preflight runs before any
-    #: exists — so a wheel whose setup gate builds scaffolding the whole set implies (a manifest's
-    #: feature list, a crate root's module declarations) builds the real thing there. Deliberately
-    #: **not** part of the setup cache identity (:func:`composer.rustapp.adapter._setup_identity`):
-    #: it decides scaffolding, not what gets authored.
+    #: Every unit the run is about to formalize (``FeatureUnit.feature_json()``), as
+    #: :attr:`CrateRootInput.units` carries them. The host holds the set at this point in the run, so
+    #: a wheel whose setup gate builds the whole crate's scaffolding renders it here rather than a
+    #: provisional form the crate-root hook would then complete. Not part of the setup cache identity
+    #: (:func:`composer.rustapp.adapter._setup_identity`) — it does not change what gets authored.
     units: list[dict[str, Any]] = Field(default_factory=list)
 
     def with_units(self, units: list[dict[str, Any]]) -> Self:

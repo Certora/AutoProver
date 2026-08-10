@@ -338,13 +338,11 @@ units' same-titled properties are two different properties: both reach the artif
 tell them apart, and each is tied to the surface it has to be checkable against. On a component turn
 the field is that turn's own unit; the setup turn is the one that sees more than one.
 
-A setup turn also carries the run's **unit set** (`Authored::Setup::units`). `begin` has it in hand at
-this point, and it is the only callout that sees the set whole — a component turn holds one, a
-preflight runs before any exists. Scaffolding for a multi-unit build is a function of the set rather
-than of any one unit (a manifest's feature list, a crate root's module declarations), so a wheel whose
-setup gate builds that scaffolding can build the real thing rather than a provisional shape something
-later has to complete. It is passed for the gate's benefit, not the author's: nothing in the prompt
-depends on it.
+A setup turn also carries the run's **unit set** (`Authored::Setup::units`, the same values
+`CrateRootInput.units` holds). `begin` has it in hand at this point, so a wheel whose setup gate
+builds the crate can build the *real* one — scaffolding for every unit included — rather than a
+provisional shape something later has to complete. It is passed for the gate's benefit, not the
+author's: nothing in the prompt depends on it.
 
 The artifact is **cached** like a formalization result (`RustSetupSpec`), keyed by
 [`_setup_identity`](../composer/rustapp/adapter.py): the program and its crate, the analyzed model,
@@ -720,6 +718,12 @@ cost). The host calls `crate_root` once, in `StagedFormalizer.begin` — the fir
 shared setup spec and the unit set exist — writes the result, and never rewrites it. A wheel that
 implements it should emit only per-unit files from `compile`/`validate`, so a gated build *is* the
 deliverable with one target selected.
+
+A wheel that declares a `setup` phase is sent the unit set on that turn too (§4.3), so its setup gate
+can render the same scaffolding and build against it. The hook still runs, and still matters: the
+host serves a cached setup spec **without** calling `compile`, so on that path the gate never runs and
+this is the only thing that puts the crate on disk. Render both from the same inputs and the second
+write is byte-identical — one assembly, repeated, rather than two shapes to keep in agreement.
 
 Because the scaffolding is written before any outcome exists, it necessarily declares a target for
 every unit — including ones formalization later gives up on. `ComponentOutcome::GaveUp` therefore

@@ -127,7 +127,7 @@ def test_workspace_prep_places_deps_only_manifest_and_warm_plan():
     assert 'channel = "stable"' in plan["files"]["fuzz/vault/rust-toolchain.toml"]
     cargo = plan["files"]["fuzz/vault/Cargo.toml"]
     assert 'name = "vault_fuzz"' in cargo
-    assert "\nprobe = []" in cargo  # a feature to select for the setup dry-run
+    assert "\npreflight = []" in cargo  # a feature to select for the setup dry-run
     # …while everything naming the *program under test* comes from the resolved crate: the `.so` to
     # build is its lib target, and the path dep its package name + real directory (neither of which
     # is derivable from `vault` — assuming they were is what broke on a real program).
@@ -145,9 +145,9 @@ def test_workspace_prep_falls_back_to_the_programs_convention_without_a_crate():
 
 
 def test_crate_root_renders_the_fixture_plus_a_gated_entry_per_unit():
-    # Written ONCE per run, between the setup step and fan-out — the only point the unit set is
-    # known — and never rewritten, so this is the crate root every gated build compiles against and
-    # the one the user receives.
+    # The same files the setup gate built, re-emitted for the run whose setup spec came from cache
+    # and so never reached that gate. Either way this is the crate root every gated build compiles
+    # against and the one the user receives.
     files = _crate_root("deposit", "withdraw")
     main_rs = files["fuzz/vault/src/main.rs"]
     assert main_rs.startswith("// FIXTURE")
@@ -164,12 +164,14 @@ def test_crate_root_renders_the_fixture_plus_a_gated_entry_per_unit():
     assert "c_invariants" not in cargo, "no fallback feature when the host supplies slugs"
     assert 'example-lending = { path = "../../programs/lend", features = ["no-entrypoint"] }' in cargo
     # The gates' sanity check ships as a target too, so a user can re-run it the same way they run a
-    # suite: `crucible run vault probe --dry-run`. It lives OUTSIDE the `c_` component namespace, so
-    # a component named "probe" (which slugs to `c_probe`) is a different target, not an overwrite.
-    assert "\nprobe = []" in cargo
-    assert "mod probe;" in main_rs and "probe::invariants(fixture)" in main_rs
-    assert "pub fn invariants" in files["fuzz/vault/src/probe.rs"]
-    # …and this manifest points the one `[[bin]]` at the real crate root, not the gates' probe root.
+    # suite: `crucible run vault preflight --dry-run`. It lives OUTSIDE the `c_` component namespace,
+    # so a component named "preflight" (slugging to `c_preflight`) is a different target, not an
+    # overwrite. Its body is inline — no section file, so nothing can drift from what the gate ran.
+    assert "\npreflight = []" in cargo
+    assert "fn preflight(fixture: &mut Fixture)" in main_rs
+    assert "mod preflight;" not in main_rs
+    assert "fuzz/vault/src/preflight.rs" not in files
+    # …and this manifest points the one `[[bin]]` at the real crate root, not the preflight's.
     assert 'path = "src/main.rs"' in cargo
 
 
@@ -280,42 +282,43 @@ def test_preflight_renders_a_skeleton_that_needs_no_program_knowledge(tmp_path):
     # nothing has been authored — the wheel supplies the whole crate itself, and there is no spec for
     # the host to send.
     files = _compile_crate(tmp_path)
-    probe_rs = files["fuzz/vault/src/gate_root.rs"]
+    preflight_rs = files["fuzz/vault/src/preflight.rs"]
 
     # It exercises what an authored fixture will depend on: the program's module (here its crate),
     # the `.so` named after the crate's *lib* target, and the crucible fixture/test macros.
-    assert "use example_lending::*;" in probe_rs
-    assert '"../../target/deploy/example_lending.so"' in probe_rs
-    assert "#[fuzz_fixture]" in probe_rs and "struct Fixture" in probe_rs
+    assert "use example_lending::*;" in preflight_rs
+    assert '"../../target/deploy/example_lending.so"' in preflight_rs
+    assert "#[fuzz_fixture]" in preflight_rs and "struct Fixture" in preflight_rs
     # `#[fuzz_fixture]` refuses to expand an impl block with no action, and a preflight has no
     # instruction to offer — hence the stand-in.
-    assert "fn action_noop" in probe_rs
-    # …and the probe test whose name is the feature the dry-run selects, as a section like any
-    # component's — the body in its own file, the entry generated at the crate root.
-    assert "fn probe" in probe_rs and "probe::invariants(fixture)" in probe_rs
-    assert "pub fn invariants" in files["fuzz/vault/src/probe.rs"]
-    assert "\nprobe = []" in files["fuzz/vault/Cargo.toml"]
+    assert "fn action_noop" in preflight_rs
+    # …and the gated entry whose name is the feature the dry-run selects, with its body inline: this
+    # one file is the whole crate.
+    assert '#[cfg(feature = "preflight")]' in preflight_rs
+    assert "fn preflight(fixture: &mut Fixture)" in preflight_rs
+    assert "\npreflight = []" in files["fuzz/vault/Cargo.toml"]
+    assert [p for p in files if p.endswith(".rs")] == ["fuzz/vault/src/preflight.rs"]
     # No property, no invariant, no instruction call: the program's API is the fixture author's job.
-    assert "fuzz_assert" not in probe_rs
-    assert "instruction::" not in probe_rs
+    assert "fuzz_assert" not in preflight_rs
+    assert "instruction::" not in preflight_rs
 
 
 def test_preflight_does_not_touch_the_deliverables_crate_root(tmp_path):
-    # It runs before analysis, so it cannot write the real root — and must not clobber it either,
-    # which is what used to leave a half-crate at `src/main.rs` when a run died mid-setup. Same
-    # `[[bin]]` name (the only one the crucible CLI executes), its own path.
+    # It runs before analysis, so nothing that belongs in the real root exists yet — and writing that
+    # path this early is what used to leave a half-crate at `src/main.rs`. Same `[[bin]]` name (the
+    # only one the crucible CLI executes), its own path.
     files = _compile_crate(tmp_path)
     assert "fuzz/vault/src/main.rs" not in files
     cargo = files["fuzz/vault/Cargo.toml"]
     assert 'name = "invariant_test"' in cargo
-    assert 'path = "src/gate_root.rs"' in cargo
+    assert 'path = "src/preflight.rs"' in cargo
 
 
 def test_a_preflight_spec_from_the_host_is_ignored(tmp_path):
     # The host has nothing to send (it passes `None`), but the skeleton is the wheel's regardless —
     # the `compile` signature is shared with the authoring gates and this must not become a way in.
     files = _compile_crate(tmp_path, spec="// NOT THE SKELETON")
-    assert "NOT THE SKELETON" not in files["fuzz/vault/src/gate_root.rs"]
+    assert "NOT THE SKELETON" not in files["fuzz/vault/src/preflight.rs"]
 
 
 def test_the_preflight_skeleton_follows_the_idl_path_when_prep_placed_one(tmp_path):
@@ -323,7 +326,7 @@ def test_the_preflight_skeleton_follows_the_idl_path_when_prep_placed_one(tmp_pa
     # dependency on the program's crate — so the preflight gates the codegen too, which is one of
     # the biggest failure surfaces (it macro-expands the whole IDL at compile time).
     files = _compile_crate(tmp_path, idl=_IDL_AT)
-    probe_rs = files["fuzz/vault/src/gate_root.rs"]
-    assert 'declare_fuzz_program!(example_lending = "idls/example_lending.json")' in probe_rs
-    assert probe_rs.index("declare_fuzz_program") < probe_rs.index("use example_lending::*;")
+    preflight_rs = files["fuzz/vault/src/preflight.rs"]
+    assert 'declare_fuzz_program!(example_lending = "idls/example_lending.json")' in preflight_rs
+    assert preflight_rs.index("declare_fuzz_program") < preflight_rs.index("use example_lending::*;")
     assert "programs/lend" not in files["fuzz/vault/Cargo.toml"]

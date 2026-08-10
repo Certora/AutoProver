@@ -1,0 +1,24 @@
+// ─── How this crate root declares its targets ────────────────────────────────────────────────
+//
+// Each target below is one Cargo feature: a `#[cfg]`-gated `mod` holding that component's authored
+// tests, and a generated `#[invariant_test]` entry that delegates into it. Exactly one feature is
+// ever enabled, because each `#[invariant_test]` expands its own `fn main()` + `#[global_allocator]`
+// and two of those cannot coexist.
+//
+// The `#[cfg]` — not the module — is what isolates a section: an inherent `impl Fixture` contributes
+// its methods to the type GLOBALLY (rustc E0592 fires on a duplicate method name even when the two
+// `impl` blocks sit in different modules), so a module alone would not stop two components' helpers
+// from colliding. Gating means only ONE section's items ever exist in a build, and components can
+// therefore define same-named helpers forever without interfering.
+//
+// The module is the single item the `#[cfg]` hangs on, which is why a section is not gated
+// item-by-item: doing that would mean parsing item boundaries out of authored source. A
+// `#[cfg]`-disabled `mod` is stripped before rustc resolves its file, so a build selecting one
+// feature needs only that component's file on disk — which is also what lets this root declare
+// components whose files do not exist yet.
+//
+// The entry fn is OURS, generated: `#[invariant_test]` expands `fn main()` as a SIBLING of the fn it
+// annotates, so it has to be applied at crate root — an authored fn cannot carry it from inside its
+// module. The macro INLINES the annotated body into its per-action loop, so delegating from here
+// runs the authored fn once after each fuzzed action, which is the semantics we want. We do not
+// reimplement `main` — that is ~100 lines of libafl wiring we would then own across Crucible bumps.

@@ -558,11 +558,12 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         rest are then told to work within — see :class:`StagedFormalizer` and
         docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two.
 
-        It is also the first moment the whole **unit set** is known, and scaffolding for a multi-unit
+        This is also the first moment the whole unit set is known, and scaffolding for a multi-unit
         build (a manifest's feature list, a crate root's module declarations) is a function of the set
-        rather than of any one unit. Both callouts below get it: a wheel whose setup gate builds the
-        crate needs the set to build the real thing, and the scaffolding write is what lets the
-        per-unit gates emit only their own files.
+        rather than of any one unit. Both callouts below get it: the author's gate builds the crate,
+        so it can build the real one rather than a provisional root to be completed later, and the
+        scaffolding write re-emits the same files for the case that gate never ran (a cached spec).
+        Writing them here is what lets the per-unit gates emit only their own files.
 
         The run's property set is the other thing only this moment holds, and it goes to the
         formalizer for the same reason it goes to the setup spec: the artifact authored from every
@@ -648,9 +649,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             setup_ctx = run.ctx.child(RUST_SETUP_KEY(descriptor.name, setup_input))
             if (hit := await setup_ctx.cache_get(RustSetupSpec)) is not None:
                 return hit.source
-            # Attached *after* the identity, deliberately: the unit set is what a wheel's gate builds
-            # the crate's scaffolding from, not something the artifact is authored from, so a changed
-            # slug must not throw away an artifact that is still correct.
+            # Attached *after* the identity, deliberately: the unit set is what the wheel's gate
+            # builds the crate's scaffolding from, not something the fixture is authored from, so a
+            # changed slug must not throw away a fixture that is still correct.
             setup_input = setup_input.with_units([u.feature_json() for u in units])
             sandbox_dict = await b.sandbox_spec(workdir)
             fixture = await run.runner(
@@ -683,7 +684,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
 
             Not cached alongside the setup spec: this is a few small files rendered from values the
             host already holds, and it must land on disk even when the expensive half above was a
-            cache hit — the per-unit gates compile against it."""
+            cache hit — the per-unit gates compile against it. A wheel whose setup gate already built
+            the whole scaffolding (it is sent the same unit set) re-emits it here identically, so this
+            is a no-op write rather than a second, different assembly."""
             payload = CrateRootInput(
                 program=program,
                 source_unit=project.source_unit,

@@ -43,10 +43,10 @@ const HARNESS_TOOLCHAIN: &str = "stable";
 /// crate-root entry fn, module and section file derived from a unit starts with this, and nothing
 /// else in the crate may.
 ///
-/// That is what keeps the wheel's own scaffolding ([`PROBE_FEATURE`], [`GATE_ROOT`]) from colliding
-/// with a component: the two namespaces are disjoint by construction rather than by everyone
-/// remembering. A component named "probe" is not a special case — it slugs to `c_probe`, which is
-/// simply a different target from the scaffolding's `probe`. Pinned by
+/// That is what keeps the wheel's own scaffolding ([`PREFLIGHT_FEATURE`], [`PREFLIGHT_ROOT`]) from
+/// colliding with a component: the two namespaces are disjoint by construction rather than by everyone
+/// remembering. A component named "preflight" is not a special case — it slugs to `c_preflight`,
+/// which is simply a different target from the scaffolding's `preflight`. Pinned by
 /// `the_scaffolding_and_component_namespaces_cannot_collide`.
 const COMPONENT_PREFIX: &str = "c_";
 
@@ -65,29 +65,27 @@ const DEFAULT_HARNESS_FN: &str = "c_invariants";
 /// here — the model writes a constant, the wheel owns every name that varies.
 const SECTION_FN: &str = "invariants";
 
-/// The feature the preflight and setup gates build under, and a section of the delivered crate like
-/// any component's. Its body (`probe_fn.j2`) drives no state — what it proves is that the fixture
-/// compiles and its program loads — so it is the check a user re-runs to sanity-test the harness:
-/// `crucible run <program> probe --dry-run`.
+/// The feature every gate builds under, and an entry of the delivered crate like any component's.
+/// Its body drives no state — what it proves is that the fixture compiles and its program loads — so
+/// it is the check a user re-runs to sanity-test the harness:
+/// `crucible run <program> preflight --dry-run`.
 ///
-/// Deliberately **outside** [`COMPONENT_PREFIX`], so a component named "probe" (which slugs to
-/// `c_probe`) is a different target rather than a silent overwrite of this one's section file.
-const PROBE_FEATURE: &str = "probe";
+/// Deliberately **outside** [`COMPONENT_PREFIX`], so a component named "preflight" (which slugs to
+/// `c_preflight`) is a different target rather than a silent overwrite of this one.
+const PREFLIGHT_FEATURE: &str = "preflight";
 
-/// The `[[bin]]` path the preflight and setup gates build. They run before the deliverable's crate
-/// root can exist — preflight before analysis, setup being what authors the fixture that root is
-/// built around — so they get a root of their own.
+/// The `[[bin]]` path the preflight gate builds: a crate of exactly one file. The preflight runs
+/// before analysis, so nothing that belongs in [`CRATE_ROOT`] exists yet — and writing that path
+/// here would leave a half-crate at the deliverable's own root whenever a run died early.
 ///
 /// Same bin *name* as [`CRATE_ROOT`], different path: `crucible run` only ever executes
 /// `target/<profile>/invariant_test` (`find_fuzz_binary` in the CLI), so the name is fixed while the
-/// path is ours to choose. That is the whole trick, and what lets [`CRATE_ROOT`] be written exactly
-/// once per run instead of being clobbered by every gate that runs before the units are known.
-///
-/// Not `src/probe.rs`: that is the probe *section's* file (`src/<PROBE_FEATURE>.rs`), and a root
-/// that shared its path would overwrite the section it is supposed to be building.
-const GATE_ROOT: &str = "src/gate_root.rs";
+/// path is ours to choose. The manifest repoints `[[bin]]` at [`CRATE_ROOT`] from the setup gate on,
+/// leaving this file behind as the record of what the preflight proved.
+const PREFLIGHT_ROOT: &str = "src/preflight.rs";
 
-/// The `[[bin]]` path of the deliverable's crate root, written once by
+/// The `[[bin]]` path of the deliverable's crate root, written by the setup gate (the first callout
+/// holding both the fixture and the unit set) and re-emitted identically by
 /// [`Backend::crate_root`](autoprover_sdk::Backend::crate_root).
 const CRATE_ROOT: &str = "src/main.rs";
 
@@ -232,27 +230,27 @@ struct TestCheatSheet;
 #[template(path = "judge_system.j2", escape = "none")]
 struct JudgeSystem;
 
-/// The wheel's own probe section — the body behind [`PROBE_FEATURE`], which validates the fixture
-/// via `--dry-run` without asserting anything about the program.
+/// How a crate root declares its targets — the `#[cfg]`/`#[invariant_test]` mechanism every entry
+/// below it uses. Emitted **once** per root: it explains the layout, not any one target, and one
+/// copy per feature was the same paragraph N+1 times in a file a user reads.
 #[derive(Template)]
-#[template(path = "probe_fn.j2", escape = "none")]
-struct ProbeFn<'a> {
-    section_fn: &'a str,
-}
+#[template(path = "root_layout.j2", escape = "none")]
+struct RootLayout;
 
-/// The header on the preflight/setup crate root, saying what that file is and why the delivered
-/// crate does not build it — see [`GATE_ROOT`].
+/// The crate root's entry for [`PREFLIGHT_FEATURE`] — gated and generated exactly like a component's
+/// ([`Section::entry`]), but with its body inline: it validates the fixture via `--dry-run` without
+/// asserting anything about the program, so there is no authored section to delegate to.
 #[derive(Template)]
-#[template(path = "probe_root.j2", escape = "none")]
-struct ProbeRoot<'a> {
+#[template(path = "preflight_entry.j2", escape = "none")]
+struct PreflightEntry<'a> {
     program: &'a str,
-    probe_feature: &'a str,
-    root: &'a str,
+    feature: &'a str,
 }
 
 /// The crate root's declaration of one component's section: the feature-gated `mod` plus the
-/// generated `#[invariant_test]` entry that delegates into it. See the template for why the
-/// `#[cfg]` (not the module) is what isolates sections, and why the entry cannot live inside it.
+/// generated `#[invariant_test]` entry that delegates into it. Why the `#[cfg]` (not the module) is
+/// what isolates sections, and why the entry cannot live inside it, is in [`RootLayout`] — said once
+/// for the root rather than once per target.
 #[derive(Template)]
 #[template(path = "section_entry.j2", escape = "none")]
 struct SectionEntry<'a> {
@@ -365,12 +363,6 @@ fn as_module_body(body: &str) -> String {
         .join("\n")
 }
 
-/// The probe's section file — written by both the gates that build it and the crate root that ships
-/// it, identically, so the delivered `c_probe` target is the one those gates ran.
-fn probe_section() -> String {
-    Section::file(PROBE_FEATURE, &ProbeFn { section_fn: SECTION_FN }.render().expect("render probe_fn"))
-}
-
 /// The wheel-authored fixture the **preflight** gate builds (`docs/crucible-application.md` §5.0) —
 /// no LLM involved. `crate_id` names both the module the program's types come from and the `.so`
 /// basename, exactly as in an authored fixture, so the preflight proves the same two paths resolve.
@@ -414,8 +406,8 @@ struct RustToolchain<'a> {
 }
 
 /// The harness `Cargo.toml` skeleton (`deps` + `feats` are pre-rendered strings). `bin_path` is the
-/// crate root the one `[[bin]]` builds — see [`GATE_ROOT`] for why that varies while its name does
-/// not.
+/// crate root the one `[[bin]]` builds — see [`PREFLIGHT_ROOT`] for why that varies while its name
+/// does not.
 #[derive(Template)]
 #[template(path = "cargo_toml.j2", escape = "none")]
 struct CargoToml<'a> {
@@ -651,61 +643,60 @@ impl HarnessSpec {
         }
     }
 
-    /// The crate's **scaffolding** for `features`: the manifest, the toolchain pin, and a `main.rs`
-    /// holding the fixture plus one gated `mod` + `#[invariant_test]` entry per feature.
+    /// Every Cargo feature a crate covering `units` declares: the wheel's own preflight first — the
+    /// one target that exists before any unit does — then one per component.
+    fn features(units: &[String]) -> Vec<String> {
+        std::iter::once(PREFLIGHT_FEATURE.to_string()).chain(units.iter().cloned()).collect()
+    }
+
+    /// The **deliverable** crate for `units`: the manifest, the toolchain pin, and a [`CRATE_ROOT`]
+    /// holding the fixture, the preflight entry, and one gated `mod` + `#[invariant_test]` entry per
+    /// component.
     ///
-    /// Written once per run, from the whole unit set (`crate_root`), and not rewritten by the gated
-    /// builds — so every build in the run, and the crate the user receives, share one crate root
-    /// rather than N separately-assembled ones that have to be argued into agreement
-    /// (docs/crucible-component-units.md §17).
+    /// Rendered by the **setup gate** — the first callout holding both halves, the authored fixture
+    /// and the unit set — and re-rendered identically by `crate_root`, whose job is to land these
+    /// files for the run whose setup spec came from cache and so never reached that gate. One
+    /// renderer and one set of inputs, so `main.rs` never exists in a provisional shape and the gated
+    /// builds compile the crate the user receives (docs/crucible-component-units.md §17).
     ///
     /// A `#[cfg]`-disabled `mod` is stripped before rustc resolves its file, so declaring every
-    /// component here costs a build nothing: it compiles the one section whose feature is selected
-    /// and never looks for the others.
+    /// component here costs a build nothing — including the setup gate, which runs before a single
+    /// section file exists: it compiles the one feature it selects and never looks for the others.
     fn scaffold(&self, fixture: &str, units: &[String]) -> BTreeMap<String, String> {
-        // The wheel's own probe is a feature like any component's, so the delivered crate can re-run
-        // the setup gate through the same mechanism it runs a suite. First, because it is the one
-        // target that exists before any unit does.
-        let features: Vec<String> =
-            std::iter::once(PROBE_FEATURE.to_string()).chain(units.iter().cloned()).collect();
-        let mut files = self.manifest_files(CRATE_ROOT, &features);
+        let mut files = self.manifest_files(CRATE_ROOT, &Self::features(units));
         files.insert(
             format!("fuzz/{}/{CRATE_ROOT}", self.program),
-            self.main_rs(&self.root_text(fixture, &features)),
+            self.main_rs(&self.root_text(fixture, units)),
         );
-        files.insert(self.section_path(PROBE_FEATURE), probe_section());
         files
     }
 
-    /// A crate root: the fixture, then one gated `mod` + `#[invariant_test]` entry per feature.
-    fn root_text(&self, fixture: &str, features: &[String]) -> String {
-        let decls = features.iter().map(|f| Section::entry(f)).collect::<Vec<_>>().join("\n");
-        format!(
-            "{}\n\n{decls}{}",
-            fixture.trim_end(),
-            if decls.is_empty() { "" } else { "\n" }
-        )
+    /// A crate root: the fixture, the layout header, the preflight entry, then one gated `mod` +
+    /// `#[invariant_test]` entry per component feature.
+    fn root_text(&self, fixture: &str, units: &[String]) -> String {
+        let layout = RootLayout.render().expect("render root_layout");
+        let preflight = PreflightEntry { program: &self.program, feature: PREFLIGHT_FEATURE }
+            .render()
+            .expect("render preflight_entry");
+        let decls = std::iter::once(preflight)
+            .chain(units.iter().map(|f| Section::entry(f)))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        format!("{}\n\n{layout}\n\n{decls}\n", fixture.trim_end())
     }
 
-    /// The crate the preflight and setup gates build — the fixture (the wheel's skeleton, or the
-    /// authored one) behind the probe section, and nothing else.
+    /// The one-file crate the **preflight** gate builds, at [`PREFLIGHT_ROOT`]: the wheel's skeleton
+    /// fixture and the preflight entry, and nothing else — it runs before analysis, so no unit exists
+    /// to declare and nothing has been authored to put behind one.
     ///
-    /// It gets its own crate root at [`GATE_ROOT`] rather than writing [`CRATE_ROOT`], because both
-    /// gates run before the deliverable's root can exist and would otherwise leave a half-crate
-    /// behind at the deliverable's path. The probe *section* it builds is the same file the delivered
-    /// crate carries, so what these gates prove is proven about the thing that ships.
-    fn probe_files(&self, fixture: &str) -> BTreeMap<String, String> {
-        let features = [PROBE_FEATURE.to_string()];
-        let mut files = self.manifest_files(GATE_ROOT, &features);
-        let root = ProbeRoot {
-            program: &self.program,
-            probe_feature: PROBE_FEATURE,
-            root: &self.root_text(fixture, &features),
-        }
-        .render()
-        .expect("render probe_root");
-        files.insert(format!("fuzz/{}/{GATE_ROOT}", self.program), self.main_rs(&root));
-        files.insert(self.section_path(PROBE_FEATURE), probe_section());
+    /// It is not [`CRATE_ROOT`] because nothing that belongs there exists yet, and writing that path
+    /// from a gate this early would leave a half-crate at the deliverable's own root.
+    fn preflight_files(&self, fixture: &str) -> BTreeMap<String, String> {
+        let mut files = self.manifest_files(PREFLIGHT_ROOT, &Self::features(&[]));
+        files.insert(
+            format!("fuzz/{}/{PREFLIGHT_ROOT}", self.program),
+            self.main_rs(&self.root_text(fixture, &[])),
+        );
         files
     }
 
@@ -1361,7 +1352,7 @@ impl Backend for CrucibleApp {
             // never asks for this prompt. Say so rather than rendering a prompt about no unit.
             Authored::Preflight => "ERROR: the preflight gate authors nothing".to_string(),
             // Author the shared fixture from the analyzed model.
-            Authored::Setup { model: analyzed } => {
+            Authored::Setup { model: analyzed, .. } => {
             let model =
                 serde_json::to_string_pretty(analyzed).unwrap_or_else(|_| analyzed.to_string());
             // The fixture's `use <id>::*` and the `.so` it loads are the crate's lib name — which
@@ -1440,19 +1431,22 @@ impl Backend for CrucibleApp {
     fn compile(&self, input: &AuthorInput, spec: Option<&str>, ws: &Workspace) -> CompileResult {
         let program = &input.program;
         let hspec = HarnessSpec::of(input);
-        // Preflight: the wheel's OWN skeleton — `spec` is `None`, nothing has been authored yet.
-        // Setup: dry-run the authored fixture behind that same probe test. Component: fixture + the
-        // authored tests, dry-run behind that component's harness feature (which gates `main`).
+        // Preflight: the wheel's OWN skeleton in a crate of one file — `spec` is `None`, nothing has
+        // been authored and no unit exists yet. Setup: the authored fixture in the DELIVERABLE's
+        // crate root, dry-run behind the same preflight test; this callout is the first to hold both
+        // the fixture and the unit set, so it renders the real root rather than a provisional one.
+        // Component: the authored tests, dry-run behind that component's feature (which gates `main`).
         let authored_spec = spec.unwrap_or_default();
         let (files, feature) = match &input.authored {
             Authored::Preflight => {
                 let skeleton = SkeletonFixture { crate_id: hspec.crate_id() }
                     .render()
                     .expect("render skeleton_fixture");
-                (hspec.probe_files(&skeleton), PROBE_FEATURE.to_string())
+                (hspec.preflight_files(&skeleton), PREFLIGHT_FEATURE.to_string())
             }
             Authored::Setup { .. } => {
-                (hspec.probe_files(authored_spec), PROBE_FEATURE.to_string())
+                let units: Vec<String> = input.units().iter().map(feature_of_unit).collect();
+                (hspec.scaffold(authored_spec, &units), PREFLIGHT_FEATURE.to_string())
             }
             Authored::Component { .. } => {
                 // ONLY this component's section. The crate root already declares it — written once
@@ -1540,7 +1534,7 @@ impl Backend for CrucibleApp {
     }
 
     fn workspace_prep(&self, input: &AuthorInput) -> WorkspacePrep {
-        // Place a deps-only harness manifest (probe feature) so warming has a manifest and the
+        // Place a deps-only harness manifest (preflight feature) so warming has a manifest and the
         // setup dry-run can select a feature; per-run builds overwrite it with their own feature.
         // Then warm the harness crate's deps and build the program `.so` (the host runs both with
         // the shared helpers — fetch unconfined, build confined+offline).
@@ -1569,17 +1563,17 @@ impl Backend for CrucibleApp {
             idl_dest,
         };
         WorkspacePrep {
-            // Pointed at the probe root, since the preflight gate is the next thing that builds here.
-            files: spec
-                .manifest_files(GATE_ROOT, std::slice::from_ref(&PROBE_FEATURE.to_string())),
+            // Pointed at the preflight root, since that gate is the next thing that builds here.
+            files: spec.manifest_files(PREFLIGHT_ROOT, &HarnessSpec::features(&[])),
             toolchain_request: ChainData::of(&request).unwrap_or_default(),
         }
     }
 
     fn crate_root(&self, input: &CrateRootInput) -> BTreeMap<String, String> {
-        // The one moment both halves of the scaffolding exist: the fixture has been authored (from
-        // every unit's properties), and the unit set is known. Written once here and never again
-        // during the run — the gated builds add only their own section file.
+        // The same files the setup gate already built, from the same two halves it was sent — the
+        // authored fixture and the unit set. It re-emits them because that gate does not run when the
+        // host serves the setup spec from cache, and the per-unit gates need the crate on disk either
+        // way. Identical bytes, so this is a no-op write on the path where the gate did run.
         let program = &input.program;
         if program.is_empty() {
             return BTreeMap::new();
@@ -1809,9 +1803,9 @@ mod template_parity {
             );
             // one and several features
             for feats in
-                [vec!["c_invariants".to_string()], vec!["c_probe".into(), "c_invariants".into()]]
+                [vec!["c_invariants".to_string()], vec!["c_preflight".into(), "c_invariants".into()]]
             {
-                for bin_path in [CRATE_ROOT, GATE_ROOT] {
+                for bin_path in [CRATE_ROOT, PREFLIGHT_ROOT] {
                     assert_eq!(
                         spec.cargo_toml(repo, bin_path, &feats),
                         expected_cargo_toml(spec, repo, bin_path, &feats),
@@ -1882,7 +1876,7 @@ mod template_parity {
         assert!(pin.contains(&format!("channel = \"{HARNESS_TOOLCHAIN}\"")), "unexpected pin:\n{pin}");
         // Emitted with the crate under every path: warming (manifest only) and the deliverable.
         assert!(spec
-            .probe_files("struct Fixture {}")
+            .preflight_files("struct Fixture {}")
             .contains_key("fuzz/vault/rust-toolchain.toml"));
         let plan = CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::json!({})));
         assert!(plan.files.contains_key("fuzz/vault/rust-toolchain.toml"));
@@ -1957,8 +1951,9 @@ mod template_parity {
         eq(BackendGuidance.render().unwrap(), include_str!("../templates/backend_guidance.j2"));
         eq(ExampleFixture.render().unwrap(), include_str!("../templates/example_fixture.j2"));
         eq(JudgeSystem.render().unwrap(), include_str!("../templates/judge_system.j2"));
-        // `probe_fn.j2` is no longer among these: it interpolates `SECTION_FN`, because the probe is
-        // now a section like any component's and must define the same fn they do.
+        eq(RootLayout.render().unwrap(), include_str!("../templates/root_layout.j2"));
+        // `preflight_entry.j2` is not among these: it interpolates the program and the feature,
+        // because the preflight is a gated crate-root entry like any component's.
     }
 
     #[test]
@@ -2050,7 +2045,7 @@ mod template_parity {
         // hand — that is the whole point of the host deferring it until extraction has run — so
         // they are part of this input too.
         let setup = AuthorInput {
-            authored: Authored::Setup { model: component.clone() },
+            authored: Authored::Setup { model: component.clone(), units: Vec::new() },
             props: vec![prop.clone()],
             ..prep_input(SolanaSourceUnit::default(), serde_json::json!({}))
         };
@@ -2220,9 +2215,10 @@ mod template_parity {
         let app = CrucibleApp;
         let mut input = component_input("farms", "Farms", vec![prop("p", "p")]);
         assert_eq!(app.checks(&input).len(), 1);
-        for authored in
-            [Authored::Setup { model: serde_json::Value::Null }, Authored::Preflight]
-        {
+        for authored in [
+            Authored::Setup { model: serde_json::Value::Null, units: Vec::new() },
+            Authored::Preflight,
+        ] {
             input.authored = authored;
             assert!(app.checks(&input).is_empty());
         }
@@ -2627,7 +2623,7 @@ mod section_isolation {
         let section = code_only(&files["fuzz/lending/src/c_a.rs"]);
         assert!(!section.contains("#[invariant_test]"), "{section}");
         // Every `#[invariant_test]` in the crate is one we generated, in the crate root: one per
-        // unit plus the wheel's own probe.
+        // unit plus the wheel's own preflight.
         let main_rs = code_only(&scaffold(&["a"])["fuzz/lending/src/main.rs"]);
         assert_eq!(main_rs.matches("#[invariant_test]").count(), 2, "{main_rs}");
     }
@@ -2694,7 +2690,7 @@ mod section_isolation {
         let code = code_only(&scaffold(&["a", "b"])["fuzz/lending/src/main.rs"]);
         assert!(code.contains("#[cfg(feature = \"c_a\")]\nmod c_a;"), "{code}");
         assert!(code.contains("#[cfg(feature = \"c_b\")]\nmod c_b;"), "{code}");
-        // One gated entry per feature — the two units plus the probe — so exactly one `fn main()`
+        // One gated entry per feature — the two units plus the preflight — so exactly one `fn main()`
         // exists in any build.
         assert_eq!(code.matches("#[invariant_test]").count(), 3, "{code}");
     }
@@ -2717,20 +2713,28 @@ mod section_isolation {
     }
 
     #[test]
-    fn the_gates_that_run_before_the_crate_root_build_a_root_of_their_own() {
-        // Preflight runs before analysis and setup is what authors the fixture, so neither can write
-        // the deliverable's crate root — and neither should CLOBBER it, which is what leaves a
-        // half-crate at `src/main.rs` when a run dies mid-setup. They build the same `[[bin]]` NAME
-        // (all `crucible run` will ever execute) at their own path.
+    fn the_preflight_is_a_crate_of_one_file_that_is_not_the_deliverables_root() {
+        // It runs before analysis, so nothing that belongs in `src/main.rs` exists yet — and writing
+        // that path this early is what used to leave a half-crate at the deliverable's own root. Same
+        // `[[bin]]` NAME (all `crucible run` will ever execute) at a path of its own.
         let spec = HarnessSpec::new("lending", SolanaSourceUnit::default(), String::new());
-        let probe = spec.probe_files("struct Fixture {}");
-        assert!(probe.contains_key("fuzz/lending/src/gate_root.rs"), "{:?}", probe.keys());
-        assert!(!probe.contains_key("fuzz/lending/src/main.rs"), "{:?}", probe.keys());
-        if let Some(cargo) = probe.get("fuzz/lending/Cargo.toml") {
+        let gate = spec.preflight_files("struct Fixture {}");
+        assert_eq!(
+            gate.keys().filter(|k| k.ends_with(".rs")).collect::<Vec<_>>(),
+            vec!["fuzz/lending/src/preflight.rs"],
+            "the preflight must be one source file",
+        );
+        assert!(!gate.contains_key("fuzz/lending/src/main.rs"), "{:?}", gate.keys());
+        if let Some(cargo) = gate.get("fuzz/lending/Cargo.toml") {
             assert!(cargo.contains(r#"name = "invariant_test""#), "{cargo}");
-            assert!(cargo.contains(r#"path = "src/gate_root.rs""#), "{cargo}");
+            assert!(cargo.contains(r#"path = "src/preflight.rs""#), "{cargo}");
         }
-        // And the deliverable's manifest points the same bin at the real root.
+        // That one file is a whole crate: the fixture and the gated entry the dry-run selects.
+        let root = &gate["fuzz/lending/src/preflight.rs"];
+        assert!(root.contains("struct Fixture {}"), "{root}");
+        assert!(root.contains("#[cfg(feature = \"preflight\")]"), "{root}");
+        assert!(root.contains("fn preflight(fixture: &mut Fixture)"), "{root}");
+        // And from the setup gate on, the same bin points at the real root.
         if let Some(cargo) = scaffold(&["a"]).get("fuzz/lending/Cargo.toml") {
             assert!(cargo.contains(r#"path = "src/main.rs""#), "{cargo}");
         }
@@ -2740,10 +2744,9 @@ mod section_isolation {
     fn the_scaffolding_and_component_namespaces_cannot_collide() {
         // Every component target is `feature_of(slug)`, which prefixes COMPONENT_PREFIX — so keeping
         // the wheel's own names OUT of that prefix makes a collision impossible rather than
-        // improbable. Without this, a component named "probe" would slug to the probe's own feature
-        // and its section file would silently overwrite the probe's, in a crate that then declares
-        // the same feature twice.
-        for slug in ["probe", "gate_root", "main", "invariants", "Probe", "pro-be", "a"] {
+        // improbable. Without this, a component named "preflight" would slug to the preflight's own
+        // feature, and declare it twice in a crate whose section file for it is the preflight root.
+        for slug in ["preflight", "main", "invariants", "Preflight", "pre-flight", "a"] {
             assert!(
                 feature_of(slug).starts_with(COMPONENT_PREFIX),
                 "component target {slug:?} escaped the component namespace",
@@ -2751,52 +2754,80 @@ mod section_isolation {
         }
         assert!(feature_of("").starts_with(COMPONENT_PREFIX), "the fallback is a component target");
         // …and the scaffolding sits outside it, so nothing a unit is named can reach these.
-        assert!(!PROBE_FEATURE.starts_with(COMPONENT_PREFIX));
-        assert!(!GATE_ROOT.starts_with(&format!("src/{COMPONENT_PREFIX}")));
-        // The gates' crate root is not the probe section's file — a root at the section's path would
-        // overwrite the very thing it builds.
+        assert!(!PREFLIGHT_FEATURE.starts_with(COMPONENT_PREFIX));
+        assert!(!PREFLIGHT_ROOT.starts_with(&format!("src/{COMPONENT_PREFIX}")));
+        // No component's section file can land on the preflight root, which is the one source file
+        // in the crate that is not a section.
         let spec = HarnessSpec::new("lending", SolanaSourceUnit::default(), String::new());
-        assert_ne!(format!("fuzz/lending/{GATE_ROOT}"), spec.section_path(PROBE_FEATURE));
-    }
-
-    #[test]
-    fn a_component_named_probe_is_a_different_target_from_the_probe() {
-        // The collision this namespace split exists to prevent, end to end.
-        let files = scaffold(&["probe"]);
-        let main_rs = &files["fuzz/lending/src/main.rs"];
-        assert!(main_rs.contains("mod probe;"), "{main_rs}");
-        assert!(main_rs.contains("mod c_probe;"), "{main_rs}");
-        // Two distinct section files, so neither body can overwrite the other.
-        let probe = files.get("fuzz/lending/src/probe.rs").expect("the wheel's probe section");
-        assert!(probe.contains("let _ = fixture;"), "{probe}");
-        assert!(!files.contains_key("fuzz/lending/src/c_probe.rs"), "the unit authors its own");
-        // …and two distinct features, so the manifest declares each once.
-        if let Some(cargo) = files.get("fuzz/lending/Cargo.toml") {
-            assert_eq!(cargo.matches("probe = []").count(), 2, "{cargo}");
-            assert!(cargo.contains("\nprobe = []") && cargo.contains("\nc_probe = []"), "{cargo}");
+        for slug in ["preflight", "main", "a"] {
+            assert_ne!(
+                format!("fuzz/lending/{PREFLIGHT_ROOT}"),
+                spec.section_path(&feature_of(slug)),
+                "a component named {slug:?} would overwrite the preflight root",
+            );
         }
     }
 
     #[test]
-    fn the_probe_is_a_section_the_delivered_crate_can_still_run() {
+    fn a_component_named_preflight_is_a_different_target_from_the_preflight() {
+        // The collision this namespace split exists to prevent, end to end.
+        let files = scaffold(&["preflight"]);
+        let main_rs = &files["fuzz/lending/src/main.rs"];
+        // Two distinct entries: the wheel's is inline, the component's delegates into its module.
+        assert!(main_rs.contains("fn preflight(fixture: &mut Fixture)"), "{main_rs}");
+        assert!(main_rs.contains("mod c_preflight;"), "{main_rs}");
+        assert!(!main_rs.contains("mod preflight;"), "the wheel's entry has no section:\n{main_rs}");
+        // …and the component's section file is its own to author, at a path of its own.
+        assert!(!files.contains_key("fuzz/lending/src/c_preflight.rs"), "the unit authors its own");
+        // …and two distinct features, so the manifest declares each once.
+        if let Some(cargo) = files.get("fuzz/lending/Cargo.toml") {
+            assert_eq!(cargo.matches("preflight = []").count(), 2, "{cargo}");
+            assert!(
+                cargo.contains("\npreflight = []") && cargo.contains("\nc_preflight = []"),
+                "{cargo}",
+            );
+        }
+    }
+
+    #[test]
+    fn the_preflight_is_an_entry_the_delivered_crate_can_still_run() {
         // The gates' sanity check survives into the deliverable as a target like any component's, so
-        // a user can re-run it (`crucible run <program> c_probe --dry-run`) through the same
+        // a user can re-run it (`crucible run <program> preflight --dry-run`) through the same
         // mechanism rather than it being a build-time artifact nobody can reach.
-        let spec = HarnessSpec::new("lending", SolanaSourceUnit::default(), String::new());
         let shipped = scaffold(&["a"]);
         let main_rs = &shipped["fuzz/lending/src/main.rs"];
-        assert!(main_rs.contains("mod probe;"), "{main_rs}");
-        assert!(main_rs.contains("probe::invariants(fixture)"), "{main_rs}");
-        // Byte-identical to the one the gates built, so what ships is what was proven.
+        assert!(main_rs.contains("#[cfg(feature = \"preflight\")]"), "{main_rs}");
+        assert!(main_rs.contains("fn preflight(fixture: &mut Fixture)"), "{main_rs}");
+        // Its body is inline — there is no authored section to delegate to, and so no file to drift.
+        assert!(!main_rs.contains("mod preflight;"), "{main_rs}");
+        assert!(!shipped.contains_key("fuzz/lending/src/preflight.rs"), "{:?}", shipped.keys());
+        // And it asserts nothing about the program: it proves the fixture compiles and loads.
+        assert!(!main_rs.contains("fuzz_assert"), "{main_rs}");
+    }
+
+    #[test]
+    fn the_setup_gate_builds_the_crate_the_run_delivers() {
+        // The setup gate is the first callout holding both the fixture and the unit set, so it builds
+        // the real `src/main.rs` rather than a provisional root something later has to complete.
+        // `crate_root` re-emits the same files for the run whose setup spec came from cache and so
+        // never reached that gate — byte-identical, or `main.rs` would have two assembled shapes and
+        // the §17 drift would be back.
+        let cr = SolanaSourceUnit {
+            dir: "p".into(),
+            package: "lending_program".into(),
+            lib: "lending_program".into(),
+            anchor: "".into(),
+        };
+        let units = ["a", "b"].map(feature_of).to_vec();
+        let gate = HarnessSpec::new("lending", cr, String::new())
+            .scaffold("struct Fixture {}", &units);
+        assert_eq!(gate, scaffold(&["a", "b"]), "the setup gate and `crate_root` disagree");
+        // The gate's build materializes no section file: every component's is `#[cfg]`-disabled and
+        // stripped before rustc resolves it, which is what lets the real root be built this early.
         assert_eq!(
-            shipped.get("fuzz/lending/src/probe.rs"),
-            spec.probe_files("struct Fixture {}").get("fuzz/lending/src/probe.rs"),
-            "the shipped probe is not the one the gates ran",
+            gate.keys().filter(|k| k.ends_with(".rs")).collect::<Vec<_>>(),
+            vec!["fuzz/lending/src/main.rs"],
         );
-        // It asserts nothing about the program — it exists to prove the fixture compiles and loads.
-        let section = &shipped["fuzz/lending/src/probe.rs"];
-        assert!(section.contains(&format!("pub fn {SECTION_FN}")), "{section}");
-        assert!(!section.contains("fuzz_assert"), "{section}");
     }
 
     #[test]

@@ -50,7 +50,9 @@ def _component_input(*slugs: str) -> str:
 
 
 def _setup_input() -> str:
-    return _author_input(kind="setup", model={"programs": []})
+    # ``units`` is the run's unit set, which a setup turn carries so the wheel's gate can build the
+    # deliverable's crate root rather than a provisional one.
+    return _author_input(kind="setup", model={"programs": []}, units=[])
 
 
 def test_descriptor_declares_design_doc_discovery_phase():

@@ -1,25 +1,7 @@
 // ═══ {{ feature }} ═══════════════════════════════════════════════════════════════════════════
-// One component's tests, sealed behind its Cargo feature. The `#[cfg]` — not the module — is what
-// isolates them: an inherent `impl Fixture` contributes its methods to the type GLOBALLY (rustc
-// E0592 fires on a duplicate method name even when the two `impl` blocks sit in different modules),
-// so a module alone would not stop two components' helpers from colliding. Gating means only ONE
-// section's items ever exist in a build, and since each `#[invariant_test]` expands to its own
-// `fn main()` + `#[global_allocator]`, exactly one feature is ever enabled. Components can
-// therefore define same-named helpers forever without interfering.
-//
-// The module is the single item the `#[cfg]` hangs on, which is why the section is not gated
-// item-by-item: doing that would mean parsing item boundaries out of authored source. A
-// `#[cfg]`-disabled `mod` is stripped before rustc resolves its file, so a build selecting one
-// feature needs only that component's file on disk.
 #[cfg(feature = "{{ feature }}")]
 mod {{ feature }};
 
-// The entry point is OURS, generated: `#[invariant_test]` expands `fn main()` as a SIBLING of the
-// fn it annotates, so it has to be applied at crate root — the authored fn cannot carry it from
-// inside the module. The macro INLINES the annotated body into its per-action loop, so delegating
-// from here runs the authored fn once after each fuzzed action, which is the semantics we want. We
-// do not reimplement `main` — that is ~100 lines of libafl wiring we would then own across
-// Crucible bumps.
 #[cfg(feature = "{{ feature }}")]
 #[invariant_test]
 fn {{ feature }}(fixture: &mut Fixture) {

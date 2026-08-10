@@ -152,25 +152,35 @@ reads the analyzed model, so it runs **concurrently with system analysis** (`bac
 3. Generate/collect the IDL when the program's Anchor major can't be linked (§6.1): `anchor idl build`
    (or convert/accept a supplied one) → `fuzz/<program>/idls/<lib>.json`; the harness then uses
    `crucible_idl_gen::declare_fuzz_program!`.
-4. **Gate it**: `crucible run <program> probe --release --dry-run` against a fixture the *wheel*
+4. **Gate it**: `crucible run <program> preflight --release --dry-run` against a fixture the *wheel*
    authors (`skeleton_fixture.j2` — a `Fixture` that loads the `.so`, one no-op action, and the
-   `probe` invariant test). No LLM is involved.
+   `preflight` invariant test). No LLM is involved.
 
-This gate and the setup gate build a crate root of their own, `src/gate_root.rs`, rather than the
-deliverable's `src/main.rs` — they run before the unit set is known, so the real root does not exist
-yet, and writing it here would leave a half-crate behind at the deliverable's path whenever a run
-died mid-setup. Both roots are declared under the same `[[bin]]` **name**, `invariant_test`, because
-that is the only binary the crucible CLI executes; only the path differs, and `crate_root` repoints
-it when it writes the real root.
+This gate builds a **crate of exactly one file**, `src/preflight.rs`: the skeleton fixture and the
+gated `preflight` entry, with its body inline. It runs before analysis, so nothing that belongs in
+the deliverable's `src/main.rs` exists yet — and writing that path this early is what would leave a
+half-crate behind at the deliverable's own root whenever a run died before setup finished. Both roots
+are declared under the same `[[bin]]` **name**, `invariant_test`, because that is the only binary the
+crucible CLI executes; only the path differs. From the setup gate on the manifest points at
+`src/main.rs`, and `src/preflight.rs` stays behind as the record of what the preflight proved — not a
+build target there, and not reached by any `mod`.
 
-`probe` is a section like any component's, so the check survives into the delivered crate: a user
-can re-run it with `crucible run <program> probe --release --dry-run` to confirm the harness still
-compiles and the program still loads, without running a campaign.
+The setup gate does *not* get a root of its own. It is the first callout holding both halves the real
+root needs — the authored fixture, and the unit set (`Authored::Setup` carries it) — so it writes
+`src/main.rs` directly, complete with every component's gated `mod`. Those sections do not exist on
+disk yet, and cost that build nothing: a `#[cfg]`-disabled `mod` is stripped before rustc resolves its
+file. `crate_root` then re-emits byte-identical files, which is what covers the run whose setup spec
+came from cache and so never reached that gate.
+
+`preflight` is a target like any component's, so the check survives into the delivered crate: a user
+can re-run it with `crucible run <program> preflight --release --dry-run` to confirm the harness still
+compiles and the program still loads, without running a campaign. Its body is inline in the crate
+root rather than in a section file, so there is nothing that can drift from what the gates ran.
 
 Its name sits **outside** the `c_` prefix every component target carries (`feature_of` is the only
-thing that names one). That is not cosmetic: a component named "probe" slugs to `c_probe`, so without
-the split it would declare the same Cargo feature as this gate and its section file would silently
-overwrite the probe's. The two namespaces are disjoint by construction.
+thing that names one). That is not cosmetic: a component named "preflight" slugs to `c_preflight`, so
+without the split it would declare the same Cargo feature as this gate, and its section file would
+land on the preflight root. The two namespaces are disjoint by construction.
 
 Step 4 is what makes steps 1–3 mean something. `cargo fetch` resolves a dependency graph but compiles
 nothing, so without it the first real build of the harness crate is the compile of the first

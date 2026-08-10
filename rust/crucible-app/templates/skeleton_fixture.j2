@@ -3,6 +3,10 @@
 // dependency graph, the program's types (a path dep on its crate, or `declare_fuzz_program!`
 // codegen from its IDL), and loading the built `.so` into LiteSVM. It deliberately sends no
 // instructions — nothing here knows the program's API; that is the fixture author's job.
+//
+// This file is the whole crate the preflight builds, and it runs before anything is authored. From
+// the setup gate on, `Cargo.toml` points `[[bin]]` at `src/main.rs` and this stays behind as the
+// record of what the preflight proved — not a build target, and not reached by any `mod`.
 use crucible_fuzzer::*;
 use solana_pubkey::Pubkey;
 use {{ crate_id }}::*;
