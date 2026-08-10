@@ -283,17 +283,16 @@ Two steps, both *declared* by the wheel and executed here:
 
 1. **`workspace_prep`** (§7) — write the plan's files, then warm dependencies / build the program /
    place its IDL through the chain's registered toolchain. Already the run's slowest non-LLM step.
-2. **The toolchain check**, when the descriptor declares `preflight` — an `Authored::Preflight`
-   `compile` with **no `spec` at all** (`None`, not an empty one): nothing has been authored yet, so
-   the wheel renders its own throwaway skeleton, the smallest artifact that still exercises what an
-   authored one will depend on. This step is optional; a wheel whose toolchain has nothing worth
-   checking early omits the phase and keeps only step 1.
+2. **The toolchain check**, when the descriptor declares a `preflight` phase — an
+   `Authored::Preflight` `compile` whose `spec` is `None`, not an empty spec. Nothing has been
+   authored yet, so the wheel renders a throwaway skeleton of its own: the smallest artifact that
+   still exercises what an authored one will depend on. A wheel with nothing worth checking early
+   declares no such phase and stops after step 1.
 
-Why check, and not just prep: `cargo fetch` resolves a dependency graph and **compiles
-nothing**, and a failed warm is deliberately non-fatal. Without the check, the first thing that
-actually builds is the compile of the first LLM-authored draft — at the far end of extraction — and
-everything that can go wrong there is invisible to an authoring agent's revise loop, because the
-agent does not own the manifest:
+Step 1 alone is not enough, because `cargo fetch` resolves a dependency graph and **compiles
+nothing** — and a failed warm is deliberately non-fatal. Skip the check and the first real build in
+the run is draft #1's compile, at the far end of extraction — and an authoring agent cannot fix what
+breaks there, because it does not own the manifest:
 
 | Failure | Where it would otherwise appear |
 |---|---|
