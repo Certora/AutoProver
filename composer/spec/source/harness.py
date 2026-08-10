@@ -19,7 +19,10 @@ Two entry points:
 """
 
 from typing import NotRequired, TypedDict
+from logging import getLogger
 from pathlib import Path
+import json
+import shutil
 import subprocess
 
 from pydantic import Field, BaseModel
@@ -39,6 +42,8 @@ from composer.spec.context import WorkflowContext, SourceCode, CacheKey
 from composer.spec.util import string_hash
 from composer.spec.gen_types import TypedTemplate, certora_relative_to_project, under_project
 from composer.spec.system_model import SolidityIdentifier, SourceApplication, SourceExternalActor, SourceExplicitContract
+
+_logger = getLogger(__name__)
 
 def system_setup_key(s: SourceApplication) -> CacheKey["ContractSetup", "SystemDescriptionHarnessed"]:
     return CacheKey["ContractSetup", "SystemDescriptionHarnessed"](
@@ -199,6 +204,66 @@ async def classifier_agent(
     await child.cache_put(res["result"])
     return res["result"]
 
+_HARNESS_CHECK_TIMEOUT_S = 900
+
+
+def _forge_errors(forge_json: str) -> list[str] | None:
+    """The error-severity diagnostics of a ``forge build --json`` report.
+
+    ``forge build --json`` exits 0 whether or not the sources compiled and puts
+    the diagnostics in its report, so the exit code says nothing; the severity
+    field is the signal. Returns None when the output is not a report at all,
+    i.e. forge stopped before it got to compiling.
+    """
+    try:
+        report = json.loads(forge_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(report, dict):
+        return None
+    diagnostics = report.get("errors", [])
+    return [
+        d.get("formattedMessage") or d.get("message", "")
+        for d in diagnostics if d.get("severity") == "error"
+    ]
+
+
+def _compile_check(project_dir: str, harness_paths: list[str]) -> str | None:
+    """Type-check the named harnesses within a materialized copy of the project.
+
+    Returns the compiler's error output, or None when they compile — or when
+    the project offers nothing to check them with (not a foundry project, no
+    forge binary, or a build that never produced a report), in which case the
+    candidates are accepted unchecked.
+    """
+    root = Path(project_dir)
+    forge = shutil.which("forge")
+    if forge is None or not (root / "foundry.toml").is_file():
+        _logger.info("Harness compile check skipped: needs forge and a foundry project")
+        return None
+    try:
+        proc = subprocess.run(
+            [forge, "build", "--json", *sorted(harness_paths)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=_HARNESS_CHECK_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        _logger.warning(
+            "Harness compile check skipped: forge build exceeded %ds", _HARNESS_CHECK_TIMEOUT_S
+        )
+        return None
+
+    errors = _forge_errors(proc.stdout)
+    if errors is None:
+        _logger.warning("Harness compile check skipped: forge emitted no report: %s", proc.stderr[-500:])
+        return None
+    if not errors:
+        return None
+    return "\n".join(errors)
+
+
 class GeneratedHarness(BaseModel):
     """A generated harness file that creates a uniquely-named contract extending an external contract."""
     path: str = Field(description="Path to the harness definition")
@@ -215,7 +280,6 @@ class HarnessAgentResult(BaseModel):
         "A map from each target contract's `solidity_identifier` (exactly as given in "
         "the input list) to the harnesses chosen for it."
     ))
-    solidity_compiler: str = Field(description=f"The solidity compiler to use for compiling these harnesses.")
 
 class HarnessResult(BaseModel):
     identifier_to_source: dict[SolidityIdentifier, list[GeneratedHarnessSource]]
@@ -290,9 +354,7 @@ async def generate_harnesses(
         tid: str
     ) -> str | None:
         check_copy = expected.copy()
-        all_files = [
-            
-        ]
+        harness_paths: list[str] = []
         for (nm, r) in res.identifier_to_source.items():
             if nm not in check_copy:
                 return f"Delivered result for contract {nm}, but no instructions were given to harness it"
@@ -301,23 +363,23 @@ async def generate_harnesses(
             for res_c in r:
                 if mat.get(s, res_c.path) is None:
                     return f"Delivered harness {res_c.harness_name} at {res_c.path} for {nm}, but it doesn't exist on the VFS"
-                all_files.append(res_c.path)
+                harness_paths.append(res_c.path)
             del check_copy[nm]
         if len(check_copy) != 0:
             error = ", ".join(
                 [ f"contract {k} ({n} copies)" for (k,n) in check_copy.items() ]
             )
             return f"Missing harnesses in results: {error}"
-        if False: # this doesn't work
-            with mat.materialize(s) as temp_dir:
-                compile_result = subprocess.run(
-                    [res.solidity_compiler] + all_files,
-                    cwd=temp_dir,
-                    capture_output=True,
-                    text=True
-                )
-                if compile_result.returncode != 0 and False:
-                    return f"Harness compilation failed:\nstdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
+        # Compile the agent's view of the project, not the project on disk: the
+        # harnesses it wrote live on the VFS, and a helper it wrote but did not
+        # deliver still has to be there for their imports to resolve.
+        with mat.materialize(s) as project_dir:
+            compile_errors = _compile_check(project_dir, harness_paths)
+        if compile_errors is not None:
+            return (
+                "The delivered harnesses do not compile. Repair them and deliver again; "
+                "the compiler reported:\n" + compile_errors
+            )
         return None
 
     result_tool = result_tool_generator(
@@ -512,9 +574,6 @@ async def run_and_apply_part1(
     return res
 
 config_key = CacheKey[None, ContractSetup]("config")
-
-from logging import getLogger
-_logger = getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

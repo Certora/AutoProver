@@ -1,0 +1,194 @@
+title: CVL Situation Recipes — Trigger Index
+precedence: Where these recipes and the CVL manual or other Certora materials diverge, the recipes govern.
+usage: Match a trigger; retrieve the pointed file before acting. When the file is unavailable, search_terms
+  are literal identifiers findable in the manual or knowledge base; entries without search_terms have
+  no external source — the file is authoritative.
+channels:
+  CVL: 'Actionable directly: write the spec construct.'
+  CONF: The fix is a Prover configuration setting, outside this agent's action space. Surface the diagnosis,
+    naming the setting and the evidence for it, and stop. A CVL-space approximation is not a substitute
+    for a conf-space fix.
+  EDIT: 'The fix involves a limited source edit or auxiliary Solidity file. Obligations on every edit:
+    the diff is minimal, and it carries a stated argument that the edit preserves the semantics relevant
+    to the properties under verification.'
+recipes:
+- id: R1
+  name: ERC-7201 namespaced storage
+  triggers:
+  - Struct annotated @custom:storage-location erc7201:... plus an assembly slot getter
+  channel: CONF
+  file: recipes/r01-erc7201-storage-extension.md
+  search_terms:
+  - storage_extension_annotation
+  - '@custom:storage-location'
+  - erc7201
+- id: R2
+  name: Raw-slot storage harness
+  triggers:
+  - Storage getter with assembly { x.slot := CONSTANT }, no erc7201 annotation
+  - R1 applied but no ext_ path materialized (namespace outside recognized grammar)
+  channel: [CONF, EDIT]
+  file: recipes/r02-certoralink-harness.md
+  search_terms:
+  - storage_extension_harnesses
+  - '@custom:certoralink'
+- id: R3
+  name: Transient-storage lock mirroring
+  triggers:
+  - tstore/tload; transient-storage locks or mutexes
+  channel: CVL
+  file: recipes/r03-transient-storage-lock-hooks.md
+  search_terms:
+  - ALL_TSTORE
+  - ALL_TLOAD
+- id: R4
+  name: Invariants over transient state
+  triggers:
+  - Invariant over transient state
+  channel: CVL
+  file: recipes/r04-preserved-ontransactionboundary.md
+  search_terms:
+  - preserved
+  - onTransactionBoundary
+- id: R6
+  name: Immutable access
+  triggers:
+  - Property about an immutable, including private ones
+  channel: CVL
+  file: recipes/r06-immutables.md
+  search_terms:
+  - direct storage access
+  - immutable
+- id: R7
+  name: Extension contracts
+  triggers:
+  - fallback() that delegatecalls to an extension contract
+  channel: CONF
+  file: recipes/r07-contract-extensions.md
+  search_terms:
+  - contract_extensions
+- id: R8
+  name: Event hooks
+  triggers:
+  - Property about emitted events
+  channel: CVL
+  file: recipes/r08-event-hooks.md
+  search_terms:
+  - hook event
+- id: R9
+  name: ETH balances
+  triggers:
+  - Property about ETH balances
+  channel: CVL
+  file: recipes/r09-nativebalances.md
+  search_terms:
+  - nativeBalances
+- id: R10
+  name: EOA vs contract
+  triggers:
+  - Distinguishing EOAs from contracts
+  channel: CVL
+  file: recipes/r10-nativecodesize.md
+  search_terms:
+  - nativeCodesize
+- id: R11
+  name: ecrecover axiom pack
+  triggers:
+  - Signature checks via ecrecover
+  channel: CVL
+  file: recipes/r11-ecrecover-axioms.md
+  search_terms:
+  - ecrecover
+- id: R12
+  name: Ghost mirror pattern
+  triggers:
+  - Invariant needs forall over array/mapping/set contents
+  channel: CVL
+  file: recipes/r12-ghost-mirror-quantified-invariants.md
+  search_terms:
+  - hook Sload
+  - hook Sstore
+  - forall
+- id: R14
+  name: Inductive strengthening
+  triggers:
+  - Invariant fails from a start state the contract can never reach
+  channel: CVL
+  file: recipes/r14-inductive-strengthening.md
+  search_terms:
+  - invariant
+- id: R15
+  name: preserved blocks
+  triggers:
+  - Invariant fails only for specific functions' preconditions
+  - Invariant fails on the constructor base case
+  channel: CVL
+  file: recipes/r15-preserved-blocks.md
+  search_terms:
+  - preserved
+- id: R16
+  name: Spec import and overriding
+  triggers:
+  - Same properties needed across several specs or contracts
+  channel: CVL
+  file: recipes/r16-spec-import-override.md
+  search_terms:
+  - import
+  note: Imported methods-block summaries cannot be overridden.
+- id: R17
+  name: Revert-condition properties
+  triggers:
+  - Property about when a function reverts
+  channel: CVL
+  file: recipes/r17-withrevert-lastreverted.md
+  search_terms:
+  - '@withrevert'
+  - lastReverted
+- id: R18
+  name: Reentrancy recipes
+  triggers:
+  - Reentrancy safety to verify
+  channel: CVL
+  file: recipes/r18-reentrancy-recipes.md
+  search_terms:
+  - viewReentrancy
+  - hook CALL
+  - ALL_SSTORE
+  - ALL_SLOAD
+- id: R19
+  name: Address dispatch
+  triggers:
+  - Rule needs to call a function on an address-typed value
+  channel: CVL
+  file: recipes/r19-address-dispatch.md
+  note: 'Closed world: the address is assumed to be one of the provided contracts — state the assumption.'
+- id: R20
+  name: Internal calls from CVL
+  triggers:
+  - Rule needs to call an internal function
+  channel: CVL
+  file: recipes/r20-internal-calls-from-cvl.md
+  note: Side effects of the invoked internal function are erased — effect-free callees only.
+- id: R21
+  name: Strong invariants
+  triggers:
+  - Invariant must hold across unresolved external calls / breaks mid-execution at a havocked call
+  channel: CVL
+  file: recipes/r21-strong-invariants.md
+  search_terms:
+  - strong invariant
+- id: R22
+  name: Invariant unsoundness sources
+  triggers:
+  - Invariant verifies but the contract can actually violate it
+  channel: CVL
+  file: recipes/r22-invariant-unsoundness-sources.md
+  search_terms:
+  - requireInvariant
+  - filtered
+- id: EDITS
+  name: Mock and source-edit doctrine
+  triggers:
+  - Behavior must exist at EVM level and no CVL construct expresses it
+  channel: EDIT
+  file: recipes/mocks-and-edits.md
