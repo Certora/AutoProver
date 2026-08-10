@@ -165,7 +165,7 @@ def test_fetch_verdicts_threads_finding_detail_into_message():
         }
     )
     inp = ReportComponentInput(
-        name="vault", props=[], formalized=Delivered(res, Path("fuzz/vault/src/main.rs"))
+        name="vault", props=[], formalized=Delivered(res, Path("certora/crucible/fuzz/vault/src/main.rs"))
     )
     verdicts = asyncio.run(fz.fetch_verdicts(inp))
     assert verdicts["c_x"].outcome == Outcome.BAD
@@ -208,7 +208,7 @@ def test_validate_returns_per_check_verdicts_and_the_host_records_them():
         },
     )
     inp = ReportComponentInput(
-        name="vault", props=[], formalized=Delivered(res, Path("fuzz/vault/src/main.rs"))
+        name="vault", props=[], formalized=Delivered(res, Path("certora/crucible/fuzz/vault/src/main.rs"))
     )
     verdicts = asyncio.run(fz.fetch_verdicts(inp))
     assert verdicts["c_conservation"].outcome == Outcome.BAD

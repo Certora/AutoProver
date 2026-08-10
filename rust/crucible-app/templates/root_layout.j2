@@ -1,3 +1,9 @@
+// The program's compiled `.so`, as the fixture loads it into LiteSVM. Relative because `crucible
+// run` executes the harness with this crate as its working directory — so the path depends on where
+// the crate sits, which is the backend's choice and not the fixture author's. Declared here for
+// that reason: authored code names this constant instead of spelling a path it cannot check.
+const PROGRAM_SO: &str = "{{ program_so }}";
+
 // ─── How this crate root declares its targets ────────────────────────────────────────────────
 //
 // Each target below is one Cargo feature: a `#[cfg]`-gated `mod` holding that component's authored

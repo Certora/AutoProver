@@ -10,7 +10,7 @@ fixed = "1"
 {% else %}ctrlc = "3.4"
 {% endif %}libafl = { version = "{{ libafl_version }}", features = ["std", "cli", "prelude"] }
 libafl_bolts = { version = "{{ libafl_version }}", features = ["std"] }
-{% if !idl %}{{ package }} = { path = "../../{{ crate_dir }}", features = ["no-entrypoint"] }
+{% if !idl %}{{ package }} = { path = "{{ to_root }}{{ crate_dir }}", features = ["no-entrypoint"] }
 {% endif %}solana-keypair = "{{ solana_version }}"
 solana-pubkey = "{{ solana_version }}"
 solana-signer = "{{ solana_version }}"

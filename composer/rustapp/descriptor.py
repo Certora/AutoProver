@@ -84,9 +84,10 @@ class Callout(WireModel):
     #: but every delivered component still records one path — its basename becomes the component's
     #: ``unit_file``, the report's rule-identity fallback, echoed to ``finalize`` — and the store
     #: can't guess where in that tree the components' checks land. A path (project-relative,
-    #: ``{program}``-templated — Crucible: ``fuzz/{program}/src/main.rs``) names that file;
-    #: ``None`` declares that no one file represents the deliverable, and components anchor to the
-    #: layout's ``deliverable_dir`` instead. On the variant because it means nothing per-component.
+    #: ``{program}``-templated — Crucible: ``certora/crucible/fuzz/{program}/src/main.rs``) names
+    #: that file; ``None`` declares that no one file represents the deliverable, and components
+    #: anchor to the layout's ``deliverable_dir`` instead. On the variant because it means nothing
+    #: per-component.
     deliverable_path: str | None
 
 

@@ -212,7 +212,7 @@ naturally with coverage-as-signal (§10 Q6).
 ## 7. Concurrency: why per-invariant fuzzing serializes (and the only clean fix)
 
 With N per-invariant harnesses the build+fuzz runs serialize (a single build semaphore
-in `CrucibleFormalizer`, because they share one crate `fuzz/<program>/`). Making them
+in `CrucibleFormalizer`, because they share one harness crate). Making them
 parallel is **harder than it looks**, and the obvious "one crate per invariant" does
 NOT work:
 

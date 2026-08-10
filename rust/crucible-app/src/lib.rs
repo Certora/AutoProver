@@ -89,6 +89,28 @@ const PREFLIGHT_ROOT: &str = "src/preflight.rs";
 /// [`Backend::crate_root`](autoprover_sdk::Backend::crate_root).
 const CRATE_ROOT: &str = "src/main.rs";
 
+/// The directory holding the run's harness crates, relative to the project root.
+///
+/// Under this backend's deliverable dir rather than crucible's own default (`./fuzz/`), so a run
+/// leaves ONE tree: the crate next to the reports and metadata rendered from the same run. The CLI
+/// defaults to `./fuzz/<program>/`, so every invocation passes `-C` ([`HarnessSpec::dir`]).
+const HARNESS_ROOT: &str = "certora/crucible/fuzz";
+
+/// The harness crate for `program`, relative to the project root.
+fn harness_dir(program: &str) -> String {
+    format!("{HARNESS_ROOT}/{program}")
+}
+
+/// The path from a harness crate back to the project root, with a trailing separator.
+///
+/// `crucible run` chdirs into the crate, so every relative path the crate itself names — the
+/// program's `.so`, the path dep on its sources — resolves from there. Derived from
+/// [`HARNESS_ROOT`] (plus the per-program directory under it) so moving the crate carries them
+/// along instead of stranding them at the old depth.
+fn to_project_root() -> String {
+    "../".repeat(HARNESS_ROOT.split('/').count() + 1)
+}
+
 /// The unit's human label, for the authoring/judge prompts. Falls back to the program name for a
 /// host that sends no component (a single-unit host).
 fn unit_name(input: &AuthorInput) -> String {
@@ -233,9 +255,16 @@ struct JudgeSystem;
 /// How a crate root declares its targets — the `#[cfg]`/`#[invariant_test]` mechanism every entry
 /// below it uses. Emitted **once** per root: it explains the layout, not any one target, and one
 /// copy per feature was the same paragraph N+1 times in a file a user reads.
+///
+/// It also declares `PROGRAM_SO`, the `.so` the fixture loads. That path is relative to the harness
+/// crate ([`to_project_root`]) and so is the wheel's to spell, not the author's: the fixture prompt
+/// names the constant and never counts `../`. Same division as [`SECTION_FN`] — the model writes a
+/// constant, the wheel owns what varies.
 #[derive(Template)]
 #[template(path = "root_layout.j2", escape = "none")]
-struct RootLayout;
+struct RootLayout<'a> {
+    program_so: &'a str,
+}
 
 /// The crate root's entry for [`PREFLIGHT_FEATURE`] — gated and generated exactly like a component's
 /// ([`Section::entry`]), but with its body inline: it validates the fixture via `--dry-run` without
@@ -375,7 +404,7 @@ struct SkeletonFixture<'a> {
 /// The pinned `[dependencies]` block for the harness crate. `idl` selects where the program's types
 /// come from (see [`ProgramTypes`]): the generator crate, or a path dep on the program itself —
 /// `package`/`crate_dir` being its Cargo name and its directory *relative to the project root*,
-/// which the template joins to `../../` (the harness crate sits at `fuzz/<program>/`).
+/// which the template joins to `to_root` ([`to_project_root`]).
 #[derive(Template)]
 #[template(path = "cargo_deps.j2", escape = "none")]
 struct CargoDeps<'a> {
@@ -385,6 +414,7 @@ struct CargoDeps<'a> {
     idl_gen: &'a str,
     package: &'a str,
     crate_dir: &'a str,
+    to_root: &'a str,
     anchor_version: &'a str,
     libafl_version: &'a str,
     solana_version: &'a str,
@@ -404,6 +434,12 @@ struct IdlPrelude<'a> {
 struct RustToolchain<'a> {
     channel: &'a str,
 }
+
+/// The harness crate's `.gitignore`. It sits under the deliverable dir ([`HARNESS_ROOT`]), which a
+/// user commits — and a run fills it with build output that must not be committed with it.
+#[derive(Template)]
+#[template(path = "harness_gitignore.j2", escape = "none")]
+struct HarnessGitignore;
 
 /// The harness `Cargo.toml` skeleton (`deps` + `feats` are pre-rendered strings). `bin_path` is the
 /// crate root the one `[[bin]]` builds — see [`PREFLIGHT_ROOT`] for why that varies while its name
@@ -514,8 +550,9 @@ enum ProgramTypes {
 /// (or, in `finalize`, from the outcome set): which program it targets, and where its types come
 /// from.
 struct HarnessSpec {
-    /// The analysis identifier. Names the harness crate itself — `fuzz/<program>/`, package
-    /// `<program>_fuzz`, and the selector `crucible run <program>` resolves — nothing else.
+    /// The analysis identifier. Names the harness crate itself — its directory under
+    /// [`HARNESS_ROOT`], package `<program>_fuzz`, and the selector `crucible run <program>`
+    /// resolves — nothing else.
     program: String,
     /// The program under test's crate — every part populated, `SolanaSourceUnit::of` having applied
     /// the layout convention to whatever the host resolved. Used for the path dep under
@@ -545,10 +582,21 @@ impl HarnessSpec {
         } else {
             // `declare_fuzz_program!` resolves its path against the harness crate's manifest dir,
             // so make the host's workdir-relative report crate-relative.
-            let prefix = format!("fuzz/{program}/");
+            let prefix = format!("{}/", harness_dir(program));
             ProgramTypes::Idl(idl_at.strip_prefix(&prefix).unwrap_or(&idl_at).to_string())
         };
         Self { program: program.to_string(), cr, types }
+    }
+
+    /// The harness crate's directory, relative to the project root — what `crucible run -C` is
+    /// pointed at, and the prefix of every file this spec renders.
+    fn dir(&self) -> String {
+        harness_dir(&self.program)
+    }
+
+    /// A crate-relative path spelled from the project root, the frame the host writes files in.
+    fn path(&self, rel: &str) -> String {
+        format!("{}/{rel}", self.dir())
     }
 
     /// The module the program's `instruction`/`accounts`/state types live under — the crate's lib
@@ -565,7 +613,7 @@ impl HarnessSpec {
     /// Where the host should place the IDL when this spec's mode needs one: inside the harness
     /// crate, so the delivered crate carries the IDL it was built against.
     fn idl_dest(&self) -> String {
-        format!("fuzz/{}/idls/{}.json", self.program, self.cr.lib)
+        self.path(&format!("idls/{}.json", self.cr.lib))
     }
 
     /// The `[dependencies]` block — the pinned crucible/solana/anchor stack plus *either* the
@@ -585,6 +633,7 @@ impl HarnessSpec {
             idl_gen: &idl_gen,
             package: &self.cr.package,
             crate_dir: &self.cr.dir,
+            to_root: &to_project_root(),
             anchor_version: ANCHOR_VERSION,
             libafl_version: LIBAFL_VERSION,
             solana_version: SOLANA_VERSION,
@@ -609,21 +658,23 @@ impl HarnessSpec {
             .expect("render cargo_toml")
     }
 
-    /// The crate's build files: a `Cargo.toml` pointing `[[bin]]` at `bin_path` and declaring exactly
-    /// `features`, plus the `rust-toolchain.toml` that pins which cargo resolves this directory. Both
-    /// are needed before dependency warming, which is why they are separable from the crate's
-    /// sources.
+    /// Everything in the crate that isn't source: a `Cargo.toml` pointing `[[bin]]` at `bin_path`
+    /// and declaring exactly `features`, the `rust-toolchain.toml` that pins which cargo resolves
+    /// this directory, and the `.gitignore` keeping the run's build output out of the deliverable.
+    /// The first two are needed before dependency warming, which is why these are separable from
+    /// the crate's sources.
     fn manifest_files(&self, bin_path: &str, features: &[String]) -> BTreeMap<String, String> {
         let mut files = BTreeMap::new();
         files.insert(
-            format!("fuzz/{}/rust-toolchain.toml", self.program),
+            self.path("rust-toolchain.toml"),
             RustToolchain { channel: HARNESS_TOOLCHAIN }.render().expect("render rust_toolchain"),
         );
+        files.insert(
+            self.path(".gitignore"),
+            HarnessGitignore.render().expect("render harness_gitignore"),
+        );
         if let Some(repo) = crucible_repo() {
-            files.insert(
-                format!("fuzz/{}/Cargo.toml", self.program),
-                self.cargo_toml(&repo, bin_path, features),
-            );
+            files.insert(self.path("Cargo.toml"), self.cargo_toml(&repo, bin_path, features));
         }
         files
     }
@@ -664,17 +715,15 @@ impl HarnessSpec {
     /// section file exists: it compiles the one feature it selects and never looks for the others.
     fn scaffold(&self, fixture: &str, units: &[String]) -> BTreeMap<String, String> {
         let mut files = self.manifest_files(CRATE_ROOT, &Self::features(units));
-        files.insert(
-            format!("fuzz/{}/{CRATE_ROOT}", self.program),
-            self.main_rs(&self.root_text(fixture, units)),
-        );
+        files.insert(self.path(CRATE_ROOT), self.main_rs(&self.root_text(fixture, units)));
         files
     }
 
     /// A crate root: the fixture, the layout header, the preflight entry, then one gated `mod` +
     /// `#[invariant_test]` entry per component feature.
     fn root_text(&self, fixture: &str, units: &[String]) -> String {
-        let layout = RootLayout.render().expect("render root_layout");
+        let program_so = format!("{}target/deploy/{}.so", to_project_root(), self.crate_id());
+        let layout = RootLayout { program_so: &program_so }.render().expect("render root_layout");
         let preflight = PreflightEntry { program: &self.program, feature: PREFLIGHT_FEATURE }
             .render()
             .expect("render preflight_entry");
@@ -693,10 +742,7 @@ impl HarnessSpec {
     /// from a gate this early would leave a half-crate at the deliverable's own root.
     fn preflight_files(&self, fixture: &str) -> BTreeMap<String, String> {
         let mut files = self.manifest_files(PREFLIGHT_ROOT, &Self::features(&[]));
-        files.insert(
-            format!("fuzz/{}/{PREFLIGHT_ROOT}", self.program),
-            self.main_rs(&self.root_text(fixture, &[])),
-        );
+        files.insert(self.path(PREFLIGHT_ROOT), self.main_rs(&self.root_text(fixture, &[])));
         files
     }
 
@@ -710,7 +756,7 @@ impl HarnessSpec {
     /// Where one component's authored tests live — `src/<feature>.rs`, the file the crate root's
     /// `mod <feature>;` resolves to.
     fn section_path(&self, feature: &str) -> String {
-        format!("fuzz/{}/src/{feature}.rs", self.program)
+        self.path(&format!("src/{feature}.rs"))
     }
 }
 
@@ -977,7 +1023,7 @@ fn crash_meta_paths(workdir: &Path, program: &str, unit: &str, crash_id: &str) -
     let file = format!("{crash_id}.meta.json");
     vec![
         workdir.join("output").join(&file),
-        workdir.join("fuzz").join(program).join("crashes").join(unit).join(&file),
+        workdir.join(harness_dir(program)).join("crashes").join(unit).join(&file),
     ]
 }
 
@@ -1220,8 +1266,8 @@ impl Backend for CrucibleApp {
                 EventKind::notice("verdict", "Verdict"),
             ],
             // Metadata (properties.json / commentary / property→tests map) lands under
-            // `certora/crucible/` — the split Foundry uses — while the crate deliverable is the
-            // one file under `fuzz/<program>/` (the callout mode's `primary` + the finalize render).
+            // `certora/crucible/` — the split Foundry uses — while the crate deliverable is the one
+            // file under [`HARNESS_ROOT`] (the callout mode's `primary` + the finalize render).
             artifact_layout: ArtifactLayout {
                 deliverable_dir: "certora/crucible".into(),
                 internal_dir: ".certora_internal/crucible".into(),
@@ -1234,7 +1280,7 @@ impl Backend for CrucibleApp {
             // One crate assembled by finalize (callout), all toolchain runs serialized on the one
             // crate/target, and confined by default (untrusted native builds).
             deliverable_mode: DeliverableMode::Callout {
-                primary: Some("fuzz/{program}/src/main.rs".into()),
+                primary: Some(format!("{HARNESS_ROOT}/{{program}}/{CRATE_ROOT}")),
             },
             serialize_toolchain: true,
             confine_by_default: true,
@@ -1457,7 +1503,8 @@ impl Backend for CrucibleApp {
                 (hspec.section_files(&fname, authored_spec), fname)
             }
         };
-        let args = ["run", program, &feature, "--release", "--dry-run"];
+        let dir = hspec.dir();
+        let args = ["-C", &dir, "run", program, &feature, "--release", "--dry-run"];
         match ws.run("crucible", args, &files) {
             Ok(out)
                 if out.exit_code == 0
@@ -1483,9 +1530,11 @@ impl Backend for CrucibleApp {
         let fname = &target.name;
         // Only this component's section, against the crate root `crate_root` already wrote — so what
         // is fuzzed is, byte for byte, what ships.
-        let files = HarnessSpec::of(input).section_files(fname, spec);
+        let hspec = HarnessSpec::of(input);
+        let files = hspec.section_files(fname, spec);
+        let dir = hspec.dir();
         let args = [
-            "run", program, fname, "--release", "--mode", "explore", "--timeout",
+            "-C", &dir, "run", program, fname, "--release", "--mode", "explore", "--timeout",
             &timeout.to_string(),
         ];
         match ws.run("crucible", args, &files) {
@@ -1556,7 +1605,7 @@ impl Backend for CrucibleApp {
         // (`autoprover-solana`). The SDK carries it without a schema, so this is the only place the
         // request's fields are named on this side.
         let request = SolanaPrep {
-            warm_dirs: vec![format!("fuzz/{program}")],
+            warm_dirs: vec![spec.dir()],
             // The `.so` is named after the crate's lib target, not the analysis identifier. Needed
             // under both paths: LiteSVM loads the compiled program either way.
             build_program: Some(cr.lib.clone()),
@@ -1659,8 +1708,10 @@ mod template_parity {
             (
                 "ctrlc = \"3.4\"\n".to_string(),
                 format!(
-                    "{} = {{ path = \"../../{}\", features = [\"no-entrypoint\"] }}\n",
-                    spec.cr.package, spec.cr.dir
+                    "{} = {{ path = \"{}{}\", features = [\"no-entrypoint\"] }}\n",
+                    spec.cr.package,
+                    to_project_root(),
+                    spec.cr.dir
                 ),
             )
         };
@@ -1732,6 +1783,18 @@ mod template_parity {
         HarnessSpec::new("vault", cr, idl_at.to_string())
     }
 
+    /// A path inside the `vault` harness crate, as the host receives it (workdir-relative). Derived
+    /// rather than spelled so a move touches one place — `the_crate_lands_under_the_deliverable_dir`
+    /// is what pins the layout itself.
+    fn at(rel: &str) -> String {
+        format!("{}/{rel}", harness_dir("vault"))
+    }
+
+    /// [`at`] for the `lending` program the `finalize` fixtures below analyze.
+    fn at_lending(rel: &str) -> String {
+        format!("{}/{rel}", harness_dir("lending"))
+    }
+
     /// The declared flags as they arrive — off the wire, as JSON.
     fn declared(v: serde_json::Value) -> DeclaredArgs {
         serde_json::from_value(v).expect("declared args")
@@ -1792,7 +1855,7 @@ mod template_parity {
         let specs = [
             spec_of(SolanaSourceUnit::default().resolved("vault"), ""),
             spec_of(distinct_crate(), ""),
-            spec_of(skewed_crate(), "fuzz/vault/idls/example_lending.json"),
+            spec_of(skewed_crate(), &at("idls/example_lending.json")),
         ];
         for spec in &specs {
             assert_eq!(spec.deps(repo), expected_deps(spec, repo));
@@ -1817,23 +1880,52 @@ mod template_parity {
     }
 
     #[test]
+    fn the_crate_lands_under_the_deliverable_dir_and_declares_its_program_so() {
+        // Spelled literally exactly here — every other path in these tests derives from
+        // `harness_dir`, so this is the one assertion a move has to be argued past. The crate is
+        // part of the deliverable rather than a stray `fuzz/` at the project root; `crucible run`
+        // is pointed at it with `-C`.
+        assert_eq!(harness_dir("vault"), "certora/crucible/fuzz/vault");
+        assert_eq!(to_project_root(), "../../../../");
+        // `crucible run` chdirs into the crate, so the crate's own paths are anchored at that
+        // depth. The crate root spells it once; the fixture (authored, and unable to check it)
+        // only ever names the constant.
+        let files = spec_of(distinct_crate(), "").scaffold("struct Fixture {}", &[]);
+        let main_rs = &files[&at(CRATE_ROOT)];
+        assert!(
+            main_rs.contains(
+                "const PROGRAM_SO: &str = \"../../../../target/deploy/example_lending.so\";"
+            ),
+            "unexpected .so constant in:\n{main_rs}"
+        );
+        // Living under the deliverable dir means a user commits this crate — and a run fills it
+        // with ~900 MB of build output that must not go with it (`crucible run` chdirs here, and
+        // `find_fuzz_binary` pins `target/`, so it cannot be redirected).
+        let ignore = &files[&at(".gitignore")];
+        for entry in ["target/", "crashes/"] {
+            assert!(ignore.contains(entry), "{entry} not ignored in:\n{ignore}");
+        }
+    }
+
+    #[test]
     fn the_program_dep_points_at_the_resolved_crate_not_the_analysis_id() {
         let repo = Path::new("/home/user/crucible");
         let deps = spec_of(distinct_crate(), "").deps(repo);
+        let up = to_project_root();
         // Keyed by the Cargo package name, pointing at the real directory — both independent of
         // the `vault` identifier the harness crate itself is named after.
         assert!(
-            deps.contains(
-                "example-lending = { path = \"../../programs/lend\", features = [\"no-entrypoint\"] }"
-            ),
+            deps.contains(&format!(
+                "example-lending = {{ path = \"{up}programs/lend\", features = [\"no-entrypoint\"] }}"
+            )),
             "unexpected program dep in:\n{deps}"
         );
         // The layout convention still holds when the host resolved nothing.
         let legacy = spec_of(SolanaSourceUnit::default().resolved("vault"), "").deps(repo);
         assert!(
-            legacy.contains(
-                "vault = { path = \"../../programs/vault\", features = [\"no-entrypoint\"] }"
-            ),
+            legacy.contains(&format!(
+                "vault = {{ path = \"{up}programs/vault\", features = [\"no-entrypoint\"] }}"
+            )),
             "unexpected fallback dep in:\n{legacy}"
         );
     }
@@ -1841,7 +1933,7 @@ mod template_parity {
     #[test]
     fn the_idl_path_drops_the_program_dep_and_declares_the_generated_module() {
         let repo = Path::new("/home/user/crucible");
-        let spec = spec_of(skewed_crate(), "fuzz/vault/idls/example_lending.json");
+        let spec = spec_of(skewed_crate(), &at("idls/example_lending.json"));
         let deps = spec.deps(repo);
         // Nothing about the program under test is in the graph — that is the whole point: its
         // Anchor/Solana stack can neither co-resolve with ours nor satisfy our trait bounds.
@@ -1872,14 +1964,14 @@ mod template_parity {
         // warms the deps — a different one from the `crucible` build's, and often too old to parse a
         // dependency's manifest at all.
         let spec = spec_of(distinct_crate(), "");
-        let pin = &spec.manifest_files(CRATE_ROOT, &[])["fuzz/vault/rust-toolchain.toml"];
+        let pin = &spec.manifest_files(CRATE_ROOT, &[])[&at("rust-toolchain.toml")];
         assert!(pin.contains(&format!("channel = \"{HARNESS_TOOLCHAIN}\"")), "unexpected pin:\n{pin}");
         // Emitted with the crate under every path: warming (manifest only) and the deliverable.
         assert!(spec
             .preflight_files("struct Fixture {}")
-            .contains_key("fuzz/vault/rust-toolchain.toml"));
+            .contains_key(&at("rust-toolchain.toml")));
         let plan = CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::json!({})));
-        assert!(plan.files.contains_key("fuzz/vault/rust-toolchain.toml"));
+        assert!(plan.files.contains_key(&at("rust-toolchain.toml")));
     }
 
     #[test]
@@ -1888,7 +1980,7 @@ mod template_parity {
             &CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::json!({}))),
         );
         // The harness dir follows the identifier (`crucible run vault`)…
-        assert_eq!(request.warm_dirs, vec!["fuzz/vault".to_string()]);
+        assert_eq!(request.warm_dirs, vec![harness_dir("vault")]);
         // …but the `.so` to build is the program crate's lib target.
         assert_eq!(request.build_program.as_deref(), Some("example_lending"));
         // A linkable program needs no IDL.
@@ -1903,10 +1995,10 @@ mod template_parity {
         let plan = CrucibleApp.workspace_prep(&prep_input(skewed_crate(), serde_json::json!({})));
         assert_eq!(
             prep_request(&plan).idl_dest.as_deref(),
-            Some("fuzz/vault/idls/example_lending.json")
+            Some(at("idls/example_lending.json").as_str())
         );
         if let Some(repo) = crucible_repo() {
-            let cargo = &plan.files["fuzz/vault/Cargo.toml"];
+            let cargo = &plan.files[&at("Cargo.toml")];
             assert!(cargo.contains("crucible-idl-gen"), "warming manifest not on the IDL path");
             assert!(!cargo.contains("programs/lend"), "warming manifest still links the program");
             let _ = repo;
@@ -1920,7 +2012,7 @@ mod template_parity {
         ));
         assert_eq!(
             prep_request(&forced).idl_dest.as_deref(),
-            Some("fuzz/vault/idls/example_lending.json")
+            Some(at("idls/example_lending.json").as_str())
         );
     }
 
@@ -1951,9 +2043,10 @@ mod template_parity {
         eq(BackendGuidance.render().unwrap(), include_str!("../templates/backend_guidance.j2"));
         eq(ExampleFixture.render().unwrap(), include_str!("../templates/example_fixture.j2"));
         eq(JudgeSystem.render().unwrap(), include_str!("../templates/judge_system.j2"));
-        eq(RootLayout.render().unwrap(), include_str!("../templates/root_layout.j2"));
+        eq(HarnessGitignore.render().unwrap(), include_str!("../templates/harness_gitignore.j2"));
         // `preflight_entry.j2` is not among these: it interpolates the program and the feature,
-        // because the preflight is a gated crate-root entry like any component's.
+        // because the preflight is a gated crate-root entry like any component's. Nor is
+        // `root_layout.j2`, which interpolates the `.so` path (see `crate_root_declares_program_so`).
     }
 
     #[test]
@@ -1961,10 +2054,10 @@ mod template_parity {
         // The cheat sheet's `use`/`.so` are the crate's lib name, not the analysis identifier.
         let out = HarnessCheatSheet { crate_id: "example_lending", idl: false }.render().unwrap();
         assert!(out.contains("use example_lending::*;"), "crate id not substituted:\n{out}");
-        assert!(
-            out.contains("\"../../target/deploy/example_lending.so\""),
-            ".so path not substituted:\n{out}"
-        );
+        // The `.so` is named, never spelled: its path is relative to a harness dir the author
+        // cannot see, so the crate root declares it and the sheet asks for the constant.
+        assert!(out.contains("add_program(&program_id, PROGRAM_SO)"), "no PROGRAM_SO in:\n{out}");
+        assert!(!out.contains("target/deploy"), "sheet spells a .so path:\n{out}");
         assert!(!out.contains("<program>"), "leftover <program> placeholder");
         assert!(!out.contains("{{"), "leftover askama expression");
         // On the crate path the fixture may use the program's own items, so say nothing about IDLs.
@@ -2479,14 +2572,14 @@ Error: Build failed
         // front, by `crate_root` — this is the run's last word on what is behind each feature.
         let files = app.finalize(&outcomes);
         assert!(
-            files["fuzz/lending/src/c_withdraw_queue.rs"].contains("fn c_withdraw_queue()"),
+            files[&at_lending("src/c_withdraw_queue.rs")].contains("fn c_withdraw_queue()"),
             "{files:?}"
         );
-        assert!(files["fuzz/lending/src/c_farms.rs"].contains("fn c_farms()"), "{files:?}");
-        assert!(!files.contains_key("fuzz/lending/src/main.rs"), "{:?}", files.keys());
-        assert!(!files.contains_key("fuzz/lending/Cargo.toml"), "{:?}", files.keys());
+        assert!(files[&at_lending("src/c_farms.rs")].contains("fn c_farms()"), "{files:?}");
+        assert!(!files.contains_key(&at_lending("src/main.rs")), "{:?}", files.keys());
+        assert!(!files.contains_key(&at_lending("Cargo.toml")), "{:?}", files.keys());
         // The one that gave up gets an honest refusal behind its feature, not silence and not a test.
-        let referrals = &files["fuzz/lending/src/c_referrals.rs"];
+        let referrals = &files[&at_lending("src/c_referrals.rs")];
         assert!(referrals.contains("compile_error!"), "{referrals}");
         assert!(referrals.contains("the fixture exposes no referral action"), "{referrals}");
     }
@@ -2506,8 +2599,8 @@ Error: Build failed
             ],
         }));
         let files = app.finalize(&outcomes);
-        assert_eq!(files["fuzz/lending/src/c_a.rs"].matches("fn c_a()").count(), 1, "{files:?}");
-        assert!(!files.contains_key("fuzz/lending/src/c_b.rs"), "{:?}", files.keys());
+        assert_eq!(files[&at_lending("src/c_a.rs")].matches("fn c_a()").count(), 1, "{files:?}");
+        assert!(!files.contains_key(&at_lending("src/c_b.rs")), "{:?}", files.keys());
     }
 }
 
@@ -2530,6 +2623,11 @@ mod section_isolation {
     const SEC_B: &str =
         "pub fn invariants(fixture: &mut Fixture) { let _ = fixture.read_token_balance(); }\n\
          impl Fixture { fn read_token_balance(&self) -> u64 { 2 } }";
+
+    /// A path inside the `lending` harness crate, as the host receives it (workdir-relative).
+    fn at(rel: &str) -> String {
+        format!("{}/{rel}", harness_dir("lending"))
+    }
 
     /// Rendered source with `//` comment lines dropped. The section templates *explain* the
     /// `#[cfg]`/`#[invariant_test]` mechanics in prose, so counting tokens over the raw render
@@ -2582,7 +2680,7 @@ mod section_isolation {
 
     #[test]
     fn a_section_is_gated_and_its_entry_point_delegates_into_it() {
-        let main_rs = &scaffold(&["a"])["fuzz/lending/src/main.rs"];
+        let main_rs = &scaffold(&["a"])[&at("src/main.rs")];
         assert!(main_rs.contains("#[cfg(feature = \"c_a\")]\nmod c_a;"), "{main_rs}");
         // The entry is ours, at crate root, gated on the same feature, delegating in.
         assert!(
@@ -2593,7 +2691,7 @@ mod section_isolation {
             "{main_rs}"
         );
         // The body lives in the file that `mod c_a;` resolves to, not in the crate root.
-        let section = &gated("c_a", SEC_A)["fuzz/lending/src/c_a.rs"];
+        let section = &gated("c_a", SEC_A)[&at("src/c_a.rs")];
         assert!(section.contains("use super::*;"), "{section}");
         assert!(section.contains("fn read_token_balance"), "{section}");
         assert!(!main_rs.contains("read_token_balance"), "body leaked into main.rs:\n{main_rs}");
@@ -2604,11 +2702,11 @@ mod section_isolation {
         // It depends only on the fixture and the unit NAMES, which is what lets it be written once
         // between the setup step and fan-out — and therefore never rewritten by a gated build.
         let files = scaffold(&["a", "b"]);
-        let code = code_only(&files["fuzz/lending/src/main.rs"]);
+        let code = code_only(&files[&at("src/main.rs")]);
         assert!(code.contains("struct Fixture {}"), "{code}");
         assert!(code.contains("mod c_a;") && code.contains("mod c_b;"), "{code}");
         // Every declared module has a feature, so `crucible run lending c_b` resolves from the start.
-        if let Some(cargo) = files.get("fuzz/lending/Cargo.toml") {
+        if let Some(cargo) = files.get(&at("Cargo.toml")) {
             assert!(cargo.contains("c_a = []") && cargo.contains("c_b = []"), "{cargo}");
         }
         // No section bodies: none have been authored yet.
@@ -2620,11 +2718,11 @@ mod section_isolation {
         // A model that adds the attribute anyway would expand `fn main()` INSIDE the module, which
         // is not a binary entry point — a link error rather than something the revise loop can fix.
         let files = gated("c_a", &format!("#[invariant_test]\n{SEC_A}"));
-        let section = code_only(&files["fuzz/lending/src/c_a.rs"]);
+        let section = code_only(&files[&at("src/c_a.rs")]);
         assert!(!section.contains("#[invariant_test]"), "{section}");
         // Every `#[invariant_test]` in the crate is one we generated, in the crate root: one per
         // unit plus the wheel's own preflight.
-        let main_rs = code_only(&scaffold(&["a"])["fuzz/lending/src/main.rs"]);
+        let main_rs = code_only(&scaffold(&["a"])[&at("src/main.rs")]);
         assert_eq!(main_rs.matches("#[invariant_test]").count(), 2, "{main_rs}");
     }
 
@@ -2644,7 +2742,7 @@ mod section_isolation {
                         pub fn invariants(fixture: &mut Fixture) {\n\
                         \x20   fuzz_assert!(true, \"[p] //! not a doc comment\");\n\
                         }";
-        let section = &gated("c_a", authored)["fuzz/lending/src/c_a.rs"];
+        let section = &gated("c_a", authored)[&at("src/c_a.rs")];
         // No inner doc comment survives below the header — that is the E0753.
         assert!(
             !section.lines().skip(4).any(|l| l.trim_start().starts_with("//!")),
@@ -2662,14 +2760,14 @@ mod section_isolation {
     fn the_authored_fn_is_made_visible_to_the_generated_entry() {
         // Called from the crate root, so a private fn is E0603. Cheaper than a revise round.
         let files = gated("c_a", "fn invariants(fixture: &mut Fixture) {}");
-        let section = files.get("fuzz/lending/src/c_a.rs").expect("section file");
+        let section = files.get(&at("src/c_a.rs")).expect("section file");
         assert!(section.contains("pub fn invariants(fixture: &mut Fixture)"), "{section}");
     }
 
     #[test]
     fn an_already_public_fn_is_left_alone() {
         let files = gated("c_a", SEC_A);
-        let section = files.get("fuzz/lending/src/c_a.rs").expect("section file");
+        let section = files.get(&at("src/c_a.rs")).expect("section file");
         assert_eq!(section.matches("pub fn invariants").count(), 1, "no double-pub:\n{section}");
         assert!(!section.contains("pub pub"), "{section}");
     }
@@ -2681,13 +2779,13 @@ mod section_isolation {
             delivered_component("B", &["c_b"], SEC_B),
         ]));
         // Each helper is in its own file, so they never coexist in a build…
-        let a = &files["fuzz/lending/src/c_a.rs"];
-        let b = &files["fuzz/lending/src/c_b.rs"];
+        let a = &files[&at("src/c_a.rs")];
+        let b = &files[&at("src/c_b.rs")];
         assert_eq!(a.matches("fn read_token_balance").count(), 1, "{a}");
         assert_eq!(b.matches("fn read_token_balance").count(), 1, "{b}");
         // …and the `#[cfg]`, not the file split, is what guarantees it: an inherent `impl Fixture`
         // contributes its methods GLOBALLY, so separate modules alone would still be E0592.
-        let code = code_only(&scaffold(&["a", "b"])["fuzz/lending/src/main.rs"]);
+        let code = code_only(&scaffold(&["a", "b"])[&at("src/main.rs")]);
         assert!(code.contains("#[cfg(feature = \"c_a\")]\nmod c_a;"), "{code}");
         assert!(code.contains("#[cfg(feature = \"c_b\")]\nmod c_b;"), "{code}");
         // One gated entry per feature — the two units plus the preflight — so exactly one `fn main()`
@@ -2706,8 +2804,8 @@ mod section_isolation {
             delivered_component("B", &["c_b"], SEC_B),
         ]));
         assert_eq!(
-            gate.get("fuzz/lending/src/c_a.rs"),
-            ship.get("fuzz/lending/src/c_a.rs"),
+            gate.get(&at("src/c_a.rs")),
+            ship.get(&at("src/c_a.rs")),
             "the fuzzed section is not the shipped section"
         );
     }
@@ -2721,21 +2819,21 @@ mod section_isolation {
         let gate = spec.preflight_files("struct Fixture {}");
         assert_eq!(
             gate.keys().filter(|k| k.ends_with(".rs")).collect::<Vec<_>>(),
-            vec!["fuzz/lending/src/preflight.rs"],
+            vec![&at("src/preflight.rs")],
             "the preflight must be one source file",
         );
-        assert!(!gate.contains_key("fuzz/lending/src/main.rs"), "{:?}", gate.keys());
-        if let Some(cargo) = gate.get("fuzz/lending/Cargo.toml") {
+        assert!(!gate.contains_key(&at("src/main.rs")), "{:?}", gate.keys());
+        if let Some(cargo) = gate.get(&at("Cargo.toml")) {
             assert!(cargo.contains(r#"name = "invariant_test""#), "{cargo}");
             assert!(cargo.contains(r#"path = "src/preflight.rs""#), "{cargo}");
         }
         // That one file is a whole crate: the fixture and the gated entry the dry-run selects.
-        let root = &gate["fuzz/lending/src/preflight.rs"];
+        let root = &gate[&at("src/preflight.rs")];
         assert!(root.contains("struct Fixture {}"), "{root}");
         assert!(root.contains("#[cfg(feature = \"preflight\")]"), "{root}");
         assert!(root.contains("fn preflight(fixture: &mut Fixture)"), "{root}");
         // And from the setup gate on, the same bin points at the real root.
-        if let Some(cargo) = scaffold(&["a"]).get("fuzz/lending/Cargo.toml") {
+        if let Some(cargo) = scaffold(&["a"]).get(&at("Cargo.toml")) {
             assert!(cargo.contains(r#"path = "src/main.rs""#), "{cargo}");
         }
     }
@@ -2761,7 +2859,7 @@ mod section_isolation {
         let spec = HarnessSpec::new("lending", SolanaSourceUnit::default(), String::new());
         for slug in ["preflight", "main", "a"] {
             assert_ne!(
-                format!("fuzz/lending/{PREFLIGHT_ROOT}"),
+                at(PREFLIGHT_ROOT),
                 spec.section_path(&feature_of(slug)),
                 "a component named {slug:?} would overwrite the preflight root",
             );
@@ -2772,15 +2870,15 @@ mod section_isolation {
     fn a_component_named_preflight_is_a_different_target_from_the_preflight() {
         // The collision this namespace split exists to prevent, end to end.
         let files = scaffold(&["preflight"]);
-        let main_rs = &files["fuzz/lending/src/main.rs"];
+        let main_rs = &files[&at("src/main.rs")];
         // Two distinct entries: the wheel's is inline, the component's delegates into its module.
         assert!(main_rs.contains("fn preflight(fixture: &mut Fixture)"), "{main_rs}");
         assert!(main_rs.contains("mod c_preflight;"), "{main_rs}");
         assert!(!main_rs.contains("mod preflight;"), "the wheel's entry has no section:\n{main_rs}");
         // …and the component's section file is its own to author, at a path of its own.
-        assert!(!files.contains_key("fuzz/lending/src/c_preflight.rs"), "the unit authors its own");
+        assert!(!files.contains_key(&at("src/c_preflight.rs")), "the unit authors its own");
         // …and two distinct features, so the manifest declares each once.
-        if let Some(cargo) = files.get("fuzz/lending/Cargo.toml") {
+        if let Some(cargo) = files.get(&at("Cargo.toml")) {
             assert_eq!(cargo.matches("preflight = []").count(), 2, "{cargo}");
             assert!(
                 cargo.contains("\npreflight = []") && cargo.contains("\nc_preflight = []"),
@@ -2795,12 +2893,12 @@ mod section_isolation {
         // a user can re-run it (`crucible run <program> preflight --dry-run`) through the same
         // mechanism rather than it being a build-time artifact nobody can reach.
         let shipped = scaffold(&["a"]);
-        let main_rs = &shipped["fuzz/lending/src/main.rs"];
+        let main_rs = &shipped[&at("src/main.rs")];
         assert!(main_rs.contains("#[cfg(feature = \"preflight\")]"), "{main_rs}");
         assert!(main_rs.contains("fn preflight(fixture: &mut Fixture)"), "{main_rs}");
         // Its body is inline — there is no authored section to delegate to, and so no file to drift.
         assert!(!main_rs.contains("mod preflight;"), "{main_rs}");
-        assert!(!shipped.contains_key("fuzz/lending/src/preflight.rs"), "{:?}", shipped.keys());
+        assert!(!shipped.contains_key(&at("src/preflight.rs")), "{:?}", shipped.keys());
         // And it asserts nothing about the program: it proves the fixture compiles and loads.
         assert!(!main_rs.contains("fuzz_assert"), "{main_rs}");
     }
@@ -2826,7 +2924,7 @@ mod section_isolation {
         // stripped before rustc resolves it, which is what lets the real root be built this early.
         assert_eq!(
             gate.keys().filter(|k| k.ends_with(".rs")).collect::<Vec<_>>(),
-            vec!["fuzz/lending/src/main.rs"],
+            vec![&at("src/main.rs")],
         );
     }
 
@@ -2838,7 +2936,7 @@ mod section_isolation {
         let gate = gated("c_a", SEC_A);
         assert_eq!(
             gate.keys().collect::<Vec<_>>(),
-            vec!["fuzz/lending/src/c_a.rs"],
+            vec![&at("src/c_a.rs")],
             "a gated build must not rewrite the crate root or the manifest",
         );
     }
@@ -2855,14 +2953,14 @@ mod section_isolation {
               "unit": { "slug": "referrals" },
               "reason": "no action mints referral fees" } },
         ]));
-        let section = &files["fuzz/lending/src/c_referrals.rs"];
+        let section = &files[&at("src/c_referrals.rs")];
         assert!(section.contains("compile_error!"), "{section}");
         assert!(section.contains("no action mints referral fees"), "{section}");
         // Nothing that could be mistaken for a check, or run at all.
         assert!(!section.contains("fuzz_assert"), "{section}");
         assert!(!section.contains(&format!("fn {SECTION_FN}")), "{section}");
         // The delivered component beside it is untouched by any of this.
-        assert!(files["fuzz/lending/src/c_a.rs"].contains("pub fn invariants"), "{files:?}");
+        assert!(files[&at("src/c_a.rs")].contains("pub fn invariants"), "{files:?}");
     }
 
     #[test]
@@ -2874,7 +2972,7 @@ mod section_isolation {
         ]));
         assert_eq!(
             files.keys().collect::<Vec<_>>(),
-            vec!["fuzz/lending/src/c_a.rs"],
+            vec![&at("src/c_a.rs")],
             "the shared body belongs to the first target only",
         );
     }
@@ -3108,10 +3206,10 @@ mod crash_triage {
 
     #[test]
     fn the_per_test_crashes_layout_is_also_searched() {
-        // `crucible tmin`/`show` keep crashes under fuzz/<program>/crashes/<test>/ rather than the
-        // flat output dir, so a minimized crash is still found.
+        // `crucible tmin`/`show` keep crashes under the harness crate's own `crashes/<test>/`
+        // rather than the flat output dir, so a minimized crash is still found.
         let dir = std::env::temp_dir().join("crucible_triage_layout");
-        let nested = dir.join("fuzz").join("kamino_lending").join("crashes").join("c_unit");
+        let nested = dir.join(harness_dir("kamino_lending")).join("crashes").join("c_unit");
         std::fs::create_dir_all(&nested).expect("mkdir");
         std::fs::write(nested.join("crash_x.meta.json"), KLEND_INITIAL_STATE).expect("write");
 

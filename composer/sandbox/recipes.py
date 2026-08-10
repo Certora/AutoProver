@@ -45,15 +45,21 @@ DEFAULT_ENV_PASSTHROUGH: tuple[str, ...] = (
 CARGO_REGISTRY_PROTOCOL_VAR = "CARGO_REGISTRIES_CRATES_IO_PROTOCOL"
 CARGO_REGISTRY_PROTOCOL = "sparse"
 
-#: Names of the private, per-run scratch directories a sandboxed build gets *under the workdir*
-#: (see :func:`sandbox_cargo_home`, :func:`sandbox_rustup_home`, and the ``TMPDIR`` redirect in
-#: :func:`rust_build_policy` for why each one is private rather than shared). Named constants
-#: because consumers outside this module must agree on the spellings — notably
+#: The private, per-run scratch directories a sandboxed build gets *under the workdir* (see
+#: :func:`sandbox_cargo_home`, :func:`sandbox_rustup_home`, and the ``TMPDIR`` redirect in
+#: :func:`rust_build_policy` for why each one is private rather than shared). They live under
+#: ``.certora_internal/``, where every other generated, non-source, non-deliverable output goes
+#: (``AUTOPROVE_INTERNAL_DIR``, ``FOUNDRY_INTERNAL_DIR``, a Rust wheel's declared
+#: ``ArtifactLayout.internal_dir``) — so a project that already ignores ``.certora_internal``
+#: ignores these too, and a copy/clean that skips it skips these too.
+#:
+#: Named constants because consumers outside this module must agree on the spellings — notably
 #: ``composer.pipeline.ecosystem.RUST_FORBIDDEN_READ``, which hides them from the source tools'
 #: file listing so the hundreds of MB they hold never reach the model's context.
-SANDBOX_CARGO_DIR = ".sandbox_cargo"
-SANDBOX_RUSTUP_DIR = ".sandbox_rustup"
-SANDBOX_TMP_DIR = ".sandbox_tmp"
+SANDBOX_INTERNAL_DIR = Path(".certora_internal") / "sandbox"
+SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
+SANDBOX_RUSTUP_DIR = SANDBOX_INTERNAL_DIR / "rustup"
+SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"
 
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads

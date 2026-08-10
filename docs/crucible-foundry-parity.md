@@ -133,7 +133,7 @@ reads per-component status off disk.
 Foundry runs multiple `forge test` processes concurrently, gated by `--max-forge-runners`
 (`composer/foundry/pipeline.py:192-203`). Crucible **serializes** all harness builds/fuzz
 runs via a single `command_sem = Semaphore(1)` (`composer/crucible/backend.py`) because
-every component shares one harness crate (`fuzz/<program>/`). This is a throughput gap on
+every component shares one harness crate. This is a throughput gap on
 multi-invariant programs.
 
 **Investigated; deferred (see docs/crucible-unit-granularity.md §7).** The obvious

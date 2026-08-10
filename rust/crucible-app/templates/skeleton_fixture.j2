@@ -22,7 +22,7 @@ impl Fixture {
     pub fn setup() -> Self {
         let mut ctx = TestContext::new();
         let program_id = Pubkey::new_from_array(ID.to_bytes());
-        ctx.add_program(&program_id, "../../target/deploy/{{ crate_id }}.so").unwrap();
+        ctx.add_program(&program_id, PROGRAM_SO).unwrap();
         Self { ctx, program_id }
     }
 

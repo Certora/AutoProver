@@ -64,7 +64,9 @@ _FEATURE = f"c_{_SLUG}"  # this property's check (one per property)
 _TARGET = "c_invariants"
 
 # A fixed, known-good shared fixture (`struct Fixture`) — the per-component decider
-# authors a test *against* it. Mirrors the Phase-1 harness, renamed to `Fixture`.
+# authors a test *against* it. Mirrors the Phase-1 harness, renamed to `Fixture`. It names
+# `PROGRAM_SO` rather than a path: the wheel declares that constant in the crate root it renders
+# around this text, because the path is relative to a harness dir an author cannot see.
 _FIXTURE = """\
 use crucible_fuzzer::*;
 use crucible_fuzzer::anchor_lang::system_program;
@@ -89,7 +91,7 @@ impl Fixture {
     pub fn setup() -> Self {
         let mut ctx = TestContext::new();
         let program_id = Pubkey::new_from_array(ID.to_bytes());
-        ctx.add_program(&program_id, "../../target/deploy/vault.so").unwrap();
+        ctx.add_program(&program_id, PROGRAM_SO).unwrap();
 
         let authority = Rc::new(Keypair::new());
         ctx.create_account()

@@ -21,7 +21,8 @@ Crucible harness API (author a FIXTURE only — no test fns):
     pub fn setup() -> Self {
         let mut ctx = TestContext::new();
         let program_id = Pubkey::new_from_array(ID.to_bytes());
-        ctx.add_program(&program_id, "../../target/deploy/{{ crate_id }}.so").unwrap();
+        ctx.add_program(&program_id, PROGRAM_SO).unwrap();  // `PROGRAM_SO` is declared for you by
+        // the crate root and is the ONLY way to name the program's `.so` — do not write a path.
         // create funded accounts: ctx.create_account().pubkey(kp.pubkey())
         //     .lamports(N).owner(system_program::ID).create().unwrap();
         // derive PDAs: Pubkey::find_program_address(&[b"seed", key.as_ref()], &program_id)

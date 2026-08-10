@@ -190,7 +190,7 @@ Foundry share `ContractComponentInstance` but receive different guidance.
 
 What Crucible does with a unit today, and would do per component:
 
-- authors one `#[invariant_test] fn` into the **shared** harness crate `fuzz/<program>/`
+- authors one `#[invariant_test] fn` into the **shared** harness crate `certora/crucible/fuzz/<program>/`
   (the analogue of the prover's shared `invariants.spec` is the shared `Fixture`);
 - builds that crate selecting the fn's Cargo feature, then runs **one fuzz campaign**
   (`crucible run <program> <fn> --mode explore`);
@@ -901,7 +901,7 @@ against 0/14 as delivered.**
 
 Section gating removed the collision; what remained was that the crate was still *assembled* N+1
 times — once per gated build from the one section it held, and once more at the end. Each section
-now lives in its own file (`fuzz/<program>/src/c_<slug>.rs`) and the crate root is rendered **once
+now lives in its own file (`<harness>/src/c_<slug>.rs`) and the crate root is rendered **once
 per run** by the `Backend::crate_root` hook, which the host calls in `StagedFormalizer.begin`: the
 first and only point where both the shared fixture and the whole unit set are known. `compile` and
 `validate` write nothing but their own section file.

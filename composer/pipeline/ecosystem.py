@@ -19,11 +19,7 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Callable, Collection, Literal, Mapping, TypedDict
 
-from composer.sandbox.recipes import (
-    SANDBOX_CARGO_DIR,
-    SANDBOX_RUSTUP_DIR,
-    SANDBOX_TMP_DIR,
-)
+from composer.sandbox.recipes import SANDBOX_INTERNAL_DIR
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CodeExplorerPromptParams
 from composer.spec.gen_types import TypedTemplate
@@ -260,13 +256,13 @@ EVM: EvmEcosystem = Ecosystem(
 #: The second group covers the hundreds of MB of build/scratch **this backend** generates inside the
 #: workdir mid-run (nothing in the front half or the Rust framework creates them), which the source
 #: tools' file-listing would otherwise pull into LLM context and blow the model's window:
-#:   • ``.sandbox_cargo``  — the command sandbox's private CARGO_HOME (docs/command-sandbox.md §3);
-#:     a build fills it with the *entire* cargo registry (~19.5k files, ~520 MB).
-#:   • ``.sandbox_rustup`` — the sandbox's private RUSTUP_HOME; its ``toolchains`` is a symlink to
-#:     the shared rustup home, so a naive listing would enumerate the whole Rust toolchain.
-#:   • ``.sandbox_tmp``    — the sandbox's private linker TMPDIR.
-#:   • nested ``target/``  — cargo build output below the root (e.g. the generated
-#:     ``fuzz/<program>/target``, ~4k files, ~900 MB); the top-level ``^target/`` misses it.
+#:   • ``SANDBOX_INTERNAL_DIR`` — the command sandbox's per-run scratch (docs/command-sandbox.md §3):
+#:     its private ``CARGO_HOME``, which a build fills with the *entire* cargo registry (~19.5k
+#:     files, ~520 MB); its private ``RUSTUP_HOME``, whose ``toolchains`` is a symlink to the shared
+#:     rustup home, so a naive listing would enumerate the whole Rust toolchain; and its linker
+#:     ``TMPDIR``.
+#:   • nested ``target/``      — cargo build output below the root (e.g. the generated harness
+#:     crate's own ``target``, ~4k files, ~900 MB); the top-level ``^target/`` misses it.
 #: These are never source, so they are never readable by the source tools (belt-and-suspenders with
 #: each run's own cleanup: a re-run or cached CI workspace can leave them behind).
 RUST_FORBIDDEN_READ = "|".join(
@@ -275,10 +271,7 @@ RUST_FORBIDDEN_READ = "|".join(
         r"(^\.git.*)",
         r"(^node_modules/.*)",
         r"(.*\.lock$)",
-        *(
-            rf"(^{re.escape(d)}/.*)"
-            for d in (SANDBOX_CARGO_DIR, SANDBOX_RUSTUP_DIR, SANDBOX_TMP_DIR)
-        ),
+        rf"(^{re.escape(SANDBOX_INTERNAL_DIR.as_posix())}/.*)",
         r"(.*/target/.*)",
     )
 )

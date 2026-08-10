@@ -140,12 +140,12 @@ docker compose -f scripts/docker-compose.yml up -d
 
 ## 3. (Recommended) Clean the scenario directory
 
-Earlier runs leave large generated dirs (`.sandbox_cargo/`, `target/`, `fuzz/`, …) in
-the scenario. They no longer break a run (the source tools exclude them), but a clean
+Earlier runs leave large generated dirs (`.certora_internal/sandbox/`, `target/`, `certora/`, …)
+in the scenario. They no longer break a run (the source tools exclude them), but a clean
 dir builds faster:
 
 ```bash
-rm -rf test_scenarios/solana_vault/{.sandbox_cargo,.sandbox_tmp,target,corpus,output,fuzz,certora,.certora_internal}
+rm -rf test_scenarios/solana_vault/{target,corpus,output,fuzz,certora,.certora_internal}
 ```
 
 ---

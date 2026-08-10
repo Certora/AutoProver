@@ -38,6 +38,12 @@ pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 _SCENARIO = Path(__file__).parent.parent / "test_scenarios" / "solana_vault"
 _PROGRAM = "vault"
 _TEST = "invariant_vault"  # crucible test name == the feature gating it
+#: Where the wheel puts a harness crate — under the backend's deliverable dir, not crucible's
+#: default ``./fuzz/``, which is why every invocation below passes ``-C``.
+_HARNESS = f"certora/crucible/fuzz/{_PROGRAM}"
+#: The crate's own relative paths are anchored here: ``crucible run`` builds and executes it with
+#: the crate as the working directory.
+_TO_ROOT = "../../../../"
 
 
 def _crucible_repo() -> Path | None:
@@ -66,7 +72,7 @@ arbitrary = {{ version = "1", features = ["derive"] }}
 ctrlc = "3.4"
 libafl = {{ version = "0.15.1", features = ["std", "cli", "prelude"] }}
 libafl_bolts = {{ version = "0.15.1", features = ["std"] }}
-vault = {{ path = "../../programs/vault", features = ["no-entrypoint"] }}
+vault = {{ path = "{_TO_ROOT}programs/vault", features = ["no-entrypoint"] }}
 solana-keypair = "3.0"
 solana-pubkey = "3.0"
 solana-signer = "3.0"
@@ -79,6 +85,10 @@ path = "src/main.rs"
 {_TEST} = []
 """
 
+
+#: The `.so` the fixture loads, as the wheel's crate root declares it. Spelled here only because
+#: phase 1's crate is hand-written and has no such root.
+_PROGRAM_SO_DECL = f'const PROGRAM_SO: &str = "{_TO_ROOT}target/deploy/{_PROGRAM}.so";\n\n'
 
 # A minimal hand-written harness (no LLM): load the built .so, initialize a vault,
 # expose deposit/withdraw actions, and a trivial balance invariant. Enough for
@@ -107,7 +117,7 @@ impl VaultFixture {
     pub fn setup() -> Self {
         let mut ctx = TestContext::new();
         let program_id = Pubkey::new_from_array(ID.to_bytes());
-        ctx.add_program(&program_id, "../../target/deploy/vault.so").unwrap();
+        ctx.add_program(&program_id, PROGRAM_SO).unwrap();
 
         let authority = Rc::new(Keypair::new());
         ctx.create_account()
@@ -202,16 +212,18 @@ async def test_crucible_phase1_build_and_dry_run():
     assert built.so_path.is_file(), built.so_path
 
     # 2. Materialize the trivial fuzz harness (crate deps resolved to the checkout).
-    fuzz_dir = _SCENARIO / "fuzz" / _PROGRAM
+    fuzz_dir = _SCENARIO / _HARNESS
     (fuzz_dir / "src").mkdir(parents=True, exist_ok=True)
     (fuzz_dir / "Cargo.toml").write_text(_fuzz_cargo_toml(crucible_repo))
-    (fuzz_dir / "src" / "main.rs").write_text(_FUZZ_MAIN_RS)
+    # This crate has no wheel-rendered root, so it declares `PROGRAM_SO` itself — the constant the
+    # fixture names, and the one thing phase 2 gets from `finalize` instead.
+    (fuzz_dir / "src" / "main.rs").write_text(_PROGRAM_SO_DECL + _FUZZ_MAIN_RS)
 
-    # 3. Dry-run: compiles the harness + runs setup() one iteration. Run from the
-    #    project root (crucible resolves fuzz/<program>/ relative to cwd).
+    # 3. Dry-run: compiles the harness + runs setup() one iteration. Run from the project root
+    #    with `-C`, exactly as the wheel invokes it — the CLI would otherwise look in ./fuzz/.
     res = await run_local_command(
         "crucible",
-        ["run", _PROGRAM, _TEST, "--release", "--dry-run"],
+        ["-C", _HARNESS, "run", _PROGRAM, _TEST, "--release", "--dry-run"],
         {},
         workdir=_SCENARIO,
         timeout_s=590,
@@ -225,7 +237,8 @@ async def test_crucible_phase1_build_and_dry_run():
 # --- Phase 2: the deliverable model (wheel finalize assembles the crate) ---
 
 # The shared fixture is the phase-1 harness minus its test fn (the store composes
-# fixture + per-component test sections).
+# fixture + per-component test sections). No `_PROGRAM_SO_DECL` here: an authored fixture never
+# declares that constant — `finalize` renders it into the crate root, which is the point.
 _FIXTURE_SRC = _FUZZ_MAIN_RS.partition("#[invariant_test]")[0]
 
 # One component's test section. Its fn name MUST equal its feature (c_deposit) —
@@ -273,7 +286,7 @@ async def test_crucible_phase2_store_assembles_crate():
     )
     store.write_properties(comp, [])
     main_rel = store.write_artifact(comp, result)  # metadata + the crate report link
-    assert str(main_rel) == f"fuzz/{_PROGRAM}/src/main.rs"
+    assert str(main_rel) == f"{_HARNESS}/src/main.rs"
 
     # finalize renders the crate (fixture + the delivered section, features from targets).
     payload = json.dumps(
@@ -303,11 +316,11 @@ async def test_crucible_phase2_store_assembles_crate():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(contents)
 
-    # Deliverable crate under fuzz/<program>/ ...
+    # Deliverable crate under the harness dir ...
     assert (_SCENARIO / main_rel).is_file()
-    assert (_SCENARIO / "fuzz" / _PROGRAM / "Cargo.toml").is_file()
-    assert 'c_deposit = []' in (_SCENARIO / "fuzz" / _PROGRAM / "Cargo.toml").read_text()
-    # ... metadata under certora/crucible/ (not under fuzz/, not under certora/specs/) ...
+    assert (_SCENARIO / _HARNESS / "Cargo.toml").is_file()
+    assert 'c_deposit = []' in (_SCENARIO / _HARNESS / "Cargo.toml").read_text()
+    # ... metadata beside it under certora/crucible/ (not under certora/specs/) ...
     props = _SCENARIO / "certora" / "crucible" / "properties"
     assert (props / "harness_deposit.commentary.md").is_file()
     assert (props / "harness_deposit.property_tests.json").is_file()
@@ -317,7 +330,7 @@ async def test_crucible_phase2_store_assembles_crate():
     # The assembled crate compiles and dry-runs (feature == the component's).
     res = await run_local_command(
         "crucible",
-        ["run", _PROGRAM, "c_deposit", "--release", "--dry-run"],
+        ["-C", _HARNESS, "run", _PROGRAM, "c_deposit", "--release", "--dry-run"],
         {},
         workdir=_SCENARIO,
         timeout_s=590,

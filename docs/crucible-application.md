@@ -67,8 +67,7 @@ Crucible is a **coverage-guided fuzzing framework for Solana programs** (LibAFL 
 declare a program's actions, write invariants, and the fuzzer searches randomly generated action
 sequences for violations. The relevant facts for backend design:
 
-- **The artifact is a Rust *fuzz-harness crate*, not a spec file.** A harness (`fuzz/<program>/`)
-  is a standalone Cargo workspace with:
+- **The artifact is a Rust *fuzz-harness crate*, not a spec file.** A harness is a standalone Cargo workspace with:
   - `src/main.rs` — a `#[derive(Clone)]` **fixture** with a `setup()` (loads the program `.so`,
     creates accounts, runs init instructions in dependency order), `action_*` methods (one per
     instruction, with `#[range(..)]`-constrained fuzz params), an optional `after_action` hook, and
@@ -150,7 +149,7 @@ reads the analyzed model, so it runs **concurrently with system analysis** (`bac
    `rust-toolchain.toml`) and `cargo fetch` them into the run's private `CARGO_HOME`.
 2. Build the program to sBPF: `cargo build-sbf` (or `anchor build`) → `target/deploy/<lib>.so`.
 3. Generate/collect the IDL when the program's Anchor major can't be linked (§6.1): `anchor idl build`
-   (or convert/accept a supplied one) → `fuzz/<program>/idls/<lib>.json`; the harness then uses
+   (or convert/accept a supplied one) → `<harness>/idls/<lib>.json`; the harness then uses
    `crucible_idl_gen::declare_fuzz_program!`.
 4. **Gate it**: `crucible run <program> preflight --release --dry-run` against a fixture the *wheel*
    authors (`skeleton_fixture.j2` — a `Fixture` that loads the `.so`, one no-op action, and the
@@ -190,7 +189,7 @@ agent's worth of elapsed time: the pinned crucible/libafl/anchor/solana graph re
 the program's types are reachable (path dep, or `declare_fuzz_program!` codegen over the real IDL);
 and the built `.so` loads into LiteSVM at the path the fixture prompt will name — `target/deploy/<crate
 lib>.so`, which is *not* the analysis identifier, and whose drift used to surface as a mystery
-`setup()` panic mid-authoring. It also leaves `fuzz/<program>/target` warm, so the first authored
+`setup()` panic mid-authoring. It also leaves the harness crate's `target/` warm, so the first authored
 compile builds one crate rather than the whole graph.
 
 What it deliberately does *not* check is anything about the program's API — instruction and accounts
@@ -476,11 +475,25 @@ one `#[invariant_test]`, one feature).
 Cargo feature whose name is the component's test fn**, all sharing the fixture/actions:
 
 ```rust
-fuzz/<program>/
+certora/crucible/fuzz/<program>/
   Cargo.toml          // [[bin]] invariant_test; [features] one per component (c_<slug> = [])
   src/main.rs         // shared #[fuzz_fixture] + action_* ; then, per component, verbatim:
                       //   #[invariant_test] fn c_<slug>(fx) { … }     (NOT user-#[cfg]-wrapped)
 ```
+
+**Where it lives.** Crucible's CLI defaults to `./fuzz/<program>/`, but it takes a global
+`-C/--harness-dir`, so the crate goes under this backend's own deliverable dir instead — a run then
+leaves *one* tree (crate, reports, metadata) rather than a `fuzz/` at the project root plus a
+`certora/`. Two consequences the wheel owns:
+
+- **The crate's own relative paths are depth-sensitive.** `crucible run` chdirs into the harness dir
+  before building and executing, so the path dep on the program's crate and the `.so` the fixture
+  loads are relative to *it* (`../../../../` at this depth). The crate root therefore declares
+  `const PROGRAM_SO`, and the fixture prompt asks for that name — an author cannot check a path
+  whose anchor they cannot see, and a wrong one compiles fine and fails at `setup()`.
+- **The crate ships a `.gitignore`.** `find_fuzz_binary` pins `target/<profile>/invariant_test`, so
+  `CARGO_TARGET_DIR` cannot be redirected: ~900 MB of build output, plus the fuzzer's
+  `corpus`/`crashes`/`output`, land inside a directory users are meant to commit.
 
 The gating is done *by Crucible's macros*, not by us: `#[invariant_test] fn <name>` expands to a
 `main()` behind `#[cfg(feature = "<name>")]` (verified in

@@ -58,8 +58,7 @@ async def test_solana_vault_builds_under_launcher(tmp_path):
     shutil.copytree(
         _SCENARIO, scenario,
         ignore=shutil.ignore_patterns(
-            ".sandbox_cargo", ".sandbox_tmp", "target", "corpus", "output",
-            "fuzz", "certora", ".certora_internal",
+            "target", "corpus", "output", "fuzz", "certora", ".certora_internal",
         ),
     )
 

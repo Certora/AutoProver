@@ -84,16 +84,15 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
     _require(_crucible_repo() is not None, "set CRUCIBLE_REPO to a local crucible checkout")
 
     # Work on a writable copy, not the committed scenario. The run writes hundreds
-    # of MB of build artifacts into project_root (.sandbox_cargo/, target/, fuzz/,
-    # …); an in-container run's image copy is read-only for the non-root runtime
+    # of MB of build artifacts into project_root (.certora_internal/sandbox/, target/,
+    # fuzz/, …); an in-container run's image copy is read-only for the non-root runtime
     # user, and a host run would otherwise pollute test_scenarios/ (see
     # docs/crucible-demo.md §3). Exclude the heavy generated dirs from the copy.
     scenario = tmp_path / "solana_vault"
     shutil.copytree(
         _SCENARIO, scenario,
         ignore=shutil.ignore_patterns(
-            ".sandbox_cargo", ".sandbox_tmp", "target", "corpus", "output",
-            "fuzz", "certora", ".certora_internal",
+            "target", "corpus", "output", "fuzz", "certora", ".certora_internal",
         ),
     )
 
@@ -203,7 +202,7 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
     # with every phase green — which is exactly what happened: it emitted the shared harness fn once
     # per report row, and the delivered crate failed with `E0428: the name c_invariants is defined
     # multiple times` while this gate passed.
-    crate = scenario / "fuzz" / _PROGRAM
+    crate = scenario / "certora" / "crucible" / "fuzz" / _PROGRAM
     manifest = crate / "Cargo.toml"
     assert (crate / "src" / "main.rs").is_file() and manifest.is_file(), "no crate was delivered"
     features = list((tomllib.loads(manifest.read_text()).get("features") or {}))

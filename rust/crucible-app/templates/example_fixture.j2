@@ -24,7 +24,7 @@ impl Fixture {
     pub fn setup() -> Self {
         let mut ctx = TestContext::new();
         let program_id = Pubkey::new_from_array(ID.to_bytes());
-        ctx.add_program(&program_id, "../../target/deploy/escrow.so").unwrap();
+        ctx.add_program(&program_id, PROGRAM_SO).unwrap();     // declared by the crate root
 
         let depositor = Rc::new(Keypair::new());
         ctx.create_account().pubkey(depositor.pubkey())
