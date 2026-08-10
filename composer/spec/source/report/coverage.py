@@ -9,8 +9,8 @@ trivially valid so a re-validate cannot raise. Soft issues go into `CoverageRepo
 from collections import Counter, defaultdict
 
 from composer.spec.source.report.schema import (
-    CoverageReport, FormalizedProperty, GaveUpComponent, PropertyGroup, PropertyKey,
-    RuleRef, RuleVerdict, SkippedClaim,
+    CoverageReport, CurtailedComponent, FormalizedProperty, GaveUpComponent, PropertyGroup,
+    PropertyKey, RuleRef, RuleVerdict, SkippedClaim,
 )
 
 
@@ -25,6 +25,7 @@ def validate(
     groups: list[PropertyGroup],
     skipped: list[SkippedClaim],
     gave_up: list[GaveUpComponent],
+    curtailed: list[CurtailedComponent],
     dropped_orphan_rules: int,
 ) -> CoverageReport:
     """Cross-check the grouping against the property set; produce a `CoverageReport`.
@@ -61,6 +62,13 @@ def validate(
                     groups_of_rule[ref].add(g.slug)
     spanning = sorted({ref[1] for ref, slugs in groups_of_rule.items() if len(slugs) > 1})
 
+    warnings: list[str] = []
+    if curtailed:
+        warnings.append(
+            f"{len(curtailed)} component(s) were cut short by the run budget; their properties "
+            "are excluded from the groupings above (see the budget appendix)."
+        )
+
     sizes = [len(g.members) for g in groups]
     return CoverageReport(
         total_properties=len(properties),
@@ -73,5 +81,7 @@ def validate(
         rules_spanning_multiple_groups=spanning,
         skipped_count=len(skipped),
         gave_up_component_count=len(gave_up),
+        curtailed_component_count=len(curtailed),
         dropped_orphan_rules=dropped_orphan_rules,
+        warnings=warnings,
     )

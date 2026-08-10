@@ -219,6 +219,9 @@ def get_run_summary() -> RunSummary:
     """
     return _run_summary.get() or RunSummary()
 
+def get_run_summary_or_none() -> RunSummary | None:
+    return _run_summary.get()
+
 
 def install_run_summary(summary: RunSummary) -> None:
     """Install ``summary`` as the active aggregator for the rest of the run."""

@@ -12,7 +12,7 @@ from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import CheckResult, NodeStatus
 
 from composer.spec.cvl_generation import GeneratedCVL
-from composer.spec.source.report.collect import ReportComponentInput, Verdict, VerdictFetcher
+from composer.spec.source.report.collect import Formalized, Verdict, VerdictFetcher
 from composer.spec.source.report.schema import Outcome, RuleName
 
 _log = logging.getLogger(__name__)
@@ -51,12 +51,13 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
 
 def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[GeneratedCVL]:
     """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, keyed by each
-    component's run link. POU calls run off the event loop (one blocking call per run)."""
+    component's run link. POU calls run off the event loop (one blocking call per run). Only ever
+    invoked for delivered results (collect skips gave-up / curtailed inputs)."""
     api = api or ProverOutputAPI()
 
-    async def fetch(inp: ReportComponentInput[GeneratedCVL]) -> dict[RuleName, Verdict]:
-        if inp.formalized is None or inp.formalized.run_link is None:
+    async def fetch(formalized: Formalized[GeneratedCVL]) -> dict[RuleName, Verdict]:
+        if formalized.run_link is None:
             return {}
-        return await asyncio.to_thread(_fetch, api, inp.formalized.run_link)
+        return await asyncio.to_thread(_fetch, api, formalized.run_link)
 
     return fetch
