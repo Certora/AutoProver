@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
+
+from langchain_core.embeddings import Embeddings
 
 # claim we always import ST
 if TYPE_CHECKING:
@@ -16,3 +18,19 @@ else:
         def get_model() -> "SentenceTransformer":
             raise NotImplementedError("Sentence transformers not available")
 
+
+class DefaultEmbedder(Embeddings):
+    def __init__(self, model: "SentenceTransformer | None" = None):
+        self.model : "SentenceTransformer" = get_model() if not model else model
+
+    @override
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.model.encode_document(
+            texts
+        ).tolist() #type: ignore
+
+    @override
+    def embed_query(self, text: str) -> list[float]:
+        return self.model.encode_query(
+            [text]
+        ).tolist()[0] #type: ignore

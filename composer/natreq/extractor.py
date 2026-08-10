@@ -22,7 +22,7 @@ from composer.input.types import RAGDBOptions
 from composer.rag.db import ComposerRAGDB, rag_context
 from composer.rag.models import get_model
 from composer.workflow.services import checkpointer_context
-from composer.tools.search import cvl_manual_search
+from composer.tools.search import cvl_manual_tools
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import IOHandler
@@ -128,7 +128,7 @@ async def get_requirements(
         mem_tool,
         results_tool,
         human_in_the_loop,
-        cvl_manual_search(ExtractionContext),
+        *cvl_manual_tools(ExtractionContext),
         *get_rough_draft_tools(ExtractionState),
     ]
     async with (

@@ -107,10 +107,7 @@ It is this "working version" of the specification that the current counterexampl
    for subsequent rounds rather than re-fetching.
 - **VFS reads** (`get_file`, `grep_files`, `list_files`) — explore the source code, especially the contracts being called by the rule.
     Real implementations beat any summary; if a callee's source is in the VFS, that's almost always the right place to start.
-- **CVL manual / KB / `cvl_research`** — for syntax, idioms, and CVL feature questions. The researcher gives synthesized multi-step
-   answers; manual / KB tools are for narrow lookups. The researcher's answers are
-   cached and tagged with `Document-Ref` strings — see the document-references
-   section below for how to use them.
+{% include "cvl_tools_system_prompt.j2" %}
 - **`summary_critic`** — pre-flight your proposed change for soundness and faithfulness to the system document.
    ALWAYS invoke before delivering; address its issues if it returns `sound: false`.
    Pass `prior_cvl` = the baseline you drafted against (your memory's last proposal,
@@ -120,10 +117,6 @@ It is this "working version" of the specification that the current counterexampl
    round, write back the new proposal, the diagnosis it addresses, what you tried
    and rejected, and any open hypotheses. Path discipline is critical — entries
    under any other key are invisible to your future self.
-
-{% with doc_ref_code = false %}
-{% include "doc_ref_author.j2" %}
-{% endwith %}
 
 {% include "cex_remediation_procedure.j2" %}
 

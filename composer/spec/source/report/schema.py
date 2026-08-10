@@ -122,6 +122,43 @@ class GaveUpComponent(BaseModel):
     properties: list[PropertyFormulation]
 
 
+class DraftedProperty(PropertyFormulation):
+    """A curtailed component's property the author claims to have encoded, with the units it
+    named at publish. Unverified: the publish gates were lifted, so the claim was never checked
+    against a judge or a verification run."""
+    units: list[RuleName] = Field(
+        default_factory=list,
+        description="The rule/test names the author declared for this property — an unchecked claim.",
+    )
+
+
+class CurtailedSkip(PropertyFormulation):
+    """A curtailed component's property the author explicitly skipped (typically citing the
+    budget) before publishing what remained."""
+    reason: str
+
+
+class CurtailedComponent(BaseModel):
+    """A component whose formalization the run budget cut short. Whatever it published was
+    accepted with the validation gates lifted, so neither the encoding nor any verification
+    result is reliable: the component contributes nothing to ``properties``/``rules``/``groups``
+    and is reported in the budget appendix instead. Its inferred properties are partitioned by
+    disposition: ``drafted`` (claimed encoded, unverified), ``skipped`` (explicitly declined,
+    with reason), ``unattempted`` (never reached)."""
+    component: ComponentName
+    #: Project-relative path of the quarantined partial encoding; None when the run was cut off
+    #: before anything was published.
+    artifact: str | None = None
+    #: Last verification-run link the partial result carried, if any (context only — its
+    #: outcome predates the final encoding and proves nothing about it).
+    run_link: str | None = None
+    #: Optional account of the termination (hard-stop message / the author's own words).
+    detail: str | None = None
+    drafted: list[DraftedProperty] = Field(default_factory=list)
+    skipped: list[CurtailedSkip] = Field(default_factory=list)
+    unattempted: list[PropertyFormulation] = Field(default_factory=list)
+
+
 class PropertyGroup(BaseModel):
     """An audit-level "P-NN" heading: a synthesized claim over a set of `FormalizedProperty`s (its
     ``members``, by identity). Members partition — each property belongs to exactly one group —
@@ -147,8 +184,28 @@ class CoverageReport(BaseModel):
     rules_spanning_multiple_groups: list[RuleName] = Field(default_factory=list)
     skipped_count: int = 0
     gave_up_component_count: int = 0
+    curtailed_component_count: int = 0
     dropped_orphan_rules: int = 0
     warnings: list[str] = Field(default_factory=list)
+
+
+class AppliedEditRecord(BaseModel):
+    """Provenance of one applied source edit, as the editor reported it. Duplicates the
+    workflow-internal ``AppliedEdit`` shape on purpose: report.json is a persisted contract and
+    must not alias a model that is free to refactor."""
+    edit_id: str
+    executive_summary: str
+    why_sound: str
+
+
+class SourceEditRecord(BaseModel):
+    """The source modifications one component's verification ran against: the editor's per-edit
+    account in application order, plus the cumulative unified diff from the on-disk baseline to the
+    proved source. Its presence means the component's outcomes are claims about the modified code,
+    not the code as shipped."""
+    component: ComponentName
+    applied_edits: list[AppliedEditRecord]
+    cumulative_diff: str
 
 
 type ReportBackend = Literal["prover", "foundry"]
@@ -157,9 +214,70 @@ this tag just lets the renderer pick the right outcome labels ("Verified" vs "Su
 for a report.json it reads cold."""
 
 
+# ---------------------------------------------------------------------------
+# Findings — violated rules surfaced as audit issues.
+#
+# A `Finding` records a violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) as an audit
+# issue: a ``title``, a ``severity``, and the ``content`` write-up, synthesized from the rule's
+# counterexample analysis and the properties/groups it breaks (see ``report/findings.py``). The field
+# set follows the "Submit Issue" body of the Sherlock Audit Engine API — schema at
+# https://api-audit-engine.sherlock.xyz/v1/docs/public — so a finding maps cleanly onto a submission,
+# but the source ``locations`` a submission needs
+# (``{owner}/{repo}`` / file / line) are NOT produced here: a run knows only local paths and CVL-spec
+# lines, so the submission layer reconstructs locations from the engagement scope + the counterexample.
+# The report-time locator is on ``provenance`` (rule name, spec file, prover-run link).
+# ---------------------------------------------------------------------------
+
+type SeverityTier = Literal["critical", "high", "medium", "low", "informational"]
+type ImpactLevel = Literal["high", "medium", "low", "none"]
+"""Impact axis. ``none`` marks a property break with no real-world consequence (a specification or
+code-quality observation); it resolves to ``informational`` severity."""
+type LikelihoodLevel = Literal["high", "medium", "low"]
+
+
+class AuthoredContent(BaseModel):
+    """The written sections of a finding. These are what the findings LLM produces, so the field
+    descriptions double as its instructions."""
+    summary: str = Field(description="A one to three sentence summary of the finding.")
+    description: str = Field(description="The full technical explanation of the vulnerability and how it manifests, grounded in the counterexample.")
+    impact: str = Field(description="The concrete consequence if the issue is exploited — funds at risk, denial of service, data exposure, and so on.")
+    attack_path: str | None = Field(default=None, description="The step-by-step path from the counterexample that triggers the issue, when one applies.")
+    assumptions_and_uncertainties: str | None = Field(default=None, description="Assumptions the finding relies on, and anything you are uncertain about.")
+
+
+class IssueContent(AuthoredContent):
+    """A finding's ``content``: the authored sections plus the evidence the report attaches."""
+    proof_of_concept: str | None = None
+    references: list[str] | None = None
+
+
+class FindingProvenance(BaseModel):
+    """Report-only trace from a finding back to the verdict that produced it (not part of a
+    submission payload)."""
+    rule_name: RuleName
+    spec_file: str
+    outcome: Outcome
+    group_slugs: list[str] = Field(default_factory=list)
+    prover_link: str | None = None
+    impact: ImpactLevel | None = None
+    likelihood: LikelihoodLevel | None = None
+    #: The findings LLM's justification for the assessed impact and likelihood.
+    risk_reasoning: str | None = None
+
+
+class Finding(BaseModel):
+    """A violated rule rendered as an audit issue. ``severity`` is computed from the assessed impact
+    and likelihood (both recorded on ``provenance``); ``content`` holds the write-up. Source
+    ``locations`` are added by the submission layer, not stored here."""
+    title: str
+    severity: SeverityTier
+    content: IssueContent
+    provenance: FindingProvenance | None = None
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0"] = "3.0"
+    schema_version: Literal["3.0", "3.1"] = "3.1"
     backend: ReportBackend = "prover"
     contract_name: str
     run_timestamp_utc: str | None = None
@@ -171,4 +289,14 @@ class AutoProverReport(BaseModel):
     #: Formalization gaps — properties that exist but no rule formalizes (see the two gap types).
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
+    #: Components the run budget cut short — excluded from every table above, rendered as an
+    #: appendix.
+    curtailed_components: list[CurtailedComponent] = Field(default_factory=list)
+    #: Source modifications each component's verification ran against; empty when every
+    #: component was verified against the on-disk source.
+    source_edits: list[SourceEditRecord] = Field(default_factory=list)
     coverage: CoverageReport
+    #: Violated rules surfaced as audit issues (one per BAD rule; empty
+    #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose
+    #: is synthesized at report time — see ``report/findings.py``.
+    findings: list[Finding] = Field(default_factory=list)

@@ -13,6 +13,7 @@ from composer.spec.types import SourceIdentifier
 from composer.spec.service_host import ServiceHost, Sort
 from composer.spec.util import slugify_filename
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
+from composer.diagnostics.budget import budget_monitor
 
 DESCRIPTION = "Component analysis"
 
@@ -160,7 +161,8 @@ async def run_component_analysis[T: BaseApplication](
         [memory, *get_rough_draft_tools(AnalysisState), *env.analysis_tools]
     ).inject(
         lambda g: initial_template.bind(prompt_params).render_to(g.with_initial_prompt_template)
-    )
+    ).with_monitor(budget_monitor())
+
 
     graph = b.compile_async()
     inputs : list[str | dict] = []

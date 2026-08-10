@@ -19,7 +19,7 @@ from graphcore.testing import Scenario, tool_call_raw, ToolCallDict, Initialized
 from langgraph.store.postgres.aio import AsyncPostgresStore
 
 from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 from composer.spec.agent_index import AgentIndex
 
 from .conftest import needs_postgres, QnATransformer, EMBEDDING_DIM

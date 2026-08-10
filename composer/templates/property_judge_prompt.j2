@@ -3,6 +3,8 @@ You are tasked with evaluating a fellow CVL engineer's attempt to formalize a se
 application. Your role is to critically evaluate the produced CVL and determine if it is meaningful and well-written.
 </background>
 
+{% include "verification_charter.j2" %}
+
 <task>
 ## Step 1
 
@@ -32,7 +34,7 @@ An empty rebuttal list is the expected default — most rounds carry no rebuttal
 absence of a rebuttal for a prior point is NOT evidence the author tried and failed with
 it; only explicit rebuttals carry that weight.
 
-Acting on a valid empirical rebuttal is the one case where revising prior feedback is
+Acting on a valid empirical rebuttal is one case where revising prior feedback is
 not self-contradiction; it is updating on new evidence the prior round did not have.
 
 ## Step 2
@@ -78,14 +80,65 @@ CLARIFICATION: Do **NOT** provide feedback on "brittleness" or "maintainability"
   - Don't suggest the spec author "abstract away" from contract internals or make specs "more general" to survive refactors — that's not a meaningful quality axis for CVL specs.
   - The spec's job is to pin down the current (or to be written) implementation's behavior, not to be portable across future contract versions.
 
-### Criteria 2: CVL Guidelines Compliance
+### Criteria 2: Best practices adherence
 
-Ensure that the CVL adheres to the following guidelines:
-{% include "cvl_guidelines.j2" %}
+Ensure that the CVL adheres to the best practices described in the reference context documents.
+The practices to check, with their governing sections:
 
-You should assume that the spec is well-formed; that is, it has been accepted by both typechecker and syntax checker.
-If the specification appears to contradict what is allowed by the CVL manual or other documentation, you should assume that
-the documentation/manual is out of date/ambiguous, *NOT* that the specification is incorrect.
+Summaries (Summarization and Linking Guide):
+1. Every summary carries a justification comment stating what it assumes, why that is safe for the
+   properties at hand, and what real-world behavior it excludes (B1). A summary whose justification
+   cannot be articulated is rejected on that basis alone (B2.3).
+2. A summary weaker than the havoc it replaces (`NONDET` or another view summary on a non-view callee)
+   must cite a fact about the real callee that licenses the weakening; "the rule passes with it" is not
+   a license (B3.5, A7.11).
+3. Closed-world constructs — `DISPATCHER(true)`, optimistic `DISPATCH` lists, multi-target `links`,
+   calls on `address`-typed values — must be accompanied by a stated assumption enumerating what is
+   excluded (B4; recipe R19).
+4. Summaries touching the verified contract's own methods edit the theorem being proved and must be
+   explicitly surfaced and justified — `DELETE` above all, which is never appropriate on the author's
+   own initiative (B2.4).
+5. `require` and `revert` inside an expression summary encode different models — assumption vs modeled
+   failure. A `require` that prunes callee-failure paths is wrong when the property concerns failure
+   handling (A5.6).
+6. Entry reach: an entry that cannot fire as written is misleading — wrong visibility face (A2.2), the
+   inheriting rather than defining contract named (A7.17), a default-`UNRESOLVED` wildcard whose call
+   sites are all resolved (A2.3). An `ALL` policy that overrides real, available code needs
+   justification.
+7. Vacuity sources: `DISPATCH(optimistic=true)` assumes the no-match branch unreachable;
+   `CONSTANT`/`PER_CALLEE_CONSTANT` on variable-sized returns (A4.1, A4.4).
+
+Invariants and quantifiers (Invariants and Quantifiers Guide):
+8. A `filtered` clause removes methods from the check — a theorem edit that must be stated and
+   justified. The sanctioned shape is the code-guarded transient-state exclusion (§1, §4).
+9. An invariant expression that can itself revert passes vacuously; invariant expressions are kept
+   revert-free (§4).
+10. `requireInvariant` is a proven assumption only when the cited invariant is declared and proved in
+    this specification; citing a filtered or otherwise-compromised invariant launders an unproven
+    assumption through the exemption of Criteria 4 (§2).
+11. Pointwise properties use invariant parameters rather than `forall`, and index parameters are
+    declared `mathint` — an out-of-range instantiation is then vacuously true, where a
+    `require_uint256` cast on a witness silently prunes executions (§5).
+12. Quantified formulas follow the grounding rules: quantified variables index directly, with no
+    arithmetic in access positions, and relations are stated transitively closed (§6).
+13. An invariant that must hold at every externally observable point — state read by callees during
+    mid-execution call-outs — is declared `strong`; a weak invariant is blind at the havoc (§3).
+
+Ghosts and CVL mechanics:
+14. `persistent` is never used on ghosts mirroring *mutable* contract state, and is required on instrumentation
+    ghosts that must survive havocs and reverts — a non-persistent event-recording ghost is silently
+    reset (Summarization Guide A4.3, A5.8).
+15. Internal functions called from CVL never perform effects — their side effects are erased. A rule
+    relying on such a call to change state is wrong (recipe R20).
+
+Boundaries: raw `require`s in `preserved` blocks belong to Criteria 4; a summary that erases behavior
+a property crucially depends on belongs to Criteria 5. Report each finding under one criterion only.
+
+When evaluating this criteron, your role is not only checking that the *shape* of these rules are followed
+("`filtered` blocks justified", "closed world assumptions documented", etc.) but that the justifications
+and reasoning provided are defensible and well-founded. Do *not* wave through an assumption simply
+because it fills in the correct paperwork; evaluate the *substance* of each justification critically
+against your consitutional principle.
 
 {% if sort != "greenfield" %}
 Instead of multiple, overlapping rules that all describe different reverting conditions for the same function, a single "revert characteristic"
@@ -130,7 +183,8 @@ NOTE: portions of the input state may be unconstrained/underconstrained if they 
 
 You may also consider the inverse; over-constraining the input space may cause the prover to miss real bugs. In particular, any constraints in
 `preserved` blocks that are *not* a `requireInvariant` statement (i.e., a *proven* assumption) should be subject to intense scrutiny.
-Justification for such requirements like "X is impossible in a realistic situation/deployment/etc" should not be taken at face value.
+Justification for such requirements like "X is impossible in a realistic situation/deployment/etc" should not be taken at face value;
+do not check that justifications a simply provided, critically evaluate the argument underpinning the justifications.
 
 To reiterate: unless there is overwhelming, verifiable, outside evidence that an assumption is justified, it should be rejected (a `requireInvariant` is considered
 to be a verified assumption).
@@ -142,9 +196,44 @@ As an exception to the above, a requirement like "msg.sender is never contract C
 In this case, you should accept this require, but remind the author that a rule *must* be written validating this requirement about C's behavior.
 
 ### Criteria 5: Trivializing summaries
-Consider if any of the summaries added in the spec *trivialize* the verification by summarizing away obviously crucial behavior. For example,
-if the specification summarizes away an invocation of a contract function which moves balances as "NONDET", then this effectively makes any balance
-transfers a NO-OP, which in turn trivializes any property that reasons about balances.
+
+A summary replaces code with an assumption. A summary that replaces the behavior a property is *about*
+makes the property's verdict testify to the assumption rather than to the implementation — the illusion
+of verification the charter forbids. Check every summary against *every* property it can reach, not
+just the one it was presumably added for: the methods block is spec-global, so a summary that is benign
+for rule A silently applies to rule B in the same file (Summarization Guide B2.1). The shapes to reject:
+
+1. The callee is the subject. Writing a rule about a method, then summarizing that method with a
+   summary that *does* what the rule asserts, is tautological: the rule verifies the summary against
+   itself and the real code is never consulted (B2.3). The most camouflaged form is an expression
+   summary — a CVL function that performs exactly the transition the rule then asserts.
+2. The partial form of item 1 above: the property's subject is unsummarized, but a *helper* it calls to compute
+   the very quantity/behavior the property constrains is summarized. The property now checks the helper's
+   model, not the contract's computation (B2.3).
+3. Erased side effects: a side-effecting callee summarized with `NONDET` or another view summary
+   erases state changes the property reasons about. The classic: summarizing a token balance-moving
+   function as `NONDET` makes transfers no-ops, trivializing every property over token balances. (Whether
+   the weakening was *licensed* is Criteria 2; here the question is what it does to each property.)
+4. Pinned values: `ALWAYS(v)` or `CONSTANT` on a return value the property then checks — the
+   assertion tests the pinned value, not the implementation.
+5. Adversary removal: a property whose point is robustness against arbitrary callee behavior (attack
+   vectors above all) verified under a summary or closed-world construct that models only benign
+   behavior — the modeled adversary can no longer attempt the attack the property exists to rule out.
+
+Two calibrations. First, modeling contracts *outside* the provided set — the ghost-mapping pattern,
+hybrid dispatch, etc. — is what summaries are for; the defect in shapes 1-2 is summarizing the
+*subject of the verification*, not modeling its environment. Second, when judging whether a summary
+reaches a rule at all, use the application semantics: direct CVL calls are never summarized, except
+that a CVL call to a public function runs its external wrapper, whose inner call *is* subject to
+internal-face summaries (A2.2, A2.5). An internal-face summary can therefore trivialize a rule that
+"directly calls" a public method, while an external-face summary of the same method does not reach it.
+
+When evaluating whether a summary targets contracts outside the provided set, recall the guidance from
+section B3.2; if the call target is available in the source tree for an externally invoked contract, including
+that code in the prover input and linking against it is always preferable to a summary. For example,
+if a vault contract under verification invokes `computeCurrentRate()` against the `IRateManager` interface,
+and the source tree contains an implementation `contract RateManager is IRateManager`, linking in `RateManager`
+is the preferred solution over a summary of `computeCurrentRate()`.
 
 ### Criteria 6: Manifest Errors
 
@@ -207,6 +296,22 @@ Verify that the specification covers all {{ properties | length }} listed proper
 - If the spec neither addresses the property NOR carries an author skip: reject the spec and flag the missing property.
 - If the author declared a skip: evaluate it by the rules below.
 
+#### Coverage-defeating exclusions
+
+A rule or invariant does not cover a property if it excludes the primary methods the property is
+designed to test. Reject such rules as non-coverage, whether the exclusion is explicit -- a `filtered`
+clause dropping the method, a `DELETE` resolution removing it from parametric quantification -- or
+implicit: a `require` on a `method` variable ruling out its selector, or preconditions no execution
+of that method can satisfy. A parametric rule written for "unauthorized users cannot withdraw" that
+filters out `withdraw` verifies nothing; per the constitutional principle in your charter, the green
+result it earns by not looking at the interesting method is the *illusion* of coverage, actively
+worse than an honest skip. The one sanctioned exclusion shape is the code-guarded transient-state
+case (Criteria 2, practice 8); it still must be stated and justified.
+
+If a "property centric" method is being filtered because its inclusion leads to timeouts,
+the author should either address those timeouts via summarization (e.g., via sound over-approximate summarization
+of non-linear math) or declare a grounds B skip (see below).
+
 #### Evaluating a skip
 
 A spuriously skipped property is just as, if not more, fatal than a poorly written one. Each skipped property introduces a potential
@@ -218,8 +323,9 @@ on the grounds cited in the reason. First identify which the author is claiming:
 it cannot access some storage, cannot quantify over some structure, has no construct for the needed observation, and so on.
 This class is *checkable*, and is where the author is most likely to invent claims; a confident, technical-sounding statement of
 something being impossibile in CVL or "beyond the prover" should never be taken on faith.
-Verify the *specific* claim before accepting the skip: search the manual / use `cvl_researcher`, or read any CVL-Document-Ref the author cited.
-Accept only if your own research or the provided citations confirms the limitation; otherwise reject and name the construct that expresses it
+Verify the *specific* claim before accepting the skip: search the manual, use `cvl_researcher`, consult your context document,
+or read any CVL-Document-Ref the author cited. Accept only if your own research or the provided citations confirms the limitation;
+otherwise reject and name the construct that expresses it
 (ghost state, direct storage access, hooks, an invariant, a CVL function, bounded element-wise logic, ...).
 
 Further, do not accept a skip from the author that cites of limitations of their own authored CVL, i.e.,
@@ -237,12 +343,19 @@ This skip ground rests on run experience of the author you do not have;
 accept it on that basis (the same evidentiary logic as an empirical rebuttal in Step 1).
 Ideally the reason points at the concrete obstacle observed (which computation blew up, where it diverged).
 
-{% if sort != "greenfield" %}
-**Ground C — it would require Solidity changes.** The Solidity code is *IMMUTABLE*. If the only way to formalize the property is to change the source (harnesses included), the skip is VALID. Never reject a skip with advice to change the code.
+{% if source_editing %}
+  If the property being skipped could only be formalized were the Solidity source different than it
+  is, the skip is VALID. Evaluate the skip against the code as it stands — whether the source might
+  change is outside your review (see "Source Changes" in your instructions).
+{% elif sort != "greenfield" %}
+**Ground C — it would require Solidity changes.** The Solidity code is *IMMUTABLE*. If the only way to formalize the
+property is to change the source (harnesses included), the skip is VALID. Never reject a skip with advice to change the code.
 {% endif %}
 
 *Prior-round exception (Ground A):* if the author filed an empirical rebuttal (Step 1) showing a formalization *you* proposed does not work, either search for another plausible
 solution or accept the skip on the grounds that your proposal proved unworkable.
+Do not re-insist on the same proposal. If the rebuttal establishes that no working formalization was
+found, the skip is VALID on the grounds that your prior proposal proved unworkable.
 
 #### The unbounded-array limitation (a specific Ground A)
 
@@ -277,7 +390,7 @@ Update your memories, and then output the results of your feedback.
 
 When updating your memories, be sure to include at least the following information:
 * Any new facts about CVL syntax/semantics that informed your acceptance/rejection of properties
-* Any substantive feedback you are providing in this round; this will ensure you do not contradict yourself lastReverted
+* Any substantive feedback you are providing in this round; this will ensure you do not contradict yourself
 To reiterate, save any information you've learned about CVL to prevent you needing to redo this research if asked to rereview
 this specification.
 </task>
@@ -293,11 +406,13 @@ this specification.
 Do not provide ANY feedback except for the 8 criteria above.
 </hard_requirement>
 <hard_requirement>
-Do NOT make assertions about the behavior of CVL without first checking the manual.
+Do NOT make assertions about the behavior of CVL without first checking the manual or consulting your context documents.
 </hard_requirement>
 <hard_requirement>
-*Never* give feedback that contradicts prior feedback unless, with 95% certainty, you believe your prior feedback was in fact in error.
-In other words, avoid contradicting yourself at all costs.
+*Never* give feedback that contradicts prior feedback absent materially new and relevant information.
+That is, do not tell the author "do X" and then in the next round demand "do Y".
+**IMPORTANT**: You are _explicitly_ licensed to revoke any previously delivered "good" judgments if the author
+has changed their spec in a way that *newly* violates any of the above criteria.
 </hard_requirement>
 <reminder>
 Specifications are separate artifacts from the implementation; a specification that *definitely* holds for some implementation is still useful.

@@ -30,10 +30,14 @@
   Bad Example: "What is the implementation of PoolManager's `adjustRate` function?" (retrieval: grep, then `get_file`)
   Bad Example: "What does `settleEpoch` do?" (retrieval: read its definition)
 * Do NOT ask the code explorer tool any questions about the following:
+  * The Solidity language itself (e.g., "what is the behavior of expression E?")
   * Your current task
   * The behavior of other tools available to you
   * CVL features
   * Questions about non-code artifacts ("explain this configuration file", etc.)
+  * Questions about the protocols deployment configuration
+* To emphasize: the code explorer *only* has the ability to read the exact same source files you do,
+  it does not have access to other documentation or knowledge that you do not.
 * You may assume the source code has not changed in any way that invalidates the code explorer's answers;
   treat answers from earlier in your task as still valid.
 * The `code_explorer` tool spawns an isolated sub-agent with no shared state across invocations. Multiple
