@@ -20,7 +20,9 @@ from composer.input.files import (
 
 from composer.llm.provider import ModelProvider
 
-from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools, DEFAULT_KB_NS as _KB_NS
+from composer.kb.knowledge_base import kb_tools as make_kb_tools
+from composer.llm.types import CacheLevel
+from composer.rag.models import DefaultEmbedder
 from composer.workflow.factories import get_vfs_tools, get_memory_ns
 from composer.workflow.services import standard_connections, IndexedConnections
 from composer.workflow.types import PromptParams, WorkflowSuccess, WorkflowFailure, WorkflowCrash, WorkflowResult
@@ -36,7 +38,7 @@ from composer.natreq.extractor import get_requirements
 from composer.natreq.judge import get_judge_tool
 from composer.spec.cvl_research import CVL_RESEARCH_BASE_DOC, cvl_research_tool
 from composer.tools.relaxation import requirements_relaxation
-from composer.tools.search import cvl_manual_tools, cvl_manual_search
+from composer.tools.search import cvl_manual_tools
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import CodeGenIOHandler, WorkflowPurpose
 from composer.io.context import with_handler, run_graph
@@ -325,8 +327,8 @@ async def _run_codegen(
     memory = conn.memory(get_memory_ns(mem_root, "composer"))
     extra_tools.append(memory)
 
-    research_tool, cvl_builder = _cvl_knowledge_setup(llm, rag_db, conn, workflow_options.recursion_limit)
-    extra_tools.append(research_tool)
+    cvl_knowledge = _cvl_knowledge_setup(llm, rag_db, conn, workflow_options.recursion_limit)
+    extra_tools.append(cvl_knowledge.research_tool)
 
     # VFS tooling: the mutable layer (its materializer is shared into the
     # AIComposerContext) plus an immutable view for the read-only sub-agents.
@@ -342,7 +344,7 @@ async def _run_codegen(
     )
 
     cex_remediation_tools = _remediation_tools(
-        cvl_builder,
+        cvl_knowledge.remediation_builder,
         conn,
         system_doc_doc,
         report_store,
@@ -354,7 +356,7 @@ async def _run_codegen(
     extra_tools.extend(cex_remediation_tools)
 
     cex_handler = AgenticCexHandler(
-        builder=cvl_builder,
+        builder=cvl_knowledge.analyzer_builder,
         report_store=report_store,
         recursion_limit=workflow_options.recursion_limit
     )
@@ -448,23 +450,37 @@ async def _run_codegen(
         return WorkflowCrash(resume_work_key=resume_key, error=exc)
 
 
+@dataclass(frozen=True)
+class _CVLKnowledge:
+    """The codegen workflow's CVL knowledge surfaces, split by tier: the
+    research sub-agent (handed to the codegen author), the manual-only
+    builder for the CEX analyzer sub-agents, and the full-tier builder
+    (manual + recipe retrieval + researcher) for the remediation pair."""
+    research_tool: BaseTool
+    analyzer_builder: Builder
+    remediation_builder: Builder
+
+
 def _cvl_knowledge_setup(
     llm: ModelProvider,
     rag_db: ComposerRAGDB,
     conn: IndexedConnections,
     recursion_limit: int,
-) -> tuple[BaseTool, Builder]:
-    """CVL knowledge tooling built on the standard connections. Returns the
-    research sub-agent (which uses cvl_research's own default run_to_completion
-    runner) and the rag-equipped builder the CEX sub-agents extend — with the
-    research tool already bound, since every consumer wants it. ``base_rag_tools``
-    is the CVL manual + KB search over the standard indexed store."""
-    base_rag_tools = tuple(cvl_manual_tools(rag_db)) + tuple(
-        make_kb_tools(conn.indexed_store, _KB_NS, read_only=True)
-    )
+) -> _CVLKnowledge:
+    """CVL knowledge tooling built on the standard connections. The research
+    sub-agent uses cvl_research's own default run_to_completion runner and
+    carries the manual trio + recipe retrieval (the CVL context documents ride
+    in its initial prompt)."""
+    manual_tools = tuple(cvl_manual_tools(rag_db))
+    recipe_tools = tuple(make_kb_tools())
     builder = (
         Builder()
-        .with_llm(llm.builder_for(), max_prompt_tokens=llm.max_prompt_tokens)
+        .with_llm(
+            llm.builder_for(), max_prompt_tokens=llm.max_prompt_tokens,
+            # The CVL context documents are stable for the whole run and shared
+            # across every remediation / research invocation — 1h TTL.
+            manager=lambda d: llm.provider.cache_marker(d, CacheLevel.LONG),
+        )
         .with_loader(load_jinja_template)
         .with_checkpointer(conn.checkpointer)
     )
@@ -476,9 +492,16 @@ def _cvl_knowledge_setup(
 
     research_doc = CVL_RESEARCH_BASE_DOC + " Do NOT use this for source code questions — use the VFS tools for that."
     research_tool = cvl_research_tool(
-        _CVLResearchEnv(builder, base_rag_tools), research_doc, recursion_limit
+        _CVLResearchEnv(builder, manual_tools + recipe_tools),
+        research_doc, recursion_limit
     )
-    return research_tool, builder.with_tools([*base_rag_tools, research_tool])
+    return _CVLKnowledge(
+        research_tool=research_tool,
+        analyzer_builder=builder.with_tools(list(manual_tools)),
+        remediation_builder=builder.with_tools(
+            [*manual_tools, *recipe_tools, research_tool]
+        ),
+    )
 
 
 def _remediation_tools(
@@ -492,7 +515,7 @@ def _remediation_tools(
     recursion_limit: int,
 ) -> list[BaseTool]:
     """The CEX remediation sub-agent (+ its summary critic) and the agentic CEX
-    handler. ``cvl_builder`` already carries the CVL manual / KB / research
+    handler. ``cvl_builder`` already carries the CVL manual / recipe / research
     tools. Returns the author-facing tools (the remediator + apply-proposal) to
     add to the codegen toolset, plus the handler to inject into the prover via
     ProverDeps. ``recursion_limit`` is threaded into every sub-agent."""
@@ -525,7 +548,7 @@ def _codegen_author_tools(
 ) -> list[BaseTool]:
     """The codegen author's tool set (formerly ``get_cryptostate_builder``'s
     crypto_tools). The prover tool is bound with its per-run deps here;
-    cvl_manual_search takes the rag_db instance directly."""
+    the manual tools take the rag_db instance directly."""
     return [
         CertoraProverTool.bind(
             ProverDeps(cex_handler=cex_handler, prover_opts=prover_opts)
@@ -533,7 +556,7 @@ def _codegen_author_tools(
         propose_spec_change,
         human_in_the_loop,
         code_result,
-        cvl_manual_search(rag_db),
+        *cvl_manual_tools(rag_db),
         *vfs_tooling,
         ReadWorkingSpec.as_tool("read_working_spec"),
         WriteWorkingSpec.as_tool("write_working_spec"),

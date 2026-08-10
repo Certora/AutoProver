@@ -1,7 +1,7 @@
 """Anthropic LLM backend: model-name probing, Files-API uploader, and the
 ``ModelProvider`` implementation that mints ``ChatAnthropic`` instances."""
 
-from typing import Literal, TypeGuard, Any, TYPE_CHECKING
+from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
@@ -14,11 +14,13 @@ from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from composer.llm.pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
+    from graphcore.graph import RawMessageType
 
 
 # --- model probing ---------------------------------------------------------
@@ -202,7 +204,20 @@ class AnthropicService(ProviderServiceBase):
             AnthropicFileUploader.lazy
         )
 
-
+    @override
+    def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
+        if (ttl := level_to_ttl(cache_level)) is None:
+            return super().cache_marker(payload, cache_level)
+        to_ret = payload
+        if not isinstance(to_ret, dict):
+            to_ret = cast(dict, {"type": "text", "text": to_ret})
+        else:
+            to_ret = to_ret.copy()
+        to_ret["cache_control"] = {
+            "type": "ephemeral",
+            "ttl": ttl
+        }
+        return to_ret
 
 @dataclass
 class AnthropicModelProvider:
@@ -213,8 +228,10 @@ class AnthropicModelProvider:
     model_name: str
     options: ModelConfiguration
     features: ModelFeatures
+    price_provider: PriceProvider
 
     provider: AnthropicService = field(default_factory=_get_service)
+
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
@@ -222,6 +239,7 @@ class AnthropicModelProvider:
             model_name,
             options,
             _model_parser(model_name),
+            price_provider_for(model_name)
         )
 
     @property
@@ -233,6 +251,7 @@ class AnthropicModelProvider:
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
         from composer.diagnostics.usage_callback import UsageCallback
+        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -267,7 +286,12 @@ class AnthropicModelProvider:
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=[UsageCallback()],
+            callbacks=[
+                UsageCallback(),
+                CostAccumulator(
+                    self.price_provider, long_cache=cache_level == CacheLevel.LONG
+                ),
+            ],
         )
 
 ANTHROPIC_SPEC = ProviderSpec(
