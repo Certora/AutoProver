@@ -8,6 +8,7 @@ import pytest
 import certora_autosetup.utils.remappings as remappings_mod
 from certora_autosetup.utils.compilation_workarounds import (
     CompilationWorkaroundManager,
+    UnimplementedContractError,
     UnsatisfiableSolcPinError,
 )
 from certora_autosetup.utils.types import ContractHandle
@@ -1312,3 +1313,62 @@ def test_unseeded_cancun_map_not_promoted_to_scalar(manager, monkeypatch, tmp_pa
     assert success is True
     assert compilation_config["solc_evm_version_map"] == {"Foo": "cancun"}
     assert "solc_evm_version" not in compilation_config
+
+
+# A contract that inherits functions it never implements. solc hard-wraps the
+# diagnostic, so the sentence is split across a newline here as it is in a real
+# run's output; the quoted contract name and the source location survive it.
+UNIMPLEMENTED_CONTRACT_OUTPUT = (
+    "Compiling certora/harnesses/TokenInstance1.sol...\n"
+    "solc8.35 had an error:\n"
+    'TypeError: Contract "TokenInstance1" should be marked as \n'
+    "abstract.\n"
+    " --> certora/harnesses/TokenInstance1.sol:7:1:\n"
+    "  |\n"
+    "7 | contract TokenInstance1 is TokenBase {\n"
+    "  | ^ (Relevant source part starts here and spans across multiple lines).\n"
+    "Note: Missing implementation: \n"
+    "   --> src/interfaces/IToken.sol:543:5:\n"
+    "    |\n"
+    "543 |     function transfer(address to, uint256 amount) external returns (bool);\n"
+)
+
+
+def test_detects_unimplemented_contract(manager: CompilationWorkaroundManager) -> None:
+    assert manager._detect_unimplemented_contract(UNIMPLEMENTED_CONTRACT_OUTPUT) == (
+        "TokenInstance1",
+        "certora/harnesses/TokenInstance1.sol",
+    )
+
+
+def test_detects_unimplemented_contract_without_source_location(
+    manager: CompilationWorkaroundManager,
+) -> None:
+    output = 'TypeError: Contract "TokenInstance1" should be marked as abstract.\n'
+    assert manager._detect_unimplemented_contract(output) == ("TokenInstance1", None)
+
+
+def test_ignores_unrelated_unimplemented_contract(manager: CompilationWorkaroundManager) -> None:
+    assert manager._detect_unimplemented_contract(PERSISTENT_STACK_TOO_DEEP_OUTPUT) is None
+
+
+def test_unimplemented_contract_is_terminal(manager, monkeypatch, tmp_path) -> None:
+    # No conf change can complete an incomplete contract: the loop must give up
+    # after the single certoraRun that reported it, rather than letting the
+    # catch-all workaround spend more compilations on the same error.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    fake_run = _SequencedRun([UNIMPLEMENTED_CONTRACT_OUTPUT] * 10)
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run
+    )
+    with pytest.raises(UnimplementedContractError) as excinfo:
+        manager.run_compilation_with_workarounds(
+            cmd=["certoraRun", "test.conf"],
+            config_file=tmp_path / "test.conf",
+            compilation_config={"files": ["contracts/Foo.sol:Foo"]},
+            contracts=contracts,
+            updated_config_dict={},
+        )
+    assert "TokenInstance1" in str(excinfo.value)
+    assert "certora/harnesses/TokenInstance1.sol" in str(excinfo.value)
+    assert fake_run.calls == 1
