@@ -47,28 +47,28 @@ type parameter — the application's **phase enum** `P`:
 
 ```
         ┌─────────────────────────────────────────────────────────────┐
-        │ main()  (composer/cli/*.py)                                   │
-        │   async with entry_point(summary) as run:   ← the Executor    │
-        │       app = FrontendApp()                   ← the Frontend    │
-        │       await run(app.make_handler)           ← the seam        │
+        │ main()  (composer/cli/*.py)                                 │
+        │   async with entry_point(summary) as run:   ← the Executor  │
+        │       app = FrontendApp()                   ← the Frontend  │
+        │       await run(app.make_handler)           ← the seam      │
         └─────────────────────────────────────────────────────────────┘
                  │                                        │
-     ┌───────────▼───────────┐              ┌─────────────▼─────────────┐
+     ┌───────────▼────────────┐              ┌─────────────▼─────────────┐
      │ 2. Entry point /       │              │ 4. Frontend               │
-     │    Executor            │              │    MultiJobApp[P, H]       │
-     │  argv → services →     │              │    OR console handler      │
-     │  a run(handler) closure│              │  supplies make_handler:    │
-     └───────────┬───────────┘              │  HandlerFactory[P, H]      │
+     │    Executor            │              │    MultiJobApp[P, H]      │
+     │  argv → services →     │              │    OR console handler     │
+     │  a run(handler) closure│              │  supplies make_handler:   │
+     └───────────┬────────────┘              │  HandlerFactory[P, H]     │
                  │ calls                     └───────────────────────────┘
      ┌───────────▼───────────┐
-     │ 3. Pipeline            │        1. Phase enum  P: HasName
-     │  run_pipeline(backend) │           (the spine that threads all
-     │  + a PipelineBackend   │            five together)
+     │ 3. Pipeline           │        1. Phase enum  P: HasName
+     │  run_pipeline(backend)│           (the spine that threads all
+     │  + a PipelineBackend  │            five together)
      └───────────┬───────────┘
                  │ contributes
      ┌───────────▼───────────┐
-     │ 5. Artifact store      │
-     │  on-disk layout        │
+     │ 5. Artifact store     │
+     │  on-disk layout       │
      └───────────────────────┘
 ```
 
