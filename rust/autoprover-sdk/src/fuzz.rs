@@ -90,7 +90,10 @@ impl<'a> Arbitrary<'a> for Authored {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
         Ok(match u.int_in_range(0..=2)? {
             0 => Authored::Preflight,
-            1 => Authored::Setup { model: json(u, JSON_DEPTH)? },
+            1 => Authored::Setup {
+                model: json(u, JSON_DEPTH)?,
+                units: Vec::arbitrary(u)?,
+            },
             _ => Authored::Component { unit: json(u, JSON_DEPTH)? },
         })
     }

@@ -308,10 +308,15 @@ mod tests {
 
         let setup: AuthorInput = serde_json::from_str(
             r#"{"kind":"setup","program":"vault","model":{"components":[]},
+                "units":[{"slug":"farms"},{"slug":"vaults"}],
                 "source_unit":{},"prep_facts":{},"props":[],"setup":null,"args":{}}"#,
         )
         .expect("parse");
         assert!(setup.model().is_some() && setup.unit().is_none());
+        // The one turn holding the whole unit set: it is the run's, not this spec's, which is why
+        // it arrives here and not through `unit()`.
+        assert_eq!(setup.units().len(), 2);
+        assert!(comp.units().is_empty(), "a component turn holds its own unit, not the set");
         assert!(setup.prep_facts.is_empty(), "a prep that established nothing says so");
 
         let pre: AuthorInput = serde_json::from_str(
@@ -320,6 +325,7 @@ mod tests {
         )
         .expect("parse");
         assert!(pre.unit().is_none() && pre.model().is_none() && pre.props.is_empty());
+        assert!(pre.units().is_empty(), "nothing is analyzed yet, so there is no unit set");
 
         // …and it round-trips flat, which is what the host parses back.
         let json = serde_json::to_value(&pre).expect("serialize");

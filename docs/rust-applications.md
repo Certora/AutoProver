@@ -329,10 +329,19 @@ units' same-titled properties are two different properties: both reach the artif
 tell them apart, and each is tied to the surface it has to be checkable against. On a component turn
 the field is that turn's own unit; the setup turn is the one that sees more than one.
 
+A setup turn also carries the run's **unit set** (`Authored::Setup::units`). `begin` has it in hand at
+this point, and it is the only callout that sees the set whole — a component turn holds one, a
+preflight runs before any exists. Scaffolding for a multi-unit build is a function of the set rather
+than of any one unit (a manifest's feature list, a crate root's module declarations), so a wheel whose
+setup gate builds that scaffolding can build the real thing rather than a provisional shape something
+later has to complete. It is passed for the gate's benefit, not the author's: nothing in the prompt
+depends on it.
+
 The artifact is **cached** like a formalization result (`RustSetupSpec`), keyed by
 [`_setup_identity`](../composer/rustapp/adapter.py): the program and its crate, the analyzed model,
 the property set, and whether types come from the crate or a generated IDL. Deliberately not the
-whole input — `args` also carries run knobs (a fuzz budget) that don't change what gets authored.
+whole input — `args` also carries run knobs (a fuzz budget) that don't change what gets authored, and
+`units` decides scaffolding rather than content, so a changed slug must not throw the artifact away.
 Authoring + compiling this is a full LLM loop and on a large program the longest single step of a
 run, so a re-run after a downstream failure must not pay for it twice. As with the driver's other
 caches, changing the *prompt* does not invalidate; clear the namespace for that.

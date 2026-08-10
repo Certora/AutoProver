@@ -77,6 +77,15 @@ pub enum Authored {
     Setup {
         /// The analyzed system model, opaque to the SDK — its shape is the ecosystem's.
         model: serde_json::Value,
+        /// Every unit the run is about to formalize, each the same [chain-shaped](ChainData) value a
+        /// component turn gets as [`Authored::Component::unit`].
+        ///
+        /// This is the only callout that sees the set whole: a per-unit turn holds one, and a
+        /// preflight runs before any exists. A wheel whose setup gate builds scaffolding the *whole*
+        /// set implies — a manifest's feature list, a crate root's module declarations — can
+        /// therefore build the real thing here rather than a provisional form something later has to
+        /// complete.
+        units: Vec<ChainData>,
     },
     /// One unit's spec.
     Component {
@@ -144,8 +153,18 @@ impl AuthorInput {
     /// The analyzed system model, on a setup turn.
     pub fn model(&self) -> Option<&serde_json::Value> {
         match &self.authored {
-            Authored::Setup { model } => Some(model),
+            Authored::Setup { model, .. } => Some(model),
             _ => None,
+        }
+    }
+
+    /// Every unit the run is about to formalize, on a setup turn. Empty on the turns that hold no
+    /// set: a preflight (nothing is analyzed yet), and a component turn, which holds its own
+    /// [`unit`](Self::unit) instead.
+    pub fn units(&self) -> &[ChainData] {
+        match &self.authored {
+            Authored::Setup { units, .. } => units,
+            _ => &[],
         }
     }
 }

@@ -88,9 +88,13 @@ PROPS = [
 
 @dataclass(frozen=True)
 class _Unit:
-    """The one `FeatureUnit` member `begin` reads: the name of the unit a property was inferred
-    for, which is what each property carries onto the wire."""
+    """The two `FeatureUnit` members `begin` reads: the name of the unit a property was inferred for,
+    which is what each property carries onto the wire, and the unit's own semantic content, which is
+    what the run's unit set carries."""
     display_name: str
+
+    def feature_json(self) -> dict[str, object]:
+        return {"slug": self.display_name}
 
 
 def _jobs(*prop_lists: list[PropertyFormulation], names: list[str] | None = None) -> list[BackendJob]:

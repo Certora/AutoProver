@@ -474,7 +474,9 @@ class ProjectFacts:
 # Authors the shared setup spec for a run, given the properties it must make checkable. Built by
 # :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for why
 # it runs between extraction and the per-unit fan-out rather than during prep or on first use.
-type SetupAuthor = Callable[[list[UnitProperty], PipelineRun], Awaitable[str]]
+type SetupAuthor = Callable[
+    [list[UnitProperty], Sequence[FeatureUnit], PipelineRun], Awaitable[str]
+]
 
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
@@ -501,9 +503,13 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         (which overlaps property extraction, so no properties exist yet), and it cannot happen
         lazily on first ``formalize`` (whichever unit won the race would decide the artifact the
         rest are then told to work within — see :class:`StagedFormalizer` and
-        docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two."""
+        docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two.
+
+        It is also the only moment the whole **unit set** is known, so that goes to the author too:
+        scaffolding for a multi-unit build is a function of the set rather than of any one unit, and
+        a wheel whose setup gate builds it needs the set to build the real thing."""
         union = [UnitProperty(job.feat.display_name, prop) for job in jobs for prop in job.props]
-        return self._build(await self._author(union, run))
+        return self._build(await self._author(union, [job.feat for job in jobs], run))
 
 
 @dataclass
@@ -558,7 +564,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             prep_facts=project.prep_facts, args=b.declared_args,
         )
 
-        async def author_setup(props: list[UnitProperty], run: PipelineRun) -> str:
+        async def author_setup(
+            props: list[UnitProperty], units: Sequence[FeatureUnit], run: PipelineRun
+        ) -> str:
             # The properties are what the artifact must make checkable, so they are part of both
             # the prompt and the cache identity
             setup_input = prep_input.with_props(_properties(props))
@@ -573,6 +581,10 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             )
             if (hit := await setup_ctx.cache_get(RustSetupSpec)) is not None:
                 return hit.source
+            # Attached *after* the identity, deliberately: the unit set is what a wheel's gate builds
+            # the crate's scaffolding from, not something the artifact is authored from, so a changed
+            # slug must not throw away an artifact that is still correct.
+            setup_input = setup_input.with_units([u.feature_json() for u in units])
             sandbox_dict = await b.sandbox_spec(workdir)
             fixture = await run.runner(
                 b.task_info(setup),
