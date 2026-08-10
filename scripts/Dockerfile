@@ -126,6 +126,13 @@ WORKDIR $AUTOPROVE_HOME/AutoProver
 # name, passed straight to `uv sync --extra`.
 ARG CERTORA_CLI_PACKAGE=certora-cli
 
+# Read by urllib3-future's build hook, which is reached because [tool.uv]
+# no-binary-package forces it to be built from its sdist. Set for the whole stage so it
+# applies to every `uv sync` below: without it that package installs a second copy of
+# `urllib3` over the real one plus a startup hook that keeps reinstating it, and `import
+# urllib3` silently resolves to the fork. See the note in pyproject.toml.
+ENV URLLIB3_NO_OVERRIDE=1
+
 # Dependency layer: lockfile-driven install of all third-party deps WITHOUT the
 # local project. Cached across rebuilds whenever pyproject.toml/uv.lock/graphcore
 # don't change. `graphcore` is the vendored submodule the [tool.uv.sources] path
@@ -145,6 +152,12 @@ COPY . ./
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-editable \
       --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
+
+# Gate on urllib3 having survived the install as itself. Worth a build step because the
+# substitution above is silent when it succeeds: `import urllib3` keeps working, it just
+# resolves to the fork, so a lockfile bump that reintroduces it would otherwise surface
+# much later as a confusing ImportError inside a pipeline phase.
+RUN /opt/autoprove/venv/bin/python scripts/check_urllib3_identity.py
 
 # Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
 COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
