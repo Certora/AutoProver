@@ -26,6 +26,7 @@ from composer.spec.system_model import ContractComponentInstance
 from composer.spec.gen_types import TemplateInstantiation, TypedTemplate, ITypedTemplate, PartialTemplate
 from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.spec.util import uniq_thread_id
+from composer.diagnostics.budget import BudgetPressureAbort, pressure_abort_monitor
 from composer.kb.kb_context import with_cvl_context
 
 class PropertyFeedback(BaseModel):
@@ -34,6 +35,19 @@ class PropertyFeedback(BaseModel):
     """
     good: bool = Field(description="Whether the properties are good as is, or if there is room for improvement")
     feedback: str = Field(description="The feedback on the rule if work is needed. Can be empty if there is no feedback")
+
+
+# Canned judge verdict when the judge was not run (or was killed mid-run)
+# because the author is in its budget wrap-up window. The author's own budget
+# warning tells it feedback approval is no longer required, so a dead judge
+# is expected there, not an error.
+BUDGET_ABORT_FEEDBACK = PropertyFeedback(
+    good=False,
+    feedback=(
+        "The feedback judge was terminated due to budget constraints. "
+        "See the system alert: feedback approval is no longer required for this task."
+    ),
+)
 
 class Properties(TypedDict):
     properties: list[PropertyFormulation]
@@ -182,7 +196,11 @@ def property_feedback_judge_generic[
         i
     ).inject(
         lambda g: system_prompt.render_to(g.with_sys_prompt_template)
-    ).with_tools([*rough_draft_tools, mem, get_cvl(st), ])
+    ).with_tools(
+        [*rough_draft_tools, mem, get_cvl(st), ]
+    ).with_monitor(
+        pressure_abort_monitor()
+    )
 
     async def the_tool(
         exec_ctx: Ctx,
@@ -211,14 +229,18 @@ def property_feedback_judge_generic[
 
         input_parts.append("The proposed CVL file is")
         input_parts.append(cvl)
-        res = await run_to_completion(
-            workflow,
-            input_lift(FeedbackBaseInput(input=input_parts, curr_spec=cvl, memory=None, did_read=False), exec_ctx),
-            thread_id=uniq_thread_id("feedback"),
-            recursion_limit=ctx.recursion_limit,
-            description="Property feedback judge",
-            within_tool=within_tool,
-        )
+        try:
+            res = await run_to_completion(
+                workflow,
+                input_lift(FeedbackBaseInput(input=input_parts, curr_spec=cvl, memory=None, did_read=False), exec_ctx),
+                thread_id=uniq_thread_id("feedback"),
+                recursion_limit=ctx.recursion_limit,
+                description="Property feedback judge",
+                within_tool=within_tool,
+            )
+        except BudgetPressureAbort:
+            return BUDGET_ABORT_FEEDBACK
+
         assert "result" in res
         return res["result"]
     return the_tool

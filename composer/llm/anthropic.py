@@ -14,6 +14,7 @@ from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from composer.llm.pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
@@ -227,8 +228,10 @@ class AnthropicModelProvider:
     model_name: str
     options: ModelConfiguration
     features: ModelFeatures
+    price_provider: PriceProvider
 
     provider: AnthropicService = field(default_factory=_get_service)
+
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
@@ -236,6 +239,7 @@ class AnthropicModelProvider:
             model_name,
             options,
             _model_parser(model_name),
+            price_provider_for(model_name)
         )
 
     @property
@@ -247,6 +251,7 @@ class AnthropicModelProvider:
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
         from composer.diagnostics.usage_callback import UsageCallback
+        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -281,7 +286,12 @@ class AnthropicModelProvider:
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=[UsageCallback()],
+            callbacks=[
+                UsageCallback(),
+                CostAccumulator(
+                    self.price_provider, long_cache=cache_level == CacheLevel.LONG
+                ),
+            ],
         )
 
 ANTHROPIC_SPEC = ProviderSpec(
