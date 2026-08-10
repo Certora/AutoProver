@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: prod # Both dev/stg are available as well
+    env:
+      CERTORA_LAMBDA_URL: ${{ secrets.LAMBDA_FUNCTION_URL }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -60,6 +62,14 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
           aws-region: us-west-2
+
+      - name: Basic who-am-i check
+        run: |
+          # The stored URL ends in a slash and //who-am-i would not route.
+          curl -sS --fail-with-body "${CERTORA_LAMBDA_URL%/}/who-am-i" \
+            --user "$AWS_ACCESS_KEY_ID":"$AWS_SECRET_ACCESS_KEY" \
+            -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
+            --aws-sigv4 "aws:amz:us-west-2:lambda"
 
       - name: run autoprover integration tests
         run: |
