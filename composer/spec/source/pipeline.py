@@ -21,6 +21,7 @@ context and hands them to ``run_pipeline``.
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import override
 
 from langchain_core.tools import BaseTool
@@ -30,7 +31,7 @@ from composer.spec.context import WorkflowContext, CacheKey, CVLGeneration
 from composer.spec.types import PropertyFormulation
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
 from composer.spec.system_model import (
-    ContractComponentInstance, SourceApplication, HarnessedApplication,
+    ContractComponentInstance, ContractInstance, SourceApplication, HarnessedApplication,
     SourceExplicitContract, HarnessedExplicitContract, SourceExternalActor,
     HarnessDefinition, SolidityIdentifier,
 )
@@ -42,12 +43,18 @@ from composer.spec.source.harness import (
 from composer.spec.source.summarizer import setup_summaries
 from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.autosetup import SetupSuccess
-from composer.spec.source.prover import get_prover_tool
-from composer.spec.source.author import batch_cvl_generation
+from composer.spec.source.prover import get_prover_tool, materializing_project
+from composer.spec.source.author import batch_cvl_generation, SourceEditing
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
-from composer.spec.source.report.collect import ReportComponentInput, Verdict, VerdictFetcher
+from composer.spec.source.report.collect import (
+    EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
+)
 from composer.spec.source.report.schema import RuleName
+from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.report.schema import AppliedEditRecord, RuleName, SourceEditRecord
+from composer.spec.source.munge.vfs_diff import diff_against_baseline
+
 from composer.spec.source.task_ids import (
     HARNESS_TASK_ID, AUTOSETUP_TASK_ID, SUMMARIES_TASK_ID,
     INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
@@ -56,9 +63,10 @@ from composer.prover.core import ProverOptions
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun, Delivered, GaveUp,
-    CorePhases, SystemAnalysisSpec, ComponentOutcome, main_instance,
+    CorePhases, SystemAnalysisSpec, ComponentOutcome,
     COMMON_SYSTEM_CACHE_KEY
 )
+from composer.pipeline.ecosystem import main_instance
 
 
 INV_CVL_KEY = CacheKey[None, GeneratedCVL]("invariant-cvl")
@@ -98,7 +106,7 @@ def _lift_harnessed(
 
 
 @dataclass
-class ProverRunner(Formalizer[GeneratedCVL]):
+class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
     """Immutable formalizer: per-batch CVL generation against a fixed prover
     config + resource set (already including ``invariants.spec`` when there are
     structural invariants), plus the in-memory invariant result for the report."""
@@ -108,6 +116,8 @@ class ProverRunner(Formalizer[GeneratedCVL]):
     _resources: list[CVLResource]
     _invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None
     _fetch: VerdictFetcher[GeneratedCVL]
+    _editing: SourceEditing
+    _analysis_store: CexAnalysisStore
 
     @override
     async def formalize(
@@ -129,7 +139,8 @@ class ProverRunner(Formalizer[GeneratedCVL]):
             description=label,
             source=run.source,
             spec_dir=SPECS_DIR,
-            spec_stem=ComponentSpec(feat.slugified_name).stem
+            spec_stem=ComponentSpec(feat.slugified_name).stem,
+            editing=self._editing,
         )
 
     @override
@@ -149,7 +160,40 @@ class ProverRunner(Formalizer[GeneratedCVL]):
         return await self._fetch(inp)
 
     @override
-    async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL]], run: PipelineRun) -> None:
+    async def source_edits(
+        self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        # Only real component outcomes can carry edits: the structural-invariant
+        # phase runs without an editing kit (see SourceEditing).
+        records: list[SourceEditRecord] = []
+        for o in outcomes:
+            if not isinstance(o.result, Delivered) or not o.result.result.applied_edits:
+                continue
+            res = o.result.result
+            records.append(SourceEditRecord(
+                component=o.feat.component.name,
+                applied_edits=[AppliedEditRecord(**e.model_dump()) for e in res.applied_edits],
+                cumulative_diff=await asyncio.to_thread(
+                    diff_against_baseline, res.vfs, Path(run.source.project_root)
+                ),
+            ))
+        return records
+
+    @override
+    def findings_evidence(self) -> EvidenceFetcher | None:
+        # Prover runs capture per-rule counterexample analysis, so this backend opts into findings.
+        return self._fetch_evidence
+
+    async def _fetch_evidence(self, rule_name: str) -> list[RuleEvidence]:
+        # Every instantiation the run analyzed, not just one: a parametric rule can fail differently
+        # per binding while the report shows a single row for the whole rule.
+        return [
+            RuleEvidence(label=r.label, analysis=r.analysis, counterexample=r.counterexample)
+            for r in await self._analysis_store.for_rule(rule_name)
+        ]
+
+    @override
+    async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]], run: PipelineRun) -> None:
         # components_to_prover_runs.json: {run_key (slug): prover /output/ link}.
         runs: dict[str, str] = {
             ComponentSpec(o.feat.slugified_name).run_key: o.result.run_link
@@ -164,7 +208,7 @@ class ProverRunner(Formalizer[GeneratedCVL]):
 
 
 @dataclass
-class ProverPrepared(PreparedSystem[GeneratedCVL]):
+class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]):
     """Post-harness system: holds the harnessed app + prover tool, and runs the
     prover-only pre-formalization fan-out in ``prepare_formalization``."""
     _store: ProverArtifactStore
@@ -173,9 +217,11 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
     _prover_tool: BaseTool
     _prover_opts: ProverOptions
     _analyzed: SourceApplication
+    _editing: SourceEditing
+    _analysis_store: CexAnalysisStore
 
     @override
-    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL]:
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL, ContractComponentInstance]:
         # AutoSetup (+ custom summaries) ∥ structural-invariant formulation; both
         # depend only on the harnessed app, so they run concurrently.
         (setup_config, resources), invariants = await asyncio.gather(
@@ -208,7 +254,12 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
                         description="Structural invariant CVL",
                         source=run.source,
                         spec_dir=SPECS_DIR,
-                        spec_stem=InvariantSpec().stem
+                        spec_stem=InvariantSpec().stem,
+                        # Invariants are assumed as preconditions by every
+                        # downstream spec, so they must hold against the
+                        # unedited source: no editor, frozen source tools,
+                        # immutable-source judge.
+                        editing=None,
                     ),
                 )
                 if isinstance(inv_result, GaveUp):
@@ -233,7 +284,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
         return ProverRunner(
             GeneratedCVL, "prover",
             self._store, self._prover_tool, setup_config.prover_config, resources, invariant,
-            make_prover_fetcher(),
+            make_prover_fetcher(), self._editing, self._analysis_store,
         )
 
     async def _autosetup(self, run: PipelineRun) -> tuple[SetupSuccess, list[CVLResource]]:
@@ -269,10 +320,13 @@ class ProverPrepared(PreparedSystem[GeneratedCVL]):
             lambda: get_invariant_formulation(run.ctx, run.source, run.env, self._harnessed),
         )
 
+AP_PROPERTIES_KEY_NAME = "ap-properties"
 
 @dataclass
 class ProverBackend:
-    """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec]."""
+    """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec,
+    ContractComponentInstance, ContractInstance, SourceApplication]
+    (P, FormT, H, A, Unit, Main, App)."""
     backend_guidance = CERTORA_BACKEND_GUIDANCE
     core_phases = CorePhases({
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
@@ -280,27 +334,32 @@ class ProverBackend:
         "formalization": AutoProvePhase.CVL_GEN,
         "report": AutoProvePhase.REPORT
     })
-    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, "ap-properties")
+    analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, AP_PROPERTIES_KEY_NAME)
 
     artifact_store: ProverArtifactStore
     _prover_opts: ProverOptions
+    editing: SourceEditing
+    analysis_store: CexAnalysisStore
 
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
-    ) -> PreparedSystem[GeneratedCVL]:
+    ) -> PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]:
         sys_desc = await run.runner(
             TaskInfo(HARNESS_TASK_ID, "Harness Creation", AutoProvePhase.HARNESS),
             lambda: run_harness_creation(run.ctx, run.source, run.env, analyzed),
         )
         harnessed = _lift_harnessed(analyzed, sys_desc)
+        # The materializing strategy covers every phase with one tool: an empty
+        # VFS (invariants, or an author that never edited) runs in-situ; a
+        # non-empty one runs in a temp materialization of the working copy.
         prover_tool = get_prover_tool(
-            run.env.llm_heavy(), run.source.contract_name, run.source.project_root,
-            prover_opts=self._prover_opts,
+            run.env.llm_heavy(), run.source.contract_name, materializing_project(run.source.project_root, self.editing.live.mat),
+            prover_opts=self._prover_opts, analysis_store=self.analysis_store,
         )
         return ProverPrepared(
             main_instance(harnessed, run.source),
             self.artifact_store, sys_desc, harnessed, prover_tool,
-            self._prover_opts, analyzed,
+            self._prover_opts, analyzed, self.editing, self.analysis_store,
         )
 
     def to_artifact_id(self, c: ContractComponentInstance) -> ComponentSpec:

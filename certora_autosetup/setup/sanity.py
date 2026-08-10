@@ -48,7 +48,7 @@ class _SanityArgs:
     thinking_tokens: int = 2048
     tokens: int = 4096
     rag_db: str = field(default_factory=lambda: SANITY_DEFAULT_CONNECTION)
-    model: str = "claude-sonnet-4-6"
+    model: str = "claude-sonnet-5"
     memory_tool: bool = True
     interleaved_thinking: bool = True
     prover_capture_output: bool = False
@@ -472,15 +472,14 @@ class SanityPhase:
         try:
             base_dir = self._sanity_analysis_dir / job_id
             reports_dir = base_dir / "Reports"
-            sources_dir = base_dir / "inputs"
             prover_api = self.prover_runner.prover_api
             txt_paths = prover_api.extract_unsat_core_files(job_url, reports_dir)
-            prover_api.extract_certora_sources(job_url, sources_dir)
+            prover_api.fetch_job_sources(job_url, base_dir)
             filtered = [p for p in txt_paths if "rule_not_vacuous" not in p.name]
             self.log("info", f"Extracted {len(filtered)} UnsatCoreTAC file(s) to {reports_dir}")
             return filtered
         except Exception as e:
-            self.log("warning", f"Failed to extract tar for {job_url}: {e}")
+            self.log("warning", f"Failed to fetch unsat cores and sources for {job_url}: {e}")
             return []
 
     def _run_sanity_analyzer(self, txt_path: Path) -> Optional[SanityAnalysisResult]:

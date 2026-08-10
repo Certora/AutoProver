@@ -16,7 +16,7 @@ The agent's real file-reading over a live model is covered by the (nightly) Coun
 integration tape.
 """
 
-from typing import Any, cast, Literal
+from typing import Any, cast
 
 from dataclasses import dataclass
 
@@ -35,10 +35,11 @@ from graphcore.graph import Builder, FlowInput
 
 from langgraph.checkpoint.memory import InMemorySaver
 
+from composer.llm.anthropic import AnthropicRenderer, _get_service
 from composer.input.files import InMemoryTextFile
 from composer.spec.context import WorkflowContext, SourceFields
-from composer.spec.service_host import ModelProvider, CoreModelProvider
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.service_host import ModelProvider
+from composer.spec.util import fs_forbidden_read
 from composer.templates.loader import load_jinja_template
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.ui.autoprove_console import AutoProveConsoleHandler
@@ -73,6 +74,11 @@ class _ToolBindingFakeLLM(FakeMessagesListChatModel):
         return self
 
 
+# The finder graph enables summarization, so a builder must declare a compaction threshold.
+# The fake LLM reports no token usage, so the value only has to exist — it never trips.
+_FAKE_PROMPT_BUDGET = 100_000
+
+
 def _ctx(store: InMemoryStore, cache_ns: tuple[str, ...] | None) -> WorkflowContext[None]:
     return WorkflowContext.create(
         services=lambda _ns: cast(BaseTool, object()),
@@ -92,7 +98,7 @@ class _StubUploader:
         p = pathlib.Path(path)
         if not p.is_file():
             return None
-        return InMemoryTextFile(basename=p.name, string_contents=p.read_text(), provider="anthropic")
+        return InMemoryTextFile(basename=p.name, string_contents=p.read_text(), renderer=AnthropicRenderer())
 
 
 def _source(
@@ -104,7 +110,7 @@ def _source(
         project_root=project_root,
         contract_name=cast(Any, contract_name),
         relative_path=relative_path,
-        forbidden_read=FS_FORBIDDEN_READ,
+        forbidden_read=fs_forbidden_read,
     )
 
 
@@ -168,19 +174,21 @@ async def test_resolve_discovered_doc(tmp_path, monkeypatch):
     assert path == doc
 
 
-async def test_resolve_no_doc_fails_fast_with_reason(tmp_path, monkeypatch):
+async def test_resolve_no_doc_returns_none_for_source_only(tmp_path, monkeypatch):
+    # Discovery finding nothing is no longer fatal: resolve_design_doc returns None
+    # and the pipeline proceeds source-only.
     async def fake_discover(**_kwargs) -> DesignDocChoice:
         return DesignDocChoice(selected_path=None, reason="only a build README here")
 
     monkeypatch.setattr("composer.spec.source.design_doc_finder._discover", fake_discover)
 
-    with pytest.raises(ValueError, match="only a build README here"):
-        await resolve_design_doc(
-            source=_source(str(tmp_path)),
-            uploader=cast(Any, _StubUploader()),
-            models=cast(Any, None),
-            disc_ctx=cast(Any, None),
-        )
+    path = await resolve_design_doc(
+        source=_source(str(tmp_path)),
+        uploader=cast(Any, _StubUploader()),
+        models=cast(Any, None),
+        disc_ctx=cast(Any, None),
+    )
+    assert path is None
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +200,7 @@ async def test_finder_graph_selects_the_design_doc(tmp_path):
     (tmp_path / "design.md").write_text("# Design\nThe counter must never decrease.\n")
     (tmp_path / "README.md").write_text("# Build\nRun `forge build`.\n")
 
-    tools = build_basic_source_tools(str(tmp_path), FS_FORBIDDEN_READ).base_source_tools
+    tools = build_basic_source_tools(str(tmp_path), fs_forbidden_read).base_source_tools
 
     # Script: inventory -> read the design doc -> submit the result.
     responses: list[BaseMessage] = [
@@ -207,7 +215,7 @@ async def test_finder_graph_selects_the_design_doc(tmp_path):
     ]
     builder = (
         Builder[None, None, None]()
-        .with_llm(_ToolBindingFakeLLM(responses=responses))
+        .with_llm(_ToolBindingFakeLLM(responses=responses), max_prompt_tokens=_FAKE_PROMPT_BUDGET)
         .with_loader(load_jinja_template)
     )
     graph = build_finder_graph(builder, tools, "Counter", "src/Counter.sol")
@@ -226,7 +234,7 @@ async def test_finder_graph_can_read_a_pdf_via_read_document(tmp_path):
     user message) and the graph completes with that file selected."""
     (tmp_path / "spec.pdf").write_bytes(b"%PDF-1.4 the protocol specification")
 
-    tools = list(build_basic_source_tools(str(tmp_path), FS_FORBIDDEN_READ).base_source_tools)
+    tools = list(build_basic_source_tools(str(tmp_path), fs_forbidden_read).base_source_tools)
     tools.append(read_document_tool(cast(Any, _StubUploader()), str(tmp_path)))
 
     responses: list[BaseMessage] = [
@@ -241,7 +249,7 @@ async def test_finder_graph_can_read_a_pdf_via_read_document(tmp_path):
     ]
     builder = (
         Builder[None, None, None]()
-        .with_llm(_ToolBindingFakeLLM(responses=responses))
+        .with_llm(_ToolBindingFakeLLM(responses=responses), max_prompt_tokens=_FAKE_PROMPT_BUDGET)
         .with_loader(load_jinja_template)
     )
     graph = build_finder_graph(builder, tools, "Counter", "src/Counter.sol")
@@ -260,7 +268,7 @@ async def test_read_document_keeps_tool_results_adjacent_under_parallel_calls(tm
     (tmp_path / "spec.pdf").write_bytes(b"%PDF-1.4 the spec")
     (tmp_path / "README.md").write_text("# Build\nrun make\n")
 
-    tools = list(build_basic_source_tools(str(tmp_path), FS_FORBIDDEN_READ).base_source_tools)
+    tools = list(build_basic_source_tools(str(tmp_path), fs_forbidden_read).base_source_tools)
     tools.append(read_document_tool(cast(Any, _StubUploader()), str(tmp_path)))
 
     responses: list[BaseMessage] = [
@@ -276,7 +284,7 @@ async def test_read_document_keeps_tool_results_adjacent_under_parallel_calls(tm
     ]
     builder = (
         Builder[None, None, None]()
-        .with_llm(_ToolBindingFakeLLM(responses=responses))
+        .with_llm(_ToolBindingFakeLLM(responses=responses), max_prompt_tokens=_FAKE_PROMPT_BUDGET)
         .with_loader(load_jinja_template)
     )
     graph = build_finder_graph(builder, tools, "Counter", "src/Counter.sol")
@@ -321,7 +329,11 @@ class FakeModelFactory:
 
     @property
     def provider(self):
-        return "anthropic"
+        return _get_service()
+
+    @property
+    def max_prompt_tokens(self) -> int:
+        return _FAKE_PROMPT_BUDGET
 
     def builder_for(self, *args, **kwargs):
         return self.fake

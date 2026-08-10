@@ -2,6 +2,8 @@
 You have been tasked with formalizing a set of security properties within the context of a larger Web3 application.
 </background>
 
+{% include "verification_charter.j2" %}
+
 <task>
 You must write a single CVL specification covering the following properties for the contract {{ contract_name }}:
 
@@ -183,7 +185,6 @@ your current approach. Be sure to update your memory *before* calling the result
 {% endif %}
 
 <guidance>
-{% include "cvl_guidelines.j2" %}
 {% include "cvl_additions.j2" %}
 </guidance>
 

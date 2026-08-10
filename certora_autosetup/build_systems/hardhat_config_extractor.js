@@ -27,11 +27,16 @@ try {
     if (hasTypeScriptConfig) {
         try {
             // Register ts-node with transpileOnly to skip type checking
-            // This allows loading TypeScript configs even if the project has type errors
+            // This allows loading TypeScript configs even if the project has type errors.
+            // moduleResolution must be overridden together with module: forcing
+            // commonjs while the project's tsconfig pins moduleResolution
+            // "nodenext"/"node16" is rejected by TypeScript (TS5110) even in
+            // transpileOnly mode, losing the whole config.
             require('ts-node').register({
                 transpileOnly: true,
                 compilerOptions: {
-                    module: 'commonjs'
+                    module: 'commonjs',
+                    moduleResolution: 'node'
                 }
             });
         } catch (tsError) {
@@ -52,7 +57,12 @@ try {
     // Extract relevant settings
     const output = {
         solidity: config.solidity || {},
-        paths: config.paths || {}
+        paths: config.paths || {},
+        // hre.config is the *resolved* config: when the user config has no
+        // `solidity` entry, hardhat fills in its own built-in default compiler
+        // (0.7.3), which says nothing about what the project's sources need.
+        // Flag that case so the caller can ignore the resolved version.
+        solidityImplicitDefault: hre.userConfig.solidity === undefined
     };
 
     // Output as JSON

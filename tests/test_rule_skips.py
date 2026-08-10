@@ -106,6 +106,9 @@ def _scenario(
         required_validations=required if required is not None else [VALIDATION_KEY],
         rule_skips=rule_skips or {},
         config={"files": ["src/Foo.sol"]},
+        # verify_spec's stamp is bound to the applied-edit history; the source
+        # pipeline always seeds it, so the test state must too.
+        version_history=[],
     )
 
 

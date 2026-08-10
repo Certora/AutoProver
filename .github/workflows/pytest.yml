@@ -2,9 +2,9 @@ name: pytest-check
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
 
 jobs:
   pytest:
@@ -27,4 +27,4 @@ jobs:
 
       - name: Run pytest
         run: |
-          uv run pytest -m 'not expensive' tests/
+          COMPOSER_STRICT_TEMPLATES=1 uv run pytest -m 'not expensive' tests/

@@ -28,7 +28,8 @@ from certora_autosetup.utils.constants import (
     FILE_LLM_USAGE,
     FILE_PROVER_USAGE,
 )
-from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles
+from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles, split_contract_spec
+from certora_autosetup.utils.project_dir import find_build_config_dir
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 from certora_autosetup.utils.llm_util import LlmUsageReport, ledger_reset
 from certora_autosetup.utils.prover_usage_ledger import (
@@ -57,19 +58,26 @@ def main():
     if args.min_loop_iter > args.max_loop_iter:
         parser.error(f"--min-loop-iter ({args.min_loop_iter}) must be <= --max-loop-iter ({args.max_loop_iter})")
 
+    # Scene detection has to look where the build config actually is: in a monorepo that
+    # is the sub-project owning the main contract, not the CWD. Derived from the raw spec
+    # because the main handle is not parsed until further down.
+    cwd = Path.cwd()
+    main_contract_file, _ = split_contract_spec(args.main_contract)
+    build_config_dir = find_build_config_dir(Path(main_contract_file), cwd)
+
     # Parse contract handles
     contract_handles = []
     if args.contract_files_and_name:
         contract_handles = parse_contract_files(args.contract_files_and_name)
         contract_handles = resolve_contract_handles(
-            contract_handles, Path.cwd(), profile=args.profile,
-            requested_build_system=args.build_system,
+            contract_handles, build_config_dir, profile=args.profile,
+            requested_build_system=args.build_system, handles_relative_to=cwd,
         )
 
     if not contract_handles:
         contract_handles = auto_detect_contracts(
-            Path.cwd(), profile=args.profile,
-            requested_build_system=args.build_system,
+            build_config_dir, profile=args.profile,
+            requested_build_system=args.build_system, emit_relative_to=cwd,
         )
 
     contract_handles = deduplicate_contract_handles(contract_handles)

@@ -795,11 +795,83 @@ class SummarySetup:
         routes it to the ``oz_math_rounding`` module."""
         template_content = template_file.read_text()
         processed_content = template_content.replace("$CONTRACT_NAME$", contract_name)
+        processed_content = self._filter_template_entries_to_contract(processed_content, contract_name)
         template_result_file.write_text(processed_content)
 
         self.log(
             f"Processed template {template_file.name} with contract name: {contract_name}"
         )
+
+    @staticmethod
+    def _normalize_type_for_match(sol_type: str) -> str:
+        """Normalize a Solidity type for signature comparison: drop data-location
+        keywords and whitespace, so e.g. ``bytes32[] memory`` and ``bytes32[]`` compare equal."""
+        return re.sub(r"\s+", "", re.sub(r"\b(memory|calldata|storage)\b", " ", sol_type))
+
+    # Materialized methods{} entry: `function <Receiver>.<name>(<params>) ... [returns (<ret>)] ... ;`.
+    # The `.` after the receiver distinguishes these from CVL helper functions
+    # (`function ArbBytes32(...) { ... }`), which have no receiver and are left untouched.
+    _TEMPLATE_METHOD_ENTRY_RE = re.compile(
+        r"^\s*function\s+(?P<receiver>[\w.]+)\.(?P<name>\w+)\s*\((?P<params>[^)]*)\)(?P<tail>[^;]*);\s*$"
+    )
+    _TEMPLATE_RETURNS_RE = re.compile(r"\breturns\s*\((?P<ret>[^)]*)\)")
+
+    def _filter_template_entries_to_contract(self, content: str, contract_name: str) -> str:
+        """Keep only the materialized methods{} entries that correspond to a real method of
+        ``contract_name``, matched by (name, parameter types, return type).
+
+        Templates list several overloads / return variants of a family (e.g. extload's
+        ``extsload`` / ``exttload`` / ``extSload``); a given contract implements only some,
+        and emitting the rest breaks CVL:
+          - two entries for one qualified signature with different returns make
+            ``combineFunctions`` throw "un-mergeable signature for a function that came from
+            the compiler";
+          - a ``DELETE`` summary for a method the contract lacks throws
+            "Only public/external methods are DELETE-able".
+        Emitting only the contract's actual methods avoids both. Entries whose receiver is
+        not ``contract_name`` (e.g. wildcard ``_.``) and every non-entry line are preserved
+        verbatim. If the contract's methods can't be determined, the content is returned
+        unchanged."""
+        try:
+            methods = self.methods_parser.get_methods_by_originating_contract(contract_name)
+        except Exception:
+            methods = []
+        if not methods:
+            return content
+
+        # (name, param-type-tuple, return-type-tuple) present on the contract.
+        present: Set[Tuple[str, Tuple[str, ...], Tuple[str, ...]]] = set()
+        for m in methods:
+            params = tuple(self._normalize_type_for_match(t) for t in m.get("fullSignature", []))
+            rets = tuple(self._normalize_type_for_match(t) for t in m.get("returns", []))
+            present.add((m["name"], params, rets))
+
+        kept: List[str] = []
+        for line in content.splitlines():
+            match = self._TEMPLATE_METHOD_ENTRY_RE.match(line)
+            if match is None or match.group("receiver") != contract_name:
+                kept.append(line)
+                continue
+            params = tuple(
+                self._normalize_type_for_match(p.strip().split()[0])
+                for p in match.group("params").split(",")
+                if p.strip()
+            )
+            ret_match = self._TEMPLATE_RETURNS_RE.search(match.group("tail"))
+            rets = (
+                tuple(self._normalize_type_for_match(r) for r in ret_match.group("ret").split(","))
+                if ret_match
+                else ()
+            )
+            if (match.group("name"), params, rets) in present:
+                kept.append(line)
+            else:
+                self.log(
+                    f"Dropping summary entry {contract_name}.{match.group('name')}"
+                    f"({','.join(params)}): no matching method on the contract"
+                )
+        result = "\n".join(kept)
+        return result + "\n" if content.endswith("\n") else result
 
     @staticmethod
     def _versioned_template_relpath(rel_under_summaries: Path, main_contract: str) -> Path:
@@ -1628,7 +1700,7 @@ Method signature: {method_signature}
             contract_files: Set of Solidity files to analyze
             methods_to_skip: Set of (contract, method) pairs to skip (already marked for
                 summarization by non-LLM step or matched by previous LLM recipes)
-            main_contract: Optional main contract name to filter methods by originatingContract
+            main_contract: Optional main contract name to filter methods to its compilation unit
 
         Returns:
             List of methods that match the criteria, excluding methods in methods_to_skip
@@ -1647,13 +1719,13 @@ Method signature: {method_signature}
 
         mp = self.methods_parser
 
-        # Filter methods by properties and originatingContract
+        # Filter methods by properties and compilation-unit membership
         all_methods = mp.get_all_methods()
         filtered_methods = []
 
         for method in all_methods:
-            # Filter by originating contract if main_contract is specified
-            if main_contract and method.get("originatingContract") != main_contract:
+            # Filter to the main contract's compilation unit if specified
+            if main_contract and main_contract not in method["originatingContracts"]:
                 continue
             method_key = (method["contractName"], method["name"])
 
@@ -1903,8 +1975,8 @@ Method signature: {method_signature}
             # Call LLM using existing infrastructure
 
             try:
-                # Use Claude Opus 4.5 for complex decimal conversion analysis
-                opus_model = "claude-opus-4-5-20251101"
+                # Use Claude Opus for complex decimal conversion analysis
+                opus_model = "claude-opus-5"
                 response = self._make_decimal_summary_call(
                     prompt,
                     opus_model,
@@ -2228,7 +2300,7 @@ Method signature: {method_signature}
     ) -> bool:
         """Run all LLM recipes for one compilation unit and emit per-summarized-contract specs.
 
-        Filters methods by ``originatingContract == contract_name``. Each match is appended
+        Filters methods to those whose compilation unit includes ``contract_name``. Each match is appended
         to ``self._methods_per_contract[match["contractName"]]`` and the corresponding
         ``certora/specs/summaries/{contractName}_summaries.spec`` file is (re-)written with
         the full set of methods seen so far for that contract — methods already in
@@ -2236,7 +2308,7 @@ Method signature: {method_signature}
         across iterations doesn't duplicate summaries even when compilation units overlap.
 
         Args:
-            contract_name: Compilation unit to analyze (matched against ``originatingContract``).
+            contract_name: Compilation unit to analyze (matched against ``originatingContracts``).
             contract_files: Solidity source files passed to ``analyze_with_llm``.
             methods_to_skip: ``(contractName, methodName)`` pairs already handled by the
                 non-LLM step or otherwise not to be reanalyzed. Always merged with
@@ -2309,7 +2381,8 @@ Method signature: {method_signature}
         mp = self.methods_parser
 
         self.log(f"Matching summaries for {main_contract}...")
-        # Filter to only methods that originate from this contract (compilation unit)
+        # Methods in this contract's compilation unit. Membership (originatingContracts) rather
+        # than a single attribution, so a shared library inlined into the unit still matches.
         contract_methods = mp.get_methods_by_originating_contract(main_contract)
         matched_functions: Set[str] = set()
         matched_method_tuples: Set[Tuple[str, str]] = set()
