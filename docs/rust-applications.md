@@ -181,26 +181,30 @@ One struct, serialized at load time, that drives everything non-backend.
 | `evidence_kinds` | the closed set an author may cite when rebutting the judge (§5) |
 
 **Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host resolves these once into a
-`PhaseModel` ([`build_phase_model`](../composer/rustapp/host.py)) — the synthesized
+`PhaseModel` ([`build_phase_model`](../composer/rustapp/host.py)): the synthesized
 `enum.Enum(f"{Name}Phase", …)`, the driver's core-phase mapping, and the frontend's labels and
-section order. Synthesizing the enum is safe because phase members are only ever used for `.name`
-and as dict keys — there are no `isinstance` or identity checks against a static class — and the
-*one* rule (labels must be keyed by the same synthesized members) holds by construction: nothing
-else builds a model, and `build_backend` requires one rather than defaulting to its own.
+section order. Synthesizing the enum is safe because members are only ever used for `.name` and as
+dict keys — nothing compares them against a static class. Resolving *once* is load-bearing, though:
+`enum.Enum(...)` mints a fresh class per call, so labels keyed by one model's members are invisible
+to another. Nothing else builds a model, and `build_backend` requires one rather than defaulting to
+its own.
 
-`role` says **which step of the run the phase groups**, and for the steps the host runs as their own
-visible task it is also the declaration *of* that step: the task is the phase's own label, under the
-phase itself, with id `{app}-{role}`. `grouping` (the default) declares no step — a phase that only
-organizes the UI, like autoprove's harness/autosetup.
+A phase's `role` says **which step of the run it groups**:
 
-The four the driver itself tags — `analysis`, `extraction`, `formalization`, `report` — are
-`PhaseRole.required()` and every descriptor must claim them (`build_phase_model` raises otherwise).
-The rest are optional, and **a role no phase claims is a step the application does not have**:
-`discovery` groups the design-doc task the *entry point* runs before the pipeline (unclaimed, it
-falls back to the first declared phase), `preflight` declares the toolchain check (§4.2), and `setup`
-the shared artifact authored before the fan-out (§4.3). Claiming a step by role rather than by a
-side struct naming a `phase_key` means there is no key for one half to spell and the other to
-match — and no way to point a step at a phase that doesn't exist.
+| `role` | The step |
+|---|---|
+| `analysis`, `extraction`, `formalization`, `report` | the four the driver itself tags. Required — `build_phase_model` raises unless every one is claimed |
+| `discovery` | the design-doc task the *entry point* runs before the pipeline. Unclaimed, that task falls back to the first declared phase |
+| `preflight` | the toolchain check (§4.2) |
+| `setup` | the shared artifact authored before the fan-out (§4.3) |
+| `grouping` (the default) | no step at all — a phase that only organizes the UI, like autoprove's harness/autosetup |
+
+Beyond the required four, **a role no phase claims is a step the application does not have**. For
+`preflight` and `setup` — the steps the host runs as their own visible task — the phase is also the
+declaration *of* that step: the task is the phase's own label, under the phase itself, with id
+`{app}-{role}`. Claiming a step by role rather than by a side struct naming a `phase_key` means
+there is no key for one half to spell and the other to match — and no way to point a step at a
+phase that doesn't exist.
 
 **CLI.** `args: [ArgSpec { flag, help, default, required }]` become `add_argument` calls on top of
 the three positional inputs (`project_root`, `main_contract`, `system_doc`) and the standard flags.
