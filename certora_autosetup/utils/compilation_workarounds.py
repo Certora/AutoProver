@@ -105,6 +105,40 @@ def _path_from_source_location_line(line: str) -> Optional[str]:
     return match.group("path") if match else None
 
 
+# The remediation hint solc attaches to a diagnostic whose fix is "compile this with the
+# IR pipeline", whatever the diagnostic itself is called: the flag spelling (``--via-ir``),
+# the Standard-JSON key (``viaIR: true``), or a mention of the pipeline by name ("via-ir
+# pipeline", "IR pipeline"). Keying on the hint rather than on one diagnostic's wording
+# covers the whole family.
+#
+# Written against whitespace-normalized text (see ``_normalize_ws``); ``-\s?`` absorbs a
+# solc hard-wrap inside a hyphenated token (``--via-\nir`` normalizes to ``--via- ir``).
+# The conf key ``solc_via_ir`` is outside the family — it appears in the "unsupported solc
+# version for solc_via_ir" error, which calls for the opposite fix — so every alternative
+# demands either the ``--`` flag spelling, the JSON key with its colon, or the word
+# "pipeline". ``\bIR`` keeps prose like "through their pipeline" out.
+_VIA_IR_HINT_RE = re.compile(
+    r"--\s?via-\s?ir\b|viaIR:\s?true|(?:\bvia-\s?ir|\bIR)\s+pipeline",
+    re.IGNORECASE,
+)
+
+# Diagnostics that carry the same hint while via-ir is only ONE of the remedies solc
+# offers ("... while enabling the optimizer. Otherwise, try removing local variables"),
+# so the hint does not mean via-ir is required. Their escalation ladder — optimizer,
+# solc's default Yul steps, then relaxing the autofinder assertion — belongs to
+# stack_too_deep_via_ir and the yul_exception_* workarounds.
+_MULTI_REMEDY_DIAGNOSTIC_RE = re.compile(
+    r"YulException|Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack",
+    re.IGNORECASE,
+)
+
+# The label opening a solc diagnostic ("Warning: ...", "TypeError: ...",
+# "UnimplementedFeatureError: ...", "YulException: ..."). It delimits one diagnostic from
+# the next, so a hint is read together with the diagnostic that owns it — and only with
+# that diagnostic's own source locations.
+_DIAGNOSTIC_START_RE = re.compile(r"^\s*(?:[A-Za-z]*Error|Warning|Info|Note|YulException)\b")
+
+
 def _flatten_conf(cmd: List[str], compilation_config: Dict, updated_config_dict: Dict) -> Dict[str, str]:
     """Leaf path -> canonical JSON value, e.g. ``compilation_config.compiler_map.Foo``
     -> ``'"solc6.4"'``. Recurses into dicts only; lists and scalars are leaves.
@@ -907,21 +941,45 @@ class CompilationWorkaroundManager:
         the affected contract name.
 
         Contracts start on plain settings and gain via-ir strictly out of
-        necessity; this is the necessity signal for non-stack reasons, e.g.
-        "UnimplementedFeatureError: Require with a custom error is only
-        available using the via-ir pipeline." Matching is whitespace-normalized
-        per compiled unit, since solc hard-wraps the phrase.
+        necessity. solc spells this necessity several ways ("Require with a
+        custom error is only available using the via-ir pipeline.", "Copying of
+        type ... to storage is not supported in legacy (only supported by the
+        IR pipeline)."), so the detector keys on the remediation hint they share
+        (``_VIA_IR_HINT_RE``) rather than on one diagnostic's wording.
+
+        The hint alone is not the signal: solc appends it to stack-too-deep and
+        YulException diagnostics too, where via-ir is one remedy among several
+        and the optimizer/Yul ladder must be climbed first. A hint therefore
+        counts only inside a diagnostic that offers no other remedy
+        (``_MULTI_REMEDY_DIAGNOSTIC_RE``). Matching is whitespace-normalized per
+        diagnostic, since solc hard-wraps the text.
         """
-        marker = "only available using the via-ir pipeline"
+        lines = output.split("\n")
+
+        def diagnostic_blocks(unit_lines: List[str]) -> List[List[str]]:
+            """Split solc output into one group of lines per diagnostic, so a hint,
+            the diagnostic offering it and its source locations stay together and a
+            neighbouring diagnostic's ``-->`` lines stay out."""
+            blocks: List[List[str]] = [[]]
+            for line in unit_lines:
+                if _DIAGNOSTIC_START_RE.match(line) or _path_from_compiling_line(line) is not None:
+                    blocks.append([])
+                blocks[-1].append(line)
+            return blocks
+
+        def requires_via_ir(block: List[str]) -> bool:
+            normalized = _normalize_ws("\n".join(block))
+            return bool(_VIA_IR_HINT_RE.search(normalized)) and not _MULTI_REMEDY_DIAGNOSTIC_RE.search(normalized)
+
         current_path: Optional[str] = None
         segment: List[str] = []
 
         def segment_hit() -> Optional[str]:
-            if current_path and marker in _normalize_ws("\n".join(segment)):
+            if current_path and any(requires_via_ir(b) for b in diagnostic_blocks(segment)):
                 return self._get_contract_name_from_path(current_path, contracts)
             return None
 
-        for line in output.split("\n"):
+        for line in lines:
             path = _path_from_compiling_line(line)
             if path is not None and "to expose internal function information" not in line:
                 hit = segment_hit()
@@ -935,7 +993,27 @@ class CompilationWorkaroundManager:
         hit = segment_hit()
         if hit:
             self.log(f"Detected via-ir-only feature for {hit} (path: {current_path})")
-        return hit
+            return hit
+
+        # Whole-project compile: certoraRun prints no per-file "Compiling <path>..."
+        # progress line, so no segment carries a path and the offending file is named
+        # only in the `-->` source-location lines of the diagnostic itself. Runs last so
+        # a per-unit hit takes precedence.
+        for block in diagnostic_blocks(lines):
+            if not requires_via_ir(block):
+                continue
+            for line in block:
+                src_path = _path_from_source_location_line(line)
+                if src_path is None:
+                    continue
+                contract_name = self._get_contract_name_from_path(src_path, contracts)
+                if contract_name:
+                    self.log(f"Detected via-ir-only feature for {contract_name} (path: {src_path})")
+                    return contract_name
+                self.log(f"Warning: Could not map path '{src_path}' to contract name", "WARNING")
+                break
+
+        return None
 
     def _detect_yul_exception_stack_too_deep(self, output: str) -> bool:
         """Detect YulException with stack too deep error.
