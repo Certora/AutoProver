@@ -374,7 +374,7 @@ What this means for the backend:
 ### 6.2 The two harness paths (implemented)
 
 Where the harness gets the program's Anchor types from is the one axis the crate rendering turns on
-(`ProgramTypes` in [crucible-app/src/lib.rs](../rust/crucible-app/src/lib.rs)):
+(`ProgramTypes` in [crucible-app/src/harness.rs](../rust/crucible-app/src/harness.rs)):
 
 | | **crate path** | **IDL path** |
 | --- | --- | --- |

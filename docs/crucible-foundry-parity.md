@@ -77,12 +77,12 @@ into a per-task collapsible panel (`ForgeTestRunEvent`, `composer/foundry/runner
 rendered `foundry_app.py:79-97`). Crucible has:
 
 - **No `tui-crucible` script** (`pyproject.toml` has only `console-crucible`).
-- **No emitted events.** `rust/crucible-app/src/lib.rs` declares three event kinds
-  (`fuzz_pulse`, `fuzz_finding`, `build_output`, `lib.rs:666-670`) but contains **no
+- **No emitted events.** The wheel's descriptor (`rust/crucible-app/src/declaration.rs`) declares
+  three event kinds (`fuzz_pulse`, `fuzz_finding`, `build_output`) but the wheel contains **no
   `Command::Emit`** anywhere — the sessions only issue `CallLlm`/`RunCommand`/`Publish`/
   `GiveUp`. So there is no live fuzzing pulse, no streamed findings, no build output
   panel. Crash detection is a post-hoc string match on `[FUZZ_FINDING]` in captured
-  stdout (`lib.rs:598`), never surfaced live.
+  stdout (`validate` in `app.rs`), never surfaced live.
 
 The generic machinery exists and is reachable (`GenericRustApp` in
 `composer/rustapp/frontend.py:77`; a generic `tui_main` in `composer/rustapp/cli.py:92`),

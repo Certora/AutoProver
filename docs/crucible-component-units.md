@@ -197,7 +197,7 @@ What Crucible does with a unit today, and would do per component:
 - verdicts are per **target**, not per property: every property in the unit shares the one fuzz
   run, and a counterexample is attributed back to a property by parsing the `[<property title>]`
   prefix the author is instructed to put on each assertion message
-  ([crucible-app/src/lib.rs:997](../rust/crucible-app/src/lib.rs#L997)).
+  (`attribute_finding` in [crucible-app/src/triage.rs](../rust/crucible-app/src/triage.rs)).
 
 The economics are the mirror image of the Prover's. Builds and campaigns are **local and
 serialized** — a single-permit semaphore, because all units share one crate and one `target/`
@@ -308,7 +308,7 @@ and rejected: moving `SolanaInstruction` objects *inside* components. Reference 
   (accounts, constraints, CPIs, signers). Nesting would force a strict partition and duplicate or
   scatter that data.
 - Backends that read the flat list keep working untouched — Crucible's `api_facts` block
-  ([crucible-app/src/lib.rs:501](../rust/crucible-app/src/lib.rs#L501)) builds the "PROGRAM API
+  ([crucible-app/src/facts.rs](../rust/crucible-app/src/facts.rs)) builds the "PROGRAM API
   FACTS" the fixture author depends on straight off `prog.instructions`, and the shared fixture is
   whole-program by construction. A CVLR backend enumerating entry points would likewise be
   unaffected.
