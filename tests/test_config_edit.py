@@ -18,6 +18,8 @@ from composer.spec.source.munge.tool_names import CONFIG_EDIT
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, prover_config_overlay,
 )
+from composer.spec.system_model import SolidityIdentifier
+from composer.spec.source.prover import ProverStateExtra
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
 
@@ -48,7 +50,7 @@ def _add_file(
     compiler_settings: CompilerSettings | None = None,
 ) -> dict:
     return AddFile(
-        type="add_file", file_path=path, contract_name=contract_name,
+        type="add_file", file_path=path, contract_name=SolidityIdentifier(contract_name) if contract_name is not None else None,
         compiler_settings=compiler_settings,
     ).model_dump()
 
@@ -88,7 +90,7 @@ def _scenario(
     if extra is not None:
         config.update(extra)
     return Scenario(ConfigTestState, TOOL).init(
-        config=config, rule_skips={},
+        config=config, rule_skips={}, reminders_channel=[]
     )
 
 

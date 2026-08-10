@@ -21,9 +21,10 @@ import openai
 
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
-from composer.llm.provider import (
+from .provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from .pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
@@ -220,11 +221,14 @@ class OpenAIModelProvider:
     model_name: str
     options: ModelConfiguration
     features: OpenAIModelFeatures
+    price_provider: PriceProvider
     provider: OpenAIService = field(default_factory=_openai_service)
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "OpenAIModelProvider":
-        return OpenAIModelProvider(model_name, options, _model_parser(model_name))
+        return OpenAIModelProvider(
+            model_name, options, _model_parser(model_name), price_provider_for(model_name)
+        )
 
     @property
     def max_prompt_tokens(self) -> int:
@@ -234,6 +238,8 @@ class OpenAIModelProvider:
         self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_openai import ChatOpenAI
+        from composer.diagnostics.usage_callback import UsageCallback
+        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         kwargs: dict[str, Any] = {
@@ -253,6 +259,9 @@ class OpenAIModelProvider:
             max_completion_tokens=opts.tokens,
             timeout=None,
             max_retries=2,
+            # OpenAI has no cache-TTL knob, so long_cache stays False; cache_write_1h
+            # mirrors cache_write in the table anyway.
+            callbacks=[UsageCallback(), CostAccumulator(self.price_provider)],
             **kwargs,
         )
 

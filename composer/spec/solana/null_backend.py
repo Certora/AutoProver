@@ -34,7 +34,7 @@ from composer.spec.solana.model import (
     SolanaComponentInstance,
     SolanaProgramInstance,
 )
-from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.source.report.collect import Formalized, Verdict
 from composer.spec.source.report.schema import RuleName
 from composer.spec.types import PropertyFormulation
 from composer.spec.util import ensure_dir
@@ -130,7 +130,7 @@ class NullSolanaFormalizer(Formalizer[NullResult, SolanaComponentInstance]):
 
     @override
     async def fetch_verdicts(
-        self, inp: ReportComponentInput[NullResult]
+        self, formalized: Formalized[NullResult]
     ) -> dict[RuleName, Verdict]:
         return {}
 
