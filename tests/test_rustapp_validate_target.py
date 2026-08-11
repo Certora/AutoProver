@@ -25,7 +25,7 @@ from composer.rustapp.session import (
     VALIDATE_KEY, CheckVocab, GateDeps, PropertyCheckMapping, RustSessionState, SessionResult,
     _validate_tool,
 )
-from composer.rustapp.wire import Target, Check, ValidateCoverageError
+from composer.rustapp.wire import Target, Check, Exploration, ValidateCoverageError, Verdict
 from composer.spec.source.report.schema import Outcome
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor, wire_verdict
@@ -162,6 +162,25 @@ async def test_a_partial_run_only_runs_the_targets_it_was_asked_for(tmp_path):
     wheel = _Wheel()
     await _validate(wheel, tmp_path, checks=["c_fees"])
     assert [t.name for t in wheel.targets] == ["c_fees"]
+
+
+@pytest.mark.asyncio
+async def test_a_full_run_asks_for_every_check_to_be_explored_to_budget(tmp_path):
+    # A full run's verdicts are the ones that stamp and get reported, so a checker that could stop
+    # at the first problem must not: the checks it would abandon still answer for themselves, and
+    # what they would say is that they held.
+    wheel = _Wheel()
+    await _validate(wheel, tmp_path)
+    assert [t.exploration for t in wheel.targets] == [Exploration.TO_BUDGET] * 2
+
+
+@pytest.mark.asyncio
+async def test_a_partial_run_lets_the_checker_stop_at_the_first_finding(tmp_path):
+    # The other half of the trade: a partial run exists so the author can iterate on one problem
+    # and never stamps, so buying speed with the other checks' verdicts costs nothing.
+    wheel = _Wheel()
+    await _validate(wheel, tmp_path, checks=["c_fees"])
+    assert [t.exploration for t in wheel.targets] == [Exploration.UNTIL_FIRST_FINDING]
 
 
 @pytest.mark.asyncio
@@ -303,3 +322,34 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
     assert [c.name for c in result.targets[0].checks] == ["c_stake", "c_dbl"]
     assert [s.property_title for s in result.skipped] == ["fees capped"]
     assert dict(result.checks) == {"stake matches": ["c_stake"], "no double stake": ["c_dbl"]}
+
+
+@pytest.mark.asyncio
+async def test_the_result_carries_the_authors_expected_failure_declarations(monkeypatch, tmp_path):
+    # The wheel reports what its run observed; that a failure IS the finding is the author's, and
+    # the session is the only place that knows it. Dropping it here is what let a documented klend
+    # finding reach report.html as "No counterexample" (tests/test_rustapp_declared_findings.py).
+    async def fake_session(**_kw):
+        return SessionResult(
+            commentary="done", spec=SPEC, skipped=[],
+            property_checks=[("stake matches", ["c_stake"])],
+            verdicts={"c_stake": Verdict.with_outcome(Outcome.GOOD)},
+            expected_failures={"c_stake": "klend makes no such guarantee"},
+        )
+
+    monkeypatch.setattr(adapter, "run_session", fake_session)
+    formalizer = adapter.RustFormalizer(
+        cast(Any, _Wheel()), AppDescriptor.model_validate(wire_descriptor())
+    )
+    result = await formalizer.formalize(
+        "Farms", cast(Any, _Feat()),
+        [PropertyFormulation(title="stake matches", sort="invariant", description="d")],
+        cast(Any, _Ctx()), cast(Any, _Run(_Source(str(tmp_path)), _Ctx())),
+    )
+
+    assert isinstance(result, adapter.RustFormalResult)
+    assert result.expected_failures == {"c_stake": "klend makes no such guarantee"}
+    # The wheel's own answer is kept verbatim beside it — the declaration is applied on the way out
+    # (``reported_verdicts``), not folded into the record of what ran.
+    assert result.verdicts["c_stake"].outcome is Outcome.GOOD
+    assert result.reported_verdicts()["c_stake"].outcome is Outcome.BAD

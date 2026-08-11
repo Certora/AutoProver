@@ -10,7 +10,7 @@ use autoprover_sdk::args::DeclaredArgs;
 use autoprover_sdk::authoring::{AuthorInput, Authored, Property, PropertyKind};
 use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::finalize::FinalizeInput;
-use autoprover_sdk::outcome::{Check, Outcome, Target, ValidateOutcome};
+use autoprover_sdk::outcome::{Check, Exploration, Outcome, Target, ValidateOutcome};
 use autoprover_sdk::prep::WorkspacePrep;
 use autoprover_sdk::Backend;
 use autoprover_solana::{SolanaPrep, SolanaSourceUnit};
@@ -114,7 +114,8 @@ pub(crate) fn prop(title: &str, slug: &str) -> Property {
     owned("Withdraw Queue", title, slug)
 }
 
-/// The target one component's properties share, exactly as `checks()` builds it.
+/// The target one component's properties share, exactly as `checks()` builds it — explored to
+/// budget, which is what the host asks for on any run whose verdicts are reported.
 pub(crate) fn target_over(feature: &str, props: &[Property]) -> Target {
     Target {
         name: feature.into(),
@@ -126,7 +127,14 @@ pub(crate) fn target_over(feature: &str, props: &[Property]) -> Target {
                 target: Some(feature.into()),
             })
             .collect(),
+        exploration: Exploration::ToBudget,
     }
+}
+
+/// [`target_over`], for the partial run an author iterates against — which the host lets stop at
+/// the first finding, so the checks it did not refute were never explored.
+pub(crate) fn iterating_target(feature: &str, props: &[Property]) -> Target {
+    Target { exploration: Exploration::UntilFirstFinding, ..target_over(feature, props) }
 }
 
 /// One verdict set as `(check name, outcome, detail)` rows, in the order the target lists them.

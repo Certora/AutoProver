@@ -6,6 +6,10 @@
 >
 > Not a regression. The mechanism predates component units (`crucible-component-units.md` §8.1) and
 > was harmless while there was one unit. It became reachable the moment K ≥ 2.
+>
+> **§7 supersedes part of §4.1.** The campaign no longer stops at the first crash, which was the
+> premise behind reporting a foreign finding as `Unknown`. Read §4.1 for the three-way split and §7
+> for what each way now yields.
 
 ## 1. What was observed
 
@@ -197,7 +201,36 @@ gate, which is the only thing that exercises either — both need a live model t
   check that exercises the real path, since the defect needs a live model to author a fixture
   assertion in the first place.
 
-## 7. Deliberately not covered
+## 7. Superseded: the truncation §4.1 reasoned from is gone
+
+§4.1's `Unknown` rests on one premise — *"the campaign really did stop at the violation"* — and that
+premise was an artefact of how the wheel invoked the fuzzer, not of fuzzing. `--mode explore` quietly
+implies `--stop-on-crash`; without it a campaign records each novel crash, prints a `[FUZZ_FINDING]`
+line for it, and keeps going to its timeout. The klend run of 2026-08-10 is what made this matter: its
+Oracle-Driven Refresh campaign ended at test case **11**, and the other 25 checks in that target were
+reported "No counterexample" on the strength of it — one of them a finding the author had reproduced
+at iteration 11619 and written up in the component's commentary.
+
+So the wheel now spells `explore`'s settings out and omits `--stop-on-crash`, `Target` carries an
+`Exploration` saying how far the host needs this invocation to go, and the §4.1 table gains a column:
+
+| Finding's title | Ran `ToBudget` | Stopped `UntilFirstFinding` |
+|---|---|---|
+| one of **my** checks | that check BAD, carrying every finding that names it | same, and the rest UNKNOWN |
+| **another component's** | left alone — it cost one test case, not the campaign | UNKNOWN, detail naming the owner (§4.1 unchanged) |
+| **unknown to the run** | all BAD | all BAD |
+
+A foreign title no longer truncates anything, so on a full run it stops being this component's
+problem at all — which is what §4.1 wanted and could not have while the campaign died on it. `Unknown`
+survives for the run an author iterates against (`validate_spec(checks=[…])`, which never stamps), and
+there it means what §4.1 said it meant.
+
+What this does **not** recover: Crucible dedups crashes by action-variant sequence, so two properties
+refuted along the same sequence of action *types* still yield one finding. A `GOOD` from a full
+campaign now means "explored to budget and not refuted", which is a real claim — but it is still not
+proof.
+
+## 8. Deliberately not covered
 
 - **Whether the underlying finding is real.** `init_without_signer` tripping its own assertion means
   the rejected init *succeeded*, which is either a program bug or a fixture modelling error. Nothing

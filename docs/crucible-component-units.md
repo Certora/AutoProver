@@ -192,12 +192,14 @@ What Crucible does with a unit today, and would do per component:
 
 - authors one `#[invariant_test] fn` into the **shared** harness crate `certora/crucible/fuzz/<program>/`
   (the analogue of the prover's shared `invariants.spec` is the shared `Fixture`);
-- builds that crate selecting the fn's Cargo feature, then runs **one fuzz campaign**
-  (`crucible run <program> <fn> --mode explore`);
+- builds that crate selecting the fn's Cargo feature, then runs **one fuzz campaign** (`crucible run
+  <program> <fn> --corpus-in ./corpus --corpus-out ./corpus --crashes-out ./output` — `--mode
+  explore`'s settings, spelled out because the mode also implies `--stop-on-crash`, which would end
+  the campaign at the first crash and leave every other property in the unit unexplored);
 - verdicts are per **target**, not per property: every property in the unit shares the one fuzz
-  run, and a counterexample is attributed back to a property by parsing the `[<property title>]`
-  prefix the author is instructed to put on each assertion message
-  (`attribute_finding` in [crucible-app/src/triage.rs](../rust/crucible-app/src/triage.rs)).
+  run, and each counterexample the campaign reports is attributed back to a property by parsing the
+  `[<property title>]` prefix the author is instructed to put on each assertion message
+  (`attribute_findings` in [crucible-app/src/triage.rs](../rust/crucible-app/src/triage.rs)).
 
 The economics are the mirror image of the Prover's. Builds and campaigns are **local and
 serialized** — a single-permit semaphore, because all units share one crate and one `target/`

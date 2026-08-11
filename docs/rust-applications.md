@@ -471,6 +471,17 @@ counterexample reaches the report *as a finding with a justification* rather tha
 examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 `expect_test_failure`.
 
+The marking is the *author's*, and the verdict is the *wheel's*; they meet on `RustFormalResult`,
+whose `reported_verdicts()` is what both the report and the console rollup read. A declared check
+reports `BAD` whatever its run said, because the alternative is the failure this exists to prevent:
+the gate accepts a declared check without ever asking the run to reproduce it, so a documented
+finding whose campaign did not happen to hit it would otherwise reach `report.html` as a clean row.
+The two cases are distinguished in the detail rather than in the outcome — a reproduced finding
+carries its counterexample, an unreproduced one says `NOT REPRODUCED` and names what the run did
+say — because an unreproduced finding rests on the author's reading alone and a reader has to be
+able to tell. `verdicts` itself stays verbatim: attribution remains the wheel's, and the declaration
+is applied on the way out.
+
 **The judge is structured.** When `judge` names a reviewer for an input, the session binds
 `feedback_tool`; a wheel with no judge gets no review machinery and no feedback stamp among its
 required validations. That question is asked once, when the session is built, and takes no spec —

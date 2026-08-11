@@ -191,7 +191,8 @@ def test_validate_returns_per_check_verdicts_and_the_host_records_them():
     # checks the target it was handed covers, which is the one part of the payload that did parse.
     target = json.dumps(
         {"name": "c_invariants",
-         "checks": [{"property": "p", "name": "c_invariants", "target": None}]}
+         "checks": [{"property": "p", "name": "c_invariants", "target": None}],
+         "exploration": "to_budget"}
     )
     out = json.loads(crucible_app.validate("not json", "spec", target, "/tmp", "{}"))
     assert out["kind"] == "verdicts"

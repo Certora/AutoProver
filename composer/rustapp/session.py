@@ -49,7 +49,7 @@ from composer.pipeline.core import GaveUp, PipelineRun
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustFormalResult, RustSetupSpec
 from composer.rustapp.wire import (
-    AuthorInput, CompileOk, Prompt, RustAppModule, Target, Check, ValidateBuildFailed,
+    AuthorInput, CompileOk, Exploration, Prompt, RustAppModule, Target, Check, ValidateBuildFailed,
     expect_payload, expect_text, parse_compile, parse_judge, parse_prompt, parse_validate,
 )
 from composer.rustapp.wire import Verdict as WireVerdict
@@ -295,6 +295,10 @@ class ValidateSpec(
     clean — where a {check} you marked with `expect_check_failure` counts as clean. Naming
     `checks` runs only those, which is for iterating on one problem; it never stamps. Any edit
     after a stamping run invalidates the stamp.
+
+    A full run explores every {check} to the whole budget and reports everything it finds, so it
+    is slower and can come back with several failures at once. Naming `checks` stops at the first
+    failure — quicker feedback while you fix one thing, and not evidence that anything else holds.
     """
     checks: list[CheckName] | None = Field(
         default=None,
@@ -308,6 +312,10 @@ class ValidateSpec(
         if spec is None:
             return "No spec written yet — use `put_spec` first."
         mapping = self.state["property_checks"]
+        # A partial run exists so the author can iterate on one problem, and it never stamps — so it
+        # may stop at the first finding. A full run's verdicts are the ones that reach the report,
+        # and a check it stopped short of exploring has not held.
+        partial = self.checks is not None
         with self.tool_deps() as deps:
             vocab = deps.vocab
             wanted = declared_checks(deps.module, deps.input_json, mapping)
@@ -326,7 +334,15 @@ class ValidateSpec(
                         f"{vocab.many} are: {', '.join(c.name for c in wanted)}."
                     )
                 wanted = [c for c in wanted if c.name in asked]
-            covered = targets_of(wanted)
+            if not wanted:
+                return (
+                    "Nothing to validate: every property is currently skipped. Un-skip one, or "
+                    "`give_up` if none of them can be formalized."
+                )
+            covered = targets_of(
+                wanted,
+                Exploration.UNTIL_FIRST_FINDING if partial else Exploration.TO_BUDGET,
+            )
             verdicts: dict[CheckName, WireVerdict] = {}
             for target in covered:
                 res = parse_validate(
@@ -349,7 +365,6 @@ class ValidateSpec(
                     _emit_verdict(deps, check, verdict)
 
         report = _verdict_report(verdicts, self.state["expected_failures"])
-        partial = self.checks is not None
         unexplained = _unexplained(verdicts, self.state["expected_failures"])
         if partial:
             return f"{report}\n\nThis was a partial run, so it does not satisfy the publish gate."
@@ -372,17 +387,24 @@ class ValidateSpec(
         )
 
 
-def targets_of(checks: Sequence[Check]) -> list[Target]:
+def targets_of(
+    checks: Sequence[Check], exploration: Exploration = Exploration.TO_BUDGET
+) -> list[Target]:
     """``checks`` partitioned into the checker invocations that cover them — one :class:`Target` per
     distinct target name, in first-seen order, each carrying its own checks.
 
     This is the whole of the run-vs-report split: several checks sharing a target means one build
     and one run for all of them, while each still gets its own verdict. The host owns the grouping —
     it decides what runs and in what order — so it hands the answer to the wheel rather than leaving
-    it to re-derive one."""
+    it to re-derive one. ``exploration`` travels the same way and for the same reason: how far a run
+    must go follows from what the host will do with its answer, which the wheel cannot see."""
     names = list(dict.fromkeys(c.target_or_name() for c in checks))
     return [
-        Target(name=name, checks=[c for c in checks if c.target_or_name() == name])
+        Target(
+            name=name,
+            checks=[c for c in checks if c.target_or_name() == name],
+            exploration=exploration,
+        )
         for name in names
     ]
 

@@ -12,7 +12,9 @@ use autoprover_sdk::authoring::{AuthorInput, Authored, Judge, Prompt};
 use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::finalize::FinalizeInput;
-use autoprover_sdk::outcome::{Check, CompileResult, Outcome, Target, ValidateOutcome};
+use autoprover_sdk::outcome::{
+    Check, CompileResult, Exploration, Outcome, Target, ValidateOutcome,
+};
 use autoprover_sdk::prep::{CrateRootInput, SandboxGrants, WorkspacePrep};
 use autoprover_sdk::sandbox::Workspace;
 use autoprover_sdk::Backend;
@@ -23,7 +25,7 @@ use crate::harness::{crate_dep_usable, HarnessSpec};
 use crate::layout::{feature_of_unit, harness_fn, PREFLIGHT_FEATURE, PREFLIGHT_ROOT};
 use crate::section::{delivered_sections, Section};
 use crate::templates::SkeletonFixture;
-use crate::triage::{attribute_finding, finding_detail};
+use crate::triage::{attribute_findings, findings};
 use crate::{declaration, prompts, toolchain};
 
 pub(crate) struct CrucibleApp;
@@ -138,27 +140,36 @@ impl Backend for CrucibleApp {
         let hspec = HarnessSpec::of(input);
         let files = hspec.section_files(fname, spec);
         let dir = hspec.dir_arg(&ws.dir);
-        let args = [
-            "-C", &dir, "run", program, fname, "--release", "--mode", "explore", "--timeout",
-            &timeout.to_string(),
+        let timeout = timeout.to_string();
+        // `--mode explore` is NOT used, though these are its settings: it also turns on
+        // `--stop-on-crash`, and a campaign that quits at the first crash leaves every other check
+        // it covers unexplored while still answering for them. Spelling the settings out is what
+        // lets `Target::exploration` decide that, rather than the mode preset deciding it for every
+        // run. The paths are `explore`'s own and resolve against the invoking cwd, which is where
+        // `crash_meta_paths` looks for the metadata behind a finding — keep them in step.
+        let mut args = vec![
+            "-C", &dir, "run", program, fname, "--release",
+            "--corpus-in", "./corpus", "--corpus-out", "./corpus", "--crashes-out", "./output",
+            "--timeout", &timeout,
         ];
+        if target.exploration == Exploration::UntilFirstFinding {
+            args.push("--stop-on-crash");
+        }
         match ws.run("crucible", args, &files) {
             Ok(out) => {
                 let combined = format!("{}\n{}", out.stdout, out.stderr);
+                let found = findings(&combined, &ws.dir, program, fname);
                 // Order matters: a fuzz finding and a clean run both mean the harness BUILT, so
                 // classify those first — only a *non-zero* exit with build markers is a real
                 // build failure. This keeps `error[...]`-looking runtime/log text in a clean
                 // (exit 0) fuzz run from being misread as a build failure.
-                if combined.contains("[FUZZ_FINDING]") {
-                    // A crash refutes ONE invariant — pin BAD to the property the finding names
-                    // (each assertion is tagged `[<title>]`), holding the rest GOOD over the
-                    // explored space. A title belonging to another component leaves this one
-                    // undetermined; one nobody in the run owns marks all BAD (never hide it).
-                    attribute_finding(
-                        target,
-                        &input.run_props,
-                        finding_detail(&combined, &ws.dir, program, fname),
-                    )
+                if !found.is_empty() {
+                    // Each crash refutes ONE invariant — pin BAD to the property each finding names
+                    // (every assertion is tagged `[<title>]`), and let `exploration` say what the
+                    // checks nothing named get. A title belonging to another component is left to
+                    // the component that owns it; one nobody in the run owns marks all BAD (never
+                    // hide it).
+                    attribute_findings(target, &input.run_props, &found)
                 } else if out.exit_code == 0 {
                     // Ran to the budget with no violation = every invariant it covers held.
                     target.all(Outcome::Good, None)

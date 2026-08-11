@@ -57,10 +57,12 @@ Crucible therefore sits at the *finest* granularity of the three.
 
 A subtlety that reframes the question: **the Crucible harness is already
 whole-program.** The setup session authors one shared `Fixture` with `action_*`
-methods that drive the *entire* program, and the fuzzer runs in `explore` mode —
-`crucible run <program> <feature> --mode explore` drives a **random sequence of
-actions across all instructions** and evaluates the test after each step
-(`rust/crucible-app/src/lib.rs`, `TEST_CHEAT_SHEET`).
+methods that drive the *entire* program, and the fuzzer explores it — `crucible
+run <program> <feature>` over `explore`'s corpus/crash settings drives a **random
+sequence of actions across all instructions** and evaluates the test after each
+step (`rust/crucible-app/src/lib.rs`, `TEST_CHEAT_SHEET`). (`--mode explore`
+itself is no longer passed; it implies `--stop-on-crash`, see
+`crucible-cross-component-attribution.md` §7.)
 
 What is *per-instruction* today is only:
 

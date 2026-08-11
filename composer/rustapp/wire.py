@@ -36,6 +36,7 @@ treatment ``model`` and ``unit`` already get, and for the same reason.
 
 import json
 from collections import Counter
+from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -356,6 +357,21 @@ class Check(WireModel):
         return self.target or TargetName(self.name)
 
 
+class Exploration(str, Enum):
+    """How much of its budget one invocation must spend before it may conclude. Mirrors the Rust
+    ``Exploration``.
+
+    A checker that can stop early is cheaper while the author iterates and wrong once the verdicts
+    are reported: a check the run abandoned before exploring is not a check that held. Only a full
+    ``validate_spec`` run stamps the publish gate, so the host knows which kind it is asking for and
+    says, rather than leaving the wheel to infer it from the shape of the check set."""
+
+    #: Stop at the first finding. The unrefuted checks say "not refuted yet" and nothing more.
+    UNTIL_FIRST_FINDING = "until_first_finding"
+    #: Explore every covered check to the full budget, whatever is found on the way.
+    TO_BUDGET = "to_budget"
+
+
 class Target(WireModel):
     """One invocation of the checker — one build + one run — and the checks it covers, which is what
     ``validate`` must return a verdict for. Mirrors the Rust ``Target``.
@@ -373,6 +389,9 @@ class Target(WireModel):
     name: TargetName
     #: Usually one; several when a backend checks a whole property set in one run.
     checks: list[Check] = Field(default_factory=list)
+    #: How far this invocation must explore before concluding — set from what the host will do with
+    #: the answer, not from anything about the checks themselves.
+    exploration: Exploration = Exploration.TO_BUDGET
 
 
 class Verdict(WireModel):

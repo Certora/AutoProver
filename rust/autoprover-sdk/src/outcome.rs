@@ -59,6 +59,30 @@ impl Check {
     }
 }
 
+/// How much of its budget one invocation must spend before it may conclude — the difference between
+/// a run whose clean checks mean something and one that only got as far as the first problem.
+///
+/// A checker that can stop early is cheaper when the author is iterating and wrong when the verdicts
+/// are going to be reported: a check that a run abandoned before exploring it is not a check that
+/// held. The host knows which kind of run it is asking for (only a full run stamps the publish gate),
+/// so it says, rather than leaving each backend to guess from the shape of its check set.
+///
+/// A backend with nothing to spend — a typechecker, a backend whose run is exhaustive by
+/// construction — answers the same either way and can ignore this.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+pub enum Exploration {
+    /// Stop as soon as there is something to report. The checks the run did not refute were not
+    /// explored to budget, so their `GOOD` says "not refuted yet" and nothing more — fine for an
+    /// author iterating on one problem, and never enough to report.
+    UntilFirstFinding,
+    /// Explore every covered check to the full budget, whatever is found on the way. The default,
+    /// because a run that quietly stops short is the failure mode worth defaulting away from.
+    #[default]
+    ToBudget,
+}
+
 /// **One invocation of the checker** — one build + one run — and the checks that invocation covers,
 /// which are the checks [`Backend::validate`](crate::Backend::validate) must return a verdict for.
 ///
@@ -83,6 +107,10 @@ pub struct Target {
     /// The checks this run must produce a verdict for. Usually one; several when a backend checks
     /// a whole property set in one run.
     pub checks: Vec<Check>,
+    /// How far this invocation must explore before concluding. Set by the host from what it will do
+    /// with the answer — a partial run it lets the author iterate against may stop early; the run
+    /// that stamps the publish gate may not.
+    pub exploration: Exploration,
 }
 
 impl Target {
