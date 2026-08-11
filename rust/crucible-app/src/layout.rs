@@ -67,6 +67,11 @@ pub(crate) const CRATE_ROOT: &str = "src/main.rs";
 /// ([`HarnessSpec::dir_arg`](crate::harness::HarnessSpec::dir_arg)).
 pub(crate) const HARNESS_ROOT: &str = "certora/crucible/fuzz";
 
+/// Where the run's reports land, relative to the project root — the same path the descriptor
+/// declares to the host, so the artifacts a callout writes itself sit beside the ones the host
+/// renders.
+pub(crate) const REPORT_ROOT: &str = "certora/crucible/reports";
+
 /// The harness crate for `program`, relative to the project root.
 pub(crate) fn harness_dir(program: &str) -> String {
     format!("{HARNESS_ROOT}/{program}")

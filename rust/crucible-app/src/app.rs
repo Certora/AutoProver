@@ -23,8 +23,11 @@ use autoprover_solana::{SolanaPrep, SolanaPrepFacts, SolanaSourceUnit};
 
 use crate::build_log::{build_errors, is_build_error};
 use crate::campaign::Campaign;
+use crate::coverage;
 use crate::harness::{crate_dep_usable, HarnessSpec};
-use crate::layout::{feature_of_unit, harness_fn, unit_name, PREFLIGHT_FEATURE, PREFLIGHT_ROOT};
+use crate::layout::{
+    feature_of_unit, harness_fn, unit_name, PREFLIGHT_FEATURE, PREFLIGHT_ROOT, REPORT_ROOT,
+};
 use crate::section::{delivered_sections, Section};
 use crate::templates::SkeletonFixture;
 use crate::triage::{attribute_findings, findings};
@@ -149,16 +152,28 @@ impl Backend for CrucibleApp {
         // lets `Target::exploration` decide that, rather than the mode preset deciding it for every
         // run. The paths are `explore`'s own and resolve against the invoking cwd, which is where
         // `crash_meta_paths` looks for the metadata behind a finding — keep them in step.
+        //
+        // `--coverage` makes the campaign emit its own LCOV as it goes ([`crate::coverage`]) rather
+        // than needing a second pass over the corpus. It requires `--corpus-in` and refuses to run
+        // alongside `-j`, both already true here. It also **depends on `--timeout` staying
+        // unconditional**: Crucible reads `--coverage` with no timeout as its coverage-ONLY mode,
+        // which replays the corpus and fuzzes nothing. Make the budget conditional and every
+        // campaign silently stops testing.
         let mut args = vec![
             "-C", &dir, "run", program, fname, "--release",
             "--corpus-in", "./corpus", "--corpus-out", "./corpus", "--crashes-out", "./output",
-            "--timeout", &timeout,
+            "--timeout", &timeout, "--coverage",
         ];
         if target.exploration == Exploration::UntilFirstFinding {
             args.push("--stop-on-crash");
         }
         let started = Instant::now();
-        match ws.run("crucible", args, &files) {
+        let ran = ws.run("crucible", args, &files);
+        // However the campaign ended. Crucible writes into the shared harness dir, so a file left
+        // behind — by a run killed after its periodic flush, say — would be published as the *next*
+        // component's coverage.
+        coverage::preserve(&ws.dir, &hspec.dir(), REPORT_ROOT, fname);
+        match ran {
             Ok(out) => {
                 let combined = format!("{}\n{}", out.stdout, out.stderr);
                 let found = findings(&combined, &ws.dir, program, fname);

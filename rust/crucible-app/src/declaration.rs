@@ -9,7 +9,7 @@ use autoprover_sdk::descriptor::{
     PhaseSpec,
 };
 
-use crate::layout::{CRATE_ROOT, HARNESS_ROOT};
+use crate::layout::{CRATE_ROOT, HARNESS_ROOT, REPORT_ROOT};
 use crate::templates::BackendGuidance;
 
 /// Everything this application declares about itself.
@@ -82,7 +82,7 @@ pub(crate) fn descriptor() -> AppDescriptor {
         artifact_layout: ArtifactLayout {
             deliverable_dir: "certora/crucible".into(),
             internal_dir: ".certora_internal/crucible".into(),
-            report_dir: "certora/crucible/reports".into(),
+            report_dir: REPORT_ROOT.into(),
             artifact_dir: "certora/crucible/harnesses".into(),
             artifact_prefix: "harness".into(),
             artifact_extension: "rs".into(),
