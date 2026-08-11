@@ -113,7 +113,7 @@ class ConfigurationBuilder:
         return self._replace(files=list(files))
 
     def with_verify(self, *, main_contract: SolidityIdentifier, spec_file: str) -> Self:
-        return self._replace(verify=f"{main_contract}:certora/{spec_file}")
+        return self._replace(verify=f"{main_contract}:{spec_file}")
 
     def with_solc(self, version: str) -> Self:
         return self._replace(
