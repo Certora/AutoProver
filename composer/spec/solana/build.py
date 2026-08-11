@@ -264,6 +264,11 @@ async def build_program(
     idl_path: Path | None = None
     if with_idl:
         out_rel = f"target/idl/{program}.json"
+        # `anchor idl build -o <path>` writes the file but does not create its directory, and
+        # `cargo-build-sbf` above only made `target/deploy/`. Without this the step fails on any
+        # clean checkout with a bare "No such file or directory", is swallowed by the best-effort
+        # branch below, and surfaces much later as "no IDL could be produced".
+        (root / "target" / "idl").mkdir(parents=True, exist_ok=True)
         idl_res = await run_local_command(
             anchor_binary, ["idl", "build", "-o", out_rel], {}, workdir=root,
             timeout_s=timeout_s, provider=provider, policy=policy,

@@ -1,0 +1,8 @@
+# Present so `anchor idl build` has a workspace to run in — the IDL path needs an IDL, and
+# `solana_vault` (crate path) needs none, which is why only this scenario carries this file.
+[programs.localnet]
+vault = "Vau1t1DL9gWKUmvBrGnPLp2MJNRnJ8mE1qYCkkTgkA5"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"

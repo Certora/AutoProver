@@ -53,8 +53,23 @@ if TYPE_CHECKING:
 
 pytestmark = [pytest.mark.expensive, needs_postgres, pytest.mark.asyncio]
 
-_SCENARIO = Path(__file__).parent.parent / "test_scenarios" / "solana_vault"
+_SCENARIOS = Path(__file__).parent.parent / "test_scenarios"
 _PROGRAM = "vault"
+
+#: The two ways the harness can get the program's Anchor types, one scenario each — the axis
+#: `ProgramTypes` turns on. They are otherwise the same vault, so a difference between the runs is a
+#: difference between the *paths*.
+#:
+#: Both matter, and the crate path alone is not enough: it links Anchor's own generated
+#: `ToAccountMetas`, while the IDL path links `crucible-idl-gen`'s reimplementation of it. A
+#: divergence between the two is invisible to a crate-path run by construction — which is how
+#: `crucible-idl-gen` came to drop `None` optional accounts from the account list, silently costing
+#: klend's 2026-08-10 run its entire core lending flow. `solana_vault_idl` carries an optional
+#: account for exactly that reason.
+_PATHS = [
+    pytest.param("solana_vault", False, id="crate-path"),
+    pytest.param("solana_vault_idl", True, id="idl-path"),
+]
 
 
 def _model_args() -> object:
@@ -77,8 +92,16 @@ def _require(cond: bool, why: str) -> None:
         pytest.skip(why)
 
 
-async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeypatch, tmp_path):
-    _require(_SCENARIO.is_dir(), f"scenario missing: {_SCENARIO}")
+@pytest.mark.parametrize("scenario_name, expect_idl", _PATHS)
+async def test_crucible_full_vertical(
+    scenario_name: str,
+    expect_idl: bool,
+    pg_container: "PostgresContainer",
+    monkeypatch,
+    tmp_path,
+):
+    committed = _SCENARIOS / scenario_name
+    _require(committed.is_dir(), f"scenario missing: {committed}")
     _require(shutil.which("cargo-build-sbf") is not None, "cargo-build-sbf not on PATH")
     _require(shutil.which("crucible") is not None, "crucible CLI not on PATH")
     _require(_crucible_repo() is not None, "set CRUCIBLE_REPO to a local crucible checkout")
@@ -88,9 +111,9 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
     # fuzz/, …); an in-container run's image copy is read-only for the non-root runtime
     # user, and a host run would otherwise pollute test_scenarios/ (see
     # docs/crucible-demo.md §3). Exclude the heavy generated dirs from the copy.
-    scenario = tmp_path / "solana_vault"
+    scenario = tmp_path / scenario_name
     shutil.copytree(
-        _SCENARIO, scenario,
+        committed, scenario,
         ignore=shutil.ignore_patterns(
             "target", "corpus", "output", "fuzz", "certora", ".certora_internal",
         ),
@@ -143,6 +166,7 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
         ) as conns,
         async_tool_context(),
     ):
+        thread = f"crucible_e2e_{scenario_name}"
         content = await conns.uploader.get_document(scenario / "system.md")
         assert content is not None
         source = SourceCode(
@@ -154,11 +178,11 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
             heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
         basic = build_basic_source_tools(root=str(scenario), forbidden_read=RUST_FORBIDDEN_READ)
-        full = build_source_tools(basic, model_provider, conns.indexed_store, ("crucible_e2e", "src"), recursion_limit=100)
+        full = build_source_tools(basic, model_provider, conns.indexed_store, (thread, "src"), recursion_limit=100)
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
         ctx = WorkflowContext.create(
             services=conns.memory,
-            thread_id="crucible_e2e", store=conns.store, recursion_limit=100,
+            thread_id=thread, store=conns.store, recursion_limit=100,
             cache_namespace=None, memory_namespace=None,
         )
 
@@ -205,6 +229,32 @@ async def test_crucible_full_vertical(pg_container: "PostgresContainer", monkeyp
     crate = scenario / "certora" / "crucible" / "fuzz" / _PROGRAM
     manifest = crate / "Cargo.toml"
     assert (crate / "src" / "main.rs").is_file() and manifest.is_file(), "no crate was delivered"
+
+    # The run took the path this scenario exists to cover. Without this the two cases can silently
+    # collapse onto one — a scenario whose Anchor drifts to the harness's major would still pass
+    # every assertion here while testing the crate path twice.
+    deps = tomllib.loads(manifest.read_text()).get("dependencies") or {}
+    generated = "crucible-idl-gen" in deps
+    main_rs = (crate / "src" / "main.rs").read_text()
+    assert generated == expect_idl, (
+        f"{scenario_name} was expected on the "
+        f"{'IDL' if expect_idl else 'crate'} path but the delivered manifest "
+        f"{'has' if generated else 'lacks'} crucible-idl-gen; deps={sorted(deps)}"
+    )
+    assert ("declare_fuzz_program!" in main_rs) == expect_idl, main_rs[:400]
+    if expect_idl:
+        # The optional account is the whole reason this scenario is separate — it is the one place
+        # `crucible-idl-gen` and Anchor's own derive disagree. A fixture that never builds
+        # `withdraw` would pass everything above while covering none of that.
+        #
+        # Writing `None` for it is caught earlier and harder: the compile callout rejects the
+        # fixture outright (`crate::optional_accounts`), so a run that reaches delivery has already
+        # been vetted for it, and no string check here is needed.
+        assert "fee_collector" in main_rs, (
+            "the fixture never builds the instruction carrying the optional account, so this run "
+            "did not exercise the path the scenario exists for"
+        )
+
     features = list((tomllib.loads(manifest.read_text()).get("features") or {}))
     assert features, "the delivered manifest declares no feature to select the harness with"
     # ONE BUILD PER FEATURE, not one build with all of them. Each `#[invariant_test]` expands to its
