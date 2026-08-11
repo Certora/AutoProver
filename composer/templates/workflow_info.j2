@@ -1,6 +1,8 @@
 The files referenced above are available as uploaded documents:
-- The specification file is: {{ spec_filename }}
-- The interface file is: {{ interface_filename }} 
+{% if spec_filenames | length == 1 %}- The specification file is: {{ spec_filenames[0] }}
+{% else %}- The specification files are:
+{% for f in spec_filenames %}  - {{ f }}
+{% endfor %}{% endif %}- The interface file is: {{ interface_filename }}
 - The system documentation is: {{ system_doc_filename }}
 
 These files have been uploaded and are accessible to you through the document references in the conversation.
