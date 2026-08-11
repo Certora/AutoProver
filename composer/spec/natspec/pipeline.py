@@ -549,6 +549,12 @@ async def run_natspec_pipeline[A: NatspecApplication, I: InterfaceDeclModel, S: 
 
     file_registry = await FileRegistry.acreate(
         store, FILES_NS + (doc_digest,), materializer=mat_,
+        # The generated interfaces reach the scene through the stubs' imports
+        # and have no bytecode of their own, so they must never become
+        # compilation units. The registry refuses them and filters any that an
+        # earlier run persisted (this namespace is keyed by document digest,
+        # so registrations outlive a change of cache namespace).
+        non_units=frozenset(v.path for v in interface.name_to_interface.values()),
     )
 
     for c in summary.contract_components:
