@@ -12,6 +12,43 @@ As a fuzzer it cannot *prove* universally quantified properties or invariants, b
 *refutation* (a fuzzing counterexample / crash) is extremely valuable. So state universal safety properties and
 invariants freely — do not restrict yourself because a fuzzer cannot definitively prove them.
 
+**What the checker can see.** Each property becomes a predicate over on-chain account state, evaluated *between*
+actions. It cannot see which instruction just ran, cannot compare against the state before it, and cannot see inside
+a transaction. Four rules follow, and they are the difference between a property that gets checked and one that is
+later declined as unformalizable:
+
+- **A per-call delta is not checkable; the standing relation it protects usually is.** "After switching elevation
+  group the obligation is stale", "a second refresh in the same slot changes nothing", "this instruction must not
+  lower that field" — none can be observed, because every mutating instruction leaves similar marks and no earlier
+  value is retained. State instead what must hold *at all times* and that the bad change would break: "an obligation
+  marked fresh has every reserve it references fresh for the current slot". Where only the per-call form says what
+  you mean, write it, and name in the same description the standing relation you would settle for.
+
+- **Name the account fields that decide it.** A violation is detectable exactly when it shows in a field of some
+  account. A bonus rate the program computes and never stores, a fee that lands in an accumulator four other
+  instructions also feed — these leave nothing to read afterwards. Name the fields a checker would compare; if the
+  deciding quantity is never persisted, say so in the description rather than leaving it to be discovered later.
+
+- **"Must be rejected" needs the exact attempt.** The test harness is built from these properties, so a rejection
+  property that names the concrete attempt — who calls what, with which account substituted or which precondition
+  violated — becomes an action that makes the attempt and records whether it was accepted. One that says only "must
+  fail" becomes nothing, because a correctly rejected instruction and one that was never sent leave identical state.
+  Name the attempt, and name what would be observable afterwards if it wrongly succeeded. The same applies to
+  liveness ("this call must succeed for its rightful owner"): that is refuted by a *revert*, which leaves no trace
+  unless the attempt is named.
+
+- **Constrain what the program writes, not what the harness writes.** A property over values only the test harness
+  ever supplies — raw oracle account bytes, a config field no instruction sets, a bound the harness's own parameter
+  ranges already keep — holds under every possible implementation, including a badly broken one, so it certifies
+  nothing. Prefer the constraint on what the *program* derives from those inputs.
+
+Two consequences worth knowing rather than working around. A Rust panic and a returned `Err` are indistinguishable
+afterwards — both roll the transaction back, leaving byte-identical state — so phrase an abort/DoS property as the
+instruction failing, and put the panic mechanism in the description rather than in the checkable claim. And a value a
+transaction perturbs and restores before it ends (a flash borrow's dip in available liquidity) is never visible to a
+between-actions observer; if that excursion is the property, say what a *second* instruction spliced into the window
+would leave behind.
+
 A few categories are a poor fit and should be skipped: properties about off-chain events (key compromise, social
 engineering, oracle manipulation outside the modeled accounts), and pure hash-collision resistance ("no two inputs ever
 collide"), which sampling cannot refute. Arithmetic-overflow and type-level facts are worth stating: Rust overflow

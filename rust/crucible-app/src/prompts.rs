@@ -295,6 +295,42 @@ mod tests {
     }
 
     #[test]
+    fn the_property_author_is_told_the_shape_of_the_checker_that_will_read_its_output() {
+        // 33 of klend's 411 proposed properties were declined as unformalizable, and four shapes
+        // account for all of them (docs/crucible-uncheckable-properties.md). Each is decided when
+        // the property is *worded*, one phase before anyone tries to check it — and this prose is
+        // the only thing that reaches that phase, since extraction runs before the fixture exists.
+        let guidance = CrucibleApp.descriptor().backend_guidance;
+        let norm = guidance.split_whitespace().collect::<Vec<_>>().join(" ");
+        let has = |needle: &str| {
+            let n = needle.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(norm.contains(&n), "missing {needle:?} in:\n{guidance}");
+        };
+
+        // The premise the four rules follow from: a predicate over accounts, between actions.
+        has("evaluated *between* actions");
+        has("cannot see which instruction just ran");
+        // 10 of the 33 — a delta across one call, with the standing relation left unstated.
+        has("A per-call delta is not checkable");
+        // 9 — a rejection or liveness claim, refuted by a revert that leaves no residue. The
+        // harness is built FROM these properties, so naming the attempt is what creates the action
+        // that records it; this is the one rule the author can act on but not verify.
+        has("**\"Must be rejected\" needs the exact attempt.**");
+        has("becomes an action that makes the attempt and records whether it was accepted");
+        // 8 — an assertion over harness-supplied values, which no implementation can fail.
+        has("holds under every possible implementation");
+        // 5 — the deciding quantity is computed and never stored.
+        has("Name the account fields that decide it");
+        // …and the two that are worth knowing rather than avoiding.
+        has("panic and a returned `Err` are indistinguishable");
+        has("perturbs and restores before it ends");
+
+        // None of it may become a reason to withhold a property: a fuzzer cannot prove, and the
+        // catalogue of what it cannot check is exactly what a reader of the report needs.
+        has("state universal safety properties and invariants freely");
+    }
+
+    #[test]
     fn a_source_confirmed_defect_is_published_as_a_finding_rather_than_skipped() {
         // klend filed two confirmed bugs — reasons opening "KNOWN VULNERABILITY" and "The bug is
         // real (confirmed in source: …)" — through `record_skip`, so the report showed them under
