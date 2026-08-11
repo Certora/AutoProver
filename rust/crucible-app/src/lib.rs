@@ -36,6 +36,7 @@ mod declaration;
 mod facts;
 mod harness;
 mod layout;
+mod optional_accounts;
 mod prompts;
 mod section;
 mod templates;

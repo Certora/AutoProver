@@ -28,6 +28,7 @@ use crate::harness::{crate_dep_usable, HarnessSpec};
 use crate::layout::{
     feature_of_unit, harness_fn, unit_name, PREFLIGHT_FEATURE, PREFLIGHT_ROOT, REPORT_ROOT,
 };
+use crate::optional_accounts;
 use crate::section::{delivered_sections, Section};
 use crate::templates::SkeletonFixture;
 use crate::triage::{attribute_findings, findings};
@@ -115,6 +116,16 @@ impl Backend for CrucibleApp {
                 (hspec.section_files(&fname, authored_spec), fname)
             }
         };
+        // Ahead of the build, because a build cannot see it: under the IDL path a `None` optional
+        // account compiles, links and dry-runs clean, and only fails once a campaign draws the
+        // action ([`crate::optional_accounts`]). Crate mode is unaffected — anchor's own derive
+        // emits the program id for a `None`.
+        if hspec.is_idl() {
+            let absent = optional_accounts::absent_optionals(authored_spec);
+            if !absent.is_empty() {
+                return CompileResult::Failed { errors: optional_accounts::explain(&absent) };
+            }
+        }
         let dir = hspec.dir_arg(&ws.dir);
         let args = ["-C", &dir, "run", program, &feature, "--release", "--dry-run"];
         match ws.run("crucible", args, &files) {

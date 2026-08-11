@@ -72,6 +72,13 @@ Crucible harness API (author a FIXTURE only — no test fns):
       `{{ crate_id }}::types::*` — e.g. `read_anchor_account::<{{ crate_id }}::state::Foo>(&pda)`.
       Anything the program's Rust source has but its IDL does not (helper fns, consts, private
       types) is NOT available: derive it in the fixture instead.
+    * An OPTIONAL account (an `Option<Pubkey>` field) that you want ABSENT is written
+      `Some(self.program_id)` — NEVER `None`. Anchor represents an absent optional account as the
+      program's own id occupying its slot in the account list; a literal `None` is dropped from the
+      list instead, so the program receives fewer accounts than it declares and rejects the
+      instruction before running any of its logic. That failure is invisible — the action just
+      returns `false` forever and every property behind it holds over code that never executed.
+      `Some(<a real account>)` is unchanged; this is only how you say "not supplied".
 {% endif %}    * Instruction args struct: `instruction::<PascalName>` — snake_case `foo_bar` → `instruction::FooBar`.
     * Accounts struct: `accounts::<PascalName>` — same PascalCase as the instruction.
     * Program id: the `ID` constant; make a Pubkey via `Pubkey::new_from_array(ID.to_bytes())`.

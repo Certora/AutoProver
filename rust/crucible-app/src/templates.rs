@@ -278,4 +278,18 @@ mod tests {
         }
         assert!(!out.contains("{{"), "leftover askama expression");
     }
+
+    #[test]
+    fn only_the_idl_path_is_told_how_to_write_an_absent_optional_account() {
+        // `crucible-idl-gen` drops a `None` optional from the account list where anchor's own derive
+        // emits the program id, so on the IDL path a `None` builds an instruction the program
+        // rejects before running (see `crate::optional_accounts`). Saying so on the crate path,
+        // where anchor is correct, would teach a workaround for a bug that isn't there.
+        let idl = HarnessCheatSheet { crate_id: "example_lending", idl: true }.render().unwrap();
+        assert!(idl.contains("`Some(self.program_id)` — NEVER `None`"), "{idl}");
+
+        let crate_path =
+            HarnessCheatSheet { crate_id: "example_lending", idl: false }.render().unwrap();
+        assert!(!crate_path.contains("NEVER `None`"), "{crate_path}");
+    }
 }
