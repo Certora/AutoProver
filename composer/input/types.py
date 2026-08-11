@@ -72,7 +72,6 @@ class LanggraphOptions(Protocol):
         default=DEFAULT_RECURSION_LIMIT
     )]
 
-
 class WorkflowOptions(RAGDBOptions, LanggraphOptions, Protocol):
     prover_capture_output: bool
     prover_keep_folders: bool

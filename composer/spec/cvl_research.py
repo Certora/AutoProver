@@ -15,6 +15,7 @@ from graphcore.tools.schemas import WithAsyncImplementation, WithInjectedId
 
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.tools.thinking import get_rough_draft_tools, RoughDraftState
+from composer.kb.kb_context import with_cvl_context
 from composer.spec.tool_env import BaseRAGTools
 from composer.spec.util import uniq_thread_id
 from composer.spec.agent_index import AgentIndex, IndexedTool
@@ -77,7 +78,7 @@ def _did_read_draft(s: _CVLResearchST, _: Any) -> str | None:
 
 def _build_research_graph(
     builder: Builder,
-    with_index: bool
+    with_index: bool,
 ) -> _CompiledResearchGraph:
     rough_draft_tools = get_rough_draft_tools(_CVLResearchST)
 
@@ -94,7 +95,7 @@ def _build_research_graph(
     ).inject(
         lambda g: sys_templ.render_to(g.with_sys_prompt_template)
     ).with_initial_prompt(
-        "Answer the following question"
+        with_cvl_context("Answer the following question")
     ).compile_async()
     return graph
 
@@ -115,8 +116,8 @@ def _build_research_tool(
     """Build a CVL research BaseTool.
 
     Args:
-        builder: Builder with LLM and all external tools (CVL manual, KB, etc.)
-            already bound.
+        builder: Builder with LLM and all external tools (CVL manual, recipe
+            retrieval, etc.) already bound.
         runner: How to invoke the compiled graph. Thread ID management and
             recursion_limit propagation are the runner's responsibility.
         doc: Docstring for the tool schema.
@@ -173,7 +174,7 @@ def indexed_cvl_research_tool(
 ) -> BaseTool:
     graph = _build_research_graph(
         env.builder.with_tools(env.base_rag_tools),
-        with_index=True
+        with_index=True,
     )
     @tool_display_of(CommonTools.cvl_research)
     class CVLResearcher(CVLResearchSchemaBase, IndexedTool[AgentIndex], WithInjectedId):

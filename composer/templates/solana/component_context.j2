@@ -1,0 +1,89 @@
+This task is targeting the security properties of the component {{ context.component.name }} within
+the program {{ context.program.name }} (`{{ context.program.program_identifier }}`).
+
+This component is described as:
+
+{{ context.component.description }}
+
+{% if context.component.requirements %}
+The following are the requirements for this component:
+{% for req in context.component.requirements %}
+* {{ req }}
+{% endfor %}
+{% endif %}
+{% if context.component.account_types %}
+
+The account/state types this component maintains: {{ context.component.account_types | join(", ") }}.
+{% endif %}
+
+The {{ context.program.name }} program itself is part of the implementation of a broader application
+described as {{ context.app.application_type }}.
+
+## This component's instructions
+
+These are the entry points that make up the component, and the checks the program is responsible for
+enforcing on each account they take.
+{% for ins in context.instructions %}
+
+### `{{ ins.name }}`
+
+{{ ins.description }}
+{% if ins.requirements %}
+Requirements:
+{% for req in ins.requirements %}
+* {{ req }}
+{% endfor %}
+{% endif %}
+{% if ins.args %}
+Non-account arguments: {% for a in ins.args %}`{{ a }}`{% if not loop.last %}, {% endif %}{% endfor %}.
+{% endif %}
+Accounts:
+{% for acc in ins.accounts %}
+* `{{ acc.name }}` — {{ acc.account_type }}{% if acc.roles %} [{{ acc.roles | join(", ") }}]{% endif %}.
+  {% if acc.constraints %}Program-enforced constraints: {{ acc.constraints | join("; ") }}.{% else %}No constraints were recorded for this account — consider whether a signer/owner/relationship check is required here.{% endif %}
+{% endfor %}
+{% if ins.signers %}
+Accounts that must sign: {{ ins.signers | join(", ") }}.
+{% endif %}
+{% if ins.cpis %}
+Cross-program invocations:
+{% for cpi in ins.cpis %}
+* → `{{ cpi.target_program }}`: {{ cpi.description }}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% if context.sibling_components %}
+## The rest of the program
+
+The other components of {{ context.program.name }} are below. They are context, not your subject —
+do not write properties about them. They matter because their instructions act on the same program
+state, and may run before, after, or interleaved with this component's.
+{% for other in context.sibling_components %}
+* **{{ other.name }}**: {{ other.description }}
+{% endfor %}
+{% endif %}
+
+{% if context.sibling_programs %}
+Other programs in the application:
+{% for p in context.sibling_programs %}
+* `{{ p.name }}` (`{{ p.program_identifier }}`): {{ p.description }}
+{% endfor %}
+{% endif %}
+{% if context.app.authorities %}
+External authorities / actors the system interacts with:
+{% for a in context.app.authorities %}
+* {{ a.name }}: {{ a.description }}
+{% endfor %}
+{% endif %}
+
+{% if context.component.interactions %}
+This component interacts with other parts of the application/external actors:
+{% for other in context.component.interactions %}
+{% if other.authority is defined %}
+- The external authority "{{ other.authority }}". This interaction is described as {{ other.description }}
+{% else %}
+- The {{ other.component or "" }} component of {% if other.program == context.program.name %}this program{% else %}the {{ other.program }} program{% endif %}. This interaction is described as {{ other.description }}
+{% endif %}
+{% endfor %}
+{% endif %}

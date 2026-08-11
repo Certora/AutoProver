@@ -127,6 +127,9 @@ class SetupProver:
         self.scope = scope
         self.build_system: Optional[BuildSystem] = None
         self.build_system_config: Optional[BuildSystemConfig] = None
+        # Directory holding the contract's build config; assigned by Autosetup alongside
+        # build_system once detection has run.
+        self.build_config_dir: Path = Path.cwd()
 
         # Track compilation configuration updates
         self.compilation_config_updates: Dict[str, Any] = {}
@@ -611,6 +614,7 @@ class SetupProver:
             project_root=Path.cwd(),
             solc_default_version=self.solc_default_version,
             verbose=self.verbose,
+            build_config_dir=self.build_config_dir,
         )
 
         return workaround_manager.run_compilation_with_workarounds(

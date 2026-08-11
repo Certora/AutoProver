@@ -2,8 +2,8 @@ name: Integration Tests
 
 on:
   schedule:
-    - cron: '7 5 * * *'
-  workflow_dispatch: {}   # adds a "Run workflow" button in the Actions tab
+    - cron: "7 5 * * *"
+  workflow_dispatch: {} # adds a "Run workflow" button in the Actions tab
 
 # If a manual run and a scheduled run overlap, cancel the older one
 # so you don't pay for the expensive job twice.
@@ -11,11 +11,17 @@ concurrency:
   group: scheduled-tests
   cancel-in-progress: true
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
+    environment: prod # Both dev/stg are available as well
+    env:
+      CERTORA_LAMBDA_URL: ${{ secrets.LAMBDA_FUNCTION_URL }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -31,8 +37,8 @@ jobs:
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '21'
+          distribution: "temurin"
+          java-version: "21"
 
       - name: sync-deps
         run: |
@@ -51,15 +57,30 @@ jobs:
           sudo chmod +x /usr/local/bin/solc8.29
           solc8.29 --version
 
-      - name: async runners
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: us-west-2
+
+      - name: Basic who-am-i check
         run: |
-          uv pip install pytest-xdist
+          # The stored URL ends in a slash and //who-am-i would not route.
+          curl -sS --fail-with-body "${CERTORA_LAMBDA_URL%/}/who-am-i" \
+            --user "$AWS_ACCESS_KEY_ID":"$AWS_SECRET_ACCESS_KEY" \
+            -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
+            --aws-sigv4 "aws:amz:us-west-2:lambda"
 
       - name: run autoprover integration tests
         run: |
           uv run pytest -n 3 -m 'expensive' tests
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
+      - name: run template fuzz tests
+        run: |
+          uv run pytest -n 2 -m 'fuzz' tests
+        env:
+          HYPOTHESIS_PROFILE: extended
 
       # Fires ONLY if a step above failed. The whole point of the file.
       - name: Notify Slack on failure

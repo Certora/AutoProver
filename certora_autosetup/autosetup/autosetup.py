@@ -51,10 +51,41 @@ from certora_autosetup.utils.paths import (
 from certora_autosetup.utils.contract_utils import split_contract_spec
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager, FileContent, ProverJobSpec
 from certora_autosetup.utils.llm_util import get_ledger_rows
+from certora_autosetup.utils.project_dir import describe_build_config_dir, find_build_config_dir
 from certora_autosetup.utils.scope import Scope
 from certora_autosetup.utils.types import ContractHandle, ContractInfo
 
 COMPONENT = "Autosetup"
+
+
+def _reconcile_evm_version_keys(
+    config: Dict[str, Any],
+    updates: Dict[str, Any],
+    contract_names: List[str],
+) -> None:
+    """Reconcile solc_evm_version / solc_evm_version_map in a merged conf, in place.
+
+    The compilation updates started as a superset of the base build-system conf,
+    so when they carry neither the scalar nor the map, the invalid_evm_version
+    workaround removed the declared version — drop the base-re-emitted scalar
+    rather than resurrect a rejected setting. When the map is present it
+    supersedes the scalar (the prover forbids both), but must cover every
+    contract: extend it with the declared scalar for contracts it misses (e.g. a
+    cancun override plus the project-declared version for the rest).
+    """
+    if (
+        updates
+        and "solc_evm_version" not in updates
+        and "solc_evm_version_map" not in updates
+    ):
+        config.pop("solc_evm_version", None)
+    if "solc_evm_version_map" in config:
+        declared = config.pop("solc_evm_version", None)
+        if declared:
+            config["solc_evm_version_map"] = {
+                **{name: declared for name in contract_names},
+                **config["solc_evm_version_map"],
+            }
 
 
 class Autosetup:
@@ -112,6 +143,9 @@ class Autosetup:
         self.bytes_mappings: List[tuple[ContractHandle, List[str]]] = []
         # Set during run()
         self.main_contract_handle: Optional[ContractHandle] = None
+        # Directory owning the main contract's build config; resolved in
+        # setup_build_system_config(). Equals the run root for a root-level project.
+        self.build_config_dir: Path = Path.cwd()
 
     def log(self, message: str, level: str = "INFO"):
         logger.log(message, level, COMPONENT)
@@ -235,6 +269,7 @@ class Autosetup:
         self.setup_build_system_config()
         self.setup_prover.build_system = self.build_system
         self.setup_prover.build_system_config = self.build_system_config
+        self.setup_prover.build_config_dir = self.build_config_dir
 
         # Check full-pipeline cache before running
         result_path = Path(DIR_CERTORA_INTERNAL) / FILE_AUTOSETUP_RESULT
@@ -346,8 +381,21 @@ class Autosetup:
         4. Stores the config in self.build_system_config (polymorphic)
         """
         try:
+            # A monorepo keeps its build config next to the sources it governs, so anchor
+            # detection on the main contract rather than on the run root.
+            run_root = Path.cwd()
+            if self.main_contract_handle is not None:
+                self.build_config_dir = find_build_config_dir(
+                    Path(self.main_contract_handle.source_file), run_root
+                )
+                nested = describe_build_config_dir(self.build_config_dir, run_root)
+                if nested:
+                    self.log(
+                        f"Build config for {self.main_contract_handle.contract_name} lives in {nested}/"
+                    )
+
             # Auto-detect or use explicit build system from init parameter
-            detected = BuildSystemDetector.resolve(Path.cwd(), self.config.requested_build_system)
+            detected = BuildSystemDetector.resolve(self.build_config_dir, self.config.requested_build_system)
             if self.config.requested_build_system is None or self.config.requested_build_system == 'auto':
                 self.log(f"Auto-detected build system: {detected.value}")
             else:
@@ -366,12 +414,11 @@ class Autosetup:
                 def is_file_in_scope(self, file_path):
                     return True
 
-            project_root = Path.cwd()
             scope = MinimalScope()
 
             # Get appropriate manager class and create instance
             ManagerClass = BuildSystemDetector.get_manager_class(detected)
-            manager: BuildSystemManager = ManagerClass(project_root, scope)  # type: ignore
+            manager: BuildSystemManager = ManagerClass(self.build_config_dir, scope)  # type: ignore
 
             # Auto-detect and parse config (polymorphic - returns FoundryConfig or HardhatConfig)
             self.log(f"Auto-detecting {detected.value} configuration...")
@@ -425,6 +472,15 @@ class Autosetup:
         # This ensures any modifications made during compilation are preserved
         if self.compilation_config_updates:
             config.update(self.compilation_config_updates)
+
+        # Must run BEFORE drop_scalars_superseded_by_maps: it expands the
+        # declared scalar into the map's missing entries (the map must cover
+        # every contract), which is impossible once the scalar is dropped.
+        _reconcile_evm_version_keys(
+            config,
+            self.compilation_config_updates,
+            [ch.contract_name for ch in self.contract_handles],
+        )
 
         # A per-contract map supersedes its scalar counterpart, and certoraRun
         # rejects a conf carrying both. The merge above can produce such pairs:
@@ -596,6 +652,7 @@ class Autosetup:
 
         base_prover_args = {
             "quiet": "",  # Add quiet flag for base
+            "destructiveOptimizations": "twostage",
         }
 
         # Prepare base-specific properties

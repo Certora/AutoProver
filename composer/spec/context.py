@@ -7,6 +7,7 @@ WorkspaceContext has been factored into WorkflowContext: workflow-specific data
 be passed explicitly to agents that need it.
 """
 
+from graphcore.tools.vfs import GlobalExcludeArg
 from dataclasses import dataclass
 from typing import Annotated, Callable, overload, Awaitable
 
@@ -20,7 +21,8 @@ from graphcore.graph import Builder
 from composer.input.files import Document
 from composer.io.mnemonic_store import assign_mnemonic
 from composer.core.user import user_data_ns
-from composer.spec.system_model import SolidityIdentifier
+from composer.spec.types import SourceIdentifier
+from composer.diagnostics.budget import budget_pressure
 
 
 # ---------------------------------------------------------------------------
@@ -37,18 +39,27 @@ class SystemDoc:
 class SourceFields:
     """Input when source code is also available (source_spec).
 
-    ``contract_name`` is the Solidity identifier of the main contract being
+    ``contract_name`` is the source identifier of the main contract/program being
     verified — the ``<Name>`` half of the ``--main-contract path:Name`` CLI
-    argument.
+    argument (a Solidity identifier on EVM, a program identifier on Solana).
     """
     project_root: str
-    contract_name: SolidityIdentifier
+    contract_name: SourceIdentifier
     relative_path: str
-    forbidden_read: str
+    forbidden_read: GlobalExcludeArg
 
 @dataclass
-class SourceCode(SystemDoc, SourceFields):
-    ...
+class SourceCode(SourceFields):
+    """Input when source code is available (source_spec).
+
+    ``content`` is the design document if one was supplied or discovered, or
+    ``None`` for a source-only run. When no design doc exists the pipeline
+    degrades gracefully: component analysis derives the breakdown from source
+    alone (see ``run_component_analysis``), which is the sole consumer of the
+    doc on the source/prover path. Kept separate from ``SystemDoc`` — whose
+    ``content`` is always present — so the natspec-only mode keeps its invariant.
+    """
+    content: Document | None
 
 # ---------------------------------------------------------------------------
 # Services protocol
@@ -121,9 +132,16 @@ class Contract:
 
 type Abstraction = CVLGeneration | FoundryGeneration
 
+class EditorAgent:
+    """editor for a single property"""
+
+class EditorJudge:
+    """judge for the editor"""
+
+
 type Marker = (
     InvJudge | InvFormal | Properties | ComponentGroup
-    | CVLJudge | FoundryJudge | Abstraction | Contract
+    | CVLJudge | FoundryJudge | Abstraction | Contract | EditorAgent | EditorJudge
 )
 
 # ---------------------------------------------------------------------------
@@ -240,6 +258,11 @@ class WorkflowContext[K]:
 
     async def cache_put(self, value: K) -> None:
         """Put a typed value in the cache. No-op if caching disabled."""
+        if budget_pressure():
+            # refuse to cache anything produced under budget pressure
+            # It's likely incomplete or "rushed", and a future run with more money
+            # should try again
+            return None
         if not isinstance(value, BaseModel):
             raise ValueError("Caching not allowed for non-basemodel keys")
         if self.cache_namespace is None:
@@ -257,8 +280,3 @@ class WorkflowContext[K]:
         tid = self.thread_id
         mnem = await assign_mnemonic(tid, self._store, user_data_ns() + MNEMONIC_KEYS)
         return (tid, mnem)
-
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
-

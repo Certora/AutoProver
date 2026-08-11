@@ -33,7 +33,7 @@ from certora_autosetup.utils.logger import logger
 # Build system keys that should be stripped from the output if the user's original conf didn't have them.
 # These are low-priority settings that can break the prover (e.g. solc_optimize with a huge value from foundry.toml).
 # High-priority keys like solc and packages are kept since they're often needed for compilation.
-_LOW_PRIORITY_BS_KEYS = {"solc_optimize", "solc_via_ir"}
+_LOW_PRIORITY_BS_KEYS = {"solc_optimize", "solc_via_ir", "solc_evm_version"}
 
 
 class _AcceptAllScope:
@@ -49,7 +49,7 @@ def create_parser() -> argparse.ArgumentParser:
         description="Fix compilation settings in a Certora .conf file.",
     )
     parser.add_argument("conf_file", type=Path, help="Path to the .conf file to fix")
-    parser.add_argument("--no-build-system", action="store_true", help="Skip Foundry/Hardhat auto-detection")
+    parser.add_argument("--no-build-system", action="store_true", help="Skip build system auto-detection")
     parser.add_argument("--profile", type=str, default=None, help="Build system profile (e.g., Foundry profile)")
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity")
     return parser
