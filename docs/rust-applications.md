@@ -611,10 +611,10 @@ would make the next ecosystem an edit to [wire.py](../composer/rustapp/wire.py).
 carried without a schema — `source_unit`, `prep_facts` and `WorkspacePrep.toolchain_request` (Rust:
 `autoprover_sdk::chain::ChainData`, a JSON object and nothing more). They are typed at both *ends* and
 nowhere in between: the chain's registered implementation and the wheels targeting that chain share
-those types through the chain's own support crate — where that chain's Cargo/Anchor vocabulary and
-its layout conventions live. Which type is inside follows from the wheel's declared `ecosystem`, not
-from inspecting keys. It is the same treatment `AuthorInput`'s `model` and `unit` already get, for
-the same reason.
+those types through the chain's own support crate ([autoprover-solana](../rust/autoprover-solana),
+which is where `{dir, package, lib, anchor}` and the `programs/<program>` fallback live). Which type is
+inside follows from the wheel's declared `ecosystem`, not from inspecting keys. It is the same
+treatment `AuthorInput`'s `model` and `unit` already get, for the same reason.
 
 **`workspace_prep` is a pure plan the host executes.** The wheel returns
 `WorkspacePrep { files, toolchain_request }` — file *contents* and declarative intent, never a command

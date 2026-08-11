@@ -35,6 +35,26 @@ DEFAULT_ENV_PASSTHROUGH: tuple[str, ...] = (
     "SSL_CERT_DIR",
 )
 
+#: Registry protocol pinned across the *warm* (network) and *build* (offline) halves of a
+#: sandboxed cargo build, so both read and write the same `registry/index/` layout. They run
+#: under different cargos, and cargo's crates.io default flipped from the git index to sparse
+#: in 1.70 — leaving it implicit means a pre-1.70 platform-tools cargo silently misses a cache
+#: a newer cargo warmed. Sparse (rather than git) because it is what every cargo from 1.68 on
+#: supports and it reuses the index a modern host cargo already has; a platform-tools older
+#: than 1.68 would need `"git"` here instead.
+CARGO_REGISTRY_PROTOCOL_VAR = "CARGO_REGISTRIES_CRATES_IO_PROTOCOL"
+CARGO_REGISTRY_PROTOCOL = "sparse"
+
+#: Names of the private, per-run scratch directories a sandboxed build gets *under the workdir*
+#: (see :func:`sandbox_cargo_home`, :func:`sandbox_rustup_home`, and the ``TMPDIR`` redirect in
+#: :func:`rust_build_policy` for why each one is private rather than shared). Named constants
+#: because consumers outside this module must agree on the spellings — notably
+#: ``composer.pipeline.ecosystem.RUST_FORBIDDEN_READ``, which hides them from the source tools'
+#: file listing so the hundreds of MB they hold never reach the model's context.
+SANDBOX_CARGO_DIR = ".sandbox_cargo"
+SANDBOX_RUSTUP_DIR = ".sandbox_rustup"
+SANDBOX_TMP_DIR = ".sandbox_tmp"
+
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads
 # ``/etc/passwd`` / ``/etc/nsswitch.conf``; it holds no AutoProver secret (those are
@@ -73,7 +93,7 @@ def sandbox_cargo_home(workdir: str | Path) -> Path:
     a shared *read-only* index/cache to avoid re-download is a deferred optimization
     (command-sandbox.md §11 item 5).
     """
-    return Path(workdir).resolve() / ".sandbox_cargo"
+    return Path(workdir).resolve() / SANDBOX_CARGO_DIR
 
 
 def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
@@ -91,6 +111,50 @@ def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
     """
     bin_dir = Path(cargo_home) / "bin"
     return (bin_dir,) if bin_dir.is_dir() else ()
+
+
+def sandbox_rustup_home(workdir: str | Path) -> Path:
+    """The **private, per-run `RUSTUP_HOME`** for a sandboxed build, under the workdir.
+
+    Same reasoning as :func:`sandbox_cargo_home`: even with a fully pre-installed
+    toolchain, the ``rustup`` proxy (which ``cargo``/``rustc``/``cargo-build-sbf`` all
+    are) writes scratch into ``$RUSTUP_HOME/tmp`` on every invocation — so a confined
+    build against a **read-only** shared ``RUSTUP_HOME`` dies with ``could not create
+    temp file …/.rustup/tmp/…: Permission denied``. Granting the *shared* rustup home
+    read-write instead would expose it to untrusted ``build.rs`` across runs.
+
+    A per-run home under the (already-writable, per-run) workdir fixes it without that
+    exposure: the heavy, immutable ``toolchains`` dir is a **symlink** to the shared
+    home (still granted read-only, so its bytes are shared, not copied), while
+    ``tmp``/``downloads``/``update-hashes`` are this run's own writable scratch. On a
+    host dev flow the shared ``RUSTUP_HOME`` is writable so the gap never showed; a
+    shared read-only home (the container image's baked toolchain) is what surfaced it.
+    """
+    return Path(workdir).resolve() / SANDBOX_RUSTUP_DIR
+
+
+def solana_toolchain_ro_paths(binary: str = "cargo-build-sbf") -> tuple[Path, ...]:
+    """The install tree of the ``binary`` on ``PATH`` — so the *confined* build runs the same
+    Solana toolchain the operator selected. Empty when it isn't on ``PATH``.
+
+    Two reasons this needs granting beyond the well-known cache locations:
+
+    * **Where the platform-tools live varies.** A tarball install keeps them next to the binary
+      (``<root>/bin/sdk/sbf/dependencies/platform-tools``), not under ``~/.cache/solana``. Without
+      the grant the build concludes they are missing and tries to *download* them, which offline
+      fails as the thoroughly misleading ``Failed to remove ~/.cache/solana/<ver> while recovering
+      from installation failure``.
+    * **An unreadable binary is skipped, not refused.** ``execvp`` treats the sandbox's ``EACCES``
+      as "keep looking" and runs the *next* ``cargo-build-sbf`` on ``PATH`` — so a confined build
+      silently used a different (here: much older) toolchain than the one on ``PATH``, and failed on
+      *its* platform-tools instead. Granting the tree keeps that choice honest.
+    """
+    exe = shutil.which(binary)
+    if exe is None:
+        return ()
+    bin_dir = Path(exe).resolve().parent
+    # `<root>/bin/<binary>` → grant `<root>`, so the sibling `sdk/` is readable too.
+    return (bin_dir.parent if bin_dir.name == "bin" else bin_dir,)
 
 
 def rust_build_policy(
@@ -133,6 +197,15 @@ def rust_build_policy(
         # cargo-build-sbf's downloaded sBPF platform-tools (layout varies by version).
         home / ".cache" / "solana",
         home / ".local" / "share" / "solana",
+        # …and the install tree of the `cargo-build-sbf` actually on PATH, which may be neither.
+        *solana_toolchain_ro_paths(),
+        # The git config, for a project with **git dependencies**: cargo resolves those
+        # through libgit2, which opens the global config before doing anything with a repo —
+        # even offline against an already-warm checkout. Without it cargo fails the whole
+        # metadata read with a misleading `'~/.gitconfig' is locked: Permission denied`.
+        # Config only, both spellings; the git *credential* stores (`~/.git-credentials`, a
+        # helper's) stay ungranted, as `~/.cargo/credentials.toml` does.
+        *(home / p for p in (".gitconfig", ".config/git/config")),
     ]
     ro_candidates.extend(extra_ro)
     # Absolute paths only: the launcher opens each relative to *its* cwd (the workdir),
@@ -145,12 +218,24 @@ def rust_build_policy(
 
     env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
     if offline:
+        # The spelling matters beyond our own cargo: the *target project* picks which one runs
+        # the build (one real program's `rust-toolchain.toml` pins 1.74), so it has to be what
+        # every version accepts.
         env["CARGO_NET_OFFLINE"] = "true"
+    # Pin the registry protocol so the offline build reads the index layout the WARM STEP
+    # WROTE. `CARGO_HOME` alone does not make them agree: the two run under different cargos
+    # (the warm uses the program's own toolchain, the build uses platform-tools'), and cargo
+    # switched its crates.io default from the git index to sparse in 1.70 — so a 1.68
+    # platform-tools cargo would look in `registry/index/index.crates.io-6f17…` (git) while a
+    # newer warm filled `…-1949…` (sparse), and the offline build fails with a bewildering
+    # "no matching package named <some crate> found". Both sides now say sparse explicitly.
+    # See `warm_cargo_cache`, which sets the same variable.
+    env[CARGO_REGISTRY_PROTOCOL_VAR] = CARGO_REGISTRY_PROTOCOL
     # A private temp dir UNDER the (writable) workdir, so tools that need scratch space
     # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
     # work without granting the shared /tmp (which may hold host/other-run secrets and
     # would defeat the escape test). Created here so $TMPDIR points at an existing dir.
-    sandbox_tmp = wd / ".sandbox_tmp"
+    sandbox_tmp = wd / SANDBOX_TMP_DIR
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     for var in ("TMPDIR", "TMP", "TEMP"):
         env[var] = str(sandbox_tmp)
@@ -168,6 +253,30 @@ def rust_build_policy(
         if src.is_file() and not (cargo_home / cfg).exists():
             shutil.copy(src, cargo_home / cfg)
     env["CARGO_HOME"] = str(cargo_home)
+
+    # Point RUSTUP_HOME at a PRIVATE per-run home under the workdir (see
+    # sandbox_rustup_home). The shared home stays read-only (granted above via
+    # `rustup`); the per-run home symlinks `toolchains` back to it (so the RO grant
+    # still covers the resolved toolchain files) and keeps rustup's writable scratch
+    # — tmp/downloads/update-hashes — inside the (writable) workdir. `settings.toml`
+    # is copied so default/override resolution still works.
+    rustup_home = sandbox_rustup_home(wd)
+    rustup_home.mkdir(parents=True, exist_ok=True)
+    tc_link = rustup_home / "toolchains"
+    shared_toolchains = rustup / "toolchains"
+    # `exists()` follows the link, so a STALE link — a workdir left over from a run whose shared
+    # rustup home has since moved — reads as absent, and `symlink_to` on it would raise
+    # FileExistsError. Ask about the link itself, and re-point it.
+    if tc_link.is_symlink() and tc_link.resolve() != shared_toolchains.resolve():
+        tc_link.unlink()
+    if not (tc_link.is_symlink() or tc_link.exists()) and shared_toolchains.is_dir():
+        tc_link.symlink_to(shared_toolchains)
+    src_settings = rustup / "settings.toml"
+    if src_settings.is_file() and not (rustup_home / "settings.toml").exists():
+        shutil.copy(src_settings, rustup_home / "settings.toml")
+    for scratch in ("tmp", "downloads", "update-hashes"):
+        (rustup_home / scratch).mkdir(exist_ok=True)
+    env["RUSTUP_HOME"] = str(rustup_home)
 
     return SandboxPolicy(
         rw_paths=rw_paths,

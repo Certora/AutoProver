@@ -29,7 +29,7 @@ from tests.conftest import wire_workspace_prep
 pytestmark = pytest.mark.asyncio
 
 #: What a registered toolchain reports about the analyzed project. Framework-side this is an opaque
-#: object; that these keys spell a Cargo crate is the *chain's* business.
+#: object; that these keys spell a Cargo crate is the *chain's* business (``autoprover-solana``).
 SOURCE_UNIT = {"dir": "programs/lend", "package": "example-lending", "lib": "example_lending"}
 #: A chain-shaped prep request, and the facts carrying it out established.
 REQUEST = {"warm_dirs": ["fuzz/vault"], "build_program": "example_lending",

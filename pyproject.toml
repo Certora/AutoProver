@@ -115,7 +115,7 @@ dev = [
 # cache-keys` over its `.rs` sources, so uv rebuilds on `uv run` when the Rust
 # changes and there is no manual `maturin develop` / `cargo build` step.
 apps = [
-    # crucible_app is added in PR3 (its crate lives in rust/crucible-app, which lands there).
+    "crucible_app",
     "echoprover",
     # The command-sandbox launcher — a binary, not an extension module; the wheel
     # lands it in `.venv/bin`, which is where composer.sandbox.launcher resolves it
@@ -150,7 +150,7 @@ conflicts = [
 [tool.uv.sources]
 graphcore = { path = "./graphcore", editable = true }
 # Wheels built from the local Rust workspace (see the `apps` group above).
-# crucible_app's source is added in PR3 (with its crate under rust/crucible-app).
+crucible_app = { path = "rust/crucible-app", editable = true }
 echoprover = { path = "rust/example-app", editable = true }
 # Not editable: a bin wheel has nothing to link back to a source tree — uv rebuilds
 # it from the cache-keys in rust/run-confined/pyproject.toml instead.

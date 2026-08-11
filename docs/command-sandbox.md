@@ -84,7 +84,14 @@ Common surface, resolved once at sandbox-config time and expressed as Landlock r
   (the `cargo` / `cargo-*` shims on `PATH`). The home **root is not granted**, so
   `credentials.toml` / private-registry tokens stay unreadable. Offline registry contents live in
   the private per-run `CARGO_HOME` under the workdir (§11 item 5), warmed *outside* (§5).
-- **Solana platform-tools** — cargo-build-sbf's sBPF rust toolchain — read+exec.
+- **Solana platform-tools** — cargo-build-sbf's sBPF rust toolchain — read+exec. Granted at all
+  three places they can live: `~/.cache/solana`, `~/.local/share/solana`, and the **install tree of
+  the `cargo-build-sbf` on `PATH`** (a tarball install keeps them in a sibling `sdk/`, and that
+  binary must itself be executable here — `execvp` silently falls through to the next `PATH` match on
+  `EACCES`, so an ungranted toolchain doesn't fail, it gets *substituted*).
+- **The global git config** (`~/.gitconfig`, `~/.config/git/config`) — read-only, for a program with
+  git dependencies: libgit2 opens it before touching any repo, even offline against a warm checkout.
+  The credential stores (`~/.git-credentials`, a helper's) stay ungranted.
 - **The `crucible` binary** and libs it dlopens — read+exec.
 - **The crucible checkout** (`$CRUCIBLE_REPO/crates/…`) — the path deps — read-only.
 - **System runtime** — `/usr`, `/bin`, `/lib`, `/lib64` — read+exec (needed for the toolchain's own

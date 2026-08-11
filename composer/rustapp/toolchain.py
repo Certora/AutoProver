@@ -14,8 +14,8 @@ the same way).
 **What crosses the seam is chain-shaped and opaque to everything here.** Both methods speak
 ``dict[str, Any]`` (Rust: ``autoprover_sdk::chain::ChainData``), typed at each end and nowhere in
 between: the implementation registered here and the wheels targeting that chain share those types
-through the chain's own support crate, while the host only transports them. Which type is inside
-follows from the wheel's declared ``ecosystem``, not from inspecting keys.
+through the chain's own support crate (``rust/autoprover-solana``), while the host only transports
+them. Which type is inside follows from the wheel's declared ``ecosystem``, not from inspecting keys.
 That is what makes a new ecosystem a registration rather than an edit to
 :mod:`composer.rustapp.wire`.
 

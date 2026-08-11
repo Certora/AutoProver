@@ -1,0 +1,17 @@
+[package]
+name = "{{ program }}_fuzz"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+{{ deps }}
+
+[[bin]]
+name = "invariant_test"
+path = "src/main.rs"
+
+[features]
+{{ feats }}
+

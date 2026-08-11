@@ -1,0 +1,18 @@
+These properties will be checked with Crucible, a coverage-guided fuzzer for Solana programs.
+
+**How Crucible executes them, and what that means for how you write them.** Crucible drives *random
+sequences* of the program's instructions and evaluates every property after every action. So the properties you
+write must hold across ANY reachable sequence of actions, not only within a single instruction — and the most
+valuable ones are exactly those a *sequence* can violate: conservation of value, monotonicity, "this can only ever
+happen once", access control that must survive whatever came before. Prefer those over properties local to a single
+call, and phrase each as something checkable against on-chain state after an arbitrary action. Note that the whole
+program's instructions interleave in that sequence — including ones outside the capability you are reviewing.
+
+As a fuzzer it cannot *prove* universally quantified properties or invariants, but it approximates them well and any
+*refutation* (a fuzzing counterexample / crash) is extremely valuable. So state universal safety properties and
+invariants freely — do not restrict yourself because a fuzzer cannot definitively prove them.
+
+A few categories are a poor fit and should be skipped: properties about off-chain events (key compromise, social
+engineering, oracle manipulation outside the modeled accounts), and pure hash-collision resistance ("no two inputs ever
+collide"), which sampling cannot refute. Arithmetic-overflow and type-level facts are worth stating: Rust overflow
+panics and Anchor constraint failures surface as crashes the fuzzer can find.
