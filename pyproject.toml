@@ -97,16 +97,6 @@ ragbuild = [
 ]
 
 [tool.uv]
-# urllib3-future (via niquests, via certora-cloud) ships a wheel that contains its own
-# top-level `urllib3` package plus a `urllib3_future.pth` startup hook, both of which
-# exist to substitute it for the real urllib3 in-place. Anything resolving `import
-# urllib3` then gets the fork, and an interrupted substitution leaves a tree that cannot
-# be imported at all. Building it from its sdist with URLLIB3_NO_OVERRIDE set — which the
-# project's own build hook reads, see its README's packaging notes — emits neither the
-# duplicate package nor the hook, leaving `urllib3` and `urllib3_future` as disjoint
-# installs. niquests imports urllib3_future directly, so it is unaffected.
-# The environment variable is set alongside every install site (see scripts/Dockerfile).
-no-binary-package = ["urllib3-future"]
 conflicts = [
     [{ extra = "cpu" }, { extra = "cuda" }],
     [
