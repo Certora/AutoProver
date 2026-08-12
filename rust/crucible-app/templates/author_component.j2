@@ -11,9 +11,12 @@ Properties to check (assert each; PREFIX every assertion message with its proper
 `"[{{ first }}] ..."`, so a counterexample names the property it refutes):
 {{ listed }}
 
-Then declare with `map_checks` which harness function verifies which property: one per property, named
-`c_<property title>`. That tag prefix is what places a counterexample on the right property, so a check whose
-property title never appears in a tagged assertion has nothing behind it.
+Then declare with `map_checks` what verifies what. **Here an invariant is one TAGGED ASSERTION, not the
+`invariants` fn** — that fn holds all of them. So declare exactly {{ n }} invariant(s), one per property, each named
+`c_<property title>` after the tag it asserts (the first would be `c_{{ first }}`), and map each property to that one
+alone. Never map several properties onto one invariant: a counterexample is placed by its tag, so that would fail
+every one of them on evidence about a single property, and the gate refuses it. An invariant whose property title
+never appears in a tagged assertion has nothing behind it.
 
 This component (its instructions are the ones the properties are about; drive them via the fixture's `action_*`
 methods, and see the fixture source below for the full set of actions the fuzzer can take):

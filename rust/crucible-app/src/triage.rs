@@ -206,6 +206,34 @@ fn finding_detail(line: &str, workdir: &Path, program: &str, unit: &str) -> Opti
     Some(detail)
 }
 
+/// Why this backend cannot answer for a check the author mapped several properties onto — `None`
+/// when every covered check claims exactly one, which is the only shape it can attribute.
+///
+/// A campaign places a counterexample by the `[<title>]` tag in the assertion message, so a check
+/// claiming several properties is refuted by a finding naming *any* of them: the whole set would go
+/// `BAD` together on evidence about one. The seam permits many-to-one (a CVL rule can genuinely
+/// discharge three invariants) — Crucible cannot, because its unit of evidence is one tagged
+/// assertion, and this is where it says so rather than reporting a verdict it cannot stand behind.
+pub(crate) fn undeclarable(target: &Target) -> Option<String> {
+    let shared: Vec<String> = target
+        .checks
+        .iter()
+        .filter(|c| c.properties.len() > 1)
+        .map(|c| format!("`{}` claims {}", c.name, c.properties.join(", ")))
+        .collect();
+    if shared.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "an invariant cannot cover more than one property here: {}. A counterexample is placed by \
+         the `[<title>]` tag in its assertion message, so one invariant covering several properties \
+         would fail them all together on evidence about one of them. Declare exactly one invariant \
+         per property, named `c_<property title>` after the tag it asserts, and map each property \
+         to that one alone.",
+        shared.join("; "),
+    ))
+}
+
 /// The run property whose title the finding names but this target does not check — the owner of a
 /// foreign assertion. Longest title wins, so one title being a prefix of another resolves to the
 /// more specific of the two.
@@ -303,7 +331,29 @@ mod attribution {
     //! campaign covers a component's whole property set, and the fixture's assertions carry titles
     //! from components that campaign never asked about.
     use super::*;
-    use crate::testkit::{iterating_target, owned, target_over, verdicts_of};
+    use crate::testkit::{iterating_target, owned, prop, target_over, verdicts_of};
+
+    #[test]
+    fn one_invariant_per_property_is_the_only_shape_this_backend_can_attribute() {
+        // The 2026-08-11 vault run: the author mapped all ten of a component's properties onto one
+        // check, so the two properties a campaign actually refuted took the other eight down with
+        // them. The seam allows many-to-one; this backend's evidence is one tagged assertion, so it
+        // refuses rather than reporting a verdict it cannot stand behind — and refuses BEFORE the
+        // campaign, since those verdicts would be unattributable however long it ran.
+        let props = [prop("fifo", "fifo"), prop("solvency", "solvency")];
+        assert!(undeclarable(&target_over("c_queue", &props)).is_none(), "one each is fine");
+
+        let mut shared = target_over("c_queue", &props);
+        shared.checks = vec![Check {
+            name: "c_all".into(),
+            properties: props.iter().map(|p| p.title.clone()).collect(),
+            target: Some("c_queue".into()),
+        }];
+        let why = undeclarable(&shared).expect("refused");
+        assert!(why.contains("c_all") && why.contains("fifo") && why.contains("solvency"), "{why}");
+        // Actionable: it says what to do instead, in the noun the prompt used.
+        assert!(why.contains("one invariant per property"), "{why}");
+    }
 
     /// The whole run's properties: two components, and the fixture's negative actions tagged with
     /// titles from both — the shape the 2026-08-07 e2e run had.

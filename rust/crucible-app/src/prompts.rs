@@ -232,6 +232,15 @@ mod tests {
         let p = app.author_prompt(&input);
         assert_no_residue(&p.instruction);
         assert!(norm(&p.instruction).contains(&format!("named EXACTLY `{SECTION_FN}`")));
+        // The declared unit is the tagged assertion, not the one fn that holds them all. Both
+        // authors of the 2026-08-11 vault run read an earlier wording ("which harness function
+        // verifies which property") as "map every property onto `invariants`", which made one
+        // counterexample fail all ten properties that check covered.
+        assert!(norm(&p.instruction).contains("one TAGGED ASSERTION, not the"), "{}", p.instruction);
+        assert!(
+            norm(&p.instruction).contains("Never map several properties onto one invariant"),
+            "{}", p.instruction,
+        );
         assert!(norm(&p.instruction).contains("**Withdraw Queue** component"));
         // The interleaving warning that replaces the whole-program framing.
         assert!(norm(&p.instruction).contains("drives the WHOLE program, not just this component"));

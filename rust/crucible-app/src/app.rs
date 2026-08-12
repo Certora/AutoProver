@@ -31,7 +31,7 @@ use crate::layout::{
 use crate::optional_accounts;
 use crate::section::{delivered_sections, Section};
 use crate::templates::SkeletonFixture;
-use crate::triage::{attribute_findings, findings};
+use crate::triage::{attribute_findings, findings, undeclarable};
 use crate::{declaration, prompts, toolchain};
 
 pub(crate) struct CrucibleApp;
@@ -132,6 +132,12 @@ impl Backend for CrucibleApp {
         target: &Target,
         ws: &Workspace,
     ) -> ValidateOutcome {
+        // Ahead of the build, because a campaign whose verdicts cannot be attributed is a wasted
+        // budget: this backend's unit of evidence is one tagged assertion, so a check the author
+        // mapped several properties onto has no answer it can stand behind ([`undeclarable`]).
+        if let Some(why) = undeclarable(target) {
+            return target.all(Outcome::Error, Some(why));
+        }
         let program = &input.program;
         let budget_s: u64 = input.args.get("fuzz_timeout").unwrap_or(30);
         // The target's name is the harness fn, which is also the Cargo feature and the selector.
