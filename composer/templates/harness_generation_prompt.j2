@@ -44,9 +44,7 @@ Once all harness contracts have been generated, call the `result` tool to delive
 mapping keyed by each target contract's `solidity_identifier` (from the input list above) to the list of harness
 descriptions for that target. Each harness description contains the relative path to the generated file and the
 Solidity identifier you chose for the generated harness.
-In addition, specify the Solidity compiler to use when compiling these harnesses. You should specify this as `solcX.Y`, where `X` and `Y` are the major/minor version numbers.
-For example, to specify Solidity version 0.8.31, use `solc8.31` as the solidity compiler.
 
-As part of delivering your result your generated harnesses will be checked for syntactic/type validity. Upon rejection, the Solidity compiler error messages will be returned to you;
-repair any issues and re-invoke the result tool. 
+As part of delivering your result your generated harnesses are compiled with the project's own build settings and checked for syntactic/type validity.
+Upon rejection, the Solidity compiler error messages will be returned to you; repair any issues and re-invoke the result tool.
 </task>
