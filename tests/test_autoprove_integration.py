@@ -102,6 +102,7 @@ def _make_args(rag_conn: str, scenario_dir: Path, system_doc: str | None) -> Aut
         thinking_tokens=2048,
         memory_tool=False,
         interleaved_thinking=False,
+        time_budget=None
     ))
 
 
@@ -188,7 +189,7 @@ async def test_autoprove_dumps_job_info_when_pipeline_crashes(scenario_provider,
             properties_key="bar"
         )
 
-        def __init__(self, store, _ignored):
+        def __init__(self, store, _opts_ignored, _editing_ignored, _analysis_ignored):
             self.artiface_store = store
             
         
