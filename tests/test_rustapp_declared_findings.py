@@ -183,3 +183,32 @@ def test_the_console_rollup_agrees_with_the_report():
         ("c_kill_prop", Outcome.BAD),
         ("c_plain_prop", Outcome.GOOD),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_wheels_own_file_beats_the_components_fallback():
+    """A verdict that names its own source file keeps it, and only a verdict that names none falls
+    back to the component's artifact.
+
+    The report identifies a rule row by ``(file, name)`` so that one definition seen through several
+    runs collapses into a single row. A callout-mode wheel delivers ONE artifact, so every component
+    shares that fallback name — and two components whose authors named an invariant the same way
+    (they are given the same property title, so they do) would collapse into one row, silently
+    dropping the second component's verdict. The wheel says which of its sections a check came from;
+    this is the wiring that lets it.
+    """
+    formalizer = adapter.RustFormalizer(
+        cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
+    )
+    located = _verdict(Outcome.BAD)
+    located.unit_file = "c_lamport_custody.rs"
+    result = _result({"c_authority_immutable": located, "c_unplaced": _verdict(Outcome.GOOD)}, {})
+    verdicts = await formalizer.fetch_verdicts(
+        cast(
+            ReportComponentInput[RustFormalResult],
+            ReportComponentInput(name="Lamport Custody", props=[],
+                                 formalized=cast(Any, _Formalized(result))),
+        )
+    )
+    assert verdicts["c_authority_immutable"].unit_file == "c_lamport_custody.rs"
+    assert verdicts["c_unplaced"].unit_file == "main.rs"

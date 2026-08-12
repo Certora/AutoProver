@@ -104,6 +104,15 @@ campaign, since a wrongly-shaped declaration is unattributable however long it r
 reporting a verdict it cannot stand behind. The seam still permits many-to-one, which is right: a CVL
 rule genuinely can discharge three invariants because the Prover reports per rule.
 
+A second finding came out of the same run's report: 15 checks rendered as **14 rule rows**. The
+report identifies a rule by `(file, name)` — deliberately, so one definition seen through several
+runs collapses into a single row — and Crucible's deliverable is one crate, so every component's
+checks shared its file name. Two components whose authors both wrote `c_vault_authority_immutable`
+collapsed into one row, keeping only the first verdict. Pre-existing, but far more reachable now
+that names come from authors given the same property title rather than from per-batch slugs. Fixed
+where the truth lives: a verdict now names the section file its assertion was written into
+(`<feature>.rs`, one per component), which is what the wire's `Verdict.unit_file` was always for.
+
 ## Follow-ups
 
 - **Crucible's corroboration is the open piece.** Its campaign reports crashes, not a list of what

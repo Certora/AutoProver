@@ -14,7 +14,7 @@ use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::finalize::FinalizeInput;
 use autoprover_sdk::outcome::{
-    CompileResult, Exploration, Outcome, Target, ValidateOutcome,
+    CompileResult, Exploration, Outcome, Target, ValidateOutcome, Verdict,
 };
 use autoprover_sdk::prep::{CrateRootInput, SandboxGrants, WorkspacePrep};
 use autoprover_sdk::sandbox::Workspace;
@@ -33,6 +33,30 @@ use crate::section::{delivered_sections, Section};
 use crate::templates::SkeletonFixture;
 use crate::triage::{attribute_findings, findings, undeclarable};
 use crate::{declaration, prompts, toolchain};
+
+/// Every verdict, told which file its assertion lives in — `<feature>.rs`, the section this
+/// component's tests were written into (one section per file, `HarnessSpec::section_path`).
+///
+/// The report identifies a rule row by `(file, name)`, which is what lets one definition seen
+/// through several runs collapse into a single row. Crucible's deliverable is ONE crate, so without
+/// this every component's checks share its file name and two components that name the same
+/// invariant collapse too — a real risk now that the names are the author's, and two authors given
+/// the same property title write the same name. The 2026-08-12 vault run had exactly that: 15
+/// checks reported as 14 rows, with the second component's verdict dropped.
+fn in_section(target: &Target, outcome: ValidateOutcome) -> ValidateOutcome {
+    let ValidateOutcome::Verdicts { verdicts } = &outcome else { return outcome };
+    let file = format!("{}.rs", target.name);
+    let by_name: Vec<(&str, &Verdict)> = verdicts.iter().collect();
+    target.verdicts(|c| {
+        let mut v = by_name
+            .iter()
+            .find(|(n, _)| *n == c.name)
+            .map(|(_, v)| (*v).clone())
+            .unwrap_or_else(|| Verdict::with_outcome(Outcome::Unknown));
+        v.unit_file = Some(file.clone());
+        v
+    })
+}
 
 pub(crate) struct CrucibleApp;
 
@@ -175,7 +199,7 @@ impl Backend for CrucibleApp {
         // behind — by a run killed after its periodic flush, say — would be published as the *next*
         // component's coverage.
         coverage::preserve(&ws.dir, &hspec.dir(), REPORT_ROOT, fname);
-        match ran {
+        let located = match ran {
             Ok(out) => {
                 let combined = format!("{}\n{}", out.stdout, out.stderr);
                 let found = findings(&combined, &ws.dir, program, fname);
@@ -215,7 +239,8 @@ impl Backend for CrucibleApp {
                     .annotate(target, concluded)
             }
             Err(e) => target.all(Outcome::Error, Some(e)),
-        }
+        };
+        in_section(target, located)
     }
 
     fn sandbox_grants(&self, _args: &AppArgs) -> SandboxGrants {
@@ -344,12 +369,41 @@ mod tests {
     use crate::layout::harness_dir;
     use crate::testkit::{
         at, component_input, delivered_component, distinct_crate, outcomes, prep_input,
-        prep_request, prop, skewed_crate,
+        prep_request, prop, skewed_crate, target_over,
     };
 
     /// A path inside the `lending` harness crate, as the host receives it (workdir-relative).
     fn at_lending(rel: &str) -> String {
         at("lending", rel)
+    }
+
+    #[test]
+    fn a_verdict_says_which_components_section_it_came_from() {
+        // Two components, each with an invariant its author named the same way — which is what two
+        // authors given the same property title do. The report keys a rule row by (file, name), so
+        // without a per-section file the second component's verdict is dropped as a duplicate of
+        // the first (the 2026-08-12 vault run: 15 checks, 14 rows).
+        let props = [prop("vault_authority_immutable", "auth_immutable")];
+        let verdicts_for = |feature: &str| {
+            let target = target_over(feature, &props);
+            let ValidateOutcome::Verdicts { verdicts } =
+                in_section(&target, target.all(Outcome::Good, None))
+            else {
+                panic!("a verdict set")
+            };
+            verdicts
+                .iter()
+                .map(|(n, v)| (n.to_string(), v.unit_file.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            verdicts_for("c_vault_initialization"),
+            vec![("c_auth_immutable".to_string(), Some("c_vault_initialization.rs".to_string()))],
+        );
+        assert_eq!(
+            verdicts_for("c_lamport_custody"),
+            vec![("c_auth_immutable".to_string(), Some("c_lamport_custody.rs".to_string()))],
+        );
     }
 
     #[test]
