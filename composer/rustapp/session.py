@@ -148,6 +148,12 @@ _MAPPING = MappingVocab(
 )
 
 
+def properties_of(mapping: Sequence[PropertyCheckMapping], check: str) -> list[str]:
+    """The property titles the mapping says ``check`` verifies — several when one check discharges
+    several properties, none while the author has not said."""
+    return [m.property_title for m in mapping if check in m.checks]
+
+
 def declared_names(mapping: Sequence[PropertyCheckMapping]) -> list[str]:
     """The check names the author's mapping references, in first-seen order and without repeats.
 
@@ -161,11 +167,15 @@ def declared_checks(
 ) -> list[Check]:
     """:func:`declared_names` as :class:`Check`\\ s, each grouped by the wheel's ``target_for``.
 
-    The two halves of a check come from the two parties that can know them: the *name* from the
-    author (it names a thing in the artifact, which only the author wrote), the *grouping* from the
-    wheel (which invocation of the checker covers it, a backend convention)."""
+    The parts come from the two parties that can know them: the *name* and what it verifies from the
+    author (the artifact is the author's, and so is the claim), the *grouping* from the wheel (which
+    invocation of the checker covers it, a backend convention)."""
     return [
-        Check(name=name, target=module.target_for(input_json, name))
+        Check(
+            name=name,
+            properties=properties_of(mapping, name),
+            target=module.target_for(input_json, name),
+        )
         for name in declared_names(mapping)
     ]
 
@@ -308,7 +318,7 @@ class ValidateSpec(
                     return f"The build FAILED, so nothing was checked.\n\n{res.errors}"
                 for check, verdict in res.resolve(target):
                     verdicts[check.name] = verdict
-                    _emit_verdict(deps, check, verdict, mapping)
+                    _emit_verdict(deps, check, verdict)
 
         report = _verdict_report(verdicts, self.state["expected_failures"])
         partial = self.checks is not None
@@ -349,18 +359,10 @@ def targets_of(checks: Sequence[Check]) -> list[Target]:
     ]
 
 
-def properties_of(mapping: Sequence[PropertyCheckMapping], check: str) -> list[str]:
-    """The property titles the mapping says ``check`` verifies — several when one check discharges
-    several properties, none while the author has not said."""
-    return [m.property_title for m in mapping if check in m.checks]
-
-
-def _emit_verdict(
-    deps: GateDeps, check: Check, verdict: WireVerdict, mapping: Sequence[PropertyCheckMapping]
-) -> None:
-    # The property's own words read better than a check name, but a run happens before publish, so
-    # the mapping is whatever the author has declared so far — fall back to the name it ran under.
-    name = ", ".join(properties_of(mapping, check.name)) or check.name
+def _emit_verdict(deps: GateDeps, check: Check, verdict: WireVerdict) -> None:
+    # The property's own words read better than a check name — the check carries the author's claim,
+    # so this needs nothing else. Several titles when one check discharges several properties.
+    name = ", ".join(check.properties) or check.name
     line = f"{name}: {verdict.outcome.value}"
     deps.emit(
         "verdict",

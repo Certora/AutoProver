@@ -91,11 +91,12 @@ def test_a_field_the_host_does_not_declare_is_refused():
 def test_a_null_target_means_a_check_is_its_own_validation_target():
     # `target` must be *present*; null is how the grouping says the check runs on its own. Absence
     # is not a third spelling of that — see the test above.
-    own = Target.model_validate_json('{"name": "rule_p", "checks": [{"name": "rule_p", "target": null}]}')
-    assert own.checks == [Check(name="rule_p", target=None)]
+    own = Target.model_validate_json(
+        '{"name": "rule_p", "checks": [{"name": "rule_p", "properties": ["p"], "target": null}]}')
+    assert own.checks == [Check(name="rule_p", properties=["p"], target=None)]
     assert own.checks[0].target_or_name() == "rule_p"
     # …and a shared target is what the host runs once for several checks.
-    assert Check(name="rule_p", target="c_vault").target_or_name() == "c_vault"
+    assert Check(name="rule_p", properties=["p"], target="c_vault").target_or_name() == "c_vault"
 
 
 def test_an_outcome_the_host_does_not_know_is_refused():
@@ -114,8 +115,8 @@ def _verdicts(*named: tuple[str, str]) -> ValidateVerdicts:
 
 
 _SHARED = Target(name="c_vault", checks=[
-    Check(name="rule_p", target="c_vault"),
-    Check(name="rule_q", target="c_vault"),
+    Check(name="rule_p", properties=["p"], target="c_vault"),
+    Check(name="rule_q", properties=["q"], target="c_vault"),
 ])
 
 

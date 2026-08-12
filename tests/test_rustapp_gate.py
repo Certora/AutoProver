@@ -43,8 +43,8 @@ def _state(**kw) -> RustSessionState:
     return cast(RustSessionState, {**base, **kw})
 
 
-def _check(name: str, target: str | None = None) -> Check:
-    return Check(name=name, target=target)
+def _check(name: str, target: str | None = None, properties: list[str] | None = None) -> Check:
+    return Check(name=name, properties=properties or ["p"], target=target)
 
 
 def _mapped(**by_title: list[str]) -> list[PropertyCheckMapping]:
@@ -148,6 +148,9 @@ def test_a_declared_check_is_paired_with_the_grouping_the_wheel_gives_it():
 
     checks = declared_checks(cast(Any, _Wheel()), "{}", _mapped(a=["c_a"], b=["c_own"]))
     assert [(c.name, c.target) for c in checks] == [("c_a", "shared"), ("c_own", None)]
+    # …and each carries the author's claim about it, so a backend whose diagnostics speak in
+    # properties can place a finding without the host parsing anything.
+    assert [c.properties for c in checks] == [["a"], ["b"]]
 
 
 def test_a_checks_target_defaults_to_its_own_name():

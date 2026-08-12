@@ -591,11 +591,11 @@ def test_an_empty_optional_is_spelled_null_on_both_sides(wire_echo: WireEcho) ->
     default nothing, so absence is an error on whichever side reads it rather than a second way to
     say "nothing". That is what lets the round trips above compare documents directly — they are
     comparing content, not two conventions for the same value."""
-    row = {"name": "u", "target": None}
+    row = {"name": "u", "properties": ["p"], "target": None}
     assert wire_echo.echo("checks", [row]) == [row]
-    assert Check.model_validate(row) == Check(name="u", target=None)
+    assert Check.model_validate(row) == Check(name="u", properties=["p"], target=None)
 
-    absent = {"name": "u"}
+    absent = {"name": "u", "properties": ["p"]}
     with pytest.raises(WireFault, match="missing field"):
         wire_echo.echo("checks", [absent])
     with pytest.raises(ValidationError):

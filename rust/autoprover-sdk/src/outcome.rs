@@ -29,10 +29,12 @@ pub struct SkippedProperty {
 /// foundry test, a tagged fuzz assertion. A check yields a [`Verdict`] and becomes one row of the
 /// report.
 ///
-/// It carries no property. What a check verifies is the author's declaration (the property→checks
-/// mapping, validated at publish), which is many-to-many and the only place that relation lives — a
-/// run is deliberately property-blind. A backend that derives its check names from properties still
-/// knows the correspondence internally; that is its own business, not something this seam carries.
+/// `properties` is what the author declared this check verifies — the mapping's own claim, carried
+/// verbatim rather than guessed by the wheel, and never empty (a check exists *because* something
+/// claimed it). Usually one title; several when one rule discharges several related invariants. It
+/// is here because some checkers speak in properties rather than in check names — Crucible tags each
+/// assertion message with its property title, so this is what lets it place a counterexample —
+/// while a backend whose checker reports per check (the Prover, forge) can ignore it.
 ///
 /// `target` names the [`Target`] this check runs under — **one invocation of the checker**. Several
 /// checks may share one (e.g. Crucible puts a component's whole property set in a single fuzz
@@ -44,6 +46,7 @@ pub struct SkippedProperty {
 #[serde(deny_unknown_fields)]
 pub struct Check {
     pub name: String,
+    pub properties: Vec<String>,
     #[serde(deserialize_with = "crate::required::present")]
     pub target: Option<String>,
 }

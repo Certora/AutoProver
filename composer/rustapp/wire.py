@@ -283,15 +283,19 @@ class Check(WireModel):
     a foundry test, a tagged fuzz assertion. A check yields a :class:`Verdict` and becomes one row of
     the report.
 
-    It carries no property. What a check verifies is the author's declaration (the property→checks
-    mapping, validated at publish), which is many-to-many and the only place that relation lives — a
-    gate run is deliberately property-blind.
+    :attr:`properties` is what the author declared this check verifies — the mapping's own claim,
+    carried verbatim rather than guessed by the wheel, and never empty (a check exists *because*
+    something claimed it). Usually one title; several when one rule discharges several related
+    invariants. It is here because some checkers speak in properties rather than in check names
+    (Crucible tags each assertion message with its property title, so this is what lets it place a
+    counterexample), while a backend whose checker reports per check can ignore it.
 
     ``target`` names the :class:`Target` this check runs under — one invocation of the checker,
     answered by the wheel's ``target_for``. Several checks may share one, so the host runs each
     distinct target once and the wheel attributes the outcome back to each check."""
 
     name: str
+    properties: list[str]
     target: str | None
 
     # Mirrors the Rust ``Check::target_or_name``.

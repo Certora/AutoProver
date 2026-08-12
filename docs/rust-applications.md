@@ -469,18 +469,20 @@ be computed before authoring starts. `map_checks` declares the property→checks
 distinct names in it are exactly what a gate run executes. The relation is **many-to-many** and both
 directions are ordinary: several checks under one property title, or one check named under several.
 
-A `Check` is `{ name, target? }` — no property. What a check verifies lives only in the declared
-mapping (which is where the report already reads it), so a gate run is deliberately property-blind:
-it knows names and invocations, not purposes. A **target** is **one invocation of the checker** — one
+A `Check` is `{ name, properties, target? }`. `properties` is the author's own claim, carried
+verbatim from the mapping rather than guessed by the wheel — it is there because some checkers speak
+in properties rather than in check names (Crucible tags each assertion message with its property
+title, and that is what lets it place a counterexample), while a backend whose checker reports per
+check can ignore it. A **target** is **one invocation of the checker** — one
 build + one run — answered per name by the wheel's `target_for`. Several checks may share one, so a
 wheel can put a component's whole property set in a single target. That is the run-vs-report split:
 targets group what *runs*, checks group what is *reported*, and a target sits inside one component's
 session, so the three nest (`component ⊇ target ⊇ check`). `target_for` returning `None` makes the
 check its own target — one invocation per check, the default.
 
-The two halves of a check therefore come from the two parties that can know them: the **name** from
-the author (it names a thing in the artifact, which only the author wrote) and the **grouping** from
-the wheel (a backend convention). The host puts them together, runs each *distinct* target once
+A check's parts therefore come from the two parties that can know them: the **name** and **what it
+verifies** from the author (the artifact is the author's, and so is the claim) and the **grouping**
+from the wheel (a backend convention). The host puts them together, runs each *distinct* target once
 (`target_or_name()`) and passes it as a `Target { name, checks }` carrying the checks it covers, so
 the grouping is not something the wheel has to reconstruct; the wheel returns a verdict **per check
 in it**. Attribution is the wheel's: it owns its result format, so it decides which check a

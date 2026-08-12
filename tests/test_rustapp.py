@@ -46,7 +46,7 @@ def _component_input(*titles: str) -> str:
 def _target(*checks: str) -> str:
     """A target and the report rows it covers — what the host passes ``validate``."""
     return Target(
-        name=checks[0], checks=[Check(name=c, target=None) for c in checks]
+        name=checks[0], checks=[Check(name=c, properties=["p"], target=None) for c in checks]
     ).model_dump_json()
 
 

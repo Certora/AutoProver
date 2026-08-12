@@ -126,9 +126,9 @@ async def test_each_distinct_target_runs_once_carrying_the_checks_it_covers(tmp_
     # …and each run is told exactly which checks it owes a verdict for, so the wheel never re-derives
     # the grouping the host just computed.
     assert [[c.name for c in t.checks] for t in wheel.targets] == [["c_stake", "c_dbl"], ["c_fees"]]
-    # A run is property-blind: a check is a name and the invocation it belongs to, and what it
-    # verifies lives only in the mapping the author declared.
-    assert set(Check.model_fields) == {"name", "target"}
+    # …carrying the author's own claim about each, which is what a backend whose diagnostics speak
+    # in properties (Crucible's tagged assertions) places a counterexample by.
+    assert [c.properties for c in wheel.targets[0].checks] == [["stake matches"], ["no double stake"]]
 
 
 @pytest.mark.asyncio
@@ -278,7 +278,8 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
             property_checks=[("stake matches", ["c_stake"]), ("no double stake", ["c_dbl"])],
             verdicts={},
             ran=[Target(name="c_farms", checks=[
-                Check(name="c_stake", target="c_farms"), Check(name="c_dbl", target="c_farms"),
+                Check(name="c_stake", properties=["stake matches"], target="c_farms"),
+                Check(name="c_dbl", properties=["no double stake"], target="c_farms"),
             ])],
             expected_failures={},
         )

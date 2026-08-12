@@ -12,7 +12,8 @@ gone. In its place:
 
 - the author declares the property→checks mapping (`map_checks`), and its distinct names are what
   runs;
-- `Check` is `{ name, target }`, and the wheel answers only `target_for(input, check)`;
+- `Check` is `{ name, properties, target }` — `properties` being the author's own claim, carried
+  verbatim rather than guessed by the wheel — and the wheel answers only `target_for(input, check)`;
 - `validate` carries a **verdict contract**: a check with no evidence it ran comes back `ERROR` or
   `UNKNOWN`, never `GOOD`;
 - a stamping run records `ran` — the targets it covered, each with its checks — and the publish gate
@@ -37,6 +38,14 @@ Five invariants were at stake:
 | I3 | Every check the author claims is really there | **the verdict contract** |
 | I4 | Every check a target covers gets exactly one verdict | `ValidateVerdicts.resolve` |
 | I5 | What a check concluded is not a model claim | unchanged — the wheel answers |
+
+`Check.properties` is worth distinguishing from the old `Check.property` it replaces. That one was a
+*wheel guess* made before authoring, which could contradict the mapping the author later published,
+and it was a scalar, so skipping one of a check's properties dropped the whole check. This one is the
+author's declaration passed through: the host builds each check from the mapping, so there is nothing
+to contradict. A first attempt at this design dropped the field entirely on the grounds that a run
+should be property-blind; implementing Crucible showed why that is wrong — its assertions are tagged
+with property titles, so its attribution has no way to place a finding without it.
 
 Only I3 looked like it needed pre-declaration, and it never delivered it. A Crucible check name
 (`c_fifo`) named *nothing*: not a function, not a symbol in the build, not a token in the campaign
