@@ -254,7 +254,16 @@ impl Backend for CrucibleApp {
         // (`autoprover-solana`). The SDK carries it without a schema, so this is the only place the
         // request's fields are named on this side.
         let request = SolanaPrep {
-            warm_dirs: vec![spec.dir()],
+            // The harness dir AND the program's own crate. Warming feeds the private `CARGO_HOME`
+            // that the later *confined, offline* build reads, so anything missing from it is a hard
+            // build failure rather than a download.
+            //
+            // The program's crate has to be named explicitly because only the crate path reaches it
+            // by accident: there the harness manifest path-depends on the program, so fetching the
+            // harness resolves the program's graph too. Under the IDL path the harness does not
+            // depend on the program at all — that is the whole point of it — so nothing warms the
+            // program, and `cargo-build-sbf` dies offline on the first dependency it cannot find.
+            warm_dirs: vec![spec.dir(), cr.dir.clone()],
             // The `.so` is named after the crate's lib target, not the analysis identifier. Needed
             // under both paths: LiteSVM loads the compiled program either way.
             build_program: Some(cr.lib.clone()),
@@ -385,11 +394,29 @@ mod tests {
             &CrucibleApp.workspace_prep(&prep_input(distinct_crate(), serde_json::json!({}))),
         );
         // The harness dir follows the identifier (`crucible run vault`)…
-        assert_eq!(request.warm_dirs, vec![harness_dir("vault")]);
+        assert_eq!(request.warm_dirs, vec![harness_dir("vault"), "programs/lend".to_string()]);
         // …but the `.so` to build is the program crate's lib target.
         assert_eq!(request.build_program.as_deref(), Some("example_lending"));
         // A linkable program needs no IDL.
         assert_eq!(request.idl_dest, None);
+    }
+
+    #[test]
+    fn the_programs_own_crate_is_warmed_even_when_the_harness_does_not_depend_on_it() {
+        // The later build is confined and OFFLINE, so it can only use what warming fetched. Under
+        // the IDL path the harness has no path dep on the program to drag the program's graph in,
+        // and `cargo-build-sbf` fails on the first crate missing from the private CARGO_HOME —
+        // which is exactly how the `solana_vault_idl` gate first failed.
+        let request = prep_request(
+            &CrucibleApp.workspace_prep(&prep_input(skewed_crate(), serde_json::json!({}))),
+        );
+
+        assert!(request.idl_dest.is_some(), "this is the IDL path");
+        assert!(
+            request.warm_dirs.contains(&"programs/lend".to_string()),
+            "the program's crate must be warmed itself: {:?}",
+            request.warm_dirs,
+        );
     }
 
     #[test]

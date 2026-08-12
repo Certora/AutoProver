@@ -205,6 +205,12 @@ def rust_build_policy(
         home / ".local" / "share" / "solana",
         # …and the install tree of the `cargo-build-sbf` actually on PATH, which may be neither.
         *solana_toolchain_ro_paths(),
+        # The `anchor` CLI, needed by `anchor idl build` on the IDL path (the crate path never
+        # runs it). Granting `~/.cargo/bin` is not enough: an `avm`-managed install puts a
+        # *symlink* there pointing into `~/.avm`, and the versioned binary it finally execs lives
+        # there too — so without the resolved tree the exec fails with a bare `Permission denied`,
+        # which the IDL step then reports as "the program's anchor CLI version isn't installed".
+        *solana_toolchain_ro_paths("anchor"),
         # The git config, for a project with **git dependencies**: cargo resolves those
         # through libgit2, which opens the global config before doing anything with a repo —
         # even offline against an already-warm checkout. Without it cargo fails the whole

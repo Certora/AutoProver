@@ -126,8 +126,11 @@ def _prep(source_unit: dict | None = None, args: dict | None = None) -> dict:
 
 def test_workspace_prep_places_deps_only_manifest_and_warm_plan():
     plan = _prep(_CRATE)
-    # The harness crate is named for the analysis identifier (`crucible run vault` finds it there)…
-    assert plan["warm_dirs"] == [_HARNESS]
+    # The harness crate is named for the analysis identifier (`crucible run vault` finds it there),
+    # and the program's own crate is warmed beside it. The build that follows is confined and
+    # OFFLINE, so it can only use what warming fetched — and on the IDL path the harness has no path
+    # dep on the program to pull the program's graph in behind it.
+    assert plan["warm_dirs"] == [_HARNESS, _CRATE["dir"]]
     # …and pins its own toolchain, because rustup resolves by directory and the crate lives inside
     # the target project: otherwise the project's rust-toolchain.toml decides which cargo warms the
     # deps, which is not the one `crucible` builds with (and may be too old for a dep's manifest).
