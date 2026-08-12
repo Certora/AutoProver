@@ -36,7 +36,6 @@ from composer.rustapp.wire import (
     ValidateCoverageError,
     ValidateVerdicts,
     parse_compile,
-    parse_checks,
     parse_validate,
     parse_workspace_prep,
 )
@@ -90,13 +89,13 @@ def test_a_field_the_host_does_not_declare_is_refused():
 
 
 def test_a_null_target_means_a_check_is_its_own_validation_target():
-    # `target` must be *present*; null is how a wheel says the check runs on its own. Absence is
-    # not a third spelling of that — see the test above.
-    checks = parse_checks('[{"property": "p", "name": "rule_p", "target": null}]')
-    assert checks == [Check(property="p", name="rule_p", target=None)]
-    assert checks[0].target_or_name() == "rule_p"
+    # `target` must be *present*; null is how the grouping says the check runs on its own. Absence
+    # is not a third spelling of that — see the test above.
+    own = Target.model_validate_json('{"name": "rule_p", "checks": [{"name": "rule_p", "target": null}]}')
+    assert own.checks == [Check(name="rule_p", target=None)]
+    assert own.checks[0].target_or_name() == "rule_p"
     # …and a shared target is what the host runs once for several checks.
-    assert Check(property="p", name="rule_p", target="c_vault").target_or_name() == "c_vault"
+    assert Check(name="rule_p", target="c_vault").target_or_name() == "c_vault"
 
 
 def test_an_outcome_the_host_does_not_know_is_refused():
@@ -115,18 +114,17 @@ def _verdicts(*named: tuple[str, str]) -> ValidateVerdicts:
 
 
 _SHARED = Target(name="c_vault", checks=[
-    Check(property="p", name="rule_p", target="c_vault"),
-    Check(property="q", name="rule_q", target="c_vault"),
+    Check(name="rule_p", target="c_vault"),
+    Check(name="rule_q", target="c_vault"),
 ])
 
 
 def test_a_verdict_resolves_to_the_check_the_host_sent():
-    # The wire keys a verdict by name; upstream wants the `Check` — the property title a row is
-    # reported under comes from the host's own map, never from what the wheel echoed back. Order is
-    # the target's, not the wheel's answer's.
+    # The wire keys a verdict by name; upstream wants the `Check` the host sent, never one the
+    # wheel echoed back. Order is the target's, not the wheel's answer's.
     resolved = _verdicts(("rule_q", "BAD"), ("rule_p", "GOOD")).resolve(_SHARED)
-    assert [(c.property, v.outcome) for c, v in resolved] == [
-        ("p", Outcome.GOOD), ("q", Outcome.BAD),
+    assert [(c.name, v.outcome) for c, v in resolved] == [
+        ("rule_p", Outcome.GOOD), ("rule_q", Outcome.BAD),
     ]
 
 

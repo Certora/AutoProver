@@ -7,18 +7,19 @@ things follow, and each is a rule this file pins down:
   refuses rather than publishing something nothing has checked;
 * a check that failed blocks publishing unless the author marked it expected-to-fail with a reason,
   which is how a real counterexample reaches the report as a finding rather than as noise;
-* the declared property→checks mapping is checked against the checks the wheel declared, not against
-  what the model claims it wrote.
+* the declared property→checks mapping is checked against the checks the stamping run actually
+  covered, in both directions — the author names the checks, so the run is what holds those names
+  to the artifact.
 """
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from composer.authoring.state import SkippedProperty, check_completion, spec_digest
 from composer.rustapp.session import (
     FEEDBACK_KEY, VALIDATE_KEY, PropertyCheckMapping, RustSessionState, _unexplained,
-    _verdict_report, live_checks, targets_of,
+    _verdict_report, declared_checks, declared_names, targets_of,
 )
 from composer.rustapp.wire import Check, Outcome, Verdict
 
@@ -36,13 +37,18 @@ def _state(**kw) -> RustSessionState:
         "property_checks": [],
         "expected_failures": {},
         "verdicts": {},
+        "ran": [],
         "failed": None,
     }
     return cast(RustSessionState, {**base, **kw})
 
 
-def _check(prop: str, name: str, target: str | None = None) -> Check:
-    return Check(property=prop, name=name, target=target)
+def _check(name: str, target: str | None = None) -> Check:
+    return Check(name=name, target=target)
+
+
+def _mapped(**by_title: list[str]) -> list[PropertyCheckMapping]:
+    return [PropertyCheckMapping(property_title=t, checks=c) for t, c in by_title.items()]
 
 
 def _verdict(outcome: Outcome, detail: str | None = None) -> Verdict:
@@ -126,37 +132,60 @@ def test_the_report_says_which_checks_were_expected_to_fail():
 # What a session is still expected to check
 # ---------------------------------------------------------------------------
 
-def test_skipping_a_property_drops_its_checks_from_the_run():
-    checks = [_check("no_free_mint", "c_no_free_mint"), _check("fifo", "c_fifo")]
-    live = live_checks(checks, [SkippedProperty(property_title="fifo", reason="no oracle")])
-    assert [c.name for c in live] == ["c_no_free_mint"]
+def test_the_declared_names_are_what_runs_deduplicated():
+    # One check discharging three properties is one thing to run, not three. The mapping is
+    # many-to-many; the work list is its distinct names.
+    mapping = _mapped(a=["c_shared"], b=["c_shared", "c_b"], c=["c_shared"])
+    assert declared_names(mapping) == ["c_shared", "c_b"]
+
+
+def test_a_declared_check_is_paired_with_the_grouping_the_wheel_gives_it():
+    # The two halves of a check come from the two parties that can know them: the name from the
+    # author, the invocation it runs under from the wheel.
+    class _Wheel:
+        def target_for(self, _input_json: str, check: str) -> str | None:
+            return "shared" if check != "c_own" else None
+
+    checks = declared_checks(cast(Any, _Wheel()), "{}", _mapped(a=["c_a"], b=["c_own"]))
+    assert [(c.name, c.target) for c in checks] == [("c_a", "shared"), ("c_own", None)]
 
 
 def test_a_checks_target_defaults_to_its_own_name():
-    assert [t.name for t in targets_of([_check("p", "c_p")])] == ["c_p"]
+    assert [t.name for t in targets_of([_check("c_p")])] == ["c_p"]
 
 
 def test_checks_sharing_a_target_are_run_once_and_carry_their_own():
     # A wheel may check a whole property set in one run; the host groups, so the wheel does not have
     # to re-derive the grouping it was already given.
-    checks = [_check("a", "c_a", "shared"), _check("b", "c_b", "shared"), _check("c", "c_c")]
+    checks = [_check("c_a", "shared"), _check("c_b", "shared"), _check("c_c")]
     targets = targets_of(checks)
     assert [t.name for t in targets] == ["shared", "c_c"]
     assert [c.name for c in targets[0].checks] == ["c_a", "c_b"]
 
 
-def test_the_mapping_is_checked_against_the_checks_the_wheel_declared():
+def test_a_check_the_run_never_covered_cannot_be_claimed():
+    # The author names the checks, so nothing but the run can say a name is real. A name that no
+    # target covered is one the wheel never answered for.
     from composer.authoring.state import validate_check_mapping
     from composer.rustapp.session import _MAPPING
 
-    checks = [_check("no_free_mint", "c_no_free_mint")]
     err = validate_check_mapping(
-        [(m.property_title, m.checks) for m in [
-            PropertyCheckMapping(property_title="no_free_mint", checks=["c_invented"])
-        ]],
-        [], ["no_free_mint"], _MAPPING, ran=[c.name for c in checks],
+        [(m.property_title, m.checks) for m in _mapped(no_free_mint=["c_invented"])],
+        [], ["no_free_mint"], _MAPPING, ran=["c_no_free_mint"],
     )
     assert err is not None and "c_invented" in err
+
+
+def test_one_check_may_be_claimed_by_several_properties():
+    # A single rule discharging three related invariants: three report rows, one thing that ran.
+    from composer.authoring.state import validate_check_mapping
+    from composer.rustapp.session import _MAPPING
+
+    err = validate_check_mapping(
+        [(m.property_title, m.checks) for m in _mapped(a=["c_all"], b=["c_all"], c=["c_all"])],
+        [], ["a", "b", "c"], _MAPPING, ran=["c_all"],
+    )
+    assert err is None
 
 
 def test_a_property_that_is_neither_skipped_nor_mapped_is_refused():

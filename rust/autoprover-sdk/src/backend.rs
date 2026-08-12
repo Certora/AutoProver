@@ -6,7 +6,7 @@ use crate::args::AppArgs;
 use crate::authoring::{AuthorInput, Judge, Prompt};
 use crate::descriptor::AppDescriptor;
 use crate::finalize::FinalizeInput;
-use crate::outcome::{Check, CompileResult, Target, ValidateOutcome};
+use crate::outcome::{CompileResult, Target, ValidateOutcome};
 use crate::prep::{SandboxGrants, WorkspacePrep};
 use crate::sandbox::Workspace;
 
@@ -23,11 +23,17 @@ pub trait Backend: Send + Sync + 'static {
         Ok(())
     }
 
-    /// The checks this input formalizes — one or more per property — each a property title and the
-    /// name of the check that carries it. Pure and pre-authoring: the author is required to produce
-    /// exactly these names, the publish gate validates its mapping against them, and they are the
-    /// report's property→check map.
-    fn checks(&self, input: &AuthorInput) -> Vec<Check>;
+    /// Which invocation of the checker a declared check runs under — `None` (the default) makes it
+    /// its own. Pure; asked once per check name the author declared.
+    ///
+    /// This is the whole of what a wheel says about the check set: the *names* are the author's
+    /// (they are names of things in the artifact, so only the author can know them), while how they
+    /// are grouped into runs is a backend convention. Crucible answers with the component's harness
+    /// fn — one campaign for the whole property set; a CVL wheel would answer with the component's
+    /// conf.
+    fn target_for(&self, _input: &AuthorInput, _check: &str) -> Option<String> {
+        None
+    }
 
     /// The instruction (+ optional system prompt) to author `input.kind`'s spec, covering all its
     /// units.
@@ -80,7 +86,29 @@ pub trait Backend: Send + Sync + 'static {
     /// components). Returns [`ValidateOutcome::BuildFailed`] to trigger a revision of the whole
     /// spec (the build is shared across targets), or a [`Verdict`](crate::outcome::Verdict) for
     /// each check the target covers — [`Target::checks`], which the host already grouped.
-    /// Per-target so the host owns enumeration and scheduling. BLOCKING.
+    /// Per-target so the host owns scheduling. BLOCKING.
+    ///
+    /// # The verdict contract
+    ///
+    /// The check names come from the author, so this is also where a name is held to the artifact.
+    /// A backend must not answer [`Outcome::Good`](crate::outcome::Outcome::Good) for a check it
+    /// found no evidence ran:
+    ///
+    /// | Situation | Verdict |
+    /// |---|---|
+    /// | The checker has no such check | `Error`, with a detail naming it |
+    /// | It exists but the run never exercised it | `Unknown`, with a detail saying so |
+    /// | It ran and held | `Good` |
+    /// | It ran and was refuted | `Bad` + the counterexample |
+    ///
+    /// Both non-`Good` cases block the publish gate, which is the point: a declared check with
+    /// nothing behind it must not stamp a property as verified. What corroborates a check is the
+    /// backend's own business — a per-rule result from the Prover, a runtime tally of which tagged
+    /// assertions a campaign evaluated — but *some* evidence is required, and a source-text scan is
+    /// not it (a tag in a comment or in dead code reads exactly like a check).
+    ///
+    /// The residue no mechanism reaches — whether a check that demonstrably ran genuinely verifies
+    /// the property it claims — is the judge's ([`Backend::judge`]).
     fn validate(
         &self,
         input: &AuthorInput,

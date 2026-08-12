@@ -6,7 +6,7 @@
   Context variables:
     gate_tool      — the tool that builds/checks the spec and stamps the publish gate
     has_judge      — a reviewer must accept the draft before it can be published
-    has_checks     — the session declares a property→checks mapping at publish (false for a shared
+    has_checks     — the session declares a property→checks mapping and runs it (false for a shared
                      setup artifact, which formalizes no properties of its own)
     check_noun     — what one check is called ("check", "rule", "test", "harness function")
 -#}
@@ -21,6 +21,12 @@ not paste the whole spec into your messages; it lives in the buffer.
 ground truth: a failure is something to fix, not something to argue with. Its approval is recorded
 against the *exact* buffer it saw, so any later edit invalidates it and you must run it again.
 {% if has_checks %}
+**What gets checked.** `map_checks` declares which {{ check_noun }}s in your spec verify which
+property, and that declaration is what `{{ gate_tool }}` runs — so declare it before you validate,
+and re-declare it whenever the set of {{ check_noun }}s changes. A property may need several
+{{ check_noun }}s and one {{ check_noun }} may carry several properties. A {{ check_noun }} you name
+but did not actually write does not quietly pass: it comes back as not-run and the gate refuses.
+
 **Skips.** If a property genuinely cannot be formalized here, `record_skip` it with a justification
 rather than writing a {{ check_noun }} that only appears to check it. A skip is reviewed like
 anything else. `unskip_property` reverses one.
@@ -36,9 +42,9 @@ a prior-round suggestion was tried and provably does not work, file a `rebuttal`
 evidence — tool output beats argument. Publishing requires an acceptance of the current draft.
 {% endif %}
 **Publishing.** Call `result` when {% if has_judge %}both the gate and the reviewer have accepted{%
-else %}the gate has accepted{% endif %} the buffer as it now stands{% if has_checks %}, and declare
-which {{ check_noun }}s demonstrate which property{% endif %}. `result` is refused if anything is
-stale — that is the gate working, not an error to route around.
+else %}the gate has accepted{% endif %} the buffer as it now stands. `result` is refused if anything
+is stale{% if has_checks %}, or if your declared mapping does not account for every property that
+was not skipped{% endif %} — that is the gate working, not an error to route around.
 
 **Giving up.** If the task cannot be completed, `give_up` with the reason. That is a real outcome
 and it is reported. It is better than publishing something that only looks checked.

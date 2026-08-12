@@ -2,7 +2,7 @@
 :class:`~composer.pipeline.core.PipelineBackend`.
 
 The Rust wheel is a **passive service** (``docs/rust-applications.md``): Python owns every LLM turn
-and calls the wheel's pure callouts (``descriptor`` / ``checks`` / ``author_prompt`` /
+and calls the wheel's pure callouts (``descriptor`` / ``target_for`` / ``author_prompt`` /
 ``check_syntax`` / ``judge`` / ``finalize``) plus the two blocking ones (``compile`` /
 ``validate``) that run the toolchain via ``run-confined``. There is no IoC ``resume`` loop and no
 ``Effects`` protocol.
@@ -64,9 +64,7 @@ from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupSpec
 from composer.rustapp.toolchain import project_toolchain, source_unit
 from composer.rustapp.session import (
-    live_checks,
     run_session,
-    targets_of,
 )
 from composer.rustapp.wire import (
     AuthorInput,
@@ -81,7 +79,6 @@ from composer.rustapp.wire import (
     SetupInput,
     parse_compile,
     parse_files,
-    parse_checks,
     parse_workspace_prep,
 )
 # The wheel's per-check verdict and the *report's* per-check verdict are different types with the same
@@ -354,15 +351,10 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             prep_facts=self._project.prep_facts,
             args=self._declared_args,
         )
-        # Pure and pre-authoring: the report's shape is fixed before the first turn, so it never
-        # depends on what the model happened to write. The session hands these to the author as the
-        # names it must produce, and to the publish gate as the names it checks the mapping against.
-        checks = parse_checks(self._module.checks(input.model_dump_json()))
         outcome = await run_session(
             module=self._module,
             input=input,
             kind="component",
-            checks=checks,
             titles=[p.title for p in props],
             env=run.env,
             ctx=ctx,
@@ -382,10 +374,11 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             checks=outcome.property_checks,
             skipped=outcome.skipped,
             verdicts=outcome.verdicts,
-            # The targets the gating run covered, in the order the host ran them — what a
-            # callout-mode wheel keys its deliverable sections on. Derived from the checks that were
-            # live at publish, so a skipped property's target is not claimed as checked.
-            targets=[t.name for t in targets_of(live_checks(checks, outcome.skipped))],
+            # What the stamping run actually covered, in the order the host ran it — each target
+            # with its checks. A callout-mode wheel keys its deliverable sections on the names, and
+            # carrying the checks alongside is what makes "which properties are these results
+            # about?" answerable even for a target that errored as a whole.
+            targets=outcome.ran,
         )
 
     @override
@@ -427,7 +420,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                         WireSkipped(property_title=sk.property_title, reason=sk.reason)
                         for sk in o.result.result.skipped
                     ],
-                    targets=list(o.result.result.targets),
+                    targets=[t.name for t in o.result.result.targets],
                 ),
             )
             for o in outcomes
@@ -592,7 +585,6 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
                     module=b.module,
                     input=setup_input,
                     kind="setup",
-                    checks=[],
                     titles=[o.prop.title for o in props],
                     env=run.env,
                     ctx=setup_ctx,

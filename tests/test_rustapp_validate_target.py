@@ -1,10 +1,10 @@
 """What the host hands ``validate``, and what it does with the answer.
 
 A report row is a *check*; the thing the host actually runs is a **target**, and several checks can
-share one (Crucible checks a component's whole property set in a single fuzz run). The host owns
-that grouping — it decides what runs and in what order — so it passes each target together with the
-checks that target covers, rather than leaving the wheel to recover them by re-deriving its own
-``checks()`` and filtering by name.
+share one (Crucible checks a component's whole property set in a single fuzz run). The check names
+are the author's — they come from the mapping ``map_checks`` declared — while the grouping is the
+wheel's, one ``target_for`` answer per name. The host puts the two together and passes each target
+with the checks it covers, rather than leaving the wheel to recover them by name.
 
 The grouping lives in the ``validate_spec`` tool the author calls, so these drive that tool directly
 against a recording wheel. No LLM is involved.
@@ -22,7 +22,7 @@ from composer.authoring.state import SkippedProperty, spec_digest
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.session import (
-    VALIDATE_KEY, GateDeps, RustSessionState, SessionResult, ValidateSpec,
+    VALIDATE_KEY, GateDeps, PropertyCheckMapping, RustSessionState, SessionResult, ValidateSpec,
 )
 from composer.rustapp.wire import Target, Check, ValidateCoverageError
 from composer.spec.source.report.schema import Outcome
@@ -31,12 +31,15 @@ from tests.conftest import wire_descriptor, wire_verdict
 
 SPEC = "fn c_farms(f: &mut Fixture) {}"
 
-#: Two properties checked by one shared target, and a third that is its own.
-CHECKS = [
-    Check(property="stake matches", name="c_stake", target="c_farms"),
-    Check(property="no double stake", name="c_dbl", target="c_farms"),
-    Check(property="fees capped", name="c_fees", target=None),
+#: What the author declared: two properties whose checks share a target, and a third that is its own.
+MAPPING = [
+    PropertyCheckMapping(property_title="stake matches", checks=["c_stake"]),
+    PropertyCheckMapping(property_title="no double stake", checks=["c_dbl"]),
+    PropertyCheckMapping(property_title="fees capped", checks=["c_fees"]),
 ]
+
+#: The wheel's grouping of those names — the other half of a ``Check``.
+TARGETS = {"c_stake": "c_farms", "c_dbl": "c_farms", "c_fees": None}
 
 
 @dataclass
@@ -49,8 +52,8 @@ class _Wheel:
     #: Checks the wheel leaves without a verdict though its target covers them.
     omit: frozenset[str] = frozenset()
 
-    def checks(self, _input_json: str) -> str:
-        return json.dumps([c.model_dump() for c in CHECKS])
+    def target_for(self, _input_json: str, check: str) -> str | None:
+        return TARGETS.get(check)
 
     def judge(self, _input_json: str) -> str | None:
         return None  # no judge, so no review machinery is bound
@@ -76,9 +79,10 @@ def _state(**kw) -> RustSessionState:
         "skipped": [],
         "validations": {},
         "required_validations": [VALIDATE_KEY],
-        "property_checks": [],
+        "property_checks": list(MAPPING),
         "expected_failures": {},
         "verdicts": {},
+        "ran": [],
         "failed": None,
     }
     return cast(RustSessionState, {**base, **kw})
@@ -91,7 +95,6 @@ def _deps(wheel: _Wheel, tmp_path: pathlib.Path) -> GateDeps:
         workdir=tmp_path,
         sandbox_json="{}",
         emit=lambda _kind, _payload: None,
-        checks=list(CHECKS),
     )
 
 
@@ -123,8 +126,9 @@ async def test_each_distinct_target_runs_once_carrying_the_checks_it_covers(tmp_
     # …and each run is told exactly which checks it owes a verdict for, so the wheel never re-derives
     # the grouping the host just computed.
     assert [[c.name for c in t.checks] for t in wheel.targets] == [["c_stake", "c_dbl"], ["c_fees"]]
-    # Each carries its property title, which is what a backend attributes a counterexample by.
-    assert wheel.targets[0].checks[0].property == "stake matches"
+    # A run is property-blind: a check is a name and the invocation it belongs to, and what it
+    # verifies lives only in the mapping the author declared.
+    assert set(Check.model_fields) == {"name", "target"}
 
 
 @pytest.mark.asyncio
@@ -178,7 +182,9 @@ async def test_a_failing_check_leaves_the_gate_unstamped(tmp_path):
 async def test_a_failure_the_author_marked_as_the_finding_stamps(tmp_path):
     # The counterexample IS the result. Marking it is what lets the run be published with the
     # failure recorded and explained.
-    marked = _state(expected_failures={c.name: "the program really does allow it" for c in CHECKS})
+    marked = _state(expected_failures={
+        name: "the program really does allow it" for name in TARGETS
+    })
     command = await _validate(_Wheel(outcome="BAD"), tmp_path, state=marked)
     assert VALIDATE_KEY in command.update["validations"]
 
@@ -195,12 +201,38 @@ async def test_a_wheel_that_leaves_a_covered_check_unanswered_is_refused(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_a_skipped_propertys_target_is_not_run(tmp_path):
-    # Its property is not being formalized, so there is nothing to check and nothing to report.
+async def test_nothing_declared_means_nothing_runs(tmp_path):
+    # The declaration IS the work list. Running "everything" when the author has declared nothing
+    # would be running nothing while reporting a clean sweep, so the tool says what to do instead.
     wheel = _Wheel()
-    skipped = _state(skipped=[SkippedProperty(property_title="fees capped", reason="no oracle")])
-    await _validate(wheel, tmp_path, state=skipped)
-    assert [t.name for t in wheel.targets] == ["c_farms"]
+    out = await _validate(wheel, tmp_path, state=_state(property_checks=[]))
+    assert isinstance(out, str) and "map_checks" in out
+    assert wheel.targets == [], "nothing ran"
+
+
+@pytest.mark.asyncio
+async def test_a_check_carrying_several_properties_runs_once(tmp_path):
+    # One rule discharging three invariants is one check with three claims on it — three report
+    # rows, but a single thing to run and a single verdict.
+    wheel = _Wheel()
+    shared = _state(property_checks=[
+        PropertyCheckMapping(property_title=title, checks=["c_stake"])
+        for title in ("stake matches", "no double stake", "fees capped")
+    ])
+    command = await _validate(wheel, tmp_path, state=shared)
+    assert [[c.name for c in t.checks] for t in wheel.targets] == [["c_stake"]]
+    assert set(command.update["verdicts"]) == {"c_stake"}
+
+
+@pytest.mark.asyncio
+async def test_the_stamping_run_records_what_it_covered(tmp_path):
+    # The publish gate validates the mapping against THIS run's checks, so a run that stamps has to
+    # say what it covered — and it says it as targets, so a component's coverage stays answerable
+    # even where a whole target erred.
+    command = await _validate(_Wheel(), tmp_path)
+    ran = command.update["ran"]
+    assert [t.name for t in ran] == ["c_farms", "c_fees"]
+    assert [[c.name for c in t.checks] for t in ran] == [["c_stake", "c_dbl"], ["c_fees"]]
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +268,8 @@ class _Run:
 
 @pytest.mark.asyncio
 async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch, tmp_path):
-    # The deliverable's sections are keyed by target name, so a skipped property's target must not
-    # be claimed as checked.
+    # The deliverable's sections are keyed by target name, so what the result claims as checked is
+    # what the stamping run covered — never what was declared, or what the properties suggest.
     async def fake_session(**_kw):
         return SessionResult(
             commentary="done",
@@ -245,6 +277,9 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
             skipped=[SkippedProperty(property_title="fees capped", reason="no oracle")],
             property_checks=[("stake matches", ["c_stake"]), ("no double stake", ["c_dbl"])],
             verdicts={},
+            ran=[Target(name="c_farms", checks=[
+                Check(name="c_stake", target="c_farms"), Check(name="c_dbl", target="c_farms"),
+            ])],
             expected_failures={},
         )
 
@@ -253,7 +288,8 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
         cast(Any, _Wheel()), AppDescriptor.model_validate(wire_descriptor())
     )
     props = [
-        PropertyFormulation(title=c.property, sort="invariant", description="d") for c in CHECKS
+        PropertyFormulation(title=m.property_title, sort="invariant", description="d")
+        for m in MAPPING
     ]
     result = await formalizer.formalize(
         "Farms", cast(Any, _Feat()), props, cast(Any, _Ctx()),
@@ -261,6 +297,7 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
     )
 
     assert isinstance(result, adapter.RustFormalResult)
-    assert result.targets == ["c_farms"]
+    assert [t.name for t in result.targets] == ["c_farms"]
+    assert [c.name for c in result.targets[0].checks] == ["c_stake", "c_dbl"]
     assert [s.property_title for s in result.skipped] == ["fees capped"]
     assert dict(result.checks) == {"stake matches": ["c_stake"], "no double stake": ["c_dbl"]}

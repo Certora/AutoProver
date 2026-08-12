@@ -52,10 +52,10 @@ Eleven callouts, all **synchronous**, all speaking JSON strings.
 impl.
 
 | Callout | Kind | Role |
-|---|---|---|
+| --- | --- | --- |
 | `descriptor() -> str` | pure | the declarative spine (§3), read once at load |
 | `validate_preconditions(args_json) -> str \| None` | pure | fail before any service opens; `None` = ok |
-| `checks(input_json) -> str` | pure | the checks this input formalizes, pre-authoring (§6) |
+| `target_for(input_json, check) -> str \| None` | pure | which invocation a declared check runs under; `None` = its own (§6) |
 | `author_prompt(input_json) -> str` | pure | the instruction (+ domain system prompt) for one authoring *session* (§5) |
 | `check_syntax(input_json, spec) -> str \| None` | pure | reject a spec at write time; `None` = accept. Cheap — it runs on every put/edit |
 | `judge(input_json) -> str \| None` | pure | who reviews this input's drafts; `None` = no judge. Asked once, before anything is authored |
@@ -169,7 +169,7 @@ One struct, serialized at load time, that drives everything non-backend.
 **Identity and vocabulary**
 
 | Field | Drives |
-|---|---|
+| --- | --- |
 | `name` | the app name, task ids (`{name}-{step}`), the synthesized enum's class name |
 | `header_text` | the TUI header |
 | `ecosystem` | which `Ecosystem` the shared front half uses (default `evm`) |
@@ -192,7 +192,7 @@ its own.
 A phase's `role` says **which step of the run it groups**:
 
 | `role` | The step |
-|---|---|
+| --- | --- |
 | `analysis`, `extraction`, `formalization`, `report` | the four the driver itself tags. Required — `build_phase_model` raises unless every one is claimed |
 | `discovery` | the design-doc task the *entry point* runs before the pipeline. Unclaimed, that task falls back to the first declared phase |
 | `preflight` | the toolchain check (§4.2) |
@@ -221,7 +221,7 @@ one-shot important results such as a verdict — rather than a line in the colla
 **Steps and modes** — the fields that let a demanding app stay bespoke-Python-free:
 
 | Field | Effect |
-|---|---|
+| --- | --- |
 | a phase with `role: preflight` | check the toolchain before authoring, as its own visible task (§4.2). No such phase: the workspace prep still runs, and nothing else changes — a wheel with nothing to check just doesn't declare one |
 | a phase with `role: setup` | author one shared artifact before the per-component fan-out and hand it to every component as `AuthorInput.setup` (§4.3) |
 | `deliverable_mode` | `per_component` (default), or `callout { primary? }` — where `primary` is the `{program}`-templated path used as each component's report link (§9) |
@@ -295,7 +295,7 @@ the run is draft #1's compile, at the far end of extraction — and an authoring
 breaks there, because it does not own the manifest:
 
 | Failure | Where it would otherwise appear |
-|---|---|
+| --- | --- |
 | Dependency graph won't co-resolve | compiler errors in draft #1 |
 | The harness crate won't link (program on another Anchor major) | compiler errors in draft #1 |
 | Codegen from the program rejects it | compiler errors in draft #1 |
@@ -354,20 +354,23 @@ mentions staging.
 
 ### 4.4 Formalization: the authoring session
 
-Per component, [`RustFormalizer.formalize`](../composer/rustapp/adapter.py) asks the wheel for its
-checks and hands them to one session (§5):
+Per component, [`RustFormalizer.formalize`](../composer/rustapp/adapter.py) runs one session (§5).
+Nothing about the checks is decided before it starts — the author decides them:
 
 ```python
-checks = parse_checks(module.checks(input_json))  # pure: the checks, before authoring
-outcome = await run_session(module=…, input=…, kind="component", checks=checks, titles=…)
+outcome = await run_session(module=…, input=…, kind="component", titles=…)
 # inside the session, driven by the agent:
 #   put_spec / edit_spec        → the buffer, gated by the wheel's check_syntax
+#   map_checks(mapping)         → which checks verify which property. THIS is the work list:
+#                                 its distinct names are what runs, grouped by the wheel's target_for
 #   validate_spec(checks=None)  → one run per DISTINCT target, each carrying the checks it covers;
-#                                 stamps the buffer's digest when every live check is accounted for
+#                                 stamps the buffer's digest when every declared check is accounted
+#                                 for, and records what it covered as `ran`
 #   expect_check_failure(c,why) → a failure that IS the finding stops blocking the gate
-#   record_skip(p, why)         → drops that property's checks from the run and the mapping
+#   record_skip(p, why)         → a property left out, with a reason; it must not be mapped
 #   feedback_tool(rebuttals=…)  → the wheel's judge, structured; stamps on acceptance
-#   result(commentary, mapping) → refused unless every stamp matches the CURRENT buffer
+#   result(commentary)          → refused unless every stamp matches the CURRENT buffer, and the
+#                                 declared mapping accounts for exactly what `ran` covered
 #   give_up(reason)             → a real outcome, reported
 ```
 
@@ -421,8 +424,9 @@ schema per session.
 > [`session.py`](../composer/rustapp/session.py) apply the display themselves for exactly this
 > reason, and `test_rust_llm_agent.py` guards it. A wheel that spelled the protocol itself could drift
 from what the host enforces, so it is never asked to. The instruction is likewise augmented: the host
-appends the exact property titles and check names from `checks()`, because the publish gate compares
-the declared mapping against those strings literally.
+appends the obligation the gate enforces — declare the mapping before validating, cover every
+property, and name only checks that are really in the spec — because that rule is the framework's
+and identical for every backend, while the names themselves are the author's.
 
 **The gate is a tool, not a loop.** A component session gets `validate_spec` (the wheel's `validate`,
 per target); a setup session gets `compile_spec` (the wheel's `compile`). A run that passes *stamps a
@@ -454,41 +458,76 @@ account for every property that was not skipped, checked against the checks the 
 
 ## 6. Checks, targets and verdicts
 
-A **check** is the backend's named, runnable verification of one property — a CVL rule, a foundry
-test, a fuzz harness function. It is what the report keys a row by, and it is the concept the whole
-seam is organized around: a check yields a `Verdict`. (A *component* is the thing system analysis
-produced and the pipeline fans out over; one component's session authors many checks.)
+A **check** is a named, runnable verification in the authored artifact — a CVL rule, a foundry test,
+a tagged fuzz assertion. It is what the report keys a row by, and it is the concept the whole seam is
+organized around: a check yields a `Verdict`. (A *component* is the thing system analysis produced
+and the pipeline fans out over; one component's session authors many checks.)
 
-`checks(input)` is **pure and pre-authoring**: it is the report's property→check map, the set of
-names the prompt requires the author to produce, and the list the publish gate validates the
-declared mapping against. It runs before the first turn, so the report's shape never depends on what
-the model happened to write.
+**The author decides the check set.** Which checks express a component's properties — one rule
+discharging three related invariants, two rules for one invariant — is authoring work, so it cannot
+be computed before authoring starts. `map_checks` declares the property→checks mapping, and the
+distinct names in it are exactly what a gate run executes. The relation is **many-to-many** and both
+directions are ordinary: several checks under one property title, or one check named under several.
 
-A `Check` is `{ property, name, target? }`. A **target** is **one invocation of the checker** — one
-build + one run — and several checks may share one, so a wheel can put a component's whole property
-set in a single target. That is the run-vs-report split: targets group what *runs*, checks group
-what is *reported*, and a target sits inside one component's session, so the three nest
-(`component ⊇ target ⊇ check`). `target: None` makes the check its own target — one invocation per
-check, the default.
+A `Check` is `{ name, target? }` — no property. What a check verifies lives only in the declared
+mapping (which is where the report already reads it), so a gate run is deliberately property-blind:
+it knows names and invocations, not purposes. A **target** is **one invocation of the checker** — one
+build + one run — answered per name by the wheel's `target_for`. Several checks may share one, so a
+wheel can put a component's whole property set in a single target. That is the run-vs-report split:
+targets group what *runs*, checks group what is *reported*, and a target sits inside one component's
+session, so the three nest (`component ⊇ target ⊇ check`). `target_for` returning `None` makes the
+check its own target — one invocation per check, the default.
 
-The host runs each *distinct* target once (`target_or_name()`) and passes it as a
-`Target { name, checks }` carrying the checks it covers, so the grouping the host just computed is
-not something the wheel has to reconstruct; the wheel returns a verdict **per check in it**.
-Attribution is the wheel's: it owns its result format, so it decides which check a counterexample
-belongs to; the host records the verdicts verbatim and does no verdict logic of its own, never
-parsing a tool's output.
+The two halves of a check therefore come from the two parties that can know them: the **name** from
+the author (it names a thing in the artifact, which only the author wrote) and the **grouping** from
+the wheel (a backend convention). The host puts them together, runs each *distinct* target once
+(`target_or_name()`) and passes it as a `Target { name, checks }` carrying the checks it covers, so
+the grouping is not something the wheel has to reconstruct; the wheel returns a verdict **per check
+in it**. Attribution is the wheel's: it owns its result format, so it decides which check a
+counterexample belongs to; the host records the verdicts verbatim and does no verdict logic of its
+own, never parsing a tool's output.
+
+### The verdict contract
+
+Because the names are the author's, `validate` is also where a name is held to the artifact. A
+backend must not answer `GOOD` for a check it found no evidence ran:
+
+| Situation | Verdict |
+| --- | --- |
+| The checker has no such check | `ERROR`, with a detail naming it |
+| It exists but the run never exercised it | `UNKNOWN`, with a detail saying so |
+| It ran and held | `GOOD` |
+| It ran and was refuted | `BAD` + the counterexample |
+
+Both non-`GOOD` cases block the publish gate, which is the point: a declared check with nothing
+behind it must not stamp a property as verified. What corroborates a check is the backend's own
+business — a per-rule result from the Prover, a runtime tally of which tagged assertions a campaign
+evaluated — but *some* evidence is required, and a scan of the source text is not it: a name in a
+comment or in dead code reads exactly like a check. `Target::all(GOOD, …)` is therefore not a
+legitimate answer to a clean run; "nothing was refuted" is one fact about the target, while `GOOD`
+per check is a claim about each check individually. The residue no mechanism reaches — whether a
+check that demonstrably ran genuinely verifies the property it claims — is the judge's.
+
+### Verdicts
 
 A verdict is keyed by **check name**, not by a restated `Check`. The wheel picks from the checks it
-was just handed rather than echoing them back, so it cannot contradict the property→check map the
-host published, and the host resolves each name to the `Check` it sent before anything upstream sees
-it. Both ends hold that key to the target's own checks. On the Rust side `ValidateOutcome::Verdicts`
-wraps a private `CheckVerdicts`, so the only ways to build one are `Target::all` and
-`Target::verdicts`, which take the names from `self.checks` — a backend attributes a run instead of
-spelling names. On the host side `ValidateVerdicts.resolve(target)` requires the answer to be
-*exactly* the target's check set: a name no check has, a covered check left unanswered, or the same
-check twice raises `ValidateCoverageError`. The unanswered case is the one worth the machinery — a
-missing verdict is not a failing verdict, so it gives the publish gate nothing to object to, and a
-wheel that answered for nothing would stamp a component nothing had checked.
+was just handed rather than echoing them back, and the host resolves each name to the `Check` it sent
+before anything upstream sees it. Both ends hold that key to the target's own checks. On the Rust
+side `ValidateOutcome::Verdicts` wraps a private `CheckVerdicts`, so the only ways to build one are
+`Target::all` and `Target::verdicts`, which take the names from `self.checks` — a backend attributes
+a run instead of spelling names. On the host side `ValidateVerdicts.resolve(target)` requires the
+answer to be *exactly* the target's check set: a name no check has, a covered check left unanswered,
+or the same check twice raises `ValidateCoverageError`. The unanswered case is the one worth the
+machinery — a missing verdict is not a failing verdict, so it gives the publish gate nothing to
+object to, and a wheel that answered for nothing would stamp a component nothing had checked.
+
+A stamping run records what it covered as `ran` — the targets, each with its checks — and that is
+what the publish gate validates the declared mapping against, in both directions: every claimed name
+must have run, and every name that ran must be claimed. Ground truth is the stamping run rather than
+the current declaration, so a name added since is one that did not run and a name removed is one
+that ran unclaimed; both are errors, which is why editing the mapping needs no stamp of its own. The
+same `ran` reaches the result as `RustFormalResult.targets`, so a component's coverage stays
+answerable even where a whole target erred.
 
 Verdicts are grouped by property, not appended as singletons — two checks verifying the same
 property are two check names under one report row, and as singletons they would be two rows with the
@@ -504,9 +543,10 @@ that looks merely inconclusive. `Verdict.detail` carries the counterexample or e
 `BAD` is never unexplained.
 
 [`results.py`](../composer/rustapp/results.py) rolls these up for the console/TUI: one row per
-*check*, named by the property title it verifies, with the tally in the report's own display order and
-wording. A delivered component that bakes no verdicts contributes one `UNKNOWN` row so the listing
-accounts for every component.
+*check*, with the tally in the report's own display order and wording. A row is named by the property
+title when the check verifies exactly one, and otherwise by the check's own name — the only thing
+that names it unambiguously once one check can carry several properties. A delivered component that
+bakes no verdicts contributes one `UNKNOWN` row so the listing accounts for every component.
 
 ---
 
@@ -599,7 +639,7 @@ overridable by `COMPOSER_SANDBOX_PROVIDER`, with its declared `sandbox_grants` (
 Per seam:
 
 | Seam | New capability | Who authors argv | Who authors policy |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `compile` / `validate` | runs the toolchain | the **wheel** (after `--`) | **Python** (before `--`) |
 | `workspace_prep` | warm dirs, build a program, place an IDL | **Python** (the registered toolchain; the wheel supplies contents + which dirs/program) | **Python** |
 | `finalize` / prep `files` | writes files under the project root | — (host writes, path-confined) | n/a |
@@ -675,7 +715,7 @@ for cp312+.
    (`features = ["extension-module", "abi3-py312"]`). The `[lib] name` MUST match the `export_app!`
    module ident and the maturin module name. Copy
    [example-app/Cargo.toml](../rust/example-app/Cargo.toml).
-2. **Implement `Backend`** — `descriptor` + `checks` + `author_prompt` + `compile` + `validate` are
+2. **Implement `Backend`** — `descriptor` + `author_prompt` + `compile` + `validate` are
    required; `validate_preconditions`, `judge`, `judge_instruction`, `workspace_prep`,
    `sandbox_grants` and `finalize` have defaults. Every callout is directly unit-testable in Rust with no Python.
 3. **Export it** — `autoprover_sdk::export_app!(my_app, MyApp::new());`
@@ -718,9 +758,9 @@ Facts about the seam as it stands, not open design questions:
   `check_build` would only save the checker's runtime on a draft that does not compile. Worth adding
   if a real run shows an author burning its fuzz budget on build errors — the callout is already
   wrapped for the setup session's `compile_spec`.
-- **A skipped property is not re-planned.** `checks()` is asked for once, before authoring; a skip
-  removes its checks from the run and from the mapping, but nothing re-derives what the remaining
-  checks should be.
+- **Undeclared work is invisible.** The check set is the author's declaration, so a check written
+  but left out of the mapping simply never runs. The gate catches the reverse (a name that did not
+  run) but has nothing to compare against for work never declared.
 - **Prompt changes don't invalidate caches** — neither the setup spec's nor the driver's. Clear
   the namespace.
 
@@ -729,7 +769,7 @@ Facts about the seam as it stands, not open design questions:
 ## 13. Key files and tests
 
 | Concern | File |
-|---|---|
+| --- | --- |
 | The SDK: the `Backend` trait, descriptor, wire types, `Workspace::run`, `export_app!` | [rust/autoprover-sdk/src/](../rust/autoprover-sdk/src/) |
 | A complete minimal application | [rust/example-app/src/lib.rs](../rust/example-app/src/lib.rs) |
 | The sandbox launcher | [rust/run-confined/src/main.rs](../rust/run-confined/src/main.rs) |

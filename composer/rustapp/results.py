@@ -53,15 +53,21 @@ class VerdictSummary:
         )
 
 
+def _row_name(check: str, properties: list[str]) -> str:
+    """What to call one check's row: the property's own words when it verifies exactly one, and
+    otherwise the check's own name — the only thing that names the row unambiguously when one check
+    discharges several properties (or the author mapped none to it)."""
+    return properties[0] if len(properties) == 1 else check
+
+
 def summarize_verdicts(
     result: CorePipelineResult[RustFormalResult], backend_tag: ReportBackend
 ) -> VerdictSummary:
     """Extract the per-check verdicts baked into a completed run's ``outcomes``.
 
-    One row per *check*, not per component: ``checks()`` is one check per property, so a component
-    with five properties bakes five verdicts and contributes five rows (reading only the first
-    would report one check where five ran). Rows are named by the property title the check
-    verifies, falling back to the check's own name.
+    One row per *check*, not per component: a component's gate run bakes a verdict per check it
+    covered, and all of them are rows (reading only the first would report one check where five
+    ran). Rows are named by :func:`_row_name`.
 
     Only *delivered* components carry verdicts; give-ups / exceptions are already surfaced in
     ``result.failures`` and skipped here. A delivered component that bakes none at all (a
@@ -75,9 +81,9 @@ def summarize_verdicts(
         if not formalized.verdicts:
             verdicts.append(CheckVerdict(o.feat.display_name, Outcome.UNKNOWN))
             continue
-        titles = formalized.check_titles()
+        titles = formalized.check_properties()
         verdicts.extend(
-            CheckVerdict(titles.get(name, name), baked.outcome)
+            CheckVerdict(_row_name(name, titles.get(name, [])), baked.outcome)
             for name, baked in formalized.verdicts.items()
         )
     return VerdictSummary(verdicts, backend_tag)

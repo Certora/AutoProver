@@ -334,8 +334,8 @@ OUTBOUND = [
     Root("sandbox", BackendSpec),
 ]
 
-#: Both an inbound root of its own (what the ``units`` callout returns) and nested inside the
-#: outbound :class:`Target`, so it appears in both lists below — one root, two roles.
+#: Only ever nested inside the outbound :class:`Target` now that the check *names* are the author's:
+#: no callout returns checks, so this crosses the seam host → wheel and never back.
 _CHECKS = Root("checks", list[Check])
 
 #: Wheel → host.
@@ -345,7 +345,6 @@ INBOUND = [
     Root("validate_outcome", ValidateOutcome),
     Root("prompt", Prompt),
     Root("judge", Judge),
-    _CHECKS,
     Root("workspace_prep", WorkspacePrep),
     Root("sandbox_grants", SandboxGrants),
 ]
@@ -592,11 +591,11 @@ def test_an_empty_optional_is_spelled_null_on_both_sides(wire_echo: WireEcho) ->
     default nothing, so absence is an error on whichever side reads it rather than a second way to
     say "nothing". That is what lets the round trips above compare documents directly — they are
     comparing content, not two conventions for the same value."""
-    row = {"property": "p", "name": "u", "target": None}
+    row = {"name": "u", "target": None}
     assert wire_echo.echo("checks", [row]) == [row]
-    assert Check.model_validate(row) == Check(property="p", name="u", target=None)
+    assert Check.model_validate(row) == Check(name="u", target=None)
 
-    absent = {"property": "p", "name": "u"}
+    absent = {"name": "u"}
     with pytest.raises(WireFault, match="missing field"):
         wire_echo.echo("checks", [absent])
     with pytest.raises(ValidationError):

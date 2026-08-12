@@ -1,14 +1,14 @@
 """End-to-end tests for the Rust application/backend framework (composer.rustapp).
 
 These drive the ``echoprover`` demo wheel (built from ``rust/example-app``) as a
-:class:`~autoprover_sdk.Backend`: the pure callouts (``descriptor`` / ``checks`` /
+:class:`~autoprover_sdk.Backend`: the pure callouts (``descriptor`` / ``target_for`` /
 ``author_prompt`` / ``compile`` / ``validate``) plus the descriptor synthesis and the
 host wiring. They need the ``echoprover`` wheel importable — ``uv sync`` builds it (the
 ``apps`` group, pulled in via ``dev``); tests skip cleanly otherwise.
 
 No Postgres / LLM is required — the callouts are pure (echoprover's ``compile`` is a
-no-op and ``validate`` returns GOOD), which is the point of the passive-service design:
-the loop lives in Python and the wheel just answers questions.
+no-op and reading the spec is its whole checker), which is the point of the
+passive-service design: the loop lives in Python and the wheel just answers questions.
 """
 
 import json
@@ -46,7 +46,7 @@ def _component_input(*titles: str) -> str:
 def _target(*checks: str) -> str:
     """A target and the report rows it covers — what the host passes ``validate``."""
     return Target(
-        name=checks[0], checks=[Check(property="p", name=c, target=None) for c in checks]
+        name=checks[0], checks=[Check(name=c, target=None) for c in checks]
     ).model_dump_json()
 
 
@@ -71,14 +71,10 @@ def test_descriptor_parses_and_maps_core_phases():
     assert keys == ["analysis", "extraction", "solving", "formalization", "report"]
 
 
-def test_checks_are_one_per_property():
-    checks = json.loads(echoprover.checks(_component_input("increment_increases", "never_overflows")))
-    assert checks == [
-        # `target` null: each unit is its own validation target. Present, not absent — an omitted
-        # key is not a spelling of anything on this seam.
-        {"property": "increment_increases", "name": "rule_increment_increases", "target": None},
-        {"property": "never_overflows", "name": "rule_never_overflows", "target": None},
-    ]
+def test_each_declared_check_is_its_own_target_by_default():
+    # The demo groups nothing, so every check the author declares is its own invocation. `None`,
+    # not a name — the host reads that as "its own target" without the wheel spelling one.
+    assert echoprover.target_for(_component_input("increment_increases"), "rule_x") is None
 
 
 def test_author_prompt_lists_the_properties():
@@ -103,18 +99,31 @@ def test_compile_takes_no_spec_at_all_for_a_preflight():
 
 def test_validate_returns_a_verdict_for_every_row_the_target_covers():
     sandbox = _sandbox()
+    spec = "rule rule_p: ok\nrule rule_a: ok\nrule rule_b: ok"
     res = json.loads(
-        echoprover.validate(_component_input("p"), "spec", _target("rule_p"), "/tmp", sandbox)
+        echoprover.validate(_component_input("p"), spec, _target("rule_p"), "/tmp", sandbox)
     )
-    # ValidateOutcome: the demo always builds, so per-unit verdicts (not build_failed).
+    # ValidateOutcome: the spec declares the rule, so per-unit verdicts (not build_failed).
     assert res == {"kind": "verdicts", "verdicts": [["rule_p", wire_verdict("GOOD")]]}
 
     # A target covering several rows answers for all of them in the one run — the wheel keys the
     # verdicts off the units the host sent, so it never has to spell a unit name itself.
     shared = json.loads(
-        echoprover.validate(_component_input("p"), "spec", _target("rule_a", "rule_b"), "/tmp", sandbox)
+        echoprover.validate(_component_input("p"), spec, _target("rule_a", "rule_b"), "/tmp", sandbox)
     )
     assert [u for u, _v in shared["verdicts"]] == ["rule_a", "rule_b"]
+
+
+def test_a_declared_check_the_spec_does_not_contain_does_not_pass():
+    # The names are the author's, so validate is what holds them to the artifact: a rule nobody
+    # wrote has nothing behind it and must not stamp a property as verified.
+    res = json.loads(
+        echoprover.validate(_component_input("p"), "rule rule_p: ok", _target("rule_ghost"),
+                            "/tmp", _sandbox())
+    )
+    (name, verdict), = res["verdicts"]
+    assert name == "rule_ghost"
+    assert verdict["outcome"] == "UNKNOWN" and "rule_ghost" in (verdict["detail"] or "")
 
 
 def test_result_round_trips_through_cache_serialization():

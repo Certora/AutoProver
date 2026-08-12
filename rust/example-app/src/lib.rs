@@ -1,17 +1,17 @@
 //! The "echo prover" — a minimal, self-contained demonstration of a Rust-based
 //! AutoProver [`Backend`] on `autoprover-sdk`. It is intentionally not a real
 //! verifier: it authors a "spec" from an LLM turn, treats compilation as a no-op,
-//! and validates every check as GOOD — enough to exercise the Python host + FFI
-//! round-trip (descriptor, checks, author_prompt, compile, validate) without any real
-//! toolchain. A production backend keeps this exact shape and swaps the callouts for
-//! real ones (see `docs/rust-applications.md`).
+//! and treats reading the spec as its whole checker — enough to exercise the Python
+//! host + FFI round-trip (descriptor, author_prompt, compile, validate) without any
+//! real toolchain. A production backend keeps this exact shape and swaps the callouts
+//! for real ones (see `docs/rust-applications.md`).
 
 use autoprover_sdk::authoring::{AuthorInput, Prompt};
 use autoprover_sdk::descriptor::{
     default_evidence_kinds, AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode,
     EventKind, PhaseRole, PhaseSpec,
 };
-use autoprover_sdk::outcome::{Check, CompileResult, Outcome, Target, ValidateOutcome};
+use autoprover_sdk::outcome::{CompileResult, Outcome, Target, ValidateOutcome, Verdict};
 use autoprover_sdk::sandbox::Workspace;
 use autoprover_sdk::Backend;
 
@@ -71,24 +71,13 @@ impl Backend for EchoApp {
         }
     }
 
-    fn checks(&self, input: &AuthorInput) -> Vec<Check> {
-        input
-            .props
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let slug = if p.slug.is_empty() { format!("p{i}") } else { p.slug.clone() };
-                Check { property: p.title.clone(), name: format!("rule_{slug}"), target: None }
-            })
-            .collect()
-    }
-
     fn author_prompt(&self, input: &AuthorInput) -> Prompt {
         let titles: Vec<&str> = input.props.iter().map(|p| p.title.as_str()).collect();
         Prompt {
             system: None,
             instruction: format!(
-                "Author a spec with a rule per property: {}.",
+                "Author a spec with a rule per property: {}. Declare each rule on its own line as \
+                 `rule <name>:`, and map every property to the rules that verify it.",
                 titles.join(", ")
             ),
         }
@@ -102,12 +91,28 @@ impl Backend for EchoApp {
     fn validate(
         &self,
         _input: &AuthorInput,
-        _spec: &str,
+        spec: &str,
         target: &Target,
         _ws: &Workspace,
     ) -> ValidateOutcome {
-        // Self-contained: any well-formed spec builds, so every check the target covers "passes".
-        target.all(Outcome::Good, None)
+        // The check names are the author's, so a run has to hold them to the artifact (the verdict
+        // contract on `Backend::validate`). This wheel has no toolchain, so reading the spec IS its
+        // checker — `rule <name>:` is the whole language. A real backend must corroborate with
+        // something its checker observed; reading source text for a name that *looks* like a check
+        // would not do, since a name in a comment or in dead code reads exactly the same.
+        let declared: Vec<&str> = spec
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("rule ")?.split(':').next())
+            .map(str::trim)
+            .collect();
+        target.verdicts(|c| {
+            if declared.contains(&c.name.as_str()) {
+                Verdict::with_outcome(Outcome::Good)
+            } else {
+                Verdict::with_outcome(Outcome::Unknown)
+                    .with_detail(Some(format!("the spec declares no rule named `{}`", c.name)))
+            }
+        })
     }
 }
 

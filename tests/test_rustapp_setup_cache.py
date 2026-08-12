@@ -118,7 +118,7 @@ async def _formalizer(
         authored.append(input)
         return SessionResult(
             commentary="", spec=FIXTURE, skipped=[], property_checks=[],
-            verdicts={}, expected_failures={},
+            verdicts={}, ran=[], expected_failures={},
         )
 
     async def fake_prep(_module, _input, **_kw):

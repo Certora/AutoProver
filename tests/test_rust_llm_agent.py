@@ -21,9 +21,9 @@ from pydantic import ValidationError
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.session import (
     CheckVocab, GateDeps, ProtocolTemplate, PublishDeps, _expect_tools, _feedback_tool,
-    _initial_prompt, _publish_tool, _validate_tool, rebuttal_model,
+    _initial_prompt, _map_tool, _publish_tool, _validate_tool, rebuttal_model,
 )
-from composer.rustapp.wire import Prompt, Check, parse_prompt
+from composer.rustapp.wire import Prompt, parse_prompt
 from composer.templates.loader import load_jinja_template
 from tests.conftest import wire_descriptor, wire_prompt
 
@@ -86,41 +86,38 @@ def test_a_setup_session_is_told_nothing_about_skips_or_expected_failures():
     assert "record_skip" not in setup and "expect_check_failure" not in setup
 
 
-def _check(prop: str, name: str) -> Check:
-    return Check(property=prop, name=name, target=None)
-
-
 _GENERIC = CheckVocab("check", "checks")
 
 
-def test_the_initial_prompt_states_the_exact_names_the_gate_will_check():
-    # The publish gate compares the declared mapping against these strings literally, so the host
-    # renders them rather than trusting the wheel's prose to spell them the same way.
+def test_the_initial_prompt_states_the_obligation_the_gate_will_enforce():
+    # The names are the author's to choose, but coverage and honesty about them are enforced the
+    # same way for every backend — so the host words that once, rather than trusting each wheel's
+    # prose to say it (or to say it compatibly).
     prompt = Prompt(system=None, instruction="Author the harness.")
-    text = _initial_prompt(
-        prompt, [_check("no_free_mint", "c_no_free_mint")], True, _GENERIC,
-    )
+    text = _initial_prompt(prompt, True, _GENERIC)
     assert "Author the harness." in text
-    assert "no_free_mint" in text and "c_no_free_mint" in text
+    assert "map_checks" in text
+    assert "skipped" in text and "really be in your spec" in text
 
 
 def test_a_setup_sessions_initial_prompt_is_the_wheels_own():
-    # Nothing to list: a setup spec declares no checks, so there is no mapping to check.
+    # Nothing to declare: a setup spec formalizes no properties, so there is no mapping at all.
     prompt = Prompt(system=None, instruction="Author the fixture.")
-    assert _initial_prompt(prompt, [], False, _GENERIC) == "Author the fixture."
+    assert _initial_prompt(prompt, False, _GENERIC) == "Author the fixture."
 
 
-def test_the_listing_speaks_the_wheels_own_noun():
+def test_the_obligation_speaks_the_wheels_own_noun():
     # A Crucible author reads about harness functions, not about "checks" — the word is the wheel's
     # (AppDescriptor.check_noun), and it is what its own prompts and generated code already use.
     text = _initial_prompt(
         Prompt(system=None, instruction="Author it."),
-        [_check("no_free_mint", "c_no_free_mint")],
         True,
         CheckVocab("harness function", "harness functions"),
     )
-    assert "harness function `c_no_free_mint`" in text
-    assert "check" not in text
+    assert "harness functions verify which property" in text
+    # The tool NAME is fixed (`map_checks`, like `expect_check_failure`); it is the prose that has
+    # to speak the wheel's word, so the generic noun must not appear as a word of its own.
+    assert "check " not in text and "checks " not in text
 
 
 # ---------------------------------------------------------------------------
@@ -164,9 +161,12 @@ def test_the_gate_tool_describes_itself_in_the_wheels_noun():
 def test_the_expected_failure_tools_and_the_publish_mapping_follow():
     vocab = _crucible()
     fail, passage = _expect_tools(vocab)
-    publish = _publish_tool(PublishDeps(titles=[], checks=[]), vocab)
-    for tool in (fail, passage, publish):
+    publish = _publish_tool(PublishDeps(titles=[]), vocab)
+    for tool in (fail, passage, _map_tool(vocab)):
         assert "harness function" in _tool_text(tool)
+    # The publish tool no longer carries the mapping — it is declared before the run, not after —
+    # so what it must still say in the wheel's words is what the gate refuses over.
+    assert "harness function" in _tool_text(publish) or "mapping" in _tool_text(publish)
 
 
 def test_a_wheel_that_declares_no_noun_gets_the_generic_one():

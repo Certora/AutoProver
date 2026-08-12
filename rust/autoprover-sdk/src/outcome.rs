@@ -25,19 +25,24 @@ pub struct SkippedProperty {
     pub reason: String,
 }
 
-/// One check: a property title and the backend's name for the thing that verifies it — a CVL rule,
-/// a foundry test, a fuzz harness function. A check yields a [`Verdict`] and becomes one row of the
+/// One check the **author declared**: the backend's name for a runnable verification — a CVL rule, a
+/// foundry test, a tagged fuzz assertion. A check yields a [`Verdict`] and becomes one row of the
 /// report.
+///
+/// It carries no property. What a check verifies is the author's declaration (the property→checks
+/// mapping, validated at publish), which is many-to-many and the only place that relation lives — a
+/// run is deliberately property-blind. A backend that derives its check names from properties still
+/// knows the correspondence internally; that is its own business, not something this seam carries.
 ///
 /// `target` names the [`Target`] this check runs under — **one invocation of the checker**. Several
 /// checks may share one (e.g. Crucible puts a component's whole property set in a single fuzz
 /// target), so the host runs it once and the backend attributes the outcome back to each check.
-/// `None` ⇒ the check is its own target (one invocation per check, the default).
+/// `None` ⇒ the check is its own target (one invocation per check, the default), and is what
+/// [`Backend::target_for`](crate::Backend::target_for) answers by default.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
 pub struct Check {
-    pub property: String,
     pub name: String,
     #[serde(deserialize_with = "crate::required::present")]
     pub target: Option<String>,
@@ -60,10 +65,11 @@ impl Check {
 /// point of the split — a backend that fuzzes a whole property set in one campaign pays for one
 /// build and one run, and still reports a row per property.
 ///
-/// The host computes the grouping from [`Backend::checks`](crate::Backend::checks) (it decides what
-/// to run, and in what order), so it hands the answer over rather than leaving each backend to
-/// recover it by re-deriving its own checks and filtering them by name. A target name is only
-/// meaningful within its session: two units naming the same target each run their own.
+/// The host computes the grouping from the checks the author declared, each targeted by
+/// [`Backend::target_for`](crate::Backend::target_for) (it decides what to run, and in what order),
+/// so it hands the answer over rather than leaving each backend to recover it by filtering a set it
+/// would have to rebuild. A target name is only meaningful within its session: two units naming the
+/// same target each run their own.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]
@@ -78,7 +84,13 @@ pub struct Target {
 
 impl Target {
     /// The same verdict for every covered check — what a run that concluded one thing about the
-    /// whole target produces (it passed; it errored; it timed out).
+    /// whole target produces (it errored; it timed out).
+    ///
+    /// Note what is NOT such a conclusion: a run that *finished cleanly*. "Nothing was refuted" is
+    /// one fact about the target, but [`Outcome::Good`] per check is a claim about each check
+    /// individually, and a check the run never exercised has not been shown to hold — see the
+    /// verdict contract on [`Backend::validate`](crate::Backend::validate). Reach for
+    /// [`Target::verdicts`] there.
     pub fn all(&self, outcome: Outcome, detail: Option<String>) -> ValidateOutcome {
         self.verdicts(|_| Verdict::with_outcome(outcome).with_detail(detail.clone()))
     }

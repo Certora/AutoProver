@@ -279,20 +279,22 @@ CompileResult = Annotated[CompileOk | CompileFailed, Field(discriminator="status
 
 
 class Check(WireModel):
-    """One check: a property title and the backend's name for the thing that verifies it — a CVL
-    rule, a foundry test, a fuzz harness function. A check yields a :class:`Verdict` and becomes one
-    row of the report.
+    """One check the *author* declared: the backend's name for a runnable verification — a CVL rule,
+    a foundry test, a tagged fuzz assertion. A check yields a :class:`Verdict` and becomes one row of
+    the report.
 
-    ``target`` names the :class:`Target` this check runs under — one invocation of the checker.
-    Several checks may share one, so the host runs each distinct target once and the wheel
-    attributes the outcome back to each check."""
+    It carries no property. What a check verifies is the author's declaration (the property→checks
+    mapping, validated at publish), which is many-to-many and the only place that relation lives — a
+    gate run is deliberately property-blind.
 
-    property: str
+    ``target`` names the :class:`Target` this check runs under — one invocation of the checker,
+    answered by the wheel's ``target_for``. Several checks may share one, so the host runs each
+    distinct target once and the wheel attributes the outcome back to each check."""
+
     name: str
     target: str | None
 
-    # A method, not a ``@property``: the ``property`` field above shadows that builtin inside this
-    # class body. Mirrors the Rust ``Check::target_or_name``.
+    # Mirrors the Rust ``Check::target_or_name``.
     def target_or_name(self) -> str:
         """The target this check runs under — its own name unless it shares one."""
         return self.target or self.name
@@ -440,8 +442,10 @@ class RustAppModule(Protocol):
     descriptor: Callable[[], str]
     #: ``(args_json) -> error | None``. A precondition the wheel checks before the run starts.
     validate_preconditions: Callable[[str], str | None]
-    #: ``(input_json) -> list[Check]`` JSON. The checks this input formalizes.
-    checks: Callable[[str], str]
+    #: ``(input_json, check) -> target | None``. Which invocation a declared check runs under;
+    #: ``None`` makes it its own. Pure — the check *names* are the author's, and only the grouping
+    #: is the wheel's to say.
+    target_for: Callable[[str, str], str | None]
     #: ``(input_json) -> Prompt`` JSON. Asked once per authoring session — the session keeps its
     #: own history, so there is no per-attempt revise prompt.
     author_prompt: Callable[[str], str]
@@ -483,7 +487,6 @@ CALLOUTS: tuple[str, ...] = tuple(RustAppModule.__annotations__)
 
 _COMPILE_RESULT: TypeAdapter[CompileOk | CompileFailed] = TypeAdapter(CompileResult)
 _VALIDATE_OUTCOME: TypeAdapter[ValidateBuildFailed | ValidateVerdicts] = TypeAdapter(ValidateOutcome)
-_CHECKS: TypeAdapter[list[Check]] = TypeAdapter(list[Check])
 _FILES: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, str])
 
 
@@ -493,10 +496,6 @@ def parse_compile(raw: str) -> CompileOk | CompileFailed:
 
 def parse_validate(raw: str) -> ValidateBuildFailed | ValidateVerdicts:
     return _VALIDATE_OUTCOME.validate_json(raw)
-
-
-def parse_checks(raw: str) -> list[Check]:
-    return _CHECKS.validate_json(raw)
 
 
 def parse_prompt(raw: str) -> Prompt:

@@ -5,8 +5,9 @@ result stays Python-native so the driver's type-keyed cache
 (``cache_get(formalizer.formalized_type)`` / ``cache_put``) round-trips it
 unchanged. It is assembled by the adapter's loop from what the wheel published
 (the wheel has no result type of its own: it answers per target, and the host
-accumulates), so the only wire type in here is the per-check
-:class:`~composer.rustapp.wire.Verdict`. It satisfies both ``FormalResult``
+accumulates), so the only wire types in here are the per-check
+:class:`~composer.rustapp.wire.Verdict` and the :class:`~composer.rustapp.wire.Target` objects a
+gate run covered. It satisfies both ``FormalResult``
 (``artifact_text`` / ``commentary`` / ``property_checks()``) and
 ``ReportableResult`` (``skipped`` / ``property_checks()`` / ``output_link``)
 structurally.
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
-from composer.rustapp.wire import Verdict
+from composer.rustapp.wire import Target, Verdict
 from composer.authoring.state import SkippedProperty
 
 
@@ -45,22 +46,33 @@ class RustFormalResult(BaseModel):
     # wheel's :class:`~composer.rustapp.wire.Verdict`, validated at the seam). Empty for
     # run-service-backed backends (they use fetch_verdicts).
     verdicts: dict[str, Verdict] = Field(default_factory=dict)
-    # The distinct validation *targets* this component's checks ran under — the wheel's
-    # ``Check.target``s, in the order they ran. Several checks may share one target (Crucible puts a
-    # component's whole property set in one fuzz target), so this is not ``checks``' keys.
-    # Mirrored into ``finalize``'s outcome set because a callout-mode wheel assembling one
-    # deliverable needs the real target names: re-deriving them from a display name would put the
-    # slug rule in two languages and smuggle a semantic value through a string.
-    targets: list[str] = Field(default_factory=list)
+    # What the stamping gate run covered: each validation *target* — one invocation of the checker —
+    # with the checks it covered, in the order they ran. Several checks may share one target
+    # (Crucible puts a component's whole property set in one fuzz target), so this is neither
+    # ``checks``' keys nor its values.
+    #
+    # The names are mirrored into ``finalize``'s outcome set because a callout-mode wheel assembling
+    # one deliverable needs the real target names: re-deriving them from a display name would put
+    # the slug rule in two languages and smuggle a semantic value through a string. The checks are
+    # here so this component's coverage — which checks, and so which properties, these results are
+    # about — is answerable even where a whole target errored.
+    targets: list[Target] = Field(default_factory=list)
 
     def property_checks(self) -> list[tuple[str, list[str]]]:
         return [(title, list(names)) for title, names in self.checks]
 
-    def check_titles(self) -> dict[str, str]:
-        """``checks`` inverted: check name -> the property title it verifies. For display, where the
-        property's own words ("Balance never overflows") read better than the backend's check name
-        (``rule_balance_never_overflows``). A check absent here has no title to show."""
-        return {name: title for title, names in self.checks for name in names}
+    def check_properties(self) -> dict[str, list[str]]:
+        """``checks`` inverted: check name -> the property titles it verifies. For display, where
+        the property's own words ("Balance never overflows") read better than the backend's check
+        name (``rule_balance_never_overflows``).
+
+        A list, not one title: the mapping is many-to-many, and a check that discharges three
+        properties has no single title to be named after. A check absent here has none at all."""
+        titles: dict[str, list[str]] = {}
+        for title, names in self.checks:
+            for name in names:
+                titles.setdefault(name, []).append(title)
+        return titles
 
 
 @dataclass(frozen=True)

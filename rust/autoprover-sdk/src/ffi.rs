@@ -49,12 +49,11 @@ pub fn validate_preconditions(b: &dyn Backend, args_json: &str) -> Option<String
     }
 }
 
-/// `checks(input_json) -> str` (JSON `[Check]`).
-pub fn checks(b: &dyn Backend, input_json: &str) -> String {
-    match parse_input(input_json) {
-        Ok(input) => serde_json::to_string(&b.checks(&input)).unwrap_or_else(|_| "[]".into()),
-        Err(_) => "[]".into(),
-    }
+/// `target_for(input_json, check) -> str | None` — the target the named check runs under, `None`
+/// for its own. Pure. An unparseable input yields `None`, which groups every check separately: the
+/// honest answer when nothing is known about the unit being formalized.
+pub fn target_for(b: &dyn Backend, input_json: &str, check: &str) -> Option<String> {
+    b.target_for(&parse_input(input_json).ok()?, check)
 }
 
 /// `author_prompt(input_json) -> str` (JSON `Prompt`).
@@ -172,7 +171,7 @@ mod tests {
     use crate::chain::ChainData;
     use crate::descriptor::AppDescriptor;
     use crate::finalize::ComponentOutcome;
-    use crate::outcome::{Check, ValidateOutcome};
+    use crate::outcome::ValidateOutcome;
     use crate::prep::WorkspacePrep;
     use serde::{Deserialize, Serialize};
     use std::sync::Mutex;
@@ -209,9 +208,9 @@ mod tests {
         fn descriptor(&self) -> AppDescriptor {
             unimplemented!("not exercised")
         }
-        fn checks(&self, input: &AuthorInput) -> Vec<Check> {
+        fn target_for(&self, input: &AuthorInput, _check: &str) -> Option<String> {
             self.seen.lock().unwrap().push(input.source_unit.clone());
-            Vec::new()
+            None
         }
         fn author_prompt(&self, _input: &AuthorInput) -> Prompt {
             unimplemented!("not exercised")
@@ -251,7 +250,7 @@ mod tests {
         // with no crates use the same seam.
         let spy = Spy::default();
         let unit = r#"{"dir":"programs/lend","package":"example-lending","lib":"example_lending"}"#;
-        checks(&spy, &component_json(unit, "{}"));
+        target_for(&spy, &component_json(unit, "{}"), "r_x");
         workspace_prep(&spy, &component_json(unit, "{}"));
         validate_preconditions(
             &spy,
@@ -281,9 +280,9 @@ mod tests {
         // convention if it has one — the alternative, filling it in here, would mean this seam
         // choosing one ecosystem's layout for every wheel.
         let spy = Spy::default();
-        checks(&spy, &component_json("{}", "{}"));
+        target_for(&spy, &component_json("{}", "{}"), "r_x");
         let seen = spy.seen.lock().unwrap();
-        let data = seen.first().expect("checks was called");
+        let data = seen.first().expect("target_for was called");
         assert!(data.is_empty());
         assert!(data.parse::<CargoUnit>().is_err(), "empty is not a resolved unit");
     }

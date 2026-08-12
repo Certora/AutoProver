@@ -105,7 +105,10 @@ ProtocolTemplate = TypedTemplate[ProtocolParams]("authoring_protocol.j2")
 # ---------------------------------------------------------------------------
 
 class PropertyCheckMapping(BaseModel):
-    """Maps one property from the batch to the {checks} that carry it."""
+    """Maps one property from the batch to the {checks} that carry it.
+
+    Many-to-many: a property may need several {checks}, and one {check} may carry several
+    properties (a single rule discharging three related invariants)."""
     property_title: str = Field(
         description="The unique snake_case title of the property (from the batch listing) that "
         "these {checks} verify"
@@ -116,11 +119,17 @@ class PropertyCheckMapping(BaseModel):
 
 
 class RustSpecExtra(AuthoringExtra):
+    #: What the author says verifies what, declared with ``map_checks`` and revisable. The distinct
+    #: check names in it are the set a gate run executes, and the whole of it is what the publish
+    #: gate validates. Empty for a setup session, which formalizes no properties of its own.
     property_checks: list[PropertyCheckMapping]
     expected_failures: Annotated[dict[str, str], merge_expected_failures]
     #: The verdicts the last full gating run produced, check name → the wheel's verdict. Recorded
     #: verbatim: attribution is the wheel's, and the host does no verdict logic of its own.
     verdicts: dict[str, WireVerdict]
+    #: The targets that run covered, each carrying the checks it covered — the ground truth the
+    #: publish gate holds the mapping to, and what the result reports as this component's coverage.
+    ran: list[Target]
     failed: bool | None
 
 
@@ -139,13 +148,26 @@ _MAPPING = MappingVocab(
 )
 
 
-def live_checks(checks: Sequence[Check], skipped: Sequence[SkippedProperty]) -> list[Check]:
-    """The checks still expected to be checked — every declared one whose property was not skipped.
+def declared_names(mapping: Sequence[PropertyCheckMapping]) -> list[str]:
+    """The check names the author's mapping references, in first-seen order and without repeats.
 
-    The wheel declares its checks before authoring starts and they do not depend on what the model
-    wrote; skipping is the only thing that removes one, which is why a skip has to carry a reason."""
-    dropped = {s.property_title for s in skipped}
-    return [c for c in checks if c.property not in dropped]
+    This is the set that runs. A name may be claimed by several properties (one rule discharging
+    three invariants), so this is not the mapping flattened — it is its distinct names."""
+    return list(dict.fromkeys(n.strip() for m in mapping for n in m.checks if n.strip()))
+
+
+def declared_checks(
+    module: RustAppModule, input_json: str, mapping: Sequence[PropertyCheckMapping]
+) -> list[Check]:
+    """:func:`declared_names` as :class:`Check`\\ s, each grouped by the wheel's ``target_for``.
+
+    The two halves of a check come from the two parties that can know them: the *name* from the
+    author (it names a thing in the artifact, which only the author wrote), the *grouping* from the
+    wheel (which invocation of the checker covers it, a backend convention)."""
+    return [
+        Check(name=name, target=module.target_for(input_json, name))
+        for name in declared_names(mapping)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +187,6 @@ class GateDeps:
     vocab: CheckVocab = CheckVocab("check", "checks")
     #: Serializes the blocking callouts when the wheel shares one build dir across components.
     command_sem: asyncio.Semaphore | None = None
-    #: The checks this session must produce, from the wheel's ``checks``. Empty for a setup
-    #: session, which formalizes none.
-    checks: list[Check] = field(default_factory=list)
 
 
 async def _blocking(thunk: Callable[[], str], sem: asyncio.Semaphore | None) -> str:
@@ -227,12 +246,14 @@ class ValidateSpec(
     WithAsyncDependencies[Command | str, GateDeps],
 ):
     """
-    Build your current spec and run the verifier over it.
+    Build your current spec and run the verifier over the {checks} you declared.
 
-    Each {check} runs under its validation target; several {checks} may share one, and each
-    distinct target runs once. The report records the verdicts verbatim.
+    What runs is exactly what `map_checks` declared, so declare before validating. Each {check}
+    runs under its validation target; several {checks} may share one, and each distinct target runs
+    once. The report records the verdicts verbatim — including a {check} the verifier could not find
+    or never exercised, which does NOT pass.
 
-    The publish gate is stamped only by a run that covers EVERY live {check} and comes back
+    The publish gate is stamped only by a run that covers EVERY declared {check} and comes back
     clean — where a {check} you marked with `expect_check_failure` counts as clean. Naming
     `checks` runs only those, which is for iterating on one problem; it never stamps. Any edit
     after a stamping run invalidates the stamp.
@@ -248,24 +269,25 @@ class ValidateSpec(
         spec = self.state["curr_spec"]
         if spec is None:
             return "No spec written yet — use `put_spec` first."
+        mapping = self.state["property_checks"]
         with self.tool_deps() as deps:
             vocab = deps.vocab
-            wanted = live_checks(deps.checks, self.state["skipped"])
+            wanted = declared_checks(deps.module, deps.input_json, mapping)
+            if not wanted:
+                return (
+                    f"No {vocab.many} declared yet, so there is nothing to run. Use `map_checks` "
+                    f"to say which {vocab.many} in your spec verify which property — that "
+                    f"declaration is what gets validated."
+                )
             if self.checks is not None:
                 asked = set(self.checks)
                 unknown = asked - {c.name for c in wanted}
                 if unknown:
                     return (
-                        f"Unknown {deps.vocab.one} name(s): {', '.join(sorted(unknown))}. The "
-                        f"{deps.vocab.many} of this spec are: "
-                        f"{', '.join(c.name for c in wanted)}."
+                        f"Unknown {vocab.one} name(s): {', '.join(sorted(unknown))}. The declared "
+                        f"{vocab.many} are: {', '.join(c.name for c in wanted)}."
                     )
                 wanted = [c for c in wanted if c.name in asked]
-            if not wanted:
-                return (
-                    "Nothing to validate: every property is currently skipped. Un-skip one, or "
-                    "`give_up` if none of them can be formalized."
-                )
             covered = targets_of(wanted)
             verdicts: dict[str, WireVerdict] = {}
             for target in covered:
@@ -286,7 +308,7 @@ class ValidateSpec(
                     return f"The build FAILED, so nothing was checked.\n\n{res.errors}"
                 for check, verdict in res.resolve(target):
                     verdicts[check.name] = verdict
-                    _emit_verdict(deps, check, verdict)
+                    _emit_verdict(deps, check, verdict, mapping)
 
         report = _verdict_report(verdicts, self.state["expected_failures"])
         partial = self.checks is not None
@@ -299,10 +321,15 @@ class ValidateSpec(
                 f"did not pass. Fix the spec, or — if the failure is the finding — mark the "
                 f"{vocab.one} with `expect_check_failure` and a reason."
             )
+        # ``ran`` travels with the stamp: the publish gate validates the mapping against the
+        # {checks} THIS run covered, and any later edit invalidates the stamp, so a stale set can
+        # never be the one publish is held to.
         return tool_state_update(
             self.tool_call_id,
-            f"{report}\n\nEvery live {vocab.one} is accounted for; the publish gate is satisfied.",
+            f"{report}\n\nEvery declared {vocab.one} is accounted for; the publish gate is "
+            f"satisfied.",
             verdicts=verdicts,
+            ran=covered,
             validations=make_validation_stamper(VALIDATE_KEY)(self.state),
         )
 
@@ -322,14 +349,24 @@ def targets_of(checks: Sequence[Check]) -> list[Target]:
     ]
 
 
-def _emit_verdict(deps: GateDeps, check: Check, verdict: WireVerdict) -> None:
-    prop = check.property
-    line = f"{prop}: {verdict.outcome.value}"
+def properties_of(mapping: Sequence[PropertyCheckMapping], check: str) -> list[str]:
+    """The property titles the mapping says ``check`` verifies — several when one check discharges
+    several properties, none while the author has not said."""
+    return [m.property_title for m in mapping if check in m.checks]
+
+
+def _emit_verdict(
+    deps: GateDeps, check: Check, verdict: WireVerdict, mapping: Sequence[PropertyCheckMapping]
+) -> None:
+    # The property's own words read better than a check name, but a run happens before publish, so
+    # the mapping is whatever the author has declared so far — fall back to the name it ran under.
+    name = ", ".join(properties_of(mapping, check.name)) or check.name
+    line = f"{name}: {verdict.outcome.value}"
     deps.emit(
         "verdict",
         {
             "outcome": verdict.outcome.value,
-            "name": prop,
+            "name": name,
             "line": f"{line} — {verdict.detail}" if verdict.detail else line,
         },
     )
@@ -547,7 +584,39 @@ class FeedbackTool(
 @dataclass
 class PublishDeps:
     titles: list[str]
-    checks: list[Check]
+
+
+class MapChecks(
+    WithInjectedId,
+    WithInjectedState[RustSessionState],
+    WithAsyncImplementation[Command | str],
+):
+    """
+    Declare which {checks} in your spec verify which property.
+
+    This declaration is what gets run: the distinct {check} names in it are exactly what
+    `validate_spec` executes, and it is what the publish gate is validated against. Declare before
+    validating, and call this again to revise — each call replaces the whole declaration.
+
+    A property may need several {checks}, and one {check} may carry several properties: name it
+    under each. Do not name a property you skipped.
+    """
+    property_checks: list[PropertyCheckMapping] = Field(
+        description="For every property you did NOT skip, the {checks} in your spec that verify it."
+    )
+
+    @override
+    async def run(self) -> Command | str:
+        names = declared_names(self.property_checks)
+        if not names:
+            return "That declares no checks at all. Name at least one per property you did not skip."
+        return tool_state_update(
+            self.tool_call_id,
+            f"Recorded: {len(self.property_checks)} propert"
+            f"{'y' if len(self.property_checks) == 1 else 'ies'} mapped onto "
+            f"{', '.join(names)}. Validating now runs exactly these.",
+            property_checks=self.property_checks,
+        )
 
 
 class PublishSpec(
@@ -557,32 +626,31 @@ class PublishSpec(
 ):
     """
     Publish your spec. Refused unless every required gate has accepted the buffer as it now stands,
-    and the declared mapping accounts for every property that was not skipped.
+    and the mapping you declared accounts for every property that was not skipped.
     """
     commentary: str = Field(description="Human-readable commentary on the spec you authored")
-    property_checks: list[PropertyCheckMapping] = Field(
-        description="For every property you did NOT skip, the {checks} in your spec that verify it."
-    )
 
     @override
     async def run(self) -> Command | str:
         if (err := check_completion(self.state)) is not None:
             return err
+        mapping = self.state["property_checks"]
         with self.tool_deps() as deps:
-            expected = live_checks(deps.checks, self.state["skipped"])
+            # Ground truth is what the STAMPING run covered, not what is declared now: a name added
+            # since is one that did not run, and one removed is one that ran unclaimed. Both are
+            # errors here, which is why a mapping edit needs no stamp of its own.
             err = validate_check_mapping(
-                [(m.property_title, m.checks) for m in self.property_checks],
+                [(m.property_title, m.checks) for m in mapping],
                 self.state["skipped"],
                 deps.titles,
                 _MAPPING,
-                ran=[c.name for c in expected],
+                ran=[c.name for t in self.state["ran"] for c in t.checks],
             )
         if err is not None:
             return err
         return tool_state_update(
             self.tool_call_id, "Accepted",
             result=self.commentary,
-            property_checks=self.property_checks,
             failed=False,
         )
 
@@ -684,6 +752,8 @@ class SessionResult:
     skipped: list[SkippedProperty]
     property_checks: list[tuple[str, list[str]]]
     verdicts: dict[str, WireVerdict]
+    #: What the stamping gate run covered — the targets, each with its checks.
+    ran: list[Target]
     expected_failures: dict[str, str]
 
 
@@ -692,7 +762,6 @@ async def run_session(
     module: RustAppModule,
     input: AuthorInput,
     kind: Literal["component", "setup"],
-    checks: list[Check],
     titles: list[str],
     env: ServiceHost,
     ctx: WorkflowContext[Any],
@@ -719,7 +788,6 @@ async def run_session(
         sandbox_json=json.dumps(sandbox_dict),
         emit=emit,
         command_sem=command_sem,
-        checks=checks,
         vocab=vocab,
     )
     component = kind == "component"
@@ -751,11 +819,12 @@ async def run_session(
     ]
     if component:
         tools += [
+            _map_tool(vocab),
             _validate_tool(gate_deps, vocab),
             RecordSkip.bind(lambda: titles).as_tool("record_skip"),
             Unskip.bind(lambda: titles).as_tool("unskip_property"),
             *_expect_tools(vocab),
-            _publish_tool(PublishDeps(titles=titles, checks=checks), vocab),
+            _publish_tool(PublishDeps(titles=titles), vocab),
         ]
     else:
         tools += [
@@ -784,7 +853,7 @@ async def run_session(
         .with_output_key("result")
         .with_tools(tools)
         .with_sys_prompt(system)
-        .with_initial_prompt(_initial_prompt(prompt, checks, component, vocab))
+        .with_initial_prompt(_initial_prompt(prompt, component, vocab))
         .compile_async()
     )
 
@@ -800,6 +869,7 @@ async def run_session(
             property_checks=[],
             expected_failures={},
             verdicts={},
+            ran=[],
             failed=None,
         ),
         thread_id=tid,
@@ -819,6 +889,7 @@ async def run_session(
         skipped=state["skipped"],
         property_checks=[(m.property_title, m.checks) for m in state["property_checks"]],
         verdicts=state["verdicts"],
+        ran=state["ran"],
         expected_failures=state["expected_failures"],
     )
 
@@ -870,20 +941,26 @@ def _expect_tools(vocab: CheckVocab) -> list[BaseTool]:
     ]
 
 
-def _publish_tool(deps: PublishDeps, vocab: CheckVocab) -> BaseTool:
-    # The mapping's own field descriptions are LLM-facing too, so the publish schema is rebuilt
-    # around a re-described element type rather than just re-describing the list.
+def _map_tool(vocab: CheckVocab) -> BaseTool:
+    # The mapping's own field descriptions are LLM-facing too, so the schema is rebuilt around a
+    # re-described element type rather than just re-describing the list.
     mapping = _redescribe(PropertyCheckMapping, vocab, property_title=..., checks=...)
     schema = create_model(
-        "PublishSpec",
-        __base__=PublishSpec,
-        __doc__=vocab.fill(PublishSpec.__doc__ or ""),
+        "MapChecks",
+        __base__=MapChecks,
+        __doc__=vocab.fill(MapChecks.__doc__ or ""),
         property_checks=(list[mapping], Field(  # type: ignore[valid-type]
             description=vocab.fill(
-                PublishSpec.model_fields["property_checks"].description or ""
+                MapChecks.model_fields["property_checks"].description or ""
             ),
         )),
     )
+    tool_display_of(ToolDisplay(f"Declaring {vocab.many}", None))(schema)
+    return schema.as_tool("map_checks")
+
+
+def _publish_tool(deps: PublishDeps, vocab: CheckVocab) -> BaseTool:
+    schema = _redescribe(PublishSpec, vocab)
     tool_display_of(ToolDisplay("Publishing spec", None))(schema)
     return schema.bind(deps).as_tool("result")
 
@@ -903,19 +980,17 @@ def _feedback_tool(judge: FeedbackThunk[Any], rebuttal: type[RebuttalBase]) -> B
     return schema.bind(FeedbackDeps(thunk=judge)).as_tool("feedback_tool")
 
 
-def _initial_prompt(
-    prompt: Prompt, checks: Sequence[Check], component: bool, vocab: CheckVocab
-) -> str:
-    """The wheel's instruction, plus the exact names the publish gate will check against.
+def _initial_prompt(prompt: Prompt, component: bool, vocab: CheckVocab) -> str:
+    """The wheel's instruction, plus the obligation the gate will hold the author to.
 
-    The host renders the listing rather than trusting each wheel's free-form instruction to spell
-    the titles and check names identically — they are compared literally."""
-    if not component or not checks:
+    The host states it rather than trusting each wheel's free-form instruction to: the names are the
+    author's to choose, but *that* every property is covered and every declared name is really in
+    the spec is enforced identically for every backend, so it is worded once here."""
+    if not component:
         return prompt.instruction
-    rows = "\n".join(
-        f"  - property {c.property!r} → {vocab.one} `{c.name}`" for c in checks
-    )
     return (
-        f"{prompt.instruction}\n\nYour spec must provide these {vocab.many}, and `result` must map "
-        f"each property to the {vocab.many} that verify it, using exactly these names:\n{rows}"
+        f"{prompt.instruction}\n\nDeclare with `map_checks` which {vocab.many} verify which "
+        f"property before you validate: that declaration is what gets run. Every property must be "
+        f"verified by at least one {vocab.one} or skipped with a reason, every {vocab.one} you "
+        f"declare must really be in your spec, and one {vocab.one} may carry several properties."
     )
