@@ -238,6 +238,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
+    extra_context: Document | None = None,
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
     budget: RunBudget | None = None,
@@ -250,7 +251,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         return await _run_pipeline_inner(
             backend, run, interactive=interactive, 
             max_bug_rounds=max_bug_rounds, threat_model=threat_model,
-            ecosystem=ecosystem
+            extra_context=extra_context, ecosystem=ecosystem
         )
 
 async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
@@ -259,6 +260,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     *,
     interactive: bool,
     threat_model: Document | None,
+    extra_context: Document | None,
     max_bug_rounds: int,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
@@ -267,7 +269,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     async with load_plugins(run, ecosystem.unit_type) as plugins:
         return await run_pipeline_inner(
             backend, run, plugins, interactive=interactive, threat_model=threat_model,
-            max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
+            extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
         )
 
 # ---- the driver --------------------------------------------------------------
@@ -278,6 +280,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
+    extra_context: Document | None = None,
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
@@ -326,6 +329,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         phases["extraction"],
         interactive,
         threat_model,
+        extra_context,
         max_bug_rounds,
         ecosystem,
         plugin_manager.bind_phase(
@@ -442,7 +446,8 @@ def _post_property_cache_key(feat: FeatureUnit, plugin: str, curr_props: list[Pr
 async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     prop_key: str,
     main: Main, backend_guidance: str, run: PipelineRun[P, H],
-    phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
+    phase: P, interactive: bool, threat_model: Document | None,
+    extra_context: Document | None, max_rounds: int,
     # ``App`` stays ``Any`` here: this helper never touches the analyzed-model axis, only
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],
@@ -512,7 +517,8 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
             TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),
             lambda conv: run_property_inference(
                 feat_ctx, run.env, feat, refinement=conv if interactive else None,
-                threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance,
+                threat_model=threat_model, extra_context=extra_context,
+                max_rounds=max_rounds, backend_guidance=backend_guidance,
                 extra_input=pre_input,
                 system_template=ecosystem.property_prompts.system,
                 render_initial=ecosystem.property_prompts.render_initial,

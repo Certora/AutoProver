@@ -7,7 +7,7 @@ entries). Wired as ``cache-autoprove`` in ``pyproject.toml``.
 Usage::
 
     # by run id (recommended — recovers the cache root, memory namespace,
-    # threat-model digest and plugin manifest from the run's ``cache_root``
+    # threat-model / extra-context digests and plugin manifest from the run's ``cache_root``
     # tags; works even when the design doc was auto-discovered):
     cache-autoprove run <run_id>
 
@@ -15,7 +15,7 @@ Usage::
     # the design doc, so it does NOT work for auto-discovered runs):
     cache-autoprove inputs <project_root> <main_contract> <system_doc> \\
         --cache-ns <ns> [--memory-ns <ns>] [--threat-model <path>] \\
-        [--plugins <name> ...]
+        [--extra-context <path>] [--plugins <name> ...]
 """
 
 import argparse
@@ -174,19 +174,26 @@ async def _resolve_bug_key(
     feat_ctx: WorkflowContext,
     tags: AutoProveCacheTags,
 ) -> CacheKey:
-    """The bug-analysis key is parameterized on the threat-model digest and
-    the refinement (interactive) flag. Both come from the run tags; records
+    """The bug-analysis key is parameterized on the threat-model and extra-context
+    digests and the refinement (interactive) flag. All come from the run tags; records
     written before the ``interactive`` tag existed leave it ``None``, in
     which case probe both variants and use whichever was written."""
     if tags.interactive is not None:
         return bug_analysis_key_from_digest(
             tags.threat_model_digest, with_refinement=tags.interactive,
+            extra_context_digest=tags.extra_context_digest,
         )
     for refine in (False, True):
-        candidate = bug_analysis_key_from_digest(tags.threat_model_digest, refine)
+        candidate = bug_analysis_key_from_digest(
+            tags.threat_model_digest, refine,
+            extra_context_digest=tags.extra_context_digest,
+        )
         if await feat_ctx.child(candidate).cache_get(_BugAnalysisCache) is not None:
             return candidate
-    return bug_analysis_key_from_digest(tags.threat_model_digest, with_refinement=False)
+    return bug_analysis_key_from_digest(
+        tags.threat_model_digest, with_refinement=False,
+        extra_context_digest=tags.extra_context_digest,
+    )
 
 
 async def _build_cvl_gen_nodes(
@@ -481,6 +488,10 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
         file_digest(pathlib.Path(args.threat_model))
         if args.threat_model is not None else None
     )
+    xc_digest = (
+        file_digest(pathlib.Path(args.extra_context))
+        if args.extra_context is not None else None
+    )
 
     return AutoProveCacheTags(
         cache_root=list(root_ns),
@@ -488,6 +499,7 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
         memory_ns=memory_ns,
         plugins=plugins,
         threat_model_digest=tm_digest,
+        extra_context_digest=xc_digest,
         # Not recoverable from the inputs — the tree builder probes both
         # refinement variants of the bug-analysis key.
         interactive=None,
@@ -546,6 +558,8 @@ async def _async_main(args: argparse.Namespace) -> int:
             status += f"  |  Plugins: {', '.join(tags.plugins)}"
         if tags.threat_model_digest:
             status += f"  |  TM digest: {tags.threat_model_digest}"
+        if tags.extra_context_digest:
+            status += f"  |  XC digest: {tags.extra_context_digest}"
 
         app = CacheExplorerApp(
             build_tree=lambda: build_tree(root_ctx, store, tags),
@@ -566,7 +580,8 @@ def main() -> int:
     p_run = sub.add_parser(
         "run",
         help="Explore a run by id (recommended). Reads the tags the run recorded "
-             "in its metadata (cache root, memory ns, plugins, threat-model digest) "
+             "in its metadata (cache root, memory ns, plugins, threat-model and "
+             "extra-context digests) "
              "— works even when the design doc was auto-discovered.",
     )
     p_run.add_argument("run_id", help="Run id (from the autoprove logs / ap-trail).")
@@ -591,6 +606,10 @@ def main() -> int:
                           help="Path to the threat model used for the original run — its "
                                "digest parameterizes the bug-analysis cache key. Omit for "
                                "runs without one.")
+    p_inputs.add_argument("--extra-context", dest="extra_context", default=None,
+                          help="Path to the extra-context document used for the original run "
+                               "— its digest also parameterizes the bug-analysis cache key. "
+                               "Omit for runs without one.")
     p_inputs.add_argument("--plugins", dest="plugins", nargs="*", default=None,
                           help="Plugin names active for the original run — the manifest "
                                "digest is suffixed onto per-component cache keys. Defaults "

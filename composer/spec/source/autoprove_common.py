@@ -53,6 +53,7 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     cloud: bool
     interactive: bool
     threat_model: str
+    extra_context: str | None
     recursion_limit: int
     max_bug_rounds: int
     budget: str | None
@@ -81,7 +82,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
     parser.add_argument("--cloud", action="store_true", help="Run prover jobs in the cloud")
     parser.add_argument("--interactive", action="store_true", help="Interactively refine the security properties after extraction")
-    parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'thread' model (text or pdf) with which to seed the property extraction process")
+    parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'threat' model (text or pdf) with which to seed the property extraction process")
+    parser.add_argument("--extra-context", type=str, default=None, help="Path to a document (text or pdf) of any extra information about the application — protocol notes, deployment assumptions, audit scope — to hand to the property extraction process as background")
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
     parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")

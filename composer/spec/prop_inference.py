@@ -113,22 +113,33 @@ class _AgentRoundWithHistory(_AgentRoundResult):
 
 def bug_analysis_key_from_digest(
     threat_model_digest: str | None,
-    with_refinement: bool
+    with_refinement: bool,
+    extra_context_digest: str | None = None,
 ) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
+    """The bug-analysis cache key, parameterized on every *extra prompt input* that
+    feeds property inference: the threat model, the user-supplied extra context, and
+    whether the properties were interactively refined.
+
+    Each parameter contributes a suffix only when present, so a run with neither
+    document keeps the historical bare ``bug_analysis`` key."""
     base_key = "bug_analysis"
     if with_refinement:
         base_key += "|refine"
-    if threat_model_digest is None:
-        return CacheKey[ComponentGroup, _BugAnalysisCache](base_key)
-    return CacheKey[ComponentGroup, _BugAnalysisCache](base_key + "-tm-" + threat_model_digest)
+    if threat_model_digest is not None:
+        base_key += "-tm-" + threat_model_digest
+    if extra_context_digest is not None:
+        base_key += "-xc-" + extra_context_digest
+    return CacheKey[ComponentGroup, _BugAnalysisCache](base_key)
 
 def bug_analysis_key(
     threat_model: Document | None,
-    with_refinement: bool
+    with_refinement: bool,
+    extra_context: Document | None = None,
 ) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
     return bug_analysis_key_from_digest(
         threat_model.to_digest() if threat_model is not None else None,
         with_refinement,
+        extra_context.to_digest() if extra_context is not None else None,
     )
 
 class _AgentResult(_BugAnalysisCache):
@@ -376,6 +387,7 @@ async def run_property_inference[U: FeatureUnit](
     component: U,
     extra_input : Sequence[AnyPropertyGenerationInput] = tuple(),
     threat_model: Document | None = None,
+    extra_context: Document | None = None,
     refinement: ConversationContextProvider | None = None,
     max_rounds: int = 3,
     *,
@@ -391,9 +403,16 @@ async def run_property_inference[U: FeatureUnit](
     tests, each describing what is and isn't a fit for *their* verification surface. It lives in
     the system prompt (rendered once) rather than the per-round initial prompt so it stays inside
     the cached prefix.
+
+    ``extra_context`` is a free-form document the user supplied about the application (protocol
+    notes, an audit scope, deployment assumptions...). Unlike ``threat_model`` it makes no claim
+    to be a list of *threats* — it is presented to the agent as authoritative background, not as
+    a checklist to work through.
     """
 
-    component_analysis = ctx.child(bug_analysis_key(threat_model, refinement is not None))
+    component_analysis = ctx.child(
+        bug_analysis_key(threat_model, refinement is not None, extra_context)
+    )
     if (cached := await component_analysis.cache_get(_BugAnalysisCache)) is not None:
         return cached.items
 
@@ -415,6 +434,20 @@ async def run_property_inference[U: FeatureUnit](
                 "analyze what content of the provided threat model is worth considering vs out of scope. Further, this threat model is just a starting point, "
                 "you should ALSO look for threats *not* mentioned in this document.",
                 threat_model.to_dict(cache_level=to_cache_level(cache))
+            ]
+        ))
+    if extra_context is not None:
+        actual_extra_input.append(CacheablePropertyGenerationInput(
+            "certora:extra_context", "generic", "always",
+            provide=lambda cache: [
+                "In addition, the user requesting this analysis has provided the following extra context about "
+                "the application: notes, assumptions, deployment details, or anything else they considered "
+                "relevant. It was written for the entire application (not just the component you are analyzing), "
+                "so parts of it may not bear on your analysis. Treat it as authoritative information about how "
+                "the system is intended to work and be deployed, and let it inform which behaviours count as "
+                "violations. It is *NOT* a list of the issues to look for and it is *NOT* exhaustive: keep "
+                "looking for problems it does not mention.",
+                extra_context.to_dict(cache_level=to_cache_level(cache))
             ]
         ))
 

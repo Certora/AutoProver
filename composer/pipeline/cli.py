@@ -148,6 +148,12 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
         ...
 
     @property
+    def extra_context(self) -> str | None:
+        """Path to a free-form document (text or PDF) of user-supplied background about
+        the application, fed to property inference alongside the threat model."""
+        ...
+
+    @property
     def cache_ns(self) -> str | None:
         ...
 
@@ -323,6 +329,12 @@ async def cli_pipeline[P: enum.Enum, H](
                 await conns.uploader.get_document(pathlib.Path(threat_path))
                 if (threat_path := args.threat_model) is not None else None
             )
+            extra_context = (
+                await conns.uploader.get_document(pathlib.Path(context_path))
+                if (context_path := args.extra_context) is not None else None
+            )
+            if args.extra_context is not None and extra_context is None:
+                raise ValueError(f"Fatal error, failed to read extra context: {args.extra_context}")
             if budget is not None:
                 await data_logger("budget", {
                     "total": budget.total, "caps": dict(budget.caps),
@@ -347,6 +359,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     memory_ns=memory_ns,
                     plugins=applicable_plugin_manifest(ecosystem.unit_type),
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
+                    extra_context_digest=extra_context.to_digest() if extra_context is not None else None,
                     interactive=args.interactive,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
@@ -370,6 +383,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
                     threat_model=threat_model,
+                    extra_context=extra_context,
                     budget=budget,
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
