@@ -428,11 +428,11 @@ async def run_property_inference[U: FeatureUnit](
         actual_extra_input.append(CacheablePropertyGenerationInput(
             "certora:thread_model", "generic", "always",
             provide=lambda cache: [
-                "In addition, a coworker has already written a 'threat model' for this application, which may include vulnerabilities/issues that"
+                "In addition, a coworker has already written a 'threat model' for this application, which may include vulnerabilities/issues that "
                 "are common in this type of application. This threat model is written for the entire application (not just the component you are analyzing) "
                 "so some of the issues/vulnerabilities/attacks may not be relevant to your analysis. Do *NOT* overfit to this threat model; carefully "
                 "analyze what content of the provided threat model is worth considering vs out of scope. Further, this threat model is just a starting point, "
-                "you should ALSO look for threats *not* mentioned in this document.",
+                "you should ALSO look for threats *not* mentioned in this document.\n\n",
                 threat_model.to_dict(cache_level=to_cache_level(cache))
             ]
         ))
@@ -446,7 +446,7 @@ async def run_property_inference[U: FeatureUnit](
                 "so parts of it may not bear on your analysis. Treat it as authoritative information about how "
                 "the system is intended to work and be deployed, and let it inform which behaviours count as "
                 "violations. It is *NOT* a list of the issues to look for and it is *NOT* exhaustive: keep "
-                "looking for problems it does not mention.",
+                "looking for problems it does not mention.\n\n",
                 extra_context.to_dict(cache_level=to_cache_level(cache))
             ]
         ))

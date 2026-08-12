@@ -503,7 +503,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
                 CacheablePropertyGenerationInput(
                     "certora:system-doc", "generic", "always",
                     lambda cache, doc=design_doc: [
-                        "For reference, the system document describing the entire application is as follows.",
+                        "For reference, the system document describing the entire application is as follows.\n\n",
                         doc.to_dict(CacheLevel.SHORT if cache else CacheLevel.NONE)
                     ]
                 ),
