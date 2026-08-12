@@ -24,6 +24,7 @@ from composer.cvl.pretty_print import pretty_print
 from composer.ui.tool_display import tool_display_of, CommonTools, ToolDisplay, suppress_ack
 
 from graphcore.graph import tool_state_update
+from graphcore.serial_tools import serialize_writes
 
 _logger = logging.getLogger(__name__)
 
@@ -162,6 +163,16 @@ def put_cvl_raw(
     """Put a CVL file using raw surface syntax."""
     return maybe_update_cvl(tool_call_id=tool_call_id, pp=cvl_file, reset_read=DEFAULT_READ_KEY, spec_key=DEFAULT_SPEC_KEY)
 
+
+# Every tool that rewrites the spec buffer belongs to one serialization group: a
+# turn containing two of them runs them in sequence, each editing the buffer the
+# previous one produced (see graphcore.serial_tools).
+_SPEC_WRITES = (DEFAULT_SPEC_KEY, DEFAULT_READ_KEY)
+
+serialize_writes(put_cvl, *_SPEC_WRITES)
+serialize_writes(put_cvl_raw, *_SPEC_WRITES)
+
+
 class WithCurrSpec(TypedDict):
     curr_spec: str | None
 
@@ -228,7 +239,10 @@ def get_cvl(
                 **update
             )
         return spec
-    return get_cvl
+    # Only the did_read-stamping variant writes state, and `did_read` is the same
+    # plain channel the spec writers reset — so it joins their serialization
+    # group. The plain reader returns a string and needs no declaration.
+    return serialize_writes(get_cvl, DEFAULT_READ_KEY) if set_did_read else get_cvl
 
 
 edit_cvl_description = """
@@ -280,4 +294,4 @@ def edit_cvl[S: WithCurrSpec](ty: type[S]) -> BaseTool:
                     spec_key=DEFAULT_SPEC_KEY,
                     reset_read=DEFAULT_READ_KEY,
                 )
-    return edit_cvl
+    return serialize_writes(edit_cvl, *_SPEC_WRITES)
