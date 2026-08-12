@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from typing import Annotated, Literal, overload
 from langchain_core.messages import AIMessage
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, ReadOnly
 
 from langchain_core.tools import tool, InjectedToolCallId, BaseTool
 from langgraph.types import Command
@@ -164,7 +164,7 @@ def put_cvl_raw(
     return maybe_update_cvl(tool_call_id=tool_call_id, pp=cvl_file, reset_read=DEFAULT_READ_KEY, spec_key=DEFAULT_SPEC_KEY)
 
 class WithCurrSpec(TypedDict):
-    curr_spec: str | None
+    curr_spec: ReadOnly[str | None]
 
 class WithCurrSpecAndDidRead(WithCurrSpec):
     did_read: bool

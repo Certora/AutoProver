@@ -21,24 +21,30 @@ Workflow shape:
 * No prover-config editor — foundry projects are assumed pre-configured.
 """
 
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 import asyncio
 from typing import (
-    Awaitable, Callable, Literal, NotRequired, Protocol, override
+    AsyncIterator, Awaitable, Callable, Literal, NotRequired, Protocol,
+    Sequence, override
 )
 from typing_extensions import TypedDict
 
+from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from graphcore.graph import FlowInput, tool_state_update
+from graphcore.graph import CacheMarker, FlowInput, RawPromptInput, tool_state_update
 from graphcore.summary import SummaryConfig
 from graphcore.tools.schemas import (
     WithAsyncDependencies, WithAsyncImplementation, WithImplementation,
     WithInjectedId, WithInjectedState,
 )
-from composer.pipeline.core import Curtailed, GaveUp
+from composer.pipeline.core import Curtailed, GaveUp, ToolBinder, ToolExtension
+from composer.pipeline.plugin_api import ProvidedTools
+from composer.foundry.plugin import FoundryState, FoundryTools
 from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
 from composer.spec.cvl_generation import (
     PropertyFeedbackProtocol, RebuttalBase, SkippedProperty,
@@ -59,7 +65,7 @@ from composer.ui.tool_display import (
     suppress_ack, tool_display,
 )
 
-from composer.foundry.runner import get_forge_test_tool
+from composer.foundry.runner import get_forge_test_tool, infer_test_dir
 from composer.foundry.state import (
     FEEDBACK,
     FORGE_TEST_VALIDATION_KEY,
@@ -633,6 +639,13 @@ address, proceed directly with addressing them.
 # Top-level batch entry
 # ---------------------------------------------------------------------------
 
+#: The foundry tool extension: contributions come from plugins deriving
+#: ``FoundryTools``, dispatched via their ``foundry_tools`` hook.
+_FOUNDRY_TOOLS = ToolExtension(
+    provider=FoundryTools, project=lambda p: p.foundry_tools
+)
+
+
 @component_context
 class FoundryPropertyGenParams(TypedDict):
     """Per-batch render variables for ``foundry_property_generation_prompt.j2``.
@@ -675,7 +688,8 @@ async def batch_foundry_test_generation(
     description: str,
     forge_binary: str = "forge",
     forge_timeout_s: int = 600,
-    forge_sem : asyncio.Semaphore
+    forge_sem : asyncio.Semaphore,
+    tool_provider: ToolBinder[ContractComponentInstance],
 ) -> BatchFoundryResult:
     """Author one batch of foundry tests covering ``props``.
 
@@ -694,6 +708,9 @@ async def batch_foundry_test_generation(
       ``composer.foundry.env.build_foundry_env``.
     * ``contract_name`` / ``component`` / ``props`` are bound into the
       initial prompt (``foundry_property_generation_prompt.j2``).
+    * ``tool_provider`` is the driver's tool binder for this batch,
+      dispatched here with the foundry extension and a reader that stages
+      :class:`FoundryState` from the author's live graph state.
 
     ``ctx`` is marked ``FoundryGeneration`` so its cache namespace stays
     distinct from a co-located CVL run's.
@@ -708,6 +725,37 @@ async def batch_foundry_test_generation(
         "contract_name": contract_name,
         "sort": "existing"
     })
+
+    # Stage the foundry analog of the prover's ProverState for contributed tools:
+    # the (in-situ) project root, the configured test dir, and the live draft
+    # buffer. Nothing is materialized — foundry runs against the project as-is —
+    # so the context manager is trivial; the shape leaves the backend free to
+    # stage a copy later without touching the plugin contract.
+    root = Path(project_root).resolve()
+    test_dir = root / infer_test_dir(root)
+
+    @asynccontextmanager
+    async def _staged_state(st: FoundryGenerationState) -> AsyncIterator[FoundryState]:
+        yield FoundryState(
+            working_dir=root,
+            test_dir=test_dir,
+            curr_test=st["curr_test"],
+        )
+
+    tools = await tool_provider(
+        _FOUNDRY_TOOLS, FoundryGenerationState, _staged_state
+    )
+
+    sys_prompt: list[RawPromptInput | type[CacheMarker]] = [
+        lambda load: load("foundry_property_generation_system_prompt.j2"),
+    ]
+    added_tools: list[BaseTool] = []
+    for inj in tools:
+        added_tools.extend(inj.tools)
+        if isinstance(inj.system_prompt_injection, list):
+            sys_prompt.extend(inj.system_prompt_injection)
+        else:
+            sys_prompt.append(inj.system_prompt_injection)
 
     titles = [p.title for p in props]
     judge_ctx = ctx.child(FOUNDRY_JUDGE_KEY)
@@ -736,7 +784,8 @@ async def batch_foundry_test_generation(
             GiveUpTool.as_tool("give_up"),
             ctx.get_memory_tool(),
         ])
-        .with_sys_prompt_template("foundry_property_generation_system_prompt.j2")
+        .with_tools(added_tools)
+        .with_sys_prompt(sys_prompt)
         .inject(lambda b: bound_template.render_to(b.with_initial_prompt_template))
         .with_summary_config(FoundryGenerationSummaryConfig())
         .with_monitor(budget_monitor(

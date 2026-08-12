@@ -18,7 +18,7 @@ from typing import TypedDict, Unpack
 
 from composer.diagnostics.timing import RunSummary
 from composer.spec.gen_types import PROPERTIES_SUBDIR, under_project
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, VerificationArtifact
 from composer.spec.util import ensure_dir
 from .types import ArtifactIdentifier, FormalResult
 from composer.spec.source.report.schema import AutoProverReport
@@ -78,6 +78,21 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         target_dir = ensure_dir(self._artifact_dir())
         target_path = target_dir / (i.artifact_file + QUARANTINE_SUFFIX)
         target_path.write_text(artifact.artifact_text)
+        return target_path.relative_to(self._project_root)
+
+    def write_plugin_artifact(
+        self, i: I, plugin: str, artifact: VerificationArtifact
+    ) -> Path:
+        """A verification-supporting artifact a plugin's tool registered for unit
+        ``i`` → ``{artifact_dir}/certificates/{stem}/{plugin}/{name}``. The name is
+        reduced to its basename and namespaced per unit and plugin, so tools cannot
+        traverse or collide. Returns the project-relative path (what the report
+        records)."""
+        target_dir = ensure_dir(
+            self._artifact_dir() / "certificates" / i.stem / plugin
+        )
+        target_path = target_dir / Path(artifact.name).name
+        target_path.write_text(artifact.content)
         return target_path.relative_to(self._project_root)
 
     def _deliverable_dir(self) -> Path:

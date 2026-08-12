@@ -15,7 +15,9 @@ from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
     FeatureUnit,
 )
-from composer.spec.types import Curtailed, PropertyFormulation, FormalResult
+from composer.spec.types import (
+    Curtailed, PropertyFormulation, FormalResult, VerificationArtifact,
+)
 from composer.spec.source.report.collect import ReportableResult
 
 
@@ -80,14 +82,39 @@ class BackendJob[U: FeatureUnit]:
     feat: U
     props: list[PropertyFormulation]
 
+
 class FinalProperties(BaseModel):
     """A component's property batch as it left the property pipeline — after
-    every post-inference plugin rewrite. This is exactly the input
+    every post-inference plugin rewrite — plus the tool-contributing plugin
+    ids the driver gated in. Together these are exactly the inputs
     ``FORMALIZATION_KEY`` is derived from, so an offline walker
-    can reconstruct the formalization edge without
+    (``composer.meta.run``) can reconstruct the formalization edge without
     sniffing the store. Written by the driver at formalization time; the
     pre-rewrite batch remains ``_BugAnalysisCache``."""
     items: list[PropertyFormulation]
+    tool_plugins: list[str]
+
+class PluginArtifact(BaseModel):
+    """One registered verification artifact with its contributing plugin's id —
+    the driver stamps the attribution, so plugins never handle their own id."""
+    plugin: str
+    artifact: VerificationArtifact
+
+
+class RegisteredArtifacts(BaseModel):
+    """The artifacts a batch's plugin tools registered during formalization,
+    cached under the formalization namespace so cache replays (where the tools
+    never run) still carry them into the report."""
+    items: list[PluginArtifact]
+
+
+@dataclass(frozen=True)
+class PersistedPluginArtifact:
+    """A registered artifact after the store wrote it: the registration plus
+    the project-relative path the report records."""
+    plugin: str
+    artifact: VerificationArtifact
+    path: Path
 
 
 @dataclass(frozen=True)
@@ -113,6 +140,10 @@ class Delivered[FormT: BackendResult]:
 @dataclass
 class ComponentOutcome[FormT: BackendResult, U: FeatureUnit](BackendJob[U]):
     result: Delivered[FormT] | GaveUp | BaseException | Curtailed[Delivered[FormT]]
+    #: Verification artifacts the batch's plugin tools registered, already
+    #: persisted by the artifact store. Independent of ``result``: a component
+    #: that gave up may still have produced artifacts worth reporting.
+    artifacts: list[PersistedPluginArtifact] = field(default_factory=list)
 
 @dataclass
 class CorePipelineResult[FormT: BackendResult]:

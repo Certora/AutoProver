@@ -19,10 +19,12 @@ phase objects, and never inspected by the driver.
 
 import asyncio
 import enum
+import functools
 import logging
 from dataclasses import dataclass
-from typing import Protocol, cast, ContextManager, Any
-from collections.abc import Sequence
+from typing import (
+    Protocol, Any, ClassVar, Concatenate, cast, Awaitable, Sequence, Callable, ContextManager, overload
+)
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
 
@@ -35,8 +37,8 @@ from composer.spec.context import (
 from composer.spec.system_model import (
     BaseApplication, FeatureUnit
 )
-from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.util import combine_digests
+from composer.spec.types import PropertyFormulation, ArtifactIdentifier, VerificationArtifact
 from composer.spec.system_analysis import run_component_analysis
 from composer.spec.prop_inference import (
     run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
@@ -46,26 +48,97 @@ from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
-    AutoProverReport, RuleName, ReportBackend, SourceEditRecord,
+    AutoProverReport, RuleName, ReportBackend, SourceEditRecord, VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
-from .ptypes import (
-    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp,
-    FinalProperties,
-    PipelineRun, SystemAnalysisSpec, RunBudget, Curtailed
-)
 from .keys import (
-    COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY,
+    COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY, PLUGIN_ARTIFACTS_KEY,
     POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
+    PLUGIN_FORMALIZATION_KEY
 )
 from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_budget
-from .plugin_api import PrePropertyInference, PostPropertyInference
+
+from .ptypes import (
+    BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
+    Curtailed,  Delivered, RunBudget,
+    FinalProperties, GaveUp, PersistedPluginArtifact, PipelineRun, PluginArtifact,
+    RegisteredArtifacts, SystemAnalysisSpec
+)
+from .plugin_api import (
+    AnyBackendTools, ArtifactRegistrar, FormalizationTool, PipelinePlugin,
+    PluginToolContext, ProvidedTools,
+)
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
 
-
 _log = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolExtension[TP: PipelinePlugin[Any], U: FeatureUnit, **P]:
+    """A backend's tool-extension point, handed to the :class:`ToolBinder` at
+    dispatch time: the provider class whose derivers contribute (``provider``) and
+    the selection of their hook method (``project`` — canonically
+    ``lambda p: p.<backend>_tools``, threading the dispatch leg itself, not a
+    wrapper). ``P`` captures the hook's backend-specific tail (its ``st`` /
+    ``state_reader``), which the binder forwards from the dispatch call. The bound
+    ``TP <: PipelinePlugin[U]`` is inexpressible, so unit agreement rides
+    ``project``'s signature statically — and, at runtime, the provider classes
+    deriving ``PipelinePlugin[U]`` plus the load-time scope check."""
+    provider: type[TP]
+    project: Callable[
+        [TP],
+        Callable[
+            Concatenate[U, Sequence[PropertyFormulation], PluginToolContext[FormalizationTool], P],
+            Awaitable[ProvidedTools | None],
+        ],
+    ]
+
+@dataclass
+class InjectingToolExtension[
+    TP: PipelinePlugin[Any],
+    U: FeatureUnit,
+    **P,
+    Ext
+]:
+    """A :class:`ToolExtension` whose hook additionally receives a backend-supplied
+    callable. The backend passes the binder a ``Callable[Concatenate[str, I], R]``;
+    the binder curries in the asking plugin's id, so the hook sees a
+    ``Callable[I, R]`` that already knows who it is serving — attribution is
+    stamped by the driver, never self-reported (the registrar in
+    :class:`_ArtifactCollector` works the same way)."""
+    provider: type[TP]
+    project: Callable[
+        [TP],
+        Callable[
+            Concatenate[U, Sequence[PropertyFormulation], PluginToolContext[FormalizationTool], Ext, P],
+            Awaitable[ProvidedTools | None]
+        ]
+    ]
+
+
+
+class ToolBinder[U: FeatureUnit](Protocol):
+    """What ``formalize`` receives — the core ↔ backend tool seam, naming no
+    backend. The backend calls it exactly once, with its own
+    :class:`ToolExtension` and the extension's tail arguments (its authoring
+    graph's state type and staged-state reader); the binder applies every
+    contributing plugin's hook — always including :class:`AnyBackendTools`
+    derivers — and returns the yielded bundles. Empty when no plugin contributes,
+    so backends need no special-casing."""
+
+    @overload
+    async def __call__[TP: PipelinePlugin[Any], **P](
+        self, ext: ToolExtension[TP, U, P], *args: P.args, **kwargs: P.kwargs
+    ) -> Sequence[ProvidedTools]:
+        ...
+
+    @overload
+    async def __call__[TP: PipelinePlugin[Any], **P, **I, R](
+        self, ext: InjectingToolExtension[TP, U, P, Callable[I, R]], inj: Callable[Concatenate[str, I], R], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Sequence[ProvidedTools]:
+        ...
 
 @dataclass
 class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
@@ -80,6 +153,12 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     formalized_type: type[FormT]
     backend_tag: ReportBackend
 
+    #: The provider class whose derivers contribute tools to this backend — the
+    #: driver matches it for both the dispatch gate and the formalization cache
+    #: key. None (the default) for a backend with no tool extension;
+    #: :class:`AnyBackendTools` derivers count regardless.
+    tool_provider_type: ClassVar[type[PipelinePlugin[Any]] | None] = None
+
     @abstractmethod
     async def formalize(
         self,
@@ -87,10 +166,12 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         feat: U,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[FormT],
-        run: PipelineRun
+        run: PipelineRun,
+        extra_tools: ToolBinder[U]
     ) -> FormT | Curtailed[FormT] | GaveUp:
-        """A full result, a ``Curtailed`` wrapper when the budget cut the author short (its
-        ``partial`` is whatever was published under the lifted gates), or a ``GaveUp``."""
+        """``extra_tools`` is the run's tool binder: call it exactly once with this
+        backend's :class:`ToolExtension` and the extension's tail (the authoring
+        graph's state type and staged-state reader)."""
         ...
 
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
@@ -202,6 +283,100 @@ def extract_task_id(idx: int) -> str:
 
 def formalize_task_id(idx: int) -> str:
     return f"formalize-{idx}"
+
+
+# ---- plugin tool contribution -------------------------------------------------
+
+class _ArtifactCollector:
+    """Per-batch sink for the verification artifacts plugin tools register at
+    dispatch time. ``for_plugin`` stamps the attribution, so a plugin never
+    handles its own id; the driver snapshots the collected set into the
+    formalization namespace (cache replays skip the tools) and persists it via
+    the run's artifact store."""
+
+    def __init__(self) -> None:
+        self.items: list[PluginArtifact] = []
+
+    def for_plugin(self, plugin_id: str) -> ArtifactRegistrar:
+        collector = self
+
+        class _Registrar:
+            def register(self, artifact: VerificationArtifact) -> None:
+                collector.items.append(
+                    PluginArtifact(plugin=plugin_id, artifact=artifact)
+                )
+
+        return _Registrar()
+
+
+def _contributes_tools(
+    plugin: PipelinePlugin[Any], provider_type: type[PipelinePlugin[Any]] | None
+) -> bool:
+    """Whether ``plugin`` counts for the running backend's tool dispatch — and so
+    for its ``FORMALIZATION_KEY``: a deriver of the formalizer's declared provider
+    class, or of the always-projected :class:`AnyBackendTools`. One predicate for
+    the gate and the key, so what the binder can reach and what the key says
+    cannot drift."""
+    if isinstance(plugin, AnyBackendTools):
+        return True
+    return provider_type is not None and isinstance(plugin, provider_type)
+
+
+@dataclass
+class _Binder[U: FeatureUnit]:
+    """Core's :class:`ToolBinder` over the batch's contributing plugins, each
+    pre-paired with its id and plugin context. Plugins fire in the deterministic
+    plugin-id order the gate collected them (injection order is prompt content);
+    per plugin, the extension's hook fires before the any-backend hook. Plugin
+    hook code runs only here — at the backend's dispatch — never as a top-level
+    tool-setup task. On an :class:`InjectingToolExtension` dispatch, the
+    backend's injectable gets the asking plugin's id curried in before the hook
+    ever sees it."""
+    _plugins: Sequence[tuple[str, PipelinePlugin[U], PluginToolContext[FormalizationTool]]]
+    _comp: U
+    _props: list[PropertyFormulation]
+
+    @overload
+    async def __call__[TP: PipelinePlugin[Any], **P](
+        self, ext: ToolExtension[TP, U, P], *args: P.args, **kwargs: P.kwargs
+    ) -> Sequence[ProvidedTools]:
+        ...
+
+    @overload
+    async def __call__[TP: PipelinePlugin[Any], **P, **I, R](
+        self, ext: InjectingToolExtension[TP, U, P, Callable[I, R]], inj: Callable[Concatenate[str, I], R], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Sequence[ProvidedTools]:
+        ...
+
+    async def __call__( #type: ignore[trust me bro]
+        self,
+        ext: ToolExtension[Any, U, ...] | InjectingToolExtension[Any, U, ..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Sequence[ProvidedTools]:
+        got: list[ProvidedTools] = []
+        for plugin_id, p, ctxt in self._plugins:
+            if isinstance(p, ext.provider):
+                if isinstance(ext, InjectingToolExtension):
+                    # args[0] is the backend's injectable (positional-only in
+                    # the overload); the hook receives it with this plugin's
+                    # id already bound.
+                    t = await ext.project(p)(
+                        self._comp, self._props, ctxt,
+                        functools.partial(args[0], plugin_id),
+                        *args[1:], **kwargs,
+                    )
+                else:
+                    t = await ext.project(p)(self._comp, self._props, ctxt, *args, **kwargs)
+                if t is not None:
+                    got.append(t)
+            if isinstance(p, AnyBackendTools):
+                t = await p.backend_tools(self._comp, self._props, ctxt)
+                if t is not None:
+                    got.append(t)
+        return got
+
+
 
 def _budget_context(budget: RunBudget | None) -> ContextManager[None]:
     if budget is not None:
@@ -318,7 +493,6 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         ecosystem,
         plugin_manager.bind_phase(
             phases.get("extraction_plugin") or phases["extraction"],
-            "Property Extraction"
         )
     )
     staged = await staged_task
@@ -338,6 +512,27 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
 
+        # Deriving the backend's declared provider class gates the dispatch AND
+        # keys the cache: whether a hook would actually yield tools is only
+        # knowable inside ``formalize`` (dispatch needs backend state that
+        # doesn't exist yet), so both run off what the plugin derives. A plugin
+        # outside this backend's gate is invisible to its binder, and so must
+        # not perturb its key either. No task machinery: tool hooks are
+        # tool-BINDING hooks, so they get the runner-less context and cannot
+        # run top-level tasks.
+        contributing_plugins : list[str] = []
+        bound_plugins : list[tuple[str, PipelinePlugin[U], PluginToolContext[FormalizationTool]]] = []
+        collected = _ArtifactCollector()
+
+        for plugin_id, plugin in plugin_manager.sorted_plugins():
+            if not _contributes_tools(plugin, formalizer.tool_provider_type):
+                continue
+            k = batch.feat_ctx.child(PLUGIN_FORMALIZATION_KEY(plugin_id))
+            bound_plugins.append((plugin_id, plugin, plugin_manager.tool_context(
+                plugin, k, collected.for_plugin(plugin_id),
+            )))
+            contributing_plugins.append(plugin_id)
+
         # Record the formalization edge's exact derivation inputs — the final
         # (post-plugin) batch and the gated plugin ids — as a first-class cache
         # entry, keyed like the bug analysis (the component namespace is shared
@@ -349,12 +544,13 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 interactive,
                 combine_digests([d.to_digest() for d in extra_context]),
             )
-        ).cache_put(FinalProperties(items=batch.props))
+        ).cache_put(FinalProperties(items=batch.props, tool_plugins=contributing_plugins))
 
         child : WorkflowContext[FormT] = await batch.feat_ctx.child(
-            FORMALIZATION_KEY(formalizer.formalized_type, batch.props),
+            FORMALIZATION_KEY(formalizer.formalized_type, batch.props, contributing_plugins),
             {"properties": [p.model_dump() for p in batch.props]},
         )
+        artifacts_ctx = child.child(PLUGIN_ARTIFACTS_KEY)
         cached_result: FormT | None = await child.cache_get(formalizer.formalized_type)
         result : FormT | Curtailed[FormT] | GaveUp
         if cached_result is None:
@@ -366,19 +562,27 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                         label,
                         phases["formalization"]
                     ),
-                    lambda: formalizer.formalize(label, batch.feat, batch.props, child, run),
+                    lambda: formalizer.formalize(
+                        label, batch.feat, batch.props, child, run,
+                        _Binder(bound_plugins, batch.feat, batch.props)
+                    ),
                 )
             # Snapshot what the tools registered: a cache replay of this
             # formalization never runs the tools, so the artifacts must ride
             # the cache alongside the result they accompany.
             if not isinstance(result, GaveUp):
-                # A curtailed partial is never the
+                await artifacts_ctx.cache_put(RegisteredArtifacts(items=collected.items))
+                # Envelope before result: a crash between the two puts replays
+                # as a miss (re-run, envelope rewritten) rather than a hit with
+                # silently absent artifacts. A curtailed partial is never the
                 # component's cached result — a later run redoes the
                 # formalization under a fresh budget.
                 if not isinstance(result, Curtailed):
                     await child.cache_put(result)
         else:
             result = cached_result
+            restored = await artifacts_ctx.cache_get(RegisteredArtifacts)
+            collected.items = restored.items if restored is not None else []
 
         outcome: Delivered[FormT] | Curtailed[Delivered[FormT]] | GaveUp
         if isinstance(result, GaveUp):
@@ -395,7 +599,22 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             )
         else:
             outcome = Delivered(result, backend.artifact_store.write_artifact(result_key, result))
-        return ComponentOutcome(batch.feat, batch.props, outcome)
+
+        # Persist registered artifacts on every path (fresh run or cache
+        # replay), like ``write_artifact`` above — deliverables are rebuilt
+        # from cache content, never assumed to survive on disk. A gave-up
+        # component keeps whatever its tools registered before the surrender.
+        persisted = [
+            PersistedPluginArtifact(
+                plugin=pa.plugin,
+                artifact=pa.artifact,
+                path=backend.artifact_store.write_plugin_artifact(
+                    result_key, pa.plugin, pa.artifact
+                ),
+            )
+            for pa in collected.items
+        ]
+        return ComponentOutcome(batch.feat, batch.props, outcome, persisted)
 
     settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
     outcomes = [o if isinstance(o, ComponentOutcome)
@@ -415,6 +634,18 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         )
         for o in outcomes
     ] + formalizer.extra_report_inputs()
+    artifact_records = [
+        VerificationArtifactRecord(
+            component=o.feat.display_name,
+            plugin=pa.plugin,
+            name=pa.artifact.name,
+            kind=pa.artifact.kind,
+            description=pa.artifact.description,
+            path=str(pa.path),
+        )
+        for o in outcomes
+        for pa in o.artifacts
+    ]
     findings_evidence = formalizer.findings_evidence()
     try:
         async def _report() -> AutoProverReport:
@@ -422,6 +653,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
                 source_edits=await formalizer.source_edits(outcomes, run),
+                verification_artifacts=artifact_records,
                 # Findings only when the backend supplies evidence — skip the heavy model otherwise.
                 findings_llm=run.env.llm_heavy() if findings_evidence else None,
                 fetch_evidence=findings_evidence,
