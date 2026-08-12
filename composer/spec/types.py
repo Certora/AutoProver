@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, Literal
 
 # Nominal ``str`` subtypes for the distinct identity fields of an analyzed
@@ -59,6 +60,20 @@ class FormalResult(Protocol):
 
     @property
     def artifact_text(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class Curtailed[T]:
+    """A formalization the run budget cut short. ``partial`` is whatever the author published
+    after the budget monitor lifted its validation gates — the raw backend result at the author
+    boundary, the persisted result inside a pipeline outcome — or ``None`` when the run stopped
+    (or the author gave up under the wrap-up order) before publishing anything. Either way the
+    component's encoding and verification state are unreliable: it is not a delivery, is never
+    cached, and the report keeps it out of the property grouping, surfacing it in the budget
+    appendix instead. ``detail`` optionally carries context (the hard-stop message, or the
+    author's own account)."""
+    partial: T | None
+    detail: str | None = None
 
 from pydantic import BaseModel, Field
 

@@ -229,6 +229,22 @@ section.gaps h4 {
 }
 ul.claims { margin: 4px 0 0 18px; padding: 0; font-size: 13px; }
 ul.claims li { margin-bottom: 4px; }
+section.gaps .desc { color: var(--muted-fg); margin: 6px 0 12px; font-size: 13px; }
+section.gaps p.note { margin: 4px 0 8px; font-size: 13px; }
+section.gaps details { margin: 8px 0 14px; }
+section.gaps details > summary {
+    cursor: pointer;
+    font-size: 12.5px;
+    color: var(--muted-fg);
+    user-select: none;
+}
+code.unit {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    background: var(--bg-pre);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
 .sort-tag {
     display: inline-block;
     padding: 1px 7px;
@@ -420,6 +436,44 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 </section>
 {%- endif %}
 
+{%- if curtailed %}
+<section class="gaps" id="budget-appendix">
+  <h2>Appendix: cut short by the run budget ({{ curtailed | length }})</h2>
+  <p class="desc">The run's budget ran out while these components were being formalized. Anything
+  they published was accepted without the usual validation gates, so neither the encodings nor
+  their verification results are reliable; nothing here contributes to the property groups,
+  outcome counts, or coverage figures above.</p>
+  {%- for c in curtailed %}
+  <h3>{{ c.component }} <span class="badge badge-{{ c.status_kind }}">{{ c.status_label }}</span></h3>
+  <p class="note">{{ c.summary }}</p>
+  {%- if c.artifact %}
+  <p class="note muted">Unvalidated draft kept for inspection: <code class="unit">{{ c.artifact }}</code>
+    {%- if c.link.href %} &middot; <a href="{{ c.link.href }}" target="_blank" rel="noopener">last {{ c.link.label }}</a>{% endif %}</p>
+  {%- endif %}
+  {%- if c.detail %}<p class="note muted">{{ c.detail }}</p>{% endif %}
+  <details>
+    <summary>Per-property breakdown ({{ c.rows | length }})</summary>
+    <table class="rules">
+      <thead><tr><th>Property</th><th>Disposition</th><th>Notes</th></tr></thead>
+      <tbody>
+        {%- for row in c.rows %}
+        <tr>
+          <td>{{ row.description }} <span class="sort-tag">{{ row.sort }}</span></td>
+          <td class="col-status"><span class="badge badge-{{ row.kind }}">{{ row.label }}</span></td>
+          <td>
+            {%- if row.units %}{% for u in row.units %}<code class="unit">{{ u }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+            {%- elif row.note %}{{ row.note }}
+            {%- else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {%- endfor %}
+      </tbody>
+    </table>
+  </details>
+  {%- endfor %}
+</section>
+{%- endif %}
+
 {%- if source_edits %}
 <section class="gaps" id="source-modifications">
   <h2>Source modifications</h2>
@@ -452,6 +506,9 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
   {%- endif %}
   {%- if coverage.rules_spanning_multiple_groups %}
   {{ coverage.rules_spanning_multiple_groups | length }} {{ terms.unit_singular }}(s) underwrite multiple high-level properties.
+  {%- endif %}
+  {%- if coverage.curtailed_component_count %}
+  {{ coverage.curtailed_component_count }} component(s) were cut short by the run budget (see the appendix).
   {%- endif %}
 </footer>
 
