@@ -18,21 +18,22 @@ Two entry points:
     compilation, and returns a ``Configuration``.
 """
 
-from typing import NotRequired, TypedDict
+from typing import AsyncIterator, NotRequired, TypedDict, override
+from contextlib import ExitStack, asynccontextmanager
 from logging import getLogger
 from pathlib import Path
-import json
+import asyncio
 import shutil
-import subprocess
 
-from pydantic import Field, BaseModel
+from pydantic import Field, BaseModel, ValidationError
 
 from langgraph.graph import MessagesState
 
 from composer.prover.core import ProverOptions
+from composer.spec.natspec.async_result import AsyncResultTool
 from graphcore.graph import FlowInput
-from graphcore.tools.vfs import VFSState, VFSToolConfig, vfs_tools
-from graphcore.tools.results import result_tool_generator
+from graphcore.tools.schemas import WithInjectedState
+from graphcore.tools.vfs import VFSAccessor, VFSState, VFSToolConfig, vfs_tools
 
 from composer.diagnostics.timing import get_run_summary
 from composer.spec.graph_builder import run_to_completion, bind_standard
@@ -207,28 +208,47 @@ async def classifier_agent(
 _HARNESS_CHECK_TIMEOUT_S = 900
 
 
-def _forge_errors(forge_json: str) -> list[str] | None:
-    """The error-severity diagnostics of a ``forge build --json`` report.
+class ForgeDiagnostic(BaseModel):
+    """One diagnostic of a ``forge build`` report."""
+    severity: str
+    message: str = ""
+    formatted_message: str = Field(default="", alias="formattedMessage")
 
-    ``forge build --json`` exits 0 whether or not the sources compiled and puts
-    the diagnostics in its report, so the exit code says nothing; the severity
-    field is the signal. Returns None when the output is not a report at all,
-    i.e. forge stopped before it got to compiling.
+    @property
+    def rendered(self) -> str:
+        """The diagnostic as solc rendered it: the source excerpt and the notes
+        that go with it, falling back to the bare message if forge gave none."""
+        return self.formatted_message or self.message
+
+
+class ForgeReport(BaseModel):
+    """A ``forge build --json`` report.
+
+    ``errors`` holds every diagnostic, warnings included; ``severity`` is what
+    separates them. The exit code carries no information — forge exits 0
+    whether or not the sources compiled.
     """
+    errors: list[ForgeDiagnostic] = Field(default_factory=list)
+
+    @property
+    def compile_errors(self) -> list[str]:
+        return [d.rendered for d in self.errors if d.severity == "error"]
+
+
+@asynccontextmanager
+async def _materialized[S](accessor: VFSAccessor[S], state: S) -> AsyncIterator[str]:
+    """The agent's filesystem view as a real directory, for the block's
+    duration. The copy and its teardown run in a worker thread: materializing a
+    whole project is blocking IO that would otherwise stall the event loop."""
+    stack = ExitStack()
+    project_dir = await asyncio.to_thread(stack.enter_context, accessor.materialize(state))
     try:
-        report = json.loads(forge_json)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(report, dict):
-        return None
-    diagnostics = report.get("errors", [])
-    return [
-        d.get("formattedMessage") or d.get("message", "")
-        for d in diagnostics if d.get("severity") == "error"
-    ]
+        yield project_dir
+    finally:
+        await asyncio.to_thread(stack.close)
 
 
-def _compile_check(project_dir: str, harness_paths: list[str]) -> str | None:
+async def _compile_check(project_dir: str, harness_paths: list[str]) -> str | None:
     """Type-check the named harnesses within a materialized copy of the project.
 
     Returns the compiler's error output, or None when they compile — or when
@@ -241,27 +261,34 @@ def _compile_check(project_dir: str, harness_paths: list[str]) -> str | None:
     if forge is None or not (root / "foundry.toml").is_file():
         _logger.info("Harness compile check skipped: needs forge and a foundry project")
         return None
+    proc = await asyncio.create_subprocess_exec(
+        forge, "build", "--json", *sorted(harness_paths),
+        cwd=str(root),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
     try:
-        proc = subprocess.run(
-            [forge, "build", "--json", *sorted(harness_paths)],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=_HARNESS_CHECK_TIMEOUT_S,
+        stdout_b, stderr_b = await asyncio.wait_for(
+            proc.communicate(), timeout=_HARNESS_CHECK_TIMEOUT_S
         )
-    except subprocess.TimeoutExpired:
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
         _logger.warning(
             "Harness compile check skipped: forge build exceeded %ds", _HARNESS_CHECK_TIMEOUT_S
         )
         return None
 
-    errors = _forge_errors(proc.stdout)
-    if errors is None:
-        _logger.warning("Harness compile check skipped: forge emitted no report: %s", proc.stderr[-500:])
+    try:
+        report = ForgeReport.model_validate_json(stdout_b.decode())
+    except ValidationError:
+        _logger.warning(
+            "Harness compile check skipped: forge emitted no report: %s", stderr_b.decode()[-500:]
+        )
         return None
-    if not errors:
+    if not report.compile_errors:
         return None
-    return "\n".join(errors)
+    return "\n".join(report.compile_errors)
 
 
 class GeneratedHarness(BaseModel):
@@ -348,46 +375,42 @@ async def generate_harnesses(
     }
 
 
-    def result_validator(
-        s: GenerationState,
-        res: HarnessAgentResult,
-        tid: str
-    ) -> str | None:
-        check_copy = expected.copy()
-        harness_paths: list[str] = []
-        for (nm, r) in res.identifier_to_source.items():
-            if nm not in check_copy:
-                return f"Delivered result for contract {nm}, but no instructions were given to harness it"
-            if len(r) != check_copy[nm]:
-                return f"Delivered {len(r)} harnesses for {nm}, but {check_copy[nm]} were required"
-            for res_c in r:
-                if mat.get(s, res_c.path) is None:
-                    return f"Delivered harness {res_c.harness_name} at {res_c.path} for {nm}, but it doesn't exist on the VFS"
-                harness_paths.append(res_c.path)
-            del check_copy[nm]
-        if len(check_copy) != 0:
-            error = ", ".join(
-                [ f"contract {k} ({n} copies)" for (k,n) in check_copy.items() ]
-            )
-            return f"Missing harnesses in results: {error}"
-        # Compile the agent's view of the project, not the project on disk: the
-        # harnesses it wrote live on the VFS, and a helper it wrote but did not
-        # deliver still has to be there for their imports to resolve.
-        with mat.materialize(s) as project_dir:
-            compile_errors = _compile_check(project_dir, harness_paths)
-        if compile_errors is not None:
-            return (
-                "The delivered harnesses do not compile. Repair them and deliver again; "
-                "the compiler reported:\n" + compile_errors
-            )
-        return None
+    class HarnessResultTool(AsyncResultTool[HarnessAgentResult], WithInjectedState[GenerationState]):
+        """Signal the completion of your workflow. Triggers a compile of the
+        delivered harnesses against the project; a compile failure is reported
+        back to you for a retry.
+        """
 
-    result_tool = result_tool_generator(
-        "result",
-        HarnessAgentResult,
-        "Signal the completion of your workflow",
-        validator=(GenerationState, result_validator)
-    )
+        @override
+        async def validate_result(self, res: HarnessAgentResult) -> str | None:
+            check_copy = expected.copy()
+            harness_paths: list[str] = []
+            for (nm, r) in res.identifier_to_source.items():
+                if nm not in check_copy:
+                    return f"Delivered result for contract {nm}, but no instructions were given to harness it"
+                if len(r) != check_copy[nm]:
+                    return f"Delivered {len(r)} harnesses for {nm}, but {check_copy[nm]} were required"
+                for res_c in r:
+                    if mat.get(self.state, res_c.path) is None:
+                        return f"Delivered harness {res_c.harness_name} at {res_c.path} for {nm}, but it doesn't exist on the VFS"
+                    harness_paths.append(res_c.path)
+                del check_copy[nm]
+            if len(check_copy) != 0:
+                error = ", ".join(
+                    [ f"contract {k} ({n} copies)" for (k,n) in check_copy.items() ]
+                )
+                return f"Missing harnesses in results: {error}"
+            # Compile the agent's view of the project, not the project on disk: the
+            # harnesses it wrote live on the VFS, and a helper it wrote but did not
+            # deliver still has to be there for their imports to resolve.
+            async with _materialized(mat, self.state) as project_dir:
+                compile_errors = await _compile_check(project_dir, harness_paths)
+            if compile_errors is not None:
+                return (
+                    "The delivered harnesses do not compile. Repair them and deliver again; "
+                    "the compiler reported:\n" + compile_errors
+                )
+            return None
 
     g = env.builder_lite().with_input(
         GenerationInput
@@ -400,7 +423,7 @@ async def generate_harnesses(
     ).with_sys_prompt_template(
         "harness_generation_system_prompt.j2"
     ).with_tools(
-        v_tools + [result_tool]
+        v_tools + [HarnessResultTool.as_tool("result")]
     ).with_default_summarizer().compile_async()
 
     res_state = await run_to_completion(
