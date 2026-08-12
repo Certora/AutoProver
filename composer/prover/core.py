@@ -45,7 +45,7 @@ from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, cloud_results
-from composer.prover.ptypes import RuleResult
+from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import read_and_format_run_result
 from composer.templates.loader import load_jinja_template
 from composer.prover.prover_protocol import ProverResult
@@ -118,9 +118,19 @@ class ProverReport:
 
     ``link`` is the prover run's URL (cloud) or local results directory.
     """
-    rule_status: dict[str, bool]
+    raw_rule_status: dict[RulePath, StatusCodes]
+
     result_str: str
     link: str
+
+    @property
+    def rule_status(self) -> dict[str, bool]:
+        to_ret = {}
+        for (k, v) in self.raw_rule_status.items():
+            if k.rule in to_ret and not to_ret[k.rule]:
+                continue
+            to_ret[k.rule] = v == "VERIFIED"
+        return to_ret
 
     @property
     def all_verified(self) -> bool:
@@ -528,8 +538,12 @@ async def run_prover(
             continue
         prover_report[rule_name] = i.status == "VERIFIED"
 
+    raw_rule_results : dict[RulePath, StatusCodes] = {
+        k.path: k.status for k in parsed.values()
+    }
+
     return ProverReport(
-        rule_status=prover_report,
+        raw_rule_status=raw_rule_results,
         result_str=result_str,
         link=run_result["link"],
     )

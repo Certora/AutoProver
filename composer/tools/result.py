@@ -13,10 +13,10 @@ def check_completion(
     tool_call_id: str
 ) -> Command | None:
     ctxt = get_runtime(AIComposerContext).context
-    digest = compute_state_digest(c=ctxt, state=state)
+    digest = compute_state_digest(state=state)
     m = state.get("validation", {})
     for req_v in ctxt.required_validations:
-        if req_v not in m or digest != m[req_v]:
+        if req_v not in m or digest != m[req_v.to_key()]:
             return Command(
                 update={
                     "messages": [

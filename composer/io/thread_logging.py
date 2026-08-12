@@ -1,4 +1,4 @@
-from typing import TypedDict, Protocol, AsyncIterator, Any, Callable
+from typing import NotRequired, TypedDict, Protocol, AsyncIterator, Any, Callable
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from uuid import uuid4
@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.base import BaseStore
 from composer.core.user import user_data_ns
+from composer.diagnostics.budget import current_cost_center
 
 class _WithTimings(TypedDict):
     start_time: str
@@ -24,6 +25,12 @@ class ThreadMeta(_WithTimings):
 
     start_checkpoint_id: str | None
     end_checkpoint_id: str | None
+
+    #: The named budget scope this thread ran under (a `PhaseBudget` phase name), or
+    #: None for work outside any named scope (the run pool / pre-pipeline). Recorded
+    #: whether or not a budget was installed. NotRequired: absent on records written
+    #: before cost-center tracking existed.
+    cost_center: NotRequired[str | None]
 
 DEFAULT_META_NS = ("logging",)
 
@@ -96,7 +103,10 @@ class ThreadLogger:
             "run_id": self.run_id,
             "start_checkpoint_id": start_checkpoint,
             "thread_id": thread_id,
-            "description": description
+            "description": description,
+            # Read from the ambient contextvar: start() runs (via log_thread) in the
+            # thread's own task, inside whatever named budget scope spawned it.
+            "cost_center": current_cost_center()
         }
         try:
             await self.store.aput(

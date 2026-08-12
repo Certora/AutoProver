@@ -26,7 +26,7 @@ import pytest_asyncio
 
 from langgraph.store.memory import InMemoryStore
 
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 from composer.spec.agent_index import AgentIndex, AgentIndexConfig
 from composer.spec.source.munge.edit_oracle import mk_oracle
 from composer.spec.source.munge.edit_store import StoredEdit

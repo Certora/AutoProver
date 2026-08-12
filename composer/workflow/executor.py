@@ -20,7 +20,9 @@ from composer.input.files import (
 
 from composer.llm.provider import ModelProvider
 
-from composer.kb.knowledge_base import DefaultEmbedder, kb_tools as make_kb_tools, DEFAULT_KB_NS as _KB_NS
+from composer.kb.knowledge_base import kb_tools as make_kb_tools
+from composer.llm.types import CacheLevel
+from composer.rag.models import DefaultEmbedder
 from composer.workflow.factories import get_vfs_tools, get_memory_ns
 from composer.workflow.services import standard_connections, IndexedConnections
 from composer.workflow.types import PromptParams, WorkflowSuccess, WorkflowFailure, WorkflowCrash, WorkflowResult
@@ -28,7 +30,7 @@ from composer.workflow.meta import create_resume_commentary
 from composer.core.context import AIComposerContext, ProverOptions
 from composer.core.state import AIComposerState
 from composer.prover.core import make_prover_options, CexHandler
-from composer.core.validation import ValidationType, prover, reqs as req_type
+from composer.core.validation import ProverValidation, CodegenValidation, ReqsValidation
 from composer.rag.db import rag_context, ComposerRAGDB
 from composer.rag.models import get_model as get_rag_model
 from composer.audit.store import AuditStore, ResumeArtifact
@@ -36,7 +38,7 @@ from composer.natreq.extractor import get_requirements
 from composer.natreq.judge import get_judge_tool
 from composer.spec.cvl_research import CVL_RESEARCH_BASE_DOC, cvl_research_tool
 from composer.tools.relaxation import requirements_relaxation
-from composer.tools.search import cvl_manual_tools, cvl_manual_search
+from composer.tools.search import cvl_manual_tools
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import CodeGenIOHandler, WorkflowPurpose
 from composer.io.context import with_handler, run_graph
@@ -76,7 +78,7 @@ class _ExecutorOptions(WorkflowOptions, ModelOptionsBase, Protocol):
 def get_reference_input(input_data: InputData, debug_prompt: Optional[str]) -> str:
     return load_jinja_template(
         "workflow_info.j2",
-        spec_filename=input_data.spec.basename,
+        spec_filenames=[s.file.basename for s in input_data.specs],
         interface_filename=input_data.intf.basename,
         system_doc_filename=input_data.system_doc.basename,
         debug_prompt=debug_prompt)
@@ -88,15 +90,17 @@ def _get_empty_extra() -> AIComposerExtra:
 
 
 def get_fresh_input(input: InputData, workflow_options: WorkflowOptions) -> AIComposerInput:
-    return AIComposerInput(input=[
-                input.intf.to_dict(),
-                input.spec.to_dict(),
-                input.system_doc.to_dict(),
-                {
-                    "type": "text",
-                    "text": get_reference_input(input_data=input, debug_prompt=workflow_options.debug_prompt_override)
-                }
-            ], vfs={"rules.spec": input.spec.string_contents}, **_get_empty_extra())
+    messages: list[str | dict] = [input.intf.to_dict()]
+    vfs: dict[str, str] = {}
+    for s in input.specs:
+        messages.append(s.file.to_dict())
+        vfs[s.vfs_path] = s.file.string_contents
+    messages.append(input.system_doc.to_dict())
+    messages.append({
+        "type": "text",
+        "text": get_reference_input(input_data=input, debug_prompt=workflow_options.debug_prompt_override),
+    })
+    return AIComposerInput(input=messages, vfs=vfs, **_get_empty_extra())
 
 @dataclass
 class InputChangeDesc:
@@ -108,10 +112,36 @@ class InputChangeDesc:
 
     vfs_note: Optional[str]
 
+
+@dataclass
+class SpecDelta:
+    """A registered spec's before/after pair for resume-prompt rendering."""
+    vfs_path: str
+    orig_text: str
+    updated_text: str
+
+
+def _resume_spec_srcs(
+    resume_art: ResumeArtifact, new_specs: dict[str, TextNativeFS]
+) -> list[tuple[str, TextUploadable]]:
+    """Resume-time source for each registered spec: the updated disk file if one
+    was supplied for that path, else the prior committed contents."""
+    out: list[tuple[str, TextUploadable]] = []
+    for path in resume_art.spec_vfs_paths:
+        updated = new_specs.get(path)
+        if updated is not None:
+            out.append((path, updated))
+        else:
+            prior = resume_art.spec_at(path)
+            assert prior is not None
+            out.append((path, prior))
+    return out
+
+
 def get_resume_prompt_common(
         art: ResumeArtifact,
         res: ResumeInput,
-        updated_spec: str,
+        spec_deltas: list[SpecDelta],
         other_changes: list[InputChangeDesc] | None = None
         ) -> list[str | dict]:
     changes = []
@@ -133,37 +163,60 @@ def get_resume_prompt_common(
         "resume_prompt.j2",
         commentary=art.commentary,
         spec_change_commentary=res.comments,
-        orig_spec=art.spec.contents,
-        new_spec=updated_spec,
+        spec_deltas=[
+            {"vfs_path": d.vfs_path, "orig": d.orig_text, "new": d.updated_text}
+            for d in spec_deltas
+        ],
         other_changes=changes
     )]
 
 def get_resume_id_input(input: ResumeIdData, resume_art: ResumeArtifact, workflow_options: WorkflowOptions) -> AIComposerInput:
+    vfs_materialize = resume_art.vfs.to_dict()
+    new_vfs = { k: v.decode("utf-8") for (k, v) in vfs_materialize.items() }
 
-    input_messages : list[str | dict] = get_resume_prompt_common(
+    spec_deltas: list[SpecDelta] = []
+    for vfs_path, new_file in input.new_specs.items():
+        new_text = new_file.string_contents
+        new_vfs[vfs_path] = new_text
+        prior = resume_art.spec_at(vfs_path)
+        spec_deltas.append(SpecDelta(
+            vfs_path=vfs_path,
+            orig_text=prior.contents if prior is not None else f"[new spec {vfs_path}]",
+            updated_text=new_text,
+        ))
+
+    input_messages = get_resume_prompt_common(
         art=resume_art,
         res=input,
-        updated_spec=input.new_spec.string_contents
+        spec_deltas=spec_deltas,
     )
     if workflow_options.debug_prompt_override is not None:
         input_messages.append(workflow_options.debug_prompt_override)
 
-    vfs_materialize = resume_art.vfs.to_dict()
-    new_vfs = { k: v.decode("utf-8") for (k, v) in vfs_materialize.items() }
-    new_vfs["rules.spec"] = input.new_spec.string_contents
     return AIComposerInput(
         input=input_messages,
         vfs=new_vfs,
         **_get_empty_extra()
     )
 
-def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflow_options: WorkflowOptions) -> tuple[AIComposerInput, TextNativeFS, TextNativeFS]:
+def get_resume_fs_input(
+    input: ResumeFSData,
+    resume_art: ResumeArtifact,
+    workflow_options: WorkflowOptions
+) -> tuple[AIComposerInput, TextNativeFS, list[tuple[str, TextUploadable]]]:
     path = pathlib.Path(input.file_path)
 
-    spec_p = path / "rules.spec"
-    if not spec_p.is_file():
-        raise RuntimeError("Specification file is apparently missing")
-    new_spec = spec_p.read_text()
+    spec_srcs: list[tuple[str, TextUploadable]] = []
+    spec_deltas: list[SpecDelta] = []
+    for vfs_path in resume_art.spec_vfs_paths:
+        spec_p = path / vfs_path
+        if not spec_p.is_file():
+            raise RuntimeError(f"Spec file missing on resume: expected {spec_p} to exist")
+        spec_srcs.append((vfs_path, TextNativeFS(spec_p)))
+        new_text = spec_p.read_text()
+        prior = resume_art.spec_at(vfs_path)
+        if prior is not None and new_text != prior.contents:
+            spec_deltas.append(SpecDelta(vfs_path=vfs_path, orig_text=prior.contents, updated_text=new_text))
 
     intf_p = path / resume_art.interface_path
     if not intf_p.is_file():
@@ -180,8 +233,8 @@ def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflo
     input_messages = get_resume_prompt_common(
         art=resume_art,
         res=input,
+        spec_deltas=spec_deltas,
         other_changes=changes,
-        updated_spec=new_spec
     )
     input_messages.append("In addition to the explicit changes mentioned above, the contents of the VFS may have been arbitrarily changed since your last work. " \
     "Some of these changes may cause the current implementation to no longer compile. Thus, analyze the current implementation and consider what changes are necessary to " \
@@ -190,7 +243,7 @@ def get_resume_fs_input(input: ResumeFSData, resume_art: ResumeArtifact, workflo
     if workflow_options.debug_prompt_override is not None:
         input_messages.append(workflow_options.debug_prompt_override)
 
-    return (AIComposerInput(input=input_messages, vfs={}, **_get_empty_extra()), TextNativeFS(intf_p), TextNativeFS(spec_p))
+    return (AIComposerInput(input=input_messages, vfs={}, **_get_empty_extra()), TextNativeFS(intf_p), spec_srcs)
 
 
 async def execute_ai_composer_workflow(
@@ -259,8 +312,12 @@ async def _run_codegen(
     # provider ``Document``s via the connection's FileUploader.
     system_doc_doc: Document
     interface_doc: TextDocument
-    spec_doc: TextDocument
+    # (vfs_path, document) per registered spec. On a fresh run these are the
+    # uploaded inputs directly; on resume the audit / disk handles are
+    # ``Uploadable`` and get rehydrated into ``Document``s via the uploader.
+    spec_docs: list[tuple[str, TextDocument]]
     resume_art : None | ResumeArtifact = None
+    
 
     match input:
         case InputData():
@@ -268,7 +325,7 @@ async def _run_codegen(
             flow_input = get_fresh_input(input, workflow_options)
             system_doc_doc = input.system_doc
             interface_doc = input.intf
-            spec_doc = input.spec
+            spec_docs = [(s.vfs_path, s.file) for s in input.specs]
 
         case ResumeIdData() | ResumeFSData():
             prompt_params = PromptParams(is_resume=True)
@@ -279,17 +336,21 @@ async def _run_codegen(
             )
             system_doc_doc = await conn.uploader.document_from(system_src)
             intf_src: TextUploadable
-            spec_src: TextUploadable
+            spec_srcs: list[tuple[str, TextUploadable]]
             match input:
                 case ResumeFSData():
-                    (flow_input, intf_src, spec_src) = get_resume_fs_input(input, resume_art, workflow_options)
+                    (flow_input, intf_src, spec_srcs) = get_resume_fs_input(input, resume_art, workflow_options)
                     fs_layer = input.file_path
                 case ResumeIdData():
                     intf_src = resume_art.intf_vfs_handle
-                    spec_src = input.new_spec
+                    spec_srcs = _resume_spec_srcs(resume_art, input.new_specs)
                     flow_input = get_resume_id_input(input, resume_art, workflow_options)
             interface_doc = conn.uploader.text_document_from(intf_src)
-            spec_doc = conn.uploader.text_document_from(spec_src)
+            spec_docs = [(p, conn.uploader.text_document_from(s)) for (p, s) in spec_srcs]
+
+    # One prover completion gate per registered spec (the reqs gate is appended
+    # below iff requirements were extracted).
+    # flow_input["required_validations"] = [ProverValidation(p) for (p, _) in spec_docs]
 
     req_mem_tool = conn.memory(get_memory_ns(mem_root, "natreq"))
 
@@ -301,7 +362,7 @@ async def _run_codegen(
             workflow_options,
             llm.builder_for(),
             system_doc_doc,
-            spec_doc,
+            [d for (_, d) in spec_docs],
             req_mem_tool,
             resume_art,
         )
@@ -325,8 +386,8 @@ async def _run_codegen(
     memory = conn.memory(get_memory_ns(mem_root, "composer"))
     extra_tools.append(memory)
 
-    research_tool, cvl_builder = _cvl_knowledge_setup(llm, rag_db, conn, workflow_options.recursion_limit)
-    extra_tools.append(research_tool)
+    cvl_knowledge = _cvl_knowledge_setup(llm, rag_db, conn, workflow_options.recursion_limit)
+    extra_tools.append(cvl_knowledge.research_tool)
 
     # VFS tooling: the mutable layer (its materializer is shared into the
     # AIComposerContext) plus an immutable view for the read-only sub-agents.
@@ -342,7 +403,7 @@ async def _run_codegen(
     )
 
     cex_remediation_tools = _remediation_tools(
-        cvl_builder,
+        cvl_knowledge.remediation_builder,
         conn,
         system_doc_doc,
         report_store,
@@ -354,7 +415,7 @@ async def _run_codegen(
     extra_tools.extend(cex_remediation_tools)
 
     cex_handler = AgenticCexHandler(
-        builder=cvl_builder,
+        builder=cvl_knowledge.analyzer_builder,
         report_store=report_store,
         recursion_limit=workflow_options.recursion_limit
     )
@@ -370,8 +431,7 @@ async def _run_codegen(
 
     await audit_store.register_run(
         thread_id=thread_id,
-        spec_vfs_path="rules.spec",
-        spec_file=spec_doc,
+        specs=spec_docs,
         interface_file=interface_doc,
         system_doc=system_doc_doc,
         vfs_init=materializer.iterate(flow_input),
@@ -412,9 +472,9 @@ async def _run_codegen(
     if workflow_options.checkpoint_id is not None:
         config["configurable"]["checkpoint_id"] = workflow_options.checkpoint_id
 
-    required_validations: list[ValidationType] = [prover]
+    required_validations: list[CodegenValidation] = [ProverValidation(s) for (s, _) in spec_docs]
     if reqs_list is not None:
-        required_validations.append(req_type)
+        required_validations.append(ReqsValidation())
 
     work_context = AIComposerContext(
         vfs_materializer=materializer, required_validations=required_validations
@@ -448,23 +508,37 @@ async def _run_codegen(
         return WorkflowCrash(resume_work_key=resume_key, error=exc)
 
 
+@dataclass(frozen=True)
+class _CVLKnowledge:
+    """The codegen workflow's CVL knowledge surfaces, split by tier: the
+    research sub-agent (handed to the codegen author), the manual-only
+    builder for the CEX analyzer sub-agents, and the full-tier builder
+    (manual + recipe retrieval + researcher) for the remediation pair."""
+    research_tool: BaseTool
+    analyzer_builder: Builder
+    remediation_builder: Builder
+
+
 def _cvl_knowledge_setup(
     llm: ModelProvider,
     rag_db: ComposerRAGDB,
     conn: IndexedConnections,
     recursion_limit: int,
-) -> tuple[BaseTool, Builder]:
-    """CVL knowledge tooling built on the standard connections. Returns the
-    research sub-agent (which uses cvl_research's own default run_to_completion
-    runner) and the rag-equipped builder the CEX sub-agents extend — with the
-    research tool already bound, since every consumer wants it. ``base_rag_tools``
-    is the CVL manual + KB search over the standard indexed store."""
-    base_rag_tools = tuple(cvl_manual_tools(rag_db)) + tuple(
-        make_kb_tools(conn.indexed_store, _KB_NS, read_only=True)
-    )
+) -> _CVLKnowledge:
+    """CVL knowledge tooling built on the standard connections. The research
+    sub-agent uses cvl_research's own default run_to_completion runner and
+    carries the manual trio + recipe retrieval (the CVL context documents ride
+    in its initial prompt)."""
+    manual_tools = tuple(cvl_manual_tools(rag_db))
+    recipe_tools = tuple(make_kb_tools())
     builder = (
         Builder()
-        .with_llm(llm.builder_for(), max_prompt_tokens=llm.max_prompt_tokens)
+        .with_llm(
+            llm.builder_for(), max_prompt_tokens=llm.max_prompt_tokens,
+            # The CVL context documents are stable for the whole run and shared
+            # across every remediation / research invocation — 1h TTL.
+            manager=lambda d: llm.provider.cache_marker(d, CacheLevel.LONG),
+        )
         .with_loader(load_jinja_template)
         .with_checkpointer(conn.checkpointer)
     )
@@ -476,9 +550,16 @@ def _cvl_knowledge_setup(
 
     research_doc = CVL_RESEARCH_BASE_DOC + " Do NOT use this for source code questions — use the VFS tools for that."
     research_tool = cvl_research_tool(
-        _CVLResearchEnv(builder, base_rag_tools), research_doc, recursion_limit
+        _CVLResearchEnv(builder, manual_tools + recipe_tools),
+        research_doc, recursion_limit
     )
-    return research_tool, builder.with_tools([*base_rag_tools, research_tool])
+    return _CVLKnowledge(
+        research_tool=research_tool,
+        analyzer_builder=builder.with_tools(list(manual_tools)),
+        remediation_builder=builder.with_tools(
+            [*manual_tools, *recipe_tools, research_tool]
+        ),
+    )
 
 
 def _remediation_tools(
@@ -492,7 +573,7 @@ def _remediation_tools(
     recursion_limit: int,
 ) -> list[BaseTool]:
     """The CEX remediation sub-agent (+ its summary critic) and the agentic CEX
-    handler. ``cvl_builder`` already carries the CVL manual / KB / research
+    handler. ``cvl_builder`` already carries the CVL manual / recipe / research
     tools. Returns the author-facing tools (the remediator + apply-proposal) to
     add to the codegen toolset, plus the handler to inject into the prover via
     ProverDeps. ``recursion_limit`` is threaded into every sub-agent."""
@@ -525,7 +606,7 @@ def _codegen_author_tools(
 ) -> list[BaseTool]:
     """The codegen author's tool set (formerly ``get_cryptostate_builder``'s
     crypto_tools). The prover tool is bound with its per-run deps here;
-    cvl_manual_search takes the rag_db instance directly."""
+    the manual tools take the rag_db instance directly."""
     return [
         CertoraProverTool.bind(
             ProverDeps(cex_handler=cex_handler, prover_opts=prover_opts)
@@ -533,7 +614,7 @@ def _codegen_author_tools(
         propose_spec_change,
         human_in_the_loop,
         code_result,
-        cvl_manual_search(rag_db),
+        *cvl_manual_tools(rag_db),
         *vfs_tooling,
         ReadWorkingSpec.as_tool("read_working_spec"),
         WriteWorkingSpec.as_tool("write_working_spec"),

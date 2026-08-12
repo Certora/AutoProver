@@ -22,7 +22,7 @@ from composer.input.types import RAGDBOptions
 from composer.rag.db import ComposerRAGDB, rag_context
 from composer.rag.models import get_model
 from composer.workflow.services import checkpointer_context
-from composer.tools.search import cvl_manual_search
+from composer.tools.search import cvl_manual_tools
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import IOHandler
@@ -120,7 +120,7 @@ async def get_requirements(
     options: RAGDBOptions,
     llm: BaseChatModel,
     sys_doc: Document,
-    spec_file: TextDocument,
+    specs: list[TextDocument],
     mem_tool: BaseTool,
     resume_artifact: ResumeArtifact | None,
 ) -> ExtractionResult:
@@ -128,7 +128,7 @@ async def get_requirements(
         mem_tool,
         results_tool,
         human_in_the_loop,
-        cvl_manual_search(ExtractionContext),
+        *cvl_manual_tools(ExtractionContext),
         *get_rough_draft_tools(ExtractionState),
     ]
     async with (
@@ -155,22 +155,24 @@ async def get_requirements(
         input_text : list[str | dict] = [
             "The system document is as follows:",
             sys_text if sys_text is not None else sys_doc.to_dict(),
-            "The spec file is as follows:",
-            spec_file.string_contents
+            "The spec file(s) are as follows:",
         ]
+        for spec in specs:
+            input_text.append(spec.string_contents)
 
         if resume_artifact is not None:
             input_text.append("""
-    You have previously performed this analysis on a prior version of the spec file. You have access to the
+    You have previously performed this analysis on a prior version of the spec file(s). You have access to the
     memories you generated during that prior analysis. Be sure to consult those memories to inform your analysis
-    of the system document. In addition, be sure to analyze the difference between the two specification files,
-    being sure to determine which natural language requirements are no longer needed (as they are now covered by the
-    spec).
+    of the system document. In addition, be sure to analyze the difference between the prior and current
+    specifications, being sure to determine which natural language requirements are no longer needed (as they are
+    now covered by the spec).
     """)
-            input_text.append("The OLD spec file is as follows:")
-            input_text.append(
-                resume_artifact.spec.contents
-            )
+            input_text.append("The OLD spec file(s) are as follows:")
+            for path in resume_artifact.spec_vfs_paths:
+                prior = resume_artifact.spec_at(path)
+                if prior is not None:
+                    input_text.append(prior.contents)
 
         graph_input = ExtractionInput(input=input_text, memory=None, did_read=False)
 
