@@ -21,7 +21,7 @@ use autoprover_sdk::sandbox::Workspace;
 use autoprover_sdk::Backend;
 use autoprover_solana::{SolanaPrep, SolanaPrepFacts, SolanaSourceUnit};
 
-use crate::build_log::{build_errors, is_build_error};
+use crate::build_log::{build_errors, is_build_error, run_failure};
 use crate::campaign::Campaign;
 use crate::coverage;
 use crate::harness::{crate_dep_usable, HarnessSpec};
@@ -230,8 +230,10 @@ impl Backend for CrucibleApp {
                     // Shared build; re-author the whole spec (docs/rust-applications.md).
                     ValidateOutcome::BuildFailed { errors: build_errors(&out) }
                 } else {
-                    // Non-zero exit with no build markers and no finding — capture the tail.
-                    target.all(Outcome::Error, Some(build_errors(&out)))
+                    // Non-zero exit with no build markers and no finding: the campaign built and
+                    // ran, so what the verdict owes is why it *stopped* — which the build log's
+                    // tail cannot say (see `run_failure`).
+                    target.all(Outcome::Error, Some(run_failure(&out)))
                 };
                 // What the campaign spent, on every row it answered for — a verdict is only worth
                 // what the run behind it cost, and the report has nowhere else to say so.

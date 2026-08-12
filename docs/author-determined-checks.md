@@ -116,10 +116,11 @@ where the truth lives: a verdict now names the section file its assertion was wr
 ## Follow-ups
 
 - **Crucible's corroboration is the open piece.** Its campaign reports crashes, not a list of what
-  ran, so today it cannot distinguish "held" from "never exercised". The fix is in the crucible repo:
-  `fuzz_assert!` and its siblings record each *evaluation*, not only each violation, and the campaign
-  reports the tally. Until then the interim signal is the LCOV it already collects via `--coverage`
-  (which needs a tag→line map, so it inherits some of the parse problem).
+  ran, so today it cannot distinguish "held" from "never exercised" — a clean run marks `GOOD` a
+  check whose assertion was never reached. The problem, its examples and the candidate fixes are in
+  [crucible-unexercised-checks.md](crucible-unexercised-checks.md); the shortest of them needs the
+  crucible repo, where `fuzz_assert!` would record each *evaluation* rather than only each
+  violation.
 - **`expect_check_failure` accepts any non-`GOOD` verdict.** It exists for "the failure is the
   finding" — a real counterexample. Letting it waive an `UNKNOWN` lets "we never tested this" be
   marked away with a sentence. Restricting the mark to `BAD` is probably right.
