@@ -9,6 +9,7 @@ which is validated against the Solidity compiler before acceptance.
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Callable, NotRequired, override, Iterable
@@ -104,15 +105,24 @@ async def _compile_stub(
     the tmpdir so relative ``import`` statements in the stub resolve the
     same way they will in the real project tree. Returns ``None`` on
     success, an error string on failure.
+
+    Compiling is necessary but not sufficient: an ``abstract contract`` — or
+    one that leaves an inherited function unimplemented, which makes it
+    implicitly abstract — compiles with exit status 0 and emits no bytecode.
+    Certora's scene assembly then rejects the verification unit ("Contract X
+    has no bytecode"), failing every subsequent typecheck with nothing in the
+    spec able to fix it. So ask solc for the bytecode and require it to be
+    non-empty, rather than trusting the exit status alone.
     """
     solc_name = f"solc{solc_version}"
+    identifier = pathlib.Path(stub_path).stem
     async with assembler.project_directory() as tmpdir:
         stub_abs = tmpdir / stub_path
         stub_abs.parent.mkdir(parents=True, exist_ok=True)
         stub_abs.write_text(stub)
         try:
             proc = await asyncio.create_subprocess_exec(
-                solc_name, stub_path,
+                solc_name, "--combined-json", "bin", stub_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=tmpdir,
@@ -123,6 +133,18 @@ async def _compile_stub(
             return f"Solidity compiler {solc_name} not found"
         if proc.returncode != 0:
             return f"stdout:\n{stdout.decode()}\nstderr:\n{stderr.decode()}"
+        try:
+            compiled = json.loads(stdout.decode())["contracts"]
+        except (json.JSONDecodeError, KeyError) as e:
+            return f"Could not read the Solidity compiler's output ({e})"
+        if not compiled.get(f"{stub_path}:{identifier}", {}).get("bin"):
+            return (
+                f"{identifier} compiles but produces no bytecode, so it cannot "
+                f"be verified. A contract yields no bytecode when it is declared "
+                f"`abstract`, or when it inherits a function it does not "
+                f"implement. Declare it as a plain `contract` and give every "
+                f"member of the interface a body."
+            )
         return None
 
 
