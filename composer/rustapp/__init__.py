@@ -14,7 +14,7 @@ This package is the Python side of the seam described in
 
     descriptor() -> str                         # the AppDescriptor (declarative spine)
     validate_preconditions(args_json) -> str|None
-    checks(input_json) -> str                   # the checks this input formalizes
+    target_for(input_json, check) -> str|None   # which invocation a declared check runs under
     author_prompt(input_json, failure_json|None) -> str
     judge(input_json) -> str|None               # None ⇒ no judge for this input
     judge_instruction(input_json, spec) -> str  # one review round's instruction

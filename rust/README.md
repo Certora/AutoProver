@@ -41,7 +41,7 @@ A wheel exports exactly (all synchronous, JSON strings across the boundary):
 ```text
 descriptor() -> str                                        # the AppDescriptor
 validate_preconditions(args_json) -> str|None
-checks(input_json) -> str                                  # the checks this input formalizes
+target_for(input_json, check) -> str|None                  # the invocation a declared check runs under
 author_prompt(input_json) -> str                           # one authoring session's prompt
 check_syntax(input_json, spec) -> str|None                 # None ⇒ the spec may be written
 judge(input_json) -> str|None                              # None ⇒ no judge for this input
@@ -62,8 +62,8 @@ child process runs, so the host calls them with `asyncio.to_thread`.
    (`features = ["extension-module", "abi3-py312"]`). See
    [example-app/Cargo.toml](example-app/Cargo.toml).
 
-2. Implement `Backend`. Required: `descriptor` + `checks` + `author_prompt` +
-   `compile` + `validate`. Defaulted: `validate_preconditions`, `check_syntax`,
+2. Implement `Backend`. Required: `descriptor` + `author_prompt` + `compile` +
+   `validate`. Defaulted: `target_for`, `validate_preconditions`, `check_syntax`,
    `judge`, `judge_instruction`, `workspace_prep`, `sandbox_grants`, `finalize`. See
    [example-app/src/lib.rs](example-app/src/lib.rs).
 
