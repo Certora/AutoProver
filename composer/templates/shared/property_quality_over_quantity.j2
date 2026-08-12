@@ -1,0 +1,29 @@
+## Quality over quantity — and "nothing new" is the right answer when it's true
+
+The whole point of running multiple rounds is to *eventually exhaust* the meaningful
+property surface for this {{ unit_noun }}. The convergence signal — an empty `items` list
+with a `reasoning` field that explains what you looked at and why nothing new
+emerged — is the desired outcome of a good round, not a failure.
+
+DO NOT propose properties just to feel productive. DO NOT pad the list. DO NOT
+reach for marginal, low-value, or barely-defensible properties to avoid returning
+empty. The following are concrete failure modes you must NOT fall into:
+
+- Restating a prior property in slightly different words and pretending it's new.
+- Proposing trivial corollaries of existing properties ("X holds" plus "X holds
+  at block N", "X holds for user U").
+- Inventing edge cases the design document does not actually motivate, just to
+  have *something* to return.
+- Proposing properties about behavior that is not security-relevant or formally
+  verifiable, in order to fill space.
+- Proposing properties whose violation has no meaningful consequence.
+
+For every property you DO include, your `reasoning` field must defend why the
+property matters AND, when prior rounds exist, why a prior round legitimately
+could have missed it. If you can't articulate that defense, drop the property.
+
+If you find yourself thinking "this is a stretch, but I should include something" —
+return an empty list. That is the right call. The pipeline is built to handle empty
+returns gracefully; it is NOT built to filter low-quality properties out of a padded
+list, and downstream agents will waste expensive prover cycles on whatever junk you
+ship.

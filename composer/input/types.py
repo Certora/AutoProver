@@ -72,7 +72,6 @@ class LanggraphOptions(Protocol):
         default=DEFAULT_RECURSION_LIMIT
     )]
 
-
 class WorkflowOptions(RAGDBOptions, LanggraphOptions, Protocol):
     prover_capture_output: bool
     prover_keep_folders: bool
@@ -130,15 +129,15 @@ class _ModelOptionsCommon(Protocol):
 
 class ModelOptions(_ModelOptionsCommon, Protocol):
     model: Annotated[str, Arg(
-        help="Model to use for code generation (default: {default})", default="claude-opus-4-6"
+        help="Model to use for code generation (default: {default})", default="claude-opus-5"
         )]
 
 class ExtendedModelOptions(_ModelOptionsCommon, Protocol):
     heavy_model: Annotated[str, Arg(
-        help="Model to use for complex tasks (default: {default})", default="claude-opus-4-6"
+        help="Model to use for complex tasks (default: {default})", default="claude-opus-5"
     )]
     lite_model: Annotated[str, Arg(
-        help="Model to use for simpler tasks(default: {default})", default="claude-sonnet-4-6"
+        help="Model to use for simpler tasks(default: {default})", default="claude-sonnet-5"
     )]
 
 class UploadPaths(Protocol):
@@ -172,14 +171,30 @@ class ResumeArgs(WorkflowOptions, ModelOptions, Protocol):
 
 
 @dataclass
+class SpecInput:
+    """A single spec file paired with the VFS path at which it should be
+    materialized inside the workflow's virtual filesystem."""
+    file: TextDocument
+    vfs_path: str
+
+
+@dataclass
 class InputData:
+    """Normalized codegen workflow input for a single contract task.
+
+    Carries one or more specs (all describing the same contract), the
+    contract's interface, and the surrounding system document. Specs and
+    interface are guaranteed text; system_doc may be PDF or text. Each spec's
+    VFS path is resolved at load time so downstream code (executor, prover
+    tool, audit) can key off a stable location.
     """
-    Represents all of the file inputs provided by the user after loading.
-    Spec and interface are guaranteed text; system_doc may be PDF or text.
-    """
-    spec: TextDocument
+    specs: list[SpecInput]
     system_doc: Document
     intf: TextDocument
+
+    @property
+    def spec_vfs_paths(self) -> list[str]:
+        return [s.vfs_path for s in self.specs]
 
 
 class ResumeInput(Protocol):
@@ -198,7 +213,10 @@ class ResumeInput(Protocol):
 @dataclass
 class ResumeIdData:
     thread_id: str
-    new_spec: TextNativeFS
+    # VFS path → new spec content. Only paths present here are updated on
+    # resume; other specs keep their prior state. Single-spec CLI resumes
+    # carry one entry.
+    new_specs: dict[str, TextNativeFS]
     comments: Optional[str]
     new_system: Optional[NativeFS]
 

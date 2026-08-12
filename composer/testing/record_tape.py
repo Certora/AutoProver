@@ -71,6 +71,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from composer.diagnostics.timing import get_current_task_id
+from composer.llm.types import CacheLevel
 
 # task_id used for LLM calls that fire outside any run_task scope. HarnessFakeLLM
 # raises on such calls, so anything landing here needs manual attention before
@@ -208,7 +209,7 @@ def install_recorder(name: str, out_path: str | None = None, *, no_thinking: boo
     def _wrap_provider(mp: Any) -> Any:
         orig_builder_for = mp.builder_for
 
-        def builder_for(*, cache_level: Any = None, disable_thinking: bool = False) -> Any:
+        def builder_for(*, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False) -> Any:
             llm = orig_builder_for(cache_level=cache_level, disable_thinking=disable_thinking)
             if no_thinking:
                 llm = llm.model_copy(update={"thinking": None})

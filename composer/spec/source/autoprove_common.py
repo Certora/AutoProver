@@ -11,7 +11,6 @@ from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 from composer.diagnostics.timing import RunSummary
 from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
 from composer.input.parsing import add_protocol_args
-from composer.kb.knowledge_base import DEFAULT_KB_NS
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.pipeline.core import CorePipelineResult
 
@@ -19,17 +18,23 @@ from composer.spec.context import (
     SourceFields
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
+from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
+from composer.spec.source.author import SourceEditing
+from composer.spec.source.live_explorer import setup_live_edits
+from composer.spec.source.munge.edit_store import EditStore
+from composer.spec.source.munge.edit_oracle import mk_oracle
 from composer.spec.source.artifacts import ProverArtifactStore
-from composer.spec.agent_index import agent_index_config_from_env
+from composer.spec.agent_index import AgentIndex, AgentIndexConfig, agent_index_config_from_env
 from composer.core.user import get_uid
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.autoprove_app import AutoProvePhase
 from composer.io.thread_logging import RunDataLogger
 
-from composer.spec.util import FS_FORBIDDEN_READ
+from composer.spec.util import fs_forbidden_read
 from composer.io.multi_job import HandlerFactory
 
 _logger = logging.getLogger(__name__)
@@ -50,6 +55,8 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     threat_model: str
     recursion_limit: int
     max_bug_rounds: int
+    budget: str | None
+    time_budget: float | None
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +83,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--interactive", action="store_true", help="Interactively refine the security properties after extraction")
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'thread' model (text or pdf) with which to seed the property extraction process")
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
+    parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
 
     args = cast(AutoProveArgs, parser.parse_args())
     async with autoprove_executor(args, summary) as runner:
@@ -115,7 +124,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
 
     async def callback(
         handler: HandlerFactory[AutoProvePhase, None]
-    ) -> CorePipelineResult[GeneratedCVL]:    
+    ) -> CorePipelineResult[GeneratedCVL]:
         async with (
             cli_pipeline(
                 args=args, design_doc_phase=design_phase,
@@ -134,17 +143,42 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             source_env = build_source_env(
                 models=staged.llm_models,
                 db=rag_db,
-                forbidden_read=FS_FORBIDDEN_READ,
-                kb_ns=DEFAULT_KB_NS,
+                forbidden_read=fs_forbidden_read,
                 root=staged.source.project_root,
                 store=staged.conns.indexed_store,
                 source_question_ns=source_data_ns,
                 recursion_limit=args.recursion_limit,
                 cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
             )
+            # Source-editing kit: the edit snapshot store, the live (vfs-aware)
+            # tool suite with its versioned explorer, and the migration oracle
+            # that caveats cached explorer findings with the files edited since
+            # they were recorded. The base index shares the frozen explorer's
+            # namespace, so pre-edit (V0) findings stay visible to the live
+            # explorer.
+            edit_store = EditStore(
+                staged.conns.store, user_ns("edit_snapshots", staged.root_key)
+            )
+            editing = SourceEditing(
+                live=setup_live_edits(
+                    builder=staged.llm_models.builder_lite(),
+                    sc=staged.source,
+                    base_store=AgentIndex(
+                        store=staged.conns.indexed_store,
+                        config=AgentIndexConfig(base_layer=source_data_ns),
+                    ),
+                    store=staged.conns.indexed_store,
+                    source_key=staged.root_key,
+                    oracle=mk_oracle(edit_store, staged.source),
+                    recursion_limit=args.recursion_limit,
+                ),
+                store=edit_store,
+            )
             backend = ProverBackend(
                 ProverArtifactStore(staged.source.project_root, staged.source.contract_name),
-                make_prover_options(cloud=args.cloud)
+                make_prover_options(cloud=args.cloud),
+                editing,
+                CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
-            return await cont(source_env, backend)
+            return await cont(source_env, backend, EVM)
     yield callback

@@ -100,10 +100,12 @@ class FoundryTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
         # The design-doc finder reports its choice as the discovery phase completes.
         evt = cast(DesignDocChosenEvent, payload)
         if evt["type"] == "design_doc_chosen":
-            await self.post_notice(
-                f"{evt['source']} design doc: {evt['path']}",
-                evt["reason"] or None,
+            title = (
+                "no design doc — proceeding source-only"
+                if evt["source"] == "none found"
+                else f"{evt['source']} design doc: {evt['path']}"
             )
+            await self.post_notice(title, evt["reason"] or None)
 
 
 # ---------------------------------------------------------------------------

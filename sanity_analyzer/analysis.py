@@ -1,4 +1,4 @@
-from typing import NotRequired, assert_never
+from typing import NotRequired
 import pathlib
 import uuid
 
@@ -13,14 +13,13 @@ from composer.rag.db import SANITY_DEFAULT_CONNECTION, get_rag_db
 from composer.rag.models import get_model
 from composer.tools.search import cvl_manual_search
 from composer.templates.loader import load_jinja_template
-from composer.workflow.services import create_llm, get_memory
-from composer.workflow.provider import provider_for
+from composer.workflow.services import create_llm, get_async_memory
+from composer.llm.registry import get_provider_for
 
 from composer.tools.thinking import get_rough_draft_tools, RoughDraftState
 
-from graphcore.tools.memory import anthropic_memory_tool, openai_memory_tool
 from graphcore.tools.vfs import fs_tools
-from graphcore.graph import build_workflow, FlowInput, build_async_workflow
+from graphcore.graph import build_workflow, FlowInput
 from graphcore.tools.results import result_tool_generator
 
 from sanity_analyzer.types import SanityAnalysisArgs
@@ -249,18 +248,12 @@ async def async_analyze(args: SanityAnalysisArgs) -> SanityAnalysisResult | None
     if args.thread_id is None:
         print(f"Chose thread id: {tid}")
 
-    provider = provider_for(args.model)
+    provider = get_provider_for(model_name=args.model, options=args)
     rag_db = await get_rag_db(args.rag_db, model=get_model())
     tools = [cvl_manual_search(rag_db), sanity_analysis_output_tool, *get_rough_draft_tools(SanityState), *v_tools]
     if args.memory_tool:
-        match provider:
-            case "anthropic":
-                mem_factory = anthropic_memory_tool
-            case "openai":
-                mem_factory = openai_memory_tool
-            case _:
-                assert_never(provider)
-        tools.append(mem_factory(get_memory(tid, "sanity")))
+        mem_factory = provider.provider.select_memory_tool
+        tools.append(mem_factory(await get_async_memory(tid)))
 
     llm = create_llm(args)
 

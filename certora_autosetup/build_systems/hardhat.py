@@ -229,6 +229,21 @@ class HardhatManager(BuildSystemManager):
                 )
             return str(path_obj)
 
+    @staticmethod
+    def _describe_solidity_version(solidity: Any) -> str:
+        """Best-effort human-readable version from a resolved `solidity` block (for logging)."""
+        if isinstance(solidity, str):
+            return solidity
+        if isinstance(solidity, dict):
+            compilers = solidity.get("compilers")
+            if isinstance(compilers, list) and compilers:
+                versions = {str(c["version"]) for c in compilers if isinstance(c, dict) and c.get("version")}
+                if versions:
+                    return ", ".join(sorted(versions))
+            if solidity.get("version"):
+                return str(solidity["version"])
+        return "unknown"
+
     def _extract_config_from_json(self, config_data: Dict[str, Any], config_type: str) -> HardhatConfig:
         """
         Extract HardhatConfig from Hardhat's JSON config output.
@@ -243,12 +258,27 @@ class HardhatManager(BuildSystemManager):
         # Extract solidity settings
         solidity = config_data.get("solidity", {})
 
+        # When the user config has no `solidity` entry, the resolved config
+        # carries hardhat's own built-in default compiler (0.7.3) — a statement
+        # about hardhat, not about the project (e.g. brownie-generated stub
+        # configs). Ignore it: solc_version=None lets the compilation phase
+        # fall back to DEFAULT_SOLC_VERSION + per-contract pragma resolution.
+        if config_data.get("solidityImplicitDefault"):
+            self.log(
+                "Hardhat config has no `solidity` entry — ignoring hardhat's "
+                f"built-in default compiler ({self._describe_solidity_version(solidity)}); "
+                "solc will be resolved from source pragmas",
+                "WARNING",
+            )
+            solidity = {}
+
         # Solidity can be a string (version) or object (settings)
         if isinstance(solidity, str):
             solc_version = solidity
             optimizer = False
             optimizer_runs = 200
             via_ir = False
+            evm_version = None
         elif isinstance(solidity, dict):
             # Hardhat config structure: {"compilers": [{"version": "0.8.28", "settings": {...}}], ...}
             # Or simple format: {"version": "0.8.28", "settings": {...}}
@@ -280,11 +310,13 @@ class HardhatManager(BuildSystemManager):
             optimizer = optimizer_settings.get("enabled", False)
             optimizer_runs = optimizer_settings.get("runs", 200)
             via_ir = settings.get("viaIR", False)
+            evm_version = settings.get("evmVersion")
         else:
             solc_version = None
             optimizer = False
             optimizer_runs = 200
             via_ir = False
+            evm_version = None
 
         # Extract and process paths
         paths = config_data.get("paths", {})
@@ -311,6 +343,7 @@ class HardhatManager(BuildSystemManager):
             optimizer=optimizer,
             optimizer_runs=optimizer_runs,
             via_ir=via_ir,
+            evm_version=evm_version,
             src=src,
             artifacts=artifacts,
             cache=cache,

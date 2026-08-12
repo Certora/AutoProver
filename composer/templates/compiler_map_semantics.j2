@@ -1,0 +1,8 @@
+The prover configuration may carry per-file compiler maps (`solc_map`, `compiler_map`,
+`solc_optimize_map`, `solc_via_ir_map`, `solc_evm_version_map`). These are all-or-nothing: when a
+map appears in the configuration, *every* input file must be matched by it — an unmatched file is a
+hard error — so a file you add must come with the corresponding explicit compiler setting, unless
+an existing map entry already matches it. Conversely, when a map does *not* appear in the
+configuration, never declare a setting for it: the global settings already govern every file, and
+a map introduced for a single new file would instantly unmatch every other input. Rule of thumb:
+supply exactly the settings the configuration's maps demand — no more, no fewer.

@@ -1,22 +1,41 @@
-from typing import NotRequired, Any
+from typing import NotRequired, Any, Callable, TypedDict
 
 from graphcore.graph import MessagesState, FlowInput
 
 
 from composer.spec.context import (
-    WorkflowContext, SystemDoc
+    WorkflowContext, SystemDoc, SourceCode
 )
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
-from composer.spec.system_model import BaseApplication, ExplicitContract, ExternalActor, ExternalDependency, SolidityIdentifier
-from composer.spec.service_host import ServiceHost
+from composer.spec.system_model import BaseApplication, ExplicitContract, ExternalActor, ExternalDependency
+from composer.spec.types import SourceIdentifier
+from composer.spec.service_host import ServiceHost, Sort
 from composer.spec.util import slugify_filename
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
+from composer.diagnostics.budget import budget_monitor
 
 DESCRIPTION = "Component analysis"
 
-def _validate_connectivity(
-    app: BaseApplication, expected_main_id: SolidityIdentifier | None
+
+class AnalysisPromptParams(TypedDict):
+    """Kwargs shared by the analysis agent's system and initial prompt templates."""
+    sort: Sort
+    has_doc: bool
+
+
+#: The EVM/Solidity analysis prompts.
+ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_system.j2")
+ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("application_analysis_prompt.j2")
+
+def validate_solidity_connectivity(
+    app: BaseApplication, expected_main_id: SourceIdentifier | None
 ) -> str | None:
+    """Connectivity/shape validation for the Solidity model *family*: typed over
+    ``BaseApplication`` because it checks only the contract/actor/interaction graph that
+    ``Application``, ``SourceApplication``, ``HarnessedApplication``, and
+    ``FromSourceApplication`` all share. Both callers name it directly; neither can use the
+    other's ``Ecosystem.validate_analysis``, which is narrowed to one ``system_model``."""
     errors: list[str] = []
     known_components: dict[str, set[str]] = {}
     known_external: set[str] = set()
@@ -51,7 +70,7 @@ def _validate_connectivity(
             if c.name in known_external:
                 errors.append(f"Duplicate external component name: {c.name}")
             known_external.add(c.name)
-    
+
     if expected_main_id is not None and expected_main_id not in known_solidity_ids:
         errors.append(f"Expected an explicit contract instance with solidity identifier: {expected_main_id}")
 
@@ -91,14 +110,29 @@ def _validate_connectivity(
 async def run_component_analysis[T: BaseApplication](
     ty: type[T],
     child_ctxt: WorkflowContext[T],
-    input: SystemDoc,
+    input: SystemDoc | SourceCode | None,
     env: ServiceHost,
     extra_input: list[str | dict],
-    expected_main_id: SolidityIdentifier | None = None,
+    expected_main_id: SourceIdentifier | None = None,
+    *,
+    system_template: TypedTemplate[AnalysisPromptParams],
+    initial_template: TypedTemplate[AnalysisPromptParams],
+    validate: Callable[[T, SourceIdentifier | None], str | None],
 ) -> T | None:
-    """Analyze application components from a system doc and optionally source code."""
+    """Analyze application components from a system doc and optionally source code.
+
+    ``input`` may be a bare ``SystemDoc`` (natspec mode), a ``SourceCode`` (source
+    mode — whose ``content`` may be ``None`` for a source-only run), or ``None``.
+    ``has_doc`` below reflects whether a design document is actually present, not
+    merely whether an ``input`` object was passed, so a source-only run renders the
+    no-doc prompt branch and never dereferences a missing ``content``.
+    """
     if (cached := await child_ctxt.cache_get(ty)) is not None:
         return cached
+
+    has_doc = input is not None and input.content is not None
+    # greenfield has no source tools, so a design doc is mandatory there.
+    assert has_doc or env.sort != "greenfield"
 
     memory = child_ctxt.get_memory_tool()
 
@@ -110,32 +144,37 @@ async def run_component_analysis[T: BaseApplication](
     })
 
     def _validation_wrapper(
-        _: Any, app: BaseApplication
+        _: Any, app: T
     ) -> str | None:
-        return _validate_connectivity(app, expected_main_id)
+        return validate(app, expected_main_id)
 
+    prompt_params: AnalysisPromptParams = {"sort": env.sort, "has_doc": has_doc}
     b = bind_standard(
         builder=env.builder_lite(),
         state_type=AnalysisState,
         validator=_validation_wrapper
     ).with_input(
         AnalysisInput
-    ).with_sys_prompt_template(
-        "application_analysis_system.j2",
-        sort=env.sort,
+    ).inject(
+        lambda g: system_template.bind(prompt_params).render_to(g.with_sys_prompt_template)
     ).with_tools(
         [memory, *get_rough_draft_tools(AnalysisState), *env.analysis_tools]
-    ).with_initial_prompt_template(
-        "application_analysis_prompt.j2",
-        sort=env.sort,
-    )
+    ).inject(
+        lambda g: initial_template.bind(prompt_params).render_to(g.with_initial_prompt_template)
+    ).with_monitor(budget_monitor())
+
 
     graph = b.compile_async()
-    inputs : list[str | dict] = [
-        "The system document is as follows",
-        input.content.to_dict(),
-        *extra_input
-    ]
+    inputs : list[str | dict] = []
+    if has_doc:
+        assert input is not None
+        doc = input.content
+        assert doc is not None
+        inputs.extend([
+            "The system document is as follows",
+            doc.to_dict()
+        ])
+    inputs.extend(extra_input)
 
     flow_input = AnalysisInput(input=inputs, did_read=False, memory=None)
 

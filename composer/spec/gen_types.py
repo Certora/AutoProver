@@ -1,7 +1,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Literal, Mapping, Any, Protocol
+from typing import Literal, Mapping, Any, Protocol, final, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -98,7 +98,24 @@ class CVLResource(BaseModel):
     description: str = Field(description="A description of this resource")
     sort: Literal["import"]
 
+class ITypedTemplate[T: Mapping[str, Any]](Protocol):
+    """
+    Any type that supports binding parameters to yield a TemplateInstantiation.
+    Implemented by TypedTemplate and the intermediate object yielded by PartialTemplate.bind
+    """
+    def bind(self, params: T) -> "TemplateInstantiation":
+        ...
+
+@final
 class TypedTemplate[T: Mapping[str, Any]]:
+    """
+    A template with the expected parameters it uses described by a TypedDict
+    of type `T` (`TypedDict` is not a valid type bound in python, we get by with `Mapping`).
+
+    `T` is a phantom type parameter, and there is (obviously) no mechanism to ensure `T`
+    accurate describes the parameters used by the parameter (see `test_fuzzed_templates` for a mitigation
+    mechanism.)
+    """
     def __init__(self, name: str):
         self._wrapped = name
 
@@ -112,9 +129,49 @@ class TemplateRenderer[T](Protocol):
     def __call__(self, template: str, /, **kwargs) -> T:
         ...
 
+@final
+@dataclass
+class _StagedTemplate[T: Mapping[str, Any]]:
+    _wrapped: str
+    _staged_params: dict
+
+    def __str__(self) -> str:
+        return self._wrapped
+
+    def bind(self, params: T) -> "TemplateInstantiation":
+        return TemplateInstantiation(
+            template=self,
+            args = {
+                **self._staged_params,
+                **params
+            }
+        )
+
+@dataclass
+class PartialTemplate[T: Mapping[str, Any], U: Mapping[str, Any]]:
+    """
+    A template whose parameters are injected in two places. Part of the parameters (`T`) is bound
+    first, and then at some later point the rest of the parameters (`U`) are bound. Use to construct
+    typed template when no actor has the "full picture".
+
+    Like TypedTemplate, `T` and `U` are both phantom types, and it is statically impossible to verify
+    these types, together, describe the parameters actually used by the named template. See `test_fuzzed_templates`
+    for our defense strategy.
+    """
+    def __init__(self, name: str):
+        self._wrapped = name
+
+    def __str__(self) -> str:
+        return self._wrapped
+
+    def bind(self, params: T) -> ITypedTemplate[U]:
+        return _StagedTemplate(self._wrapped, { **params })
+
+type _TemplateName = TypedTemplate | _StagedTemplate
+
 @dataclass
 class TemplateInstantiation:
-    template: TypedTemplate
+    template: _TemplateName
     args: dict
 
     @staticmethod
@@ -132,20 +189,4 @@ class TemplateInstantiation:
         return cb(
             str(self.template),
             **self.args
-        )
-
-    def depends[X: Mapping[str, Any]](self, other: type[X]) -> "InjectedTemplate[X]":
-        return InjectedTemplate(self)
-
-@dataclass
-class InjectedTemplate[X: Mapping[str, Any]]:
-    wrapped: TemplateInstantiation
-
-    def inject(self, injected: X) -> TemplateInstantiation:
-        return TemplateInstantiation(
-            TypedTemplate(str(self.wrapped.template)),
-            {
-                **self.wrapped.args,
-                **injected
-            }
         )

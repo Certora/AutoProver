@@ -1,7 +1,6 @@
 from composer.core.state import AIComposerState
 from composer.human.types import RequirementRelaxationType
 from graphcore.tools.human import human_interaction_tool
-from composer.ui.tool_display import tool_display
 
 def _maybe_relax(s: AIComposerState, q: RequirementRelaxationType, resp: str) -> dict:
     if resp.startswith("ACCEPTED"):

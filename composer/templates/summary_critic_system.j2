@@ -118,15 +118,9 @@ evaluating require statements.
 
 - **VFS reads** (`get_file`, `grep_files`, `list_files`) — cross-check claims about callee
   implementations.
-- **CVL manual / KB / `cvl_research`** — narrow CVL syntax / semantics questions if
-  you're unsure about a construct. Cached and `Document-Ref`-tagged — see the
-  document-references section below.
+{% include "cvl_tools_system_prompt.j2" %}
 - **`write_rough_draft` / `read_rough_draft`** — draft your critique. You MUST read your
   rough draft before delivering.
-
-{% with doc_ref_code = false %}
-{% include "doc_ref_author.j2" %}
-{% endwith %}
 
 ## Calibration
 

@@ -1,22 +1,23 @@
-"""Cloud prover integration via anonymous key URLs.
+"""Cloud prover integration.
 
-Handles job submission polling, and result downloading for the Certora
-cloud prover, using the anonymousKey parameter embedded in the job URL
-to access job data without authentication.
+Polls a Certora cloud job to completion using the anonymousKey embedded in the
+job URL (so waiting needs no credentials), then retrieves its results through
+``prover_output_utility``.
 """
 
 import asyncio
 import logging
-import tarfile
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 from urllib.parse import urlparse, parse_qs
 
 import aiohttp
+from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import JobStatus, convert_job_status
 
 logger = logging.getLogger("composer.spec")
@@ -147,19 +148,15 @@ def _job_runtime_ms(job_data: dict) -> int | None:
         return None
 
 
-def find_results_root(dest: Path) -> Path:
-    """Navigate past the extra TarName/ top-level directory in the extracted archive."""
-    children = [p for p in dest.iterdir() if p.is_dir()]
-    if len(children) == 1 and (children[0] / "Reports").is_dir():
-        return children[0]
+@lru_cache(maxsize=1)
+def _results_api() -> ProverOutputAPI:
+    """Client for reading job results. Cached because constructing one logs in.
 
-    if (dest / "Reports").is_dir():
-        return dest
-
-    raise RuntimeError(
-        f"Could not find Reports/ in extracted results at {dest}. "
-        f"Contents: {[p.name for p in dest.iterdir()]}"
-    )
+    ``enable_cache=False``: each job's documents are read once, and building
+    POU's cache would mkdir ``<cwd>/.certora_internal/api_cache`` in whatever
+    directory composer was invoked from.
+    """
+    return ProverOutputAPI(enable_cache=False)
 
 
 @asynccontextmanager
@@ -197,28 +194,15 @@ async def cloud_results(
 
     runtime_ms = _job_runtime_ms(job_data)
 
-    zip_url = job_data.get("zipOutputUrl")
-    if not zip_url:
-        raise CloudJobError(status, run_result_link)
-
-    separator = "&" if "?" in zip_url else "?"
-    full_url = f"{zip_url}{separator}anonymousKey={cloud_job.anonymous_key}"
-
     with tempfile.TemporaryDirectory(prefix="certora_cloud_") as tmp_dir:
         dest = Path(tmp_dir)
-        tmp_path = Path(tmp_dir) / "downloaded.tar.gz"
-
-        try:
-            async with aiohttp.ClientSession(headers=_NO_BROTLI_HEADERS) as session:
-                async with session.get(full_url, timeout=aiohttp.ClientTimeout(total=300)) as resp:
-                    resp.raise_for_status()
-                    with open(tmp_path, "wb") as f:
-                        async for chunk in resp.content.iter_chunked(8192):
-                            f.write(chunk)
-
-            with tarfile.open(tmp_path, "r:gz") as tar:
-                tar.extractall(path=dest, filter=lambda x, _: x)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-        yield (find_results_root(dest), runtime_ms)
+        # Fetch just the tree view and the compiled sources, which is everything
+        # the results parse and the CEX analyzer read. The job's zipOutput archive
+        # also carries ``outputs/`` and ``debugs/`` — the split dumps — which reach
+        # tens of gigabytes on real jobs and used to exhaust the disk; across the
+        # jobs measured here these two subtrees are ~3% of the archive. POU writes
+        # them in the same layout the archive had, so the parse is unchanged.
+        await asyncio.to_thread(
+            _results_api().fetch_sources_and_treeview_files, cloud_job.job_id, dest
+        )
+        yield (dest, runtime_ms)

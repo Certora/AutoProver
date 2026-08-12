@@ -68,7 +68,7 @@ class StoredSystemBinary(TypedDict):
 
 
 class StoredRunInfo(TypedDict):
-    spec: StoredSpecFile
+    specs: list[StoredSpecFile]
     interface_name: str
     interface_contents: str
     system_name: str
@@ -204,8 +204,9 @@ class ResumeSpecEntry:
 
 class ResumeArtifact:
     """Bundle of everything needed to resume a prior run: the final interface
-    and system views, the spec file that was in play at completion, the full
-    final VFS, and the commentary the LLM attached on completion.
+    and system views, every spec file that was in play at completion (keyed by
+    VFS path), the full final VFS, and the commentary the LLM attached on
+    completion.
 
     All file-shaped fields satisfy ``Uploadable``; the executor passes them
     through its ``FileUploader`` on resume to rehydrate into ``Document`` /
@@ -214,18 +215,28 @@ class ResumeArtifact:
     def __init__(
         self,
         final_intf: _StoredText,
-        spec_entry: ResumeSpecEntry,
+        spec_entries: list[ResumeSpecEntry],
         system_doc: "_StoredText | _StoredBinary",
         commentary: str,
         intf_path: str,
         vfs_cur: VFSRetriever,
     ):
         self.intf_vfs_handle = final_intf
-        self.spec = spec_entry
+        self._specs: dict[str, ResumeSpecEntry] = {s.vfs_path: s for s in spec_entries}
         self.system_vfs_handle: "_StoredText | _StoredBinary" = system_doc
         self.vfs = vfs_cur
         self.commentary = commentary
         self.interface_path = intf_path
+
+    @property
+    def spec_vfs_paths(self) -> list[str]:
+        """VFS paths of every spec registered with the run."""
+        return list(self._specs.keys())
+
+    def spec_at(self, vfs_path: str) -> ResumeSpecEntry | None:
+        """The spec registered at ``vfs_path`` (final contents at completion),
+        or ``None`` if no spec was registered there."""
+        return self._specs.get(vfs_path)
 
     @cached_property
     def interface_file(self) -> str:
@@ -313,16 +324,15 @@ class AuditStore:
     async def register_run(
         self,
         thread_id: str,
-        spec_vfs_path: str,
-        spec_file: TextDocument,
+        specs: list[tuple[str, TextDocument]],
         interface_file: TextDocument,
         system_doc: Document,
         vfs_init: Iterable[tuple[str, bytes]],
         reqs: list[str] | None,
         description: str | None = None,
     ) -> None:
-        """``spec_vfs_path`` is where the spec lives in the VFS (codegen's
-        historical convention is ``rules.spec``).
+        """``specs`` pairs each spec's VFS path with its document (codegen's
+        single-spec convention is one entry at ``rules.spec``).
 
         Spec/interface contents persist as plain strings (text-guaranteed
         upstream). The system doc is classified once here: ``string_contents``
@@ -330,11 +340,14 @@ class AuditStore:
         binary record. ``description`` is free-form user-supplied text recorded
         on the ``run_meta`` slot so callers can find a run by name after the
         thread id has been lost."""
-        stored_spec: StoredSpecFile = {
-            "vfs_path": spec_vfs_path,
-            "basename": spec_file.basename,
-            "contents": spec_file.string_contents,
-        }
+        stored_specs: list[StoredSpecFile] = [
+            {
+                "vfs_path": vfs_path,
+                "basename": doc.basename,
+                "contents": doc.string_contents,
+            }
+            for (vfs_path, doc) in specs
+        ]
         system_text = system_doc.string_contents
         stored_system: str | StoredSystemBinary
         if system_text is not None:
@@ -345,7 +358,7 @@ class AuditStore:
                 "contents": base64.standard_b64encode(system_doc.bytes_contents).decode("utf-8"),
             }
         run_info: StoredRunInfo = {
-            "spec": stored_spec,
+            "specs": stored_specs,
             "interface_name": interface_file.basename,
             "interface_contents": interface_file.string_contents,
             "system_name": system_doc.basename,
@@ -402,25 +415,26 @@ class AuditStore:
                 f"Resume artifact references {ra['interface_path']} but it's not in vfs_result"
             )
 
-        # Pull the registered spec's *final* contents from the completed VFS.
-        # Missing is a hard error — it was present at registration time.
-        stored_spec = ri["spec"]
-        spec_vfs_path = stored_spec["vfs_path"]
-        final_spec_contents = vfs_files.get(spec_vfs_path)
-        if final_spec_contents is None:
-            raise RuntimeError(
-                f"vfs_result for thread {thread_id} has no file at {spec_vfs_path!r} "
-                f"(registered as the spec at run start)"
-            )
-        spec_entry = ResumeSpecEntry(
-            vfs_path=spec_vfs_path,
-            basename=stored_spec["basename"],
-            contents=final_spec_contents,
-        )
+        # Reconstruct each registered spec's *final* contents from the completed
+        # VFS. Missing is a hard error — each was present at registration time.
+        spec_entries: list[ResumeSpecEntry] = []
+        for stored_spec in ri["specs"]:
+            spec_vfs_path = stored_spec["vfs_path"]
+            final_spec_contents = vfs_files.get(spec_vfs_path)
+            if final_spec_contents is None:
+                raise RuntimeError(
+                    f"vfs_result for thread {thread_id} has no file at {spec_vfs_path!r} "
+                    f"(registered as a spec at run start)"
+                )
+            spec_entries.append(ResumeSpecEntry(
+                vfs_path=spec_vfs_path,
+                basename=stored_spec["basename"],
+                contents=final_spec_contents,
+            ))
 
         return ResumeArtifact(
             final_intf=_StoredText(path=ra["interface_path"], contents=intf_contents),
-            spec_entry=spec_entry,
+            spec_entries=spec_entries,
             system_doc=_system_handle(ri["system_name"], ri["system"]),
             commentary=ra["commentary"],
             intf_path=ra["interface_path"],
@@ -439,15 +453,17 @@ class AuditStore:
             vfs_files = cast(StoredVFS, vfs_item.value)["files"]
         retriever = VFSRetriever(_files=vfs_files)
 
-        stored_spec = ri["spec"]
-        run_spec: SpecRunEntry = {
-            "vfs_path": stored_spec["vfs_path"],
-            "basename": stored_spec["basename"],
-            "contents": stored_spec["contents"],
-        }
+        run_specs: list[SpecRunEntry] = [
+            {
+                "vfs_path": s["vfs_path"],
+                "basename": s["basename"],
+                "contents": s["contents"],
+            }
+            for s in ri["specs"]
+        ]
         run_input: RunInput = {
             "interface": _StoredText(path=ri["interface_name"], contents=ri["interface_contents"]),
-            "spec": run_spec,
+            "specs": run_specs,
             "system": _system_handle(ri["system_name"], ri["system"]),
             "reqs": ri["reqs"],
         }

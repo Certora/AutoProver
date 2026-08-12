@@ -1,21 +1,26 @@
 """Anthropic LLM backend: model-name probing, Files-API uploader, and the
 ``ModelProvider`` implementation that mints ``ChatAnthropic`` instances."""
 
-from typing import Literal, TypeGuard, Any, TYPE_CHECKING
+from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
+from functools import cache
 
 import anthropic
 
-from composer.input.files import _UploaderBase
+from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
-    ProviderKind, CacheLevel, _ListIter, NoSuchElementError,
+    ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from composer.llm.pricing import PriceProvider, price_provider_for
+from .types import CacheLevel
+from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
+    from graphcore.graph import RawMessageType
 
 
 # --- model probing ---------------------------------------------------------
@@ -26,6 +31,10 @@ type ClaudeModelNames = Literal["opus", "sonnet", "haiku", "fable"]
 class ModelFeatures:
     interleaved_thinking: bool
     adaptive_thinking: bool
+    # Whether summarized thinking has to be asked for. From 4.7 on, a response still carries
+    # thinking blocks but their text is empty unless the request opts in; up to 4.6 the summary
+    # came back by default.
+    thinking_summary_opt_in: bool
     version_tuple: tuple[int, int]
     name: ClaudeModelNames
 
@@ -37,8 +46,14 @@ def _validate_model(s: str) -> TypeGuard[ClaudeModelNames]:
 # Interleaved thinking on <= 4.5; adaptive thinking on newer models.
 _interleaved_pivot_version = (4, 5)
 
+# From 4.7 on, a response still carries thinking blocks but their
+# text is empty unless the request opts in; up to 4.6 the summary
+# came back by default.
+# Last version to return a thinking summary without being asked.
+_default_thinking_summary_version = (4, 6)
+
 def _model_parser(model_name: str) -> ModelFeatures:
-    stream = _ListIter(model_name.split("-"))
+    stream = ListIter(model_name.split("-"))
     parsing: Literal["claude", "model", "version"] = "claude"
     try:
         claude = stream.next()
@@ -60,6 +75,7 @@ def _model_parser(model_name: str) -> ModelFeatures:
         return ModelFeatures(
             interleaved_thinking=interleaved_flag,
             adaptive_thinking=not interleaved_flag,
+            thinking_summary_opt_in=version_tuple > _default_thinking_summary_version,
             name=model_class,
             version_tuple=version_tuple,
         )
@@ -74,17 +90,80 @@ def _model_parser(model_name: str) -> ModelFeatures:
 def matches(model: str) -> bool:
     return model.split("-", 1)[0] == "claude"
 
+def level_to_ttl(c: CacheLevel) -> str | None:
+    match c:
+        case CacheLevel.NONE:
+            return None
+        case CacheLevel.SHORT:
+            return "5m"
+        case CacheLevel.LONG:
+            return "1h"
+
+_long_context_window = 1_000_000
+_base_context_window = 200_000
+
+
+def _long_context_pivot(family: ClaudeModelNames) -> tuple[int, int] | None:
+    """The first version of `family` to ship the 1M-token window, or None for a family that has
+    none. A version comparison rather than a list of model identifiers, so a new release of a
+    family that already crossed over needs no edit here; a `match` so that a family added to
+    `ClaudeModelNames` fails the type check here rather than at runtime."""
+    match family:
+        case "opus" | "sonnet":
+            return (4, 6)
+        case "fable":
+            return (5, 0)
+        case "haiku":
+            # No long-context haiku has shipped; understating one only costs earlier compaction.
+            return None
+
+
+def _context_window(features: ModelFeatures) -> int:
+    pivot = _long_context_pivot(features.name)
+    if pivot is not None and features.version_tuple >= pivot:
+        return _long_context_window
+    return _base_context_window
+
 
 # --- Files API uploader ----------------------------------------------------
 
+class AnthropicRenderer:
+    def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        to_ret : dict[str, Any] = {"type": "text", "text": text}
+        if (ttl := level_to_ttl(cache_level)) is not None:
+            to_ret["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": ttl
+            }
+        return to_ret
+
+    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        to_ret : dict[str, Any] = {
+            "type": "document",
+            "source": {
+                "type": "file",
+                "file_id": file_id,
+            },
+        }
+        if (ttl := level_to_ttl(cache_level)) is not None:
+            to_ret["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": ttl
+            }
+        return to_ret
+
+@cache
+def _get_service():
+    return AnthropicService()
+
 @dataclass
-class AnthropicFileUploader(_UploaderBase):
+class AnthropicFileUploader(UploaderBase):
     """``FileUploader`` impl backed by Anthropic's beta Files API."""
 
     client: anthropic.AsyncAnthropic
     uploaded: dict[str, str] | None = None
     _seed_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    provider: ProviderKind = "anthropic"
+    renderer: ContentRenderer = field(default_factory=AnthropicRenderer)
 
     async def _ensure_seeded(self) -> dict[str, str]:
         """Seed the dedup cache from the account's existing Files-API uploads on
@@ -117,6 +196,29 @@ class AnthropicFileUploader(_UploaderBase):
 
 # --- ModelProvider ---------------------------------------------------------
 
+class AnthropicService(ProviderServiceBase):
+    def __init__(self):
+        from graphcore.tools.memory import anthropic_async_memory_tool
+        super().__init__(
+            anthropic_async_memory_tool,
+            AnthropicFileUploader.lazy
+        )
+
+    @override
+    def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
+        if (ttl := level_to_ttl(cache_level)) is None:
+            return super().cache_marker(payload, cache_level)
+        to_ret = payload
+        if not isinstance(to_ret, dict):
+            to_ret = cast(dict, {"type": "text", "text": to_ret})
+        else:
+            to_ret = to_ret.copy()
+        to_ret["cache_control"] = {
+            "type": "ephemeral",
+            "ttl": ttl
+        }
+        return to_ret
+
 @dataclass
 class AnthropicModelProvider:
     """``ModelProvider`` for Anthropic. Probes ``model_name`` once at
@@ -126,17 +228,30 @@ class AnthropicModelProvider:
     model_name: str
     options: ModelConfiguration
     features: ModelFeatures
-    provider: ProviderKind = "anthropic"
+    price_provider: PriceProvider
+
+    provider: AnthropicService = field(default_factory=_get_service)
+
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
-        return AnthropicModelProvider(model_name, options, _model_parser(model_name))
+        return AnthropicModelProvider(
+            model_name,
+            options,
+            _model_parser(model_name),
+            price_provider_for(model_name)
+        )
+
+    @property
+    def max_prompt_tokens(self) -> int:
+        return compaction_threshold(_context_window(self.features))
 
     def builder_for(
-        self, *, cache_level: CacheLevel | None = None, disable_thinking: bool = False
+        self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
         from composer.diagnostics.usage_callback import UsageCallback
+        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -144,6 +259,10 @@ class AnthropicModelProvider:
             thinking = None
         elif self.features.adaptive_thinking:
             thinking = {"type": "adaptive"}
+            if self.features.thinking_summary_opt_in:
+                # Ask for the summary the model would otherwise leave empty. It costs nothing
+                # (thinking is billed the same either way), we want it to help with debugging.
+                thinking["display"] = "summarized"
         else:
             thinking = {"type": "enabled", "budget_tokens": opts.thinking_tokens}
 
@@ -153,26 +272,29 @@ class AnthropicModelProvider:
         if opts.memory_tool:
             betas.append("context-management-2025-06-27")
 
-        match cache_level:
-            case CacheLevel.SHORT:
-                ttl = "5m"
-            case CacheLevel.LONG:
-                ttl = "1h"
-            case None | CacheLevel.NONE:
-                ttl = None
+        ttl = level_to_ttl(cache_level)
         model_kwargs = (
-            {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl else {}
+            {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl is not None else {}
         )
 
         return ChatAnthropic(
             model_name=self.model_name,
             max_tokens_to_sample=opts.tokens,
-            temperature=1,
             timeout=None,
             max_retries=8,
             stop=None,
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=[UsageCallback()],
+            callbacks=[
+                UsageCallback(),
+                CostAccumulator(
+                    self.price_provider, long_cache=cache_level == CacheLevel.LONG
+                ),
+            ],
         )
+
+ANTHROPIC_SPEC = ProviderSpec(
+    matches=matches,
+    build=AnthropicModelProvider.create
+)
