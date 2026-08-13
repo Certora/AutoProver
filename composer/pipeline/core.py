@@ -46,7 +46,10 @@ from composer.spec.system_model import (
 )
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier
 from composer.spec.system_analysis import run_component_analysis
-from composer.spec.prop_inference import run_property_inference, AnyPropertyGenerationInput
+from composer.spec.prop_inference import (
+    run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
+)
+from composer.llm.types import CacheLevel
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
@@ -293,7 +296,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     preflight, analyzed = preflight_task.result(), analysis_task.result()
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
-    
+
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
     prepared = await backend.prepare_system(analyzed, run, preflight)
 
@@ -351,7 +354,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 await child.cache_put(result)
         else:
             result = cached_result
-        
+
         outcome: Delivered[FormT] | GaveUp = (
             result if isinstance(result, GaveUp)
             else Delivered(result, backend.artifact_store.write_artifact(result_key, result))
@@ -451,6 +454,22 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
 
     async def _one(feat: U) -> _Batch[U] | None:
         pre_input = await _pre_plugin_inputs(feat)
+
+        # Mirrors the natspec path's `system_doc` injection (composer/spec/natspec/pipeline.py):
+        # the design doc, when supplied on the source/prover path too, should inform property
+        # inference the same way it informs component analysis, not just the latter.
+        design_doc = run.source.content
+        if design_doc is not None:
+            pre_input = [
+                *pre_input,
+                CacheablePropertyGenerationInput(
+                    "certora:system-doc", "generic", "always",
+                    lambda cache, doc=design_doc: [
+                        "For reference, the system document describing the entire application is as follows.",
+                        doc.to_dict(CacheLevel.SHORT if cache else CacheLevel.NONE)
+                    ]
+                ),
+            ]
 
         feat_ctx = await prop_ctx.child(
             _component_cache_key(feat, plugins.plugin_digest),
