@@ -3,7 +3,7 @@ from typing import Callable, Sequence
 from typing_extensions import TypedDict
 from composer.spec.service_host import Sort, ServiceHost
 
-from composer.authoring.judge import JudgeState, build_feedback_judge
+from composer.authoring.judge import JudgeBuilder, JudgeState, build_feedback_judge
 from composer.authoring.state import SkippedProperty
 from composer.spec.context import (
     WorkflowContext, CVLJudge
@@ -62,8 +62,9 @@ def property_feedback_judge(
         system_prompt = FeedbackSystemTemplate.bind({"sort": env.sort})
 
     def apply_prompt(
-        builder, _cvl: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal]
-    ):
+        builder: JudgeBuilder, _cvl: str,
+        skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal],
+    ) -> JudgeBuilder:
         return prompt.bind({
             "properties": props,
             "rebuttals": rebuttals,

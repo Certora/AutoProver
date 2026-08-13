@@ -179,7 +179,6 @@ _GET_CVL_DESCRIPTION = """
     Retrive the textual representation of the current specification.
     """
 
-
 @overload
 def get_cvl[S: SpecBufferWithRead](
     ty: type[S],
@@ -205,16 +204,24 @@ def get_cvl(
 ) -> BaseTool:
     """The CVL read-back tool over ``curr_spec``. ``set_did_read`` additionally stamps
     ``did_read``, which the property judge's completion validator requires."""
-    common = {
-        "name": "get_cvl",
-        "description": _GET_CVL_DESCRIPTION,
-        "missing": "No spec file written yet",
-        "display": _get_cvl_display,
-        "title": "GetCVL",
-    }
     if set_did_read:
-        return get_spec_tool(ty, set_did_read=True, **common)
-    return get_spec_tool(ty, **common)
+        return get_spec_tool(
+            ty,
+            name="get_cvl",
+            description=_GET_CVL_DESCRIPTION,
+            missing="No spec file written yet",
+            display=_get_cvl_display,
+            title="GetCVL",
+            set_did_read=True,
+        )
+    return get_spec_tool(
+        ty,
+        name="get_cvl",
+        description=_GET_CVL_DESCRIPTION,
+        missing="No spec file written yet",
+        display=_get_cvl_display,
+        title="GetCVL",
+    )
 
 
 edit_cvl_description = """

@@ -42,7 +42,7 @@ from composer.authoring.buffer import (
     SpecBuffer, SpecBufferSet, apply_spec_update, get_spec_tool,
 )
 from composer.authoring.judge import (
-    FeedbackThunk, JudgeState, RebuttalBase, build_feedback_judge,
+    FeedbackThunk, JudgeBuilder, JudgeState, RebuttalBase, build_feedback_judge,
 )
 from composer.authoring.state import SkippedProperty
 from composer.authoring.tools import give_up_tool
@@ -423,8 +423,9 @@ def _build_feedback_thunk(
     rendered into the prompt template."""
 
     def apply_prompt(
-        builder, _spec: str, _skipped: Sequence[SkippedProperty], _rebuttals: Sequence[Rebuttal]
-    ):
+        builder: JudgeBuilder, _spec: str,
+        _skipped: Sequence[SkippedProperty], _rebuttals: Sequence[Rebuttal],
+    ) -> JudgeBuilder:
         return _FoundryJudgeTemplate.bind({
             "properties": props, "context": component, "sort": "existing",
         }).render_to(builder.with_initial_prompt_template)

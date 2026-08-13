@@ -2,8 +2,7 @@
 
 A judge is a sub-agent, not a scoring function: it gets the session's tool belt, a rough-draft
 scratchpad, the run memory, and a read-back of the spec under review, and it must call ``result``
-with a structured :class:`PropertyFeedback`. The verdict is a field the judge had to set, never
-something recovered from prose — an unparseable review is not a thing that can happen here.
+with a structured :class:`PropertyFeedback`.
 
 Two properties are enforced rather than requested. It must read the draft back through the tool
 (``did_read``) instead of reviewing the copy pasted into its prompt, and the author may file
@@ -17,7 +16,7 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 
-from graphcore.graph import FlowInput
+from graphcore.graph import Builder, FlowInput
 
 from composer.authoring.buffer import SpecBufferSet
 from composer.authoring.state import SkippedProperty
@@ -91,13 +90,17 @@ def _did_rough_draft_read(s: JudgeState, _: Any) -> str | None:
     return None
 
 
+#: The judge's builder as its prompt hooks see it: state and input are the judge's own, and no
+#: context type is bound.
+type JudgeBuilder = Builder[JudgeState, None, JudgeInput]
+
 #: Applies a prompt to the judge's builder. A backend that renders templates binds its params and
 #: calls ``with_*_prompt_template``; one whose prompts are plain strings (a Rust wheel's) calls
 #: ``with_sys_prompt`` / ``with_initial_prompt``. Either way the judge itself holds no opinion about
 #: where prompt text comes from.
-type ApplySystem = Callable[[Any], Any]
+type ApplySystem = Callable[[JudgeBuilder], JudgeBuilder]
 type ApplyPrompt[R: RebuttalBase] = Callable[
-    [Any, str, Sequence[SkippedProperty], Sequence[R]], Any
+    [JudgeBuilder, str, Sequence[SkippedProperty], Sequence[R]], JudgeBuilder
 ]
 
 
@@ -142,7 +145,7 @@ def build_feedback_judge[R: RebuttalBase](
         rebuttals: Sequence[R],
         within_tool: str,
     ) -> PropertyFeedbackProtocol:
-        workflow: Any = staged.inject(
+        workflow = staged.inject(
             lambda b: apply_prompt(b, spec, skipped, rebuttals)
         ).compile_async()
         res = await run_to_completion(

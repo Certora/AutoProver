@@ -36,7 +36,8 @@ from composer.authoring.buffer import (
     apply_spec_update, edit_spec_tool, get_spec_tool,
 )
 from composer.authoring.judge import (
-    FeedbackThunk, JudgeState, PropertyFeedbackProtocol, RebuttalBase, build_feedback_judge,
+    FeedbackThunk, JudgeBuilder, JudgeState, PropertyFeedbackProtocol, RebuttalBase,
+    build_feedback_judge,
 )
 from composer.authoring.state import (
     AuthoringExtra, MappingVocab, SkippedProperty, check_completion, make_validation_stamper,
@@ -496,10 +497,10 @@ def build_judge(
         parse_judge(declared).system or "You are reviewing a formal specification."
     ) + _JUDGE_PROTOCOL
 
-    def apply_system(builder):
+    def apply_system(builder: JudgeBuilder) -> JudgeBuilder:
         return builder.with_sys_prompt(system)
 
-    def apply_prompt(builder, spec: str, skipped, rebuttals):
+    def apply_prompt(builder: JudgeBuilder, spec: str, skipped, rebuttals) -> JudgeBuilder:
         return builder.with_initial_prompt(module.judge_instruction(input_json, spec))
 
     def input_parts(spec: str, skipped, rebuttals) -> list[str | dict]:
