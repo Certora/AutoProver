@@ -22,6 +22,7 @@ from composer.pipeline.cli import cli_pipeline, user_ns
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
+from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.prover.core import make_prover_options
 from composer.spec.source.source_env import build_source_env
 from composer.spec.source.artifacts import ProverArtifactStore
@@ -119,7 +120,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
 
     async def callback(
         handler: HandlerFactory[AutoProvePhase, None]
-    ) -> CorePipelineResult[GeneratedCVL]:    
+    ) -> CorePipelineResult[GeneratedCVL]:
         async with (
             cli_pipeline(
                 args=args, design_doc_phase=design_phase,
@@ -148,7 +149,8 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
             )
             backend = ProverBackend(
                 ProverArtifactStore(staged.source.project_root, staged.source.contract_name),
-                make_prover_options(cloud=args.cloud)
+                make_prover_options(cloud=args.cloud),
+                CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
             return await cont(source_env, backend, EVM)
     yield callback
