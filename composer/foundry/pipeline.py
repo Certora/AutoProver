@@ -35,9 +35,10 @@ from composer.pipeline.core import (
     CorePhases, CorePipelineResult,
     COMMON_SYSTEM_CACHE_KEY
 )
+from composer.pipeline.ptypes import Curtailed
 from composer.pipeline.ecosystem import main_instance
 from composer.foundry.artifacts import FoundryTestArtifact
-from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.source.report.collect import Formalized, Verdict
 from composer.spec.source.report.schema import RuleName
 from composer.spec.context import (
     WorkflowContext, SourceCode, FoundryGeneration
@@ -121,7 +122,7 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstan
         props: list[PropertyFormulation],
         ctx: WorkflowContext[GeneratedFoundryTest],
         run: PipelineRun
-    ) -> GeneratedFoundryTest | GaveUp:
+    ) -> GeneratedFoundryTest | Curtailed[GeneratedFoundryTest] | GaveUp:
         return await batch_foundry_test_generation(
             ctx=ctx.abstract(FoundryGeneration),
             project_root=run.source.project_root,
@@ -134,12 +135,12 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstan
             forge_timeout_s=self.conf.forge_timeout_s,
             props=props
         )
-    
+
     @override
     async def fetch_verdicts(
-        self, inp: ReportComponentInput[GeneratedFoundryTest]
+        self, formalized: Formalized[GeneratedFoundryTest]
     ) -> dict[RuleName, Verdict]:
-        return await _foundry_verdicts(inp)
+        return await _foundry_verdicts(formalized)
 
 @dataclass
 class FoundrySystem(PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]):

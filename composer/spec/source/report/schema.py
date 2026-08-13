@@ -130,6 +130,43 @@ class GaveUpComponent(BaseModel):
     properties: list[PropertyFormulation]
 
 
+class DraftedProperty(PropertyFormulation):
+    """A curtailed component's property the author claims to have encoded, with the units it
+    named at publish. Unverified: the publish gates were lifted, so the claim was never checked
+    against a judge or a verification run."""
+    units: list[RuleName] = Field(
+        default_factory=list,
+        description="The rule/test names the author declared for this property — an unchecked claim.",
+    )
+
+
+class CurtailedSkip(PropertyFormulation):
+    """A curtailed component's property the author explicitly skipped (typically citing the
+    budget) before publishing what remained."""
+    reason: str
+
+
+class CurtailedComponent(BaseModel):
+    """A component whose formalization the run budget cut short. Whatever it published was
+    accepted with the validation gates lifted, so neither the encoding nor any verification
+    result is reliable: the component contributes nothing to ``properties``/``rules``/``groups``
+    and is reported in the budget appendix instead. Its inferred properties are partitioned by
+    disposition: ``drafted`` (claimed encoded, unverified), ``skipped`` (explicitly declined,
+    with reason), ``unattempted`` (never reached)."""
+    component: ComponentName
+    #: Project-relative path of the quarantined partial encoding; None when the run was cut off
+    #: before anything was published.
+    artifact: str | None = None
+    #: Last verification-run link the partial result carried, if any (context only — its
+    #: outcome predates the final encoding and proves nothing about it).
+    run_link: str | None = None
+    #: Optional account of the termination (hard-stop message / the author's own words).
+    detail: str | None = None
+    drafted: list[DraftedProperty] = Field(default_factory=list)
+    skipped: list[CurtailedSkip] = Field(default_factory=list)
+    unattempted: list[PropertyFormulation] = Field(default_factory=list)
+
+
 class PropertyGroup(BaseModel):
     """An audit-level "P-NN" heading: a synthesized claim over a set of `FormalizedProperty`s (its
     ``members``, by identity). Members partition — each property belongs to exactly one group —
@@ -155,6 +192,7 @@ class CoverageReport(BaseModel):
     rules_spanning_multiple_groups: list[RuleName] = Field(default_factory=list)
     skipped_count: int = 0
     gave_up_component_count: int = 0
+    curtailed_component_count: int = 0
     dropped_orphan_rules: int = 0
     warnings: list[str] = Field(default_factory=list)
 
@@ -263,6 +301,9 @@ class AutoProverReport(BaseModel):
     #: Formalization gaps — properties that exist but no rule formalizes (see the two gap types).
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
+    #: Components the run budget cut short — excluded from every table above, rendered as an
+    #: appendix.
+    curtailed_components: list[CurtailedComponent] = Field(default_factory=list)
     #: Source modifications each component's verification ran against; empty when every
     #: component was verified against the on-disk source.
     source_edits: list[SourceEditRecord] = Field(default_factory=list)

@@ -34,6 +34,7 @@ from composer.spec.types import PropertyTitle, RuleName
 from composer.spec.graph_builder import run_to_completion
 from composer.cvl.tools import put_cvl_raw, put_cvl, get_cvl, edit_cvl
 from composer.ui.tool_display import tool_display, suppress_ack
+from composer.diagnostics.budget import budget_pressure
 
 CVL_JUDGE_KEY = CacheKey[CVLGeneration, CVLJudge]("judge")
 
@@ -224,6 +225,16 @@ class FeedbackToolBase[ST: CVLGenerationState](WithInjectedState[ST], WithInject
         spec = st["curr_spec"]
         if spec is None:
             return tool_return(self.tool_call_id, "No spec put yet")
+        if budget_pressure():
+            # Don't launch a judge that would be terminated on its first
+            # monitor tick; the author's budget warning already tells it
+            # feedback approval is no longer required.
+            return tool_return(
+                self.tool_call_id,
+                "Good? False\nFeedback The feedback judge was not run due to budget "
+                "constraints. See the system alert: feedback approval is no longer "
+                "required for this task.",
+            )
         skipped = st["skipped"]
         t = await self._get_feedback(spec, skipped)
         msg = f"Good? {t.good}\nFeedback {t.feedback}"

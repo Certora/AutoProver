@@ -73,6 +73,8 @@ class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
     forge_binary: str
     forge_timeout_s: int
     max_forge_runners: int
+    budget: str | None
+    time_budget: float | None
 
     @property
     def threat_model(self) -> None:
@@ -134,6 +136,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
     parser.add_argument("--forge-binary", default="forge", help="`forge` executable on PATH (default: forge)")
     parser.add_argument("--forge-timeout-s", type=int, default=600, help="Per-`forge test` invocation timeout in seconds (default: 600)")
+    parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
     parser.set_defaults(threat_model=None)
     return parser
 

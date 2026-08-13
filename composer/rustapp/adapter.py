@@ -88,7 +88,7 @@ from composer.rustapp.wire import Delivered as WireDelivered
 from composer.rustapp.wire import SkippedProperty as WireSkipped
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import CacheKey, SourceFields, WorkflowContext
-from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.source.report.collect import Formalized, ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import ComponentName, PropertyFormulation
@@ -383,11 +383,8 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
 
     @override
     async def fetch_verdicts(
-        self, inp: ReportComponentInput[RustFormalResult]
+        self, formalized: Formalized[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
-        formalized = inp.formalized
-        if formalized is None:
-            return {}
         return {
             name: Verdict(
                 outcome=v.outcome,

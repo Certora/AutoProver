@@ -59,6 +59,10 @@ class FoundryGenerationExtra(AuthoringExtra):
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     last_test_names: list[CheckName] | None
     failed: bool | None
+    #: Stamped True by the budget monitor's state transformer when the wrap-up alert fires (the
+    #: same update that lifts the validation gates), so the published result is known to be a
+    #: budget-curtailed partial rather than a validated delivery.
+    budget_curtailed: bool
 
 
 class FoundryGenerationInput(FoundryGenerationExtra, FlowInput):

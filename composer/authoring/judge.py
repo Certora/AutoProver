@@ -22,6 +22,7 @@ from graphcore.graph import Builder, FlowInput
 
 from composer.authoring.buffer import SpecBufferSet
 from composer.authoring.state import SkippedProperty
+from composer.diagnostics.budget import BudgetPressureAbort, pressure_abort_monitor
 from composer.spec.context import WorkflowContext
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.service_host import ServiceHost, Sort
@@ -35,6 +36,19 @@ class PropertyFeedback(BaseModel):
     """
     good: bool = Field(description="Whether the properties are good as is, or if there is room for improvement")
     feedback: str = Field(description="The feedback on the rule if work is needed. Can be empty if there is no feedback")
+
+
+# Canned judge verdict when the judge was not run (or was killed mid-run)
+# because the author is in its budget wrap-up window. The author's own budget
+# warning tells it feedback approval is no longer required, so a dead judge
+# is expected there, not an error.
+BUDGET_ABORT_FEEDBACK = PropertyFeedback(
+    good=False,
+    feedback=(
+        "The feedback judge was terminated due to budget constraints. "
+        "See the system alert: feedback approval is no longer required for this task."
+    ),
+)
 
 
 class PropertyFeedbackProtocol(Protocol):
@@ -201,6 +215,8 @@ def build_feedback_judge_generic[R: RebuttalBase, S: JudgeState, I: JudgeInput, 
         apply_system
     ).with_tools(
         [*get_rough_draft_tools(st), ctx.get_memory_tool(), readback, *extra_tools]
+    ).with_monitor(
+        pressure_abort_monitor()
     )
 
     async def judge(
@@ -215,17 +231,20 @@ def build_feedback_judge_generic[R: RebuttalBase, S: JudgeState, I: JudgeInput, 
         ).compile_async()
         produced = input_parts(spec, skipped, rebuttals)
         parts = await produced if inspect.isawaitable(produced) else produced
-        res = await run_to_completion(
-            workflow,
-            input_lift(
-                JudgeInput(input=parts, curr_spec=spec, memory=None, did_read=False),
-                exec_ctx,
-            ),
-            thread_id=uniq_thread_id(thread_prefix),
-            recursion_limit=ctx.recursion_limit,
-            description=description,
-            within_tool=within_tool,
-        )
+        try:
+            res = await run_to_completion(
+                workflow,
+                input_lift(
+                    JudgeInput(input=parts, curr_spec=spec, memory=None, did_read=False),
+                    exec_ctx,
+                ),
+                thread_id=uniq_thread_id(thread_prefix),
+                recursion_limit=ctx.recursion_limit,
+                description=description,
+                within_tool=within_tool,
+            )
+        except BudgetPressureAbort:
+            return BUDGET_ABORT_FEEDBACK
         assert "result" in res
         return res["result"]
 

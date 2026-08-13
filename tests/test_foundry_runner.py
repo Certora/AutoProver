@@ -46,6 +46,7 @@ def _min_state(curr_spec: str) -> dict:
         "expected_failures": {},
         "last_test_names": ["stale_name"],
         "failed": None,
+        "budget_curtailed": False
     }
 
 

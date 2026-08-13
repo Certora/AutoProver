@@ -12,13 +12,14 @@ from datetime import datetime, timezone
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from composer.spec.types import Curtailed
 from composer.spec.source.report.collect import (
     EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
 from composer.spec.source.report.coverage import ValidationError, validate
 from composer.spec.source.report.findings import build_findings
 from composer.spec.source.report.grouping import (
-    build_fallback_grouping, build_groups, call_grouping_llm,
+    build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
 from composer.spec.source.report.schema import (
     AutoProverReport, Finding, Outcome, PropertyKey, ReportBackend, RuleRef, SourceEditRecord
@@ -53,7 +54,7 @@ async def build_report[R: ReportableResult](
     audit-issue `Finding`s (best-effort; a synthesis failure yields no findings
     rather than failing the report). ``fetch_evidence`` supplies each violation's captured
     counterexample analysis; it is optional."""
-    properties, rules, skipped, gave_up, dropped = await collect(
+    properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         components, fetch_verdicts=fetch_verdicts
     )
     rule_outcomes: dict[RuleRef, Outcome] = {r.ref: r.outcome for r in rules}
@@ -63,36 +64,53 @@ async def build_report[R: ReportableResult](
     # always has a high-level section: (a) the LLM call raises, (b) validation rejects a
     # structurally-invalid grouping, (c) the grouping is valid but covers no properties. The
     # fallback bucket holds every property exactly once, so the re-validate below cannot raise.
+    # With no formalized properties at all (everything gave up or was budget-curtailed), there is
+    # nothing to group and no reason to spend the LLM call.
     fallback_reason: str | None = None
-    try:
-        grouping = await call_grouping_llm(
-            llm=llm, contract_name=contract_name, properties=properties,
-        )
-        groups = build_groups(grouping.groups, props_by_key, rule_outcomes)
+    if not properties:
+        groups: list[PropertyGroup] = []
         coverage = validate(
-            properties=properties, rules=rules, groups=groups,
-            skipped=skipped, gave_up=gave_up, dropped_orphan_rules=dropped,
+            properties=properties, rules=rules, groups=groups, skipped=skipped,
+            gave_up=gave_up, curtailed=curtailed, dropped_orphan_rules=dropped,
         )
-        grouped: set[PropertyKey] = {k for g in groups for k in g.members}
-        if properties and not grouped:
-            raise ValidationError("grouping produced no high-level properties")
-    except Exception as e:  # noqa: BLE001 — any LLM/transport/validation error degrades
-        if RERAISE_REPORT_FAILURES:
-            raise
-        fallback_reason = (
-            f"validation rejected the grouping: {e}" if isinstance(e, ValidationError)
-            else f"grouping failed: {e}"
-        )
-        _log.warning("report: %s; applying fallback grouping", fallback_reason)
-        groups = build_groups(
-            build_fallback_grouping(properties).groups, props_by_key, rule_outcomes
-        )
-        coverage = validate(
-            properties=properties, rules=rules, groups=groups,
-            skipped=skipped, gave_up=gave_up, dropped_orphan_rules=dropped,
-        )
-        coverage.warnings = ["FALLBACK GROUPING APPLIED"] + coverage.warnings
+    else:
+        try:
+            grouping = await call_grouping_llm(
+                llm=llm, contract_name=contract_name, properties=properties,
+            )
+            groups = build_groups(grouping.groups, props_by_key, rule_outcomes)
+            coverage = validate(
+                properties=properties, rules=rules, groups=groups, skipped=skipped,
+                gave_up=gave_up, curtailed=curtailed, dropped_orphan_rules=dropped,
+            )
+            grouped: set[PropertyKey] = {k for g in groups for k in g.members}
+            if not grouped:
+                raise ValidationError("grouping produced no high-level properties")
+        except Exception as e:  # noqa: BLE001 — any LLM/transport/validation error degrades
+            if RERAISE_REPORT_FAILURES:
+                raise
+            fallback_reason = (
+                f"validation rejected the grouping: {e}" if isinstance(e, ValidationError)
+                else f"grouping failed: {e}"
+            )
+            _log.warning("report: %s; applying fallback grouping", fallback_reason)
+            groups = build_groups(
+                build_fallback_grouping(properties).groups, props_by_key, rule_outcomes
+            )
+            coverage = validate(
+                properties=properties, rules=rules, groups=groups, skipped=skipped,
+                gave_up=gave_up, curtailed=curtailed, dropped_orphan_rules=dropped,
+            )
+            coverage.warnings = ["FALLBACK GROUPING APPLIED"] + coverage.warnings
 
+    # Curtailed results are deliberately absent: a run link on a partial encoding proves nothing
+    # about it, so it lives only in the component's appendix record.
+    prover_links = {
+        c.name: c.formalized.run_link
+        for c in components
+        if c.formalized is not None and not isinstance(c.formalized, Curtailed)
+        and c.formalized.run_link
+    }
     # Violated rules -> findings. Its own guard: findings synthesis must never fail the report
     # (the whole phase is also best-effort in the caller, but this keeps a working report even when
     # only findings break).
@@ -112,13 +130,13 @@ async def build_report[R: ReportableResult](
         backend=backend,
         contract_name=contract_name,
         run_timestamp_utc=datetime.now(timezone.utc).isoformat(),
-        prover_links={c.name: c.formalized.run_link for c in components
-                      if c.formalized and c.formalized.run_link},
+        prover_links=prover_links,
         properties=properties,
         rules=rules,
         groups=groups,
         skipped=skipped,
         gave_up_components=gave_up,
+        curtailed_components=curtailed,
         source_edits=source_edits or [],
         coverage=coverage,
         findings=findings,
