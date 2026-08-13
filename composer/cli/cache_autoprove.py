@@ -36,43 +36,38 @@ from composer.ui.cache_explorer import (
 )
 from composer.spec.context import WorkflowContext, CVLGeneration, CVLJudge, CacheKey
 from composer.spec.source.harness import (
-    config_key,
-    system_setup_key,
-    harness_generation_key,
-    HARNESS_ANALYSIS_KEY,
     ContractSetup,
     SystemDescriptionHarnessed,
     AgentSystemDescription,
     HarnessResult,
 )
 from composer.pipeline.cli import root_cache_key, user_ns
-from composer.pipeline.core import (
-    COMMON_SYSTEM_CACHE_KEY, PROPERTIES_KEY,
-    _component_cache_key, _batch_cache_key, _pre_property_cache_key,
+from composer.pipeline.keys import (
+    AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
+    COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FORMALIZATION_KEY,
+    PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
 )
 from composer.pipeline.plugins import applicable_plugin_manifest, manifest_digest
 from composer.pipeline.run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.core.user import get_uid
 from composer.workflow.services import store_context
 from composer.io.run_index import get_run_data
-from composer.spec.source.summarizer import _summary_key, _SummaryCache
-from composer.spec.source.struct_invariant import STRUCTURAL_INV_KEY, Invariants
-from composer.spec.source.pipeline import INV_CVL_KEY, AP_PROPERTIES_KEY_NAME
+from composer.spec.source.keys import (
+    AP_PROPERTIES_KEY_NAME, CVL_JUDGE_KEY, HARNESS_ANALYSIS_KEY,
+    HARNESS_GENERATION_KEY, INV_CVL_KEY, LAST_ATTEMPT_KEY, STRUCTURAL_INV_KEY,
+    SUMMARY_KEY, SYSTEM_SETUP_KEY, config_key,
+)
+from composer.spec.source.summarizer import _SummaryCache
+from composer.spec.source.struct_invariant import Invariants
 from composer.spec.prop_inference import (
     _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
-    bug_analysis_key_from_digest, agent_round_key, AGENT_RESULT_KEY,
 )
-from composer.spec.cvl_generation import GeneratedCVL, _LastAttemptCache, LAST_ATTEMPT_KEY, CVL_JUDGE_KEY
+from composer.spec.cvl_generation import GeneratedCVL, _LastAttemptCache
 from composer.spec.system_model import (
     SourceApplication, SourceExplicitContract, SourceExternalActor,
     HarnessedApplication, HarnessedExplicitContract, HarnessDefinition,
     ContractInstance, ContractComponentInstance,
 )
-
-
-# The driver writes the analyzed SourceApplication under CacheKey(COMMON_SYSTEM_CACHE_KEY)
-# (pipeline.core.run_pipeline); mirror that key here to read it back.
-SYSTEM_ANALYSIS_KEY = CacheKey[None, SourceApplication](COMMON_SYSTEM_CACHE_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -179,14 +174,14 @@ async def _resolve_bug_key(
     written before the ``interactive`` tag existed leave it ``None``, in
     which case probe both variants and use whichever was written."""
     if tags.interactive is not None:
-        return bug_analysis_key_from_digest(
+        return BUG_ANALYSIS_KEY(
             tags.threat_model_digest, with_refinement=tags.interactive,
         )
     for refine in (False, True):
-        candidate = bug_analysis_key_from_digest(tags.threat_model_digest, refine)
+        candidate = BUG_ANALYSIS_KEY(tags.threat_model_digest, refine)
         if await feat_ctx.child(candidate).cache_get(_BugAnalysisCache) is not None:
             return candidate
-    return bug_analysis_key_from_digest(tags.threat_model_digest, with_refinement=False)
+    return BUG_ANALYSIS_KEY(tags.threat_model_digest, with_refinement=False)
 
 
 async def _build_cvl_gen_nodes(
@@ -202,13 +197,13 @@ async def _build_component_nodes(
     store: BaseStore,
     tags: AutoProveCacheTags,
 ) -> AsyncGenerator[CacheTreeNode[AutoProveCachedValue], None]:
-    comp_key = _component_cache_key(feat, manifest_digest(tags.plugins))
+    comp_key = COMPONENT_KEY(feat, manifest_digest(tags.plugins))
     async with node_for(prop_ctx, comp_key, feat.component.name) as feat_ctx:
         # Per-plugin pre-inference namespaces are siblings of the component
         # key under PROPERTIES_KEY, but they're per-component work — surface
         # them inside the component's subtree.
         for plugin in tags.plugins:
-            pre_ctx = prop_ctx.child(_pre_property_cache_key(feat, plugin))
+            pre_ctx = prop_ctx.child(PRE_PROPERTY_KEY(feat, plugin))
             with node(CacheNode(label=f"Plugin pre-inference: {plugin}", ctx=pre_ctx)):
                 async for n in _enumerate_raw_subtree(store, pre_ctx):
                     yield n
@@ -222,7 +217,7 @@ async def _build_component_nodes(
                 i = 0
                 while True:
                     round_node = await leaf(
-                        agent_ctx, agent_round_key(i),
+                        agent_ctx, AGENT_ROUND_KEY(i),
                         f"Round {i + 1}", _AgentRoundWithHistory,
                     )
                     if round_node.value is None:
@@ -233,7 +228,7 @@ async def _build_component_nodes(
         bug_cache = await feat_ctx.child(bug_key).cache_get(_BugAnalysisCache)
         if bug_cache is None:
             return
-        batch_key = _batch_cache_key(bug_cache.items)
+        batch_key = FORMALIZATION_KEY(GeneratedCVL, bug_cache.items)
         async with node_for(feat_ctx, batch_key, "CVL Generation", GeneratedCVL) as cvl_ctx:
             async for n in _build_cvl_gen_nodes(cvl_ctx.abstract(CVLGeneration)):
                 yield n
@@ -244,7 +239,11 @@ async def build_tree_inner(
     store: BaseStore,
     tags: AutoProveCacheTags,
 ) -> AsyncGenerator[CacheTreeNode[AutoProveCachedValue], None]:
-    sa_leaf = await leaf(root_ctx, SYSTEM_ANALYSIS_KEY, "system-analysis", SourceApplication)
+    sa_leaf = await leaf(
+        root_ctx,
+        SYSTEM_ANALYSIS_KEY(SourceApplication, COMMON_SYSTEM_CACHE_KEY),
+        "system-analysis", SourceApplication,
+    )
     yield sa_leaf
 
     # Read config value upfront so we can derive the summary key outside the with block
@@ -252,20 +251,20 @@ async def build_tree_inner(
 
     async with node_for(root_ctx, config_key, "config", ContractSetup) as config_ctx:
         if sa_leaf.value is not None:
-            async with node_for(config_ctx, system_setup_key(sa_leaf.value), "setup", SystemDescriptionHarnessed) as setup_ctx:
+            async with node_for(config_ctx, SYSTEM_SETUP_KEY(sa_leaf.value), "setup", SystemDescriptionHarnessed) as setup_ctx:
                 ha_leaf = await leaf(setup_ctx, HARNESS_ANALYSIS_KEY, "harness-analysis", AgentSystemDescription)
                 yield ha_leaf
                 if ha_leaf.value is not None and ha_leaf.value.needs_harnessing():
                     yield await leaf(
                         setup_ctx,
-                        harness_generation_key(ha_leaf.value),
+                        HARNESS_GENERATION_KEY(ha_leaf.value),
                         "harness-generation",
                         HarnessResult,
                     )
 
     # Summary — key derivable only once ContractSetup is cached
     if config_val is not None:
-        yield await leaf(root_ctx, _summary_key(config_val), "summary", _SummaryCache)
+        yield await leaf(root_ctx, SUMMARY_KEY(config_val), "summary", _SummaryCache)
 
     yield await leaf(root_ctx, STRUCTURAL_INV_KEY, "structural-inv", Invariants)
     async with node_for(root_ctx, INV_CVL_KEY, "invariant-cvl", GeneratedCVL) as inv_cvl_ctx:
