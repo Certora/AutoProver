@@ -97,7 +97,7 @@ class AppArgs(WireModel):
     #: The analysis identifier — never the name of a build-system unit (that is ``source_unit``).
     program: str
     #: The main source file, project-root-relative.
-    source_path: str = ""
+    source_path: str
     #: The design doc, when one was named on the command line.
     system_doc: str | None = None
     #: Where the analyzed code lives as a unit of its own build system, chain-shaped — see
