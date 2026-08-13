@@ -37,7 +37,7 @@ from composer.spec.solana.model import (
 )
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, PropertyTitle
 from composer.spec.util import ensure_dir
 
 SOLANA_NULL_GUIDANCE: str = """\
@@ -59,10 +59,10 @@ class NullResult(BaseModel):
     """A trivial formalization result: it just carries the properties back out."""
 
     commentary: str = ""
-    property_rules: list[tuple[str, list[str]]] = Field(default_factory=list)
+    property_rules: list[tuple[PropertyTitle, list[RuleName]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
 
-    def property_checks(self) -> list[tuple[str, list[str]]]:
+    def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]:
         return [(t, list(u)) for t, u in self.property_rules]
 
     @property
@@ -123,7 +123,9 @@ class NullSolanaFormalizer(Formalizer[NullResult, SolanaComponentInstance]):
         return NullResult(
             commentary=f"Null formalization of instruction {feat.display_name} "
             f"({len(props)} properties recorded, unverified).",
-            property_rules=[(p.title, [p.title]) for p in props],
+            # The pseudo-check is named after the title itself: nothing runs, so the property's
+            # own words are the only name its report row could have.
+            property_rules=[(p.title, [RuleName(p.title)]) for p in props],
         )
 
     @override

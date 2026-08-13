@@ -28,6 +28,7 @@ from composer.authoring.state import (
     merge_expected_failures, validate_check_mapping,
 )
 from composer.spec.context import CacheKey, FoundryGeneration, FoundryJudge
+from composer.spec.types import CheckName, PropertyTitle
 
 
 FORGE_TEST_VALIDATION_KEY = "forge_test"
@@ -42,11 +43,11 @@ FOUNDRY_JUDGE_KEY = CacheKey[FoundryGeneration, FoundryJudge]("judge")
 class PropertyTestMapping(BaseModel):
     """Maps one property from the batch to the foundry test function(s)
     that demonstrate it."""
-    property_title: str = Field(
+    property_title: PropertyTitle = Field(
         description="The unique snake_case title of the property (from the "
         "batch listing) that these tests demonstrate"
     )
-    tests: list[str] = Field(
+    tests: list[CheckName] = Field(
         description="The names of the test functions (``test_*`` / "
         "``testFuzz_*`` / ``invariant_*``) in the test file that demonstrate "
         "this property"
@@ -55,8 +56,8 @@ class PropertyTestMapping(BaseModel):
 
 class FoundryGenerationExtra(AuthoringExtra):
     property_tests: list[PropertyTestMapping]
-    expected_failures: Annotated[dict[str, str], merge_expected_failures]
-    last_test_names: list[str] | None
+    expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
+    last_test_names: list[CheckName] | None
     failed: bool | None
 
 
@@ -85,8 +86,8 @@ _FOUNDRY_MAPPING = MappingVocab(
 def validate_property_tests(
     property_tests: list[PropertyTestMapping],
     skipped: list[SkippedProperty],
-    titles: list[str],
-    ran_test_names: list[str],
+    titles: list[PropertyTitle],
+    ran_test_names: list[CheckName],
 ) -> str | None:
     """Validate the property→tests mapping declared at completion time, against the tests forge
     actually ran."""

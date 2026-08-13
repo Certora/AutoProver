@@ -50,7 +50,7 @@ from composer.pipeline.core import GaveUp
 from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import run_to_completion
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import CheckName, PropertyFormulation, PropertyTitle
 from composer.spec.system_model import ContractComponentInstance, component_context
 from composer.spec.service_host import ServiceHost
 from composer.ui.tool_display import (
@@ -85,10 +85,10 @@ class GeneratedFoundryTest(BaseModel):
     # gating unseeded run, and the author's expected-failure markings (test
     # name -> reason). Together they give every test a pass / expected-failure
     # status without trusting the model's own transcription.
-    expected_failures: dict[str, str] = Field(default_factory=dict)
-    ran_tests: list[str] = Field(default_factory=list)
+    expected_failures: dict[CheckName, str] = Field(default_factory=dict)
+    ran_tests: list[CheckName] = Field(default_factory=list)
 
-    def property_checks(self) -> list[tuple[str, list[str]]]:
+    def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
         """Property title -> the foundry test names that demonstrate it (the report's
         `ReportableResult` adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.tests) for m in self.property_tests]
@@ -170,7 +170,7 @@ def get_test_tool(ty: type) -> BaseTool:
 class _RecordSkipSchema(
     WithInjectedId,
     # deps: the batch's property titles
-    WithAsyncDependencies[Command, list[str]],
+    WithAsyncDependencies[Command, list[PropertyTitle]],
 ):
     """
     Declare that you are skipping a property from the batch.
@@ -179,7 +179,7 @@ class _RecordSkipSchema(
     excludes the property from the publish-time property→test mapping
     check; only use after a genuine attempt to formalize.
     """
-    property_title: str = Field(
+    property_title: PropertyTitle = Field(
         description="The snake_case title of the property from the batch listing"
     )
     reason: str = Field(
@@ -218,13 +218,13 @@ class _RecordSkipSchema(
 class _UnskipSchema(
     WithInjectedId,
     # deps: the batch's property titles
-    WithAsyncDependencies[Command, list[str]],
+    WithAsyncDependencies[Command, list[PropertyTitle]],
 ):
     """
     Remove a previously declared skip for a property. Use this if you later
     find a way to formalize a property you previously skipped.
     """
-    property_title: str = Field(
+    property_title: PropertyTitle = Field(
         description="The snake_case title of the property to un-skip"
     )
 
@@ -482,7 +482,7 @@ class PublishResultTool(
     WithInjectedState[FoundryGenerationState],
     WithInjectedId,
     # deps: the batch's property titles
-    WithAsyncDependencies[Command | str, list[str]],
+    WithAsyncDependencies[Command | str, list[PropertyTitle]],
 ):
     """
     Call to signal completion. The publish is gated on the required

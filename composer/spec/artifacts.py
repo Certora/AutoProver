@@ -18,7 +18,7 @@ from typing import TypedDict, Unpack
 
 from composer.diagnostics.timing import RunSummary
 from composer.spec.gen_types import PROPERTIES_SUBDIR, under_project
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import CheckName, PropertyFormulation, PropertyTitle
 from composer.spec.util import ensure_dir
 from .types import ArtifactIdentifier, FormalResult
 from composer.spec.source.report.schema import AutoProverReport
@@ -95,7 +95,7 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         (self._properties_dir() / f"{stem}.commentary.md").write_text(commentary)
 
     def _write_property_map(
-        self, stem: str, suffix: str, mapping: dict[str, list[str]],
+        self, stem: str, suffix: str, mapping: dict[PropertyTitle, list[CheckName]],
     ) -> None:
         """A ``{property title: [demonstrating names]}`` map → ``{stem}.{suffix}.json``.
         Titles are unique (enforced at extraction). ``suffix`` is the workflow's term

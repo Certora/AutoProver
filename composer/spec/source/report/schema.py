@@ -15,17 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from composer.spec.types import PropertyFormulation
-
-type RuleName = str
-"""A CVL rule/invariant identifier as it appears in the prover report and in a component's
-``property_rules`` mapping."""
-
-type ComponentName = str
-"""Human name of an AIComposer component (e.g. "Increment"), or "Structural Invariants"."""
-
-type PropertyTitle = str
-"""A property's unique snake_case title — the key in a component's ``property_rules`` mapping."""
+from composer.spec.types import ComponentName, PropertyFormulation, PropertyTitle, RuleName
 
 type RuleRef = tuple[str, RuleName]
 """A rule's identity: ``(spec_file, name)``. A name is only unique within a spec, so the defining

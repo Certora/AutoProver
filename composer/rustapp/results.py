@@ -18,6 +18,7 @@ from composer.pipeline.core import CorePipelineResult, Delivered
 from composer.rustapp.result import RustFormalResult
 from composer.spec.source.report.render import outcome_glyph, outcome_label
 from composer.spec.source.report.schema import Outcome, ReportBackend
+from composer.spec.types import CheckName, PropertyTitle
 
 # Tally display order — mirrors render.py's ``_OUTCOME_ORDER`` so the console and the HTML report
 # list outcomes in the same sequence.
@@ -28,6 +29,9 @@ _ORDER = [Outcome.GOOD, Outcome.BAD, Outcome.TIMEOUT, Outcome.ERROR, Outcome.UNK
 class CheckVerdict:
     """One check's outcome: its display name and the neutral ``Outcome``."""
 
+    #: Deliberately plain ``str``, not ``CheckName`` or ``PropertyTitle``: this is whatever
+    #: :func:`_row_name` chose to call the row — a property's title, a check's name, or a
+    #: component's display name — so it belongs to neither namespace and is never looked up.
     name: str
     outcome: Outcome
 
@@ -53,7 +57,7 @@ class VerdictSummary:
         )
 
 
-def _row_name(check: str, properties: list[str]) -> str:
+def _row_name(check: CheckName, properties: list[PropertyTitle]) -> str:
     """What to call one check's row: the property's own words when it verifies exactly one, and
     otherwise the check's own name — the only thing that names the row unambiguously when one check
     discharges several properties (or the author mapped none to it)."""

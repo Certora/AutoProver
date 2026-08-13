@@ -38,6 +38,7 @@ from composer.pipeline.core import (
 from composer.pipeline.ecosystem import main_instance
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import ReportComponentInput, Verdict
+from composer.spec.source.report.schema import RuleName
 from composer.spec.context import (
     WorkflowContext, SourceCode, FoundryGeneration
 )
@@ -135,7 +136,9 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstan
         )
     
     @override
-    async def fetch_verdicts(self, inp: ReportComponentInput[GeneratedFoundryTest]) -> dict[str, Verdict]:
+    async def fetch_verdicts(
+        self, inp: ReportComponentInput[GeneratedFoundryTest]
+    ) -> dict[RuleName, Verdict]:
         return await _foundry_verdicts(inp)
 
 @dataclass

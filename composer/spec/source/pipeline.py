@@ -27,7 +27,7 @@ from langchain_core.tools import BaseTool
 
 from composer.io.multi_job import TaskInfo
 from composer.spec.context import WorkflowContext, CacheKey, CVLGeneration
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, PropertyTitle
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
 from composer.spec.system_model import (
     ContractComponentInstance, ContractInstance, SourceApplication, HarnessedApplication,
@@ -49,7 +49,7 @@ from composer.spec.source.artifacts import (
 )
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import ReportComponentInput, Verdict, VerdictFetcher
-from composer.spec.source.report.schema import RuleName
+from composer.spec.source.report.schema import ComponentName, RuleName
 from composer.spec.source.task_ids import (
     HARNESS_TASK_ID, AUTOSETUP_TASK_ID, SUMMARIES_TASK_ID,
     INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
@@ -142,7 +142,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
             return []
         inv_props, inv = self._invariant
         return [ReportComponentInput(
-            name="Structural Invariants", props=inv_props, formalized=inv,
+            name=ComponentName("Structural Invariants"), props=inv_props, formalized=inv,
         )]
 
     @override
@@ -188,7 +188,9 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
         invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None = None
         if invariants.inv:
             inv_props = [
-                PropertyFormulation(title=inv.name, description=inv.description, sort="invariant")
+                PropertyFormulation(
+                    title=PropertyTitle(inv.name), description=inv.description, sort="invariant",
+                )
                 for inv in invariants.inv
             ]
             self._store.write_properties(InvariantSpec(), inv_props)

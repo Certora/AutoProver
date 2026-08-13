@@ -29,6 +29,7 @@ from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
 )
 from composer.spec.guidance import ERC20TokenGuidance, UnresolvedCallGuidance
+from composer.spec.types import PropertyTitle, RuleName
 from composer.spec.graph_builder import run_to_completion
 from composer.cvl.tools import put_cvl_raw, put_cvl, get_cvl, edit_cvl
 from composer.ui.tool_display import tool_display, suppress_ack
@@ -42,8 +43,8 @@ CVL_JUDGE_KEY = CacheKey[CVLGeneration, CVLJudge]("judge")
 
 class PropertyRuleMapping(BaseModel):
     """The rules/invariants in the spec that verify a given property."""
-    property_title: str = Field(description="The unique snake_case title of the property (from the batch listing) that these rules verify")
-    rules: list[str] = Field(description="The names of the rules/invariants in the spec that verify this property")
+    property_title: PropertyTitle = Field(description="The unique snake_case title of the property (from the batch listing) that these rules verify")
+    rules: list[RuleName] = Field(description="The names of the rules/invariants in the spec that verify this property")
 
 class Rebuttal(RebuttalBase):
     """A rebuttal to a specific piece of feedback from a prior round, backed by evidence.
@@ -87,7 +88,7 @@ class GeneratedCVL(BaseModel):
     # cache hit retains it. None when the prover never produced a link.
     final_link: str | None = Field(default=None)
 
-    def property_checks(self) -> list[tuple[str, list[str]]]:
+    def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]:
         """Property title -> the CVL rule names that verify it (the report's `ReportableResult`
         adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.rules) for m in self.property_rules]
@@ -120,7 +121,7 @@ _CVL_MAPPING = MappingVocab(check_noun="rule", field_name="property_rules")
 def validate_property_rules(
     property_rules: list[PropertyRuleMapping],
     skipped: list[SkippedProperty],
-    titles: list[str],
+    titles: list[PropertyTitle],
 ) -> str | None:
     """Validate the property->rules mapping declared at completion time. ``titles`` is the batch's
     full set of property titles; returns None if valid, else one message enumerating all problems."""
@@ -159,7 +160,7 @@ class FeedbackToolContext:
     # The batch's property titles (unique, enforced at extraction). Used to validate that
     # the titles named by record_skip / unskip_property / the result mapping refer to real
     # properties, and to check every non-skipped property is mapped.
-    titles: list[str]
+    titles: list[PropertyTitle]
 
 FEEDBACK_VALIDATION_KEY = "feedback"
 
@@ -216,7 +217,7 @@ class _RecordSkipSchema(WithInjectedState[CVLGenerationState], WithInjectedId, W
     The feedback judge will evaluate whether your justification is valid.
     Only use this after genuinely attempting to formalize the property.
     """
-    property_title: str = Field(
+    property_title: PropertyTitle = Field(
         description="The snake_case title of the property from the batch listing"
     )
     reason: str = Field(
@@ -255,7 +256,7 @@ class _UnskipSchema(WithInjectedId, WithImplementation[Command]):
     Remove a previously declared skip for a property.
     Use this if you later find a way to formalize a property you previously skipped.
     """
-    property_title: str = Field(
+    property_title: PropertyTitle = Field(
         description="The snake_case title of the property to un-skip"
     )
 

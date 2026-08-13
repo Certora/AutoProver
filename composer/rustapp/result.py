@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from composer.rustapp.wire import Target, Verdict
 from composer.authoring.state import SkippedProperty
+from composer.spec.types import CheckName, PropertyTitle
 
 
 class RustSetupSpec(BaseModel):
@@ -39,13 +40,13 @@ class RustFormalResult(BaseModel):
 
     commentary: str = ""
     artifact_text: str = ""
-    checks: list[tuple[str, list[str]]] = Field(default_factory=list)
+    checks: list[tuple[PropertyTitle, list[CheckName]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
     output_link: str | None = None
     # Per-check verdicts baked in at formalize time by a self-contained backend (check name -> the
     # wheel's :class:`~composer.rustapp.wire.Verdict`, validated at the seam). Empty for
     # run-service-backed backends (they use fetch_verdicts).
-    verdicts: dict[str, Verdict] = Field(default_factory=dict)
+    verdicts: dict[CheckName, Verdict] = Field(default_factory=dict)
     # What the stamping gate run covered: each validation *target* — one invocation of the checker —
     # with the checks it covered, in the order they ran. Several checks may share one target
     # (Crucible puts a component's whole property set in one fuzz target), so this is neither
@@ -58,17 +59,17 @@ class RustFormalResult(BaseModel):
     # about — is answerable even where a whole target errored.
     targets: list[Target] = Field(default_factory=list)
 
-    def property_checks(self) -> list[tuple[str, list[str]]]:
+    def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
         return [(title, list(names)) for title, names in self.checks]
 
-    def check_properties(self) -> dict[str, list[str]]:
+    def check_properties(self) -> dict[CheckName, list[PropertyTitle]]:
         """``checks`` inverted: check name -> the property titles it verifies. For display, where
         the property's own words ("Balance never overflows") read better than the backend's check
         name (``rule_balance_never_overflows``).
 
         A list, not one title: the mapping is many-to-many, and a check that discharges three
         properties has no single title to be named after. A check absent here has none at all."""
-        titles: dict[str, list[str]] = {}
+        titles: dict[CheckName, list[PropertyTitle]] = {}
         for title, names in self.checks:
             for name in names:
                 titles.setdefault(name, []).append(title)

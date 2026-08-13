@@ -15,36 +15,41 @@ from typing import TYPE_CHECKING, Protocol, Literal
 # identifier when the design doc names the entity that way, but allowed to be
 # anything human-readable.
 #
+# ``CheckName``: the backend's name for one check — a CVL rule, a foundry
+# test, a fuzz harness function. ``FormalResult.property_checks()`` maps each
+# property title onto the checks that verify it.
+# ``ComponentName``: human name of an AIComposer component (e.g. "Increment"),
+# or "Structural Invariants".
+# ``PropertyTitle``: a property's unique snake_case title — the key in a
+# component's ``property_rules`` mapping.
+#
 # ``SolidityIdentifier`` and ``RustIdentifier`` are **siblings** under
-# ``SourceIdentifier``; the conceptual names are siblings of each other and of
-# ``SourceIdentifier``. Passing one where a sibling is expected is a type error,
-# even though all are ``str`` at runtime.
+# ``SourceIdentifier``; every other name is a sibling of the rest. Passing one
+# where a sibling is expected is a type error, even though all are ``str`` at
+# runtime.
 if TYPE_CHECKING:
     class SourceIdentifier(str): ...
     class SolidityIdentifier(SourceIdentifier): ...
     class RustIdentifier(SourceIdentifier): ...
     class ContractName(str): ...
     class ProgramName(str): ...
+    class CheckName(str): ...
+    class ComponentName(str): ...
+    class PropertyTitle(str): ...
 else:
     SourceIdentifier = str
     SolidityIdentifier = str
     RustIdentifier = str
     ContractName = str
     ProgramName = str
+    CheckName = str
+    ComponentName = str
+    PropertyTitle = str
 
-type CheckName = str
-"""The backend's name for one check — a CVL rule, a foundry test, a fuzz harness function.
-``FormalResult.property_checks()`` maps each property title onto the checks that verify it."""
-
-type RuleName = CheckName
-"""A CVL rule/invariant identifier as it appears in the prover report and in a component's
-``property_rules`` mapping."""
-
-type ComponentName = str
-"""Human name of an AIComposer component (e.g. "Increment"), or "Structural Invariants"."""
-
-type PropertyTitle = str
-"""A property's unique snake_case title — the key in a component's ``property_rules`` mapping."""
+#: A ``CheckName`` as the CVL/prover side speaks it: a rule/invariant identifier as it appears in
+#: the prover report and in a component's ``property_rules`` mapping. The same type, not a
+#: sibling — a rule name is what the Rust seam calls a check name.
+RuleName = CheckName
 
 class ArtifactIdentifier(Protocol):
     @property
@@ -87,6 +92,6 @@ class PropertyFormulation(UntitledPropertyFormulation):
     """
     A property or invariant that must hold for the component
     """
-    title: str = Field(description="A short, descriptive snake_case identifier for the property (e.g. 'total_supply_preserved'). Must be unique within the batch of properties.")
+    title: PropertyTitle = Field(description="A short, descriptive snake_case identifier for the property (e.g. 'total_supply_preserved'). Must be unique within the batch of properties.")
     
 

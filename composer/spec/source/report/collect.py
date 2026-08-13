@@ -138,7 +138,7 @@ async def collect[R: ReportableResult](
         skip_reasons = {s.property_title: s.reason for s in res.skipped}
         mapping = dict(res.property_checks())
 
-        def _ref(unit_name: str) -> RuleRef:
+        def _ref(unit_name: RuleName) -> RuleRef:
             v = verdicts.get(unit_name)
             return ((v.unit_file if v and v.unit_file else unit_file), unit_name)
 

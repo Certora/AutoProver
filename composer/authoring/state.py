@@ -18,11 +18,12 @@ from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 
 from composer.core.state import merge_validation
+from composer.spec.types import CheckName, PropertyTitle
 
 
 class SkippedProperty(BaseModel):
     """A property the agent explicitly decided not to formalize."""
-    property_title: str = Field(description="The unique snake_case title of the property from the batch listing")
+    property_title: PropertyTitle = Field(description="The unique snake_case title of the property from the batch listing")
     reason: str = Field(description="Justification for why this property was skipped")
 
 
@@ -44,7 +45,9 @@ def merge_skips(
     )
 
 
-def merge_expected_failures(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
+def merge_expected_failures(
+    left: dict[CheckName, str], right: dict[CheckName, str]
+) -> dict[CheckName, str]:
     """State reducer for the check-name → reason map of checks expected to fail.
 
     An empty reason removes the marking — the marking tool rejects an empty reason at the tool
@@ -121,12 +124,12 @@ class MappingVocab:
 
 
 def validate_check_mapping(
-    mapping: Sequence[tuple[str, Sequence[str]]],
+    mapping: Sequence[tuple[PropertyTitle, Sequence[CheckName]]],
     skipped: list[SkippedProperty],
-    titles: list[str],
+    titles: Sequence[PropertyTitle],
     vocab: MappingVocab,
     *,
-    ran: Sequence[str] | None = None,
+    ran: Sequence[CheckName] | None = None,
 ) -> str | None:
     """Validate the property→checks mapping declared at completion time. None if valid, otherwise
     one message enumerating every problem.
@@ -146,8 +149,8 @@ def validate_check_mapping(
     ran_names = set(ran) if ran is not None else None
     noun = vocab.check_noun
     errors: list[str] = []
-    mapped: set[str] = set()
-    claimed: set[str] = set()
+    mapped: set[PropertyTitle] = set()
+    claimed: set[CheckName] = set()
     for title, names_declared in mapping:
         if title not in valid_titles:
             errors.append(f"Unknown property title {title!r} (not one of the batch's properties).")
@@ -162,7 +165,7 @@ def validate_check_mapping(
                 "in the mapping (un-skip it or remove it)."
             )
             continue
-        names = [n.strip() for n in names_declared if n.strip()]
+        names = [CheckName(n.strip()) for n in names_declared if n.strip()]
         if not names:
             errors.append(f"Property {title!r} must map to at least one non-empty {noun} name.")
             continue

@@ -10,7 +10,7 @@ What varies is LLM-facing text — tool names, descriptions, the noun for a chec
 parameterized rather than unified away.
 """
 
-from typing import Annotated, Callable, override
+from typing import Annotated, Callable, Sequence, override
 
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from langgraph.types import Command
@@ -20,12 +20,13 @@ from graphcore.graph import tool_state_update
 from graphcore.tools.schemas import WithAsyncDependencies, WithInjectedId
 
 from composer.authoring.state import SkippedProperty
+from composer.spec.types import PropertyTitle
 from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display, tool_display_of
 
 
 #: Supplies the batch's property titles when a skip tool runs. A thunk rather than the list itself
 #: because a backend may only be able to reach them through the graph's runtime context.
-type Titles = Callable[[], list[str]]
+type Titles = Callable[[], Sequence[PropertyTitle]]
 
 
 @tool_display(
@@ -40,7 +41,7 @@ class RecordSkip(WithInjectedId, WithAsyncDependencies[Command, Titles]):
     excludes the property from the publish-time mapping check; only use
     after a genuine attempt to formalize.
     """
-    property_title: str = Field(
+    property_title: PropertyTitle = Field(
         description="The snake_case title of the property from the batch listing"
     )
     reason: str = Field(
@@ -78,7 +79,7 @@ class Unskip(WithInjectedId, WithAsyncDependencies[Command, Titles]):
     Remove a previously declared skip for a property. Use this if you later
     find a way to formalize a property you previously skipped.
     """
-    property_title: str = Field(
+    property_title: PropertyTitle = Field(
         description="The snake_case title of the property to un-skip"
     )
 

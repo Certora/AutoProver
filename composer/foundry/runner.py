@@ -49,6 +49,7 @@ from graphcore.tools.schemas import (
 from composer.ui.tool_display import tool_display
 
 from composer.authoring.state import make_validation_stamper
+from composer.spec.types import CheckName
 from composer.foundry.state import (
     FORGE_TEST_VALIDATION_KEY,
     FoundryGenerationState,
@@ -81,7 +82,7 @@ class ForgeTestRunEvent(TypedDict):
 
 @dataclass(frozen=True)
 class _TestResult:
-    name: str
+    name: CheckName
     status: str
     reason: str | None
 
@@ -387,7 +388,7 @@ def _parse_forge_json(stdout: str) -> list[_TestResult] | None:
     report = _FORGE_REPORT.validate_python(doc)
     return [
         _TestResult(
-            name=signature.split("(", 1)[0].strip(),
+            name=CheckName(signature.split("(", 1)[0].strip()),
             status=entry.status,
             reason=entry.reason,
         )
@@ -396,7 +397,7 @@ def _parse_forge_json(stdout: str) -> list[_TestResult] | None:
     ]
 
 
-def _format_summary(results: list[_TestResult], expected_failures: dict[str, str]) -> str:
+def _format_summary(results: list[_TestResult], expected_failures: dict[CheckName, str]) -> str:
     """Render a compact human-readable summary of the JSON results."""
     if not results:
         return "(no tests reported)"

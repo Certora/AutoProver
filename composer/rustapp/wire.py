@@ -35,12 +35,22 @@ treatment ``model`` and ``unit`` already get, and for the same reason.
 """
 
 from collections import Counter
-from typing import Annotated, Any, Callable, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from composer.spec.source.report.schema import Outcome
-from composer.spec.types import PropertyType
+from composer.spec.types import CheckName, ComponentName, PropertyTitle, PropertyType
+
+# ``TargetName``: what a backend selects when it invokes the checker — one :class:`Target`'s name
+# (Crucible: the component's harness fn / Cargo feature). Phantom-typed like the vocabulary in
+# :mod:`composer.spec.types`, and defined here because targets exist only on this seam. A sibling
+# of ``CheckName``: a check that shares no target is *named after* its check name
+# (:meth:`Check.target_or_name`), but the two namespaces are otherwise distinct.
+if TYPE_CHECKING:
+    class TargetName(str): ...
+else:
+    TargetName = str
 
 
 class WireModel(BaseModel):
@@ -66,8 +76,8 @@ class Property(WireModel):
     #: component name). A title identifies a property only within its own unit, so a setup spec —
     #: which is sent every unit's properties at once — needs this to tell two same-titled ones apart
     #: and to know which unit's surface each has to be checkable against.
-    component: str
-    title: str
+    component: ComponentName
+    title: PropertyTitle
     #: The shared vocabulary (:data:`~composer.spec.types.PropertyType`), mirrored by the Rust
     #: ``PropertyKind`` — a closed set on both sides rather than a free string.
     sort: PropertyType
@@ -186,7 +196,7 @@ class SkippedProperty(WireModel):
     ``SkippedProperty`` and carries the same fields as the host's own
     :class:`composer.authoring.state.SkippedProperty`, which is what it is built from."""
 
-    property_title: str
+    property_title: PropertyTitle
     reason: str
 
 
@@ -197,8 +207,8 @@ class Delivered(WireModel):
     artifact_text: str = ""
     #: The validation targets this component's checks ran under, in the order they ran — what a
     #: callout-mode wheel keys its deliverable sections and declared features on.
-    targets: list[str] = Field(default_factory=list)
-    property_checks: list[tuple[str, list[str]]] = Field(default_factory=list)
+    targets: list[TargetName] = Field(default_factory=list)
+    property_checks: list[tuple[PropertyTitle, list[CheckName]]] = Field(default_factory=list)
     #: What the author declined to formalize, and why — disjoint from :attr:`property_checks`.
     skipped: list[SkippedProperty] = Field(default_factory=list)
     unit_file: str | None = None
@@ -219,7 +229,7 @@ ComponentOutcome = Annotated[Delivered | ComponentGaveUp, Field(discriminator="s
 class FinalizeComponent(WireModel):
     """One component's line in the ``finalize`` payload."""
 
-    name: str
+    name: ComponentName
     outcome: ComponentOutcome
 
 
@@ -294,14 +304,14 @@ class Check(WireModel):
     answered by the wheel's ``target_for``. Several checks may share one, so the host runs each
     distinct target once and the wheel attributes the outcome back to each check."""
 
-    name: str
-    properties: list[str]
-    target: str | None
+    name: CheckName
+    properties: list[PropertyTitle]
+    target: TargetName | None
 
     # Mirrors the Rust ``Check::target_or_name``.
-    def target_or_name(self) -> str:
+    def target_or_name(self) -> TargetName:
         """The target this check runs under — its own name unless it shares one."""
-        return self.target or self.name
+        return self.target or TargetName(self.name)
 
 
 class Target(WireModel):
@@ -318,7 +328,7 @@ class Target(WireModel):
 
     #: What the backend selects when it runs the checker (Crucible: the component's harness fn, which is also its Cargo
     #: feature).
-    name: str
+    name: TargetName
     #: Usually one; several when a backend checks a whole property set in one run.
     checks: list[Check] = Field(default_factory=list)
 
@@ -361,7 +371,7 @@ class ValidateVerdicts(WireModel):
     """It built, and every check the target covers got a verdict, ``(check_name, verdict)``."""
 
     kind: Literal["verdicts"]
-    verdicts: list[tuple[str, Verdict]]
+    verdicts: list[tuple[CheckName, Verdict]]
 
     def resolve(self, target: Target) -> list[tuple[Check, Verdict]]:
         """Each of the target's checks paired with the verdict the wheel returned for it, in the
@@ -449,7 +459,7 @@ class RustAppModule(Protocol):
     #: ``(input_json, check) -> target | None``. Which invocation a declared check runs under;
     #: ``None`` makes it its own. Pure — the check *names* are the author's, and only the grouping
     #: is the wheel's to say.
-    target_for: Callable[[str, str], str | None]
+    target_for: Callable[[str, str], TargetName | None]
     #: ``(input_json) -> Prompt`` JSON. Asked once per authoring session — the session keeps its
     #: own history, so there is no per-attempt revise prompt.
     author_prompt: Callable[[str], str]

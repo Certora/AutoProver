@@ -53,6 +53,7 @@ from composer.rustapp.wire import (
 from composer.rustapp.wire import Verdict as WireVerdict
 from composer.sandbox.config import BackendSpec
 from composer.spec.context import WorkflowContext
+from composer.spec.types import CheckName, PropertyTitle
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import run_to_completion
 from composer.spec.service_host import ServiceHost
@@ -110,11 +111,11 @@ class PropertyCheckMapping(BaseModel):
 
     Many-to-many: a property may need several {checks}, and one {check} may carry several
     properties (a single rule discharging three related invariants)."""
-    property_title: str = Field(
+    property_title: PropertyTitle = Field(
         description="The unique snake_case title of the property (from the batch listing) that "
         "these {checks} verify"
     )
-    checks: list[str] = Field(
+    checks: list[CheckName] = Field(
         description="The names of the {checks} in your spec that verify this property"
     )
 
@@ -124,10 +125,10 @@ class RustSpecExtra(AuthoringExtra):
     #: check names in it are the set a gate run executes, and the whole of it is what the publish
     #: gate validates. Empty for a setup session, which formalizes no properties of its own.
     property_checks: list[PropertyCheckMapping]
-    expected_failures: Annotated[dict[str, str], merge_expected_failures]
+    expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The verdicts the last full gating run produced, check name → the wheel's verdict. Recorded
     #: verbatim: attribution is the wheel's, and the host does no verdict logic of its own.
-    verdicts: dict[str, WireVerdict]
+    verdicts: dict[CheckName, WireVerdict]
     #: The targets that run covered, each carrying the checks it covered — the ground truth the
     #: publish gate holds the mapping to, and what the result reports as this component's coverage.
     ran: list[Target]
@@ -149,18 +150,18 @@ _MAPPING = MappingVocab(
 )
 
 
-def properties_of(mapping: Sequence[PropertyCheckMapping], check: str) -> list[str]:
+def properties_of(mapping: Sequence[PropertyCheckMapping], check: CheckName) -> list[PropertyTitle]:
     """The property titles the mapping says ``check`` verifies — several when one check discharges
     several properties, none while the author has not said."""
     return [m.property_title for m in mapping if check in m.checks]
 
 
-def declared_names(mapping: Sequence[PropertyCheckMapping]) -> list[str]:
+def declared_names(mapping: Sequence[PropertyCheckMapping]) -> list[CheckName]:
     """The check names the author's mapping references, in first-seen order and without repeats.
 
     This is the set that runs. A name may be claimed by several properties (one rule discharging
     three invariants), so this is not the mapping flattened — it is its distinct names."""
-    return list(dict.fromkeys(n.strip() for m in mapping for n in m.checks if n.strip()))
+    return list(dict.fromkeys(CheckName(n.strip()) for m in mapping for n in m.checks if n.strip()))
 
 
 def declared_checks(
@@ -269,7 +270,7 @@ class ValidateSpec(
     `checks` runs only those, which is for iterating on one problem; it never stamps. Any edit
     after a stamping run invalidates the stamp.
     """
-    checks: list[str] | None = Field(
+    checks: list[CheckName] | None = Field(
         default=None,
         description="Run only the targets covering these {check} names. Omit to run everything, "
         "which is what the publish gate requires.",
@@ -300,7 +301,7 @@ class ValidateSpec(
                     )
                 wanted = [c for c in wanted if c.name in asked]
             covered = targets_of(wanted)
-            verdicts: dict[str, WireVerdict] = {}
+            verdicts: dict[CheckName, WireVerdict] = {}
             for target in covered:
                 res = parse_validate(
                     await _blocking(
@@ -376,8 +377,8 @@ def _emit_verdict(deps: GateDeps, check: Check, verdict: WireVerdict) -> None:
 
 
 def _unexplained(
-    verdicts: dict[str, WireVerdict], expected_failures: dict[str, str]
-) -> set[str]:
+    verdicts: dict[CheckName, WireVerdict], expected_failures: dict[CheckName, str]
+) -> set[CheckName]:
     """The checks that did not pass and were not marked as expected to fail — what stands between
     the run and the publish gate."""
     return {
@@ -386,7 +387,9 @@ def _unexplained(
     }
 
 
-def _verdict_report(verdicts: dict[str, WireVerdict], expected_failures: dict[str, str]) -> str:
+def _verdict_report(
+    verdicts: dict[CheckName, WireVerdict], expected_failures: dict[CheckName, str]
+) -> str:
     lines = []
     for name, v in verdicts.items():
         mark = " (expected to fail)" if name in expected_failures else ""
@@ -407,7 +410,7 @@ class ExpectCheckFailure(WithAsyncImplementation[Command | str], WithInjectedId)
     property does not hold of the program under test. A marked {check} no longer blocks the publish
     gate, and your reason is recorded with the result. Do not use it to get past your own bug.
     """
-    check_name: str = Field(description="The name of the {check} expected to fail")
+    check_name: CheckName = Field(description="The name of the {check} expected to fail")
     reason: str = Field(
         description="Why this {check} is expected to fail — what the failure demonstrates"
     )
@@ -428,7 +431,7 @@ class ExpectCheckPassage(WithAsyncImplementation[Command], WithInjectedId):
     Unmark a {check} previously marked expected-to-fail. Every {check} is expected to pass by
     default, so this only reverts a prior `expect_check_failure`.
     """
-    check_name: str = Field(description="The name of the {check} now expected to pass after all")
+    check_name: CheckName = Field(description="The name of the {check} now expected to pass after all")
 
     @override
     async def run(self) -> Command:
@@ -586,7 +589,7 @@ class FeedbackTool(
 
 @dataclass
 class PublishDeps:
-    titles: list[str]
+    titles: list[PropertyTitle]
 
 
 class MapChecks(
@@ -753,11 +756,11 @@ class SessionResult:
     commentary: str
     spec: str
     skipped: list[SkippedProperty]
-    property_checks: list[tuple[str, list[str]]]
-    verdicts: dict[str, WireVerdict]
+    property_checks: list[tuple[PropertyTitle, list[CheckName]]]
+    verdicts: dict[CheckName, WireVerdict]
     #: What the stamping gate run covered — the targets, each with its checks.
     ran: list[Target]
-    expected_failures: dict[str, str]
+    expected_failures: dict[CheckName, str]
 
 
 async def run_session(
@@ -765,7 +768,7 @@ async def run_session(
     module: RustAppModule,
     input: AuthorInput,
     kind: Literal["component", "setup"],
-    titles: list[str],
+    titles: list[PropertyTitle],
     env: ServiceHost,
     ctx: WorkflowContext[Any],
     run: PipelineRun,
