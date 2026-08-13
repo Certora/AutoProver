@@ -46,13 +46,14 @@ from composer.authoring.state import (
 from composer.authoring.tools import RecordSkip, Unskip, give_up_tool
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.rustapp.descriptor import AppDescriptor
+from composer.rustapp.result import RustFormalResult, RustSetupSpec
 from composer.rustapp.wire import (
     AuthorInput, CompileOk, Prompt, RustAppModule, Target, Check, ValidateBuildFailed,
     parse_compile, parse_judge, parse_prompt, parse_validate,
 )
 from composer.rustapp.wire import Verdict as WireVerdict
 from composer.sandbox.config import BackendSpec
-from composer.spec.context import WorkflowContext
+from composer.spec.context import CacheKey, WorkflowContext
 from composer.spec.types import CheckName, PropertyTitle
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import run_to_completion
@@ -473,20 +474,18 @@ _JUDGE_PROTOCOL = (
     "when there is nothing to change). Your verdict is what the author's publish gate reads."
 )
 
-# The reviewer gets the spec and the program's API in its prompt and shares the run memory, so it
-# does not need the exploration sub-agent — direct reads (`get_file`/`grep`) cover its spot-checks,
-# and each `code_explorer` call is itself a multi-call sub-agent.
-JUDGE_EXCLUDE_TOOLS = frozenset({"code_explorer"})
+class RustJudge:
+    """Phantom marker for the judge's child context."""
 
 
-def build_judge(
+def build_judge[K: (RustFormalResult, RustSetupSpec)](
     module: RustAppModule,
     input_json: str,
     *,
-    ctx: WorkflowContext[Any],
+    author_ctx: WorkflowContext[K],
     env: ServiceHost,
     backend_name: str,
-) -> FeedbackThunk[Any] | None:
+) -> FeedbackThunk[RebuttalBase] | None:
     """The wheel's judge as the shared feedback thunk, or ``None`` when it declares none for this
     input — a wheel may review components and not the shared setup spec.
 
@@ -503,10 +502,15 @@ def build_judge(
     def apply_system(builder: JudgeBuilder) -> JudgeBuilder:
         return builder.with_sys_prompt(system)
 
-    def apply_prompt(builder: JudgeBuilder, spec: str, skipped, rebuttals) -> JudgeBuilder:
+    def apply_prompt(
+        builder: JudgeBuilder, spec: str,
+        skipped: Sequence[SkippedProperty], rebuttals: Sequence[RebuttalBase],
+    ) -> JudgeBuilder:
         return builder.with_initial_prompt(module.judge_instruction(input_json, spec))
 
-    def input_parts(spec: str, skipped, rebuttals) -> list[str | dict]:
+    def input_parts(
+        spec: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[RebuttalBase],
+    ) -> list[str | dict]:
         parts: list[str | dict] = ["The proposed spec is", spec]
         if skipped:
             parts.append("The author declined to formalize these properties:")
@@ -527,7 +531,9 @@ def build_judge(
         return parts
 
     return build_feedback_judge(
-        ctx=ctx,
+        # The judge reviews under its own child context so its memory namespace is disjoint from
+        # the author's — a reviewer that reads the author's notes is not independent.
+        ctx=author_ctx.child(CacheKey[K, RustJudge]("judge")),
         env=env,
         apply_system=apply_system,
         apply_prompt=apply_prompt,
@@ -540,7 +546,7 @@ def build_judge(
 
 @dataclass
 class FeedbackDeps:
-    thunk: FeedbackThunk[Any]
+    thunk: FeedbackThunk[RebuttalBase]
 
 
 class FeedbackTool(
@@ -559,7 +565,7 @@ class FeedbackTool(
     the concrete evidence. Do not file rebuttals for feedback you merely disagree with — address
     those by revising the spec.
     """
-    rebuttals: list[Any] = Field(
+    rebuttals: list[RebuttalBase] = Field(
         default_factory=list,
         description="Rebuttals to specific prior-round feedback, each identifying the point being "
         "rebutted, classifying the evidence, and supplying it. Empty is the expected default.",
@@ -763,14 +769,14 @@ class SessionResult:
     expected_failures: dict[CheckName, str]
 
 
-async def run_session(
+async def run_session[K: (RustFormalResult, RustSetupSpec)](
     *,
     module: RustAppModule,
     input: AuthorInput,
     kind: Literal["component", "setup"],
     titles: list[PropertyTitle],
     env: ServiceHost,
-    ctx: WorkflowContext[Any],
+    ctx: WorkflowContext[K],
     run: PipelineRun,
     workdir: Path,
     sandbox_dict: BackendSpec,
@@ -797,7 +803,7 @@ async def run_session(
         vocab=vocab,
     )
     component = kind == "component"
-    judge = build_judge(module, input_json, ctx=ctx, env=env, backend_name=backend_name)
+    judge = build_judge(module, input_json, author_ctx=ctx, env=env, backend_name=backend_name)
 
     gate_tool = "validate_spec" if component else "compile_spec"
     required = [VALIDATE_KEY if component else COMPILE_KEY]
@@ -971,7 +977,7 @@ def _publish_tool(deps: PublishDeps, vocab: CheckVocab) -> BaseTool:
     return schema.bind(deps).as_tool("result")
 
 
-def _feedback_tool(judge: FeedbackThunk[Any], rebuttal: type[RebuttalBase]) -> BaseTool:
+def _feedback_tool(judge: FeedbackThunk[RebuttalBase], rebuttal: type[RebuttalBase]) -> BaseTool:
     """``feedback_tool``, with the rebuttal type the wheel's declared evidence kinds produced."""
     schema = create_model(
         "FeedbackTool",

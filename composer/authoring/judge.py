@@ -1,8 +1,8 @@
 """The feedback judge an authoring session invokes on its own draft.
 
 A judge is a sub-agent, not a scoring function: it gets the session's tool belt, a rough-draft
-scratchpad, the run memory, and a read-back of the spec under review, and it must call ``result``
-with a structured :class:`PropertyFeedback`.
+scratchpad, a memory namespace of its own, and a read-back of the spec under review, and it must
+call ``result`` with a structured :class:`PropertyFeedback`.
 
 Two properties are enforced rather than requested. It must read the draft back through the tool
 (``did_read``) instead of reviewing the copy pasted into its prompt, and the author may file
@@ -126,6 +126,10 @@ def build_feedback_judge[R: RebuttalBase](
     ``readback`` is the backend's own read-back tool over ``curr_spec``, built with
     :func:`composer.authoring.buffer.get_spec_tool` against :class:`JudgeState` — it keeps the tool
     name the backend's prompts already refer to.
+
+    ``ctx`` must be the judge's own context — every backend derives a ``child`` with a ``"judge"``
+    key rather than passing the author's. The memory tool is namespaced by the context, and a judge
+    that shares the author's namespace reviews with the author's notes in hand.
     """
     staged = bind_standard(
         env.builder_heavy().with_tools(env.all_tools),
