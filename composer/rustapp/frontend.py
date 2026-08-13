@@ -54,7 +54,7 @@ def _notice_headline(payload: dict) -> str:
 
 class GenericRustTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
     """Per-task handler that streams the app's declared domain events into a
-    collapsible log under the task panel."""
+    collapsible log pinned at the top of the task panel."""
 
     def __init__(
         self,
@@ -81,7 +81,9 @@ class GenericRustTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
             log = RichLog(highlight=True, markup=False)
             log.styles.min_height = 12
             self._event_log = log
-            await self._mount_to(self._panel, Collapsible(log, title="Events"))
+            # Created lazily so an event-less task — e.g. design-doc discovery —
+            # never grows an empty Events section.
+            await self._mount_fixture(Collapsible(log, title="Events"))
         return self._event_log
 
     @override

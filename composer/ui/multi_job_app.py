@@ -409,6 +409,14 @@ class MultiJobTaskHandler[H]:
         if target.max_scroll_y - target.scroll_y <= 3:
             target.scroll_end(animate=False)
 
+    async def _mount_fixture(self, widget: Widget) -> None:
+        """Mount a task-lifetime fixture: pinned above the conversation stream as the
+        panel's first child, rather than appended at whatever stream position it was
+        first needed. For widgets that accumulate for the task's whole life (e.g. a
+        streaming event log); output anchored to one moment in the conversation
+        belongs in ``_mount_to``."""
+        await self._panel.mount(widget, before=0)
+
     # ── Content links ───────────────────────────────────────
 
     async def render_content_link(self, label: str, content: str, filename: str) -> None:
