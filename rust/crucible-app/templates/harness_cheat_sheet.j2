@@ -54,6 +54,18 @@ Crucible harness API (author a FIXTURE only — no test fns):
     // a dead-end state and STOPS the action sequence there, so a negative action returning `false`
     // truncates every campaign that draws it.
 
+- Anything fallible that a FUZZED value reaches must be handled, never unwrapped. The one that
+  bites hardest is PDA derivation: use `Pubkey::try_find_program_address(...)` and `return false`
+  on `None` — `find_program_address` PANICS when no bump yields a valid address.
+  A panic here is not a finding and is not reported as one. It happens outside the fuzz target, so
+  the fuzzer records no crash, the process aborts, and EVERY property in that campaign comes back
+  as an error rather than a verdict. Worse, the input that reached it is written to the shared
+  corpus, so every LATER component's campaign loads it and dies the same way — one unchecked
+  derivation takes down the whole run, not one test.
+  Seeds fixed when you write them (`b"lma"`, a key created in `setup()`) cannot fail this way; the
+  rule is for seeds an `action_*` argument or fuzzed byte reaches. In `setup()` itself, panicking
+  is still fine — that is the harness failing before any campaign starts.
+
 - The fixture NEVER asserts a property: no `fuzz_assert*` inside an `action_*`, and no
   `"[<property title>] ..."` message anywhere in it. The fixture is built into EVERY component's
   fuzz target, so an assertion here fires in campaigns that never asked about the property it names.

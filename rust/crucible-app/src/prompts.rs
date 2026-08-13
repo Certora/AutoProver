@@ -284,6 +284,41 @@ mod tests {
     }
 
     #[test]
+    fn both_authors_are_told_a_panic_on_fuzzed_input_costs_the_whole_run() {
+        // The klend run that produced 84 uninformative ERROR verdicts across three components:
+        // one unchecked `find_program_address` in the shared fixture aborted every campaign that
+        // drew the input, and the input then sat in the shared corpus poisoning later components.
+        // Both halves have to be in the prompt — the `try_` rule alone reads as style advice, and
+        // an author who does not know a panic is invisible to the fuzzer will keep reaching for
+        // the unchecked form.
+        let app = CrucibleApp;
+        let setup = AuthorInput {
+            authored: Authored::Setup {
+                model: serde_json::json!({}).into(),
+                units: Vec::new(),
+            },
+            props: vec![prop("fifo", "fifo")],
+            ..prep_input(SolanaSourceUnit::default(), serde_json::json!({}))
+        };
+        let fixture = app.author_prompt(&setup).instruction;
+        let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        let f = norm(&fixture);
+        assert!(f.contains("try_find_program_address"), "no guarded derivation in:\n{f}");
+        assert!(f.contains("outside the fuzz target"), "the panic's invisibility is missing:\n{f}");
+        assert!(f.contains("shared corpus"), "the blast radius is missing:\n{f}");
+        // `setup()` is exempt, and saying so keeps the rule from being read as "never panic".
+        assert!(f.contains("In `setup()` itself, panicking is still fine"), "{f}");
+
+        // The judge reviews suites, not the fixture (`judge` returns None for setup), so the same
+        // defect reaches it only through a component — where it is this author's to fix.
+        let comp = component_input("withdraw_queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
+        let j = norm(&app.judge_instruction(&comp, "fn c_fifo(f: &mut Fixture) {}"));
+        assert!(j.contains("Panics are not findings"), "no panic criterion in the judge:\n{j}");
+        assert!(j.contains("report it under C8"), "fixture-gap routing missing:\n{j}");
+    }
+
+    #[test]
     fn the_judge_rejects_untriageable_messages_and_precondition_scope_errors() {
         // The two harness defects that produced BOTH of klend's false counterexamples. Catching
         // them at the judge is cheaper than reporting them as findings a human must triage.

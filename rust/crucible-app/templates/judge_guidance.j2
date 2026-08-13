@@ -86,6 +86,14 @@ lamport-delta assertion on a signer/fee-payer that ignores the fee (e.g.
 `depositor_before - amount == depositor_after`) is a false oracle: it FAILS on a correct
 program. Flag it — exact-delta assertions belong on non-signer accounts (the receiving PDA),
 or must subtract the fee / assert a bound.
+- Panics are not findings, and they are not local: a fallible call left unchecked on fuzzed input —
+`find_program_address` (which panics when no bump yields a valid address), an `unwrap()` on a
+derivation or a read that arbitrary bytes can defeat — aborts the campaign instead of failing a
+check. The abort happens outside the fuzz target, so no crash is recorded and EVERY property in
+that campaign returns an error, not just the test that panicked; the input then persists in the
+shared corpus and takes down later components' campaigns too. Flag any such call in THIS suite:
+the fix is the `try_` form, or a guard that skips the assertion. The same call in the FIXTURE is a
+gap this author cannot fix — report it under C8 rather than rejecting the suite for it.
 - Diagnosable failure messages: a custom message REPLACES the macro's built-in operand dump, so
 every message must interpolate the values it compares (`"…total_supply={} exceeds limit={}",
 total, limit`) plus, inside a loop, the account key. A bare `"[title] invariant violated"`
