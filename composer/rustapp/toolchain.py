@@ -88,7 +88,24 @@ class ProjectToolchain(Protocol):
           (``docs/command-sandbox.md`` §5).
 
         Returns what the prep established, chain-shaped, for the host to report back to the wheel as
-        ``AuthorInput.prep_facts`` — empty when the plan asked for nothing it had to establish."""
+        ``AuthorInput.prep_facts`` — empty when the plan asked for nothing it had to establish.
+
+        As a concrete example — Crucible's fuzz harness on Solana — the request is a ``SolanaPrep``,
+        asking for three things, in order:
+
+        * *warm*: ``cargo fetch`` each of ``warm_dirs`` — the harness crate's dir **and** the
+          program's own crate dir — into the run's private ``CARGO_HOME``, so the confined +
+          offline builds that follow find every dependency already present instead of dying on
+          the first download.
+        * *build*: ``cargo-build-sbf`` the program's lib target (``build_program``), leaving
+          ``target/deploy/<lib>.so`` in the workspace for the harness to load into LiteSVM.
+        * *IDL*: place the program's IDL at ``idl_dest`` — the operator's ``--program-idl`` file
+          when supplied, else the one ``anchor idl build`` emits — normalized to carry the
+          program's address.
+
+        The warm and the build are side effects on the workspace; only the IDL becomes a *fact*.
+        What this call returns for Crucible is ``SolanaPrepFacts`` — today one field, ``idl``: the
+        project-root-relative path where the IDL landed."""
         ...
 
 
