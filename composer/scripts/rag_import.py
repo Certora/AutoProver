@@ -1,15 +1,17 @@
 """Generic RAG importer — ingest any corpus described by a common JSON manifest.
 
 This is the shared back half of the RAG build (see ``docs/rag-import-format.md``): it reads one or
-more :class:`~composer.rag.import_format.RagManifest` documents and owns everything downstream —
-length-bounded chunking (``BlockBuilder``), embedding, ``part`` numbering, and the *dual-path*
-ingestion every corpus wants:
+more :class:`~composer.rag.import_format.RagManifest` documents and owns everything downstream of
+the manifest — length-bounded chunking (``BlockBuilder``), embedding, ``part`` numbering, and the
+DB writes. A manifest declares the two retrieval products separately, and each feeds exactly its
+own index:
 
-* ``add_chunks_batch`` — length-bounded embedded chunks for **vector** (semantic) search;
-* ``add_manual_section`` — the full section for **keyword** search + exact ``get_section``.
+* ``embedded_groups`` → ``add_chunks_batch`` — length-bounded embedded chunks for **vector**
+  (semantic) search, cut according to each block's declared kind;
+* ``manual_sections`` → ``add_manual_section`` — whole documents for **keyword** search + exact
+  ``get_section``, never split.
 
-Both paths are always populated — there is no per-section knob; "ingest a corpus" means feed both
-indexes. A *producer* does the corpus-specific parsing and emits the manifest; this module is
+A *producer* does the corpus-specific parsing and emits the manifest; this module is
 corpus-agnostic — an application ships its corpus as a committed ``<knowledge_base>.rag.json`` and
 nothing about it lives here.
 
@@ -28,7 +30,14 @@ from collections import defaultdict
 import spacy
 
 from composer.rag.db import KNOWLEDGE_BASES, get_rag_db
-from composer.rag.import_format import BlockKind, RagManifest, Section, SCHEMA_VERSION
+from composer.rag.import_format import (
+    EmbeddedBlockKind,
+    EmbeddedGroup,
+    ManualBlockKind,
+    ManualSection,
+    RagManifest,
+    SCHEMA_VERSION,
+)
 from composer.rag.models import get_model
 from composer.rag.text import code_ref_tag
 from composer.rag.types import BlockChunk
@@ -40,12 +49,12 @@ logger = logging.getLogger(__name__)
 _BATCH_SIZE = 50
 
 
-def _manual_chunk(sec: Section) -> BlockChunk:
-    """One full-section chunk (code as ``<code-ref-N>`` tags) for keyword / get-section."""
+def _manual_chunk(sec: ManualSection) -> BlockChunk:
+    """The whole section as one chunk (code as ``<code-ref-N>`` tags) for keyword / get-section."""
     parts: list[str] = []
     code_refs: list[str] = []
     for b in sec.blocks:
-        if b.kind is BlockKind.CODE:
+        if b.kind is ManualBlockKind.CODE:
             parts.append(code_ref_tag(len(code_refs)))
             code_refs.append(b.body)
         else:
@@ -53,14 +62,19 @@ def _manual_chunk(sec: Section) -> BlockChunk:
     return BlockChunk(headers=list(sec.headers), part=0, code_refs=code_refs, chunk="\n\n".join(parts))
 
 
-def _embedded_chunks(sec: Section, config: BuilderConfig) -> list[BlockChunk]:
-    """Length-bounded embedded chunks for vector search, via the shared builder."""
-    builder = BlockBuilder(header=list(sec.headers), config=config)
-    for b in sec.blocks:
-        if b.kind is BlockKind.CODE:
-            builder.add_code(b.body)
-        else:
-            builder.append_text(b.body, is_structured_boundary=True, unbreakable=False)
+def _embedded_chunks(group: EmbeddedGroup, config: BuilderConfig) -> list[BlockChunk]:
+    """Length-bounded embedded chunks for vector search, cut as each block's kind dictates."""
+    builder = BlockBuilder(header=list(group.headers), config=config)
+    for b in group.blocks:
+        match b.kind:
+            case EmbeddedBlockKind.CODE:
+                builder.add_code(b.body)
+            case EmbeddedBlockKind.PARAGRAPH:
+                builder.append_text(b.body, is_structured_boundary=True, unbreakable=False)
+            case EmbeddedBlockKind.ATOMIC:
+                builder.append_text(b.body, is_structured_boundary=True, unbreakable=True)
+            case EmbeddedBlockKind.CONTINUATION:
+                builder.append_text(b.body, is_structured_boundary=False, unbreakable=False)
     return list(builder.finish())
 
 
@@ -88,37 +102,42 @@ def _resolve_output(manifest: RagManifest, override: str | None) -> str:
 
 
 def _print_manifest(manifest: RagManifest) -> None:
-    """Dry-run: render each section's full-section chunk to stdout, no DB writes."""
+    """Dry-run: render each manual section and name each embedded group, no DB writes."""
     print(f"=== knowledge_base: {manifest.knowledge_base}  (source: {manifest.source})")
-    for s in manifest.sections:
+    for s in manifest.manual_sections:
         print(f"\n#### {' / '.join(h for h in s.headers if h)}")
-        print(_manual_chunk(s).chunk[:500])
+        print(_manual_chunk(s).chunk)
+    print(f"\n=== {len(manifest.embedded_groups)} embedded group(s):")
+    for g in manifest.embedded_groups:
+        kinds = ", ".join(b.kind.value for b in g.blocks)
+        print(f"  {' / '.join(h for h in g.headers if h)}  [{kinds}]")
 
 
 async def _ingest(
     db, manifest: RagManifest, config: BuilderConfig, seen_paths: dict[tuple[str, ...], int]
 ) -> tuple[int, int]:
-    """Ingest one manifest's sections into ``db``, feeding both indexes. ``seen_paths`` is shared
-    across manifests targeting the same DB so the ``manual_sections`` ``(headers, part)`` unique
-    key never collides."""
+    """Ingest one manifest's two products into ``db``. ``seen_paths`` is shared across manifests
+    targeting the same DB so the ``manual_sections`` ``(headers, part)`` unique key never
+    collides."""
     buffer: list[BlockChunk] = []
-    n_docs = n_manual = 0
-    for s in manifest.sections:
-        buffer.extend(_embedded_chunks(s, config))
+    n_docs = 0
+    for g in manifest.embedded_groups:
+        buffer.extend(_embedded_chunks(g, config))
         if len(buffer) >= _BATCH_SIZE:
             await db.add_chunks_batch(buffer)
             n_docs += len(buffer)
             buffer = []
+    if buffer:
+        await db.add_chunks_batch(buffer)
+        n_docs += len(buffer)
+
+    for s in manifest.manual_sections:
         manual = _manual_chunk(s)
         key = tuple(manual.headers)
         manual.part = seen_paths.get(key, 0)
         seen_paths[key] = manual.part + 1
         await db.add_manual_section(manual)
-        n_manual += 1
-    if buffer:
-        await db.add_chunks_batch(buffer)
-        n_docs += len(buffer)
-    return n_docs, n_manual
+    return n_docs, len(manifest.manual_sections)
 
 
 async def _async_main(args: argparse.Namespace) -> None:
@@ -159,7 +178,7 @@ def main() -> None:
         "--output", "-o", default=None,
         help="RAG DB connection string. Overrides the manifest's knowledge_base -> connection lookup.",
     )
-    parser.add_argument("--print", action="store_true", help="Dry-run: print sections, no DB writes.")
+    parser.add_argument("--print", action="store_true", help="Dry-run: print both products, no DB writes.")
     asyncio.run(_async_main(parser.parse_args()))
 
 

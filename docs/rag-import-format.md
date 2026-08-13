@@ -59,14 +59,32 @@ uv group** (spaCy + sentence-transformers). A new Rust app that just wants to co
 inherits all of that — which is what makes Crucible the natural first case to lift onto a generic
 mechanism (the other two builders already exist and work, so they can migrate later or never).
 
-### The right cut: logical sections, not pre-chunked rows
+### The right cut: two declared products, chunked by the importer
 
-The seam should fall **between parsing and chunking**, not after chunking. A producer emits
-*logical sections* — a header path plus an ordered list of prose/code blocks — exactly the
-shape the former `crucible_ragbuild`'s internal `_Section` already had. The importer owns everything from
-there down: running `BlockBuilder` to produce length-bounded embedded chunks, assembling the
-full-section manual chunk, assigning `<code-ref-N>` tags, numbering `part`s, embedding, and
-batching.
+The seam should fall **between parsing and chunking**, not after chunking. But the two indexes
+store **different products**, not one product rendered twice:
+
+- the **manual index** (`manual_sections`) stores *documents* — complete reference units,
+  addressable by header path, returned whole by `get_section`, at whatever size they are;
+- the **vector index** (`documents`) stores *passages* — length-bounded chunks whose cut points
+  matter, and whose quality depends on knowing what each piece of content *is*: a paragraph that
+  may be split at sentence boundaries, a table that must stay intact, prose that merely continues
+  around a code sample.
+
+The CVL builder keeps two pipelines for exactly this reason: its manual documents are
+subtree-inclusive renderings (a section's document contains its child sections inline, with
+editorial rules like Example subsections never getting their own document), while its vector
+chunks are disjoint bounded passages driven with per-element chunking flags (§5). A single
+flattened "section" list feeding both indexes can express neither side faithfully — it erases the
+chunking hints the vector side needs, and it forces the manual unit to coincide with the vector
+grouping unit.
+
+So the manifest declares the two products **explicitly and independently** (§2): manual sections
+as whole documents, embedded groups as kind-annotated block runs. Laying out both is where the
+genuinely corpus-specific editorial judgment lives — often two views of the same source, but
+never derived one from the other. The importer owns everything mechanical from there down:
+running `BlockBuilder` to cut embedded groups into length-bounded chunks, assembling manual
+documents, assigning `<code-ref-N>` tags, numbering `part`s, embedding, and batching.
 
 Why this cut and not "emit finished `BlockChunk`s":
 
@@ -81,18 +99,12 @@ Why this cut and not "emit finished `BlockChunk`s":
   `(h1..h6, part)`; repeated header paths must bump `part`. That's a whole-corpus concern the
   importer is positioned to own; a producer emitting isolated chunks can't.
 
-The one thing this cut asks of producers is that they decide **section boundaries** — how blocks
-group into sections. That is exactly where the genuinely corpus-specific editorial judgment
-lives (e.g. Foundry merges signature/description/parameters/returns into one summary section and
-gives each example its own; see §5), and it is expressed simply by *how the producer lays out
-sections*. Within a section, the importer still sub-splits by length.
-
 ---
 
 ## 2. The JSON format
 
-A corpus is one **manifest** document: metadata plus an ordered list of sections. Proposed
-schema (v1), mirrored by a pydantic model the way
+A corpus is one **manifest** document: metadata plus the two retrieval products. Schema (v1),
+mirrored by a pydantic model the way
 [`descriptor.py`](../composer/rustapp/descriptor.py) mirrors the Rust `AppDescriptor`:
 
 ```jsonc
@@ -100,7 +112,7 @@ schema (v1), mirrored by a pydantic model the way
   "version": 1,
   "knowledge_base": "crucible_kb",         // logical KB tag (== descriptor rag_db_default)
   "source": "crucible@a1b2c3d docs/*.md",  // free-text provenance, for logs only
-  "sections": [
+  "manual_sections": [
     {
       "headers": ["Writing Fuzz Harnesses", "PDA Seed Encoding"],
       "blocks": [
@@ -108,10 +120,17 @@ schema (v1), mirrored by a pydantic model the way
         { "kind": "code", "body": "let (pda, bump) = Pubkey::find_program_address(...);" },
         { "kind": "text", "body": "The bump is then ..." }
       ]
-    },
+    }
+  ],
+  "embedded_groups": [
     {
-      "headers": ["Writing Fuzz Harnesses", "PDA Seed Encoding", "Example"],
-      "blocks": [ { "kind": "code", "body": "..." } ]
+      "headers": ["Writing Fuzz Harnesses", "PDA Seed Encoding"],
+      "blocks": [
+        { "kind": "paragraph", "body": "Seeds are encoded as ..." },
+        { "kind": "code", "body": "let (pda, bump) = Pubkey::find_program_address(...);" },
+        { "kind": "continuation", "body": "— the bump is then verified by the runtime." },
+        { "kind": "atomic", "body": "| seed | meaning |\n| --- | --- |\n| ... | ... |" }
+      ]
     }
   ]
 }
@@ -131,27 +150,38 @@ Field notes:
   ([`documents`](../composer/rag/db.py) / `manual_sections` store `content + h1..h6`), so this
   is **not** persisted per row; it just lands in the importer's log line. (If we later want
   per-row provenance we'd extend the DB schema — out of scope for v1.)
-- **`headers`** — the section's header path, at most 6 entries: `_normalize_head` maps entry *i*
-  to column `h(i+1)`, leaving a falsy or absent level as `NULL` in its own column (so a gap stays a
-  gap — nothing is left-packed). A path longer than 6 is a producer bug, not something the importer
-  trims: it raises rather than silently dropping the deepest level.
-- **`blocks`** — ordered `{ "kind": "text" | "code", "body": "..." }`. Prose is fed to
-  `append_text` (spaCy-split, structured boundary); code is fed to `add_code` and gets a
-  `<code-ref-N>` tag automatically. This is the whole content model — it maps 1:1 onto the two
-  `BlockBuilder` operations, so nothing about a section is unrepresentable.
+- **`headers`** — a header path (on both products), at most 6 entries: `_normalize_head` maps
+  entry *i* to column `h(i+1)`, leaving a falsy or absent level as `NULL` in its own column (so a
+  gap stays a gap — nothing is left-packed). A path longer than 6 is a producer bug, not something
+  the importer trims: it raises rather than silently dropping the deepest level.
+- **`manual_sections[].blocks`** — ordered `{ "kind": "text" | "code", "body": "..." }`. A manual
+  section is never split, so the only distinction that matters is prose vs. code: code is held
+  aside as `code_refs` behind an importer-assigned `<code-ref-N>` placeholder, keeping it out of
+  the keyword-searchable text while `get_section` substitutes it back.
+- **`embedded_groups[].blocks`** — ordered `{ "kind": ..., "body": "..." }` where the kind
+  carries the chunking semantics, mapping 1:1 onto the ways the CVL builder already drives
+  `BlockBuilder`:
 
-**Every section feeds both retrieval paths.** There is no knob for this: the importer always
-ingests a section into *both* the vector index (semantic search over length-bounded embedded
-chunks) and the manual index (keyword search + exact `get_section` over the whole section). The
-two indexes answer different questions — "what passage *means* this?" vs. "which sections
-*contain* this term, and give me one in full" — and a corpus's tools module
-(`composer/tools/<corpus>_rag.py`, bound by [`rag_env.py`](../composer/tools/rag_env.py)) typically
-binds all three retrieval styles. So populating both is what the per-corpus builders already did,
-and what "ingest a corpus" means here.
+  | kind | what the block is | when a chunk overflows |
+  | --- | --- | --- |
+  | `paragraph` | a self-contained prose unit | split at sentence boundaries; cuts prefer the block edge, carrying the previous chunk's last sentence as overlap context |
+  | `atomic` | structure that must survive intact (tables, lists) | never sentence-split — emitted as one oversized chunk |
+  | `continuation` | prose resuming the stream an earlier block interrupted | no boundary preference; may be cut at any sentence end |
+  | `code` | a code sample | never split, never embedded as prose — held as `code_refs` behind a `<code-ref-N>` placeholder |
+
+**Each product feeds exactly its own index.** The two indexes answer different questions — "what
+passage *means* this?" vs. "which documents *contain* this term, and give me one in full" — and a
+corpus declares what it wants in each. Typically the two lists are parallel views of the same
+source, since a corpus's tools module (`composer/tools/<corpus>_rag.py`, bound by
+[`rag_env.py`](../composer/tools/rag_env.py)) usually binds all three retrieval styles — but
+nothing requires it: a vector-only corpus (what Foundry's builder produces today, §5) is an
+`embedded_groups`-only manifest, and manual documents may overlap in content (as CVL's
+subtree-inclusive documents do) without affecting the vector side at all.
 
 Deliberately **not** in the schema: `part` (importer-assigned), `code_refs` / `<code-ref-N>`
 tags (importer-assigned), `max_length` / chunking knobs (importer flags — a cross-corpus tuning
-concern, not corpus data), and any ingest-path selector (there is only one behaviour: both).
+concern, not corpus data), and any ingest-path selector — what a corpus ingests is exactly what
+it declares.
 
 ---
 
@@ -172,13 +202,15 @@ Behaviour:
    file, before any DB write).
 2. **Resolve the target** once per manifest: `--output` if given, else the connection registered
    for `knowledge_base` (§4). Refuse to run if neither resolves.
-3. For each section, feed **both** indexes:
-   - **vector** → build a `BlockBuilder` from the blocks, buffer the resulting `BlockChunk`s,
-     flush via `add_chunks_batch` at `_BATCH_SIZE`;
-   - **manual** → assemble one full-section `BlockChunk` (code as `<code-ref-N>` tags), assign
-     its `part` from a per-header-path counter, `add_manual_section`.
-4. **`--print`** — dry-run: render sections/chunks to stdout, no DB writes (parity with every
-   builder's existing `--print`).
+3. Ingest each product into its own index:
+   - **vector** → run a `BlockBuilder` over each embedded group, cutting as each block's kind
+     dictates (§2); buffer the resulting `BlockChunk`s, flush via `add_chunks_batch` at
+     `_BATCH_SIZE`;
+   - **manual** → assemble each manual section into one whole-document `BlockChunk` (code as
+     `<code-ref-N>` tags), assign its `part` from a per-header-path counter,
+     `add_manual_section`.
+4. **`--print`** — dry-run: render manual sections and name embedded groups on stdout, no DB
+   writes (parity with every builder's existing `--print`).
 
 That is the orchestration the former `crucible_ragbuild` hand-rolled, now reusable by any producer
 that emits the manifest. Note it needs the `ragbuild` uv group (spaCy + sentence-transformers) — but
@@ -211,28 +243,34 @@ corpus's *import* target and its *runtime* search tools resolve by one name.
 ## 5. Does the format generalize? (Foundry / CVL — future adopters, not now)
 
 No *existing* corpus moves onto this mechanism now — the first adopter is a new one (Crucible's).
-But to be sure we aren't designing a Crucible-shaped
-format by accident, it's worth checking the format could absorb the *other* corpora later — the
-harder one being Foundry, whose builder does real editorial grouping, not just parsing: it merges
-`signature`/`description`/`parameters`/`returns` into **one** summary chunk keyed by the cheatcode
-name, gives `Examples`/`Gotchas` their **own** chunks, and drops `Related Cheatcodes`. None of
-that needs new schema — it's all just *how a producer lays out sections*:
+But to be sure we aren't designing a Crucible-shaped format by accident, it's worth checking the
+format could absorb the *other* corpora later.
 
-- Summary → one section `headers: ["Cheatcodes", "<NAME>"]` whose `blocks` are the merged,
-  labelled content (`"Signature:\n..."`, `"Description:\n..."`, the parameter list as text, …).
-- Each example/gotcha → its own section `headers: ["Cheatcodes", "<NAME>", "Examples"]`.
-- `Related Cheatcodes` → simply not emitted.
+**Foundry** does real editorial grouping, not just parsing: it merges
+`signature`/`description`/`parameters`/`returns` into **one** summary chunk keyed by the
+cheatcode name, gives `Examples`/`Gotchas` their **own** chunks, and drops `Related Cheatcodes`.
+All of that is producer layout, and its per-element decisions map 1:1 onto the block kinds:
+parameter tables and lists are `atomic`, descriptions are `paragraph`s, follow-on prose is
+`continuation`, samples are `code`. Its builder populates **only the vector index**, which the
+format expresses directly as an `embedded_groups`-only manifest. A migration would also be the
+moment to decide *deliberately* whether to start emitting `manual_sections`: Foundry's
+`foundry_cheatcodes_keyword_search` / `..._get_section` tools currently query a
+`manual_sections` table that nothing writes, and the dual declaration makes that gap visible in
+the manifest instead of leaving it to ingestion side effects.
 
-The genuinely Foundry-specific pieces — the `.mdx → .html` conversion
-([`foundry_process.py`](../composer/scripts/foundry_process.py)) and the table-to-parameter-list
-translation — would stay in a producer. So the section-layout model absorbs a non-trivial corpus
-cleanly; the design isn't Crucible-only.
+**CVL** is the corpus that shows why the products must be independent:
+[`ragbuild.py`](../composer/scripts/ragbuild.py) runs two pipelines over the same parsed HTML.
+Its vector chunks are disjoint length-bounded passages built with exactly the per-element flags
+the block kinds encode (paragraphs splittable, admonitions/lists/tables/asides atomic, stray
+inter-tag text as continuation), while its manual documents are **subtree-inclusive** — a
+section's document contains all its descendant sections inline, with editorial rules of its own
+(an `Example` subsection never gets its own document). Flat sections feeding both indexes could
+represent neither the overlap nor the flags; two independent products represent both directly.
 
-One aside worth recording (but **out of scope**): a future Foundry migration would incidentally
-fix a latent gap. The current `foundry_ragbuild.py` only populates the vector index, so Foundry's
-`foundry_cheatcodes_keyword_search` / `..._get_section` tools query a `manual_sections` table that
-is never written. Because this importer always feeds both indexes (§2), routing Foundry through it
-would finally populate that table. Not a reason to migrate now — just a note for whoever does.
+The genuinely corpus-specific pieces — Foundry's `.mdx → .html` conversion
+([`foundry_process.py`](../composer/scripts/foundry_process.py)) and table-to-parameter-list
+translation, CVL's docutils traversal — would stay in producers either way. So the model absorbs
+both non-trivial corpora cleanly; the design isn't Crucible-only.
 
 ---
 
@@ -264,9 +302,9 @@ The mechanism, corpus-free:
 1. Manifest model [`composer/rag/import_format.py`](../composer/rag/import_format.py) — pydantic,
    and deliberately importable with no RAG-stack dependency, so a producer needs only it.
 2. The generic importer [`composer/scripts/rag_import.py`](../composer/scripts/rag_import.py) (§3),
-   covered by [`tests/test_rag_import.py`](../tests/test_rag_import.py) (both indexes fed, `part`
-   numbering across sections *and* across manifests sharing a DB, code-ref tagging, version and
-   target-resolution refusals).
+   covered by [`tests/test_rag_import.py`](../tests/test_rag_import.py) (each product feeds exactly
+   its own index, block kinds cut as declared, `part` numbering across sections *and* across
+   manifests sharing a DB, code-ref tagging, version and target-resolution refusals).
 3. The `KNOWLEDGE_BASES` registry (§4) in [`composer/rag/db.py`](../composer/rag/db.py) — **empty**,
    the same resting state as [`rag_env.py`](../composer/tools/rag_env.py)'s tools registry.
 
@@ -282,6 +320,12 @@ No runtime code changes — the search tools, `rag_env.py`, and the DB API are t
 
 ## 8. Alternatives considered
 
+- **One shared section list feeding both indexes (an earlier draft of this format).** Rejected
+  once measured against what the two indexes actually store (§1): it forced the manual unit to
+  coincide with the vector grouping unit (CVL's subtree-inclusive documents are unrepresentable),
+  flattened every prose block to one kind so the importer had to guess chunking flags the
+  producer knew, and hard-wired "every section feeds both" so a vector-only corpus like Foundry's
+  was inexpressible. Replaced before any corpus shipped on it, so the schema version stayed 1.
 - **Emit finished `BlockChunk`s in the JSON (cut below chunking).** Rejected: pushes spaCy +
   the `max_length` policy + `<code-ref-N>` tagging + global `part` numbering into every
   producer, re-duplicating the heavy, error-prone parts and re-coupling producers to the RAG
