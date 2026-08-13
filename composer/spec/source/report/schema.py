@@ -159,6 +159,25 @@ class CoverageReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class AppliedEditRecord(BaseModel):
+    """Provenance of one applied source edit, as the editor reported it. Duplicates the
+    workflow-internal ``AppliedEdit`` shape on purpose: report.json is a persisted contract and
+    must not alias a model that is free to refactor."""
+    edit_id: str
+    executive_summary: str
+    why_sound: str
+
+
+class SourceEditRecord(BaseModel):
+    """The source modifications one component's verification ran against: the editor's per-edit
+    account in application order, plus the cumulative unified diff from the on-disk baseline to the
+    proved source. Its presence means the component's outcomes are claims about the modified code,
+    not the code as shipped."""
+    component: ComponentName
+    applied_edits: list[AppliedEditRecord]
+    cumulative_diff: str
+
+
 type ReportBackend = Literal["prover", "foundry", "none"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
 this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
@@ -232,7 +251,7 @@ class Finding(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0"] = "3.0"
+    schema_version: Literal["3.0", "3.1"] = "3.1"
     backend: ReportBackend = "prover"
     contract_name: str
     run_timestamp_utc: str | None = None
@@ -244,6 +263,9 @@ class AutoProverReport(BaseModel):
     #: Formalization gaps — properties that exist but no rule formalizes (see the two gap types).
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
+    #: Source modifications each component's verification ran against; empty when every
+    #: component was verified against the on-disk source.
+    source_edits: list[SourceEditRecord] = Field(default_factory=list)
     coverage: CoverageReport
     #: Violated rules surfaced as audit issues (one per BAD rule; empty
     #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose

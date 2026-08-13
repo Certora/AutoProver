@@ -12,7 +12,7 @@ here is why" is part of what a judge accepted.
 
 import hashlib
 from dataclasses import dataclass
-from typing import Annotated, Callable, Sequence
+from typing import Annotated, Protocol, Sequence
 from typing_extensions import TypedDict
 
 from pydantic import BaseModel, Field
@@ -71,36 +71,54 @@ class AuthoringExtra(TypedDict):
     required_validations: list[str]
 
 
-def spec_digest(curr_spec: str, skipped: list[SkippedProperty]) -> str:
-    """The publish surface's identity: the buffered spec plus the skip declarations. Stamps from
-    gate tools are this value, so any later edit to either invalidates them."""
+def spec_digest(
+    curr_spec: str,
+    skipped: list[SkippedProperty],
+    version_history: Sequence[str] = (),
+) -> str:
+    """The publish surface's identity: the buffered spec, the skip declarations, and — in the
+    editing-enabled source pipeline — the applied-edit history, so a stamp earned before a source
+    edit goes stale with it. Stamps from gate tools are this value, so any later edit to any of the
+    three invalidates them. Sessions without source editing pass no history and hash identically."""
     digester = hashlib.md5()
     digester.update(curr_spec.encode())
     for s in skipped:
         digester.update(f"{s.property_title}:{s.reason}".encode())
+    for edit_id in version_history:
+        digester.update(f"edit:{edit_id}".encode())
     return digester.hexdigest()
 
 
-def make_validation_stamper(key: str) -> Callable[[AuthoringExtra], dict[str, str]]:
+class ValidationStamper(Protocol):
+    def __call__(
+        self, state: AuthoringExtra, version_history: Sequence[str] = ()
+    ) -> dict[str, str]: ...
+
+
+def make_validation_stamper(key: str) -> ValidationStamper:
     """A ``state -> {key: digest}`` a gate tool merges into ``validations`` when it accepts the
     draft. Returned rather than inlined so the stamping tool never spells the digest itself."""
-    def stamp(state: AuthoringExtra) -> dict[str, str]:
-        return {key: spec_digest(state["curr_spec"] or "", state["skipped"])}
+    def stamp(state: AuthoringExtra, version_history: Sequence[str] = ()) -> dict[str, str]:
+        return {key: spec_digest(state["curr_spec"] or "", state["skipped"], version_history)}
     return stamp
 
 
 def check_completion(
-    state: AuthoringExtra, *, nothing_written: str = "no spec written yet."
+    state: AuthoringExtra,
+    version_history: Sequence[str] = (),
+    *,
+    nothing_written: str = "no spec written yet.",
 ) -> str | None:
     """None if the publish gate is satisfied, else the reason it is not.
 
-    A stamp that doesn't match the current digest is stale (the agent edited the spec after the
-    stamp was issued) and is reported the same way as a missing one — from the gate's point of view
-    they are the same thing: nothing has accepted *this* draft."""
+    A stamp that doesn't match the current digest is stale (the agent edited the spec — or, when a
+    ``version_history`` is in play, the source — after the stamp was issued) and is reported the
+    same way as a missing one — from the gate's point of view they are the same thing: nothing has
+    accepted *this* draft."""
     spec = state["curr_spec"]
     if spec is None:
         return f"Completion REJECTED: {nothing_written}"
-    digest = spec_digest(spec, state["skipped"])
+    digest = spec_digest(spec, state["skipped"], version_history)
     validations = state["validations"]
     for key in state["required_validations"]:
         if validations.get(key) != digest:

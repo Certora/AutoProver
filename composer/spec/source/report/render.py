@@ -26,8 +26,9 @@ from typing import TypedDict
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, Finding, FormalizedProperty, GaveUpComponent, GroupStatus,
-    Outcome, PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim,
+    AutoProverReport, ComponentName, CoverageReport, Finding, FormalizedProperty, GaveUpComponent,
+    GroupStatus, Outcome, PropertyGroup, PropertyKey, ReportBackend, RuleRef, RuleVerdict,
+    SkippedClaim, SourceEditRecord,
 )
 
 
@@ -158,6 +159,9 @@ class GroupView(TypedDict):
     label: str
     kind: str
     rows: list[RowView]
+    #: True when any member property's component was verified against edited source; renders
+    #: the "edited source" badge linking to the source-modifications appendix.
+    edited: bool
 
 
 class FindingView(TypedDict):
@@ -191,6 +195,7 @@ class ReportTemplateParams(TypedDict):
     groups: list[GroupView]
     skipped: list[SkippedClaim]
     gave_up: list[GaveUpComponent]
+    source_edits: list[SourceEditRecord]
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
@@ -262,6 +267,7 @@ def _group_view(
     rules_by_ref: dict[RuleRef, RuleVerdict],
     unit_labels: dict[Outcome, str],
     group_labels: dict[GroupStatus, str],
+    edited_components: set[ComponentName],
 ) -> GroupView:
     """Invert the group's members into rule rows: each rule the group's properties formalize, labelled
     with the descriptions of the in-group properties that pull it in (the edge labels). The same rule
@@ -299,6 +305,7 @@ def _group_view(
         "label": group_labels[group.status],
         "kind": _GROUP_KIND[group.status],
         "rows": rows,
+        "edited": any(component in edited_components for component, _ in group.members),
     }
 
 
@@ -329,6 +336,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
     rules_by_ref = {r.ref: r for r in report.rules}
     unit_labels = _OUTCOME_LABELS[report.backend]
     group_labels = _GROUP_LABELS[report.backend]
+    edited_components = {e.component for e in report.source_edits}
     return {
         "contract_name": report.contract_name,
         "run_timestamp_utc": report.run_timestamp_utc,
@@ -344,11 +352,12 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         "group_counts": _group_counts([g.status for g in report.groups], group_labels),
         "findings": [_finding_view(f) for f in report.findings],
         "groups": [
-            _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels)
+            _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels, edited_components)
             for g in report.groups
         ],
         "skipped": report.skipped,
         "gave_up": report.gave_up_components,
+        "source_edits": report.source_edits,
     }
 
 

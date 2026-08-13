@@ -14,8 +14,8 @@ from graphcore.tools.schemas import WithInjectedId, WithInjectedState, WithAsync
 from composer.authoring.state import check_completion
 from composer.authoring.tools import give_up_tool
 from composer.spec.cvl_generation import (
-    static_tools, run_cvl_generator, CVLGenerationInput, CVLGenerationState,
-    FeedbackToolContext, CVLGenerationExtra
+    static_tools, property_tools, run_cvl_generator, CVLGenerationInput, CVLGenerationState,
+    CVLGenerationExtra
 )
 
 from composer.spec.service_host import Sort
@@ -208,7 +208,7 @@ async def generate_cvl_batch(
 
     ctx = root_ctx.abstract(CVLGeneration)
 
-    feedback_ctxt = property_feedback_judge(
+    feedback_services = property_feedback_judge(
         ctx=ctx.child(CVL_JUDGE_KEY), env=env, prompt=FeedbackTemplate.bind({
             "context": component,
             "sort": env.sort,
@@ -220,6 +220,7 @@ async def generate_cvl_batch(
         .with_tools(env.all_tools)
         .with_tools(injected_tools)
         .with_tools(static_tools())
+        .with_tools(property_tools(feedback_services))
         .with_tools([
             give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="property generation"),
             AdvisoryTypecheck.bind(typechecker).as_tool("advisory_typecheck"),
@@ -229,7 +230,6 @@ async def generate_cvl_batch(
         .with_output_key("result")
         .with_input(NatspecGenerationInput)
         .with_state(NatspecGenerationState)
-        .with_context(FeedbackToolContext)
         .with_sys_prompt_template("nosource_property_generation_system_prompt.j2")
         .inject(
             lambda b: NoSourceGen.bind({
@@ -254,7 +254,6 @@ async def generate_cvl_batch(
             suggested_spec_path=None,
             property_rules=[],
         ),
-        ctxt=feedback_ctxt,
         description = f"{contract_name} {component.component.name} ({len(props)} properties)"
     )
     assert "result" in res

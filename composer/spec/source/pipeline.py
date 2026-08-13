@@ -21,6 +21,7 @@ context and hands them to ``run_pipeline``.
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import override
 
 from langchain_core.tools import BaseTool
@@ -42,8 +43,8 @@ from composer.spec.source.harness import (
 from composer.spec.source.summarizer import setup_summaries
 from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.autosetup import SetupSuccess
-from composer.spec.source.prover import get_prover_tool
-from composer.spec.source.author import batch_cvl_generation
+from composer.spec.source.prover import get_prover_tool, materializing_project
+from composer.spec.source.author import batch_cvl_generation, SourceEditing
 from composer.spec.source.artifacts import (
     ProverArtifactStore, ComponentSpec, InvariantSpec,
 )
@@ -51,8 +52,12 @@ from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import (
     EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
 )
-from composer.spec.source.report.schema import ComponentName, RuleName
+from composer.spec.source.report.schema import (
+    AppliedEditRecord, ComponentName, RuleName, SourceEditRecord,
+)
 from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.munge.vfs_diff import diff_against_baseline
+
 from composer.spec.source.task_ids import (
     HARNESS_TASK_ID, AUTOSETUP_TASK_ID, SUMMARIES_TASK_ID,
     INVARIANTS_TASK_ID, INVARIANT_CVL_TASK_ID,
@@ -114,6 +119,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
     _resources: list[CVLResource]
     _invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None
     _fetch: VerdictFetcher[GeneratedCVL]
+    _editing: SourceEditing
     _analysis_store: CexAnalysisStore
 
     @override
@@ -136,7 +142,8 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
             description=label,
             source=run.source,
             spec_dir=SPECS_DIR,
-            spec_stem=ComponentSpec(feat.slugified_name).stem
+            spec_stem=ComponentSpec(feat.slugified_name).stem,
+            editing=self._editing,
         )
 
     @override
@@ -154,6 +161,26 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         self, inp: ReportComponentInput[GeneratedCVL],
     ) -> dict[RuleName, Verdict]:
         return await self._fetch(inp)
+
+    @override
+    async def source_edits(
+        self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        # Only real component outcomes can carry edits: the structural-invariant
+        # phase runs without an editing kit (see SourceEditing).
+        records: list[SourceEditRecord] = []
+        for o in outcomes:
+            if not isinstance(o.result, Delivered) or not o.result.result.applied_edits:
+                continue
+            res = o.result.result
+            records.append(SourceEditRecord(
+                component=o.feat.component.name,
+                applied_edits=[AppliedEditRecord(**e.model_dump()) for e in res.applied_edits],
+                cumulative_diff=await asyncio.to_thread(
+                    diff_against_baseline, res.vfs, Path(run.source.project_root)
+                ),
+            ))
+        return records
 
     @override
     def findings_evidence(self) -> EvidenceFetcher | None:
@@ -193,6 +220,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
     _prover_tool: BaseTool
     _prover_opts: ProverOptions
     _analyzed: SourceApplication
+    _editing: SourceEditing
     _analysis_store: CexAnalysisStore
 
     @override
@@ -231,7 +259,12 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
                         description="Structural invariant CVL",
                         source=run.source,
                         spec_dir=SPECS_DIR,
-                        spec_stem=InvariantSpec().stem
+                        spec_stem=InvariantSpec().stem,
+                        # Invariants are assumed as preconditions by every
+                        # downstream spec, so they must hold against the
+                        # unedited source: no editor, frozen source tools,
+                        # immutable-source judge.
+                        editing=None,
                     ),
                 )
                 if isinstance(inv_result, GaveUp):
@@ -256,7 +289,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
         return ProverRunner(
             GeneratedCVL, "prover",
             self._store, self._prover_tool, setup_config.prover_config, resources, invariant,
-            make_prover_fetcher(), self._analysis_store,
+            make_prover_fetcher(), self._editing, self._analysis_store,
         )
 
     async def _autosetup(self, run: PipelineRun) -> tuple[SetupSuccess, list[CVLResource]]:
@@ -309,6 +342,7 @@ class ProverBackend:
 
     artifact_store: ProverArtifactStore
     _prover_opts: ProverOptions
+    editing: SourceEditing
     analysis_store: CexAnalysisStore
 
     async def preflight(self, run: PipelineRun[AutoProvePhase, None]) -> None:
@@ -326,14 +360,17 @@ class ProverBackend:
             lambda: run_harness_creation(run.ctx, run.source, run.env, analyzed),
         )
         harnessed = _lift_harnessed(analyzed, sys_desc)
+        # The materializing strategy covers every phase with one tool: an empty
+        # VFS (invariants, or an author that never edited) runs in-situ; a
+        # non-empty one runs in a temp materialization of the working copy.
         prover_tool = get_prover_tool(
-            run.env.llm_heavy(), run.source.contract_name, run.source.project_root,
+            run.env.llm_heavy(), run.source.contract_name, materializing_project(run.source.project_root, self.editing.live.mat),
             prover_opts=self._prover_opts, analysis_store=self.analysis_store,
         )
         return ProverPrepared(
             main_instance(harnessed, run.source),
             self.artifact_store, sys_desc, harnessed, prover_tool,
-            self._prover_opts, analyzed, self.analysis_store,
+            self._prover_opts, analyzed, self.editing, self.analysis_store,
         )
 
     def to_artifact_id(self, c: ContractComponentInstance) -> ComponentSpec:

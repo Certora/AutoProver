@@ -20,6 +20,7 @@ from composer.spec.system_model import (
 from composer.spec.solana.model import (
     SolanaApplication, SolanaComponentInstance, SolanaProgramInstance
 )
+from composer.templates.loader import _patch_environment_filters
 from composer.spec.service_host import Sort # defined here? huh?
 import hypothesis.strategies._internal.core as hcore
 
@@ -32,6 +33,7 @@ TEMPLATES_DIR = REPO_ROOT / "composer" / "templates"
 MANIFEST = Manifest.validate_json((REPO_ROOT / "template_manifest.json").read_text())
 
 env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), undefined=StrictUndefined)
+_patch_environment_filters(env)
 
 #: Cap on any drawn list field (see ``_field_strategy``). Templates iterate these; a handful of
 #: elements covers the same branches as an unbounded draw, at a fraction of the entropy.

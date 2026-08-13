@@ -53,8 +53,10 @@ from composer.llm.types import CacheLevel
 from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import EvidenceFetcher, ReportComponentInput, Verdict
-from composer.spec.source.report.schema import RuleName, ReportBackend
+from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher
+from composer.spec.source.report.schema import (
+    AutoProverReport, RuleName, ReportBackend, SourceEditRecord,
+)
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
@@ -96,6 +98,13 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         """Synthetic report inputs beyond the per-component outcomes — the prover folds in its
         'Structural Invariants' here. Default: none."""
+        return []
+
+    async def source_edits(
+        self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        """Source-modification records for components whose verification ran against edited
+        source. Default: none (foundry; prover runs without editing)."""
         return []
 
     @abstractmethod
@@ -387,14 +396,18 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     ] + formalizer.extra_report_inputs()
     findings_evidence = formalizer.findings_evidence()
     try:
-        report = await run.runner(
-            job=lambda: build_report(
+        async def _report() -> AutoProverReport:
+            return await build_report(
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
+                source_edits=await formalizer.source_edits(outcomes, run),
                 # Findings only when the backend supplies evidence — skip the heavy model otherwise.
                 findings_llm=run.env.llm_heavy() if findings_evidence else None,
                 fetch_evidence=findings_evidence,
-            ),
+
+            )
+        report = await run.runner(
+            job=_report,
             task_info=TaskInfo(REPORT_TASK_ID, label="Report Extraction", phase=backend.core_phases["report"])
         )
         backend.artifact_store.write_report(report)
