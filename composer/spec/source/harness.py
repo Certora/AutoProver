@@ -40,9 +40,13 @@ from composer.spec.graph_builder import run_to_completion, bind_standard
 from composer.spec.source.autosetup import run_autosetup, read_autosetup_usage, read_autosetup_prover_usage, SetupFailure, SetupSuccess
 from composer.spec.service_host import ServiceHost
 from composer.spec.context import WorkflowContext, SourceCode, CacheKey
+from composer.spec.key_family import KeyFamily
 from composer.spec.util import string_hash
 from composer.spec.gen_types import TypedTemplate, certora_relative_to_project, under_project
-from composer.spec.system_model import SolidityIdentifier, SourceApplication, SourceExternalActor, SourceExplicitContract
+from composer.spec.system_model import (
+    HarnessDefinition, HarnessedApplication, HarnessedExplicitContract,
+    SolidityIdentifier, SourceApplication, SourceExternalActor, SourceExplicitContract,
+)
 
 _logger = getLogger(__name__)
 
@@ -133,6 +137,45 @@ class HarnessAnalysisParams(TypedDict):
 class ContractSetup(BaseModel):
     system_description: SystemDescriptionHarnessed
     config: SetupSuccess
+
+
+def lift_harnessed(
+    s: SourceApplication, sys_desc: SystemDescriptionHarnessed,
+) -> HarnessedApplication:
+    """Re-key harness definitions by harnessed contract and fold them into a
+    ``HarnessedApplication`` — each ``SourceExplicitContract`` becomes a
+    ``HarnessedExplicitContract`` carrying the harnesses generated for it.
+
+    Declared beside the models because every consumer of the harnessed view
+    must build it identically — the prover pipeline, and any offline walker
+    re-deriving component cache keys (``composer.meta.run``): the harnessed
+    app is part of the unit's ``cache_material``."""
+    contract_to_harness: dict[SolidityIdentifier, list[HarnessDefinition]] = {}
+    for c in sys_desc.transitive_closure:
+        if not c.harness_definition:
+            continue
+        contract_to_harness.setdefault(c.harness_definition.harness_of, []).append(
+            HarnessDefinition(name=c.solidity_identifier, path=c.path)
+        )
+
+    comp: list[SourceExternalActor | HarnessedExplicitContract] = []
+    for c in s.components:
+        if not isinstance(c, SourceExplicitContract):
+            comp.append(c)
+            continue
+        comp.append(HarnessedExplicitContract(
+            sort=c.sort,
+            name=c.name,
+            solidity_identifier=c.solidity_identifier,
+            components=c.components,
+            description=c.description,
+            path=c.path,
+            harnesses=contract_to_harness.get(c.solidity_identifier, []),
+        ))
+    return HarnessedApplication(
+        application_type=s.application_type, description=s.description, components=comp,
+    )
+
 
 HarnessAnalysis = TypedTemplate[HarnessAnalysisParams]("state_analysis.j2")
 
@@ -321,10 +364,17 @@ class HarnessGenParams(TypedDict):
 
 _HarnessGenerationPrompt = TypedTemplate[HarnessGenParams]("harness_generation_prompt.j2")
 
-def harness_generation_key(
-    instructions: AgentSystemDescription
-) -> CacheKey[SystemDescriptionHarnessed, HarnessResult]:
-    return CacheKey[SystemDescriptionHarnessed, HarnessResult](string_hash(instructions.model_dump_json()))
+def _system_setup_key(s: SourceApplication) -> str:
+    return "system-setup-" + string_hash(s.model_dump_json())
+
+SYSTEM_SETUP_KEY = KeyFamily(ContractSetup, SystemDescriptionHarnessed, _system_setup_key)
+
+def _harness_generation_key(instructions: AgentSystemDescription) -> str:
+    return string_hash(instructions.model_dump_json())
+
+HARNESS_GENERATION_KEY = KeyFamily(
+    SystemDescriptionHarnessed, HarnessResult, _harness_generation_key
+)
 
 async def generate_harnesses(
     context: WorkflowContext[SystemDescriptionHarnessed],
@@ -333,7 +383,7 @@ async def generate_harnesses(
     application: SourceApplication,
     instructions: AgentSystemDescription
 ) -> HarnessResult:
-    child = await context.child(harness_generation_key(instructions), instructions.model_dump())
+    child = await context.child(HARNESS_GENERATION_KEY(instructions), instructions.model_dump())
     if (cached := await child.cache_get(HarnessResult)) is not None:
         return cached
 
@@ -521,7 +571,7 @@ async def run_setup_part1(
     env: ServiceHost,
     application_desc: SourceApplication
 ) -> SystemDescriptionHarnessed:
-    setup_ctx = await context.child(system_setup_key(application_desc), application_desc.model_dump())
+    setup_ctx = await context.child(SYSTEM_SETUP_KEY(application_desc), application_desc.model_dump())
     if (cached := await setup_ctx.cache_get(SystemDescriptionHarnessed)):
         return cached
 
@@ -605,7 +655,7 @@ config_key = CacheKey[None, ContractSetup]("config")
 # Harness creation and AutoSetup are exposed as two separate, independently
 # cached steps so the pipeline can run AutoSetup in parallel with invariant/bug
 # analysis. They share the ``config_key`` parent context, so existing
-# harness-creation caches (keyed by ``system_setup_key``) still hit; the
+# harness-creation caches (keyed by ``SYSTEM_SETUP_KEY``) still hit; the
 # AutoSetup result is cached under its own key.
 # ---------------------------------------------------------------------------
 
@@ -623,18 +673,18 @@ async def run_harness_creation(
     return await run_and_apply_part1(config_ctxt, source, env, application_desc)
 
 
-def autosetup_key(
+def _autosetup_key(
     app: SourceApplication,
     prover_opts: ProverOptions,
-) -> CacheKey[ContractSetup, SetupSuccess]:
-    """Cache key for the AutoSetup phase. Includes ``prover_opts`` so cloud and
-    local configurations never collide (the old composite ``config_key`` omitted
-    them, which could reuse a stale config across modes)."""
-    return CacheKey[ContractSetup, SetupSuccess](
-        "autosetup-" + string_hash(
-            app.model_dump_json() + "\x00" + "\x00".join(prover_opts.extra_args)
-        )
+) -> str:
+    return "autosetup-" + string_hash(
+        app.model_dump_json() + "\x00" + "\x00".join(prover_opts.extra_args)
     )
+
+#: Cache key for the AutoSetup phase. Includes ``prover_opts`` so cloud and
+#: local configurations never collide (the old composite ``config_key`` omitted
+#: them, which could reuse a stale config across modes).
+AUTOSETUP_KEY = KeyFamily(ContractSetup, SetupSuccess, _autosetup_key)
 
 
 async def run_autosetup_phase(
@@ -651,7 +701,7 @@ async def run_autosetup_phase(
     Cache hits are guarded by the on-disk existence of ``summaries_path``."""
     config_ctxt = context.child(config_key)
     cache = await config_ctxt.child(
-        autosetup_key(application_desc, prover_opts),
+        AUTOSETUP_KEY(application_desc, prover_opts),
         application_desc.model_dump(),
     )
     if (cached := await cache.cache_get(SetupSuccess)) is not None:
