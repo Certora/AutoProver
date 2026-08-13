@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path, PurePath
 from typing import Iterator, Sequence
 
-from composer.spec.gen_types import CERTORA_DIR
+from composer.spec.gen_types import CERTORA_DIR, INTERNAL_DIR
 
 
 def string_hash(s: str) -> str:
@@ -75,7 +75,7 @@ def temp_certora_file(
 # since each certoraRun invocation materializes its own ``inputs/.certora_sources/**``.
 # Analysis that wants a specific report's copy reaches it through a VFS scoped to that
 # report, not through the project source surface.
-_WITHHELD_WHOLE_DIRS = frozenset({".git", ".certora_internal"})
+_WITHHELD_WHOLE_DIRS = frozenset({".git", INTERNAL_DIR.name})
 
 # Prover report directories, named ``emv-<n>-<verdict>-<contract>``. Root-only: these
 # are created where certoraRun was invoked, which for this pipeline is the project root.

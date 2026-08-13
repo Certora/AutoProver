@@ -77,6 +77,22 @@ pub(crate) fn harness_dir(program: &str) -> String {
     format!("{HARNESS_ROOT}/{program}")
 }
 
+/// The fuzzer's own accumulating output, relative to the project root: the seed corpus a campaign
+/// reads and extends, and the inputs it sets aside.
+///
+/// Under `.certora_internal/` rather than beside the deliverable, because these are neither source
+/// nor something a user keeps — and above all because they are **unbounded**. A campaign writes an
+/// entry per interesting input, every component shares them, and they persist across runs: one
+/// klend run left 48k files. The host withholds that directory whole from the source tools
+/// (`RUST_FORBIDDEN_READ`), which is the only reason a `grep_files` during authoring does not
+/// inhale a fuzzer corpus — these lived at the project root once, and a run lost 7 of 15 components
+/// to prompts of up to 4.7M tokens.
+///
+/// `crucible run` resolves both against the process cwd, which is the workdir the host materializes
+/// the crate in — the project root — so they are spelled relative to it.
+pub(crate) const CORPUS_DIR: &str = ".certora_internal/crucible/corpus";
+pub(crate) const CRASHES_DIR: &str = ".certora_internal/crucible/crashes";
+
 /// The path from a harness crate back to the project root, with a trailing separator.
 ///
 /// `crucible run` chdirs into the crate, so every relative path the crate itself names — the
@@ -166,6 +182,27 @@ fn ident_of(slug: &str) -> String {
 mod tests {
     //! The names one unit produces, and the namespace split that keeps them off the wheel's own.
     use super::*;
+
+    /// The host withholds `.certora_internal/` whole from the source tools, and that is the ONLY
+    /// thing keeping a campaign's own output out of the next component's prompt. The wheel picks
+    /// these paths; the host writes that rule; nothing in either language checks the other. So the
+    /// prefix is asserted literally here — a move out of this directory has to be argued past it.
+    #[test]
+    fn what_a_campaign_accumulates_stays_where_the_host_withholds_it() {
+        for dir in [CORPUS_DIR, CRASHES_DIR] {
+            assert!(
+                dir.starts_with(".certora_internal/"),
+                "a campaign fills {dir} without bound, and the source tools would list it"
+            );
+        }
+        // Distinct: the fuzzer reads seeds from one and sets inputs aside in the other, and
+        // `crash_meta_paths` looks in the second by name.
+        assert_ne!(CORPUS_DIR, CRASHES_DIR);
+        // The deliverable goes the other way — under `certora/`, which a user keeps and reads.
+        assert!(HARNESS_ROOT.starts_with("certora/"));
+        assert!(REPORT_ROOT.starts_with("certora/"));
+    }
+
     use crate::app::CrucibleApp;
     use crate::harness::HarnessSpec;
     use crate::testkit::{at, component_input, prop, scaffold};

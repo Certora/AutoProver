@@ -17,6 +17,7 @@ import shutil
 from pathlib import Path
 
 from composer.sandbox.policy import SandboxPolicy
+from composer.spec.gen_types import INTERNAL_DIR
 
 # Benign build vars passed through to the child (values read from the current env).
 # Never secrets — the whole point is that secrets are *not* inherited.
@@ -56,7 +57,7 @@ CARGO_REGISTRY_PROTOCOL = "sparse"
 #: Named constants because consumers outside this module must agree on the spellings — notably
 #: ``composer.pipeline.ecosystem.RUST_FORBIDDEN_READ``, which hides them from the source tools'
 #: file listing so the hundreds of MB they hold never reach the model's context.
-SANDBOX_INTERNAL_DIR = Path(".certora_internal") / "sandbox"
+SANDBOX_INTERNAL_DIR = INTERNAL_DIR / "sandbox"
 SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
 SANDBOX_RUSTUP_DIR = SANDBOX_INTERNAL_DIR / "rustup"
 SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"

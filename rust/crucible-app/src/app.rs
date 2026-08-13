@@ -26,7 +26,8 @@ use crate::campaign::Campaign;
 use crate::coverage;
 use crate::harness::{crate_dep_usable, HarnessSpec};
 use crate::layout::{
-    feature_of_unit, harness_fn, unit_name, PREFLIGHT_FEATURE, PREFLIGHT_ROOT, REPORT_ROOT,
+    feature_of_unit, harness_fn, unit_name, CORPUS_DIR, CRASHES_DIR, PREFLIGHT_FEATURE,
+    PREFLIGHT_ROOT, REPORT_ROOT,
 };
 use crate::optional_accounts;
 use crate::section::{delivered_sections, Section};
@@ -176,8 +177,10 @@ impl Backend for CrucibleApp {
         // `--stop-on-crash`, and a campaign that quits at the first crash leaves every other check
         // it covers unexplored while still answering for them. Spelling the settings out is what
         // lets `Target::exploration` decide that, rather than the mode preset deciding it for every
-        // run. The paths are `explore`'s own and resolve against the invoking cwd, which is where
-        // `crash_meta_paths` looks for the metadata behind a finding — keep them in step.
+        // run. The corpus/crashes paths resolve against the invoking cwd, which is where
+        // `crash_meta_paths` looks for the metadata behind a finding — keep them in step. They are
+        // `explore`'s own names moved under `.certora_internal/` ([`CORPUS_DIR`]): a campaign fills
+        // them without bound and the source tools must never list them.
         //
         // `--coverage` makes the campaign emit its own LCOV as it goes ([`crate::coverage`]) rather
         // than needing a second pass over the corpus. It requires `--corpus-in` and refuses to run
@@ -187,7 +190,7 @@ impl Backend for CrucibleApp {
         // campaign silently stops testing.
         let mut args = vec![
             "-C", &dir, "run", program, fname, "--release",
-            "--corpus-in", "./corpus", "--corpus-out", "./corpus", "--crashes-out", "./output",
+            "--corpus-in", CORPUS_DIR, "--corpus-out", CORPUS_DIR, "--crashes-out", CRASHES_DIR,
             "--timeout", &timeout, "--coverage",
         ];
         if target.exploration == Exploration::UntilFirstFinding {

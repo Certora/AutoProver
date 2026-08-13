@@ -32,10 +32,19 @@ SUMMARIES_DIR = SPECS_DIR / "summaries"
 #: include or exclude the human-facing report independently of the specs.
 AP_REPORT_DIR = CERTORA_DIR / "ap_report"
 
+#: Everything generated that is NOT a deliverable: diagnostics, scratch, and the
+#: build/fuzz outputs a run accumulates. The counterpart to :data:`CERTORA_DIR` —
+#: one is what a user keeps, this is what a user ignores — so a project that
+#: ignores this directory ignores all of it, and every source surface withholds it
+#: whole (``fs_forbidden_read``, ``RUST_FORBIDDEN_READ``). Spelled once here
+#: because a subdirectory that grows without bound is only safe while it is
+#: *inside* the directory those rules name.
+INTERNAL_DIR = Path(".certora_internal")
+
 #: Internal autoProve run artifacts (rotating logs, events.jsonl, run-link
 #: dumps). NOT part of the certora/ deliverable layout above — these are
 #: diagnostics/scratch outputs under the project root.
-AUTOPROVE_INTERNAL_DIR = Path(".certora_internal") / "autoProve"
+AUTOPROVE_INTERNAL_DIR = INTERNAL_DIR / "autoProve"
 
 #: The foundry pipeline's deliverable metadata (per-component properties,
 #: property->test maps, commentary, statuses, run report). A subdir of certora/
@@ -46,7 +55,7 @@ AUTOPROVE_INTERNAL_DIR = Path(".certora_internal") / "autoProve"
 FOUNDRY_DELIVERABLE_DIR = CERTORA_DIR / "foundry"
 #: Foundry counterpart to AUTOPROVE_INTERNAL_DIR — diagnostics (token usage)
 #: under a foundry-specific subdir so a co-located autoprove run doesn't collide.
-FOUNDRY_INTERNAL_DIR = Path(".certora_internal") / "foundry"
+FOUNDRY_INTERNAL_DIR = INTERNAL_DIR / "foundry"
 
 
 def under_project(project_root: "str | Path", rel: "str | Path") -> Path:

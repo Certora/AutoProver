@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use autoprover_sdk::authoring::Property;
 use autoprover_sdk::outcome::{Check, Exploration, Outcome, Target, ValidateOutcome, Verdict};
 
-use crate::layout::harness_dir;
+use crate::layout::{harness_dir, CRASHES_DIR};
 
 /// One action in a crash's reproducing sequence, as Crucible records it in
 /// `crash_<id>.meta.json`.
@@ -108,7 +108,7 @@ impl std::fmt::Display for HarnessSuspicion {
 fn crash_meta_paths(workdir: &Path, program: &str, unit: &str, crash_id: &str) -> Vec<PathBuf> {
     let file = format!("{crash_id}.meta.json");
     vec![
-        workdir.join("output").join(&file),
+        workdir.join(CRASHES_DIR).join(&file),
         workdir.join(harness_dir(program)).join("crashes").join(unit).join(&file),
     ]
 }
@@ -564,7 +564,7 @@ mod crash_triage {
     /// A workdir with `output/<crash>.meta.json` in it. Named per-test so cases can't collide.
     fn workdir_with_meta(tag: &str, crash_id: &str, meta: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("crucible_triage_{tag}"));
-        let out = dir.join("output");
+        let out = dir.join(CRASHES_DIR);
         std::fs::create_dir_all(&out).expect("mkdir");
         std::fs::write(out.join(format!("{crash_id}.meta.json")), meta).expect("write meta");
         dir
@@ -750,7 +750,7 @@ mod crash_triage {
         // must not become a finding of its own.
         let dir = workdir_with_meta("multi", "crash_a", KLEND_ACTION_FAILED);
         std::fs::write(
-            dir.join("output").join("crash_b.meta.json"),
+            dir.join(CRASHES_DIR).join("crash_b.meta.json"),
             r#"{"iteration": 11619, "actions": [{"name": "refresh", "success": true}]}"#,
         )
         .expect("write second meta");
