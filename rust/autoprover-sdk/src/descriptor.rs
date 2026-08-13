@@ -193,8 +193,8 @@ pub enum DeliverableMode {
         /// component's `unit_file`, the report's rule-identity fallback, echoed back to
         /// `finalize` — and the store can't guess where in that tree the components' checks land.
         /// A path (project-relative, `{program}`-templated — Crucible:
-        /// `fuzz/{program}/src/main.rs`) names that file; `None` declares that no one file
-        /// represents the deliverable, and components anchor to the layout's `deliverable_dir`
+        /// `certora/crucible/fuzz/{program}/src/main.rs`) names that file; `None` declares that
+        /// no one file represents the deliverable, and components anchor to the layout's `deliverable_dir`
         /// instead. The wire requires the key either way, so opting out is an explicit choice,
         /// not an omitted field. Carried by the variant because it means nothing under
         /// `PerComponent`.

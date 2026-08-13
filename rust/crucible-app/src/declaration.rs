@@ -78,7 +78,7 @@ pub(crate) fn descriptor() -> AppDescriptor {
         ],
         // Metadata (properties.json / commentary / property→tests map) lands under
         // `certora/crucible/` — the split Foundry uses — while the crate deliverable is the one
-        // file under [`HARNESS_ROOT`] (the callout mode's `primary` + the finalize render).
+        // file under [`HARNESS_ROOT`] (the callout mode's `deliverable_path` + the finalize render).
         artifact_layout: ArtifactLayout {
             deliverable_dir: "certora/crucible".into(),
             internal_dir: ".certora_internal/crucible".into(),
@@ -91,7 +91,7 @@ pub(crate) fn descriptor() -> AppDescriptor {
         // One crate assembled by finalize (callout), all toolchain runs serialized on the one
         // crate/target, and confined by default (untrusted native builds).
         deliverable_mode: DeliverableMode::Callout {
-            primary: Some(format!("{HARNESS_ROOT}/{{program}}/{CRATE_ROOT}")),
+            deliverable_path: Some(format!("{HARNESS_ROOT}/{{program}}/{CRATE_ROOT}")),
         },
         serialize_toolchain: true,
         confine_by_default: true,
