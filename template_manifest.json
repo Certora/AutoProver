@@ -29,6 +29,12 @@
     "template_name": "foundry_property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.kb.kb_context:index_template": {
+    "module": "composer.kb.kb_context",
+    "qualname": "index_template",
+    "template_name": "cvl_kb_index.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.pipeline.ecosystem:SOLANA_ANALYSIS_SYSTEM_TEMPLATE": {
     "module": "composer.pipeline.ecosystem",
     "qualname": "SOLANA_ANALYSIS_SYSTEM_TEMPLATE",

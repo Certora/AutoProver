@@ -42,6 +42,7 @@ from composer.spec.guidance import ERC20TokenGuidance
 
 from composer.core.state import AIComposerState
 from composer.input.files import Document
+from composer.kb.kb_context import with_cvl_context
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.util import uniq_thread_id, string_hash
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
@@ -115,8 +116,8 @@ def summary_critic_tool(
 ) -> BaseTool:
     """Build the summary-critic sub-agent as a tool.
 
-    ``builder`` should already have the LLM, CVL manual + KB tools, and
-    immutable VFS tools bound. ``system_doc`` is the protocol's design
+    ``builder`` should already have the LLM, CVL manual / recipe /
+    researcher tools, and immutable VFS tools bound. ``system_doc`` is the protocol's design
     document; it's spliced into every critic invocation so the critic can
     judge faithfulness, not just local CVL well-formedness. ``recursion_limit``
     bounds each critic sub-agent run (threaded from the workflow options).
@@ -128,7 +129,9 @@ def summary_critic_tool(
         .with_input(_CritiqueInput)
         .with_tools(rough_draft_tools)
         .with_sys_prompt_template("summary_critic_system.j2")
-        .with_initial_prompt_template("summary_critic_initial.j2")
+        .with_initial_prompt(with_cvl_context(
+            lambda loader: loader("summary_critic_initial.j2")
+        ))
         .compile_async()
     )
 
@@ -401,14 +404,16 @@ class CEXRemediator(
             # round (see graphcore's _get_summarizer_pure). The system
             # document is intentionally NOT inlined here; the agent fetches
             # it on demand via the `read_system_document` tool.
-            graph = deps.builder.with_initial_prompt_template(
-                "cex_remediation_initial.j2",
-                attributed_rules=diagnosis_record.attributed_rules,
-                target_spec_path=self.target_spec_path,
-                cex_diagnosis=diagnosis_record.diagnosis,
-                ground_truth=ground_truth,
-                working_version=working_version,
-            ).compile_async()
+            graph = deps.builder.with_initial_prompt(with_cvl_context(
+                lambda loader: loader(
+                    "cex_remediation_initial.j2",
+                    attributed_rules=diagnosis_record.attributed_rules,
+                    target_spec_path=self.target_spec_path,
+                    cex_diagnosis=diagnosis_record.diagnosis,
+                    ground_truth=ground_truth,
+                    working_version=working_version,
+                ),
+            )).compile_async()
 
             inp = _RemediationInput(
                 input=[],
@@ -452,7 +457,7 @@ def cex_remediation_tool(
 ) -> BaseTool:
     """Build the CEX-remediation sub-agent as a tool.
 
-    ``builder`` should have: LLM, CVL manual/KB/researcher tools,
+    ``builder`` should have: LLM, CVL manual/recipe/researcher tools,
     immutable VFS tools, and the ``summary_critic`` tool already bound.
     ``system_doc`` is spliced into the agent's input so it can weigh the
     protocol's design when proposing changes (the system doc is the

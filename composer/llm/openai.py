@@ -11,7 +11,7 @@ variant tokens (-2024-08-06, -turbo, -preview, -32k) carry no reasoning-relevant
 signal and are ignored.
 """
 
-from typing import Literal, TypeGuard, Any, TYPE_CHECKING
+from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override
 import io
 from dataclasses import dataclass, field
 from functools import cache
@@ -29,6 +29,7 @@ from .list_iter import ListIter, NoSuchElementError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
+    from graphcore.graph import MessagePayloadType
 
 
 # --- model probing ---------------------------------------------------------

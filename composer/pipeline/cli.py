@@ -32,7 +32,7 @@ from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 from composer.ui.tool_display import async_tool_context
 from composer.core.user import user_data_ns, get_uid
 from composer.spec.source.design_doc_finder import (

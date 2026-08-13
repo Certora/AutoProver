@@ -22,6 +22,7 @@ from composer.spec.gen_types import TemplateInstantiation, TypedTemplate, ITyped
 from composer.spec.cvl_generation import FeedbackServices, Rebuttal
 from composer.spec.source.live_explorer import VersionedHistory
 from composer.spec.system_model import ContractComponentInstance, component_context
+from composer.kb.kb_context import with_cvl_context
 
 class Properties(TypedDict):
     properties: list[PropertyFormulation]
@@ -104,11 +105,11 @@ def property_feedback_judge_generic[S: JudgeState, I: JudgeInput, Ctx](
         builder: Builder[S, None, I], _cvl: str,
         skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal],
     ) -> Builder[S, None, I]:
-        return prompt.bind({
+        return builder.with_initial_prompt(with_cvl_context(prompt.bind({
             "properties": props,
             "rebuttals": rebuttals,
             "skipped": skipped,
-        }).render_to(builder.with_initial_prompt_template)
+        }).render_to))
 
     async def input_parts(
         cvl: str, _skipped: Sequence[SkippedProperty], _rebuttals: Sequence[Rebuttal]

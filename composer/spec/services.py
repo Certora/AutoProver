@@ -53,13 +53,9 @@ def build_rag_tools(
 
 def build_basic_rag_tools(
     db: PostgreSQLRAGDatabase,
-    store: BaseStore,
-    kb_ns: tuple[str, ...],
 ) -> BaseRAGTools:
     return _BaseRAGTools(
-        tuple(cvl_manual_tools(db)) + tuple(kb_tools(
-            store, kb_ns, read_only=True
-        ))
+        tuple(cvl_manual_tools(db)) + tuple(kb_tools())
     )
 
 
@@ -70,7 +66,6 @@ class LLMInputs(TypedDict):
 class RAGInputs(LLMInputs):
     db: PostgreSQLRAGDatabase
     store: BaseStore
-    kb_ns: tuple[str, ...]
     cvl_index_config: AgentIndexConfig
     recursion_limit: int
 
@@ -83,11 +78,7 @@ def build_rag_tool_env(
     """Build a source-less ``PureServiceHost`` carrying the RAG tool
     suite. The natspec greenfield path uses this directly; the source
     path layers source tools on top via :func:`build_source_env`."""
-    base_rag = build_basic_rag_tools(
-        db=params["db"],
-        kb_ns=params["kb_ns"],
-        store=params["store"],
-    )
+    base_rag = build_basic_rag_tools(db=params["db"])
     full_rag = build_rag_tools(
         models=params["models"],
         s=base_rag,

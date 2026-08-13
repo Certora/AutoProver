@@ -45,10 +45,9 @@ from composer.input.types import (
 )
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
 from composer.io.thread_logging import default_logging_ns, thread_logger
-from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.cli import root_cache_key
 from composer.pipeline.core import CorePipelineResult, DEFAULT_MAX_CPU_TASKS
-from composer.rag.models import get_model
+from composer.rag.models import DefaultEmbedder, get_model
 from composer.rustapp.adapter import source_unit_of
 from composer.rustapp.descriptor import ArgSpec, BoolDefault, IntDefault, PhaseRole, StrDefault
 from composer.rustapp.wire import AppArgs, parse_sandbox_grants

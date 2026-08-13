@@ -28,7 +28,7 @@ from composer.spec.types import RustIdentifier
 from composer.ui.tool_display import async_tool_context
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.workflow.services import standard_connections
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 
 from tests.conftest import needs_postgres, MockSentenceTransformer
 from tests.conftest import _RAG_DB, _VECTOR_DBS, _MEMORIES_DDL, _db_url

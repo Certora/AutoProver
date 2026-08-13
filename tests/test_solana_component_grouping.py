@@ -30,7 +30,7 @@ from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
 from composer.io.multi_job import TaskInfo
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 from composer.llm.registry import get_provider_for
 from composer.pipeline.core import PipelineRun
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
