@@ -153,19 +153,18 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
 
 
 class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
-    #: Backend-specific direction for property extraction — what this verifier can check.
-    backend_guidance: str
-
-    #: The backend's contribution to the shared system-analysis call.
-    analysis_spec: SystemAnalysisSpec
-
-    #: The backend's own phase enum, mapped onto the four phases the driver tags tasks with.
-    core_phases: CorePhases[P]
+    @property
+    def backend_guidance(self) -> str: ...
 
     @property
-    def artifact_store(self) -> ArtifactStore[A, FormT]:
-        """Where the driver persists each unit's properties, deliverable, and the run's report."""
-        ...
+    def analysis_spec(self) -> SystemAnalysisSpec: ...
+
+    @property
+    def core_phases(self) -> CorePhases[P]: ...
+
+    @property
+    def artifact_store(self) -> ArtifactStore[A, FormT]: ...
+
 
     async def preflight(self, run: PipelineRun[P, H]) -> Pre:
         """Whatever the backend can do before it knows anything about the program — run

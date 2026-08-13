@@ -51,7 +51,6 @@ from composer.pipeline.core import (
     Delivered,
     Formalizer,
     GaveUp,
-    PipelineBackend,
     PipelineRun,
     PreparedSystem,
     StagedFormalizer,
@@ -61,6 +60,7 @@ from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
+from composer.rustapp.phases import PhaseModel
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupSpec
 from composer.rustapp.toolchain import project_toolchain, source_unit
 from composer.rustapp.session import (
@@ -606,13 +606,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
 
 
 @dataclass
-class RustBackend(
-    PipelineBackend[
-        enum.Enum, RustFormalResult, Any, RustArtifact, FeatureUnit, Any, BaseApplication,
-        ProjectFacts,
-    ]
-):
-    """A :class:`PipelineBackend` backed by a Rust wheel. Ecosystem-agnostic: it locates the main
+class RustBackend:
+    """A ``PipelineBackend`` (satisfied structurally) backed by a Rust wheel. Ecosystem-agnostic:
+    it locates the main
     and marshals units through the resolved ``ecosystem`` + the ``FeatureUnit`` protocol, so its
     unit / main / app axes stay open (``Any``) where a single-ecosystem backend would pin them.
 
@@ -621,13 +617,9 @@ class RustBackend(
 
     module: RustAppModule
     descriptor: AppDescriptor
-    #: The phase enum synthesized from the descriptor — the *same* class object the frontend's
-    #: ``phase_labels`` are keyed by, since the lookup is by member identity. Public because the
-    #: prepared system and the formalizer need to tag their own tasks with a declared phase; reach
-    #: it through :meth:`task_info` rather than indexing it.
-    phase: type[enum.Enum]
-    #: The four core slots of :attr:`phase`, as the driver's own mapping.
-    core_phases: CorePhases
+    #: The application's resolved phase model, held whole so the enum and the core-phase mapping
+    #: cannot come from two different builds (see :class:`PhaseModel` on why identity matters).
+    phases: PhaseModel
     store: ArtifactStore[Any, RustFormalResult]
     ecosystem: Ecosystem[Any, Any, Any]
     # Wall-clock ceiling for a single compile/validate (a first build can be minutes).
@@ -638,16 +630,28 @@ class RustBackend(
     # ``AuthorInput.args`` (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
     declared_args: dict[str, Any] = field(default_factory=dict)
 
-    # Both are the wheel's to state, so they are derived from its descriptor rather than passed.
-    backend_guidance: str = field(init=False)
-    analysis_spec: SystemAnalysisSpec = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.backend_guidance = self.descriptor.backend_guidance
-        self.analysis_spec = SystemAnalysisSpec(self.descriptor.analysis_key, "rust-properties")
+    @property
+    def phase(self) -> type[enum.Enum]:
+        """The phase enum synthesized from the descriptor — the *same* class object the frontend's
+        ``phase_labels`` are keyed by, since the lookup is by member identity. Public because the
+        prepared system and the formalizer need to tag their own tasks with a declared phase; reach
+        it through :meth:`task_info` rather than indexing it."""
+        return self.phases.phase
 
     @property
-    @override
+    def core_phases(self) -> CorePhases:
+        return self.phases.core
+
+    # Both are the wheel's to state, so they are derived from its descriptor rather than passed.
+    @property
+    def backend_guidance(self) -> str:
+        return self.descriptor.backend_guidance
+
+    @property
+    def analysis_spec(self) -> SystemAnalysisSpec:
+        return SystemAnalysisSpec(self.descriptor.analysis_key, "rust-properties")
+
+    @property
     def artifact_store(self) -> ArtifactStore[Any, RustFormalResult]:
         return self.store
 
@@ -662,7 +666,6 @@ class RustBackend(
             f"{self.descriptor.name}-{phase.role.value}", phase.label, self.phase[phase.key]
         )
 
-    @override
     async def preflight(self, run: PipelineRun) -> ProjectFacts:
         """Prepare the wheel's workspace and gate it — everything buildable before the program has
         been analyzed, run concurrently with system analysis (``docs/rust-applications.md`` §4.2).
@@ -724,7 +727,6 @@ class RustBackend(
             return await self.sandbox.backend_spec(workdir, timeout_s=self.command_timeout_s)
         return {"argv_prefix": [], "timeout_s": self.command_timeout_s}
 
-    @override
     async def prepare_system(
         self, analyzed: BaseApplication, run: PipelineRun, preflight: ProjectFacts
     ) -> PreparedSystem[RustFormalResult, FeatureUnit, Any]:
@@ -732,7 +734,6 @@ class RustBackend(
             self.ecosystem.locate_main(analyzed, run.source), self, preflight, analyzed
         )
 
-    @override
     def to_artifact_id(self, c: FeatureUnit) -> RustArtifact:
         return RustArtifact(
             c.slug,
