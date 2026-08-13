@@ -1,9 +1,11 @@
 # Unexercised checks: why a clean campaign is not a passing check
 
 A Crucible campaign that finds nothing marks every check it covers `GOOD`. That claims more than the
-run established, and this note says exactly how much more, what it looks like in practice, and what
-would close it. The gap is marked in the code at the one place that makes the claim (`app.rs`,
-`KNOWN GAP`), and listed as the open follow-up in [author-determined-checks.md](author-determined-checks.md).
+run established, and this note says exactly how much more, what it looks like in practice, and the
+proposed fix — which needs no change to the crucible repo, because the macro a call site expands is
+decided by name resolution, and the wheel writes every line that resolution reads. The gap is marked
+in the code at the one place that makes the claim (`app.rs`, `KNOWN GAP`), and listed as the open
+follow-up in [author-determined-checks.md](author-determined-checks.md).
 
 ## The inference
 
@@ -69,53 +71,122 @@ trusting the agent's transcription"), and `report.py` builds verdicts *out of* t
 does not exist gets no verdict and cannot be claimed. Crucible is the outlier, only because its
 checker emits crashes rather than an execution record.
 
-## Fixes
+## The fix: interpose on `fuzz_assert!` from the crate root
 
-### 1. Make the precondition reportable (preferred)
+The evidence that closes the gap is a per-tag evaluation count: an increment inside the macro cannot
+be forgotten, never parses source text, and turns a silent campaign's claim from "no violation" into
+"no violation across N evaluations" — where `N = 0` is exactly the case the verdict must stop
+calling `GOOD`. Earlier drafts of this note assumed the increment therefore had to live in the
+crucible repo. It does not.
 
-Hoist the guard into the macro so the runtime sees both halves instead of a collapsed `bool`:
+`fuzz_assert*` are ordinary `#[macro_export] macro_rules!` in `crucible-test-context`, re-exported
+by `crucible_fuzzer` (seven of them: the bare one plus `_{eq,ne,lt,le,gt,ge}`), and authored code
+reaches them only through globs — `use crucible_fuzzer::*;` in the fixture at crate root, then the
+`use super::*;` that `section_file.j2` supplies. Both hops funnel through the crate root, which the
+wheel renders (`root_text`). So the crate root can bind the name to a wrapper of its own, and every
+call site in every section expands the wrapper — no authoring-surface change, and no author
+compliance to police:
 
 ```rust
-fuzz_assert_when!(
-    f.read_vault(),                                      // precondition, visible to the runtime
-    |v| f.lamports_of(&f.vault_pda) >= v.balance,        // the property
-    "[vault_lamports_cover_balance] …"
-);
+macro_rules! __tally_fuzz_assert {
+    ($cond:expr, $fmt:literal $(, $args:expr)* $(,)?) => {{
+        {
+            static __EVALS: ::std::sync::atomic::AtomicU64 =
+                ::std::sync::atomic::AtomicU64::new(0);
+            let __n = __EVALS.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed) + 1;
+            if __n.is_power_of_two() {
+                let __tag = $fmt.split_once('[').and_then(|(_, r)| r.split_once(']'))
+                    .map(|(t, _)| t).unwrap_or("?");
+                ::std::println!("[FUZZ_TALLY] tag: {__tag}, evaluated: {__n}");
+            }
+        }
+        ::crucible_fuzzer::fuzz_assert!($cond, $fmt $(, $args)*);
+    }};
+    // + a bare-condition arm (keyed by file!/line!, no tag) and a non-literal passthrough arm
+}
+pub(crate) use __tally_fuzz_assert as fuzz_assert;
 ```
 
-Three outcomes per tag instead of two — violated / meaningfully held / precondition unmet — so a
-campaign reports `evaluated=4479, meaningful=0` and the verdict becomes `UNKNOWN` with a detail
-saying which. This also catches the case a bare hit-counter misses: the assertion runs, but its
-precondition never opens.
+The name-resolution detail is load-bearing, and was verified on 2026-08-13. A bare textual shadow —
+`macro_rules! fuzz_assert` at crate root — is `E0659` in the sections, because `use super::*`
+re-imports crucible's macro into path-based scope beside it. The private name plus explicit
+re-export works because an explicit binding shadows a glob within its module: the crate root's
+namespace then holds exactly one `fuzz_assert` — ours — and the section's `use super::*` imports
+exactly that one. The delegation is path-qualified, so the original macro still does everything it
+did: the condition is evaluated once, the message still formats only on failure, `record_violation`
+fires as before.
 
-### 2. Count evaluations inside `fuzz_assert!` (smaller)
+**The channel already exists.** Campaigns run in libafl's `InProcessExecutor` (`singlecore.rs`), so
+a per-site `static` persists across every execution — the same fact that lets `take_violation`'s
+thread-local work — and a `println!` from the harness lands in the output `validate` captures, which
+is where `campaign.rs` already reads the `[FUZZ_PULSE]` lines. Same runtime-prints-wheel-parses
+shape; one more label-parsed line format.
 
-A per-tag tally incremented by the macro, printed once at campaign end and parsed beside the
-existing stats. `campaign.rs` already reads executions and edge/branch coverage off the
-`[FUZZ_PULSE]` lines that `crucible-fuzz-macro` emits, so the channel exists — runtime prints, wheel
-parses, verdict follows. `evaluated=0` ⇒ `UNKNOWN`.
+**The tag costs nothing per evaluation.** The fiddly part of the earlier counting proposal — the
+`[tag]` lives in a message that is formatted only on failure — dissolves: the format string is a
+`$fmt:literal`, so the wrapper holds it as a `&'static str` and slices the tag out of it *inside the
+power-of-two branch only*. The hot path is one relaxed `fetch_add` and one branch; the printing is
+≤ ~13 lines per site per campaign (counts print at powers of two, so the last line is within 2× of
+the true count — and the verdict only needs "greater than zero").
 
-The fiddly part: `fuzz_assert!` formats its message *only on failure*, so the `[tag]` is not
-available as a counter key without paying `format!` on every evaluation. Either take the tag as a
-string-literal argument (a `&'static str` key for free, but it changes the authoring surface), or
-key by `(file!(), line!())` — free, with the wheel mapping line → tag against the section file it
-just wrote. The latter touches source text only to *name* evidence the counter already established,
-which is the reverse of parsing source to decide whether something is a check.
+**The verdict gate.** A small parser (label-based, the way `campaign.rs` reads pulse fields; max per
+site, then summed per tag) turns the tally lines into `tag → evaluations`. Then the two places that
+currently conclude `GOOD` on silence — the clean-exit path in `app.rs`, and `attribute_findings`'
+unnamed-check-on-`ToBudget` branch — grant it per check only when some property title the check
+claims has a tally above zero, and answer `UNKNOWN` otherwise, with a detail saying no
+`[<title>]`-tagged assertion was ever evaluated. That is the verdict contract's own wording ("a
+check with no evidence it ran comes back `ERROR` or `UNKNOWN`, never `GOOD`") finally enforced at
+this seam. The tag convention itself is no new fragility: it is already the load-bearing convention
+attribution places findings by.
 
-### 3. LCOV (interim, no crucible-repo change)
+That closes all three shapes at once: an assertion never written (no tally line carries its tag — a
+case the LCOV option below cannot even see, having no line to find unexecuted), an assertion written
+where the fuzzer cannot reach it, and a guard that never opened. It also collapses the distinction
+the earlier `fuzz_assert_when!` proposal existed for: with the author's guard *outside* the macro —
+the shape they already write — "evaluated" already means "the precondition opened", so the count is
+the meaningful count.
 
-`--coverage` is already passed and the LCOV preserved per component. An assertion line never executed
-did not run. It needs a tag→line map, so it inherits the source-parse fragility, and it is
-line-granular rather than tag-granular — weaker than either option above, but available today.
+**Every hole points the safe way.** A section author can dodge the wrapper — an explicit
+`use crucible_fuzzer::fuzz_assert;`, or a path-qualified `crucible_test_context::fuzz_assert!` — and
+what that buys is a missing tally, which is an `UNKNOWN`, never a false `GOOD`; the section
+normalizer (`as_module_body`) can strip the import spelling on top. An authored glob of
+`crucible_fuzzer` inside a section is `E0659` at the gate, and an explicit import in the fixture
+collides with the re-export as a duplicate binding — both loud, both the revise loop's to fix. And
+if a future Crucible forked per execution, resetting the statics, a printed line still proves at
+least one evaluation — the only fact the gate consumes.
+
+One empirical check remains before relying on it: a real campaign with the wrapper in place, to
+confirm no libafl mode redirects the harness's stdout somewhere `validate` does not capture. Every
+observed mode prints `[FUZZ_PULSE]`/`[FUZZ_FINDING]` from the same process, so the risk is
+theoretical.
+
+## Where the increment belongs eventually
+
+Upstream. If the crucible repo is being changed anyway, `fuzz_assert!` itself should record each
+evaluation and the campaign should report the tally in its own end-of-run summary — per-tag,
+unforgeable, and available to every crucible user rather than only to harnesses this wheel renders.
+A `fuzz_assert_when!` that takes the precondition as a visible argument belongs there too, for the
+genuinely conditional property whose author wants "evaluated" and "precondition opened" reported
+separately. The interposition produces the same evidence today; the day crucible's macros record
+evaluations, the wrapper block and its parser are deleted and the verdict gate stays.
+
+## LCOV (cross-check)
+
+`--coverage` is already passed and the LCOV preserved per component. An assertion line never
+executed did not run — so LCOV answers the one question the tally cannot: whether a missing tally
+means *no assertion exists for this tag* or *one exists and was never reached*, since a site that
+never runs never announces itself and the two read identically in the tally. As a verdict source it
+stays inferior — it needs a tag→line map and inherits the source-parse fragility, and it is
+line-granular rather than tag-granular — but as triage for an `UNKNOWN` row it is already on disk.
 
 ## Rejected
 
 - **An author-written `AtomicUsize` beside the assertion.** The model writes the instrumentation for
   the check the instrumentation is meant to police: an author who does not reach the assertion
   equally does not reach the counter, and a `0` is indistinguishable from a counter never added. It
-  is a fine thing for a human to add while debugging one harness; it cannot be the gate. If the
-  crucible repo is being changed anyway, the increment belongs in the macro, where it cannot be
-  forgotten and is per-tag for free.
+  is a fine thing for a human to add while debugging one harness; it cannot be the gate. The
+  increment belongs in the macro, where it cannot be forgotten and is per-tag for free — and the
+  macro, it turns out, is reachable without the crucible repo (above).
 - **Folding the guard into the condition** — `f.read_vault().map(…).unwrap_or(true)`. This makes
   things strictly worse: it *asserts* the vacuous case, converting an unevaluated assertion (which a
   counter catches) into a vacuously true one (which nothing catches). It also launders real evidence
