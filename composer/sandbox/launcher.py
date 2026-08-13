@@ -32,16 +32,14 @@ _PROBE_TIMEOUT_S = 10
 
 def _resolve_binary() -> str | None:
     """Locate the ``run-confined`` binary: ``$RUN_CONFINED_BIN`` → ``PATH`` → this
-    interpreter's scripts dir → the dev build under ``rust/target/release``
-    (repo-relative). ``None`` if unbuilt.
+    interpreter's scripts dir. ``None`` if unbuilt.
 
     The env var is for deployments that mount the binary elsewhere (the sandbox compose
-    overlay). The two middle probes both target the normal development install:
+    overlay). The two probes both target the normal development install:
     ``rust/run-confined`` builds as a maturin *bin* wheel that ``uv sync`` puts in
     ``.venv/bin`` (see the ``apps`` dependency group) — PATH finds it under `uv run` or
     an activated venv, and ``sysconfig`` finds it when the venv's interpreter is invoked
-    by path without activation. ``rust/target/release`` covers a bare ``cargo build``
-    outside any venv."""
+    by path without activation."""
     override = os.environ.get("RUN_CONFINED_BIN")
     if override and Path(override).is_file():
         return override
@@ -49,12 +47,7 @@ def _resolve_binary() -> str | None:
     if on_path:
         return on_path
     in_venv = Path(sysconfig.get_path("scripts")) / _BIN_NAME
-    if in_venv.is_file():
-        return str(in_venv)
-    # Dev fallback: composer/sandbox/launcher.py → repo root is parents[2].
-    repo_root = Path(__file__).resolve().parents[2]
-    cand = repo_root / "rust" / "target" / "release" / _BIN_NAME
-    return str(cand) if cand.is_file() else None
+    return str(in_venv) if in_venv.is_file() else None
 
 
 class LauncherProvider:

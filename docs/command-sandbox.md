@@ -478,7 +478,7 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
 Each step is behind the seam, so every earlier gate kept passing. **Prerequisite of running
 confined:** `run-confined` must be resolvable — `$RUN_CONFINED_BIN`, then PATH (a development
 checkout gets it in `.venv/bin` from `uv sync`, which builds `rust/run-confined` as a bin
-wheel), then a bare `cargo build -p run-confined --release`. Containers opt in via the
+wheel). Containers opt in via the
 `scripts/docker-compose.sandbox.yml` overlay, which builds the launcher
 (`scripts/Dockerfile.sandbox`) and mounts it read-only at `$RUN_CONFINED_BIN`. Otherwise a
 confine-by-default application fail-closes (§7/§8). A later off-the-shelf swap
