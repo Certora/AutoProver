@@ -323,7 +323,8 @@ populates it at `setup-db` time.
    `crucible_rag_user` schema in `init-db.sql`.
 2. The corpus is generated **once** from the crucible repo's `docs/` and committed as
    [`rust/crucible-app/crucible_kb.rag.json`](../rust/crucible-app/crucible_kb.rag.json)
-   (126 sections). A checked-in artifact — no crucible checkout is needed to build or run the app.
+   (126 manual sections + 126 embedded groups, parallel views of the same header-path units). A
+   checked-in artifact — no crucible checkout is needed to build or run the app.
 3. The container populates it at `setup-db` time: the Dockerfile copies the manifest to
    `$AUTOPROVE_HOME/crucible_kb.rag.json`, and
    [`scripts/autoprove-entrypoint.sh`](../scripts/autoprove-entrypoint.sh) runs `rag_import` into
@@ -333,11 +334,13 @@ populates it at `setup-db` time.
    `populate_crucible_rag.sh` this mechanism replaced are gone, so Crucible contributes a corpus as
    data plus two registry entries.
 
-**Regenerating the manifest.** It was produced by a small markdown→manifest producer (parse ATX
-headers + fenced code into sections — the logic mirrors §2 and is preserved in git history at the
-commit that removed it). To refresh after a crucible docs update, restore or re-derive that
-producer, point it at the crucible `docs/`, and re-commit the JSON. Because the corpus changes
-rarely, this is an occasional manual step, not part of any build.
+**Regenerating the manifest.** The original flat manifest came from a small markdown→manifest
+producer (parse ATX headers + fenced code into sections — preserved in git history at the commit
+that removed it); the committed dual-product manifest was mechanically derived from it (manual
+sections verbatim; embedded blocks with table runs as `atomic`, blank-line paragraph splits, and
+horizontal rules dropped). To refresh after a crucible docs update, re-derive a producer emitting
+the §2 shape directly, point it at the crucible `docs/`, and re-commit the JSON. Because the
+corpus changes rarely, this is an occasional manual step, not part of any build.
 
 **Untouched:** `foundry_ragbuild.py`, `ragbuild.py` (CVL), their wrappers, and `refresh_rag.sh`.
 No runtime code changes — the search tools, `rag_env.py`, and the DB API are the same.
