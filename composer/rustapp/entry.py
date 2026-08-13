@@ -69,6 +69,7 @@ from composer.spec.source.source_env import (
 )
 from composer.spec.types import SourceIdentifier
 from composer.spec.util import fs_forbidden_read
+from composer.tools.rag_env import build_rag_tools
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import standard_connections
 from composer.llm.registry import get_provider_for
@@ -103,13 +104,7 @@ def build_default_env(
     full = build_source_tools(
         basic, model_provider, store, source_question_ns, recursion_limit=recursion_limit
     )
-    rag_tools: tuple[BaseTool, ...] = ()
-    if rag_db:
-        # local: rag_env opens the corpus and pulls in the embedding stack, which a wheel that
-        # declares no rag_db_default never needs.
-        from composer.tools.rag_env import build_rag_tools
-
-        rag_tools = build_rag_tools(rag_db)
+    rag_tools: tuple[BaseTool, ...] = build_rag_tools(rag_db) if rag_db else ()
     return PureServiceHost(
         models=model_provider, rag_tools=rag_tools, sort="existing"
     ).bind_source_tools(full)
