@@ -35,10 +35,10 @@ class AutoProveCacheTags(BaseModel):
     """``Document.to_digest()`` of the threat model, which parameterizes
     ``bug_analysis_key``; ``None`` for runs without one."""
 
-    extra_context_digest: str | None = None
-    """``Document.to_digest()`` of the ``--extra-context`` document, which
-    also parameterizes ``bug_analysis_key``; ``None`` for runs without one
-    (including records written before this field existed)."""
+    extra_context_digests: list[str] = Field(default_factory=list)
+    """``Document.to_digest()`` of each ``--extra-context`` document, in order. Folded
+    through ``combine_digests`` to parameterize ``bug_analysis_key``; kept unfolded here
+    so the individual documents stay identifiable."""
 
     interactive: bool | None = None
     """Whether the run used interactive refinement (selects the ``|refine``

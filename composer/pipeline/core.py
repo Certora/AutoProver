@@ -238,7 +238,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
-    extra_context: Document | None = None,
+    extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
     budget: RunBudget | None = None,
@@ -260,7 +260,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     *,
     interactive: bool,
     threat_model: Document | None,
-    extra_context: Document | None,
+    extra_context: Sequence[Document],
     max_bug_rounds: int,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
@@ -280,7 +280,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
-    extra_context: Document | None = None,
+    extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
@@ -447,7 +447,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     prop_key: str,
     main: Main, backend_guidance: str, run: PipelineRun[P, H],
     phase: P, interactive: bool, threat_model: Document | None,
-    extra_context: Document | None, max_rounds: int,
+    extra_context: Sequence[Document], max_rounds: int,
     # ``App`` stays ``Any`` here: this helper never touches the analyzed-model axis, only
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],

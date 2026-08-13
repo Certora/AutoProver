@@ -16,6 +16,7 @@ from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMes
 from composer.input.files import Document
 from composer.llm.types import CacheLevel
 from composer.spec.gen_types import TypedTemplate
+from composer.spec.util import combine_digests
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
@@ -134,12 +135,12 @@ def bug_analysis_key_from_digest(
 def bug_analysis_key(
     threat_model: Document | None,
     with_refinement: bool,
-    extra_context: Document | None = None,
+    extra_context: Sequence[Document] = (),
 ) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
     return bug_analysis_key_from_digest(
         threat_model.to_digest() if threat_model is not None else None,
         with_refinement,
-        extra_context.to_digest() if extra_context is not None else None,
+        combine_digests([d.to_digest() for d in extra_context]),
     )
 
 class _AgentResult(_BugAnalysisCache):
@@ -387,7 +388,7 @@ async def run_property_inference[U: FeatureUnit](
     component: U,
     extra_input : Sequence[AnyPropertyGenerationInput] = tuple(),
     threat_model: Document | None = None,
-    extra_context: Document | None = None,
+    extra_context: Sequence[Document] = (),
     refinement: ConversationContextProvider | None = None,
     max_rounds: int = 3,
     *,
@@ -404,10 +405,10 @@ async def run_property_inference[U: FeatureUnit](
     the system prompt (rendered once) rather than the per-round initial prompt so it stays inside
     the cached prefix.
 
-    ``extra_context`` is a free-form document the user supplied about the application (protocol
-    notes, an audit scope, deployment assumptions...). Unlike ``threat_model`` it makes no claim
-    to be a list of *threats* — it is presented to the agent as authoritative background, not as
-    a checklist to work through.
+    ``extra_context`` is any number of documents the user supplied about the application.
+    Unlike ``threat_model`` they make no claim to be a list of *threats* — they are
+    presented as authoritative background, not a checklist. Rendered in the order given,
+    each labelled with its filename.
     """
 
     component_analysis = ctx.child(
@@ -436,18 +437,31 @@ async def run_property_inference[U: FeatureUnit](
                 threat_model.to_dict(cache_level=to_cache_level(cache))
             ]
         ))
-    if extra_context is not None:
+    if extra_context:
+        def extra_context_blocks(cache: bool) -> list[RawMessageType]:
+            # Each document introduced by its filename, then its body. Only the final
+            # body carries the cache marker: a breakpoint is a prefix boundary, so
+            # marking an interior one spends one of the four without extending the
+            # cached prefix.
+            blocks: list[RawMessageType] = []
+            for i, doc in enumerate(extra_context):
+                is_last = i == len(extra_context) - 1
+                blocks.append(f"--- {doc.basename} ---\n\n")
+                blocks.append(doc.to_dict(cache_level=to_cache_level(cache and is_last)))
+            return blocks
+
         actual_extra_input.append(CacheablePropertyGenerationInput(
             "certora:extra_context", "generic", "always",
             provide=lambda cache: [
-                "In addition, the user requesting this analysis has provided the following extra context about "
-                "the application: notes, assumptions, deployment details, or anything else they considered "
-                "relevant. It was written for the entire application (not just the component you are analyzing), "
-                "so parts of it may not bear on your analysis. Treat it as authoritative information about how "
-                "the system is intended to work and be deployed, and let it inform which behaviours count as "
-                "violations. It is *NOT* a list of the issues to look for and it is *NOT* exhaustive: keep "
-                "looking for problems it does not mention.\n\n",
-                extra_context.to_dict(cache_level=to_cache_level(cache))
+                f"In addition, the user requesting this analysis has provided the following extra context about "
+                f"the application ({len(extra_context)} document(s), each introduced by its filename below): "
+                "notes, assumptions, deployment details, or anything else they considered relevant. It was "
+                "written for the entire application (not just the component you are analyzing), so parts of it "
+                "may not bear on your analysis. Treat it as authoritative information about how the system is "
+                "intended to work and be deployed, and let it inform which behaviors count as violations. It "
+                "is *NOT* a list of the issues to look for and it is *NOT* exhaustive: keep looking for "
+                "problems it does not mention.\n\n",
+                *extra_context_blocks(cache),
             ]
         ))
 

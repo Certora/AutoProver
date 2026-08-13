@@ -28,7 +28,7 @@ import pathlib
 import zlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol, overload
+from typing import Protocol, Sequence, overload
 
 from composer.llm.types import CacheLevel
 
@@ -93,6 +93,59 @@ def file_digest(path: pathlib.Path) -> str:
     document shape digests its raw bytes, so this matches without going
     through an uploader."""
     return _bytes_digest(path.read_bytes())
+
+
+DOCUMENT_SUFFIXES: frozenset[str] = frozenset({
+    ".md", ".markdown", ".txt", ".rst", ".pdf",
+})
+"""What :func:`discover_documents` collects. Narrower than what
+:meth:`FileUploader.get_document` accepts, so a sweep does not inhale contract source
+sitting beside the docs; an explicitly-named path is not filtered by it."""
+
+
+def discover_documents(root: pathlib.Path) -> list[pathlib.Path]:
+    """The :data:`DOCUMENT_SUFFIXES` files directly in ``root``, sorted by name; not
+    recursive, hidden files skipped. The order feeds a cache key, so the same directory
+    must always yield the same list. Raises ``ValueError`` if ``root`` is not a
+    directory; an empty directory yields an empty list."""
+    if not root.is_dir():
+        raise ValueError(f"not a directory: {root}")
+    return sorted(
+        (
+            # Name checks before is_file so the stat only runs for qualifying names.
+            p for p in root.iterdir()
+            if p.suffix.lower() in DOCUMENT_SUFFIXES
+            and not p.name.startswith(".")
+            and p.is_file()
+        ),
+        key=lambda p: p.name,
+    )
+
+
+def resolve_document_paths(paths: Sequence[str] | None) -> list[pathlib.Path]:
+    """Resolve extra-context selections into an ordered document list. Each entry is
+    either a document, taken as-is, or a directory, swept by :func:`discover_documents`
+    and spliced in place.
+
+    Order is fully determined — entries in the order given, each sweep sorted by name —
+    because the result feeds both the prompt and a cache key. Raises ``ValueError`` for a
+    path that does not exist, or a swept directory with no supported documents."""
+    out: list[pathlib.Path] = []
+    for raw in paths or []:
+        p = pathlib.Path(raw)
+        if p.is_dir():
+            found = discover_documents(p)
+            if not found:
+                raise ValueError(
+                    f"no supported documents directly under {p} (looked for "
+                    f"{', '.join(sorted(DOCUMENT_SUFFIXES))}; the sweep is not recursive)"
+                )
+            out.extend(found)
+        elif p.is_file():
+            out.append(p)
+        else:
+            raise ValueError(f"no such file or directory: {p}")
+    return out
 
 
 # Suffixes treated as binary regardless of byte content; short-circuits

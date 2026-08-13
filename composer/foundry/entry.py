@@ -23,7 +23,7 @@ from typing import Annotated, AsyncIterator, Awaitable, Callable, Protocol, cast
 
 from composer.core.user import get_uid
 from composer.diagnostics.timing import RunSummary
-from composer.input.parsing import Arg, add_protocol_args
+from composer.input.parsing import Arg, add_extra_context_args, add_protocol_args
 from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
@@ -73,13 +73,10 @@ class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
     max_forge_runners: int
     budget: str | None
     time_budget: float | None
+    extra_context: list[str] | None
 
     @property
     def threat_model(self) -> None:
-         ...
-
-    @property
-    def extra_context(self) -> None:
          ...
 
 
@@ -139,7 +136,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--forge-timeout-s", type=int, default=600, help="Per-`forge test` invocation timeout in seconds (default: 600)")
     parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
-    parser.set_defaults(threat_model=None, extra_context=None)
+    add_extra_context_args(parser)
+    parser.set_defaults(threat_model=None)
     return parser
 
 
