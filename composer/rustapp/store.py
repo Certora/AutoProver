@@ -50,9 +50,10 @@ class RustArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
 
     @override
     def write_artifact(self, i: RustArtifact, artifact: RustFormalResult) -> Path:
-        """In ``callout`` mode, write only the shared metadata and return the (whole-deliverable)
-        report link — the source files come from the wheel's ``finalize``. Otherwise defer to the
-        base one-file-per-component writer."""
+        """In ``callout`` mode, write only the shared metadata — the source files come from the
+        wheel's ``finalize`` — and return the deliverable's representative file as the component's
+        ``Delivered`` path: the descriptor's declared primary file, or the deliverable dir when
+        the app declared it has none. Otherwise defer to the base one-file-per-component writer."""
         mode = self._deliverable_mode
         if not isinstance(mode, Callout):
             return super().write_artifact(i, artifact)
@@ -60,5 +61,9 @@ class RustArtifactStore(ArtifactStore[RustArtifact, RustFormalResult]):
         self._write_property_map(
             i.stem, self._property_suffix, dict(artifact.property_checks())
         )
-        primary = mode.primary
-        return Path(primary.format(program=self._program) if primary else self._layout.deliverable_dir)
+        deliverable_path = mode.deliverable_path
+        return Path(
+            deliverable_path.format(program=self._program)
+            if deliverable_path
+            else self._layout.deliverable_dir
+        )

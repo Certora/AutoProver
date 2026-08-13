@@ -166,12 +166,18 @@ pub enum DeliverableMode {
     /// The store writes no per-component source; the wheel's `finalize` renders the whole
     /// deliverable (e.g. Crucible's one shared crate assembled from all sections + the fixture).
     Callout {
-        /// The project-relative path of the primary deliverable file, `{program}`-templated
-        /// (Crucible: `fuzz/{program}/src/main.rs`). Used only as each component's report link —
-        /// the actual files come from `finalize`. Carried by the variant because it means nothing
-        /// under `PerComponent`.
+        /// Does the deliverable have a representative primary file? `finalize` renders a whole
+        /// tree, but every delivered component still records one path — its basename becomes the
+        /// component's `unit_file`, the report's rule-identity fallback, echoed back to
+        /// `finalize` — and the store can't guess where in that tree the components' checks land.
+        /// A path (project-relative, `{program}`-templated — Crucible:
+        /// `fuzz/{program}/src/main.rs`) names that file; `None` declares that no one file
+        /// represents the deliverable, and components anchor to the layout's `deliverable_dir`
+        /// instead. The wire requires the key either way, so opting out is an explicit choice,
+        /// not an omitted field. Carried by the variant because it means nothing under
+        /// `PerComponent`.
         #[serde(deserialize_with = "crate::required::present")]
-        primary: Option<String>,
+        deliverable_path: Option<String>,
     },
 }
 

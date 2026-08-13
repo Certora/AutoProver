@@ -80,10 +80,14 @@ class Callout(WireModel):
     deliverable (e.g. Crucible's one shared crate)."""
 
     mode: Literal["callout"] = "callout"
-    #: The project-relative path of the primary deliverable file, ``{program}``-templated (Crucible:
-    #: ``fuzz/{program}/src/main.rs``). Used only as each component's report link — the actual files
-    #: come from ``finalize``. On the variant because it means nothing per-component.
-    primary: str | None
+    #: Does the deliverable have a representative primary file? ``finalize`` renders a whole tree,
+    #: but every delivered component still records one path — its basename becomes the component's
+    #: ``unit_file``, the report's rule-identity fallback, echoed to ``finalize`` — and the store
+    #: can't guess where in that tree the components' checks land. A path (project-relative,
+    #: ``{program}``-templated — Crucible: ``fuzz/{program}/src/main.rs``) names that file;
+    #: ``None`` declares that no one file represents the deliverable, and components anchor to the
+    #: layout's ``deliverable_dir`` instead. On the variant because it means nothing per-component.
+    deliverable_path: str | None
 
 
 #: How the source deliverable is written — tagged on ``mode`` (Rust ``DeliverableMode``).
