@@ -852,7 +852,7 @@ async def run_session(
     }).render_to(load_jinja_template)
     system = f"{protocol}\n\n{prompt.system}" if prompt.system else protocol
 
-    graph: Any = (
+    graph = (
         env.builder_heavy()
         .with_state(RustSessionState)
         .with_input(RustSessionInput)
