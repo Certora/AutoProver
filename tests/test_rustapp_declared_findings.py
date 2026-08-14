@@ -26,7 +26,6 @@ from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
-from composer.spec.source.report.collect import ReportComponentInput
 from composer.spec.source.report.schema import Outcome
 from tests.conftest import wire_descriptor
 
@@ -141,13 +140,7 @@ async def test_the_report_gets_the_declared_finding():
     result = _result(
         {"c_kill": _verdict(Outcome.GOOD), "c_plain": _verdict(Outcome.GOOD)}, {"c_kill": REASON}
     )
-    verdicts = await formalizer.fetch_verdicts(
-        cast(
-            ReportComponentInput[RustFormalResult],
-            ReportComponentInput(name="Oracle-Driven Refresh", props=[],
-                                 formalized=cast(Any, _Formalized(result))),
-        )
-    )
+    verdicts = await formalizer.fetch_verdicts(cast(Any, _Formalized(result)))
 
     assert verdicts["c_kill"].outcome is Outcome.BAD
     assert REASON in (verdicts["c_kill"].message or "")
@@ -203,12 +196,6 @@ async def test_a_wheels_own_file_beats_the_components_fallback():
     located = _verdict(Outcome.BAD)
     located.unit_file = "c_lamport_custody.rs"
     result = _result({"c_authority_immutable": located, "c_unplaced": _verdict(Outcome.GOOD)}, {})
-    verdicts = await formalizer.fetch_verdicts(
-        cast(
-            ReportComponentInput[RustFormalResult],
-            ReportComponentInput(name="Lamport Custody", props=[],
-                                 formalized=cast(Any, _Formalized(result))),
-        )
-    )
+    verdicts = await formalizer.fetch_verdicts(cast(Any, _Formalized(result)))
     assert verdicts["c_authority_immutable"].unit_file == "c_lamport_custody.rs"
     assert verdicts["c_unplaced"].unit_file == "main.rs"

@@ -152,7 +152,6 @@ def test_fetch_verdicts_threads_finding_detail_into_message():
     from composer.rustapp.adapter import RustFormalizer
     from composer.rustapp.descriptor import AppDescriptor
     from composer.rustapp.result import RustFormalResult
-    from composer.spec.source.report.collect import ReportComponentInput
     from composer.spec.source.report.schema import Outcome
 
     desc = AppDescriptor.model_validate_json(crucible_app.descriptor())
@@ -163,10 +162,9 @@ def test_fetch_verdicts_threads_finding_detail_into_message():
             "c_y": wire_verdict("GOOD"),
         }
     )
-    inp = ReportComponentInput(
-        name="vault", props=[], formalized=Delivered(res, Path("certora/crucible/fuzz/vault/src/main.rs"))
-    )
-    verdicts = asyncio.run(fz.fetch_verdicts(inp))
+    verdicts = asyncio.run(fz.fetch_verdicts(
+        Delivered(res, Path("certora/crucible/fuzz/vault/src/main.rs"))
+    ))
     assert verdicts["c_x"].outcome == Outcome.BAD
     assert verdicts["c_x"].message == "crash abc: deposit(5) — expected 105 got 100"
     # GOOD verdict with no detail carries no message.
@@ -183,7 +181,6 @@ def test_validate_returns_per_check_verdicts_and_the_host_records_them():
     from composer.rustapp.adapter import RustFormalizer
     from composer.rustapp.descriptor import AppDescriptor
     from composer.rustapp.result import RustFormalResult
-    from composer.spec.source.report.collect import ReportComponentInput
     from composer.spec.source.report.schema import Outcome
 
     # A parse error still yields the per-check `verdicts` shape the host consumes — keyed by the
@@ -207,10 +204,9 @@ def test_validate_returns_per_check_verdicts_and_the_host_records_them():
             "c_solvency": wire_verdict("GOOD"),
         },
     )
-    inp = ReportComponentInput(
-        name="vault", props=[], formalized=Delivered(res, Path("certora/crucible/fuzz/vault/src/main.rs"))
-    )
-    verdicts = asyncio.run(fz.fetch_verdicts(inp))
+    verdicts = asyncio.run(fz.fetch_verdicts(
+        Delivered(res, Path("certora/crucible/fuzz/vault/src/main.rs"))
+    ))
     assert verdicts["c_conservation"].outcome == Outcome.BAD
     assert "conservation" in verdicts["c_conservation"].message
     assert verdicts["c_solvency"].outcome == Outcome.GOOD

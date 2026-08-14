@@ -169,9 +169,16 @@ class _Ctx:
         return _ChildCtx()
 
 
+class _Source:
+    # _extract_all injects the design doc into property inference when one is
+    # supplied (PR #124); None is the no-doc case.
+    content = None
+
+
 class _Run:
     ctx = _Ctx()
     env = object()
+    source = _Source()
 
     async def runner(self, info, job):
         return await job(None)  # the extraction job takes a refinement-conv arg

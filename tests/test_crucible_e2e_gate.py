@@ -30,7 +30,7 @@ import pytest
 from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
-from composer.kb.knowledge_base import DefaultEmbedder
+from composer.rag.models import DefaultEmbedder
 from composer.pipeline.core import Delivered
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
 from composer.rustapp.frontend import GenericRustConsoleHandler
