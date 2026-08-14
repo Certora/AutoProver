@@ -4,7 +4,6 @@ import uuid
 from dataclasses import dataclass
 import pathlib
 
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
 from graphcore.graph import Builder
@@ -41,7 +40,7 @@ from composer.tools.relaxation import requirements_relaxation
 from composer.tools.search import cvl_manual_tools
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import CodeGenIOHandler, WorkflowPurpose
-from composer.io.context import with_handler, run_graph
+from composer.io.context import with_handler, run_to_completion
 from composer.diagnostics.timing import set_current_task_id
 from composer.ui.codegen_events import CodeGenEventHandler
 from composer.core.state import AIComposerInput, AIComposerExtra
@@ -466,12 +465,6 @@ async def _run_codegen(
     except ModuleNotFoundError:
         pass
 
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-    config["recursion_limit"] = workflow_options.recursion_limit
-
-    if workflow_options.checkpoint_id is not None:
-        config["configurable"]["checkpoint_id"] = workflow_options.checkpoint_id
-
     required_validations: list[CodegenValidation] = [ProverValidation(s) for (s, _) in spec_docs]
     if reqs_list is not None:
         required_validations.append(ReqsValidation())
@@ -483,7 +476,15 @@ async def _run_codegen(
     try:
         async with with_handler(handler, CodeGenEventHandler(handler)):
             with set_current_task_id(CODEGEN_TASK_ID):
-                final_state = await run_graph(workflow_exec, work_context, flow_input, config, description="Code generation")
+                final_state = await run_to_completion(
+                    workflow_exec,
+                    flow_input,
+                    thread_id=thread_id,
+                    context=work_context,
+                    checkpoint_id=workflow_options.checkpoint_id,
+                    recursion_limit=workflow_options.recursion_limit,
+                    description="Code generation",
+                )
 
         result = final_state.get("generated_code", None)
         if result is None:

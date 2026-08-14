@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 from langgraph.config import get_config
 from langchain_core.messages import HumanMessage
+from composer.spec.graph_builder import run_to_completion
 from graphcore.graph import MonitorReturn
 from composer.prover.ptypes import StatusCodes
 

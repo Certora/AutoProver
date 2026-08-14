@@ -219,6 +219,19 @@ class AnthropicService(ProviderServiceBase):
         }
         return to_ret
 
+    @override
+    def should_retry(self, exc: Exception) -> bool:
+        """Mirrors the SDK's own ``_should_retry`` status roster (408/409/429
+        and every 5xx, which covers 529 overloaded) plus connection-level
+        failures (``APITimeoutError`` subclasses ``APIConnectionError``).
+        400-class request errors are deterministic — an over-long prompt fails
+        identically on every attempt — and are deliberately excluded."""
+        if isinstance(exc, anthropic.APIConnectionError):
+            return True
+        if isinstance(exc, anthropic.APIStatusError):
+            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+        return False
+
 @dataclass
 class AnthropicModelProvider:
     """``ModelProvider`` for Anthropic. Probes ``model_name`` once at
