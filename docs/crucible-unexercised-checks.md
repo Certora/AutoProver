@@ -97,7 +97,8 @@ macro_rules! __tally_fuzz_assert {
             if __n.is_power_of_two() {
                 let __tag = $fmt.split_once('[').and_then(|(_, r)| r.split_once(']'))
                     .map(|(t, _)| t).unwrap_or("?");
-                ::std::println!("[FUZZ_TALLY] tag: {__tag}, evaluated: {__n}");
+                ::std::println!("[FUZZ_TALLY] tag: {__tag}, site: {}:{}, evaluated: {__n}",
+                    ::std::file!(), ::std::line!());
             }
         }
         ::crucible_fuzzer::fuzz_assert!($cond, $fmt $(, $args)*);
@@ -127,7 +128,12 @@ shape; one more label-parsed line format.
 `$fmt:literal`, so the wrapper holds it as a `&'static str` and slices the tag out of it *inside the
 power-of-two branch only*. The hot path is one relaxed `fetch_add` and one branch; the printing is
 ≤ ~13 lines per site per campaign (counts print at powers of two, so the last line is within 2× of
-the true count — and the verdict only needs "greater than zero").
+the true count). Each expansion mints its own `static`, so the counter is per call site — sharing
+one across the sites that assert the same tag would need a string-keyed registry at runtime, since
+the tag sits inside a literal the macro cannot inspect at expansion time. Sites collapse into tags
+at parse time instead, which is why the printed line carries the `site:` key (`file!`/`line!`
+expand to the call site): per-site counts are monotonic, so the parser takes each site's last line,
+and the site field is what keeps two same-tag sites' interleaved prints separable.
 
 **The verdict gate.** A small parser (label-based, the way `campaign.rs` reads pulse fields; max per
 site, then summed per tag) turns the tally lines into `tag → evaluations`. Then the two places that
@@ -138,6 +144,18 @@ claims has a tally above zero, and answer `UNKNOWN` otherwise, with a detail say
 check with no evidence it ran comes back `ERROR` or `UNKNOWN`, never `GOOD`") finally enforced at
 this seam. The tag convention itself is no new fragility: it is already the load-bearing convention
 attribution places findings by.
+
+**A count, not a boolean.** The gate itself consumes only "greater than zero", so a per-site
+evaluated-once flag would be sound — and simpler, one line per site with no site key or max to
+parse. The count is for the green row, on `campaign.rs`'s own argument: a green row's strength is
+otherwise invisible, so the note says what the run spent. "Evaluated 4479×" and "evaluated 2× in
+67,798 executions" both clear the gate, but the second is a nearly-closed guard — the init
+succeeded twice all campaign — which is the per-assertion analog of klend's `discovered: 44/92`
+actions, and an actionable fixture signal ("make initialization succeed more often") that a boolean
+erases. The magnitude is close to free — the hot path is one relaxed `fetch_add` where a flag would
+be a relaxed `swap`, and the power-of-two printing bounds the difference at ~13 lines per site
+against the boolean's one — and a count is the shape crucible's own tally would report, so the
+parser and the gate survive that migration unchanged.
 
 That closes all three shapes at once: an assertion never written (no tally line carries its tag — a
 case the LCOV option below cannot even see, having no line to find unexecuted), an assertion written
