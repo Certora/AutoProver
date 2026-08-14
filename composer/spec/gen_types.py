@@ -5,6 +5,8 @@ from typing import Literal, Mapping, Any, Protocol, final, TypedDict
 
 from pydantic import BaseModel, Field
 
+from composer.layout import CERTORA_DIR, INTERNAL_DIR
+
 
 # ---------------------------------------------------------------------------
 # Canonical certora/ layout
@@ -15,8 +17,10 @@ from pydantic import BaseModel, Field
 # entry verbatim (the prover reads it relative to the project root), and CVL ``import``
 # statements are derived with :func:`import_statement_for` (the prover reads
 # those relative to the importing spec's own directory).
+#
+# The two roots — CERTORA_DIR (keep) and INTERNAL_DIR (ignore) — are defined in
+# composer.layout and re-exported here.
 # ---------------------------------------------------------------------------
-CERTORA_DIR = Path("certora")
 #: Generated specs (the "importers") are written here.
 SPECS_DIR = CERTORA_DIR / "specs"
 #: Per-component property dumps (`<stem>.properties.json` / `.property_rules.json`)
@@ -31,15 +35,6 @@ SUMMARIES_DIR = SPECS_DIR / "summaries"
 #: canonical slug<->id map) lives here -- a dedicated subdir so a consumer can
 #: include or exclude the human-facing report independently of the specs.
 AP_REPORT_DIR = CERTORA_DIR / "ap_report"
-
-#: Everything generated that is NOT a deliverable: diagnostics, scratch, and the
-#: build/fuzz outputs a run accumulates. The counterpart to :data:`CERTORA_DIR` —
-#: one is what a user keeps, this is what a user ignores — so a project that
-#: ignores this directory ignores all of it, and every source surface withholds it
-#: whole (``fs_forbidden_read``, ``RUST_FORBIDDEN_READ``). Spelled once here
-#: because a subdirectory that grows without bound is only safe while it is
-#: *inside* the directory those rules name.
-INTERNAL_DIR = Path(".certora_internal")
 
 #: Internal autoProve run artifacts (rotating logs, events.jsonl, run-link
 #: dumps). NOT part of the certora/ deliverable layout above — these are

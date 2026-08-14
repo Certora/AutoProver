@@ -16,8 +16,8 @@ import os
 import shutil
 from pathlib import Path
 
+from composer.layout import INTERNAL_DIR
 from composer.sandbox.policy import SandboxPolicy
-from composer.spec.gen_types import INTERNAL_DIR
 
 # Benign build vars passed through to the child (values read from the current env).
 # Never secrets — the whole point is that secrets are *not* inherited.
