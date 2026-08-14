@@ -161,7 +161,7 @@ def test_the_gate_tool_describes_itself_in_the_wheels_noun():
 def test_the_expected_failure_tools_and_the_publish_mapping_follow():
     vocab = _crucible()
     fail, passage = _expect_tools(vocab)
-    publish = _publish_tool(PublishDeps(titles=[]), vocab)
+    publish = _publish_tool(PublishDeps(titles=[]))
     for tool in (fail, passage, _map_tool(vocab)):
         assert "harness function" in _tool_text(tool)
     # The publish tool no longer carries the mapping — it is declared before the run, not after —
@@ -175,13 +175,14 @@ def test_a_wheel_that_declares_no_noun_gets_the_generic_one():
     assert CheckVocab.of(_descriptor(check_noun="invariant")).many == "invariants"
 
 
-def test_a_redescribed_tool_is_not_silently_the_base_one():
-    # `@tool_display` rebinds `as_tool`/`bind` closed over the class it decorated, so a subclass of
-    # a decorated schema hands back the BASE schema — the re-described text vanishes with no error.
-    # The factories apply the display themselves to avoid that; this is the guard.
+def test_a_templated_tool_is_not_silently_the_base_one():
+    # A family instantiated with different nouns must produce different LLM-facing text. This is
+    # the guard that ``with_template`` actually rewrote the schema, rather than handing back the
+    # untemplated ``{check}`` placeholders.
     generic = _tool_text(_validate_tool(_gate_deps(_GENERIC), _GENERIC))
     crucible = _tool_text(_validate_tool(_gate_deps(_crucible()), _crucible()))
     assert generic != crucible
+    assert "{check}" not in generic and "{check}" not in crucible
 
 
 def test_the_rebuttal_tool_carries_the_wheels_declared_evidence_kinds():

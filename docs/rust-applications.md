@@ -415,14 +415,14 @@ requires, what a skip and a give-up mean — rendered from
 declares — Crucible's author reads about *harness functions*, another wheel's about *invariants* —
 because an author writes better when the prompt speaks the language its own generated code uses. The
 tool *names* stay generic (`validate_spec`, `expect_check_failure`) so the protocol can name them
-literally; only prose moves. The host renders this through `CheckVocab`, which re-describes each
-schema per session.
+literally; only prose moves. The host renders this through `CheckVocab` plus graphcore
+`tool_family`: the session tools declare `{check}` / `{checks}` placeholders and
+`with_template` instantiates them per wheel.
 
-> A schema that is re-described must not carry `@tool_display`: that decorator rebinds
-> `as_tool`/`bind` closed over the class it decorated, so a *subclass* of a decorated schema hands
-> back the base's fields with no error at all. The factories in
-> [`session.py`](../composer/rustapp/session.py) apply the display themselves for exactly this
-> reason, and `test_rust_llm_agent.py` guards it. A wheel that spelled the protocol itself could drift
+> `@tool_family_display` applies the UI label *after* `with_template`, so the generated
+> subclass is what `as_tool`/`bind` close over. Putting `@tool_display` on the untemplated
+> family class would rebind those methods over the *base* schema and the nouns would
+> vanish with no error. `test_rust_llm_agent.py` guards it. A wheel that spelled the protocol itself could drift
 from what the host enforces, so it is never asked to. The instruction is likewise augmented: the host
 appends the obligation the gate enforces — declare the mapping before validating, cover every
 property, and name only checks that are really in the spec — because that rule is the framework's

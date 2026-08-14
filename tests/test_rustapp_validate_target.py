@@ -22,7 +22,8 @@ from composer.authoring.state import SkippedProperty, spec_digest
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.session import (
-    VALIDATE_KEY, GateDeps, PropertyCheckMapping, RustSessionState, SessionResult, ValidateSpec,
+    VALIDATE_KEY, CheckVocab, GateDeps, PropertyCheckMapping, RustSessionState, SessionResult,
+    _validate_tool,
 )
 from composer.rustapp.wire import Target, Check, ValidateCoverageError
 from composer.spec.source.report.schema import Outcome
@@ -100,7 +101,7 @@ def _deps(wheel: _Wheel, tmp_path: pathlib.Path) -> GateDeps:
 
 async def _validate(wheel: _Wheel, tmp_path: pathlib.Path, state=None, checks=None):
     """Invoke the gate tool exactly as the graph would, and return what it handed back."""
-    tool = ValidateSpec.bind(_deps(wheel, tmp_path)).as_tool("validate_spec")
+    tool = _validate_tool(_deps(wheel, tmp_path), CheckVocab("check", "checks"))
     out = await tool.ainvoke({
         "name": "validate_spec",
         "type": "tool_call",

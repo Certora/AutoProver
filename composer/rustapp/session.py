@@ -29,7 +29,8 @@ from pydantic import BaseModel, Field, create_model
 
 from graphcore.graph import FlowInput, tool_state_update
 from graphcore.tools.schemas import (
-    WithAsyncDependencies, WithAsyncImplementation, WithInjectedId, WithInjectedState,
+    TemplatedTool, ToolFamilyParams, WithAsyncDependencies, WithAsyncImplementation,
+    WithInjectedId, WithInjectedState, tool_family,
 )
 
 from composer.authoring.buffer import (
@@ -60,7 +61,9 @@ from composer.spec.graph_builder import run_to_completion
 from composer.spec.service_host import ServiceHost
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import Outcome
-from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display, tool_display_of
+from composer.ui.tool_display import (
+    ToolDisplay, suppress_ack, tool_display, tool_display_of, tool_family_display,
+)
 from typing_extensions import TypedDict
 
 _log = logging.getLogger(__name__)
@@ -77,7 +80,8 @@ class CheckVocab:
     Declared by the wheel (``AppDescriptor.check_noun``) because an author writes better when the
     prompt speaks its own domain's language — Crucible's are harness functions, another backend's
     are invariants. Only prose moves: the tools keep their ``check``-worded *names* so the protocol
-    can name them literally, and the wire keeps calling a check a check."""
+    can name them literally, and the wire keeps calling a check a check. Schema text is instantiated
+    via :class:`CheckNouns`; this object supplies the values and the leftover runtime strings."""
 
     one: str
     many: str
@@ -87,9 +91,16 @@ class CheckVocab:
         return cls(one=descriptor.check_label(), many=descriptor.check_label(plural=True))
 
     def fill(self, text: str) -> str:
-        """``text`` with ``{check}`` / ``{checks}`` rendered. Only ever applied to strings declared
-        in this module, so a stray brace is a bug here rather than untrusted input."""
+        """``text`` with ``{check}`` / ``{checks}`` rendered. For *runtime* strings (tool results,
+        the initial prompt). LLM-facing schemas go through :func:`tool_family` instead."""
         return text.format(check=self.one, checks=self.many)
+
+
+class CheckNouns(ToolFamilyParams):
+    """The nouns :func:`tool_family` substitutes into the session tools' schemas."""
+
+    check: str
+    checks: str
 
 
 class ProtocolParams(TypedDict):
@@ -253,6 +264,8 @@ class CompileSpec(
             )
 
 
+@tool_family_display("Validating spec", "Validation result")
+@tool_family(CheckNouns)
 class ValidateSpec(
     WithInjectedId,
     WithInjectedState[RustSessionState],
@@ -403,6 +416,12 @@ def _verdict_report(
 # Expected-failure marking
 # ---------------------------------------------------------------------------
 
+def _expect_fail_label(p: dict, *, check: str, checks: str) -> str:
+    return f"Expecting {check} `{p['check_name']}` to fail"
+
+
+@tool_family_display(_expect_fail_label, None)
+@tool_family(CheckNouns)
 class ExpectCheckFailure(WithAsyncImplementation[Command | str], WithInjectedId):
     """
     Mark a {check} as expected to fail.
@@ -427,6 +446,12 @@ class ExpectCheckFailure(WithAsyncImplementation[Command | str], WithInjectedId)
         )
 
 
+def _expect_pass_label(p: dict, *, check: str, checks: str) -> str:
+    return f"Expecting {check} `{p['check_name']}` to pass"
+
+
+@tool_family_display(_expect_pass_label, None)
+@tool_family(CheckNouns)
 class ExpectCheckPassage(WithAsyncImplementation[Command], WithInjectedId):
     """
     Unmark a {check} previously marked expected-to-fail. Every {check} is expected to pass by
@@ -598,6 +623,7 @@ class PublishDeps:
     titles: list[PropertyTitle]
 
 
+@tool_family(CheckNouns)
 class MapChecks(
     WithInjectedId,
     WithInjectedState[RustSessionState],
@@ -631,6 +657,7 @@ class MapChecks(
         )
 
 
+@tool_display("Publishing spec", None)
 class PublishSpec(
     WithInjectedId,
     WithInjectedState[RustSessionState],
@@ -836,7 +863,7 @@ async def run_session[K: (RustFormalResult, RustSetupSpec)](
             RecordSkip.bind(lambda: titles).as_tool("record_skip"),
             Unskip.bind(lambda: titles).as_tool("unskip_property"),
             *_expect_tools(vocab),
-            _publish_tool(PublishDeps(titles=titles), vocab),
+            _publish_tool(PublishDeps(titles=titles)),
         ]
     else:
         tools += [
@@ -906,75 +933,46 @@ async def run_session[K: (RustFormalResult, RustSetupSpec)](
     )
 
 
-def _redescribe[T: BaseModel](base: type[T], vocab: CheckVocab, **fields: Any) -> type[T]:
-    """``base`` with its docstring — and the named fields' descriptions — spoken in the wheel's
-    vocabulary. A subclass rather than a mutation: the base classes are module-level and shared by
-    every session in the process.
-
-    The bases these are built from must NOT carry ``@tool_display``: that decorator rebinds
-    ``as_tool``/``bind`` closed over the class it decorated, so a subclass of a decorated class
-    silently hands back the *base's* schema. The factories below apply the display instead, which
-    is also what lets a label speak the wheel's noun."""
-    assert base.__doc__ is not None
-    return create_model(
-        base.__name__,
-        __base__=base,
-        __doc__=vocab.fill(base.__doc__),
-        **{
-            name: (info.annotation, Field(
-                default_factory=info.default_factory,  # type: ignore[arg-type]
-            ) if info.default_factory is not None else Field(
-                default=info.default,
-                description=vocab.fill(info.description or ""),
-            ))
-            for name, info in ((n, base.model_fields[n]) for n in fields)
-        },
+def _validate_tool(deps: GateDeps, vocab: CheckVocab) -> BaseTool:
+    return (
+        ValidateSpec.with_template(check=vocab.one, checks=vocab.many)
+        .bind(deps)
+        .as_tool("validate_spec")
     )
 
 
-def _validate_tool(deps: GateDeps, vocab: CheckVocab) -> BaseTool:
-    schema = _redescribe(ValidateSpec, vocab, checks=...)
-    tool_display_of(ToolDisplay("Validating spec", "Validation result"))(schema)
-    return schema.bind(deps).as_tool("validate_spec")
-
-
 def _expect_tools(vocab: CheckVocab) -> list[BaseTool]:
-    fail = _redescribe(ExpectCheckFailure, vocab, check_name=..., reason=...)
-    passage = _redescribe(ExpectCheckPassage, vocab, check_name=...)
-    tool_display_of(
-        ToolDisplay(lambda p: f"Expecting {vocab.one} `{p['check_name']}` to fail", None)
-    )(fail)
-    tool_display_of(
-        ToolDisplay(lambda p: f"Expecting {vocab.one} `{p['check_name']}` to pass", None)
-    )(passage)
     return [
-        fail.as_tool("expect_check_failure"),
-        passage.as_tool("expect_check_passage"),
+        ExpectCheckFailure.with_template(check=vocab.one, checks=vocab.many)
+        .as_tool("expect_check_failure"),
+        ExpectCheckPassage.with_template(check=vocab.one, checks=vocab.many)
+        .as_tool("expect_check_passage"),
     ]
 
 
 def _map_tool(vocab: CheckVocab) -> BaseTool:
-    # The mapping's own field descriptions are LLM-facing too, so the schema is rebuilt around a
-    # re-described element type rather than just re-describing the list.
-    mapping = _redescribe(PropertyCheckMapping, vocab, property_title=..., checks=...)
+    # Formatting is not transitive: MapChecks.with_template rewrites this class's own text, but
+    # the nested PropertyCheckMapping would still show ``{checks}``. Template the element first,
+    # then splice it in. Display is applied after the splice so ``as_tool`` closes over the
+    # spliced schema, not the unspliced templated base.
+    mapping = TemplatedTool(PropertyCheckMapping).with_template(
+        check=vocab.one, checks=vocab.many,
+    )
+    templated = MapChecks.with_template(check=vocab.one, checks=vocab.many)
     schema = create_model(
         "MapChecks",
-        __base__=MapChecks,
-        __doc__=vocab.fill(MapChecks.__doc__ or ""),
+        __doc__=templated.__doc__,
+        __base__=templated,
         property_checks=(list[mapping], Field(  # type: ignore[valid-type]
-            description=vocab.fill(
-                MapChecks.model_fields["property_checks"].description or ""
-            ),
+            description=templated.model_fields["property_checks"].description,
         )),
     )
     tool_display_of(ToolDisplay(f"Declaring {vocab.many}", None))(schema)
     return schema.as_tool("map_checks")
 
 
-def _publish_tool(deps: PublishDeps, vocab: CheckVocab) -> BaseTool:
-    schema = _redescribe(PublishSpec, vocab)
-    tool_display_of(ToolDisplay("Publishing spec", None))(schema)
-    return schema.bind(deps).as_tool("result")
+def _publish_tool(deps: PublishDeps) -> BaseTool:
+    return PublishSpec.bind(deps).as_tool("result")
 
 
 def _feedback_tool(judge: FeedbackThunk[RebuttalBase], rebuttal: type[RebuttalBase]) -> BaseTool:
