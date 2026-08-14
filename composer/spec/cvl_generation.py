@@ -26,9 +26,7 @@ from composer.authoring.judge import PropertyFeedbackProtocol, RebuttalBase
 from composer.authoring.state import (
     AuthoringExtra, MappingVocab, SkippedProperty, spec_digest, validate_check_mapping,
 )
-from composer.authoring.tools import (
-    CVL_SKIP_DESCRIPTION, CVL_SKIP_REASON, skip_tools as _skip_pair,
-)
+from composer.authoring.tools import skip_tools as _skip_pair
 from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
 )
@@ -281,12 +279,22 @@ def static_tools() -> list[BaseTool]:
     ]
 
 
+_SKIP_DESCRIPTION = """
+    Declare that you are skipping a property from the batch.
+    You must provide the property's title and a justification.
+    The feedback judge will evaluate whether your justification is valid.
+    Only use this after genuinely attempting to formalize the property.
+    """
+
+_SKIP_REASON = "Justification for why this property cannot be formalized"
+
+
 def skip_tools(titles: list[PropertyTitle]) -> list[BaseTool]:
     """The skip-management pair, bound to the batch's property titles."""
     return _skip_pair(
         titles,
-        skip_description=CVL_SKIP_DESCRIPTION,
-        skip_reason=CVL_SKIP_REASON,
+        skip_description=_SKIP_DESCRIPTION,
+        skip_reason=_SKIP_REASON,
     )
 
 

@@ -45,9 +45,7 @@ from composer.authoring.judge import (
     FeedbackThunk, JudgeBuilder, JudgeState, RebuttalBase, build_feedback_judge,
 )
 from composer.authoring.state import SkippedProperty
-from composer.authoring.tools import (
-    FOUNDRY_SKIP_DESCRIPTION, FOUNDRY_SKIP_REASON, give_up_tool, skip_tools,
-)
+from composer.authoring.tools import give_up_tool, skip_tools
 from composer.pipeline.core import Curtailed, GaveUp
 from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
 from composer.diagnostics.budget import (
@@ -143,6 +141,16 @@ class PutTestRaw(WithImplementation[Command | str], WithInjectedId):
     def run(self) -> Command | str:
         return apply_spec_update(tool_call_id=self.tool_call_id, text=self.test_source)
 
+
+_SKIP_DESCRIPTION = """
+    Declare that you are skipping a property from the batch.
+
+    You must provide the property's title and a justification. Skipping
+    excludes the property from the publish-time property→test mapping
+    check; only use after a genuine attempt to formalize.
+    """
+
+_SKIP_REASON = "Justification for why this property cannot be formalized as a foundry test"
 
 _GET_TEST_DESCRIPTION = """
     Retrieve the textual representation of the current foundry test.
@@ -625,8 +633,8 @@ async def batch_foundry_test_generation(
             get_test_tool(FoundryGenerationState),
             *skip_tools(
                 titles,
-                skip_description=FOUNDRY_SKIP_DESCRIPTION,
-                skip_reason=FOUNDRY_SKIP_REASON,
+                skip_description=_SKIP_DESCRIPTION,
+                skip_reason=_SKIP_REASON,
             ),
             ExpectTestFailure.as_tool("expect_test_failure"),
             ExpectTestPassage.as_tool("expect_test_passage"),

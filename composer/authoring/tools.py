@@ -7,9 +7,8 @@ publish-time mapping check. Backends agreeing on those by coincidence is one ref
 of them disagreeing.
 
 What varies on skip and give-up is LLM-facing text, so those are
-:func:`~graphcore.tools.schemas.tool_family` classes instantiated with the backend's own wording.
-Unskip does not vary. The CVL and Foundry skip/give-up instantiations keep the text those tools
-had on master.
+:func:`~graphcore.tools.schemas.tool_family` classes; each backend supplies its own wording at
+instantiate time. Unskip does not vary.
 """
 
 import inspect
@@ -50,35 +49,6 @@ def _llm_doc(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Skip / unskip
 # ---------------------------------------------------------------------------
-
-# Exact master wording. Do not "clean up" — the golden test pins these strings.
-
-CVL_SKIP_DESCRIPTION = """
-    Declare that you are skipping a property from the batch.
-    You must provide the property's title and a justification.
-    The feedback judge will evaluate whether your justification is valid.
-    Only use this after genuinely attempting to formalize the property.
-    """
-
-FOUNDRY_SKIP_DESCRIPTION = """
-    Declare that you are skipping a property from the batch.
-
-    You must provide the property's title and a justification. Skipping
-    excludes the property from the publish-time property→test mapping
-    check; only use after a genuine attempt to formalize.
-    """
-
-RUST_SKIP_DESCRIPTION = """
-    Declare that you are skipping a property from the batch.
-
-    You must provide the property's title and a justification. Skipping
-    excludes the property from the publish-time mapping check; only use
-    after a genuine attempt to formalize.
-    """
-
-CVL_SKIP_REASON = "Justification for why this property cannot be formalized"
-FOUNDRY_SKIP_REASON = "Justification for why this property cannot be formalized as a foundry test"
-
 
 class SkipParams(ToolFamilyParams):
     description: str

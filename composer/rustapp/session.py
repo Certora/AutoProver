@@ -44,9 +44,7 @@ from composer.authoring.state import (
     AuthoringExtra, MappingVocab, SkippedProperty, check_completion, make_validation_stamper,
     merge_expected_failures, validate_check_mapping,
 )
-from composer.authoring.tools import (
-    CVL_SKIP_REASON, RUST_SKIP_DESCRIPTION, give_up_tool, skip_tools,
-)
+from composer.authoring.tools import give_up_tool, skip_tools
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustFormalResult, RustSetupSpec
@@ -73,6 +71,16 @@ _log = logging.getLogger(__name__)
 VALIDATE_KEY = "validate"
 COMPILE_KEY = "compile"
 FEEDBACK_KEY = "feedback"
+
+_SKIP_DESCRIPTION = """
+    Declare that you are skipping a property from the batch.
+
+    You must provide the property's title and a justification. Skipping
+    excludes the property from the publish-time mapping check; only use
+    after a genuine attempt to formalize.
+    """
+
+_SKIP_REASON = "Justification for why this property cannot be formalized"
 
 
 @dataclass(frozen=True)
@@ -864,8 +872,8 @@ async def run_session[K: (RustFormalResult, RustSetupSpec)](
             _validate_tool(gate_deps, vocab),
             *skip_tools(
                 lambda: titles,
-                skip_description=RUST_SKIP_DESCRIPTION,
-                skip_reason=CVL_SKIP_REASON,
+                skip_description=_SKIP_DESCRIPTION,
+                skip_reason=_SKIP_REASON,
             ),
             *_expect_tools(vocab),
             _publish_tool(PublishDeps(titles=titles)),

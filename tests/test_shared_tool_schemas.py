@@ -10,13 +10,13 @@ import inspect
 
 from langchain_core.tools import BaseTool
 
-from composer.authoring.tools import (
-    CVL_SKIP_DESCRIPTION, CVL_SKIP_REASON,
-    FOUNDRY_SKIP_DESCRIPTION, FOUNDRY_SKIP_REASON,
-    Unskip, give_up_tool, skip_tools,
-)
+from composer.authoring.tools import Unskip, give_up_tool, skip_tools
 from composer.cvl.tools import WithCurrSpec, edit_cvl, edit_cvl_description, get_cvl
 from composer.foundry.author import _GIVE_UP_DESCRIPTION as _FOUNDRY_GIVE_UP
+from composer.foundry.author import _SKIP_DESCRIPTION as _FOUNDRY_SKIP
+from composer.foundry.author import _SKIP_REASON as _FOUNDRY_SKIP_REASON
+from composer.spec.cvl_generation import _SKIP_DESCRIPTION as _CVL_SKIP
+from composer.spec.cvl_generation import skip_tools as cvl_skip_tools
 from composer.spec.natspec.author import _GIVE_UP_DESCRIPTION as _NATSPEC_GIVE_UP
 from composer.spec.source.author import _GIVE_UP_DESCRIPTION as _CVL_GIVE_UP
 
@@ -127,8 +127,8 @@ def test_constants_are_the_master_wording():
     assert _CVL_GIVE_UP == _MASTER_CVL_GIVE_UP_DOC
     assert _NATSPEC_GIVE_UP == _MASTER_NATSPEC_GIVE_UP_DOC
     assert _FOUNDRY_GIVE_UP == _MASTER_FOUNDRY_GIVE_UP_DOC
-    assert CVL_SKIP_DESCRIPTION == _MASTER_CVL_SKIP_DOC
-    assert FOUNDRY_SKIP_DESCRIPTION == _MASTER_FOUNDRY_SKIP_DOC
+    assert _CVL_SKIP == _MASTER_CVL_SKIP_DOC
+    assert _FOUNDRY_SKIP == _MASTER_FOUNDRY_SKIP_DOC
     assert edit_cvl_description == _MASTER_EDIT_CVL_DOC
 
 
@@ -154,18 +154,14 @@ def test_give_up_matches_master():
 
 
 def test_skip_tools_match_master():
-    cvl_skip, cvl_unskip = skip_tools(
-        [],
-        skip_description=CVL_SKIP_DESCRIPTION,
-        skip_reason=CVL_SKIP_REASON,
-    )
+    cvl_skip, cvl_unskip = cvl_skip_tools([])
     assert _surface(cvl_skip) == _MASTER_CVL_SKIP
     assert _surface(cvl_unskip) == _SHARED_UNSKIP
 
     foundry_skip, foundry_unskip = skip_tools(
         [],
-        skip_description=FOUNDRY_SKIP_DESCRIPTION,
-        skip_reason=FOUNDRY_SKIP_REASON,
+        skip_description=_FOUNDRY_SKIP,
+        skip_reason=_FOUNDRY_SKIP_REASON,
     )
     assert _surface(foundry_skip) == _MASTER_FOUNDRY_SKIP
     assert _surface(foundry_unskip) == _SHARED_UNSKIP
