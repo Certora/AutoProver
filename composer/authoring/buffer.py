@@ -5,21 +5,26 @@ whoever needs the current text (the agent itself, its judge, its checker). Every
 :func:`apply_spec_update`, so a backend that can reject a malformed spec at write time does it in
 exactly one place — and a rejected write leaves the buffer untouched.
 
-The tools are factories rather than classes because the pieces that vary between backends are the
-tool's *name* and *description* (both LLM-facing, so they can't be unified away) and the validator.
-:mod:`composer.core.edit` holds the one string operation an edit is.
+Read and edit are :func:`~graphcore.tools.schemas.tool_family` classes; a thin factory still
+injects the backend's state type, tool name, and write-time validator, because those are not
+schema nouns.
 """
 
-from typing import Annotated, Callable, Literal, overload
+import inspect
+from dataclasses import dataclass
+from typing import Annotated, Callable, Literal, overload, override
 from typing_extensions import TypedDict
 
 from langchain_core.messages import AIMessage
-from langchain_core.tools import BaseTool, InjectedToolCallId, tool
+from langchain_core.tools import BaseTool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
-from pydantic import BaseModel, Field, create_model
+from pydantic import Field, create_model
 
 from graphcore.graph import tool_state_update
+from graphcore.tools.schemas import (
+    ToolFamilyParams, WithAsyncDependencies, WithInjectedId, WithInjectedState, tool_family,
+)
 
 from composer.core.edit import EditErr, EditOk, replace_unique
 from composer.ui.tool_display import ToolDisplay, tool_display_of
@@ -71,10 +76,35 @@ def apply_spec_update(
     return tool_state_update(tool_call_id=tool_call_id, content="Accepted", **update)
 
 
-class _GetSpecTemplate(BaseModel):
-    """
-    Retrive the textual representation of the current specification.
-    """
+class BufferDoc(ToolFamilyParams):
+    description: str
+
+
+@dataclass(frozen=True)
+class GetDeps:
+    missing: str
+    set_did_read: bool = False
+
+
+@tool_family(BufferDoc)
+class GetSpec(
+    WithInjectedId,
+    WithInjectedState[SpecBuffer],
+    WithAsyncDependencies[str | Command, GetDeps],
+):
+    """{description}"""
+
+    @override
+    async def run(self) -> str | Command:
+        with self.tool_deps() as deps:
+            spec = self.state[SPEC_KEY]
+            if spec is None:
+                return deps.missing
+            if deps.set_did_read:
+                return tool_state_update(
+                    tool_call_id=self.tool_call_id, content=spec, **{READ_KEY: True}
+                )
+            return spec
 
 
 @overload
@@ -114,39 +144,64 @@ def get_spec_tool(
     ``set_did_read`` additionally stamps :data:`READ_KEY`, which is how a judge's completion
     validator knows the review actually looked at the draft rather than at the copy in its prompt.
     """
-    extra_fields: dict = {}
-    if set_did_read:
-        extra_fields["tool_call_id"] = (Annotated[str, InjectedToolCallId], ...)
+    templated = GetSpec.with_template(description=inspect.cleandoc(description))
     schema = create_model(
         title,
-        __base__=_GetSpecTemplate,
-        __doc__=description,
+        __doc__=templated.__doc__,
+        __base__=templated,
         state=(Annotated[ty, InjectedState], ...),
-        **extra_fields,
     )
-
-    @tool_display_of(display)
-    @tool(name_or_callable=name, args_schema=schema)
-    def get_spec(**args) -> str | Command:
-        st = args["state"]
-        if st[SPEC_KEY] is None:
-            return missing
-        spec = st[SPEC_KEY]
-        if set_did_read:
-            return tool_state_update(
-                tool_call_id=args["tool_call_id"], content=spec, **{READ_KEY: True}
-            )
-        return spec
-
-    return get_spec
+    tool_display_of(display)(schema)
+    return schema.bind(GetDeps(missing=missing, set_did_read=set_did_read)).as_tool(name)
 
 
-class _EditSpecTemplate(BaseModel):
+@dataclass(frozen=True)
+class EditDeps:
+    name: str
+    missing: str
+    validator: SpecValidator | None = None
+    reset_read: str | None = READ_KEY
+
+
+@tool_family(BufferDoc)
+class EditSpec(
+    WithInjectedId,
+    WithInjectedState[SpecBuffer],
+    WithAsyncDependencies[str | Command, EditDeps],
+):
+    """{description}"""
     old_string: str = Field(
         description="The exact span of the current spec to replace. Must occur exactly once; "
         "include surrounding context to disambiguate."
     )
     new_string: str = Field(description="The text to replace `old_string` with.")
+
+    @override
+    async def run(self) -> str | Command:
+        with self.tool_deps() as deps:
+            spec = self.state[SPEC_KEY]
+            if spec is None:
+                return deps.missing
+            messages = self.state.get("messages")  # type: ignore[attr-defined]
+            if messages:
+                last = messages[-1]
+                if (
+                    isinstance(last, AIMessage)
+                    and len([t for t in last.tool_calls if t["name"] == deps.name]) > 1
+                ):
+                    return (
+                        f"`{deps.name}` tool cannot be called in parallel within the same turn."
+                    )
+            match replace_unique(spec, self.old_string, self.new_string):
+                case EditErr(message=msg):
+                    return msg
+                case EditOk(text=new_text):
+                    return apply_spec_update(
+                        tool_call_id=self.tool_call_id,
+                        text=new_text,
+                        validator=deps.validator,
+                        reset_read=deps.reset_read,
+                    )
 
 
 def edit_spec_tool[S: SpecBuffer](
@@ -169,37 +224,14 @@ def edit_spec_tool[S: SpecBuffer](
     Two calls of this tool in the same turn are refused: parallel edits race through the state
     reducer. A single edit alongside a different tool is allowed.
     """
+    templated = EditSpec.with_template(description=inspect.cleandoc(description))
     schema = create_model(
         title,
-        __base__=_EditSpecTemplate,
-        __doc__=description,
+        __doc__=templated.__doc__,
+        __base__=templated,
         state=(Annotated[ty, InjectedState], ...),
-        tool_call_id=(Annotated[str, InjectedToolCallId], ...),
     )
-
-    @tool_display_of(display)
-    @tool(name_or_callable=name, args_schema=schema)
-    def edit_spec(**args) -> str | Command:
-        st = args["state"]
-        if st[SPEC_KEY] is None:
-            return missing
-        messages = st.get("messages")
-        if messages:
-            last = messages[-1]
-            if (
-                isinstance(last, AIMessage)
-                and len([t for t in last.tool_calls if t["name"] == name]) > 1
-            ):
-                return f"`{name}` tool cannot be called in parallel within the same turn."
-        match replace_unique(st[SPEC_KEY], args["old_string"], args["new_string"]):
-            case EditErr(message=msg):
-                return msg
-            case EditOk(text=new_text):
-                return apply_spec_update(
-                    tool_call_id=args["tool_call_id"],
-                    text=new_text,
-                    validator=validator,
-                    reset_read=reset_read,
-                )
-
-    return edit_spec
+    tool_display_of(display)(schema)
+    return schema.bind(EditDeps(
+        name=name, missing=missing, validator=validator, reset_read=reset_read,
+    )).as_tool(name)

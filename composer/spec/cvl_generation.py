@@ -26,6 +26,9 @@ from composer.authoring.judge import PropertyFeedbackProtocol, RebuttalBase
 from composer.authoring.state import (
     AuthoringExtra, MappingVocab, SkippedProperty, spec_digest, validate_check_mapping,
 )
+from composer.authoring.tools import (
+    CVL_SKIP_DESCRIPTION, CVL_SKIP_REASON, CVL_UNSKIP_DESCRIPTION, skip_tools as _skip_pair,
+)
 from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
 )
@@ -33,7 +36,7 @@ from composer.spec.guidance import ERC20TokenGuidance, UnresolvedCallGuidance
 from composer.spec.types import PropertyTitle, RuleName
 from composer.spec.graph_builder import run_to_completion
 from composer.cvl.tools import put_cvl_raw, put_cvl, get_cvl, edit_cvl
-from composer.ui.tool_display import tool_display, suppress_ack
+from composer.ui.tool_display import tool_display
 from composer.diagnostics.budget import budget_pressure
 
 CVL_JUDGE_KEY = CacheKey[CVLGeneration, CVLJudge]("judge")
@@ -265,79 +268,6 @@ class VanillaFeedbackTool(
     def _version_history(self) -> Sequence[str]:
         return ()
 
-@tool_display(
-    lambda p: f"Skipping property `{p.get('property_title', '?')}`",
-    suppress_ack("Skip result", ("Recorded skip",)),
-)
-class _RecordSkipSchema(WithInjectedId, WithAsyncDependencies[Command, list[PropertyTitle]]):
-    """
-    Declare that you are skipping a property from the batch.
-    You must provide the property's title and a justification.
-    The feedback judge will evaluate whether your justification is valid.
-    Only use this after genuinely attempting to formalize the property.
-    """
-    property_title: PropertyTitle = Field(
-        description="The snake_case title of the property from the batch listing"
-    )
-    reason: str = Field(
-        description="Justification for why this property cannot be formalized"
-    )
-
-    @override
-    async def run(self) -> Command:
-        with self.tool_deps() as titles:
-            if self.property_title not in titles:
-                return tool_state_update(
-                    self.tool_call_id,
-                    f"Unknown property title {self.property_title!r}. Must be one of: {', '.join(titles)}.",
-                )
-            if not self.reason.strip():
-                return tool_state_update(
-                    self.tool_call_id,
-                    "A non-empty justification is required when skipping a property.",
-                )
-            skip = SkippedProperty(
-                property_title=self.property_title,
-                reason=self.reason,
-            )
-            return tool_state_update(
-                self.tool_call_id,
-                f"Recorded skip for property {self.property_title}.",
-                skipped=[skip],
-            )
-
-@tool_display(
-    lambda p: f"Un-skipping property `{p.get('property_title', '?')}`",
-    suppress_ack("Unskip result", ("Removed skip",)),
-)
-class _UnskipSchema(WithInjectedId, WithAsyncDependencies[Command, list[PropertyTitle]]):
-    """
-    Remove a previously declared skip for a property.
-    Use this if you later find a way to formalize a property you previously skipped.
-    """
-    property_title: PropertyTitle = Field(
-        description="The snake_case title of the property to un-skip"
-    )
-
-    @override
-    async def run(self) -> Command:
-        with self.tool_deps() as titles:
-            if self.property_title not in titles:
-                return tool_state_update(
-                    self.tool_call_id,
-                    f"Unknown property title {self.property_title!r}. Must be one of: {', '.join(titles)}.",
-                )
-            # Empty reason is the sentinel for "not skipped"
-            skip = SkippedProperty(
-                property_title=self.property_title,
-                reason="",
-            )
-            return tool_state_update(
-                self.tool_call_id,
-                f"Removed skip for property {self.property_title}.",
-                skipped=[skip],
-            )
-
 def static_tools() -> list[BaseTool]:
     """The dependency-free CVL authoring tools. The property-management suite
     (feedback / skip tools) is NOT here — it carries runtime deps; see
@@ -353,10 +283,12 @@ def static_tools() -> list[BaseTool]:
 
 def skip_tools(titles: list[PropertyTitle]) -> list[BaseTool]:
     """The skip-management pair, bound to the batch's property titles."""
-    return [
-        _RecordSkipSchema.bind(titles).as_tool("record_skip"),
-        _UnskipSchema.bind(titles).as_tool("unskip_property"),
-    ]
+    return _skip_pair(
+        titles,
+        skip_description=CVL_SKIP_DESCRIPTION,
+        skip_reason=CVL_SKIP_REASON,
+        unskip_description=CVL_UNSKIP_DESCRIPTION,
+    )
 
 
 def property_tools(services: FeedbackServices) -> list[BaseTool]:

@@ -44,7 +44,10 @@ from composer.authoring.state import (
     AuthoringExtra, MappingVocab, SkippedProperty, check_completion, make_validation_stamper,
     merge_expected_failures, validate_check_mapping,
 )
-from composer.authoring.tools import RecordSkip, Unskip, give_up_tool
+from composer.authoring.tools import (
+    CVL_SKIP_REASON, RUST_SKIP_DESCRIPTION, RUST_UNSKIP_DESCRIPTION, give_up_tool,
+    skip_tools,
+)
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustFormalResult, RustSetupSpec
@@ -860,8 +863,12 @@ async def run_session[K: (RustFormalResult, RustSetupSpec)](
         tools += [
             _map_tool(vocab),
             _validate_tool(gate_deps, vocab),
-            RecordSkip.bind(lambda: titles).as_tool("record_skip"),
-            Unskip.bind(lambda: titles).as_tool("unskip_property"),
+            *skip_tools(
+                lambda: titles,
+                skip_description=RUST_SKIP_DESCRIPTION,
+                skip_reason=CVL_SKIP_REASON,
+                unskip_description=RUST_UNSKIP_DESCRIPTION,
+            ),
             *_expect_tools(vocab),
             _publish_tool(PublishDeps(titles=titles)),
         ]

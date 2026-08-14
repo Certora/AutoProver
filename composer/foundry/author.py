@@ -45,7 +45,10 @@ from composer.authoring.judge import (
     FeedbackThunk, JudgeBuilder, JudgeState, RebuttalBase, build_feedback_judge,
 )
 from composer.authoring.state import SkippedProperty
-from composer.authoring.tools import give_up_tool
+from composer.authoring.tools import (
+    FOUNDRY_SKIP_DESCRIPTION, FOUNDRY_SKIP_REASON, FOUNDRY_UNSKIP_DESCRIPTION,
+    give_up_tool, skip_tools,
+)
 from composer.pipeline.core import Curtailed, GaveUp
 from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
 from composer.diagnostics.budget import (
@@ -166,89 +169,6 @@ def get_test_tool(ty: type) -> BaseTool:
         display=ToolDisplay("Reading current test draft", None),
         title="GetTestTool",
     )
-
-@tool_display(
-    lambda p: f"Skipping property `{p.get('property_title', '?')}`",
-    suppress_ack("Skip result", ("Recorded skip",)),
-)
-class _RecordSkipSchema(
-    WithInjectedId,
-    # deps: the batch's property titles
-    WithAsyncDependencies[Command, list[PropertyTitle]],
-):
-    """
-    Declare that you are skipping a property from the batch.
-
-    You must provide the property's title and a justification. Skipping
-    excludes the property from the publish-time property→test mapping
-    check; only use after a genuine attempt to formalize.
-    """
-    property_title: PropertyTitle = Field(
-        description="The snake_case title of the property from the batch listing"
-    )
-    reason: str = Field(
-        description="Justification for why this property cannot be formalized as a foundry test"
-    )
-
-    @override
-    async def run(self) -> Command:
-        with self.tool_deps() as titles:
-            if self.property_title not in titles:
-                return tool_state_update(
-                    self.tool_call_id,
-                    f"Unknown property title {self.property_title!r}. Must be one "
-                    f"of: {', '.join(titles)}.",
-                )
-        if not self.reason.strip():
-            return tool_state_update(
-                self.tool_call_id,
-                "A non-empty justification is required when skipping a property.",
-            )
-        skip = SkippedProperty(
-            property_title=self.property_title,
-            reason=self.reason,
-        )
-        return tool_state_update(
-            self.tool_call_id,
-            f"Recorded skip for property {self.property_title}.",
-            skipped=[skip],
-        )
-
-
-@tool_display(
-    lambda p: f"Un-skipping property `{p.get('property_title', '?')}`",
-    suppress_ack("Unskip result", ("Removed skip",)),
-)
-class _UnskipSchema(
-    WithInjectedId,
-    # deps: the batch's property titles
-    WithAsyncDependencies[Command, list[PropertyTitle]],
-):
-    """
-    Remove a previously declared skip for a property. Use this if you later
-    find a way to formalize a property you previously skipped.
-    """
-    property_title: PropertyTitle = Field(
-        description="The snake_case title of the property to un-skip"
-    )
-
-    @override
-    async def run(self) -> Command:
-        with self.tool_deps() as titles:
-            if self.property_title not in titles:
-                return tool_state_update(
-                    self.tool_call_id,
-                    f"Unknown property title {self.property_title!r}. Must be one "
-                    f"of: {', '.join(titles)}.",
-                )
-        # Sentinel reason "" — merge_skips drops empty-reason entries.
-        skip = SkippedProperty(property_title=self.property_title, reason="")
-        return tool_state_update(
-            self.tool_call_id,
-            f"Removed skip for property {self.property_title}.",
-            skipped=[skip],
-        )
-
 
 @tool_display(lambda p: f"Expecting test `{p['test_name']}` to fail", None)
 class ExpectTestFailure(WithAsyncImplementation[Command], WithInjectedId):
@@ -704,8 +624,12 @@ async def batch_foundry_test_generation(
         .with_tools([
             PutTestRaw.as_tool("put_test_raw"),
             get_test_tool(FoundryGenerationState),
-            _RecordSkipSchema.bind(titles).as_tool("record_skip"),
-            _UnskipSchema.bind(titles).as_tool("unskip_property"),
+            *skip_tools(
+                titles,
+                skip_description=FOUNDRY_SKIP_DESCRIPTION,
+                skip_reason=FOUNDRY_SKIP_REASON,
+                unskip_description=FOUNDRY_UNSKIP_DESCRIPTION,
+            ),
             ExpectTestFailure.as_tool("expect_test_failure"),
             ExpectTestPassage.as_tool("expect_test_passage"),
             forge_test_tool,
