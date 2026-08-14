@@ -46,8 +46,7 @@ from composer.authoring.judge import (
 )
 from composer.authoring.state import SkippedProperty
 from composer.authoring.tools import (
-    FOUNDRY_SKIP_DESCRIPTION, FOUNDRY_SKIP_REASON, FOUNDRY_UNSKIP_DESCRIPTION,
-    give_up_tool, skip_tools,
+    FOUNDRY_SKIP_DESCRIPTION, FOUNDRY_SKIP_REASON, give_up_tool, skip_tools,
 )
 from composer.pipeline.core import Curtailed, GaveUp
 from composer.spec.context import FoundryGeneration, FoundryJudge, WorkflowContext
@@ -628,7 +627,6 @@ async def batch_foundry_test_generation(
                 titles,
                 skip_description=FOUNDRY_SKIP_DESCRIPTION,
                 skip_reason=FOUNDRY_SKIP_REASON,
-                unskip_description=FOUNDRY_UNSKIP_DESCRIPTION,
             ),
             ExpectTestFailure.as_tool("expect_test_failure"),
             ExpectTestPassage.as_tool("expect_test_passage"),

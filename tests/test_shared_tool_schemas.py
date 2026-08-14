@@ -11,9 +11,9 @@ import inspect
 from langchain_core.tools import BaseTool
 
 from composer.authoring.tools import (
-    CVL_SKIP_DESCRIPTION, CVL_SKIP_REASON, CVL_UNSKIP_DESCRIPTION,
-    FOUNDRY_SKIP_DESCRIPTION, FOUNDRY_SKIP_REASON, FOUNDRY_UNSKIP_DESCRIPTION,
-    give_up_tool, skip_tools,
+    CVL_SKIP_DESCRIPTION, CVL_SKIP_REASON,
+    FOUNDRY_SKIP_DESCRIPTION, FOUNDRY_SKIP_REASON,
+    Unskip, give_up_tool, skip_tools,
 )
 from composer.cvl.tools import WithCurrSpec, edit_cvl, edit_cvl_description, get_cvl
 from composer.foundry.author import _GIVE_UP_DESCRIPTION as _FOUNDRY_GIVE_UP
@@ -89,15 +89,6 @@ _MASTER_FOUNDRY_SKIP_DOC = (
     "    excludes the property from the publish-time property→test mapping\n"
     "    check; only use after a genuine attempt to formalize.\n    "
 )
-_MASTER_CVL_UNSKIP_DOC = (
-    "\n    Remove a previously declared skip for a property.\n"
-    "    Use this if you later find a way to formalize a property you previously skipped.\n    "
-)
-_MASTER_FOUNDRY_UNSKIP_DOC = (
-    "\n    Remove a previously declared skip for a property. Use this if you later\n"
-    "    find a way to formalize a property you previously skipped.\n    "
-)
-
 _MASTER_GET_CVL = _expect("get_cvl", _MASTER_GET_CVL_DOC, {})
 _MASTER_EDIT_CVL = _expect("edit_cvl", _MASTER_EDIT_CVL_DOC, {
     "old_string": (
@@ -123,12 +114,13 @@ _MASTER_FOUNDRY_SKIP = _expect("record_skip", _MASTER_FOUNDRY_SKIP_DOC, {
     "property_title": "The snake_case title of the property from the batch listing",
     "reason": "Justification for why this property cannot be formalized as a foundry test",
 })
-_MASTER_CVL_UNSKIP = _expect("unskip_property", _MASTER_CVL_UNSKIP_DOC, {
-    "property_title": "The snake_case title of the property to un-skip",
-})
-_MASTER_FOUNDRY_UNSKIP = _expect("unskip_property", _MASTER_FOUNDRY_UNSKIP_DOC, {
-    "property_title": "The snake_case title of the property to un-skip",
-})
+_SHARED_UNSKIP = {
+    "name": "unskip_property",
+    "description": inspect.cleandoc(Unskip.__doc__ or ""),
+    "fields": {
+        "property_title": "The snake_case title of the property to un-skip",
+    },
+}
 
 
 def test_constants_are_the_master_wording():
@@ -137,8 +129,6 @@ def test_constants_are_the_master_wording():
     assert _FOUNDRY_GIVE_UP == _MASTER_FOUNDRY_GIVE_UP_DOC
     assert CVL_SKIP_DESCRIPTION == _MASTER_CVL_SKIP_DOC
     assert FOUNDRY_SKIP_DESCRIPTION == _MASTER_FOUNDRY_SKIP_DOC
-    assert CVL_UNSKIP_DESCRIPTION == _MASTER_CVL_UNSKIP_DOC
-    assert FOUNDRY_UNSKIP_DESCRIPTION == _MASTER_FOUNDRY_UNSKIP_DOC
     assert edit_cvl_description == _MASTER_EDIT_CVL_DOC
 
 
@@ -168,16 +158,14 @@ def test_skip_tools_match_master():
         [],
         skip_description=CVL_SKIP_DESCRIPTION,
         skip_reason=CVL_SKIP_REASON,
-        unskip_description=CVL_UNSKIP_DESCRIPTION,
     )
     assert _surface(cvl_skip) == _MASTER_CVL_SKIP
-    assert _surface(cvl_unskip) == _MASTER_CVL_UNSKIP
+    assert _surface(cvl_unskip) == _SHARED_UNSKIP
 
     foundry_skip, foundry_unskip = skip_tools(
         [],
         skip_description=FOUNDRY_SKIP_DESCRIPTION,
         skip_reason=FOUNDRY_SKIP_REASON,
-        unskip_description=FOUNDRY_UNSKIP_DESCRIPTION,
     )
     assert _surface(foundry_skip) == _MASTER_FOUNDRY_SKIP
-    assert _surface(foundry_unskip) == _MASTER_FOUNDRY_UNSKIP
+    assert _surface(foundry_unskip) == _SHARED_UNSKIP

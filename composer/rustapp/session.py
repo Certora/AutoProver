@@ -45,8 +45,7 @@ from composer.authoring.state import (
     merge_expected_failures, validate_check_mapping,
 )
 from composer.authoring.tools import (
-    CVL_SKIP_REASON, RUST_SKIP_DESCRIPTION, RUST_UNSKIP_DESCRIPTION, give_up_tool,
-    skip_tools,
+    CVL_SKIP_REASON, RUST_SKIP_DESCRIPTION, give_up_tool, skip_tools,
 )
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.rustapp.descriptor import AppDescriptor
@@ -867,7 +866,6 @@ async def run_session[K: (RustFormalResult, RustSetupSpec)](
                 lambda: titles,
                 skip_description=RUST_SKIP_DESCRIPTION,
                 skip_reason=CVL_SKIP_REASON,
-                unskip_description=RUST_UNSKIP_DESCRIPTION,
             ),
             *_expect_tools(vocab),
             _publish_tool(PublishDeps(titles=titles)),

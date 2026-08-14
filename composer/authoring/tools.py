@@ -6,9 +6,10 @@ how a session reports that it produced nothing, and a skip is what excuses a pro
 publish-time mapping check. Backends agreeing on those by coincidence is one refactor away from two
 of them disagreeing.
 
-What varies is LLM-facing text — descriptions, the reason field, the UI label — so each tool is a
-:func:`~graphcore.tools.schemas.tool_family` instantiated with the backend's own wording. The
-CVL and Foundry instantiations keep the text those tools had on master.
+What varies on skip and give-up is LLM-facing text, so those are
+:func:`~graphcore.tools.schemas.tool_family` classes instantiated with the backend's own wording.
+Unskip does not vary. The CVL and Foundry skip/give-up instantiations keep the text those tools
+had on master.
 """
 
 import inspect
@@ -26,7 +27,7 @@ from graphcore.tools.schemas import (
 
 from composer.authoring.state import SkippedProperty
 from composer.spec.types import PropertyTitle
-from composer.ui.tool_display import suppress_ack, tool_family_display
+from composer.ui.tool_display import suppress_ack, tool_display, tool_family_display
 
 
 #: Supplies the batch's property titles when a skip tool runs. A thunk rather than the list itself
@@ -78,19 +79,6 @@ RUST_SKIP_DESCRIPTION = """
 CVL_SKIP_REASON = "Justification for why this property cannot be formalized"
 FOUNDRY_SKIP_REASON = "Justification for why this property cannot be formalized as a foundry test"
 
-CVL_UNSKIP_DESCRIPTION = """
-    Remove a previously declared skip for a property.
-    Use this if you later find a way to formalize a property you previously skipped.
-    """
-
-FOUNDRY_UNSKIP_DESCRIPTION = """
-    Remove a previously declared skip for a property. Use this if you later
-    find a way to formalize a property you previously skipped.
-    """
-
-#: Rust used the shared class, whose wording matched Foundry's line breaks.
-RUST_UNSKIP_DESCRIPTION = FOUNDRY_UNSKIP_DESCRIPTION
-
 
 class SkipParams(ToolFamilyParams):
     description: str
@@ -138,22 +126,12 @@ class RecordSkip(WithInjectedId, WithAsyncDependencies[Command, Titles]):
         )
 
 
-class UnskipParams(ToolFamilyParams):
-    description: str
-
-
-def _unskip_label(p: dict, *, description: str) -> str:
-    return f"Un-skipping property `{p.get('property_title', '?')}`"
-
-
-def _unskip_result(_name: str, msg: ToolMessage, *, description: str) -> str | None:
-    return suppress_ack("Unskip result", ("Removed skip",))(_name, msg)
-
-
-@tool_family_display(_unskip_label, _unskip_result)
-@tool_family(UnskipParams)
+@tool_display(
+    lambda p: f"Un-skipping property `{p.get('property_title', '?')}`",
+    suppress_ack("Unskip result", ("Removed skip",)),
+)
 class Unskip(WithInjectedId, WithAsyncDependencies[Command, Titles]):
-    """{description}"""
+    """Remove a previously declared skip for a property. Use this if you later find a way to formalize a property you previously skipped."""
     property_title: PropertyTitle = Field(
         description="The snake_case title of the property to un-skip"
     )
@@ -180,7 +158,6 @@ def skip_tools(
     *,
     skip_description: str,
     skip_reason: str,
-    unskip_description: str,
 ) -> list[BaseTool]:
     """The skip / unskip pair, bound to the batch's property titles."""
     get = _as_titles(titles)
@@ -188,9 +165,7 @@ def skip_tools(
         RecordSkip.with_template(description=_llm_doc(skip_description), reason=skip_reason)
         .bind(get)
         .as_tool("record_skip"),
-        Unskip.with_template(description=_llm_doc(unskip_description))
-        .bind(get)
-        .as_tool("unskip_property"),
+        Unskip.bind(get).as_tool("unskip_property"),
     ]
 
 

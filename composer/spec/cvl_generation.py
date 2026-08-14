@@ -27,7 +27,7 @@ from composer.authoring.state import (
     AuthoringExtra, MappingVocab, SkippedProperty, spec_digest, validate_check_mapping,
 )
 from composer.authoring.tools import (
-    CVL_SKIP_DESCRIPTION, CVL_SKIP_REASON, CVL_UNSKIP_DESCRIPTION, skip_tools as _skip_pair,
+    CVL_SKIP_DESCRIPTION, CVL_SKIP_REASON, skip_tools as _skip_pair,
 )
 from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
@@ -287,7 +287,6 @@ def skip_tools(titles: list[PropertyTitle]) -> list[BaseTool]:
         titles,
         skip_description=CVL_SKIP_DESCRIPTION,
         skip_reason=CVL_SKIP_REASON,
-        unskip_description=CVL_UNSKIP_DESCRIPTION,
     )
 
 
