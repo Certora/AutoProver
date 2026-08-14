@@ -17,6 +17,7 @@ use crate::layout::{
 use crate::section::Section;
 use crate::templates::{
     CargoDeps, CargoToml, HarnessGitignore, IdlPrelude, PreflightEntry, RootLayout, RustToolchain,
+    TallyMacros,
 };
 
 // The crucible/solana/anchor stack a harness pins (docs/crucible-application.md §6.1). Hardcoded
@@ -28,6 +29,12 @@ const LIBAFL_VERSION: &str = "0.15.1";
 /// The toolchain the harness crate is built with — the `crucible` CLI forces this channel for the
 /// harness build (`try_cargo_build`), so the crate pins it too (see `rust_toolchain.j2`).
 const HARNESS_TOOLCHAIN: &str = "stable";
+
+/// The comparison macros `crucible_fuzzer` re-exports — with the bare `fuzz_assert!`, the whole
+/// assertion surface the test cheat sheet offers, and so the set the crate root's tally wrappers
+/// interpose on (`tally_macros.j2`). `fuzz_assert_approx_eq!` is not among them: `crucible_fuzzer`
+/// does not re-export it, so a section's glob-imported scope never held it to begin with.
+const TALLIED_OPS: [&str; 6] = ["eq", "ne", "lt", "le", "gt", "ge"];
 
 /// The crucible checkout that resolves the harness crate's path deps (`$CRUCIBLE_REPO`). Read
 /// here so crate rendering is fully wheel-owned; `validate_preconditions` guarantees it is set.
@@ -252,11 +259,16 @@ impl HarnessSpec {
         files
     }
 
-    /// A crate root: the fixture, the layout header, the preflight entry, then one gated `mod` +
-    /// `#[invariant_test]` entry per component feature.
+    /// A crate root: the fixture, the layout header, the tally wrappers, the preflight entry, then
+    /// one gated `mod` + `#[invariant_test]` entry per component feature.
+    ///
+    /// The tally wrappers sit between the fixture and the section declarations, though neither
+    /// order is load-bearing: their re-exports shadow the fixture's glob import by being explicit,
+    /// not by coming later, and the sections reach them by path, not textual scope.
     fn root_text(&self, fixture: &str, units: &[String]) -> String {
         let program_so = format!("{}target/deploy/{}.so", to_project_root(), self.crate_id());
         let layout = RootLayout { program_so: &program_so }.render().expect("render root_layout");
+        let tally = TallyMacros { ops: &TALLIED_OPS }.render().expect("render tally_macros");
         let preflight = PreflightEntry { program: &self.program, feature: PREFLIGHT_FEATURE }
             .render()
             .expect("render preflight_entry");
@@ -264,7 +276,7 @@ impl HarnessSpec {
             .chain(units.iter().map(|f| Section::entry(f)))
             .collect::<Vec<_>>()
             .join("\n\n");
-        format!("{}\n\n{layout}\n\n{decls}\n", fixture.trim_end())
+        format!("{}\n\n{layout}\n\n{}\n\n{decls}\n", fixture.trim_end(), tally.trim_end())
     }
 
     /// The one-file crate the **preflight** gate builds, at [`PREFLIGHT_ROOT`]: the wheel's skeleton
@@ -550,6 +562,38 @@ mod tests {
     }
 
     #[test]
+    fn the_crate_root_interposes_tally_wrappers_on_every_assertion_macro() {
+        // The wrappers are what let a verdict refuse GOOD for a never-evaluated check
+        // (docs/crucible-unexercised-checks.md): the explicit `pub(crate) use … as` re-exports
+        // shadow the fixture's `use crucible_fuzzer::*;` glob at this root, so a section's bare
+        // `fuzz_assert*!` resolves to the counting wrapper. A `macro_rules!` under the original
+        // name would instead be ambiguous beside that glob (E0659).
+        let files = scaffold(&["a"]);
+        let code = code_only(&files[&at_lending("src/main.rs")]);
+        for m in [
+            "fuzz_assert", "fuzz_assert_eq", "fuzz_assert_ne", "fuzz_assert_lt",
+            "fuzz_assert_le", "fuzz_assert_gt", "fuzz_assert_ge",
+        ] {
+            assert!(code.contains(&format!(" as {m};")), "no interposing re-export for {m}:\n{code}");
+            // Path-qualified delegation, so the original still records the violation.
+            assert!(
+                code.contains(&format!("::crucible_fuzzer::{m}!")),
+                "no delegation to crucible's {m}:\n{code}"
+            );
+        }
+        // The lines `tally::evaluations` parses back: per-site (two same-tag sites must stay
+        // separable), with the free-text tag last.
+        assert!(
+            code.contains("[FUZZ_TALLY] site: {}:{}, evaluated: {}, tag: {}"),
+            "unexpected tally line format:\n{code}"
+        );
+        // The preflight root carries the same block (it renders through the same `root_text`),
+        // where nothing invokes it — the #[allow]s are what keep that build warning-free.
+        let gate = spec_of(distinct_crate(), "").preflight_files("struct Fixture {}");
+        assert!(gate[&at_vault("src/preflight.rs")].contains("__fuzz_tally"), "{:?}", gate.keys());
+    }
+
+    #[test]
     fn the_crate_root_is_written_before_anything_is_authored() {
         // It depends only on the fixture and the unit NAMES, which is what lets it be written once
         // between the setup step and fan-out — and therefore never rewritten by a gated build.
@@ -606,7 +650,12 @@ mod tests {
         assert!(!main_rs.contains("mod preflight;"), "{main_rs}");
         assert!(!shipped.contains_key(&at_lending("src/preflight.rs")), "{:?}", shipped.keys());
         // And it asserts nothing about the program: it proves the fixture compiles and loads.
-        assert!(!main_rs.contains("fuzz_assert"), "{main_rs}");
+        // (The root also defines the tally *wrappers*, so "no `fuzz_assert` anywhere" stopped
+        // being the right check — what must hold is that the preflight's own body stays inert.)
+        assert!(
+            main_rs.contains("fn preflight(fixture: &mut Fixture) {\n    let _ = fixture;\n}"),
+            "{main_rs}"
+        );
     }
 
     #[test]

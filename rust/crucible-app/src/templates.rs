@@ -59,6 +59,16 @@ pub(crate) struct RootLayout<'a> {
     pub(crate) program_so: &'a str,
 }
 
+/// The `fuzz_assert*` wrappers the crate root interposes on crucible's macros, counting each
+/// assertion site's evaluations so a verdict can refuse `GOOD` for a check nothing evaluated
+/// ([`crate::tally`], docs/crucible-unexercised-checks.md). `ops` are the comparison-macro
+/// suffixes to wrap — the authoring surface the cheat sheet offers.
+#[derive(Template)]
+#[template(path = "tally_macros.j2", escape = "none")]
+pub(crate) struct TallyMacros<'a> {
+    pub(crate) ops: &'a [&'a str],
+}
+
 /// The crate root's entry for [`PREFLIGHT_FEATURE`](crate::layout::PREFLIGHT_FEATURE) — gated and
 /// generated exactly like a component's ([`Section::entry`](crate::section::Section::entry)), but
 /// with its body inline: it validates the fixture via `--dry-run` without asserting anything about

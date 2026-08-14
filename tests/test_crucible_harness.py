@@ -320,7 +320,10 @@ def test_preflight_renders_a_skeleton_that_needs_no_program_knowledge(tmp_path):
     assert "\npreflight = []" in files[f"{_HARNESS}/Cargo.toml"]
     assert [p for p in files if p.endswith(".rs")] == [f"{_HARNESS}/src/preflight.rs"]
     # No property, no invariant, no instruction call: the program's API is the fixture author's job.
-    assert "fuzz_assert" not in preflight_rs
+    # The root *defines* the tally wrappers (`fuzz_assert*` counting each evaluation, see
+    # docs/crucible-unexercised-checks.md), so what must hold is that the preflight ASSERTS nothing —
+    # its body is inert — not that the name is absent from the file.
+    assert "fn preflight(fixture: &mut Fixture) {\n    let _ = fixture;\n}" in preflight_rs
     assert "instruction::" not in preflight_rs
 
 

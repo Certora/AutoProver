@@ -33,7 +33,7 @@ use crate::optional_accounts;
 use crate::section::{delivered_sections, Section};
 use crate::templates::SkeletonFixture;
 use crate::triage::{attribute_findings, findings, undeclarable};
-use crate::{declaration, prompts, toolchain};
+use crate::{declaration, prompts, tally, toolchain};
 
 /// Every verdict, told which file its assertion lives in — `<feature>.rs`, the section this
 /// component's tests were written into (one section per file, `HarnessSpec::section_path`).
@@ -219,15 +219,8 @@ impl Backend for CrucibleApp {
                     attribute_findings(target, &input.run_props, &found)
                 } else if out.exit_code == 0 {
                     // Ran to the budget with no violation, so nothing this campaign covers was
-                    // refuted.
-                    //
-                    // KNOWN GAP against the verdict contract on `Backend::validate`: `GOOD` per
-                    // check also claims each one was *exercised*, and a campaign reports crashes,
-                    // not which tagged assertions it evaluated. So a property whose assertion was
-                    // never written, or written where the fuzzer cannot reach it, passes here. The
-                    // fix is `fuzz_assert!` recording each evaluation and the campaign reporting the
-                    // tally (docs/author-determined-checks.md); until then this is the one place a
-                    // Crucible verdict claims more than the run established.
+                    // refuted. Whether each check was *exercised* — the other half of what `GOOD`
+                    // claims — is `tally::gate`'s to answer below.
                     target.all(Outcome::Good, None)
                 } else if is_build_error(&combined) {
                     // Shared build; re-author the whole spec (docs/rust-applications.md).
@@ -238,6 +231,12 @@ impl Backend for CrucibleApp {
                     // tail cannot say (see `run_failure`).
                     target.all(Outcome::Error, Some(run_failure(&out)))
                 };
+                // `GOOD` also claims each check was *exercised*, and the campaign's own
+                // `[FUZZ_TALLY]` lines (printed by the crate root's assertion wrappers) are the
+                // only evidence of that: a check whose tag was never evaluated is downgraded to
+                // UNKNOWN here, whichever branch above concluded it
+                // (docs/crucible-unexercised-checks.md).
+                let concluded = tally::gate(target, &tally::evaluations(&combined), concluded);
                 // What the campaign spent, on every row it answered for — a verdict is only worth
                 // what the run behind it cost, and the report has nowhere else to say so.
                 Campaign::of(&unit_name(input), budget_s, started.elapsed(), &combined)

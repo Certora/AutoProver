@@ -115,12 +115,12 @@ where the truth lives: a verdict now names the section file its assertion was wr
 
 ## Follow-ups
 
-- **Crucible's corroboration is the open piece.** Its campaign reports crashes, not a list of what
-  ran, so today it cannot distinguish "held" from "never exercised" — a clean run marks `GOOD` a
-  check whose assertion was never reached. The problem, its examples and the proposed fix are in
-  [crucible-unexercised-checks.md](crucible-unexercised-checks.md); the fix needs no crucible-repo
-  change — the wheel-generated crate root interposes a counting wrapper on `fuzz_assert!`, and the
-  verdict gates `GOOD` on a check's tag having been evaluated at all.
+- **Crucible's corroboration — closed.** Its campaign reports crashes, not a list of what ran, so
+  a clean run used to mark `GOOD` a check whose assertion was never reached. Closed without a
+  crucible-repo change: the wheel-generated crate root interposes counting wrappers on
+  `fuzz_assert*!` (`tally_macros.j2`) and `tally::gate` downgrades to `UNKNOWN` any `GOOD` whose
+  tag was never evaluated. The problem, the mechanism and the one remaining empirical check are in
+  [crucible-unexercised-checks.md](crucible-unexercised-checks.md).
 - **`expect_check_failure` accepts any non-`GOOD` verdict.** It exists for "the failure is the
   finding" — a real counterexample. Letting it waive an `UNKNOWN` lets "we never tested this" be
   marked away with a sentence. Restricting the mark to `BAD` is probably right.

@@ -69,10 +69,11 @@ struct Reach {
     actions: Ratio,
 }
 
-/// The value after `<label>:` on one of Crucible's `key: value, key: value` console lines, with any
-/// trailing comma stripped. Read by label rather than by position so Crucible can add or reorder
-/// fields without this silently reporting one number as another.
-fn field<'a>(line: &'a str, label: &str) -> Option<&'a str> {
+/// The value after `<label>:` on a `key: value, key: value` console line — Crucible's own lines
+/// and the tally lines the wheel's wrappers print ([`crate::tally`]) — with any trailing comma
+/// stripped. Read by label rather than by position so a line can add or reorder fields without
+/// this silently reporting one number as another.
+pub(crate) fn field<'a>(line: &'a str, label: &str) -> Option<&'a str> {
     let key = format!("{label}:");
     let tokens: Vec<&str> = line.split_whitespace().collect();
     let at = tokens.iter().position(|t| *t == key)?;

@@ -192,7 +192,7 @@ async def test_crucible_fixture_authoring(pg_container: "PostgresContainer", mon
         # Unsandboxed here (the gate trusts its inputs), so the argv prefix is empty.
         setup_input = SetupInput(program=_PROGRAM, model=_ANALYZED)
         sandbox_dict = {"argv_prefix": [], "timeout_s": 1200}
-        run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
+        run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _agent_semaphore=asyncio.Semaphore(4), _cpu_semaphore=asyncio.Semaphore(2), env=env)
 
         result = await run.runner(
             TaskInfo("crucible_setup", "Harness Fixture", phases.member("harness_fixture")),

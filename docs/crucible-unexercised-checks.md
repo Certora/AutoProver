@@ -1,11 +1,13 @@
 # Unexercised checks: why a clean campaign is not a passing check
 
-A Crucible campaign that finds nothing marks every check it covers `GOOD`. That claims more than the
-run established, and this note says exactly how much more, what it looks like in practice, and the
-proposed fix — which needs no change to the crucible repo, because the macro a call site expands is
-decided by name resolution, and the wheel writes every line that resolution reads. The gap is marked
-in the code at the one place that makes the claim (`app.rs`, `KNOWN GAP`), and listed as the open
-follow-up in [author-determined-checks.md](author-determined-checks.md).
+**Status: implemented.** A Crucible campaign that finds nothing used to mark every check it covers
+`GOOD`. That claims more than the run established, and this note says exactly how much more, what
+it looked like in practice, and the fix — which needed no change to the crucible repo, because the
+macro a call site expands is decided by name resolution, and the wheel writes every line that
+resolution reads. The wrappers ship in `templates/tally_macros.j2`, rendered into every crate root;
+the tally parse and the verdict gate are `tally.rs`, applied in `validate` (`app.rs`) where the
+`KNOWN GAP` marker used to stand. Confirmed on real campaigns, including the expensive
+per-component gate — see the end of the fix section.
 
 ## The inference
 
@@ -85,27 +87,35 @@ reaches them only through globs — `use crucible_fuzzer::*;` in the fixture at 
 `use super::*;` that `section_file.j2` supplies. Both hops funnel through the crate root, which the
 wheel renders (`root_text`). So the crate root can bind the name to a wrapper of its own, and every
 call site in every section expands the wrapper — no authoring-surface change, and no author
-compliance to police:
+compliance to police. The shipped block is `templates/tally_macros.j2`; its shape:
 
 ```rust
-macro_rules! __tally_fuzz_assert {
-    ($cond:expr, $fmt:literal $(, $args:expr)* $(,)?) => {{
+macro_rules! __fuzz_tally {                    // one counting helper, shared by all seven wrappers
+    ($fmt:expr) => {
         {
-            static __EVALS: ::std::sync::atomic::AtomicU64 =
-                ::std::sync::atomic::AtomicU64::new(0);
+            static __EVALS: ::std::sync::atomic::AtomicU64 = ::std::sync::atomic::AtomicU64::new(0);
             let __n = __EVALS.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed) + 1;
             if __n.is_power_of_two() {
-                let __tag = $fmt.split_once('[').and_then(|(_, r)| r.split_once(']'))
-                    .map(|(t, _)| t).unwrap_or("?");
-                ::std::println!("[FUZZ_TALLY] tag: {__tag}, site: {}:{}, evaluated: {__n}",
-                    ::std::file!(), ::std::line!());
+                let __tag = /* sliced from $fmt between `[` and `]`, else "?" */;
+                ::std::println!("[FUZZ_TALLY] site: {}:{}, evaluated: {}, tag: {}",
+                    ::std::file!(), ::std::line!(), __n, __tag);
             }
         }
-        ::crucible_fuzzer::fuzz_assert!($cond, $fmt $(, $args)*);
-    }};
-    // + a bare-condition arm (keyed by file!/line!, no tag) and a non-literal passthrough arm
+    };
+    () => { crate::__fuzz_tally!("") };
 }
-pub(crate) use __tally_fuzz_assert as fuzz_assert;
+pub(crate) use __fuzz_tally;
+
+macro_rules! __tallied_fuzz_assert {
+    ($cond:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {
+        {
+            crate::__fuzz_tally!($fmt);
+            ::crucible_fuzzer::fuzz_assert!($cond, $fmt $(, $arg)*);
+        }
+    };
+    // + a bare-condition arm and a non-literal passthrough arm, both tallied under `?`
+}
+pub(crate) use __tallied_fuzz_assert as fuzz_assert;   // …and `_{eq,ne,lt,le,gt,ge}` likewise
 ```
 
 The name-resolution detail is load-bearing, and was verified on 2026-08-13. A bare textual shadow —
@@ -135,15 +145,16 @@ at parse time instead, which is why the printed line carries the `site:` key (`f
 expand to the call site): per-site counts are monotonic, so the parser takes each site's last line,
 and the site field is what keeps two same-tag sites' interleaved prints separable.
 
-**The verdict gate.** A small parser (label-based, the way `campaign.rs` reads pulse fields; max per
-site, then summed per tag) turns the tally lines into `tag → evaluations`. Then the two places that
-currently conclude `GOOD` on silence — the clean-exit path in `app.rs`, and `attribute_findings`'
-unnamed-check-on-`ToBudget` branch — grant it per check only when some property title the check
-claims has a tally above zero, and answer `UNKNOWN` otherwise, with a detail saying no
-`[<title>]`-tagged assertion was ever evaluated. That is the verdict contract's own wording ("a
-check with no evidence it ran comes back `ERROR` or `UNKNOWN`, never `GOOD`") finally enforced at
-this seam. The tag convention itself is no new fragility: it is already the load-bearing convention
-attribution places findings by.
+**The verdict gate.** `tally::evaluations` (label-based, the way `campaign.rs` reads pulse fields;
+max per site, then summed per tag) turns the tally lines into `tag → evaluations`, and
+`tally::gate` is applied once over whatever `validate` concluded — which covers both places that
+conclude `GOOD` on silence, the clean-exit path and `attribute_findings`' unnamed-check-on-
+`ToBudget` branch. A `GOOD` keeps its outcome only when some property title the check claims has a
+tally above zero (and the row gains "evaluated at least N times"); otherwise it becomes `UNKNOWN`
+with a detail saying no `[<title>]`-tagged assertion was ever evaluated. That is the verdict
+contract's own wording ("a check with no evidence it ran comes back `ERROR` or `UNKNOWN`, never
+`GOOD`") finally enforced at this seam. The tag convention itself is no new fragility: it is
+already the load-bearing convention attribution places findings by.
 
 **A count, not a boolean.** The gate itself consumes only "greater than zero", so a per-site
 evaluated-once flag would be sound — and simpler, one line per site with no site key or max to
@@ -173,10 +184,19 @@ collides with the re-export as a duplicate binding — both loud, both the revis
 if a future Crucible forked per execution, resetting the statics, a printed line still proves at
 least one evaluation — the only fact the gate consumes.
 
-One empirical check remains before relying on it: a real campaign with the wrapper in place, to
-confirm no libafl mode redirects the harness's stdout somewhere `validate` does not capture. Every
-observed mode prints `[FUZZ_PULSE]`/`[FUZZ_FINDING]` from the same process, so the risk is
-theoretical.
+**Confirmed on a real campaign** (2026-08-14), which was the one thing the mechanism could not be
+argued into: libafl does not redirect the harness's stdout, so the tally lines arrive on the same
+stream `campaign.rs` already reads. A 20s vault campaign printed 54 `[FUZZ_TALLY]` lines with
+correct sites and tags, a deliberately unreachable guard printed none, and `validate` turned that
+into two `GOOD` rows carrying `evaluated at least 131072 times` beside one `UNKNOWN` for the
+never-evaluated check. The same holds through the whole pipeline: the expensive
+`tests/test_crucible_formalize_gate.py` passes on an LLM-authored suite whose `GOOD` verdict
+carries the tally detail — and because that gate asserts `GOOD`, it now fails if the capture ever
+breaks.
+
+One consequence to keep in mind: that gate is legitimately stricter than before. An authored suite
+whose assertion is never evaluated now yields `UNKNOWN` and fails the test — which is the feature
+working, not a regression, but it is a new way for the gate to go red.
 
 ## Where the increment belongs eventually
 

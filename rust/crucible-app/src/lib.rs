@@ -24,6 +24,7 @@
 //!  * `templates` — the `.j2` bindings every renderer above fills.
 //!  * `build_log` — did the harness build, and what does the author need to see.
 //!  * `triage` — what a fuzz finding means, and which of a shared target's rows it refutes.
+//!  * `tally` — what a campaign said it evaluated, and the gate refusing `GOOD` without it.
 //!
 //! Nothing is re-exported: the crate's only public surface is the PyO3 module below, so every module
 //! is private and the names above are files, not paths a Rust consumer can reach.
@@ -39,6 +40,7 @@ mod layout;
 mod optional_accounts;
 mod prompts;
 mod section;
+mod tally;
 mod templates;
 mod toolchain;
 mod triage;

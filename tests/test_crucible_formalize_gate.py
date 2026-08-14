@@ -30,9 +30,9 @@ from composer.io.multi_job import TaskInfo
 from composer.rag.models import DefaultEmbedder
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
-from composer.rustapp.adapter import emit_event
+from composer.rustapp.adapter import emit_event, write_wheel_files
 from composer.rustapp.session import run_session
-from composer.rustapp.wire import ComponentInput, Property
+from composer.rustapp.wire import ComponentInput, CrateRootInput, Property, parse_files
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.rustapp.host import build_phase_model, load_descriptor, load_module
 from composer.spec.context import SourceCode, WorkflowContext
@@ -62,6 +62,9 @@ _FEATURE = f"c_{_SLUG}"  # this property's check (one per property)
 # building with any other feature leaves `main` cfg'd out (E0601). Mirrors crucible-app's
 # SINGLE_HARNESS_FN.
 _TARGET = "c_invariants"
+# The one fn name every component's suite defines (crucible-app's `SECTION_FN`), which the crate
+# root's generated entry calls into.
+_SECTION_FN = "invariants"
 
 # A fixed, known-good shared fixture (`struct Fixture`) — the per-component decider
 # authors a test *against* it. Mirrors the Phase-1 harness, renamed to `Fixture`. It names
@@ -245,8 +248,6 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             cache_namespace=None, memory_namespace=None,
         )
 
-        # No manifest pre-placement needed: `compile`/`validate` materialize the harness crate
-        # (Cargo.toml + main.rs) themselves per run (docs/rust-applications.md).
         module = load_module("crucible_app")
         descriptor = load_descriptor(module)
         phases = build_phase_model(descriptor)
@@ -260,11 +261,26 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             setup=_FIXTURE,
             args={"fuzz_timeout": 15},
         )
+
+        # Place the crate root and manifest, which a per-component gate does NOT write: since
+        # sections moved into their own files (docs/crucible-component-units.md §17), `compile` and
+        # `validate` emit only `src/<feature>.rs` — the crate root is rendered ONCE from the fixture
+        # plus the whole unit set. The pipeline does this in `adapter.write_crate_root` between the
+        # setup step and fan-out; this drives the same callout with the same payload. Without it the
+        # harness dir holds a section file and no `Cargo.toml`, so every gate fails to build and the
+        # author burns its rounds revising a spec that was never the problem.
+        #
+        # `source_unit`/`prep_facts` are left at their defaults deliberately: `component_input`
+        # carries none either, so both callouts derive the same crate (the `programs/<program>`
+        # layout convention, crate path, no IDL) and the root matches what `validate` builds.
+        write_wheel_files(Path(_SCENARIO), parse_files(module.crate_root(CrateRootInput(
+            program=_PROGRAM, setup=_FIXTURE, units=[_COMPONENT],
+        ).model_dump_json())))
         input_json = component_input.model_dump_json()
         sandbox_dict = {"argv_prefix": [], "timeout_s": 1200}
         sandbox_json = json.dumps(sandbox_dict)
 
-        run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _semaphore=asyncio.Semaphore(2), env=env)
+        run = PipelineRun(ctx=ctx, source=source, _handler_factory=GenericRustConsoleHandler(set()).make_handler, _agent_semaphore=asyncio.Semaphore(4), _cpu_semaphore=asyncio.Semaphore(2), env=env)
         outcome = await run.runner(
             TaskInfo("crucible_fmz", "Harness Authoring", phases.member("formalization")),
             lambda: run_session(
@@ -291,7 +307,14 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
 
     print("\n===== authored test =====\n" + test_src)
     print("checks:", checks, "validate:", res)
-    assert "#[invariant_test]" in test_src or "#[crucible_fuzz]" in test_src
+    # The authored spec is the section BODY: a bare `pub fn invariants`, which the crate root's
+    # generated `#[invariant_test]` entry delegates into. Asserting the attribute is here would
+    # contradict the contract in both directions — `test_cheat_sheet.j2` tells the author not to
+    # write it (the macro expands `fn main()` as a sibling, so it only works at crate root), and
+    # `Section::file` strips it if one is written anyway.
+    assert f"pub fn {_SECTION_FN}" in test_src, test_src
+    root = (_SCENARIO / f"certora/crucible/fuzz/{_PROGRAM}/src/main.rs").read_text()
+    assert f"#[invariant_test]\nfn {_TARGET}(fixture: &mut Fixture)" in root, root
     assert res["kind"] == "verdicts", res
     (check_name, verdict), = res["verdicts"]
     assert verdict["outcome"] == "GOOD", res

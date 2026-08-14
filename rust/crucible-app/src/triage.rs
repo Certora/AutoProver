@@ -286,6 +286,11 @@ fn unexplored(target: &Target, run_props: &[Property], stopper: &str) -> String 
 /// stop [`UntilFirstFinding`](Exploration::UntilFirstFinding) abandoned the rest wherever it
 /// happened to be, so `GOOD` there would be a claim about a space nothing searched — `UNKNOWN`, and
 /// the detail says which finding ended it.
+///
+/// "Explored every check it covers" presumes the check's assertion was *evaluated* at all — which
+/// this attribution cannot see, and a guarded assertion whose guard never opens makes false. That
+/// premise is [`tally::gate`](crate::tally::gate)'s to collect, applied over this outcome in
+/// `validate` (docs/crucible-unexercised-checks.md).
 pub(crate) fn attribute_findings(
     target: &Target, run_props: &[Property], findings: &[String],
 ) -> ValidateOutcome {
