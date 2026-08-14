@@ -139,17 +139,21 @@ Use your memory tool to record the results of this analysis at `/memories/closur
 
 ## Step 4
 
-For all such contracts in collected in step 4, follow this decision tree (stop at the first criteria which matches):
-1. If C is a *standard* ERC20 token, mark C as "ERC20"
-2. If C is classified as `MULTIPLE` or `DYNAMIC`: determine how many instances of C are necessary to model a non-trivial state.
-3. Otherwise, Mark C as "included"
+For every contract `C` in collected in step 3, make a *harnessing determination* about that contract, i.e., is a harness needed?
 
-**IMPORTANT**: If one of the contracts is a NON-TRIVIAL extension to the ERC20 standard, where these extensions are *MEANINGFUL*
-to the application, do *NOT* classify the contract as "ERC20".
+A harness is needed under one condition:
 
-NB: Any contract that is part of the non-trivial state (criteria 2) is considered "included".
+> Modeling a non-trivial state requires multiple instances of the contract `C`. As described above, each contract type name in the Prover
+> corresponds one-to-one with a modeled on-chain instance. Thus, harnesses that extend `C` under unique names are necessary.
 
-Uses your memory tool to record the results of this analysis at `/memories/classification.md`
+If exactly one instance of `C` is required for modeling the non-trivial state, no harnessing is required; the contract implementation
+can be used as-is.
+
+For contracts that require harnessing, record their harnessing determination as `Multiple(n)`, where `n` is the number
+of instances required in the non-trivial state. To reiterate; `n` should almost always be larger than 1. Contracts that
+do not need harnessing should have their determination recorded as "None".
+
+Uses your memory tool to record the intermediate results of this analysis at `/memories/classification.md`
 
 ## Step 5
 
@@ -196,7 +200,7 @@ Your results consists of four parts:
 3. The contracts of the application with which {{ contract_name }} transitively interacts (including itself), with the following information:
    a. The name of the contract
    b. A list of "link fields" used to connect this contract with others in this interaction closure
-   c. the number of instances needed to model a non-trivial state if the contract is `MULTIPLE` or `DYNAMIC` (null if inapplicable)
+   c. The harness determination result, `Multiple(n)` if n > 1 harnesses are required, or null if no harnessing is needed.
 4. A list of contracts classified at ERC20
 
 <state>
