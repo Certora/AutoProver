@@ -15,7 +15,8 @@ import time
 from contextlib import contextmanager, asynccontextmanager, ExitStack, nullcontext
 from pathlib import Path
 from typing import (
-    Annotated, AsyncIterator, Callable, Iterator, override, AsyncContextManager, Sequence, Literal
+    Annotated, AsyncIterator, Callable, Container, Iterator, Mapping, override,
+    AsyncContextManager, Sequence, Literal
 )
 from typing_extensions import TypedDict, NotRequired
 
@@ -111,6 +112,69 @@ class NagMarker(TypedDict):
     sort: Literal["nag"]
 
 type ProverHistoryItem = Annotated[ProverRunLog | NagMarker, Discriminator("sort")]
+
+#: How many consecutive runs must end in the identical failure before the author is nagged
+#: about a rule. Counts the run being processed, so 3 means "this run plus the two before it".
+STUCK_RULE_NAG_THRESHOLD = 3
+
+
+def stuck_rule_warnings(
+    # Values are compared for equality only, so the looser ``str`` keeps callers free of
+    # the narrowing dance ``StatusCodes`` would otherwise force on a filtered comprehension.
+    stuck_rules: Mapping["RulePath", str],
+    prover_history: list[ProverHistoryItem],
+    known_tool_call_ids: Container[str | None],
+) -> tuple[set["RulePath"], bool]:
+    """Decide which of the currently-stuck rules the author should be nagged about.
+
+    Walks ``prover_history`` backwards counting, per stuck rule, how many *consecutive*
+    recent runs ended in the identical failure — each rule starts at 1 for the run being
+    processed. A rule leaves the tally as soon as a run breaks its streak (it either
+    passed, failed differently, or the tally is exhausted); reaching
+    :data:`STUCK_RULE_NAG_THRESHOLD` moves it to the returned warning set. A run that
+    targeted an explicit rule subset is transparent to rules it never exercised, so a
+    narrowly-scoped re-run neither extends nor breaks another rule's streak.
+
+    A ``nag`` marker means those rules were warned about already, so their streaks restart
+    there and the author isn't nagged twice for the same stretch of failures.
+
+    Returns the rules to warn about, plus whether any inspected run predates the author's
+    most recent history compaction (its tool call is no longer in ``known_tool_call_ids``)
+    — the caller footnotes the warning with that, since those runs are no longer visible
+    in the conversation.
+    """
+    stuck_count = {k: 1 for k in stuck_rules}
+    to_warn: set[RulePath] = set()
+    seen_post_compaction_history = False
+
+    history_ind = len(prover_history) - 1
+    while history_ind >= 0 and len(stuck_count) > 0:
+        it = prover_history[history_ind]
+        history_ind -= 1
+        if it["sort"] == "nag":
+            for r in it["nagged_rules"]:
+                # A previously-nagged rule need not be stuck now — drop it if present.
+                stuck_count.pop(r, None)
+            continue
+        assert it["sort"] == "run"
+        if it["tool_call_id"] not in known_tool_call_ids:
+            seen_post_compaction_history = True
+        target_rules = set(it["rules"]) if it["rules"] else None
+        # Snapshot the keys: the body deletes from ``stuck_count`` as streaks end.
+        for k in list(stuck_count.keys()):
+            if target_rules is not None and k.rule not in target_rules:
+                continue
+            if not any(
+                rp == k and stuck_rules[k] == stat for (rp, stat) in it["prover_results"]
+            ):
+                del stuck_count[k]
+            else:
+                stuck_count[k] += 1
+                if stuck_count[k] == STUCK_RULE_NAG_THRESHOLD:
+                    to_warn.add(k)
+                    del stuck_count[k]
+    return to_warn, seen_post_compaction_history
+
 
 def last_prover_run(
     l: list[ProverHistoryItem]
@@ -430,44 +494,15 @@ def get_prover_tool(
                 k: v for (k,v) in result.raw_rule_status.items() if v in ("TIMEOUT", "ERROR", "SANITY_FAILED") and k.rule not in state["rule_skips"]
             }
 
-            stuck_count = {
-                k: 1 for k in stuck_rules.keys()
-            }
-
-            to_warn : set[RulePath] = set()
-
             known_tc_ids = {
                 l["id"]
                 for msg in state["messages"] if isinstance(msg, AIMessage)
                 for l in msg.tool_calls if l["name"] == "verify_spec"
             }
 
-            seen_post_compaction_history = False
-
-            history_ind = len(state["prover_history"]) - 1
-            while history_ind >= 0 and len(stuck_count) > 0:
-                it = state["prover_history"][history_ind]
-                if it["sort"] == "nag":
-                    for r in it["nagged_rules"]:
-                        del stuck_count[r]
-                    history_ind -= 1
-                    continue
-                assert it["sort"] == "run"
-                if it["tool_call_id"] not in known_tc_ids:
-                    seen_post_compaction_history = True
-                target_rules = set(it["rules"]) if it["rules"] else None
-                for k in stuck_count.keys():
-                    if target_rules is not None and k.rule not in target_rules:
-                        continue
-                    if not any(
-                        rp == k and stuck_rules[k] == stat for (rp, stat) in it["prover_results"]
-                    ):
-                        del stuck_count[k]
-                    else:
-                        stuck_count[k] += 1
-                        if stuck_count[k] == 3:
-                            to_warn.add(k)
-                            del stuck_count[k]
+            to_warn, seen_post_compaction_history = stuck_rule_warnings(
+                stuck_rules, state["prover_history"], known_tc_ids
+            )
             
             prover_update : list[ProverHistoryItem] = [
                 ProverRunLog(
