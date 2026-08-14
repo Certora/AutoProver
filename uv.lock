@@ -1447,6 +1447,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 ci = [{ name = "pyright" }]
 test = [
+    { name = "hypothesis" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-asyncio", specifier = ">=1.3" },
     { name = "testcontainers", specifier = ">=4.0" },
