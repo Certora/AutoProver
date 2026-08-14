@@ -28,7 +28,7 @@ from certora_autosetup.utils.constants import (
     FILE_LLM_USAGE,
     FILE_PROVER_USAGE,
 )
-from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles, split_contract_spec
+from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles, split_contract_spec, with_main_contract
 from certora_autosetup.utils.project_dir import find_build_config_dir
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 from certora_autosetup.utils.llm_util import LlmUsageReport, ledger_reset
@@ -82,9 +82,23 @@ def main():
 
     contract_handles = deduplicate_contract_handles(contract_handles)
 
-    # Parse main contract
-    main_handles = parse_contract_files([args.main_contract])
+    # Parse main contract. It goes through the same artifact-backed name resolution as
+    # --contract-files-and-name, so a bare `path.sol` spec gets the contract the file really
+    # declares instead of the filename stem.
+    main_handles = resolve_contract_handles(
+        parse_contract_files([args.main_contract]), build_config_dir, profile=args.profile,
+        requested_build_system=args.build_system, handles_relative_to=cwd,
+    )
     main_contract_handle = main_handles[0]
+
+    if main_contract_handle not in contract_handles:
+        logger.log(
+            f"Main contract {main_contract_handle.contract_name}@"
+            f"{main_contract_handle.source_file} was not among the auto-detected contracts "
+            f"— adding it to the scene",
+            "INFO", "Autosetup",
+        )
+    contract_handles = with_main_contract(contract_handles, main_contract_handle)
 
     # TODO: a bare `path.sol` spec drops only the contract whose name matches the file
     # stem. Expand to "drop every concrete contract in the file" for symmetry with

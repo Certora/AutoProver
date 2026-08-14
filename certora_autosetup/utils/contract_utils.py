@@ -145,6 +145,28 @@ def deduplicate_contract_handles(handles: list[ContractHandle]) -> list[Contract
     return result
 
 
+def with_main_contract(
+    handles: list[ContractHandle], main_handle: ContractHandle
+) -> list[ContractHandle]:
+    """Return *handles* with *main_handle* guaranteed present.
+
+    A contract the caller named is in scope by definition, but two upstream steps can drop it:
+    auto-detection skips every file under a dependency directory (``node_modules/``, ``lib/``,
+    ``dependencies/``, ...), which is where per-address verification bundles and vendored
+    sub-projects keep real, deployed code; and ``deduplicate_contract_handles`` prefers the
+    shortest path when two files declare the same contract name. Either way the failure
+    surfaces much later, from setup_prover, as "is not among the compiled contracts in the
+    prover scene" — a compilation message for what is really a scoping decision.
+
+    A same-named handle from another file is displaced rather than kept alongside: the caller
+    said which file it meant, and leaving both would put the ambiguity straight back into the
+    scene the dedup pass exists to keep unambiguous.
+    """
+    if main_handle in handles:
+        return handles
+    return [h for h in handles if h.contract_name != main_handle.contract_name] + [main_handle]
+
+
 def resolve_contract_handles(
     contract_handles: list[ContractHandle],
     project_root: Path,
