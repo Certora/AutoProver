@@ -29,6 +29,7 @@ and the actual source compiled into the verification problem.
 
 import asyncio
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import Annotated, Literal, NotRequired, Union, override
 import uuid
@@ -56,6 +57,8 @@ from composer.templates.loader import load_jinja_template
 from composer.diagnostics.timing import set_current_task_id
 from composer.prover.cex_task_ids import cex_rule_task_id, cex_aggregator_task_id
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
+
+_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -490,12 +493,28 @@ class AgenticCexHandler(CexHandler):
             with set_current_task_id(cex_rule_task_id(tool_call_id, rule_group.rule_name)):
                 return await _process_rule(rule_group)
 
+        # A rule whose analysis raises forfeits its own root causes only; the
+        # remaining rules still report, and the caller still gets a rendered
+        # report rather than losing the prover run.
         per_rule = await asyncio.gather(
-            *(_process_rule_addressed(rg) for rg in failing_rules)
+            *(_process_rule_addressed(rg) for rg in failing_rules),
+            return_exceptions=True,
         )
+        for rule_group, outcome in zip(failing_rules, per_rule):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, BaseException):
+                _logger.warning(
+                    "CEX analysis failed for rule %s, continuing without its root causes: %r",
+                    rule_group.rule_name,
+                    outcome,
+                )
         # Flatten preserving rule order (gather preserves input order).
         all_causes: list[_PerRuleRootCause] = [
-            c for rule_results in per_rule for c in rule_results
+            c
+            for rule_results in per_rule
+            if not isinstance(rule_results, BaseException)
+            for c in rule_results
         ]
 
         if not all_causes:

@@ -235,6 +235,9 @@ re-sending the entire file.
 
 The edited spec is run through the CVL parser exactly like `put_cvl_raw`. If the result
 fails to parse, the edit is rejected with the parser errors and the buffer is unchanged.
+
+IMPORTANT: You cannot call this tool multiple times in the same turn. If you need to make
+multiple edits, you must spread them across distinct turns.
 """
 
 

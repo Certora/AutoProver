@@ -213,3 +213,127 @@ def test_forge_run_with_foundry_profile_env(tmp_path: Path, monkeypatch) -> None
     build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None, profile="ci")
 
     assert captured["env"]["FOUNDRY_PROFILE"] == "ci"
+
+
+def _nested_project(tmp_path: Path) -> Path:
+    """A repo whose Foundry project sits at <repo>/chains/somechain, with a sub-project tree."""
+    project = tmp_path / "chains" / "somechain"
+    (project / "src" / "Widget_1234" / "dependencies" / "oz-5.4.0" / "contracts").mkdir(parents=True)
+    (project / "lib" / "forge-std" / "src").mkdir(parents=True)
+    return project
+
+
+def test_context_is_rebased_onto_the_run_root(tmp_path: Path, monkeypatch) -> None:
+    # `forge remappings` reports contexts relative to the project dir, but solc matches them
+    # against source unit names, which are relative to the run root. For a project nested under
+    # the run root the reported context `src/Widget_1234/` never prefixes the source unit name
+    # `chains/somechain/src/Widget_1234/...`, so the remapping silently never applies and every
+    # import of that sub-project fails to resolve.
+    project = _nested_project(tmp_path)
+    _forge_returning(
+        monkeypatch,
+        "src/Widget_1234/:@openzeppelin/contracts/=src/Widget_1234/dependencies/oz-5.4.0/contracts/\n"
+        "forge-std/=lib/forge-std/src/\n",
+    )
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    keys = _keys(packages)
+    assert "chains/somechain/src/Widget_1234/:@openzeppelin/contracts/" in keys
+    assert "src/Widget_1234/:@openzeppelin/contracts/" not in keys
+    # the target half is untouched by the rebasing — still absolute, still pointing at the tree
+    assert _path_of(packages, "chains/somechain/src/Widget_1234/:@openzeppelin/contracts/") == \
+        str(project / "src/Widget_1234/dependencies/oz-5.4.0/contracts") + "/"
+    # an unscoped key has no context to rebase
+    assert "forge-std/" in keys
+
+
+def test_context_unchanged_when_the_project_is_the_run_root(tmp_path: Path, monkeypatch) -> None:
+    # The flat case (the overwhelming majority): base_dir == run_root, so contexts are already
+    # expressed against the run root and must come out byte-identical.
+    (tmp_path / "lib" / "some-dependency").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (tmp_path / "remappings.txt").write_text(
+        "lib/some-dependency/:@openzeppelin/contracts/=lib/openzeppelin-contracts-v4/contracts/\n"
+    )
+
+    with_root = build_packages_from_remapping_sources(
+        base_dir=tmp_path, log_fn=lambda *_: None, run_root=tmp_path
+    )
+    without_root = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
+
+    assert with_root == without_root
+    assert "lib/some-dependency/:@openzeppelin/contracts/" in _keys(with_root)
+
+
+def test_context_naming_no_directory_is_left_alone(tmp_path: Path, monkeypatch) -> None:
+    # Only a context that names a real directory under the project is project-relative. Anything
+    # else — including a context already written against the run root — is left as authored.
+    project = _nested_project(tmp_path)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text(
+        "chains/somechain/src/Widget_1234/:@oz/=src/Widget_1234/dependencies/oz-5.4.0/contracts/\n"
+    )
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert "chains/somechain/src/Widget_1234/:@oz/" in _keys(packages)
+
+
+def test_context_outside_the_run_root_is_left_alone_with_a_warning(tmp_path: Path, monkeypatch) -> None:
+    # A context resolving outside the run root cannot be named by any source unit name; keep the
+    # authored form and say so rather than emitting a `../`-prefixed context.
+    project = _nested_project(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-vendor"
+    outside.mkdir(exist_ok=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text(f"{outside}/:@oz/=lib/forge-std/src/\n")
+    warnings: list[tuple[str, str]] = []
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project,
+        log_fn=lambda msg, level: warnings.append((msg, level)),
+        run_root=tmp_path,
+    )
+
+    assert f"{outside}/:@oz/" in _keys(packages)
+    assert any(level == "WARNING" and "outside the run root" in msg for msg, level in warnings)
+
+
+def test_parse_config_rebases_contexts_against_the_project_root(tmp_path: Path, monkeypatch) -> None:
+    # End-to-end at the bug site: the manager knows the run root, so parse_config's packages
+    # come out with run-root-relative contexts.
+    project = _nested_project(tmp_path)
+    foundry_toml = project / "foundry.toml"
+    foundry_toml.write_text(
+        '[profile.default]\nsrc = "src"\n'
+        'remappings = ["src/Widget_1234/:@oz/=src/Widget_1234/dependencies/oz-5.4.0/contracts/"]\n'
+    )
+    _no_forge(monkeypatch)
+
+    manager = FoundryManager(project_root=tmp_path, scope=None)
+    config = manager.parse_config(foundry_toml)
+
+    keys = {p.split("=", 1)[0] for p in (config.packages or [])}
+    assert "chains/somechain/src/Widget_1234/:@oz/" in keys
+
+
+def test_context_that_is_the_run_root_is_left_alone_without_a_warning(tmp_path: Path, monkeypatch) -> None:
+    # A context resolving to the run root itself already covers every source unit name, so
+    # nothing is wrong with it — unlike a context resolving outside the run root, it must not
+    # be reported as a problem.
+    project = _nested_project(tmp_path)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("../../:@oz/=lib/forge-std/src/\n")
+    logged: list[tuple[str, str]] = []
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda msg, level: logged.append((msg, level)), run_root=tmp_path
+    )
+
+    assert "../../:@oz/" in _keys(packages)
+    assert not [m for m, level in logged if level == "WARNING" and "run root" in m]

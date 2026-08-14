@@ -16,5 +16,5 @@ def monitor(
         return None, None
     
     return [HumanMessage(f"<system-reminder>{'\n'.join(curr_state["reminders_channel"])}</system-reminder>")], {
-        "reminders_channel": None
+        "reminders_channel": []
     }

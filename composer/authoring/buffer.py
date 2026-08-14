@@ -13,6 +13,7 @@ tool's *name* and *description* (both LLM-facing, so they can't be unified away)
 from typing import Annotated, Callable, Literal, overload
 from typing_extensions import TypedDict
 
+from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
@@ -163,7 +164,11 @@ def edit_spec_tool[S: SpecBuffer](
 
     A failed match leaves the buffer alone and returns the reason, which names what to do about it
     (add context, or re-read the buffer) — an edit that silently hit the wrong site would be far
-    worse than one that is refused."""
+    worse than one that is refused.
+
+    Two calls of this tool in the same turn are refused: parallel edits race through the state
+    reducer. A single edit alongside a different tool is allowed.
+    """
     schema = create_model(
         title,
         __base__=_EditSpecTemplate,
@@ -178,6 +183,14 @@ def edit_spec_tool[S: SpecBuffer](
         st = args["state"]
         if st[SPEC_KEY] is None:
             return missing
+        messages = st.get("messages")
+        if messages:
+            last = messages[-1]
+            if (
+                isinstance(last, AIMessage)
+                and len([t for t in last.tool_calls if t["name"] == name]) > 1
+            ):
+                return f"`{name}` tool cannot be called in parallel within the same turn."
         match replace_unique(st[SPEC_KEY], args["old_string"], args["new_string"]):
             case EditErr(message=msg):
                 return msg
