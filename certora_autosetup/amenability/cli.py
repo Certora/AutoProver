@@ -58,6 +58,16 @@ def _recommendations(report_evidence) -> list[Recommendation]:
                    "sanctioned slot patterns (ERC-7201/StorageSlot) so the prover's storage "
                    "and memory analyses can model them.",
         ))
+    if "mutual_recursion" in kinds:
+        recs.append(Recommendation(
+            kind="munge",
+            detail="Rewrite recursive call cycles — above all mutual recursion reached from "
+                   "inside a loop — as an iteration over an explicit stack/worklist, or put a "
+                   "summarized boundary at the cycle's entry. Each recursive entry is unfolded "
+                   "to a fixed depth on every path, so the decompiled program grows "
+                   "combinatorially and can exhaust the prover's block/command budget before "
+                   "verification starts; raising those limits does not help.",
+        ))
     if "bitmask_style" in kinds or "mixed_theory" in kinds:
         recs.append(Recommendation(
             kind="harness",
@@ -94,9 +104,10 @@ def main() -> int:
         print(error.model_dump_json(indent=2))
         return 1
 
-    ctx = AnalysisContext(project_root=project_root, dumps=resolution.dumps)
-
     config = ScoringConfig.load(args.weights)
+    ctx = AnalysisContext(
+        project_root=project_root, dumps=resolution.dumps, params=config.signal_params
+    )
     results = [sig(ctx) for sig in ALL_SIGNALS]
     static = aggregate(results, config)
     evidence = [e for r in results for e in r.evidence]

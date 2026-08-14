@@ -30,6 +30,8 @@ class ScoringConfig:
     killer_severe_score: float
     killers_for_low: int
     structural_low_max: float = field(default=0.5)
+    # Curve constants of individual signals, handed to them through the context.
+    signal_params: dict[str, dict[str, float]] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | str = DEFAULT_WEIGHTS) -> "ScoringConfig":
@@ -44,6 +46,7 @@ class ScoringConfig:
             killer_severe_score=hard["killer_severe_score"],
             killers_for_low=hard["killers_for_low"],
             structural_low_max=thresholds.get("structural_low_max", 0.5),
+            signal_params=data.get("signal_params", {}),
         )
 
 

@@ -46,6 +46,16 @@ class TestScoring:
         static = aggregate(self._results(config, overrides), config)
         assert static.provisional_level is Level.LOW
 
+    def test_one_severe_killer_vetoes_high(self):
+        # A hazard confined to a small part of the code can still make the project
+        # uningestible, so a single severe structural killer caps the verdict at
+        # medium even while the weighted mean stays above high_min.
+        config = ScoringConfig.load()
+        killer = sorted(config.structural_killers)[0]
+        static = aggregate(self._results(config, {killer: 0.05}), config)
+        assert static.weighted_score >= config.high_min
+        assert static.provisional_level is Level.MEDIUM
+
     def test_non_structural_signals_never_force_low(self):
         # Even if every friction signal craters, without killer co-occurrence the
         # verdict stays medium — friction is config-solvable, not a rewrite.

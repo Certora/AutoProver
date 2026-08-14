@@ -10,6 +10,7 @@ from certora_autosetup.amenability.signals.bitmask import bitmask_style
 from certora_autosetup.amenability.signals.calls import external_call_surface
 from certora_autosetup.amenability.signals.functions import function_length, surface_shape
 from certora_autosetup.amenability.signals.loops import dynamic_loops
+from certora_autosetup.amenability.signals.recursion import mutual_recursion
 from certora_autosetup.amenability.signals.storage import storage_packing
 from certora_autosetup.amenability.signals.summaries import curated_summary_hits
 
@@ -23,6 +24,7 @@ ALL_SIGNALS = [
     mixed_theory,
     curated_summary_hits,
     storage_packing,
+    mutual_recursion,
     external_call_surface,
     dynamic_loops,
     surface_shape,

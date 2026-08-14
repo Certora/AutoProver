@@ -13,6 +13,7 @@ from certora_autosetup.solidity_ast import (
     AstDump,
     ContractDefinition,
     FunctionDefinition,
+    SourceAst,
     SourceUnit,
     find_all,
 )
@@ -43,6 +44,9 @@ def is_dependency_path(source_path: str) -> bool:
 class AnalysisContext:
     project_root: Path
     dumps: list[AstDump]
+    # Per-signal curve constants from weights.yaml (`signal_params`), read via
+    # `param()`; empty when a caller builds a context without a scoring config.
+    params: dict[str, dict[str, float]] = field(default_factory=dict)
     _sources: dict[str, SourceUnit] = field(default_factory=dict, init=False)
     _line_tables: dict[str, list[int]] = field(default_factory=dict, init=False)
     _source_texts: dict[str, Optional[bytes]] = field(default_factory=dict, init=False)
@@ -78,6 +82,28 @@ class AnalysisContext:
             for node in contract.nodes:
                 if isinstance(node, FunctionDefinition) and (node.implemented or not implemented_only):
                     yield path, contract, node
+
+    def iter_units(self) -> Iterator[list[SourceAst]]:
+        """The parsed sources of each compilation unit, unit by unit.
+
+        Node ids are unique within a compilation unit but collide across units, so
+        anything that resolves `referencedDeclaration` (call graphs, inheritance)
+        must work per unit rather than over the deduplicated source map. Units carry
+        their dependencies, which is the point: a hazard vendored under lib/ is only
+        visible here.
+        """
+        for dump in self.dumps:
+            for file_asts in dump.files.values():
+                parsed = [s for s in file_asts.sources.values() if s.root is not None]
+                if parsed:
+                    yield parsed
+
+    # ---- tuning parameters -------------------------------------------------
+
+    def param(self, signal_id: str, key: str, default: float) -> float:
+        """A signal's curve constant from weights.yaml, falling back to the signal
+        module's default when no scoring config was passed in."""
+        return self.params.get(signal_id, {}).get(key, default)
 
     # ---- source text / line mapping --------------------------------------
 

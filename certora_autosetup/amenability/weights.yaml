@@ -12,6 +12,12 @@ weights:
   storage_packing: 1.5
   function_length: 1.2
   mixed_theory: 1.2
+  # Bottom of the killer tier deliberately: the veto below is what this signal is
+  # for, and the fix is a local rewrite of the cycle to an explicit worklist, not a
+  # reference implementation. A larger weight would also drift the mean upward for
+  # every recursion-free project (a signal scoring 1.0 pulls a mean of m up by
+  # w*(1-m)/(W+w)), which is not a calibration this signal should be making.
+  mutual_recursion: 1.2
   # Friction — makes autosetup harder (config/summaries/harnesses) but is
   # config-solvable, so these pull toward medium, not low. Lower weight.
   asm_density: 0.6
@@ -37,5 +43,22 @@ hard_rules:
     - storage_packing
     - function_length
     - mixed_theory
+    - mutual_recursion
   killer_severe_score: 0.25
   killers_for_low: 3
+
+# Per-signal curve constants, read through ctx.param("<signal_id>", key, default).
+signal_params:
+  # A recursive cluster is unfolded to a fixed depth at every entry, so the cost of
+  # one cluster grows with how much the decompiler has to unfold: mutual > self,
+  # bigger cluster > smaller, inside a loop >> straight-line, more entry sites >
+  # one. Costs compose as a saturating product (score = prod(1 - cost)).
+  mutual_recursion:
+    self_cycle_cost: 0.15         # size-1 cluster (direct self-recursion)
+    mutual_cycle_cost: 0.45       # size-2 cluster (mutual recursion)
+    mutual_size_step: 0.15        # per member above 2
+    loop_entry_multiplier: 1.7    # a call into or inside the cluster sits in a loop
+    unreachable_multiplier: 0.35  # no public entry point reaches the cluster
+    reentry_step: 0.15            # per extra call site entering the cluster
+    reentry_multiplier_cap: 1.6
+    max_cycle_cost: 0.9           # no single cluster may zero the score alone
