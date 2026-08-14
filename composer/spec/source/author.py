@@ -794,7 +794,8 @@ async def batch_cvl_generation(
                 prover_history=[],
                 reminders_channel=[],
                 vfs=restored_vfs,
-                version_history=restored_history
+                version_history=restored_history,
+                spec_stem=spec_stem
             )
         )
     except BudgetExceeded as e:
