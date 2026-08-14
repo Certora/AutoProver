@@ -33,10 +33,10 @@ from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun,
     GaveUp, SystemAnalysisSpec,
     CorePhases, CorePipelineResult,
-    COMMON_SYSTEM_CACHE_KEY
 )
 from composer.pipeline.ptypes import Curtailed
 from composer.pipeline.ecosystem import main_instance
+from composer.pipeline.keys import COMMON_SYSTEM_CACHE_KEY
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import Formalized, Verdict
 from composer.spec.source.report.schema import RuleName

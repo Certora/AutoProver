@@ -108,6 +108,16 @@ class BackendJob[U: FeatureUnit]:
     feat: U
     props: list[PropertyFormulation]
 
+class FinalProperties(BaseModel):
+    """A component's property batch as it left the property pipeline — after
+    every post-inference plugin rewrite. This is exactly the input
+    ``FORMALIZATION_KEY`` is derived from, so an offline walker
+    can reconstruct the formalization edge without
+    sniffing the store. Written by the driver at formalization time; the
+    pre-rewrite batch remains ``_BugAnalysisCache``."""
+    items: list[PropertyFormulation]
+
+
 @dataclass(frozen=True)
 class Delivered[FormT: BackendResult]:
     """A formalization result and the project-relative path it was persisted to. The path exists

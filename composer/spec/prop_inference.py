@@ -17,6 +17,7 @@ from composer.input.files import Document
 from composer.llm.types import CacheLevel
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
+from composer.spec.key_family import KeyFamily
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
@@ -111,33 +112,28 @@ def render_evm_property_prompt(
 class _AgentRoundWithHistory(_AgentRoundResult):
     agent_conversation: list[AnyMessage]
 
-def bug_analysis_key_from_digest(
+def _bug_analysis_key(
     threat_model_digest: str | None,
     with_refinement: bool
-) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
+) -> str:
     base_key = "bug_analysis"
     if with_refinement:
         base_key += "|refine"
     if threat_model_digest is None:
-        return CacheKey[ComponentGroup, _BugAnalysisCache](base_key)
-    return CacheKey[ComponentGroup, _BugAnalysisCache](base_key + "-tm-" + threat_model_digest)
+        return base_key
+    return base_key + "-tm-" + threat_model_digest
 
-def bug_analysis_key(
-    threat_model: Document | None,
-    with_refinement: bool
-) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
-    return bug_analysis_key_from_digest(
-        threat_model.to_digest() if threat_model is not None else None,
-        with_refinement,
-    )
+#: Parameterized on the threat model's *digest* (not the document) so a
+#: recorded digest — e.g. from a run's cache tags — can rebuild the key.
+BUG_ANALYSIS_KEY = KeyFamily(ComponentGroup, _BugAnalysisCache, _bug_analysis_key)
 
 class _AgentResult(_BugAnalysisCache):
     final_history: list[AnyMessage]
 
-def agent_round_key(
-    i: int
-) -> CacheKey[_AgentResult, _AgentRoundWithHistory]:
-    return CacheKey[_AgentResult, _AgentRoundWithHistory](f"round-{i}")
+def _agent_round_key(i: int) -> str:
+    return f"round-{i}"
+
+AGENT_ROUND_KEY = KeyFamily(_AgentResult, _AgentRoundWithHistory, _agent_round_key)
 
 AGENT_RESULT_KEY = CacheKey[_BugAnalysisCache, _AgentResult]("agent_bug_analysis")
 
@@ -268,7 +264,7 @@ async def _run_bug_round(
     prev: list[_AgentRoundResult],
     system_prompt: str
 ) -> _AgentRoundWithHistory:
-    round_ctx = ctx.child(agent_round_key(round))
+    round_ctx = ctx.child(AGENT_ROUND_KEY(round))
     if (cached := await round_ctx.cache_get(_AgentRoundWithHistory)) is not None:
         return cached
 
@@ -393,7 +389,10 @@ async def run_property_inference[U: FeatureUnit](
     the cached prefix.
     """
 
-    component_analysis = ctx.child(bug_analysis_key(threat_model, refinement is not None))
+    component_analysis = ctx.child(BUG_ANALYSIS_KEY(
+        threat_model.to_digest() if threat_model is not None else None,
+        refinement is not None,
+    ))
     if (cached := await component_analysis.cache_get(_BugAnalysisCache)) is not None:
         return cached.items
 
