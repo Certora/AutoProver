@@ -15,7 +15,7 @@ and skipped without testcontainers. Run with ``-m expensive``.
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
@@ -106,12 +106,18 @@ def _make_args(rag_conn: str, scenario_dir: Path, system_doc: str | None) -> Aut
     ))
 
 
-def _install_mocks(monkeypatch, scenario_dir: Path) -> None:
+def _install_mocks(
+    monkeypatch,
+    scenario_dir: Path,
+    tape_installer: Callable[[], object] = lambda: install_harness_tape(with_delay=False),
+) -> None:
     """LLM / AutoSetup / embedding mocks (undone per test by ``monkeypatch``). The
     databases themselves — and the host/port connection redirection — are handled once
-    per session by the ``langgraph_db`` fixture."""
-    # Mock only the LLM (Counter tape) + disable the agent-index cache.
-    install_harness_tape(with_delay=False)
+    per session by the ``langgraph_db`` fixture. ``tape_installer`` selects which
+    tape backs the fake LLM (default: the main Counter tape); the sibling
+    integration tests pass their variant installers through it."""
+    # Mock only the LLM (the selected tape) + disable the agent-index cache.
+    tape_installer()
     # pipeline.cli imported `get_provider_for` by name, so install_harness_tape's
     # patch of registry.get_provider_for doesn't reach that binding — rebind it here.
     import composer.llm.registry as registry

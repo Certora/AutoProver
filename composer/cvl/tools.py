@@ -10,6 +10,7 @@ import logging
 import subprocess
 import tempfile
 from typing import Annotated, Literal, overload
+from langchain_core.messages import AIMessage
 from typing_extensions import TypedDict
 
 from langchain_core.tools import tool, InjectedToolCallId, BaseTool
@@ -242,6 +243,9 @@ re-sending the entire file.
 
 The edited spec is run through the CVL parser exactly like `put_cvl_raw`. If the result
 fails to parse, the edit is rejected with the parser errors and the buffer is unchanged.
+
+IMPORTANT: You cannot call this tool multiple times in the same turn. If you need to make
+multiple edits, you must spread them across distinct turns.
 """
 
 
@@ -270,6 +274,9 @@ def edit_cvl[S: WithCurrSpec](ty: type[S]) -> BaseTool:
         st = args["state"]
         if st["curr_spec"] is None:
             return "No spec file written yet — use put_cvl or put_cvl_raw first."
+        last = st["messages"][-1]
+        if isinstance(last, AIMessage) and len([ t for t in last.tool_calls if t["name"] == "edit_cvl"]) > 1:
+            return "`edit_cvl` tool cannot be called in parallel within the same turn."
         match replace_unique(st["curr_spec"], args["old_string"], args["new_string"]):
             case EditErr(message=msg):
                 return msg
