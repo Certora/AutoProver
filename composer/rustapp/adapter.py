@@ -87,7 +87,8 @@ from composer.rustapp.wire import (
 from composer.rustapp.wire import Delivered as WireDelivered
 from composer.rustapp.wire import SkippedProperty as WireSkipped
 from composer.spec.artifacts import ArtifactStore
-from composer.spec.context import CacheKey, SourceFields, WorkflowContext
+from composer.spec.context import SourceFields, WorkflowContext
+from composer.spec.key_family import KeyFamily
 from composer.spec.source.report.collect import Formalized, ReportComponentInput, Verdict
 from composer.spec.source.report.schema import RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
@@ -200,6 +201,15 @@ def _setup_identity(input: SetupInput) -> str:
         "props": [p.model_dump() for p in input.props],
     }
     return string_hash(json.dumps(material, sort_keys=True, default=str))
+
+
+def _setup_key(descriptor_name: str, input: SetupInput) -> str:
+    return f"{descriptor_name}-setup-{_setup_identity(input)}"
+
+
+#: The shared setup spec's slot under the run root, keyed per wheel and per
+#: :func:`_setup_identity` of what the artifact is authored from.
+RUST_SETUP_KEY = KeyFamily(type(None), RustSetupSpec, _setup_key)
 
 
 async def run_workspace_prep(
@@ -566,9 +576,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             # by what it is authored *from*, so a changed model, program crate, type source
             # (crate vs IDL) or property set re-authors it. As with the driver's other caches, a
             # change to the *prompt* does not invalidate — clear the namespace for that.
-            setup_ctx: WorkflowContext[RustSetupSpec] = run.ctx.child(
-                CacheKey(f"{descriptor.name}-setup-{_setup_identity(setup_input)}")
-            )
+            setup_ctx = run.ctx.child(RUST_SETUP_KEY(descriptor.name, setup_input))
             if (hit := await setup_ctx.cache_get(RustSetupSpec)) is not None:
                 return hit.source
             # Attached *after* the identity, deliberately: the unit set is what a wheel's gate builds
