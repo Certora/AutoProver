@@ -58,7 +58,15 @@ def ensure_prover_login() -> None:
 
     Raises ``ProverAuthError`` when the credentials cannot be refreshed — a
     condition no amount of retrying fixes, since it needs a human to log in.
+
+    Under ``CI`` this is a no-op, mirroring ProverOutputUtility's own
+    precondition: ``get_auth_cookies`` returns an empty jar rather than logging
+    in, and the API authenticates to Lambda with SigV4 instead. Our integration
+    runner has AWS credentials and no credentials file, so insisting on a login
+    that ProverOutputUtility will never perform would fail the job at this gate.
     """
+    if os.getenv("CI"):
+        return
     os.environ.setdefault("CERTORA_LOGIN_NO_PKCE", "1")
     try:
         login(env=resolve_login_env(), force_file=True)

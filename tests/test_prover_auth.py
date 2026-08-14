@@ -22,7 +22,13 @@ import composer.prover.auth as auth
 
 @pytest.fixture(autouse=True)
 def _clean_login_state(monkeypatch: pytest.MonkeyPatch):
-    """``ensure_prover_login`` is process-cached and sets an env var; isolate both."""
+    """``ensure_prover_login`` is process-cached and sets an env var; isolate both.
+
+    ``CI`` is cleared because this suite runs under GitHub Actions, where it is
+    set — leaving it would turn every login assertion below into a no-op that
+    passes without testing anything.
+    """
+    monkeypatch.delenv("CI", raising=False)
     monkeypatch.delenv("CERTORA_LOGIN_NO_PKCE", raising=False)
     monkeypatch.setattr(auth, "resolve_login_env", lambda: "production")
     auth.ensure_prover_login.cache_clear()
@@ -48,6 +54,21 @@ def test_an_operator_override_is_respected(monkeypatch: pytest.MonkeyPatch) -> N
     auth.ensure_prover_login()
 
     assert os.environ["CERTORA_LOGIN_NO_PKCE"] == "0"
+
+
+def test_ci_does_not_log_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ProverOutputUtility skips certora_login under CI and authenticates to Lambda
+    with SigV4 instead (its ``get_auth_cookies`` returns an empty jar). The nightly
+    integration job has AWS credentials and no credentials file, so gating a run on
+    a login that never happens there would fail it."""
+    calls: list[dict] = []
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr(auth, "login", lambda **kw: calls.append(kw))
+
+    auth.ensure_prover_login()
+
+    assert calls == []
+    assert "CERTORA_LOGIN_NO_PKCE" not in os.environ
 
 
 def test_login_happens_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
