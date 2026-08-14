@@ -182,8 +182,9 @@ def _rebase_context(context: str, base_dir: Path, run_root: Optional[Path], log_
 
     A context is rebased only when ``base_dir/context`` is a real directory, which is what tells
     a project-relative context apart from one that is already run-root-relative. Anything else
-    (no ``run_root``, a context that resolves outside ``run_root``, a context naming no directory)
-    is returned untouched: those are shapes this cannot improve on, so leave them alone.
+    (no ``run_root``, a context naming no directory, a context resolving to the run root itself
+    or outside it) is returned untouched: those are shapes this cannot improve on, so leave them
+    alone. Only the outside-the-run-root case warns — it is the one that cannot work at all.
     """
     if run_root is None or not context:
         return context
@@ -193,7 +194,13 @@ def _rebase_context(context: str, base_dir: Path, run_root: Optional[Path], log_
         return context
 
     rebased = os.path.relpath(resolved, run_root)
-    if rebased == os.curdir or rebased.startswith(os.pardir):
+    if rebased == os.curdir:
+        # The context IS the run root, so it already covers every source unit name. Its faithful
+        # translation is a global, context-free remapping — but promoting a scoped remapping to
+        # global would let it shadow correct global mappings (solc ranks longest matching context
+        # first), so keep it as authored. Nothing is wrong here, hence no warning.
+        return context
+    if rebased.startswith(os.pardir):
         log_fn(
             f"Remapping context '{context}' resolves outside the run root {run_root} "
             f"— leaving it as is",

@@ -320,3 +320,20 @@ def test_parse_config_rebases_contexts_against_the_project_root(tmp_path: Path, 
 
     keys = {p.split("=", 1)[0] for p in (config.packages or [])}
     assert "chains/somechain/src/Widget_1234/:@oz/" in keys
+
+
+def test_context_that_is_the_run_root_is_left_alone_without_a_warning(tmp_path: Path, monkeypatch) -> None:
+    # A context resolving to the run root itself already covers every source unit name, so
+    # nothing is wrong with it — unlike a context resolving outside the run root, it must not
+    # be reported as a problem.
+    project = _nested_project(tmp_path)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("../../:@oz/=lib/forge-std/src/\n")
+    logged: list[tuple[str, str]] = []
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda msg, level: logged.append((msg, level)), run_root=tmp_path
+    )
+
+    assert "../../:@oz/" in _keys(packages)
+    assert not [m for m, level in logged if level == "WARNING" and "run root" in m]
