@@ -89,6 +89,11 @@ services:
       CERTORA_TOKEN: ${CERTORA_TOKEN:-}
       CERTORA_REFRESH_TOKEN: ${CERTORA_REFRESH_TOKEN:-}
       CERTORA_LOGIN_NO_BROWSER: "true"
+      # NO_BROWSER only stops the flow from opening a browser; the callback server
+      # still waits out its deadline. NO_PKCE is what makes login refresh-only, so a
+      # stale session fails immediately instead of hanging. composer sets this for
+      # itself too — it is here so subprocesses (certoraRun, autosetup) inherit it.
+      CERTORA_LOGIN_NO_PKCE: "true"
       CERTORA_AI_COMPOSER_PGHOST: postgres
       CERTORA_AI_COMPOSER_PGPORT: "5432"
     volumes:

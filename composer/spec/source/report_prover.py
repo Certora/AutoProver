@@ -11,6 +11,7 @@ from pathlib import Path
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import CheckResult, NodeStatus
 
+from composer.prover.auth import prover_output_api
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.source.report.collect import Formalized, Verdict, VerdictFetcher
 from composer.spec.source.report.schema import Outcome, RuleName
@@ -53,7 +54,7 @@ def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[Ge
     """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, keyed by each
     component's run link. POU calls run off the event loop (one blocking call per run). Only ever
     invoked for delivered results (collect skips gave-up / curtailed inputs)."""
-    api = api or ProverOutputAPI()
+    api = api or prover_output_api()
 
     async def fetch(formalized: Formalized[GeneratedCVL]) -> dict[RuleName, Verdict]:
         if formalized.run_link is None:
