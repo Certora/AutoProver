@@ -1626,5 +1626,8 @@ class CompilationWorkaroundManager:
         """
         # Read from the directory that owns the build config (the run root unless the
         # contract lives in a monorepo sub-project); the helper resolves every relative
-        # target absolute against it, so the emitted paths are valid from the run CWD.
-        return build_packages_from_remapping_sources(base_dir=self.build_config_dir, log_fn=self.log)
+        # target absolute against it, so the emitted paths are valid from the run CWD, and
+        # re-expresses remapping contexts against the run root, where solc matches them.
+        return build_packages_from_remapping_sources(
+            base_dir=self.build_config_dir, log_fn=self.log, run_root=self.project_root
+        )

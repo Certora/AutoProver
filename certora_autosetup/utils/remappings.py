@@ -11,7 +11,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 import tomllib
 
@@ -23,7 +23,12 @@ LogFn = Callable[[str, str], None]
 _SOURCE_SUFFIXES = (".sol", ".vy", ".yul")
 
 
-def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile: str = "default") -> List[str]:
+def build_packages_from_remapping_sources(
+    base_dir: Path,
+    log_fn: LogFn,
+    profile: str = "default",
+    run_root: Optional[Path] = None,
+) -> List[str]:
     """Build a merged packages list from forge remappings, foundry.toml, remappings.txt, package.json.
 
     All sources are read relative to ``base_dir`` (the Foundry project dir), and ``forge remappings``
@@ -31,6 +36,11 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile
     project dir (nested/walked-up ``foundry.toml``). ``profile`` is passed to forge via
     ``FOUNDRY_PROFILE`` and selects the ``[profile.<profile>]`` remappings read from foundry.toml
     when forge is unavailable, so a non-default profile's remappings are honored.
+
+    ``run_root`` is the directory certoraRun is invoked from (the autosetup run root). It is what
+    the *context* half of a context-scoped remapping must be expressed against — see
+    ``_rebase_context``. It equals ``base_dir`` for a project whose build config sits at the run
+    root, in which case every context comes out unchanged; pass it whenever the caller knows it.
 
     Priority on key conflict (highest wins, with a warning on path mismatch):
     1. ``forge remappings`` — recursively walks nested foundry.toml files (e.g. lib/*/foundry.toml)
@@ -74,6 +84,7 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile
                 remapping_key_to_source=remapping_key_to_source,
                 warn_on_mismatch=False,
                 base_dir=base_dir,
+                run_root=run_root,
                 log_fn=log_fn,
             )
     elif result is not None:
@@ -111,6 +122,7 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile
                 remapping_key_to_source=remapping_key_to_source,
                 warn_on_mismatch=False,
                 base_dir=base_dir,
+                run_root=run_root,
                 log_fn=log_fn,
             )
 
@@ -128,6 +140,7 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile
                 remapping_key_to_source=remapping_key_to_source,
                 warn_on_mismatch=True,
                 base_dir=base_dir,
+                run_root=run_root,
                 log_fn=log_fn,
             )
 
@@ -148,10 +161,56 @@ def build_packages_from_remapping_sources(base_dir: Path, log_fn: LogFn, profile
                     remapping_key_to_source=remapping_key_to_source,
                     warn_on_mismatch=True,
                     base_dir=base_dir,
+                    run_root=run_root,
                     log_fn=log_fn,
                 )
 
     return [f"{key}={path}" for key, path in remapping_key_to_path.items()]
+
+
+def _rebase_context(context: str, base_dir: Path, run_root: Optional[Path], log_fn: LogFn) -> str:
+    """Re-express a remapping *context* against ``run_root``.
+
+    A remapping's two halves are matched against different things. The target is a filesystem
+    path, so any spelling that reaches the directory works. The context is matched by solc
+    against the **source unit name** of the importing file — i.e. the path as it appears in the
+    conf's ``files``, which is relative to the directory certoraRun runs from. ``forge
+    remappings`` reports contexts relative to the Foundry project dir instead, so for a project
+    nested under the run root (``<repo>/chains/ethereum-1/foundry.toml``) a context like
+    ``src/Widget_1234/`` never prefixes the source unit name ``chains/ethereum-1/src/Widget_1234/…``,
+    no remapping applies, and every import of that sub-project fails to resolve.
+
+    A context is rebased only when ``base_dir/context`` is a real directory, which is what tells
+    a project-relative context apart from one that is already run-root-relative. Anything else
+    (no ``run_root``, a context naming no directory, a context resolving to the run root itself
+    or outside it) is returned untouched: those are shapes this cannot improve on, so leave them
+    alone. Only the outside-the-run-root case warns — it is the one that cannot work at all.
+    """
+    if run_root is None or not context:
+        return context
+
+    resolved = Path(context) if Path(context).is_absolute() else base_dir / context
+    if not resolved.is_dir():
+        return context
+
+    rebased = os.path.relpath(resolved, run_root)
+    if rebased == os.curdir:
+        # The context IS the run root, so it already covers every source unit name. Its faithful
+        # translation is a global, context-free remapping — but promoting a scoped remapping to
+        # global would let it shadow correct global mappings (solc ranks longest matching context
+        # first), so keep it as authored. Nothing is wrong here, hence no warning.
+        return context
+    if rebased.startswith(os.pardir):
+        log_fn(
+            f"Remapping context '{context}' resolves outside the run root {run_root} "
+            f"— leaving it as is",
+            "WARNING",
+        )
+        return context
+
+    # relpath drops the trailing slash; the context is a path *prefix*, so put it back exactly
+    # when the source had one (see `_merge_remapping_entry` on why the boundary slash matters).
+    return rebased + "/" if context.endswith("/") else rebased
 
 
 def _merge_remapping_entry(
@@ -162,6 +221,7 @@ def _merge_remapping_entry(
     remapping_key_to_source: Dict[str, str],
     warn_on_mismatch: bool,
     base_dir: Path,
+    run_root: Optional[Path] = None,
     log_fn: LogFn,
 ) -> None:
     """Record a single `key=path` remapping entry into the running key->path/source maps.
@@ -180,7 +240,9 @@ def _merge_remapping_entry(
     ``@oz/contracts/`` from different sources onto one key, so the dedup below stays correct.)
 
     Relative target paths are resolved to absolute against ``base_dir`` so the packages list is
-    valid even when the process CWD differs from the project dir.
+    valid even when the process CWD differs from the project dir. The *context* half of a
+    context-scoped key gets the opposite treatment — ``_rebase_context`` re-expresses it against
+    ``run_root``, because solc matches it against source unit names rather than the filesystem.
 
     On a key conflict (already populated by an earlier-priority source):
     - if ``warn_on_mismatch`` and the stored path differs from the new one, log a warning naming
@@ -192,6 +254,12 @@ def _merge_remapping_entry(
     raw_key, raw_path = entry.split("=", 1)
     key = raw_key.strip()
     path = raw_path.strip()
+
+    # A context-scoped key is `context:prefix`; solc reads the context as a source-unit-name
+    # prefix, so it belongs to the run root while the prefix is opaque text (see `_rebase_context`).
+    if ":" in key:
+        context, prefix = key.split(":", 1)
+        key = f"{_rebase_context(context, base_dir, run_root, log_fn)}:{prefix}"
 
     # Resolve a relative target against base_dir first (Path() drops any trailing slash).
     if not Path(path).is_absolute():
