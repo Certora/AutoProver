@@ -1,0 +1,21 @@
+use cvlr::cvlr_satisfy;
+use cvlr_soroban_derive::rule;
+use cvlr_soroban::*;
+use soroban_sdk::Env;
+
+{% for pkg in packages %}// package {{ pkg.name }}
+
+{% for c in pkg.contracts %}use crate::{{ c.name }};
+{% for t in c.impl_blocks %}{% if t.trait %}use {{ t.trait_fqn }};
+{%endif %}{% for f in t.functions %}// {% if t.trait %}trait {{ t.trait }}{% else %}contract {{ c.name }}{% endif %}
+#[rule]
+pub fn {{ f.name }}_sanity(e: Env) { {% for p in f.params %}{% if not loop.first %}
+    {% set type = p.type.rsplit('<', 1)[0] %}let {{ p.name }} = nondet_{{ type|lower }}(); {% endif %}{% endfor %}
+
+    {{ c.name }}::{{ f.name }}({% for a in f.params %}{% if loop.first %}{% if t.trait %}&{% endif %}{% else %}, {% endif %}{{ a.name }}{% endfor %});   
+
+    cvlr_satisfy!(true);
+}
+
+{% endfor %}{% endfor %}{% endfor %}{% endfor %}
+

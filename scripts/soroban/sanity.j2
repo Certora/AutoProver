@@ -1,0 +1,9 @@
+#[rule]
+pub fn {{ arg.name }}_sanity(e: Env) { {% for p in arg.parameters %}
+    let {{ p.name }} = nondet_{{ p.type_detail.type }}(); {% endfor %}
+
+    {{ arg.contract.type }}::{{ arg.name }}(&e{% for a in arg.parameters %}, {{ a.name }}{% endfor %});   
+
+    cvlr_satisfy!(true);
+}
+

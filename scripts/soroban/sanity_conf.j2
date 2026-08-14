@@ -1,0 +1,8 @@
+{% for pkg in packages %}
+{
+  "files": "../target/wasm32v1-none/release/{{ pkg.name | replace("-", "_") }}.wasm",
+  "rule": [
+    {% for c in pkg.contracts %}{% set outer_loop = loop %}{% for t in c.impl_blocks %}{% set mid_loop = loop %}{% for f in t.functions %}{% if outer_loop.first and mid_loop.first and loop.first %}{% else %}    ,{% endif %}"{{ f.name }}_sanity"
+{% endfor %}{% endfor %}{% endfor %}  ]
+}
+{% endfor %}
