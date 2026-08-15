@@ -7,9 +7,9 @@ the source-reading conventions, connectivity validation, how the target's "main"
 and how it is split into units. Everything downstream of properties (how a property becomes a
 verified artifact) belongs to the **backend**, a separate axis.
 
-Today two ecosystems are implemented: `EVM` (Solidity, fully wired to the CVL/prover and
-Foundry backends) and `SOLANA` (Rust, front half only — analysis + property extraction, gated
-by a null backend).
+Today three ecosystems are implemented: `EVM` (Solidity, wired to the CVL/prover and Foundry
+backends), `SOLANA` (Rust front half, gated by a null backend), and `SOROBAN` (Rust front half,
+with no backend yet).
 
 ---
 
@@ -50,7 +50,7 @@ not the language a backend is implemented in.
 
 ```python
 LanguageTag = Literal["solidity", "rust"]
-ChainTag    = Literal["evm", "solana", "soroban"]   # "soroban" is reserved; not yet wired
+ChainTag    = Literal["evm", "solana", "soroban"]
 
 @dataclass(frozen=True)
 class Language:
@@ -78,11 +78,16 @@ thin index wrappers over `App` that the driver hands to the backend and to prope
 interface (`display_name` / `slug` / `unit_index` / `cache_material` / `context_tag` /
 `feature_json`) the driver uses for per-unit cache keys, task ids, and labels.
 
-A registry exposes the ecosystems by chain tag; it is heterogeneous in `App`/`Main`/`Unit`
-(each chain has its own model), hence `Ecosystem[Any, Any, Any]`:
+A registry exposes the ecosystems by chain tag. Each chain has its own `App`/`Main`/`Unit` types,
+so the registry is a `TypedDict` rather than a plain `dict`.
 
 ```python
-ECOSYSTEMS: dict[ChainTag, Ecosystem[Any, Any, Any]] = {"evm": EVM, "solana": SOLANA}
+class Ecosystems(TypedDict):
+    evm: EvmEcosystem
+    solana: SolanaEcosystem
+    soroban: SorobanEcosystem
+
+ECOSYSTEMS: Ecosystems = {"evm": EVM, "solana": SOLANA, "soroban": SOROBAN}
 ```
 
 ---
@@ -192,7 +197,50 @@ Rust chain without copying.
 
 ---
 
-## 5. Driver integration
+## 5. The Soroban ecosystem (`RUST ⊕ soroban`)
+
+`SOROBAN` is the `RUST` language facet plus the Soroban/Stellar model and prompts. It is front half
+only: there is no Soroban backend yet. Registering it still matters because the prompt templates
+are typed, listed in `template_manifest.json`, and rendered by
+[tests/test_fuzzed_templates.py](../tests/test_fuzzed_templates.py).
+
+```python
+SOROBAN: SorobanEcosystem = Ecosystem(
+    name="soroban",
+    language=RUST,
+    system_model=SorobanApplication,
+    analysis_prompts=PromptPair(SOROBAN_ANALYSIS_SYSTEM_TEMPLATE, SOROBAN_ANALYSIS_INITIAL_TEMPLATE),
+    property_prompts=PropertyPrompts(SOROBAN_PROPERTY_SYSTEM_TEMPLATE, _render_soroban_property_prompt),
+    validate_analysis=_soroban_validate,
+    locate_main=_soroban_locate_main,
+    supports_greenfield=False,
+    units=_soroban_units,
+    unit_type=SorobanComponentInstance,
+    analysis_extra_input=_soroban_analysis_extra_input,
+)
+```
+
+- **System model** ([composer/spec/soroban/model.py](../composer/spec/soroban/model.py)) models
+  contracts, entry-point functions, `Address` auth checks, storage entries, calls, components, and
+  external actors.
+- **Storage** carries its kind everywhere: `instance`, `persistent`, or `temporary`. A component's
+  `storage_keys` resolve to full `StorageEntry` objects so the templates can show the storage kind.
+- **Auth** is explicit. A function with no `require_auth` is represented as `auth == []`; the
+  templates render that fact instead of hiding it.
+- **Units** are one `SorobanComponentInstance` per component of the main contract.
+- **Validation** checks duplicate contract identifiers/names, duplicate function slugs, duplicate
+  component names/slugs, unknown component links, unknown storage keys, duplicate storage keys, and
+  functions that belong to no component.
+- **Templates** include `soroban/_platform_model.j2` in both the analysis and property prompts, so
+  Soroban execution facts live in one shared place. See
+  [composer/templates/soroban/README.md](../composer/templates/soroban/README.md).
+- **Backend guidance** still belongs to the backend. A future Certora Sunbeam backend should provide
+  guidance for CVLR `#[rule]` specs and `certoraSorobanProver`; the Soroban ecosystem should only
+  describe the app and propose properties.
+
+---
+
+## 6. Driver integration
 
 `run_pipeline` ([composer/pipeline/core.py](../composer/pipeline/core.py)) takes an
 `ecosystem` and never hardcodes a domain. It is a required keyword argument — every caller names
@@ -230,11 +278,11 @@ async def run_pipeline[..., U, Main, App](
   under `BaseApplication` rather than subtypes — so `ecosystem.validate_analysis` does not
   typecheck there and it names `validate_solidity_connectivity` directly.
 - **`_extract_all`** iterates `ecosystem.units(main)`, running one property-inference agent per
-  unit — one per component for EVM, one for the whole program for Solana.
+  unit — one per component for EVM, Solana, and Soroban.
 
 ---
 
-## 6. What is shared and domain-neutral
+## 7. What is shared and domain-neutral
 
 - Source tools (`fs_tools`, `code_explorer`, `code_document_ref`) — language-neutral; they read
   Rust as well as Solidity. The only ecosystem inputs are the `forbidden_read` default and the
@@ -246,7 +294,7 @@ async def run_pipeline[..., U, Main, App](
 
 ---
 
-## 7. Key files
+## 8. Key files
 
 | Concern | File |
 |---|---|
@@ -258,4 +306,7 @@ async def run_pipeline[..., U, Main, App](
 | EVM system model + prompts | [composer/spec/system_model.py](../composer/spec/system_model.py) · `composer/templates/application_analysis_*.j2` · `property_analysis_*.j2` |
 | Solana system model | [composer/spec/solana/model.py](../composer/spec/solana/model.py) |
 | Solana prompts + shared Rust fragment | `composer/templates/solana/*.j2` · `composer/templates/rust/_vulnerability_patterns.j2` |
+| Soroban system model | [composer/spec/soroban/model.py](../composer/spec/soroban/model.py) |
+| Soroban prompts (+ platform primer) | `composer/templates/soroban/*.j2` · [its README](../composer/templates/soroban/README.md) |
+| Template manifest (what the fuzzer renders) | [template_manifest.json](../template_manifest.json) · [composer/scripts/template_manifest.py](../composer/scripts/template_manifest.py) |
 | fs-exclusion default (EVM) | [composer/spec/util.py](../composer/spec/util.py) |
