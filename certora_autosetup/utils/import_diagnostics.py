@@ -3,9 +3,10 @@
 A source-not-found failure has several distinct causes with different remedies, and the
 distinction is decidable from the filesystem plus the packages list the conf actually carried:
 solc reports the source unit name *after* remapping, so a prefix match of the reported name
-against a package's target says whether a remapping fired, and one ``is_dir()`` on that target
-says whether the package is installed at all. Anything the evidence does not decide stays
-``UNMAPPED_IMPORT`` rather than being guessed at.
+against a package's target says whether a remapping fired, and ``is_dir()`` on that target — and,
+when it is absent, on the ``node_modules/<pkg>`` above it — says whether the package is installed
+at all. Anything the evidence does not decide stays ``UNMAPPED_IMPORT`` rather than being guessed
+at.
 
 What this deliberately does NOT try to say: why a package is missing (autosetup does not run the
 dependency install and never sees its exit status), which version was intended when several
@@ -20,6 +21,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from certora_autosetup.utils.remappings import node_modules_package_root
 
 # A solc source-location line, e.g. ``   --> contracts/Foo.sol:120:9:``. It names the offending
 # file in a whole-project (non-autofinder) solc error, where there is no ``Compiling <path>...``
@@ -48,9 +51,14 @@ _IMPORTER_LOOKAHEAD = 6
 class UnresolvedImportKind(StrEnum):
     """Why one ``Source "…" not found`` happened, as far as the filesystem can decide."""
 
-    # A remapping fired and its target directory does not exist: the dependency is not installed
-    # where the packages list points. This is the class the ancestor walk resolves.
+    # A remapping fired and neither its target directory nor the `node_modules/<pkg>` it names
+    # exists: the dependency is not installed where the packages list points. This is the class
+    # the ancestor walk resolves.
     PACKAGE_TARGET_MISSING = "package_target_missing"
+    # A remapping fired, the `node_modules/<pkg>` it names is installed, but the remapped
+    # subdirectory inside it is absent — the same state `resolve_node_modules_target` reports as
+    # `subpath_missing`, reached only when no ancestor had the whole target either.
+    PACKAGE_SUBPATH_MISSING = "package_subpath_missing"
     # A remapping fired, its target directory exists, but the file inside it does not. Rebuilding
     # the packages list cannot help — the suffix or the installed version is wrong.
     FILE_MISSING_IN_PACKAGE = "file_missing_in_package"
@@ -68,6 +76,9 @@ class UnresolvedImport:
     kind: UnresolvedImportKind
     package_key: Optional[str] = None
     package_target: Optional[str] = None
+    # The installed `node_modules/<pkg>` above a target that does not exist; set on
+    # PACKAGE_SUBPATH_MISSING only, where it is what separates that class from a missing package.
+    package_root: Optional[str] = None
     importer: Optional[str] = None
     hint: Optional[str] = None
 
@@ -175,16 +186,31 @@ def classify_unresolved_import(
 
     if best is not None:
         key, _, target = best
-        target_exists = Path(_absolute(target, run_root)).is_dir()
+        absolute_target = _absolute(target, run_root)
+        # A target that does not exist has two very different causes, and the package root above
+        # it decides which: no `node_modules/<pkg>` at all (nothing is installed) versus an
+        # installed package whose remapped subdirectory is absent. Without this split the second
+        # case is described as "the dependency is not installed", contradicting
+        # `resolve_node_modules_target`, which already found the package directory.
+        package_root = node_modules_package_root(absolute_target)
+        if Path(absolute_target).is_dir():
+            kind = UnresolvedImportKind.FILE_MISSING_IN_PACKAGE
+            package_root = None
+        elif (
+            package_root is not None
+            and package_root != absolute_target
+            and Path(package_root).is_dir()
+        ):
+            kind = UnresolvedImportKind.PACKAGE_SUBPATH_MISSING
+        else:
+            kind = UnresolvedImportKind.PACKAGE_TARGET_MISSING
+            package_root = None
         return UnresolvedImport(
             source_unit=source_unit,
-            kind=(
-                UnresolvedImportKind.FILE_MISSING_IN_PACKAGE
-                if target_exists
-                else UnresolvedImportKind.PACKAGE_TARGET_MISSING
-            ),
+            kind=kind,
             package_key=key,
             package_target=target,
+            package_root=package_root,
             importer=importer,
         )
 
@@ -237,6 +263,13 @@ def _describe_one(failure: UnresolvedImport) -> str:
             f'"{failure.source_unit}": package \'{failure.package_key}\' maps to '
             f"{failure.package_target}, which does not exist — the dependency is not installed "
             f"there and was not found in any ancestor node_modules up to the run root"
+        )
+    if failure.kind == UnresolvedImportKind.PACKAGE_SUBPATH_MISSING:
+        return (
+            f'"{failure.source_unit}": package \'{failure.package_key}\' maps to '
+            f"{failure.package_target}; the package is installed at {failure.package_root} but "
+            f"the remapped subdirectory inside it is missing — the remapping suffix or the "
+            f"installed version is wrong"
         )
     if failure.kind == UnresolvedImportKind.FILE_MISSING_IN_PACKAGE:
         return (

@@ -1,8 +1,7 @@
 """Tests for classifying `ParserError: Source "…" not found` against the conf's packages.
 
 Two independent halves: parsing the source unit names (and importers) out of wrap-prone solc
-output, and deciding — from the packages list plus the filesystem — which of the four causes
-each one is.
+output, and deciding — from the packages list plus the filesystem — which cause each one is.
 """
 
 from pathlib import Path
@@ -80,6 +79,49 @@ def test_missing_target_directory_is_a_package_target_miss(tmp_path: Path) -> No
 
     assert failure.kind == UnresolvedImportKind.PACKAGE_TARGET_MISSING
     assert failure.package_key == "@vault/"
+
+
+def test_installed_package_without_the_remapped_subdirectory_is_its_own_class(
+    tmp_path: Path,
+) -> None:
+    # `resolve_node_modules_target` already decided this case (kind `subpath_missing`) by finding
+    # the package directory, so classifying it as "not installed anywhere up to the run root"
+    # would contradict the resolver and name a remedy that cannot apply.
+    (tmp_path / "node_modules" / "@oz" / "contracts").mkdir(parents=True)
+    packages = ["@oz/=node_modules/@oz/contracts/token/"]
+
+    failure = classify_unresolved_import(
+        "node_modules/@oz/contracts/token/ERC20.sol", packages, tmp_path
+    )
+
+    assert failure.kind == UnresolvedImportKind.PACKAGE_SUBPATH_MISSING
+    assert failure.package_root == str(tmp_path / "node_modules/@oz/contracts")
+    described = describe_unresolved_imports([failure])
+    assert "the package is installed at" in described
+    assert "not found in any ancestor" not in described
+
+
+def test_missing_package_directory_stays_a_package_target_miss(tmp_path: Path) -> None:
+    # Same target shape, nothing installed: the class the ancestor walk resolves, unchanged.
+    packages = ["@oz/=node_modules/@oz/contracts/token/"]
+
+    failure = classify_unresolved_import(
+        "node_modules/@oz/contracts/token/ERC20.sol", packages, tmp_path
+    )
+
+    assert failure.kind == UnresolvedImportKind.PACKAGE_TARGET_MISSING
+    assert failure.package_root is None
+
+
+def test_missing_non_node_modules_target_stays_a_package_target_miss(tmp_path: Path) -> None:
+    # forge/soldeer targets have no package root to fall back on, so they keep the plain class.
+    failure = classify_unresolved_import(
+        "lib/openzeppelin/contracts/token/ERC20.sol",
+        ["@oz/=lib/openzeppelin/contracts/"],
+        tmp_path,
+    )
+
+    assert failure.kind == UnresolvedImportKind.PACKAGE_TARGET_MISSING
 
 
 def test_existing_target_directory_is_a_file_miss(tmp_path: Path) -> None:

@@ -994,6 +994,8 @@ def test_missing_package_target_is_retried_once_the_rebuild_finds_it(
     (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
     packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
     manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
     contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
 
     success, updated, fake_run = _run_loop_with_packages(
@@ -1005,10 +1007,44 @@ def test_missing_package_target_is_retried_once_the_rebuild_finds_it(
         packages,
     )
 
-    assert [f.kind.value for f in manager.last_import_diagnostics] == ["package_target_missing"]
+    assert any("package_target_missing" in msg for msg, _ in logged)
+    # The retry compiled, so the run has no unresolved imports left to report.
+    assert manager.last_import_diagnostics == []
     assert success is True
     assert fake_run.calls == 2
     assert updated["packages"] == [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+
+
+def test_import_diagnostics_do_not_survive_into_an_unrelated_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The import problem IS fixed by the rebuild and the run then dies of something else. The
+    # classification of the first output must not be reported for that terminal failure —
+    # callers paste it into the compilation error, where it would blame a missing dependency.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+    unrelated = "Error: something entirely different, no workaround applies\n"
+
+    success, _, _ = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{project / 'node_modules/@vault/core/IVault.sol'}")] + [unrelated] * 12,
+        contracts,
+        packages,
+    )
+
+    assert success is False
+    assert manager.last_import_diagnostics == []
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert errors and not any("package_target_missing" in msg for msg in errors)
 
 
 def test_unparseable_source_not_found_leaves_the_loop_unchanged(

@@ -17,7 +17,11 @@ import pytest
 
 from certora_autosetup.build_systems.foundry import FoundryManager
 from certora_autosetup.utils import remappings as remappings_mod
-from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
+from certora_autosetup.utils.remappings import (
+    build_packages_from_remapping_sources,
+    node_modules_package_root,
+    resolve_node_modules_target,
+)
 
 
 def _no_forge(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -533,7 +537,9 @@ def test_ancestor_with_the_subpath_beats_a_nearer_package_without_it(
     # Only the full target is usable by solc, so a nearer package that lacks the remapped
     # subdirectory is skipped in favour of an ancestor that has the whole thing.
     project = tmp_path / "smart-contracts"
-    (project / "node_modules" / "@pkg").mkdir(parents=True)
+    # The nearer install really is the package directory (`@pkg/artifacts`, two segments for a
+    # scoped name) — it just lacks the remapped `src/`.
+    (project / "node_modules" / "@pkg" / "artifacts").mkdir(parents=True)
     (tmp_path / "node_modules" / "@pkg" / "artifacts" / "src").mkdir(parents=True)
     _no_forge(monkeypatch)
     (project / "remappings.txt").write_text("@pkg/=node_modules/@pkg/artifacts/src/\n")
@@ -548,6 +554,85 @@ def test_ancestor_with_the_subpath_beats_a_nearer_package_without_it(
     assert _path_of(packages, "@pkg/") == str(tmp_path / "node_modules/@pkg/artifacts/src") + "/"
     assert not [m for m, level in logged if level == "WARNING"]
     assert any(level == "INFO" and "hoisted install" in m for m, level in logged)
+
+
+def test_installed_package_without_the_subpath_is_reported_as_subpath_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # No ancestor has the full target either, so the installed package is the best evidence
+    # there is: the entry keeps naming its subdirectory and the log says the package is there
+    # while the remapped subdirectory is not — a different remedy from "not installed".
+    project = tmp_path / "smart-contracts"
+    (project / "node_modules" / "@oz" / "contracts").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("@oz/=node_modules/@oz/contracts/token/\n")
+    logged: list[tuple[str, str]] = []
+
+    resolution = resolve_node_modules_target(
+        "node_modules/@oz/contracts/token", base_dir=project, run_root=tmp_path
+    )
+    packages = build_packages_from_remapping_sources(
+        base_dir=project,
+        log_fn=lambda msg, level: logged.append((msg, level)),
+        run_root=tmp_path,
+    )
+
+    assert resolution.kind == "subpath_missing"
+    assert resolution.package_dir == str(project / "node_modules/@oz/contracts")
+    assert _path_of(packages, "@oz/") == str(project / "node_modules/@oz/contracts/token") + "/"
+    warnings = [m for m, level in logged if level == "WARNING"]
+    assert any("exists but the remapped subdirectory is missing" in m for m in warnings)
+
+
+def test_ancestor_walk_never_leaves_the_run_root_through_a_symlinked_base_dir(
+    tmp_path: Path,
+) -> None:
+    # A base_dir that reaches the run root through a symlink must not widen the walk: a package
+    # found above the run root is outside the tree certoraRun uploads.
+    run_root = tmp_path / "repo"
+    (run_root / "a" / "b" / "c").mkdir(parents=True)
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    base_dir = run_root / "link"
+    base_dir.symlink_to(run_root / "a" / "b" / "c", target_is_directory=True)
+
+    resolution = resolve_node_modules_target(
+        "node_modules/@vault/core", base_dir=base_dir, run_root=run_root
+    )
+
+    assert resolution.kind == "unresolved"
+    assert all(str(tmp_path / "node_modules") not in candidate for candidate in resolution.searched)
+
+
+def test_ancestor_walk_reaches_the_run_root_through_a_symlinked_base_dir(tmp_path: Path) -> None:
+    # The converse: a base_dir textually deeper than it resolves must still be walked all the
+    # way up to the run root, or a hoisted package there is silently missed.
+    run_root = tmp_path / "repo"
+    (run_root / "x").mkdir(parents=True)
+    (run_root / "p" / "q").mkdir(parents=True)
+    hoisted = run_root / "node_modules" / "@vault" / "core"
+    hoisted.mkdir(parents=True)
+    base_dir = run_root / "p" / "q" / "s"
+    base_dir.symlink_to(run_root / "x", target_is_directory=True)
+
+    resolution = resolve_node_modules_target(
+        "node_modules/@vault/core", base_dir=base_dir, run_root=run_root
+    )
+
+    assert resolution.kind == "hoisted"
+    assert resolution.path == str(hoisted)
+
+
+def test_package_root_of_a_target_takes_the_last_node_modules(tmp_path: Path) -> None:
+    # Scoped names span two segments, unscoped one, and a nested install is governed by the
+    # innermost node_modules — the classifier tests exactly this directory for existence.
+    assert node_modules_package_root("/r/node_modules/@oz/contracts/token") == \
+        "/r/node_modules/@oz/contracts"
+    assert node_modules_package_root("/r/node_modules/solady/src") == "/r/node_modules/solady"
+    assert node_modules_package_root("/r/node_modules/a/node_modules/@b/c/src") == \
+        "/r/node_modules/a/node_modules/@b/c"
+    assert node_modules_package_root("/r/node_modules/@oz/contracts") == \
+        "/r/node_modules/@oz/contracts"
+    assert node_modules_package_root("/r/lib/openzeppelin/contracts") is None
 
 
 def test_package_missing_everywhere_keeps_the_base_dir_target_and_warns(

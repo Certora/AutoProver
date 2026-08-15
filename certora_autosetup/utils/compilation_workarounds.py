@@ -129,9 +129,10 @@ class CompilationWorkaroundManager:
         self.build_config_dir = build_config_dir or project_root
         self.solc_convention = solc_convention
         self.verbose = verbose
-        # Classification of the most recent source-not-found output (see
-        # `_classify_unresolved_imports`). Read by callers to name the failure class in the
-        # terminal error text instead of only the phase that failed.
+        # Classification of the compilation output the loop returned on, empty when that output
+        # had no source-not-found error at all (see `_record_import_diagnostics`). Read by
+        # callers to name the failure class in the terminal error text instead of only the phase
+        # that failed, so it must describe *that* failure and never an earlier pass's.
         self.last_import_diagnostics: List[UnresolvedImport] = []
         self._remappings_workaround_applied = False
         # (consumer, lib) pairs already covered by a generated harness in this run.
@@ -516,6 +517,7 @@ class CompilationWorkaroundManager:
             output = result.stdout + result.stderr
 
             if result.returncode == 0:
+                self._record_import_diagnostics(output, compilation_config, log_summary=False)
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return True, output, updated_config_dict
 
@@ -531,6 +533,7 @@ class CompilationWorkaroundManager:
             # otherwise fire first and delay this).
             abstract_main_contract = self._detect_abstract_main_contract(output, compilation_config)
             if abstract_main_contract is not None:
+                self._record_import_diagnostics(output, compilation_config, log_summary=False)
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 raise AbstractMainContractError(
                     f"Main contract '{abstract_main_contract}' compiled to no bytecode: it is abstract "
@@ -589,18 +592,19 @@ class CompilationWorkaroundManager:
                     self.log(output, "WARNING")
                 else:
                     self.log("Compilation failed with no applicable workaround", "ERROR")
-                if self._has_source_not_found(output):
-                    self._classify_unresolved_imports(output, compilation_config)
+                self._record_import_diagnostics(output, compilation_config)
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return False, output, updated_config_dict
 
             # If the whole pass changed nothing, recompiling would reproduce the
             # identical failure — stop here instead of burning another certoraRun.
             if self._retry_state(cmd, compilation_config, updated_config_dict) == state_before:
-                # The classification recorded while detecting turns "nothing changed" into the
-                # reason nothing could change (e.g. the package is installed and the file inside
-                # it is the one missing).
-                diagnosis = describe_unresolved_imports(self.last_import_diagnostics)
+                # Classifying this pass's output turns "nothing changed" into the reason nothing
+                # could change (e.g. the package is installed and the file inside it is the one
+                # missing). It is logged as part of the ERROR below, not separately.
+                diagnosis = describe_unresolved_imports(
+                    self._record_import_diagnostics(output, compilation_config, log_summary=False)
+                )
                 self.log(
                     f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf "
                     f"and command are unchanged — retrying would fail identically, giving up"
@@ -623,8 +627,7 @@ class CompilationWorkaroundManager:
         self.log(f"Max retries ({max_retries}) exceeded for workarounds", "ERROR")
         self.log("Final compilation output:", "ERROR")
         self.log(output, "ERROR")
-        if self._has_source_not_found(output):
-            self._classify_unresolved_imports(output, compilation_config)
+        self._record_import_diagnostics(output, compilation_config)
         self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
         return False, output, updated_config_dict
 
@@ -936,11 +939,28 @@ class CompilationWorkaroundManager:
         self._classify_unresolved_imports(output, compilation_config)
         return "detected"
 
+    def _record_import_diagnostics(
+        self, output: str, compilation_config: Dict, log_summary: bool = True
+    ) -> List[UnresolvedImport]:
+        """Refresh ``last_import_diagnostics`` from ``output`` on the way out of the loop.
+
+        Only an output carrying a source-not-found error can be classified, so every other
+        outcome must *clear* the field rather than leave it alone: callers append it to their
+        terminal error text (``setup_prover.run_compilation_analysis``), and a verdict from an
+        earlier pass — whose import problem this pass may well have fixed — would blame a missing
+        dependency for a failure that has nothing to do with imports.
+        """
+        if not self._has_source_not_found(output):
+            self.last_import_diagnostics = []
+            return []
+        return self._classify_unresolved_imports(output, compilation_config, log_summary)
+
     def _classify_unresolved_imports(
-        self, output: str, compilation_config: Dict
+        self, output: str, compilation_config: Dict, log_summary: bool = True
     ) -> List[UnresolvedImport]:
         """Classify every source-not-found error in ``output`` against the conf's packages,
-        store the result on the manager, and log the summary.
+        store the result on the manager, and log the summary (unless the caller prints the
+        classification itself).
 
         Purely diagnostic: it changes no conf and gates no workaround, so a change in solc's
         output format degrades to today's (less precise) messages rather than aborting the
@@ -957,7 +977,7 @@ class CompilationWorkaroundManager:
             return []
 
         self.last_import_diagnostics = failures
-        if failures:
+        if failures and log_summary:
             self.log(f"Unresolved imports:\n{describe_unresolved_imports(failures)}", "WARNING")
         return failures
 

@@ -72,30 +72,63 @@ def _split_node_modules_target(target: str) -> Optional[Tuple[str, str]]:
     return "/".join(rest[:pkg_len]), "/".join(rest[pkg_len:])
 
 
+def node_modules_package_root(target: str) -> Optional[str]:
+    """The ``…/node_modules/<pkg>`` prefix of ``target``, or None when it names no package.
+
+    Unlike ``_split_node_modules_target`` this accepts a target with anything in front of
+    ``node_modules`` (an absolute path, a sub-project prefix), because its callers are handed a
+    finished packages entry rather than an authored remapping. The *last* ``node_modules``
+    segment wins: with a nested install (``a/node_modules/b/node_modules/c``) the innermost one
+    is what governs the tail. ``<pkg>`` takes two segments for a scoped package (``@scope/name``),
+    one otherwise; the result equals ``target`` when the target IS the package root, which is how
+    a caller tells "no subdirectory was remapped" apart from one that was.
+    """
+    segments = [s for s in target.replace(os.sep, "/").replace("\\", "/").split("/") if s != "."]
+    if _NODE_MODULES not in segments:
+        return None
+    index = len(segments) - 1 - segments[::-1].index(_NODE_MODULES)
+    rest = segments[index + 1:]
+    if not rest:
+        return None
+    pkg_len = 2 if rest[0].startswith("@") else 1
+    if len(rest) < pkg_len:
+        return None
+    return "/".join(segments[: index + 1 + pkg_len])
+
+
 def _ancestor_roots(base_dir: Path, run_root: Optional[Path]) -> List[str]:
     """Directories to search for a hoisted package: ``base_dir`` first, then each parent up to
     and including ``run_root``.
 
     The chain has a single element — today's behaviour exactly — when there is no run root or
-    when ``base_dir`` is not inside it. The number of steps comes from the relative depth of
-    ``base_dir`` under ``run_root``, which is what bounds the walk at the run root.
+    when ``base_dir`` is not inside it.
 
-    The candidates are composed textually with ``os.path.normpath`` rather than resolved:
+    Both the containment test and the walk are textual (``os.path.normpath`` /
+    ``os.path.dirname``, never ``Path.resolve``), and they must stay that way *together*:
     ``BuildSystemConfig._relativize_packages`` makes every emitted package path relative with a
     textual ``Path.relative_to(project_root)``, so a resolved path (``/tmp`` → ``/private/tmp``
     on macOS) would stop matching the run root and fall back to absolute paths. ``_rebase_context``
-    makes the same textual assumption with ``os.path.relpath``.
+    makes the same textual assumption with ``os.path.relpath``. Mixing the two — a step count
+    taken from resolved paths, candidates composed textually — makes the walk escape the run root
+    when ``base_dir`` reaches it through a symlink (a candidate above the run root names a
+    directory certoraRun does not upload) and stop short of it in the opposite case (a hoisted
+    package silently missed). Each candidate is therefore derived from the previous one and the
+    loop ends on the run root itself.
     """
     if run_root is None:
         return [str(base_dir)]
-    try:
-        depth = len(base_dir.resolve().relative_to(run_root.resolve()).parts)
-    except ValueError:
+    root = os.path.normpath(str(run_root))
+    candidate = os.path.normpath(str(base_dir))
+    if candidate != root and not candidate.startswith(root.rstrip(os.sep) + os.sep):
         return [str(base_dir)]
-    return [
-        os.path.normpath(os.path.join(str(base_dir), *([os.pardir] * step)))
-        for step in range(depth + 1)
-    ]
+    roots = [candidate]
+    while candidate != root:
+        parent = os.path.dirname(candidate)
+        if parent == candidate:
+            break
+        candidate = parent
+        roots.append(candidate)
+    return roots
 
 
 def resolve_node_modules_target(
