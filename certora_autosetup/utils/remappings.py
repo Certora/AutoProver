@@ -10,8 +10,9 @@ found``. This module is the single source of truth both call.
 import json
 import os
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 import tomllib
 
@@ -21,6 +22,139 @@ LogFn = Callable[[str, str], None]
 # Remapping entries whose key ends in one of these target a concrete source file, not a directory
 # prefix, so they must not receive a trailing-slash boundary (see `_merge_remapping_entry`).
 _SOURCE_SUFFIXES = (".sol", ".vy", ".yul")
+
+# The one directory name npm/yarn/pnpm hoist packages into, and the only target prefix the
+# ancestor walk applies to (see `resolve_node_modules_target`).
+_NODE_MODULES = "node_modules"
+
+
+@dataclass
+class PackageResolution:
+    """Where a remapping target actually lives, and how it was found.
+
+    ``path`` is the target to emit (always an absolute path built from ``base_dir`` or one of
+    its ancestors). ``kind`` says which candidate answered:
+    - ``local``     — resolved under ``base_dir``, i.e. the target as authored;
+    - ``hoisted``   — resolved in an ancestor's ``node_modules`` (a hoisted install);
+    - ``subpath_missing`` — a ``node_modules/<pkg>`` was found, but the remapped subdirectory
+      inside it is absent, so the target names a directory that does not exist;
+    - ``unresolved`` — no ancestor up to the run root has the package at all; ``path`` is the
+      base-dir target, unchanged.
+    ``package_dir`` is the ``node_modules/<pkg>`` directory the resolution came from (None when
+    nothing was found), and ``searched`` lists every candidate tested, for the log message.
+    """
+
+    path: str
+    kind: Literal["local", "hoisted", "subpath_missing", "unresolved"]
+    package_dir: Optional[str] = None
+    searched: List[str] = field(default_factory=list)
+
+
+def _split_node_modules_target(target: str) -> Optional[Tuple[str, str]]:
+    """Split a bare ``node_modules/<pkg>[/<subpath>]`` target into ``(pkg, subpath)``.
+
+    Returns None for anything else, which is what keeps the ancestor walk narrow. A target
+    that spells a location before ``node_modules`` (``packages/a/node_modules/x``,
+    ``../vendor/node_modules/x``) names a specific install the author chose, so it is left
+    alone; only a bare ``node_modules/...`` is the node-resolution idiom that hoisting applies
+    to. ``<pkg>`` takes two segments for a scoped package (``@scope/name``), one otherwise.
+    """
+    normalized = target.replace(os.sep, "/").replace("\\", "/")
+    segments = [s for s in normalized.split("/") if s and s != "."]
+    if not segments or segments[0] != _NODE_MODULES:
+        return None
+    rest = segments[1:]
+    if not rest:
+        return None
+    pkg_len = 2 if rest[0].startswith("@") else 1
+    if len(rest) < pkg_len:
+        return None
+    return "/".join(rest[:pkg_len]), "/".join(rest[pkg_len:])
+
+
+def _ancestor_roots(base_dir: Path, run_root: Optional[Path]) -> List[str]:
+    """Directories to search for a hoisted package: ``base_dir`` first, then each parent up to
+    and including ``run_root``.
+
+    The chain has a single element — today's behaviour exactly — when there is no run root or
+    when ``base_dir`` is not inside it. The number of steps comes from the relative depth of
+    ``base_dir`` under ``run_root``, which is what bounds the walk at the run root.
+
+    The candidates are composed textually with ``os.path.normpath`` rather than resolved:
+    ``BuildSystemConfig._relativize_packages`` makes every emitted package path relative with a
+    textual ``Path.relative_to(project_root)``, so a resolved path (``/tmp`` → ``/private/tmp``
+    on macOS) would stop matching the run root and fall back to absolute paths. ``_rebase_context``
+    makes the same textual assumption with ``os.path.relpath``.
+    """
+    if run_root is None:
+        return [str(base_dir)]
+    try:
+        depth = len(base_dir.resolve().relative_to(run_root.resolve()).parts)
+    except ValueError:
+        return [str(base_dir)]
+    return [
+        os.path.normpath(os.path.join(str(base_dir), *([os.pardir] * step)))
+        for step in range(depth + 1)
+    ]
+
+
+def resolve_node_modules_target(
+    target: str, base_dir: Path, run_root: Optional[Path]
+) -> PackageResolution:
+    """Resolve a relative remapping target, walking ancestor ``node_modules`` when needed.
+
+    npm/yarn hoist a dependency to the highest ``node_modules`` that can satisfy every consumer,
+    so a sub-project's ``node_modules/<pkg>`` frequently does not exist while the repo root's
+    does. solc has no such resolver: the packages list must name the directory. This reproduces
+    node's own order — nearest ``node_modules`` first, then outwards — bounded at the run root so
+    the emitted path stays inside the tree certoraRun uploads.
+
+    Only bare ``node_modules/...`` targets are walked. forge (``lib/``) and soldeer
+    (``dependencies/``) do not hoist, and a sibling project's ``lib/<name>`` is routinely a
+    different pin, so walking those would silently bind the wrong version.
+
+    A target that resolves under ``base_dir`` is always returned unchanged, so the walk can only
+    change an entry whose current target does not exist on disk. When the nearest package lacks
+    the remapped subpath, a farther ancestor that has the whole target is preferred — a
+    deliberate deviation from node, since only the full target is usable by solc.
+    """
+    split = _split_node_modules_target(target)
+    if split is None:
+        return PackageResolution(path=str(base_dir / target), kind="local")
+
+    package, subpath = split
+    searched: List[str] = []
+    nearest_package_dir: Optional[str] = None
+
+    for index, root in enumerate(_ancestor_roots(base_dir, run_root)):
+        package_dir = os.path.join(root, _NODE_MODULES, package)
+        full_target = os.path.join(package_dir, *subpath.split("/")) if subpath else package_dir
+        searched.append(full_target)
+        if not Path(package_dir).is_dir():
+            continue
+        if nearest_package_dir is None:
+            nearest_package_dir = package_dir
+        # `.exists()` rather than `.is_dir()`: a remapping may target a single source file.
+        if Path(full_target).exists():
+            return PackageResolution(
+                path=full_target,
+                kind="local" if index == 0 else "hoisted",
+                package_dir=package_dir,
+                searched=searched,
+            )
+
+    if nearest_package_dir is not None:
+        full_target = (
+            os.path.join(nearest_package_dir, *subpath.split("/")) if subpath else nearest_package_dir
+        )
+        return PackageResolution(
+            path=full_target,
+            kind="subpath_missing",
+            package_dir=nearest_package_dir,
+            searched=searched,
+        )
+
+    return PackageResolution(path=str(base_dir / target), kind="unresolved", searched=searched)
 
 
 def build_packages_from_remapping_sources(
@@ -37,10 +171,14 @@ def build_packages_from_remapping_sources(
     ``FOUNDRY_PROFILE`` and selects the ``[profile.<profile>]`` remappings read from foundry.toml
     when forge is unavailable, so a non-default profile's remappings are honored.
 
-    ``run_root`` is the directory certoraRun is invoked from (the autosetup run root). It is what
-    the *context* half of a context-scoped remapping must be expressed against — see
-    ``_rebase_context``. It equals ``base_dir`` for a project whose build config sits at the run
-    root, in which case every context comes out unchanged; pass it whenever the caller knows it.
+    ``run_root`` is the directory certoraRun is invoked from (the autosetup run root). It bounds
+    both halves of a remapping. The *context* half must be expressed against it, because solc
+    matches contexts against source unit names — see ``_rebase_context``. The *target* half of a
+    bare ``node_modules/...`` entry is resolved against it too: the package is looked for in
+    ``base_dir/node_modules`` first and then in each ancestor's up to the run root, which is how
+    a hoisted install is found (see ``resolve_node_modules_target``). A target that resolves
+    under ``base_dir`` resolves to exactly the same path either way, so with ``run_root`` equal
+    to ``base_dir`` or absent the result is unchanged; pass it whenever the caller knows it.
 
     Priority on key conflict (highest wins, with a warning on path mismatch):
     1. ``forge remappings`` — recursively walks nested foundry.toml files (e.g. lib/*/foundry.toml)
@@ -261,9 +399,32 @@ def _merge_remapping_entry(
         context, prefix = key.split(":", 1)
         key = f"{_rebase_context(context, base_dir, run_root, log_fn)}:{prefix}"
 
-    # Resolve a relative target against base_dir first (Path() drops any trailing slash).
+    # Resolve a relative target against base_dir first (Path() drops any trailing slash), letting
+    # the ancestor walk find a hoisted node_modules package (see `resolve_node_modules_target`).
     if not Path(path).is_absolute():
-        path = str(base_dir / path)
+        resolution = resolve_node_modules_target(path, base_dir, run_root)
+        if resolution.kind == "hoisted":
+            log_fn(
+                f"Package '{key}' is not installed under {base_dir}; resolving '{path}' to the "
+                f"hoisted install at {resolution.path}",
+                "INFO",
+            )
+        elif resolution.kind == "subpath_missing":
+            log_fn(
+                f"Package '{key}': {resolution.package_dir} exists but the remapped subdirectory "
+                f"is missing (looked for {resolution.path}) — the remapping target may be wrong "
+                f"or the package is not built",
+                "WARNING",
+            )
+        elif resolution.kind == "unresolved":
+            log_fn(
+                f"Package '{key}' target {resolution.path} does not exist "
+                f"(searched: {', '.join(resolution.searched)}) — the dependency is not installed "
+                f"under the project or any ancestor up to the run root; keeping the entry so solc "
+                f"reports the exact missing source",
+                "WARNING",
+            )
+        path = resolution.path
 
     # Canonicalize a DIRECTORY remapping to a trailing-slash form so the key's prefix boundary is
     # preserved (see docstring) and key/path agree on that boundary. A remapping that targets a

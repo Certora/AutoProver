@@ -18,6 +18,13 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION, SolcConvention
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
+from certora_autosetup.utils.import_diagnostics import (
+    UnresolvedImport,
+    classify_unresolved_import,
+    describe_unresolved_imports,
+    parse_unresolved_imports,
+    path_from_source_location_line,
+)
 from certora_autosetup.utils.library_harness import (
     LibrarySpec,
     build_consumer_harness_source,
@@ -61,19 +68,6 @@ def _path_from_compiling_line(line: str) -> Optional[str]:
     if not (line.startswith(prefix) and line.endswith(suffix)):
         return None
     return line.removeprefix(prefix).removesuffix(suffix)
-
-
-# A solc source-location line, e.g. ``   --> contracts/Foo.sol:120:9:``. It names the
-# offending file in a whole-project (non-autofinder) solc error, where there is no
-# ``Compiling <path>...`` progress line to recover it from.
-_SOURCE_LOCATION_RE = re.compile(r"^\s*-->\s+(?P<path>.+?):\d+:\d+:?\s*$")
-
-
-def _path_from_source_location_line(line: str) -> Optional[str]:
-    """Return ``<path>`` from a solc ``  --> <path>:<line>:<col>:`` source-location
-    line, or None if ``line`` isn't one."""
-    match = _SOURCE_LOCATION_RE.match(line)
-    return match.group("path") if match else None
 
 
 def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
@@ -135,6 +129,10 @@ class CompilationWorkaroundManager:
         self.build_config_dir = build_config_dir or project_root
         self.solc_convention = solc_convention
         self.verbose = verbose
+        # Classification of the most recent source-not-found output (see
+        # `_classify_unresolved_imports`). Read by callers to name the failure class in the
+        # terminal error text instead of only the phase that failed.
+        self.last_import_diagnostics: List[UnresolvedImport] = []
         self._remappings_workaround_applied = False
         # (consumer, lib) pairs already covered by a generated harness in this run.
         # Used as a loop guard — if the prover still reports the same pair after we
@@ -362,12 +360,7 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="source_not_found_packages",
-                detect_fn=lambda output: (
-                    "detected"
-                    if self._has_source_not_found(output)
-                    and not self._remappings_workaround_applied
-                    else None
-                ),
+                detect_fn=lambda output: self._detect_source_not_found(output, compilation_config),
                 apply_fn=self._apply_source_not_found_packages_workaround,
                 enabled=True,
             ),
@@ -596,15 +589,22 @@ class CompilationWorkaroundManager:
                     self.log(output, "WARNING")
                 else:
                     self.log("Compilation failed with no applicable workaround", "ERROR")
+                if self._has_source_not_found(output):
+                    self._classify_unresolved_imports(output, compilation_config)
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return False, output, updated_config_dict
 
             # If the whole pass changed nothing, recompiling would reproduce the
             # identical failure — stop here instead of burning another certoraRun.
             if self._retry_state(cmd, compilation_config, updated_config_dict) == state_before:
+                # The classification recorded while detecting turns "nothing changed" into the
+                # reason nothing could change (e.g. the package is installed and the file inside
+                # it is the one missing).
+                diagnosis = describe_unresolved_imports(self.last_import_diagnostics)
                 self.log(
                     f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf "
-                    f"and command are unchanged — retrying would fail identically, giving up",
+                    f"and command are unchanged — retrying would fail identically, giving up"
+                    + (f"\n{diagnosis}" if diagnosis else ""),
                     "ERROR",
                 )
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
@@ -623,6 +623,8 @@ class CompilationWorkaroundManager:
         self.log(f"Max retries ({max_retries}) exceeded for workarounds", "ERROR")
         self.log("Final compilation output:", "ERROR")
         self.log(output, "ERROR")
+        if self._has_source_not_found(output):
+            self._classify_unresolved_imports(output, compilation_config)
         self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
         return False, output, updated_config_dict
 
@@ -702,7 +704,7 @@ class CompilationWorkaroundManager:
             if not line.startswith("CompilerError: Stack too deep"):
                 continue
             for j in range(i + 1, min(i + 6, len(lines))):
-                src_path = _path_from_source_location_line(lines[j])
+                src_path = path_from_source_location_line(lines[j])
                 if src_path is None:
                     continue
                 contract_name = self._get_contract_name_from_path(src_path, contracts)
@@ -921,6 +923,43 @@ class CompilationWorkaroundManager:
                         return contract_name
                 return None
         return None
+
+    def _detect_source_not_found(self, output: str, compilation_config: Dict) -> Optional[str]:
+        """Fire the packages rebuild on a source-not-found output, classifying it on the way.
+
+        The classification is recorded and logged, not used as a gate: the loop's no-progress
+        check already stops cleanly when a rebuild produces the identical packages list, and
+        gating here would mean a misread output silently skips a workaround that works.
+        """
+        if not self._has_source_not_found(output) or self._remappings_workaround_applied:
+            return None
+        self._classify_unresolved_imports(output, compilation_config)
+        return "detected"
+
+    def _classify_unresolved_imports(
+        self, output: str, compilation_config: Dict
+    ) -> List[UnresolvedImport]:
+        """Classify every source-not-found error in ``output`` against the conf's packages,
+        store the result on the manager, and log the summary.
+
+        Purely diagnostic: it changes no conf and gates no workaround, so a change in solc's
+        output format degrades to today's (less precise) messages rather than aborting the
+        workaround loop.
+        """
+        try:
+            packages = compilation_config.get("packages", []) or []
+            failures = [
+                classify_unresolved_import(source_unit, packages, self.project_root, importer)
+                for source_unit, importer in parse_unresolved_imports(output)
+            ]
+        except Exception as e:
+            self.log(f"Could not classify unresolved imports: {e}", "WARNING")
+            return []
+
+        self.last_import_diagnostics = failures
+        if failures:
+            self.log(f"Unresolved imports:\n{describe_unresolved_imports(failures)}", "WARNING")
+        return failures
 
     def _has_remappings_conflict(self, output: str) -> bool:
         return "package.json and remappings.txt include duplicated keys in" in output

@@ -76,15 +76,18 @@ class HardhatManager(BuildSystemManager):
     Parallel to FoundryManager but adapted for Hardhat's JavaScript/TypeScript ecosystem.
     """
 
-    def __init__(self, project_root: Path, scope):
+    def __init__(self, project_root: Path, scope, run_root: Optional[Path] = None):
         """
         Initialize Hardhat manager.
 
         Args:
-            project_root: Root directory of the project
+            project_root: Directory the hardhat config is anchored on
             scope: Centralized scope for consistent filtering
+            run_root: Directory certoraRun is invoked from (defaults to project_root).
+                Accepted for interface parity — autosetup constructs every manager class
+                through the same call.
         """
-        super().__init__(project_root, scope, "HardhatManager")
+        super().__init__(project_root, scope, "HardhatManager", run_root=run_root)
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""

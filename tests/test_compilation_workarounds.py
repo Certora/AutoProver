@@ -904,3 +904,132 @@ def test_unseeded_cancun_map_not_promoted_to_scalar(manager, monkeypatch, tmp_pa
     assert success is True
     assert compilation_config["solc_evm_version_map"] == {"Foo": "cancun"}
     assert "solc_evm_version" not in compilation_config
+
+
+# =============================================================================
+# Unresolved-import classification around the source-not-found workaround
+# =============================================================================
+#
+# The classification never gates the workaround: it explains what the rebuild is reacting to,
+# and turns the loop's generic "conf and command are unchanged" giving-up message into one that
+# names why nothing could change.
+
+
+class _SequencedRunWithoutForge(_SequencedRun):
+    """Queued compilation outputs, plus `forge remappings` failing the way it does in CI.
+
+    The packages rebuild shells out to forge through the same subprocess module the loop's fake
+    is installed on, so one fake has to answer both kinds of call.
+    """
+
+    def __call__(self, cmd, **kwargs):
+        if cmd and cmd[0] == "forge":
+            raise FileNotFoundError("forge")
+        return super().__call__(cmd, **kwargs)
+
+
+def _run_loop_with_packages(manager, monkeypatch, tmp_path, outputs, contracts, packages):
+    """Like _run_loop, but the conf already carries a packages list (in both dicts), which is
+    what a real run looks like once the build system contributed one."""
+    fake_run = _SequencedRunWithoutForge(outputs)
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run
+    )
+    compilation_config = {
+        "files": [f"{c.source_file}:{c.contract_name}" for c in contracts],
+        "packages": list(packages),
+    }
+    success, _, updated = manager.run_compilation_with_workarounds(
+        cmd=["certoraRun", "test.conf"],
+        config_file=tmp_path / "test.conf",
+        compilation_config=compilation_config,
+        contracts=contracts,
+        updated_config_dict={"packages": list(packages)},
+    )
+    return success, updated, fake_run
+
+
+def _source_not_found(source_unit: str) -> str:
+    return f'ParserError: Source "{source_unit}" not found: File not found.\n'
+
+
+def test_file_missing_in_installed_package_is_named_when_giving_up(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The package IS installed, so the rebuilt list is identical and the loop stops — the
+    # message must say that rebuilding cannot help rather than only "nothing changed".
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (tmp_path / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, _, fake_run = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{tmp_path / 'node_modules/@vault/core/IVault.sol'}")] * 10,
+        contracts,
+        packages,
+    )
+
+    assert success is False
+    # One certoraRun: the rebuild reproduces the identical list, so there is nothing to retry.
+    assert fake_run.calls == 1
+    assert [f.kind.value for f in manager.last_import_diagnostics] == ["file_missing_in_package"]
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert any("rebuilding the packages list cannot help" in msg for msg in errors)
+
+
+def test_missing_package_target_is_retried_once_the_rebuild_finds_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The dependency is hoisted to the run root, so the rebuild produces a different list and
+    # the loop has something new to try.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, updated, fake_run = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{project / 'node_modules/@vault/core/IVault.sol'}")],
+        contracts,
+        packages,
+    )
+
+    assert [f.kind.value for f in manager.last_import_diagnostics] == ["package_target_missing"]
+    assert success is True
+    assert fake_run.calls == 2
+    assert updated["packages"] == [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+
+
+def test_unparseable_source_not_found_leaves_the_loop_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A garbled diagnostic still trips the detector; classification simply finds nothing and the
+    # workaround runs exactly as it did before.
+    garbled = 'ParserError: Source " not found: File not found.\n'
+    manager = CompilationWorkaroundManager(project_root=tmp_path)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, _, fake_run = _run_loop_with_packages(
+        manager, monkeypatch, tmp_path, [garbled] * 10, contracts, []
+    )
+
+    assert success is False
+    assert manager.last_import_diagnostics == []
+    # Empty project, so the rebuild reproduces the empty list and the loop gives up after the
+    # one certoraRun — with no diagnosis appended, exactly as before the classifier existed.
+    assert fake_run.calls == 1
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert errors and errors[-1].endswith("giving up")
