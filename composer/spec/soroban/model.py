@@ -83,13 +83,24 @@ class SorobanFunction(BaseModel):
         description="Required function behavior."
     )
 
+    def to_signature(self) -> str:
+        """This function rendered as a Rust-like signature, e.g.
+        ``transfer(from: Address, to: Address, amount: i128) -> Result<(), Error>``.
+
+        Note: ``env`` is already excluded from ``args`` by the analysis prompt,
+        so this looks like what the caller sees."""
+        returns = f" -> {self.returns}" if self.returns else ""
+        return f"{self.name}({', '.join(self.args)}){returns}"
+
 
 class InterComponentInteraction(BaseModel):
     contract: ContractName = Field(
         description="Name of the contract used."
     )
-    component: ComponentName | None = Field(
-        description="Component used, if known."
+    # ``_soroban_validate`` rejects a name that does not resolve.
+    component: ComponentName = Field(
+        description="The component of that contract this interaction is with. Must match the "
+        "`name` of a component declared on it."
     )
     description: str = Field(description="How this component is used.")
 

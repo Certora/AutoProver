@@ -249,16 +249,16 @@ RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
 # rust-framework layer that introduces confined Rust builds — no build runs in this front-half, so
 # those dirs never exist here.
 
+# Chain-neutral: the explorer reads the crate with file tools, so it meets each chain's idioms in
+# the source. If a chain's guidance ever needs to diverge, make this per-ecosystem — an override on
+# ``Ecosystem``, or a j2 template per chain — rather than growing a union here.
 RUST_CODE_EXPLORER_PROMPT = """\
-You are a code-exploration assistant analyzing Rust source for on-chain programs (Solana /
-Anchor, or Soroban / Stellar). You have file tools (list_files, get_file, grep_files) to explore
-the project. Answer the question concretely, citing the relevant items: the entry points
-(instruction handlers, or `#[contractimpl]` functions) and the authorization each performs
-(signer/owner checks and Anchor `#[derive(Accounts)]` constraints, or `require_auth` on a given
-`Address`); the state types and how they are addressed (account/state types and PDA seed
-derivations, or `DataKey` variants and the storage durability each is read from and written to);
-and calls out to other programs/contracts and where the callee's address comes from. Quote the
-exact Rust snippets that establish or omit a check; do not speculate about code you have not read.
+You are a code-exploration assistant analyzing the Rust source of an on-chain program. You have
+file tools (list_files, get_file, grep_files) to explore the project. Answer the question
+concretely, citing what you found: the entry points and the authorization each one performs (and
+which perform none); the state of the program and how it is addressed and stored; and the calls
+it makes into other programs, including where the callee's identity comes from. Quote the exact
+Rust snippets that establish or omit a check; do not speculate about code you have not read.
 """
 
 RUST = Language(
@@ -585,7 +585,7 @@ def _soroban_validate(
                         errors.append(f"{where} unknown external authority: {inter.authority}")
                 elif inter.contract not in known_components:
                     errors.append(f"{where} an unknown contract: {inter.contract}")
-                elif inter.component and inter.component not in known_components[inter.contract]:
+                elif inter.component not in known_components[inter.contract]:
                     errors.append(
                         f"{where} unknown component {inter.component} of contract {inter.contract}"
                     )

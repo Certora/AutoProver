@@ -21,6 +21,14 @@ Follow these steps exactly:
 Formulate likely, precise, concise properties checkable against storage and call
 behavior.
 
+This runs as a multi-round loop, and this is one round of it. If a `<prior_properties>` block
+appears above, it is a record of what earlier rounds already found and already
+ruled out: in round your goal is to surface only what they *missed*. Read their reasoning before
+you start and do not re-propose a property prior rounds already listed, and do not reframe one of theirs as a
+different category (an attack vector restated as an invariant is the same property). If the
+earlier rounds have already covered this component's meaningful surface, returning an empty list
+with reasoning that says so is the correct outcome.
+
 Security properties fall into three categories:
 
 1. **Invariants** — storage facts that should hold after any valid call sequence.
@@ -50,21 +58,30 @@ Security properties fall into three categories:
    the caller's own positions, so one user can overwrite another's."
    Bad: "The contract could be exploited somehow" (overly broad).
 
-Consider these vulnerability patterns:
+As a starting point, consider the following common failure modes. They are a prompt for your own
+reasoning, not a checklist to work through and not an exhaustive account of what can go wrong with
+this contract. The properties that matter most are often the ones specific to what *this*
+application is trying to do. Make sure to look outside of these patterns, and beyond the three categories
+defined above.
 
 {% include "rust/_vulnerability_patterns.j2" %}
 
 {% include "soroban/_vulnerability_patterns.j2" %}
 
-Do not write specs. Keep only properties the downstream verifier can reasonably
-check — its capabilities are described in your system prompt's backend guidance.
+Write each property as **natural-language prose**: a sentence or two stating what must hold, in
+terms of this contract's functions, addresses, and storage keys. Do not write CVLR or CVLR-Soroban, any other Rust,
+or any other formal syntax. Formalization is a downstream agent's job, and a property
+expressed as code cannot be reviewed by the human who reads your output. Keep only properties the
+downstream verifier can reasonably check; its capabilities are described in your system prompt's
+backend guidance.
 
 ## Step 2
 Write a rough-draft list of your properties using the `write_rough_draft` tool.
 
 ## Step 3
-Review the draft. Keep only properties with a clear bad outcome, non-trivial
-content, and likely verifier support.
+Review the draft. Keep only properties with a clear bad outcome, non-trivial content, and likely
+verifier support. Where prior rounds exist, only keep those that are genuinely not already covered. Drop
+anything you cannot defend in your `reasoning`; an empty result is better than a padded one.
 
 ## Step 4
 Output the results using the result tool.
@@ -83,7 +100,10 @@ Output the results using the result tool.
      Attack vectors need a credible reason, not proof.
   </reminder>
   <reminder>
-     Do not propose classic reentrancy properties. Check stale state across
-     calls, attacker-controlled target contracts, and auth scope instead.
+     Do not propose classic reentrancy properties. Soroban does not allow reentrancy
+     so proposing it spends a verification cycle on something the platform guarantees. The
+     cross-contract risks that DO apply here are state read before a call and relied on after it,
+     a callee address an attacker can choose, and an authorization tree broader than the operation
+     it was signed for.
   </reminder>
 </guidance>

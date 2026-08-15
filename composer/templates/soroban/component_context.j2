@@ -38,9 +38,7 @@ Requirements:
 * {{ req }}
 {% endfor %}
 {% endif %}
-{% if fn.args %}
-Arguments: {% for a in fn.args %}`{{ a }}`{% if not loop.last %}, {% endif %}{% endfor %}{% if fn.returns %} → `{{ fn.returns }}`{% endif %}.
-{% endif %}
+Signature: `{{ fn.to_signature() }}`
 Authorization:
 {% if fn.auth %}
 {% for au in fn.auth %}
@@ -75,8 +73,9 @@ Failure conditions:
 {% if context.sibling_components %}
 ## The rest of the contract
 
-Other components of {{ context.contract.name }}. They are context only, but may
-share storage or execute before/after this component:
+Other components of {{ context.contract.name }}. These are provided for context only. Do not
+write properties about them. They matter because they may share storage with this component, or
+execute before, after, or between its calls:
 {% for other in context.sibling_components %}
 * **{{ other.name }}**: {{ other.description }}
 {% endfor %}
@@ -101,7 +100,7 @@ Component links:
 {% if other.authority is defined %}
 - External actor "{{ other.authority }}": {{ other.description }}
 {% else %}
-- {{ other.component or "Unspecified" }} of {% if other.contract == context.contract.name %}this contract{% else %}{{ other.contract }}{% endif %}: {{ other.description }}
+- The `{{ other.component }}` component of {% if other.contract == context.contract.name %}this contract{% else %}the {{ other.contract }} contract{% endif %}: {{ other.description }}
 {% endif %}
 {% endfor %}
 {% endif %}

@@ -1,6 +1,7 @@
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from composer.pipeline.ecosystem import SOROBAN, _soroban_validate
 from composer.spec.soroban.model import (
@@ -122,6 +123,22 @@ def test_absent_auth_is_recorded_as_empty_not_missing():
     assert [a.address for a in by_name["deposit"].auth] == ["from"]
 
 
+def test_to_signature_renders_args_and_return():
+    """The join/`->` assembly lives on the model, not in `component_context.j2`, so it is
+    testable without rendering a template."""
+    def typed(raw):
+        fns = _contract(raw)["functions"]
+        fns[1]["args"] = ["from: Address", "to: Address", "amount: i128"]
+        fns[1]["returns"] = "Result<(), Error>"
+
+    by_name = _app(typed).contracts[0].functions_by_name
+    assert (
+        by_name["deposit"].to_signature()
+        == "deposit(from: Address, to: Address, amount: i128) -> Result<(), Error>"
+    )
+    assert by_name["initialize"].to_signature() == "initialize()"
+
+
 def test_interaction_union_discriminates_by_shape():
     contract = _app().contracts[0]
     assert isinstance(contract.components[0].interactions[0], AuthorityInteraction)
@@ -209,7 +226,7 @@ def test_a_contract_with_no_functions_needs_no_components():
         ({"authority": "Reflector", "description": "reads a price"},
          "unknown external authority: Reflector"),
         (
-            {"contract": "Pool", "component": None, "description": "x"},
+            {"contract": "Pool", "component": "Swaps", "description": "x"},
             "an unknown contract: Pool",
         ),
         (
@@ -224,6 +241,21 @@ def test_unresolvable_interactions_rejected(interaction, expected):
 
     problem = _soroban_validate(_app(point_nowhere), VAULT_ID)
     assert problem is not None and expected in problem
+
+
+def test_interaction_component_is_required():
+    """Unlike EVM's ``ComponentInteraction`` and Solana's peer, which allow a null component:
+    analysis authors the callee's components in the same response as the interaction, so there is
+    no point at which they are unknown.
+
+    Asserted against the model directly rather than through a whole application: an application
+    whose contract fails to parse does not raise, because ``SorobanContract | SorobanAuthority``
+    falls back to the authority arm (it needs only ``name`` + ``description``, which a contract
+    dict also has)."""
+    ok = {"contract": "Vault", "component": "Deposits", "description": "x"}
+    assert InterComponentInteraction.model_validate(ok).component == "Deposits"
+    with pytest.raises(ValidationError):
+        InterComponentInteraction.model_validate({**ok, "component": None})
 
 
 def test_unknown_storage_key_reference_rejected():
