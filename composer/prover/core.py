@@ -45,7 +45,7 @@ from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, cloud_results
-from composer.prover.ptypes import RuleResult
+from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import read_and_format_run_result
 from composer.templates.loader import load_jinja_template
 from composer.prover.prover_protocol import ProverResult
@@ -118,9 +118,19 @@ class ProverReport:
 
     ``link`` is the prover run's URL (cloud) or local results directory.
     """
-    rule_status: dict[str, bool]
+    raw_rule_status: dict[RulePath, StatusCodes]
+
     result_str: str
     link: str
+
+    @property
+    def rule_status(self) -> dict[str, bool]:
+        to_ret = {}
+        for (k, v) in self.raw_rule_status.items():
+            if k.rule in to_ret and not to_ret[k.rule]:
+                continue
+            to_ret[k.rule] = v == "VERIFIED"
+        return to_ret
 
     @property
     def all_verified(self) -> bool:
@@ -299,8 +309,25 @@ class TrivialFanoutCexHandler(CexHandler):
                 await callbacks.on_analysis_complete(instance, analysis)
             return (instance, analysis)
 
-        jobs = [_one(r) for r in all_results if r.status == "VIOLATED"]
-        results = await asyncio.gather(*jobs)
+        violated = [r for r in all_results if r.status == "VIOLATED"]
+        # One counterexample's analysis failing is not a reason to lose the
+        # prover run that produced it: the rule keeps its status and only its
+        # explanation goes missing, so the report renders without it.
+        settled = await asyncio.gather(
+            *(_one(r) for r in violated), return_exceptions=True
+        )
+        results: list[tuple[RuleResult, str | None]] = []
+        for rule, outcome in zip(violated, settled):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, BaseException):
+                _logger.warning(
+                    "CEX analysis failed for rule %s, continuing without its explanation: %r",
+                    rule.name,
+                    outcome,
+                )
+                continue
+            results.append(outcome)
 
         to_cex_explanation = {
             r.name: stat for (r, stat) in results if stat is not None
@@ -321,8 +348,10 @@ class TrivialFanoutCexHandler(CexHandler):
             results=results_for_template,
         )
 
+        # Counted over every violated rule, not just the analyzed ones, so a
+        # failed analysis cannot move the summarization threshold.
         failed_count = sum(
-            1 for instance, _ in results
+            1 for instance in violated
             if instance.status != "VERIFIED"
         )
         if failed_count > self.summarization_threshold:
@@ -528,8 +557,12 @@ async def run_prover(
             continue
         prover_report[rule_name] = i.status == "VERIFIED"
 
+    raw_rule_results : dict[RulePath, StatusCodes] = {
+        k.path: k.status for k in parsed.values()
+    }
+
     return ProverReport(
-        rule_status=prover_report,
+        raw_rule_status=raw_rule_results,
         result_str=result_str,
         link=run_result["link"],
     )

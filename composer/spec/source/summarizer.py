@@ -24,12 +24,14 @@ from graphcore.tools.schemas import WithImplementation, WithInjectedState, WithI
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.cvl.tools import get_cvl, put_cvl, put_cvl_raw, edit_cvl
 from composer.spec.gen_types import CVLResource, SUMMARIES_DIR, under_project
-from composer.spec.context import WorkflowContext, SourceCode, CacheKey
+from composer.spec.context import WorkflowContext, SourceCode
+from composer.spec.key_family import KeyFamily
 from composer.spec.util import temp_certora_file, string_hash, ensure_dir
 from composer.spec.service_host import ServiceHost
 from composer.spec.source.harness import ContractSetup, ExternalInterface, HarnessDef
 from composer.spec.system_model import HarnessedApplication, ExternalActor
 from composer.spec.gen_types import TypedTemplate
+from composer.kb.kb_context import with_cvl_context
 from composer.ui.tool_display import tool_display
 
 
@@ -245,11 +247,11 @@ async def _setup_summaries_impl(
     })
 
     graph = bind_standard(
-        env.builder_lite(), ST, "The commentary on the generated specification", _validator
+        env.builder_heavy(), ST, "The commentary on the generated specification", _validator
     ).with_sys_prompt_template(
         "source_cvl_system_prompt.j2"
-    ).inject(
-        lambda g: bound.render_to(g.with_initial_prompt_template)
+    ).with_initial_prompt(
+        with_cvl_context(bound.render_to)
     ).with_tools(
         [ctx.get_memory_tool(), *env.all_tools]
     ).with_tools(
@@ -286,9 +288,10 @@ class _SummaryCache(BaseModel):
     content: str
 
 
-def _summary_key(d: ContractSetup) -> CacheKey[None, _SummaryCache]:
-    cacher = string_hash(d.model_dump_json())[:16]
-    return CacheKey("summary-" + cacher)
+def _summary_key(d: ContractSetup) -> str:
+    return "summary-" + string_hash(d.model_dump_json())[:16]
+
+SUMMARY_KEY = KeyFamily(type(None), _SummaryCache, _summary_key)
 
 # ---------------------------------------------------------------------------
 # Agent
@@ -318,7 +321,7 @@ async def setup_summaries(
         CVLResource pointing to the generated ``custom_summaries.spec`` file.
     """
 
-    summary_context = ctx.child(_summary_key(config))
+    summary_context = ctx.child(SUMMARY_KEY(config))
     custom_summaries_path = SUMMARIES_DIR / "custom_summaries.spec"  # project-root-relative
     result_path = under_project(source.project_root, custom_summaries_path)
     ensure_dir(result_path.parent)

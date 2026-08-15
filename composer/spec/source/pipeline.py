@@ -27,18 +27,17 @@ from typing import override
 from langchain_core.tools import BaseTool
 
 from composer.io.multi_job import TaskInfo
-from composer.spec.context import WorkflowContext, CacheKey, CVLGeneration
+from composer.spec.context import WorkflowContext, CVLGeneration
 from composer.spec.types import PropertyFormulation
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
 from composer.spec.system_model import (
     ContractComponentInstance, ContractInstance, SourceApplication, HarnessedApplication,
-    SourceExplicitContract, HarnessedExplicitContract, SourceExternalActor,
-    HarnessDefinition, SolidityIdentifier,
 )
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.prop_inference import CERTORA_BACKEND_GUIDANCE
 from composer.spec.source.harness import (
     run_harness_creation, run_autosetup_phase, ContractSetup, SystemDescriptionHarnessed,
+    lift_harnessed
 )
 from composer.spec.source.summarizer import setup_summaries
 from composer.spec.source.struct_invariant import get_invariant_formulation
@@ -48,7 +47,7 @@ from composer.spec.source.author import batch_cvl_generation, SourceEditing
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import (
-    EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
+    Formalized, EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
 )
 from composer.spec.source.report.schema import RuleName
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -64,45 +63,15 @@ from composer.ui.autoprove_app import AutoProvePhase
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun, Delivered, GaveUp,
     CorePhases, SystemAnalysisSpec, ComponentOutcome,
-    COMMON_SYSTEM_CACHE_KEY
+    Curtailed
 )
+from composer.pipeline.keys import COMMON_SYSTEM_CACHE_KEY
 from composer.pipeline.ecosystem import main_instance
+from composer.spec.source.keys import AP_PROPERTIES_KEY_NAME, INV_CVL_KEY
 
-
-INV_CVL_KEY = CacheKey[None, GeneratedCVL]("invariant-cvl")
-
-
-def _lift_harnessed(
-    s: SourceApplication, sys_desc: SystemDescriptionHarnessed,
-) -> HarnessedApplication:
-    """Re-key harness definitions by harnessed contract and fold them into a
-    ``HarnessedApplication`` — each ``SourceExplicitContract`` becomes a
-    ``HarnessedExplicitContract`` carrying the harnesses generated for it."""
-    contract_to_harness: dict[SolidityIdentifier, list[HarnessDefinition]] = {}
-    for c in sys_desc.transitive_closure:
-        if not c.harness_definition:
-            continue
-        contract_to_harness.setdefault(c.harness_definition.harness_of, []).append(
-            HarnessDefinition(name=c.solidity_identifier, path=c.path)
-        )
-
-    comp: list[SourceExternalActor | HarnessedExplicitContract] = []
-    for c in s.components:
-        if not isinstance(c, SourceExplicitContract):
-            comp.append(c)
-            continue
-        comp.append(HarnessedExplicitContract(
-            sort=c.sort,
-            name=c.name,
-            solidity_identifier=c.solidity_identifier,
-            components=c.components,
-            description=c.description,
-            path=c.path,
-            harnesses=contract_to_harness.get(c.solidity_identifier, []),
-        ))
-    return HarnessedApplication(
-        application_type=s.application_type, description=s.description, components=comp,
-    )
+#: The invariant CVL's slot in the report: a real delivery (imported by every component spec)
+#: or the quarantined leftovers of a budget-curtailed generation (appendix only).
+type InvariantResult = Delivered[GeneratedCVL] | Curtailed[Delivered[GeneratedCVL]]
 
 
 @dataclass
@@ -114,7 +83,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
     _prover_tool: BaseTool
     _prover_config: dict
     _resources: list[CVLResource]
-    _invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None
+    _invariant: tuple[list[PropertyFormulation], InvariantResult] | None
     _fetch: VerdictFetcher[GeneratedCVL]
     _editing: SourceEditing
     _analysis_store: CexAnalysisStore
@@ -127,7 +96,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         props: list[PropertyFormulation],
         ctx: WorkflowContext[GeneratedCVL],
         run: PipelineRun,
-    ) -> GeneratedCVL | GaveUp:
+    ) -> GeneratedCVL | Curtailed[GeneratedCVL] | GaveUp:
         return await batch_cvl_generation(
             ctx=ctx.abstract(CVLGeneration),
             init_config=self._prover_config,
@@ -155,9 +124,9 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
 
     @override
     async def fetch_verdicts(
-        self, inp: ReportComponentInput[GeneratedCVL],
+        self, formalized: Formalized[GeneratedCVL],
     ) -> dict[RuleName, Verdict]:
-        return await self._fetch(inp)
+        return await self._fetch(formalized)
 
     @override
     async def source_edits(
@@ -194,7 +163,8 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
 
     @override
     async def finalize(self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]], run: PipelineRun) -> None:
-        # components_to_prover_runs.json: {run_key (slug): prover /output/ link}.
+        # components_to_prover_runs.json: {run_key (slug): prover /output/ link}. Deliveries
+        # only — a curtailed partial's last run says nothing about its final content.
         runs: dict[str, str] = {
             ComponentSpec(o.feat.slugified_name).run_key: o.result.run_link
             for o in outcomes
@@ -202,7 +172,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         }
         if self._invariant is not None:
             inv = self._invariant[1]
-            if inv.run_link:
+            if isinstance(inv, Delivered) and inv.run_link:
                 runs[InvariantSpec().run_key] = inv.run_link
         self._store.write_component_runs(runs)
 
@@ -228,7 +198,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
             self._autosetup(run), self._invariants(run),
         )
 
-        invariant: tuple[list[PropertyFormulation], Delivered[GeneratedCVL]] | None = None
+        invariant: tuple[list[PropertyFormulation], InvariantResult] | None = None
         if invariants.inv:
             inv_props = [
                 PropertyFormulation(title=inv.name, description=inv.description, sort="invariant")
@@ -238,6 +208,7 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
 
             inv_cvl_ctx = run.ctx.child(INV_CVL_KEY)
             cached = await inv_cvl_ctx.cache_get(GeneratedCVL)
+            inv_cvl: GeneratedCVL | Curtailed[GeneratedCVL]
             if cached is not None:
                 inv_cvl = cached
             else:
@@ -267,19 +238,34 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
                         f"Structural invariant CVL generation gave up: {inv_result.reason}"
                     )
                 inv_cvl = inv_result
-                await inv_cvl_ctx.cache_put(inv_cvl)
+                if isinstance(inv_result, GeneratedCVL):
+                    await inv_cvl_ctx.cache_put(inv_result)
 
-            # Writes invariants.spec + bundle, returns its project-root-relative path.
-            inv_path = self._store.write_artifact(InvariantSpec(), inv_cvl)
-            # All pre-formalization work has joined, so appending here is race-free;
-            # the per-component CVLs (run after this returns) will see invariants.spec.
-            resources = [*resources, CVLResource(
-                path=inv_path,
-                required=False,
-                description="Structural invariants that may be assumed as preconditions",
-                sort="import",
-            )]
-            invariant = (inv_props, Delivered(inv_cvl, inv_path))
+            if isinstance(inv_cvl, Curtailed):
+                # The budget cut the invariant CVL short. An unreliable invariants.spec must not
+                # be imported into the per-component specs as assumed preconditions, so the
+                # partial (if any) is quarantined for inspection and the invariants surface only
+                # in the report's budget appendix; the run itself degrades gracefully.
+                partial = (
+                    Delivered(
+                        inv_cvl.partial,
+                        self._store.write_quarantined(InvariantSpec(), inv_cvl.partial),
+                    )
+                    if inv_cvl.partial is not None else None
+                )
+                invariant = (inv_props, Curtailed(partial, inv_cvl.detail))
+            else:
+                # Writes invariants.spec + bundle, returns its project-root-relative path.
+                inv_path = self._store.write_artifact(InvariantSpec(), inv_cvl)
+                # All pre-formalization work has joined, so appending here is race-free;
+                # the per-component CVLs (run after this returns) will see invariants.spec.
+                resources = [*resources, CVLResource(
+                    path=inv_path,
+                    required=False,
+                    description="Structural invariants that may be assumed as preconditions",
+                    sort="import",
+                )]
+                invariant = (inv_props, Delivered(inv_cvl, inv_path))
 
         return ProverRunner(
             GeneratedCVL, "prover",
@@ -320,8 +306,6 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
             lambda: get_invariant_formulation(run.ctx, run.source, run.env, self._harnessed),
         )
 
-AP_PROPERTIES_KEY_NAME = "ap-properties"
-
 @dataclass
 class ProverBackend:
     """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec,
@@ -348,7 +332,7 @@ class ProverBackend:
             TaskInfo(HARNESS_TASK_ID, "Harness Creation", AutoProvePhase.HARNESS),
             lambda: run_harness_creation(run.ctx, run.source, run.env, analyzed),
         )
-        harnessed = _lift_harnessed(analyzed, sys_desc)
+        harnessed = lift_harnessed(analyzed, sys_desc)
         # The materializing strategy covers every phase with one tool: an empty
         # VFS (invariants, or an author that never edited) runs in-situ; a
         # non-empty one runs in a temp materialization of the working copy.

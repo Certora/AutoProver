@@ -84,6 +84,7 @@ class ModelProvider:
         return Builder[None, None, None]().with_llm(
             model.builder_for(cache_level=cache_level, disable_thinking=disable_thinking),
             max_prompt_tokens=model.max_prompt_tokens,
+            manager=lambda d: model.provider.cache_marker(d, cache_level)
         ).with_loader(self._loader or load_jinja_template).with_checkpointer(self.checkpointer)
 
 

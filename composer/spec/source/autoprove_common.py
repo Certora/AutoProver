@@ -11,7 +11,6 @@ from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 from composer.diagnostics.timing import RunSummary
 from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
 from composer.input.parsing import add_protocol_args
-from composer.kb.knowledge_base import DEFAULT_KB_NS
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.pipeline.core import CorePipelineResult
 
@@ -56,6 +55,8 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     threat_model: str
     recursion_limit: int
     max_bug_rounds: int
+    budget: str | None
+    time_budget: float | None
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +83,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--interactive", action="store_true", help="Interactively refine the security properties after extraction")
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'thread' model (text or pdf) with which to seed the property extraction process")
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
+    parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
+    parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
 
     args = cast(AutoProveArgs, parser.parse_args())
     async with autoprove_executor(args, summary) as runner:
@@ -141,7 +144,6 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 models=staged.llm_models,
                 db=rag_db,
                 forbidden_read=fs_forbidden_read,
-                kb_ns=DEFAULT_KB_NS,
                 root=staged.source.project_root,
                 store=staged.conns.indexed_store,
                 source_question_ns=source_data_ns,
