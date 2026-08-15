@@ -70,9 +70,10 @@ defined above.
 
 Write each property as **natural-language prose**: a sentence or two stating what must hold, in
 terms of this contract's functions, addresses, and storage keys. Do not write CVLR or CVLR-Soroban, any other Rust,
-or any other formal syntax. Formalization is a downstream agent's job, and a property
-expressed as code cannot be reviewed by the human who reads your output. Keep only properties the
-downstream verifier can reasonably check; its capabilities are described in your system prompt's
+or any other formal syntax. Formalization is handled elsewhere,
+and depends on you producing specific, high quality properties.
+Further, a property expressed as code cannot be reviewed by the human who reads your output. Keep only properties the
+verifier can reasonably check; its capabilities are described in your system prompt's
 backend guidance.
 
 ## Step 2
@@ -103,7 +104,7 @@ Output the results using the result tool.
      Do not propose classic reentrancy properties. Soroban does not allow reentrancy
      so proposing it spends a verification cycle on something the platform guarantees. The
      cross-contract risks that DO apply here are state read before a call and relied on after it,
-     a callee address an attacker can choose, and an authorization tree broader than the operation
-     it was signed for.
+     a callee address an attacker can choose, an authorization tree broader than the operation
+     it was signed for, etc.
   </reminder>
 </guidance>
