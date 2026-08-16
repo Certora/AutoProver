@@ -26,7 +26,9 @@ nodes carry name + `stateMutability` + `visibility`, so we never touch autosetup
 pass a `conf` and we run `certoraRun --compilation_steps_only --dump_asts` ourselves (standalone mode).
 
 Pure cores (`scan_ast`, `detect_from`) take already-fetched inputs so they are unit-testable offline;
-`detect` is the thin orchestrator. Reuses `difficulty.py` + `certora_autosetup.utils.file_utils`.
+`detect` is the thin orchestrator; `cli.main` is the standalone command. A separate tool from smtool (it
+decides WHAT to summarize; smtool generates the summaries), it only REUSES AutoProver code —
+`smtool.difficulty` for the difficulty signal and `certora_autosetup.utils.file_utils` for the AST.
 """
 import json
 import subprocess
@@ -35,7 +37,7 @@ from pathlib import Path
 
 from certora_autosetup.utils.file_utils import stream_ast_files
 
-from .difficulty import DifficultyReport, fetch_difficulty
+from smtool.difficulty import DifficultyReport, fetch_difficulty
 
 # ---------------------------------------------------------------- signal 2: AST hashing/encoding calls
 # The TRIGGER is an actual hash builtin — a global `Identifier` callee. Yul (assembly) calls are

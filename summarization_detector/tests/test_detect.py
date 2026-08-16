@@ -7,7 +7,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from smtool.detect import scan_ast, detect_from, HashSignal, reachable_from_main
+from summarization_detector.detect import scan_ast, detect_from, HashSignal, reachable_from_main
 from smtool.difficulty import DifficultyReport, Hotspot
 
 
