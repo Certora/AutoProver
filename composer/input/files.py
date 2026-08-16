@@ -129,9 +129,17 @@ def resolve_document_paths(paths: Sequence[str] | None) -> list[pathlib.Path]:
 
     Order is fully determined — entries in the order given, each sweep sorted by name —
     because the result feeds both the prompt and a cache key. Raises ``ValueError`` for a
-    path that does not exist, or a swept directory with no supported documents."""
+    path that does not exist, or a swept directory with no supported documents.
+
+    Entries are used exactly as given: a relative one is interpreted against the process
+    working directory (*not* the pipeline's ``--project-root``), and paths come back in
+    the form they went in, so a swept directory yields relative paths iff the directory
+    entry was relative."""
+    if not paths:
+        return []
+
     out: list[pathlib.Path] = []
-    for raw in paths or []:
+    for raw in paths:
         p = pathlib.Path(raw)
         if p.is_dir():
             found = discover_documents(p)
