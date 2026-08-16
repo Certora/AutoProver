@@ -74,3 +74,19 @@ def build_monotonicity_rule(t: OverApproxTarget, spec: MonotoneSpec) -> S.RuleBl
         f"monotone: raising arg {spec.arg} does not "
         f"{'lower' if spec.increasing else 'raise'} output {spec.out}"))
     return x.rule(monotone_rule_name(sig.name, spec.arg), rule_params, cmds)
+
+
+def build_monotonicity_spec(t: OverApproxTarget, spec: MonotoneSpec) -> S.CVLFile | None:
+    """The monotonicity rule wrapped in a runnable spec: the scene setup import (if any) + an envfree
+    decl of `f_sol` (for an envfree target, so the two calls need no env) + the rule. Mirrors
+    overapprox.build_conformance_spec's envfree/setup wiring."""
+    rule = build_monotonicity_rule(t, spec)
+    if rule is None:
+        return None
+    blocks: list = []
+    if _envfree(t):
+        blocks.append(x.methods_block([x.m_envfree(t.cut, t.sig.name,
+                                                   [p.type for p in t.sig.params], list(t.sig.returns))]))
+    blocks.append(rule)
+    imports = [t.setup_spec_import] if t.setup_spec_import else ()
+    return x.spec_file(imports=imports, blocks=blocks)

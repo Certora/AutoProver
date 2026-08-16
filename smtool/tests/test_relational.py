@@ -8,7 +8,7 @@ from composer.cvl.pretty_print import pretty_print
 from smtool import cvlx as x
 from smtool.ir import Signature, Param as P
 from smtool.overapprox import OverApproxTarget
-from smtool.relational import build_monotonicity_rule, MonotoneSpec
+from smtool.relational import build_monotonicity_rule, build_monotonicity_spec, MonotoneSpec
 
 
 def _t(name, params, returns, mutability="pure", **kw):
@@ -46,6 +46,19 @@ def test_monotone_rule_decreasing_multireturn_guard_env():
     assert "(rLo0, rLo1, rLo2) = quote(e, fee, amt);" in txt      # multi-return tuple binds
     assert "(rHi0, rHi1, rHi2) = quote(e, fee_hi, amt);" in txt
     assert "assert(rLo1 >= rHi1" in txt                           # non-increasing, output component 1
+
+
+def test_monotone_spec_wraps_rule_with_envfree_decl():
+    """The runnable spec adds the envfree decl (an envfree target's two calls need no env) + the rule —
+    without it the pure calls fail to typecheck ('missing environment parameter')."""
+    t = _t("feeOut", [("uint24", "fee"), ("uint256", "amount")], ["uint256"])   # pure => envfree
+    txt = pretty_print(build_monotonicity_spec(t, MonotoneSpec(arg=0)))
+    assert "function C.feeOut(uint24, uint256) external returns (uint256) envfree;" in txt
+    assert "rule monotone_feeOut_arg0(" in txt
+    # non-envfree target: env threaded instead, no envfree decl
+    t2 = _t("act", [("uint256", "amt")], ["uint256"], mutability="nonpayable")
+    txt2 = pretty_print(build_monotonicity_spec(t2, MonotoneSpec(arg=0)))
+    assert "envfree" not in txt2 and "env e;" in txt2
 
 
 def test_monotone_rule_none_for_void_or_bad_index():

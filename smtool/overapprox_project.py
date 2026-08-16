@@ -26,8 +26,19 @@ from .project import Result, _set_perf
 
 
 def conformance_rule_name(fn: str) -> str:
-    """The conformance rule the runner proves for target `fn` (matches overapprox.build_conformance_rule)."""
+    """The value-conformance rule the runner proves for target `fn` (matches build_conformance_rule)."""
     return "overApprox_" + fn
+
+
+def conformance_rule_names(t: OverApproxTarget) -> list[str]:
+    """All conformance rules to run for target `t`: the value rule `overApprox_<fn>` (single-return) plus,
+    when Ψ is set, the revert rule `revertConform_<fn>` — the two the emitted conformance spec carries."""
+    names: list[str] = []
+    if oa.build_conformance_rule(t) is not None:
+        names.append(conformance_rule_name(t.sig.name))
+    if oa.build_revert_rule(t) is not None:
+        names.append(oa.revert_rule_name(t.sig.name))
+    return names
 
 
 @dataclass
@@ -78,9 +89,38 @@ class OverApproxProject:
             pretty_print(oa.build_phi_spec(snap))       # structural: the Phi spec must render
         except Exception as e:                          # pragma: no cover - defensive
             return Result(False, f"Phi does not render: {type(e).__name__}: {e}")
+        bad = oa.lint_phi(snap)                         # SOUNDNESS guardrail: no domain-restricting require
+        if bad:
+            return Result(False, "Phi has a domain-restricting require (would be unsound)", violations=bad)
         self.targets[fn] = snap
         self.verified.discard(fn)                       # Phi changed → any prior verdict is stale
         return Result(True, f"set Phi for '{fn}' ({len(cmds)} statement(s))")
+
+    def set_psi(self, fn: str, cvl_text: str) -> Result:
+        """Fill / replace target `fn`'s REVERT predicate Ψ(params) from CVL surface text — a boolean
+        formula over the params, true where the summary must revert (e.g. `return c == 0;`). Installs
+        `if (Ψ(params)) revert();` at the top of the summary and adds the `revertConform_<fn>` rule
+        (`Ψ => realReverted`). Ψ over the params only (no result, no witness locals), so a `require` is
+        never legitimate here — the lint rejects it. Snapshot→validate→commit, like set_phi."""
+        if fn not in self.targets:
+            return Result(False, f"unknown target '{fn}' (targets: {sorted(self.targets)})")
+        t = self.targets[fn]
+        try:
+            cmds = parse_commands(cvl_text, oa._psi_params(t))
+        except CVLParseError as e:
+            return Result(False, f"CVL parse error in Psi body: {e}")
+        snap = copy.deepcopy(t)
+        snap.psi_body = cmds
+        try:
+            pretty_print(oa.build_psi_spec(snap))       # structural: the Ψ spec must render
+        except Exception as e:                          # pragma: no cover - defensive
+            return Result(False, f"Psi does not render: {type(e).__name__}: {e}")
+        bad = oa.lint_psi(snap)                          # SOUNDNESS guardrail: no require in Ψ
+        if bad:
+            return Result(False, "Psi must be a pure boolean revert predicate (no require)", violations=bad)
+        self.targets[fn] = snap
+        self.verified.discard(fn)                        # Ψ changed → any prior verdict is stale
+        return Result(True, f"set Psi (revert predicate) for '{fn}' ({len(cmds)} statement(s))")
 
     # -------------------------------------------------- verified-fallback bookkeeping
     def mark_verified(self, fn: str) -> None:
@@ -104,6 +144,9 @@ class OverApproxProject:
     def render_phi(self, fn: str) -> str:
         return pretty_print(oa.build_phi_spec(self.targets[fn]))
 
+    def render_psi(self, fn: str) -> str:
+        return pretty_print(oa.build_psi_spec(self.targets[fn]))
+
     def render_summary(self, fn: str) -> str:
         # the sound-by-construction HAVOC summary (require Phi; havoc'd result). The DETERMINISTIC-ghost
         # (memo) form — for consumer proofs that need f to behave as a function — is built separately by
@@ -115,18 +158,20 @@ class OverApproxProject:
 
     # -------------------------------------------------- conf + output
     def provable_targets(self) -> list[str]:
-        """Targets that yield a conformance rule (single-return; a void f_sol has nothing to constrain)."""
-        return [fn for fn, t in self.targets.items() if oa.build_conformance_rule(t) is not None]
+        """Targets that yield at least one conformance rule: the value rule (single-return `f_sol`) or,
+        when Ψ is set, the revert rule (a void `f_sol` has no value rule but can still have a Ψ)."""
+        return [fn for fn, t in self.targets.items() if conformance_rule_names(t)]
 
     def _conf(self, fn: str, setup_conf: dict) -> dict:
         """The conformance .conf for `fn`: the setup conf (scene inherited untouched) with verify -> the
-        conformance spec, rule = exactly `overApprox_<fn>` (the setup's imported `sanity` rule stays
-        defined-but-not-run), multi_assert_check on, and smtool's perf settings."""
+        conformance spec, rule = the value rule `overApprox_<fn>` plus `revertConform_<fn>` when Ψ is set
+        (the setup's imported `sanity` rule stays defined-but-not-run), multi_assert_check on, and
+        smtool's perf settings."""
         conf = copy.deepcopy(setup_conf)
         conf["verify"] = f"{self.cut}:{self.specs_dir}/{fn}Conformance.spec"
         conf["msg"] = f"overapprox {fn} conformance"
         conf["multi_assert_check"] = True
-        conf["rule"] = [conformance_rule_name(fn)]
+        conf["rule"] = conformance_rule_names(self.targets[fn])
         return _set_perf(conf)
 
     def conf_paths(self, out_dir: str) -> list[str]:
@@ -149,7 +194,11 @@ class OverApproxProject:
             sp = spec_dir / f"{fn}Summary.spec"
             sp.write_text(self.render_summary(fn))
             written += [str(pp), str(sp)]
-            if oa.build_conformance_rule(t) is None:        # void f_sol: no conformance to run
+            if t.psi_body is not None:                      # the revert predicate Ψ (dual of Phi)
+                rp = spec_dir / t.psi_import
+                rp.write_text(self.render_psi(fn))
+                written.append(str(rp))
+            if not conformance_rule_names(t):               # void f_sol with no Ψ: no conformance to run
                 continue
             cs = spec_dir / f"{fn}Conformance.spec"
             cs.write_text(self.render_conformance(fn))
@@ -175,4 +224,11 @@ class OverApproxProject:
             if not ok:
                 last = tail.strip().splitlines()[-1] if tail.strip() else "(no output)"
                 problems.append(f"[{fn}] Phi spec does not typecheck: {last}")
+            problems += oa.lint_phi(t)                 # SOUNDNESS: no domain-restricting require in Phi
+            if t.psi_body is not None:
+                ok, tail = typecheck_spec(self.render_psi(fn))
+                if not ok:
+                    last = tail.strip().splitlines()[-1] if tail.strip() else "(no output)"
+                    problems.append(f"[{fn}] Psi spec does not typecheck: {last}")
+                problems += oa.lint_psi(t)             # SOUNDNESS: no require in the revert predicate Ψ
         return problems

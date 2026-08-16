@@ -59,6 +59,24 @@ class SetPhi(_Tool):
             return _res(d.project.set_phi(self.fn, self.body))
 
 
+class SetPsi(_Tool):
+    """Set (or replace) the REVERT predicate `Psi(<params>)` for a target — a PURE boolean formula over
+    the params that is true exactly where the real function REVERTS (e.g. `return c == 0;`, or
+    `return ts0 > ts1;`). This makes the summary `revert()` on those inputs (a FAITHFUL summary: if the
+    real `f` reverts, so does the summary), and adds the dual rule `revertConform_<fn>` proving
+    `Psi => realReverted` (the sound direction — the summary never reverts where `f` succeeds). OPTIONAL:
+    omit Psi and the summary simply never reverts (still sound, but it returns a value where `f` would
+    revert, which can produce spurious counterexamples downstream). No `require` here — state the whole
+    condition in the `return`. If the revert condition is inexpressible/deep, leave Psi unset."""
+    fn: str = Field(description="the target function whose revert predicate to set, e.g. 'divmul'")
+    body: str = Field(description="the Psi body: CVL ending in `return <bool over params>` (no require)")
+
+    @override
+    async def run(self) -> str:
+        with self.tool_deps() as d:
+            return _res(d.project.set_psi(self.fn, self.body))
+
+
 class CheckConsistency(_Tool):
     """Coherence check (no prover run): every target's Phi is filled and type-checks, and — when a full
     typechecker is bound — the whole conformance bundle passes the REAL certoraRun CVL typecheck (catches
@@ -105,6 +123,16 @@ class RenderPhi(_Tool):
             return d.project.render_phi(self.fn)
 
 
+class RenderPsi(_Tool):
+    """Return a target's current revert predicate Ψ spec as CVL text (empty/absent if Ψ is unset)."""
+    fn: str = Field(description="the target function whose revert predicate spec to render")
+
+    @override
+    async def run(self) -> str:
+        with self.tool_deps() as d:
+            return d.project.render_psi(self.fn)
+
+
 class RenderConformance(_Tool):
     """Return a target's conformance spec as CVL text (the `overApprox_<fn>` rule proved against the real
     function)."""
@@ -129,8 +157,10 @@ class RenderSummary(_Tool):
 
 _TOOLS: list[tuple[type[_Tool], str]] = [
     (SetPhi, "set_phi"),
+    (SetPsi, "set_psi"),
     (CheckConsistency, "check_consistency"),
     (RenderPhi, "render_phi"),
+    (RenderPsi, "render_psi"),
     (RenderConformance, "render_conformance"),
     (RenderSummary, "render_summary"),
 ]

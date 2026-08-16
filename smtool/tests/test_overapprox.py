@@ -13,7 +13,7 @@ from composer.cvl.pretty_print import pretty_print
 from smtool import cvlx as x
 from smtool.cvl_parse import parse_commands
 from smtool.ir import Signature, Param as P
-from smtool.overapprox import OverApproxTarget, build_conformance_rule
+from smtool.overapprox import OverApproxTarget, build_conformance_rule, build_revert_rule
 from smtool.overapprox_project import OverApproxProject, conformance_rule_name
 
 
@@ -73,6 +73,68 @@ def test_env_path_threads_env():
     assert "with (env e) => actCVL(amt, e)" in summ                  # binding threads env
 
 
+# ---------------------------------------------------------------- revert predicate Ψ (fidelity)
+def test_no_psi_summary_never_reverts():
+    """Default (no Ψ): the summary has no revert guard and there is no revert-conformance rule — the
+    sound-but-coarse behavior. The value conformance is the only rule."""
+    t = OverApproxTarget(cut="C", sig=_sig("f", [("uint256", "a")], ["uint256"]))
+    pr = _project(t)
+    pr.set_phi("f", "return res <= a;")
+    assert build_revert_rule(pr.targets["f"]) is None
+    assert "revert()" not in pr.render_summary("f")
+    assert "revertConform_f" not in pr.render_conformance("f")
+
+
+def test_psi_makes_summary_revert_and_adds_conformance():
+    """With Ψ set: the summary reverts on Ψ FIRST (before havoc/require Phi), the conformance spec gains
+    the dual rule `revertConform_f` asserting `Psi => realReverted` (the sound direction), and both the
+    Phi and Ψ specs are imported."""
+    t = OverApproxTarget(cut="C", sig=_sig("divmul", [("uint256", "a"), ("uint256", "c")], ["uint256"]))
+    pr = _project(t)
+    pr.set_phi("divmul", "return to_mathint(res) == to_mathint(a);")
+    assert pr.set_psi("divmul", "return c == 0;").ok
+
+    summ = pr.render_summary("divmul")
+    assert "if(divmulReverts(a, c))" in summ and "revert(" in summ            # guard reverts where f does
+    assert summ.index("revert(") < summ.index("divmulPhi(a, c, res)")        # revert BEFORE havoc/require Phi
+    assert 'import "divmulReverts.spec";' in summ and 'import "divmulPhi.spec";' in summ
+
+    psi = pr.render_psi("divmul")
+    assert "function divmulReverts(uint256 a, uint256 c) returns bool" in psi
+    assert "c == 0" in psi
+
+    conf = pr.render_conformance("divmul")
+    assert "rule overApprox_divmul" in conf                                   # value rule kept
+    assert "rule revertConform_divmul" in conf                                # + the dual revert rule
+    assert "divmulReverts(a, c) => realRev" in conf                           # Psi => realReverted
+    assert 'import "divmulReverts.spec";' in conf
+
+
+def test_set_psi_rejects_require():
+    """Ψ is a pure boolean over params — a `require` (which would prune inputs) is rejected; a plain
+    boolean `return` is accepted."""
+    pr = _project(OverApproxTarget(cut="C", sig=_sig("f", [("uint256", "a")], ["uint256"])))
+    pr.set_phi("f", "return res <= a;")
+    assert pr.set_psi("f", "return a == 0;").ok
+    r = pr.set_psi("f", "require a > 0; return a == 0;")
+    assert not r.ok and any("PURE boolean" in v for v in r.violations)
+    assert pr.targets["f"].psi_body is not None                              # rejected set_psi didn't clobber
+    assert not pr.set_psi("nope", "return true;").ok                         # unknown target
+
+
+def test_write_and_conf_include_revert_rule():
+    """write() emits the Ψ spec and the conformance .conf runs BOTH rules when Ψ is set."""
+    t = OverApproxTarget(cut="C", sig=_sig("f", [("uint256", "a")], ["uint256"]))
+    pr = _project(t)
+    pr.set_phi("f", "return res <= a;")
+    pr.set_psi("f", "return a == 0;")
+    with tempfile.TemporaryDirectory() as d:
+        written = {Path(p).name for p in pr.write(d, {"files": ["C.sol"], "verify": "C:Setup.spec"})}
+        assert "fReverts.spec" in written
+        conf = json.loads((Path(d) / "conf" / "fConformance.conf").read_text())
+        assert conf["rule"] == ["overApprox_f", "revertConform_f"]
+
+
 # ---------------------------------------------------------------- set_phi discipline
 def test_set_phi_rejects_and_preserves():
     pr = _project(OverApproxTarget(cut="C", sig=_sig("f", [("uint256", "a")], ["uint256"])))
@@ -82,6 +144,24 @@ def test_set_phi_rejects_and_preserves():
     r = pr.set_phi("f", "return a <<< ;")                            # parse error
     assert not r.ok and "parse error" in r.message
     assert pr.targets["f"].phi_body is good                          # a rejected set_phi does not clobber
+
+
+def test_set_phi_rejects_domain_restricting_require():
+    """SOUNDNESS guardrail: a `require` that constrains only params/result (no fresh witness local) is a
+    domain restriction — rejected. A `require` that pins a fresh witness local (byte-extract idiom) is OK."""
+    pr = _project(OverApproxTarget(cut="C", sig=_sig("f", [("uint256", "x")], ["uint256"])))
+    good = pr.set_phi("f", "return a <= 100;".replace("a", "x"))   # a plain bound in the RETURN is fine
+    assert good.ok
+    # a domain-restricting require on a param -> REJECTED
+    r = pr.set_phi("f", "require x < 100; return x <= 100;")
+    assert not r.ok and any("DOMAIN RESTRICTION" in v for v in r.violations)
+    assert pr.targets["f"].phi_body is not None                    # rejected set_phi didn't clobber
+    # a require restricting the result -> REJECTED
+    r2 = pr.set_phi("f", "require res != 0; return res <= x;")
+    assert not r2.ok and any("DOMAIN RESTRICTION" in v for v in r2.violations)
+    # a WITNESS pin (require references a fresh local) -> ACCEPTED, even with an inequality bracket
+    r3 = pr.set_phi("f", "uint256 k; require k * k <= x && (k + 1) * (k + 1) > x; return res <= x;")
+    assert r3.ok
 
 
 def test_set_phi_invalidates_stale_verdict():
