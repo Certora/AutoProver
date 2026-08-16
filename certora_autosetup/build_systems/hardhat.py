@@ -388,7 +388,8 @@ class HardhatManager(BuildSystemManager):
         that is there whatever the project calls its sources."""
         if not artifacts_dir.is_dir():
             return False
-        return (artifacts_dir / "contracts").exists() or (artifacts_dir / "build-info").exists()
+        return (any((artifacts_dir / "contracts").rglob("*.json"))
+                or any((artifacts_dir / "build-info").glob("*.json")))
 
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """

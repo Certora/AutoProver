@@ -159,8 +159,12 @@ class BuildSystemDetector:
         ran, so that is the one whose artifacts the extractor can read.
 
         Foundry keeps the tie whenever it has artifacts of its own, and when neither side
-        has any — an unbuilt tree, where there is no evidence to go on and Foundry has
-        always been the answer.
+        has any — an unbuilt tree offers no evidence to rank them by.
+
+        Two limits worth knowing. The Foundry side is read from `[profile.default].out`, so a
+        tree built under a non-default `FOUNDRY_PROFILE` whose `out` differs reads as having no
+        artifacts. And a Hardhat project whose foundry.toml governs a forge *test* harness looks
+        like Foundry as soon as that harness is compiled, since the harness fills `out/` too.
 
         Args:
             project_root: Directory holding both config files
@@ -203,7 +207,8 @@ class BuildSystemDetector:
 
         Centralizes the "explicit override or auto-detect" logic so call sites cannot
         accidentally drop the user's --build-system choice and fall back to detection
-        (which warns and defaults to Foundry when both build systems are present).
+        (which, when both build systems are present, picks the one whose artifacts are on
+        disk — see `_pick_foundry_or_hardhat`).
         """
         if requested is None or requested == "auto":
             return BuildSystemDetector.detect(project_root)

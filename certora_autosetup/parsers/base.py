@@ -109,9 +109,15 @@ class ContractExtractor(ABC):
         """Extract logic contracts from build artifacts with config fallback."""
         artifacts_dir = self.resolve_artifacts_dir()
         if artifacts_dir is None:
+            # Name the directory the caller should go look at — the one the config declares
+            # when it declares one — and say which way it is unusable, since a path that is
+            # there but is a file needs a different remedy than one that is absent.
+            missing = self._try_read_artifact_dir_from_config()
+            if missing is None:
+                missing = self.project_root / self.manager.get_default_artifact_dir()
+            state = "is not a directory" if missing.exists() else "does not exist"
             raise Exception(
-                f"{self.manager.component} artifacts directory "
-                f"'{self.project_root / self.manager.get_default_artifact_dir()}' does not exist. "
+                f"{self.manager.component} artifacts directory '{missing}' {state}. "
                 f"Please run '{self.manager.get_build_command(profile=self.profile)}' first."
             )
 

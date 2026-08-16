@@ -40,9 +40,13 @@ def _foundry_artifacts(out_dir: Path, contract: str = "Widget", source: str = "s
 
 
 def _hardhat_artifacts(artifacts_dir: Path) -> None:
-    """Hardhat's own layout: the sources tree mirrored, plus build-info beside it."""
+    """Hardhat's own layout: the sources tree mirrored down to the per-contract json, plus
+    build-info beside it. The json matters — the mirror directories alone are created by a
+    configured-but-never-run build."""
     (artifacts_dir / "contracts" / "Vault.sol").mkdir(parents=True)
+    (artifacts_dir / "contracts" / "Vault.sol" / "Vault.json").write_text('{"abi": []}')
     (artifacts_dir / "build-info").mkdir(parents=True)
+    (artifacts_dir / "build-info" / "1234.json").write_text("{}")
 
 
 # --- detector: one build system ------------------------------------------------------
@@ -178,3 +182,26 @@ def test_an_unbuilt_project_names_the_build_command(project: Path) -> None:
 
     with pytest.raises(Exception, match="forge build"):
         _extracted(project)
+
+
+def test_an_empty_hardhat_artifacts_dir_is_not_evidence(tmp_path: Path) -> None:
+    # Symmetry with the Foundry side: a leftover empty artifacts/contracts/ says a Hardhat build
+    # was configured, not that one ran, so it must not take the tie from a Foundry tree.
+    (tmp_path / "foundry.toml").write_text("[profile.default]\n")
+    (tmp_path / "hardhat.config.ts").write_text("export default {};\n")
+    (tmp_path / "out").mkdir()
+    (tmp_path / "artifacts" / "contracts").mkdir(parents=True)
+
+    assert BuildSystemDetector.detect(tmp_path) == BuildSystem.FOUNDRY
+
+
+def test_the_unreadable_artifacts_error_names_the_configured_directory(tmp_path: Path) -> None:
+    # An unbuilt project whose config points elsewhere should be told about that directory,
+    # not about the build system's default which it never uses.
+    (tmp_path / "foundry.toml").write_text('[profile.default]\nout = "out/foundry"\n')
+    (tmp_path / "src").mkdir()
+
+    extractor = FoundryContractExtractor(tmp_path)
+
+    with pytest.raises(Exception, match=r"out/foundry.*does not exist"):
+        extractor.extract_logic_contracts()
