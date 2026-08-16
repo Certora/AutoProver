@@ -7,10 +7,12 @@ traverses below the run root, in tree order::
     ├── {analysis key}                         SYSTEM_ANALYSIS_KEY  → ecosystem App model
     └── {properties key}                       PROPERTIES_KEY       → Properties
         ├── {unit digest}[-{plugin digest}]    COMPONENT_KEY        → ComponentGroup
-        │   ├── bug_analysis[|refine][-tm-…]   BUG_ANALYSIS_KEY     → _BugAnalysisCache
+        │   ├── bug_analysis[|refine][-tm-…][-xc-…]
+        │   │                                  BUG_ANALYSIS_KEY     → _BugAnalysisCache
         │   │   └── agent_bug_analysis         AGENT_RESULT_KEY     → _AgentResult
         │   │       └── round-{i}              AGENT_ROUND_KEY      → _AgentRoundWithHistory
-        │   ├── final_props[|refine][-tm-…]    FINAL_PROPERTIES_KEY → FinalProperties
+        │   ├── final_props[|refine][-tm-…][-xc-…]
+        │   │                                  FINAL_PROPERTIES_KEY → FinalProperties
         │   └── {props digest}                 FORMALIZATION_KEY    → backend result (FormT)
         │       └── plugin-artifacts           PLUGIN_ARTIFACTS_KEY → RegisteredArtifacts
         ├── {unit digest}-{plugin}-pre         PRE_PROPERTY_KEY     → PrePropertyInference
@@ -92,7 +94,11 @@ def _component_key(feat: FeatureUnit, plugin_digest: str | None) -> str:
 #: plugin set changes (``plugins.manifest_digest``).
 COMPONENT_KEY = KeyFamily(Properties, ComponentGroup, _component_key)
 
-def _final_properties_key(threat_model_digest: str | None, with_refinement: bool) -> str:
+def _final_properties_key(
+    threat_model_digest: str | None,
+    with_refinement: bool,
+    extra_context_digest: str | None = None,
+) -> str:
     # Parameterized exactly like BUG_ANALYSIS_KEY: the component namespace is
     # shared across runs, so the entry must be keyed by what distinguishes one
     # run's extraction from another's — a single fixed leaf would be
@@ -100,9 +106,11 @@ def _final_properties_key(threat_model_digest: str | None, with_refinement: bool
     base_key = "final_props"
     if with_refinement:
         base_key += "|refine"
-    if threat_model_digest is None:
-        return base_key
-    return base_key + "-tm-" + threat_model_digest
+    if threat_model_digest is not None:
+        base_key += "-tm-" + threat_model_digest
+    if extra_context_digest is not None:
+        base_key += "-xc-" + extra_context_digest
+    return base_key
 
 #: The property batch as it left the property pipeline (post-inference plugin
 #: rewrites applied) plus the tool-contributing plugin ids — the exact

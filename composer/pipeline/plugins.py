@@ -13,7 +13,7 @@ from composer.spec.context import (
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import FeatureUnit
-from composer.spec.util import string_hash
+from composer.spec.util import combine_digests, string_hash
 from .ptypes import PipelineRun
 from .plugin_api import (
     AnyEcosystem, ForEcosystem, PipelinePluginLoader, PipelinePlugin, PluginContext, PluginScope,
@@ -121,9 +121,7 @@ def applicable_plugin_manifest[U: FeatureUnit](unit_type: type[U]) -> list[str]:
 def manifest_digest(manifest: list[str]) -> str | None:
     """Digest of a sorted plugin manifest as suffixed onto per-component
     cache keys; ``None`` when no plugins are active."""
-    if not manifest:
-        return None
-    return string_hash("|".join(manifest))
+    return combine_digests(manifest)
 
 
 @dataclass
