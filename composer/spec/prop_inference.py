@@ -18,6 +18,7 @@ from composer.llm.types import CacheLevel
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.util import combine_digests
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
+from composer.spec.key_family import KeyFamily
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
@@ -112,17 +113,11 @@ def render_evm_property_prompt(
 class _AgentRoundWithHistory(_AgentRoundResult):
     agent_conversation: list[AnyMessage]
 
-def bug_analysis_key_from_digest(
+def _bug_analysis_key(
     threat_model_digest: str | None,
     with_refinement: bool,
     extra_context_digest: str | None = None,
-) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
-    """The bug-analysis cache key, parameterized on every *extra prompt input* that
-    feeds property inference: the threat model, the user-supplied extra context, and
-    whether the properties were interactively refined.
-
-    Each parameter contributes a suffix only when present, so a run with neither
-    document keeps the historical bare ``bug_analysis`` key."""
+) -> str:
     base_key = "bug_analysis"
     if with_refinement:
         base_key += "|refine"
@@ -130,26 +125,21 @@ def bug_analysis_key_from_digest(
         base_key += "-tm-" + threat_model_digest
     if extra_context_digest is not None:
         base_key += "-xc-" + extra_context_digest
-    return CacheKey[ComponentGroup, _BugAnalysisCache](base_key)
+    return base_key
 
-def bug_analysis_key(
-    threat_model: Document | None,
-    with_refinement: bool,
-    extra_context: Sequence[Document] = (),
-) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
-    return bug_analysis_key_from_digest(
-        threat_model.to_digest() if threat_model is not None else None,
-        with_refinement,
-        combine_digests([d.to_digest() for d in extra_context]),
-    )
+#: Parameterized on the *digests* of the documents that fed the prompt (not the
+#: documents) so a recorded digest — e.g. from a run's cache tags — can rebuild the key.
+#: Each input contributes a suffix only when present, so a run with neither document
+#: keeps the bare ``bug_analysis`` key.
+BUG_ANALYSIS_KEY = KeyFamily(ComponentGroup, _BugAnalysisCache, _bug_analysis_key)
 
 class _AgentResult(_BugAnalysisCache):
     final_history: list[AnyMessage]
 
-def agent_round_key(
-    i: int
-) -> CacheKey[_AgentResult, _AgentRoundWithHistory]:
-    return CacheKey[_AgentResult, _AgentRoundWithHistory](f"round-{i}")
+def _agent_round_key(i: int) -> str:
+    return f"round-{i}"
+
+AGENT_ROUND_KEY = KeyFamily(_AgentResult, _AgentRoundWithHistory, _agent_round_key)
 
 AGENT_RESULT_KEY = CacheKey[_BugAnalysisCache, _AgentResult]("agent_bug_analysis")
 
@@ -280,7 +270,7 @@ async def _run_bug_round(
     prev: list[_AgentRoundResult],
     system_prompt: str
 ) -> _AgentRoundWithHistory:
-    round_ctx = ctx.child(agent_round_key(round))
+    round_ctx = ctx.child(AGENT_ROUND_KEY(round))
     if (cached := await round_ctx.cache_get(_AgentRoundWithHistory)) is not None:
         return cached
 
@@ -411,9 +401,11 @@ async def run_property_inference[U: FeatureUnit](
     each labelled with its filename.
     """
 
-    component_analysis = ctx.child(
-        bug_analysis_key(threat_model, refinement is not None, extra_context)
-    )
+    component_analysis = ctx.child(BUG_ANALYSIS_KEY(
+        threat_model.to_digest() if threat_model is not None else None,
+        refinement is not None,
+        combine_digests([d.to_digest() for d in extra_context]),
+    ))
     if (cached := await component_analysis.cache_get(_BugAnalysisCache)) is not None:
         return cached.items
 

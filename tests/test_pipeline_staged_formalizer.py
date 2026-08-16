@@ -119,7 +119,12 @@ class _Ctx:
 
 
 class _FeatCtx:
-    async def child(self, *_a, **_kw): return _Cache()
+    def child(self, key, tags = None):
+        if tags is None:
+            return _Cache()
+        async def thunk():
+            return _Cache()
+        return thunk()
 
 
 class _Source:
