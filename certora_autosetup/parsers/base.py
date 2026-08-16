@@ -80,24 +80,40 @@ class ContractExtractor(ABC):
         """
         pass
 
+    def resolve_artifacts_dir(self) -> Optional[Path]:
+        """Return the directory holding this project's build artifacts, or None if there is none.
+
+        The default directory name is only a guess. A project can configure its output
+        elsewhere (Foundry's ``out``, Hardhat's ``paths.artifacts``) and still have a
+        directory by the default name, most often as the *parent* of the configured one:
+        ``out = "out/foundry"`` leaves a bare ``out/`` that exists and holds nothing the
+        extractor can read. So the default only counts while it actually holds artifacts,
+        and the config decides otherwise. The config is the second question because it is
+        the expensive one — Hardhat and Truffle answer it by running node.
+
+        A default directory that exists but holds no artifacts is still the right answer
+        when the config offers nothing better: it means the build produced nothing, which
+        is what the caller should report on.
+        """
+        default_artifact_dir = self.project_root / self.manager.get_default_artifact_dir()
+        if self.manager.holds_artifacts(default_artifact_dir):
+            return default_artifact_dir
+
+        configured_dir = self._try_read_artifact_dir_from_config()
+        if configured_dir is not None and configured_dir.is_dir():
+            return configured_dir
+
+        return default_artifact_dir if default_artifact_dir.is_dir() else None
+
     def extract_logic_contracts(self) -> List[ContractHandle]:
         """Extract logic contracts from build artifacts with config fallback."""
-        # Get default artifact directory from manager
-        default_artifact_dir = self.project_root / self.manager.get_default_artifact_dir()
-
-        artifacts_dir = default_artifact_dir
-
-        # Config file fallback: use manager's auto_detect_config()
-        if not artifacts_dir.exists():
-            artifacts_dir = self._try_read_artifact_dir_from_config()
-            if not artifacts_dir or not artifacts_dir.exists():
-                raise Exception(
-                    f"{self.manager.component} artifacts directory '{artifacts_dir}' does not exist. "
-                    f"Please run '{self.manager.get_build_command(profile=self.profile)}' first."
-                )
-
-        if not artifacts_dir.is_dir():
-            raise Exception(f"'{artifacts_dir}' exists but is not a directory")
+        artifacts_dir = self.resolve_artifacts_dir()
+        if artifacts_dir is None:
+            raise Exception(
+                f"{self.manager.component} artifacts directory "
+                f"'{self.project_root / self.manager.get_default_artifact_dir()}' does not exist. "
+                f"Please run '{self.manager.get_build_command(profile=self.profile)}' first."
+            )
 
         # Delegate to build-system-specific implementation
         return self.extract_logic_contracts_impl(artifacts_dir)

@@ -393,6 +393,15 @@ class FoundryManager(BuildSystemManager):
             return f"FOUNDRY_PROFILE={profile} forge build"
         return "forge build"
 
+    @staticmethod
+    def holds_artifacts(artifacts_dir: Path) -> bool:
+        """Foundry writes one `<source>.sol/` directory per compiled source file."""
+        if not artifacts_dir.is_dir():
+            return False
+        return any(
+            child.is_dir() and child.name.endswith(".sol") for child in artifacts_dir.iterdir()
+        )
+
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """
         Filter Foundry artifacts - all .json files except those in build-info/ directories.

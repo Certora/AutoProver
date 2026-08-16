@@ -39,13 +39,9 @@ class FoundryContractExtractor(ContractExtractor):
         Applies the same filters as extract_logic_contracts_impl: non-empty bytecode only,
         excludes libraries/deps/tests.
         """
-        artifacts_dir = self.project_root / self.manager.get_default_artifact_dir()
-        if not artifacts_dir.exists():
-            fallback = self._try_read_artifact_dir_from_config()
-            if fallback and fallback.exists():
-                artifacts_dir = fallback
-            else:
-                return {}
+        artifacts_dir = self.resolve_artifacts_dir()
+        if artifacts_dir is None:
+            return {}
 
         library_files = find_all_library_files_and_names()
         library_files = {Path(file).stem: names for file, names in library_files.items()}

@@ -97,6 +97,11 @@ class TruffleManager(BuildSystemManager):
         """Return the build command for this build system."""
         return "npx truffle compile"
 
+    @staticmethod
+    def holds_artifacts(artifacts_dir: Path) -> bool:
+        """Truffle writes one flat `<ContractName>.json` per contract into its build dir."""
+        return artifacts_dir.is_dir() and any(artifacts_dir.glob("*.json"))
+
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """Return Truffle's artifact JSONs — one flat `<ContractName>.json` per contract."""
         return self._walk_and_filter_artifacts(

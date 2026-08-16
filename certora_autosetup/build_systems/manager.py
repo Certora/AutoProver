@@ -101,6 +101,27 @@ class BuildSystemManager(ABC):
         """
         pass
 
+    @staticmethod
+    @abstractmethod
+    def holds_artifacts(artifacts_dir: Path) -> bool:
+        """
+        Whether *artifacts_dir* holds output written by this build system.
+
+        Recognises the build system's own layout inside the directory, so a directory that
+        merely exists under the expected name does not pass for a built project. That
+        happens for real: a project whose configured output dir is nested (Foundry's
+        ``out = "out/foundry"``) has a bare ``out/`` holding only subdirectories, and a
+        project that shipped a second build config often has an empty artifact dir left by
+        the tool that no longer runs.
+
+        Args:
+            artifacts_dir: Directory to inspect; need not exist
+
+        Returns:
+            True if the directory holds this build system's artifacts
+        """
+        pass
+
     @abstractmethod
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """

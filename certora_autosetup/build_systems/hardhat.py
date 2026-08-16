@@ -381,6 +381,15 @@ class HardhatManager(BuildSystemManager):
         """Return Hardhat build command."""
         return "npx hardhat compile"
 
+    @staticmethod
+    def holds_artifacts(artifacts_dir: Path) -> bool:
+        """Hardhat mirrors the sources tree under the artifacts dir and writes `build-info/`
+        beside it; the mirror is named after `paths.sources`, so `build-info/` is the part
+        that is there whatever the project calls its sources."""
+        if not artifacts_dir.is_dir():
+            return False
+        return (artifacts_dir / "contracts").exists() or (artifacts_dir / "build-info").exists()
+
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """
         Filter Hardhat artifacts - only contracts/, exclude .dbg.json and build-info/.
