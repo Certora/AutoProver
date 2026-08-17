@@ -211,7 +211,6 @@ def get_cvl(
             description=_GET_CVL_DESCRIPTION,
             missing="No spec file written yet",
             display=_get_cvl_display,
-            title="GetCVL",
             set_did_read=True,
         )
     return get_spec_tool(
@@ -220,7 +219,6 @@ def get_cvl(
         description=_GET_CVL_DESCRIPTION,
         missing="No spec file written yet",
         display=_get_cvl_display,
-        title="GetCVL",
     )
 
 
@@ -250,6 +248,5 @@ def edit_cvl[S: SpecBuffer](ty: type[S]) -> BaseTool:
         description=edit_cvl_description,
         missing="No spec file written yet — use put_cvl or put_cvl_raw first.",
         display=_edit_cvl_display,
-        title="EditCVL",
         validator=cvl_syntax_error,
     )

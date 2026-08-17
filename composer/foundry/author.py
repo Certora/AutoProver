@@ -174,7 +174,6 @@ def get_test_tool(ty: type) -> BaseTool:
         description=_GET_TEST_DESCRIPTION,
         missing="No test draft written",
         display=ToolDisplay("Reading current test draft", None),
-        title="GetTestTool",
     )
 
 @tool_display(lambda p: f"Expecting test `{p['test_name']}` to fail", None)

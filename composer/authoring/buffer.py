@@ -5,21 +5,20 @@ whoever needs the current text (the agent itself, its judge, its checker). Every
 :func:`apply_spec_update`, so a backend that can reject a malformed spec at write time does it in
 exactly one place — and a rejected write leaves the buffer untouched.
 
-Read and edit are :func:`~graphcore.tools.schemas.tool_family` classes; a thin factory still
-injects the backend's state type, tool name, and write-time validator, because those are not
-schema nouns.
+Read and edit are :func:`~graphcore.tools.schemas.tool_family` classes, generic in the
+backend's state type. A thin factory still binds the tool name, write-time validator, and
+display, because those are not schema nouns.
 """
 
 import inspect
 from dataclasses import dataclass
-from typing import Annotated, Callable, Literal, overload, override
+from typing import Any, Callable, Literal, overload, override
 from typing_extensions import TypedDict
 
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
-from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
-from pydantic import Field, create_model
+from pydantic import Field
 
 from graphcore.graph import tool_state_update
 from graphcore.tools.schemas import (
@@ -28,6 +27,15 @@ from graphcore.tools.schemas import (
 
 from composer.core.edit import EditErr, EditOk, replace_unique
 from composer.ui.tool_display import ToolDisplay, tool_display_of
+
+
+class WithGenericState[T](WithInjectedState[T]):
+    def __class_getitem__(cls, params: type[Any] | tuple[type[Any], ...]):
+        concrete = super().__class_getitem__(params)
+        # Specialized generic models do not inherit the origin's docstring.
+        if isinstance(concrete, type) and not concrete.__doc__:
+            concrete.__doc__ = cls.__doc__
+        return concrete
 
 
 #: Validates a candidate spec at write time. ``None`` accepts it; a string rejects the write and is
@@ -87,9 +95,9 @@ class GetDeps:
 
 
 @tool_family(BufferDoc)
-class GetSpec(
+class GetSpec[T: SpecBuffer](
     WithInjectedId,
-    WithInjectedState[SpecBuffer],
+    WithGenericState[T],
     WithAsyncDependencies[str | Command, GetDeps],
 ):
     """{description}"""
@@ -110,21 +118,19 @@ class GetSpec(
 @overload
 def get_spec_tool[S: SpecBufferWithRead](
     ty: type[S], *, name: str, description: str, missing: str, display: ToolDisplay,
-    title: str = ..., set_did_read: Literal[True],
+    set_did_read: Literal[True],
 ) -> BaseTool: ...
 
 
 @overload
 def get_spec_tool[S: SpecBufferSet](
     ty: type[S], *, name: str, description: str, missing: str, display: ToolDisplay,
-    title: str = ...,
 ) -> BaseTool: ...
 
 
 @overload
 def get_spec_tool[S: SpecBuffer](
     ty: type[S], *, name: str, description: str, missing: str, display: ToolDisplay,
-    title: str = ...,
 ) -> BaseTool: ...
 
 
@@ -135,7 +141,6 @@ def get_spec_tool(
     description: str,
     missing: str,
     display: ToolDisplay,
-    title: str = "GetSpec",
     set_did_read: bool = False,
 ) -> BaseTool:
     """Read-back tool over the buffer. ``missing`` is what the agent is told when nothing has been
@@ -144,15 +149,11 @@ def get_spec_tool(
     ``set_did_read`` additionally stamps :data:`READ_KEY`, which is how a judge's completion
     validator knows the review actually looked at the draft rather than at the copy in its prompt.
     """
-    templated = GetSpec.with_template(description=inspect.cleandoc(description))
-    schema = create_model(
-        title,
-        __doc__=templated.__doc__,
-        __base__=templated,
-        state=(Annotated[ty, InjectedState], ...),
+    return tool_display_of(display)(
+        GetSpec.with_template(description=inspect.cleandoc(description))[ty]
+        .bind(GetDeps(missing=missing, set_did_read=set_did_read))
+        .as_tool(name)
     )
-    tool_display_of(display)(schema)
-    return schema.bind(GetDeps(missing=missing, set_did_read=set_did_read)).as_tool(name)
 
 
 @dataclass(frozen=True)
@@ -164,9 +165,9 @@ class EditDeps:
 
 
 @tool_family(BufferDoc)
-class EditSpec(
+class EditSpec[T: SpecBuffer](
     WithInjectedId,
-    WithInjectedState[SpecBuffer],
+    WithGenericState[T],
     WithAsyncDependencies[str | Command, EditDeps],
 ):
     """{description}"""
@@ -211,7 +212,6 @@ def edit_spec_tool[S: SpecBuffer](
     description: str,
     missing: str,
     display: ToolDisplay,
-    title: str = "EditSpec",
     validator: SpecValidator | None = None,
     reset_read: str | None = READ_KEY,
 ) -> BaseTool:
@@ -224,14 +224,10 @@ def edit_spec_tool[S: SpecBuffer](
     Two calls of this tool in the same turn are refused: parallel edits race through the state
     reducer. A single edit alongside a different tool is allowed.
     """
-    templated = EditSpec.with_template(description=inspect.cleandoc(description))
-    schema = create_model(
-        title,
-        __doc__=templated.__doc__,
-        __base__=templated,
-        state=(Annotated[ty, InjectedState], ...),
+    return tool_display_of(display)(
+        EditSpec.with_template(description=inspect.cleandoc(description))[ty]
+        .bind(EditDeps(
+            name=name, missing=missing, validator=validator, reset_read=reset_read,
+        ))
+        .as_tool(name)
     )
-    tool_display_of(display)(schema)
-    return schema.bind(EditDeps(
-        name=name, missing=missing, validator=validator, reset_read=reset_read,
-    )).as_tool(name)

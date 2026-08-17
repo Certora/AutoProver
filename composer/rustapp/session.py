@@ -757,7 +757,6 @@ def _readback(ty: type) -> BaseTool:
         description=_GET_SPEC_DESCRIPTION,
         missing="No spec written yet",
         display=ToolDisplay("Reading spec", None),
-        title="GetSpec",
     )
 
 
@@ -857,7 +856,6 @@ async def run_session[K: (RustFormalResult, RustSetupSpec)](
             description=_EDIT_SPEC_DESCRIPTION,
             missing="No spec written yet — use `put_spec` first.",
             display=ToolDisplay("Editing spec", suppress_ack("Spec edit result")),
-            title="EditSpec",
             validator=_syntax_check(module, input_json),
             reset_read=None,
         ),
