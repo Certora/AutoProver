@@ -5,6 +5,7 @@ The one input is `--url` (a prover-run URL): it fetches the sources + conf, deri
 generates the AST, and pulls the difficulty report — getting as much signal as available. The lower-level
 flags (`--ast`/`--conf`/`--cut`/…) are overrides / an offline path when you already have the artifacts."""
 import argparse
+import json
 
 from .detect import detect
 from .sources import detect_url
@@ -29,6 +30,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="directory prepended to PATH so the conf's solcN.NN resolves.")
     p.add_argument("--include-dependencies", action="store_true",
                    help="also report hashing in lib/ dependency code (off by default).")
+    p.add_argument("--json", action="store_true",
+                   help="emit the report as JSON (for pipeline/tool consumption) instead of text.")
     # offline / override path (when you already have the artifacts instead of a URL):
     p.add_argument("--ast", default=None, help="path to a solc AST dump (.asts.json).")
     p.add_argument("--conf", default=None, help="a .conf to generate the AST from (offline, needs --cut).")
@@ -48,5 +51,5 @@ def main(argv: list[str] | None = None) -> int:
         report = detect(a.job_url, ast_path=a.ast, conf=a.conf, cut=a.cut, solc_dir=a.solc_dir,
                         external_call_graph=a.external_call_graph,
                         include_dependencies=a.include_dependencies)
-    print(report.format())
+    print(json.dumps(report.to_dict(), indent=2) if a.json else report.format())
     return 0

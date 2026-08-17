@@ -43,7 +43,7 @@ import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from certora_autosetup.utils.file_utils import stream_ast_files
@@ -79,6 +79,27 @@ class HashSignal:
 
 
 @dataclass
+class Boundary:
+    """A caller of a detected leaf, offered as an alternative place to summarize. The leaf is where the
+    COST is; a caller is often where the CLEAN semantic boundary is (a summary there subsumes the leaf).
+    Feasibility is described by three orthogonal facts: `has_return` (a void function has no value to
+    model — nothing to summarize at); `expressible` (has a return AND all param/return types are CVL-clean
+    — no opaque dynamic bytes/string, mapping, or function type); `mutating` (writes state, NOT view/pure —
+    summarizing it as a value would erase side effects the properties may observe). `hops` = call-graph
+    distance from the candidate. `direction` = "up" (a CALLER to summarize at — the hashing-leaf case) or
+    "down" (a shared nonlinear PRIMITIVE the candidate inlines — the real arg-based target). `shared` = for
+    a "down" target, how many sibling candidates also inline it (fan-in). Best: expressible, non-mutating."""
+    function: str
+    hops: int
+    signature: str
+    expressible: bool
+    has_return: bool
+    mutating: bool
+    direction: str = "up"
+    shared: int = 1
+
+
+@dataclass
 class Candidate:
     """A function worth summarizing, with WHY (`signals`) and HOW (`mode`)."""
     function: str                 # "Contract.fn"
@@ -87,6 +108,7 @@ class Candidate:
     mode: str                     # "over_approx" | "symbolic_model"
     score: float                  # rank key (higher = summarize first)
     evidence: str                 # human-readable justification
+    boundaries: list[Boundary] = field(default_factory=list)   # caller boundaries to summarize at instead
 
 
 @dataclass
@@ -96,6 +118,11 @@ class DetectionReport:
     def is_empty(self) -> bool:
         return not self.candidates
 
+    def to_dict(self) -> dict:
+        """Machine-readable form for the autosetup/smtool pipeline: each candidate (the problematic
+        function, why, and rank) with its caller-boundary shortlist (call chain + summarizability)."""
+        return asdict(self)
+
     def format(self) -> str:
         if self.is_empty():
             return "no summarization candidates detected"
@@ -103,6 +130,21 @@ class DetectionReport:
         for c in self.candidates:
             out.append(f"  [{c.mode:14s}] {c.score:5.1f}  {c.function}  <{','.join(c.signals)}>")
             out.append(f"                          {c.evidence}")
+            for b in c.boundaries:
+                if not b.has_return:
+                    feas = "no return value"                    # void — nothing to model as a summary
+                elif not b.expressible:                         # has a return, so the TYPE is the problem
+                    feas = "opaque sig"
+                elif b.mutating:
+                    feas = "state-changing — prefer a pure boundary"
+                else:
+                    feas = "summarizable here"
+                if b.direction == "down":                       # a shared nonlinear primitive (descend)
+                    arrow = "↓"
+                    tag = f"shared ×{b.shared}, {feas}" if b.shared > 1 else feas
+                else:                                           # a caller boundary (walk up)
+                    arrow, tag = "↑", feas
+                out.append(f"                          {arrow} +{b.hops} {b.signature}  [{tag}]")
         return "\n".join(out)
 
 
@@ -363,6 +405,22 @@ def _classify_mode(contract: str, signals: tuple[str, ...], external_multi: bool
     return "over_approx"
 
 
+def _is_cvl_ghost(function: str) -> bool:
+    """A `CVL/Ghost Function '...'` hotspot is an ALREADY-APPLIED CVL summary / ghost, not a Solidity
+    function to summarize — so it is never a candidate (it IS the summary). The prover labels these
+    procIds distinctly; real Solidity hotspots are `Contract.fn` with a source location."""
+    return function.lstrip().startswith(("CVL/Ghost", "CVL Function", "Ghost"))
+
+
+def _strip_procid(function: str) -> str:
+    """Normalize a prover procId to `Contract.fn` for the detector: drop a leading `(internal)` /
+    `(external)` marker the prover prefixes to inlined-function hotspots. Without this the marker leaks
+    into the contract parse, so the CUT's OWN internal function (`(internal) Stonks.foo`) is misread as a
+    different contract and wrongly classified as a resolved-external. (The raw marker stays intact in the
+    shared DifficultyReport, which smtool's refine message relies on.)"""
+    return re.sub(r"^\((?:internal|external)\)\s*", "", function.strip())
+
+
 def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *, cut: str,
                 include_dependencies: bool = False,
                 cone_weight: dict[str, int] | None = None) -> DetectionReport:
@@ -371,10 +429,12 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     signal 2. `cut` is the verified contract (its own methods are NOT "external"). Dependency-tree
     functions (lib/) are dropped unless `include_dependencies`. `cone_weight` (per-function
     cone-of-influence size) re-weights the build-phase hashing signal by how much code consumes the
-    result — the only cost proxy available there."""
+    result — the only cost proxy available there. CVL/ghost hotspots (already-applied summaries) are
+    excluded — they are the summary, not a summarization target."""
+    hotspots = [h for h in difficulty.hotspots if not _is_cvl_ghost(h.function)]
     ext_counts: dict[str, int] = {}
-    for h in difficulty.hotspots:
-        c = _contract_of(h.function)
+    for h in hotspots:
+        c = _contract_of(_strip_procid(h.function))
         if c and c != cut:
             ext_counts[c] = ext_counts.get(c, 0) + 1
 
@@ -392,12 +452,13 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
             c.evidence += " | " + evidence
 
     # signal 1 (nonlinear) + 3 (external): the difficulty hotspots
-    for h in difficulty.hotspots:
-        contract = _contract_of(h.function)
-        _bump(h.function, contract, "nonlinear", float(h.pct),
+    for h in hotspots:
+        fn = _strip_procid(h.function)
+        contract = _contract_of(fn)
+        _bump(fn, contract, "nonlinear", float(h.pct),
               f"{h.pct}% of nonlinear ops" + (f" @{h.location}" if h.location else ""))
         if contract and contract != cut:
-            _bump(h.function, contract, "external", 10.0,
+            _bump(fn, contract, "external", 10.0,
                   f"resolved external in {contract} (not the CUT)")
 
     # signal 2 (hashing/encoding): the AST scan. Dynamic-input hashing (unbounded bytes/string/array) is
@@ -431,6 +492,16 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     return DetectionReport(candidates=ranked)
 
 
+def _survives(function: str, surviving_set: set[str], survivors_bare: set[str]) -> bool:
+    """Whether `function` (a scan_ast candidate) reaches SMT per the prover's surviving set. A host-less
+    free (file-level) function has no contract host in the AST (e.g. `computeBaseHash`), but the prover
+    attributes it to an arbitrary host in the surviving set (e.g. `Ownable.computeBaseHash`) — so it's
+    matched by bare name. A hosted candidate matches on its exact qualified name, so a genuinely-
+    unreachable `CTHelpers.getConditionId` is NOT resurrected by a same-named method on another contract
+    (`survivors_bare` is `{name after last '.'}` over the surviving set)."""
+    return function in surviving_set or ("." not in function and function in survivors_bare)
+
+
 def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
            conf: str | Path | None = None, cut: str, solc_dir: str | Path | None = None,
            include_dependencies: bool = False,
@@ -447,18 +518,49 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
     hash_signals = scan_ast(ast)
     cone: dict[str, int] = {}
     reachable: set[str] = set()
-    g = _build_graph(ast, cut, external_call_graph)        # built once, for cone (rank) + reachability (gate)
-    if g is not None:
-        edges, roots, sizes = g
-        reachable = _bfs(edges, roots)
+    edges: dict[str, set[str]] = {}
+    sigs: dict[str, tuple[str, bool, bool, bool]] = {}
+    merged = _unit_declaring(ast, cut)                     # the CUT's compilation unit, built once
+    if merged is not None:
+        edges, roots, by_name, sizes = _ast_call_graph(merged, cut)
+        if external_call_graph is not None:
+            _add_external_edges(edges, by_name, external_call_graph)
+        reachable = _bfs(edges, roots)                     # for cone (rank) + the ecg fallback gate
         cone = _cone_weights(edges, reachable, sizes)
+        sigs = _signatures(merged)                         # for caller-boundary expressibility
     if surviving_set:                                     # authoritative: exactly what reached SMT
-        hash_signals = [h for h in hash_signals if h.function in surviving_set]
-    elif g is not None and external_call_graph is not None:   # fallback: complete cross-contract edges
+        survivors_bare = {n.rpartition(".")[2] for n in surviving_set}
+        hash_signals = [h for h in hash_signals if _survives(h.function, surviving_set, survivors_bare)]
+    elif merged is not None and external_call_graph is not None:   # fallback: complete cross-contract edges
         hash_signals = [h for h in hash_signals if h.function in reachable]
     difficulty = fetch_difficulty(job_url) if job_url else DifficultyReport()
-    return detect_from(hash_signals, difficulty, cut=cut, cone_weight=cone,
-                       include_dependencies=include_dependencies)
+    report = detect_from(hash_signals, difficulty, cut=cut, cone_weight=cone,
+                         include_dependencies=include_dependencies)
+    # For each hashing candidate (the cost LEAF), offer caller boundaries — a summary at a clean-signature
+    # caller subsumes the leaf and is often more feasible to model (see Boundary).
+    bounds_reach = surviving_set if surviving_set else (reachable or None)
+    if edges:
+        # nonlinear candidates: descend to the shared nonlinear PRIMITIVE they inline, and count how many
+        # candidates share each (fan-in) — a primitive shared across many methods is the real target.
+        # Filter by AST reachability, NOT the surviving set: library `using`-for primitives (e.g.
+        # MathLib.mulDivDown) get no INTERNAL_FUNC_START annotation, so they are absent from the surviving
+        # set even though they are genuinely inlined into a surviving method.
+        nl = [c.function for c in report.candidates if "nonlinear" in c.signals and "hashing" not in c.signals]
+        prim_reach = {m: _descend_to_prims(edges, m, reachable or None) for m in nl}
+        fanin: dict[str, int] = {}
+        for prims in prim_reach.values():
+            for p in prims:
+                fanin[p] = fanin.get(p, 0) + 1
+        for c in report.candidates:
+            if "hashing" in c.signals:                     # walk UP to a clean caller boundary
+                c.boundaries = _caller_boundaries(edges, sigs, c.function, bounds_reach)
+            elif "nonlinear" in c.signals:                 # descend DOWN to the shared nonlinear primitive
+                targets = sorted(prim_reach.get(c.function, {}).items(),
+                                 key=lambda kv: (-fanin.get(kv[0], 0), kv[1], kv[0]))[:4]
+                c.boundaries = [Boundary(p, d, *sigs.get(p, (p, False, False, True)),
+                                         direction="down", shared=fanin.get(p, 1))
+                                for p, d in targets]
+    return report
 
 
 # ---------------------------------------------------------------- reachability-from-main (signal-2 gate)
@@ -632,6 +734,149 @@ def _cone_weights(edges: dict, reachable: set, sizes: dict) -> dict[str, int]:
             stack.extend(x for x in consumers.get(c, ()) if x in reachable and x not in seen)
         out[f] = sum(sizes.get(g, 0) for g in seen)
     return out
+
+
+_NON_EXPRESSIBLE_ELEM = {"bytes", "string"}   # dynamic byte blobs; fixed `bytesN` / value types are fine
+
+
+def _param_infos(node: dict, key: str) -> list[tuple[str, object]]:
+    """(typeString for display, typeName node for the structural check) per `parameters`/`returnParameters`."""
+    ps = ((node.get(key) or {}).get("parameters")) or []
+    return [(((p.get("typeDescriptions") or {}).get("typeString") or ""), p.get("typeName")) for p in ps]
+
+
+def _expressible_typename(tn: object, merged: dict, seen: frozenset = frozenset()) -> bool:
+    """Whether a solc `typeName` is modelable as a typed CVL summary value — walked RECURSIVELY, so a blob
+    nested inside an array or struct is caught (unlike a flat typeString check). Expressible: value types,
+    UDVTs, enums, contracts; arrays (fixed or dynamic) of an expressible element; structs whose fields are
+    all expressible. NOT expressible, wherever nested: dynamic `bytes`/`string` (abi-encoded blobs — the
+    point of an opaque boundary), mappings, and function types."""
+    if not isinstance(tn, dict):
+        return False
+    nt = tn.get("nodeType")
+    if nt == "ElementaryTypeName":
+        return (tn.get("name") or "") not in _NON_EXPRESSIBLE_ELEM
+    if nt == "ArrayTypeName":
+        return _expressible_typename(tn.get("baseType"), merged, seen)
+    if nt == "UserDefinedTypeName":
+        ref = tn.get("referencedDeclaration")
+        decl = merged.get(str(ref)) if ref is not None else None
+        if not isinstance(decl, dict):
+            return True                                   # external/interface type not in unit -> value-like
+        if decl.get("nodeType") == "StructDefinition":
+            sid = str(ref)
+            if sid in seen:                               # recursive struct: no new blob on this cycle
+                return True
+            return all(_expressible_typename((m or {}).get("typeName"), merged, seen | {sid})
+                       for m in (decl.get("members") or []))
+        return True                                       # enum / UDVT / contract -> value-like
+    if nt in ("Mapping", "FunctionTypeName"):
+        return False
+    return False                                          # unknown node -> conservative
+
+
+def _signatures(merged: dict) -> dict[str, tuple[str, bool, bool, bool]]:
+    """qual -> (readable `fn(pt,..) -> rt,..` signature, is-CVL-expressible, has-a-return, is-mutating).
+    Expressible = has a return AND every param/return type is CVL-expressible (see `_expressible_typename`).
+    has_return is kept SEPARATELY so a void function (no value to model) is distinguished from one with an
+    opaque type. Mutating = stateMutability not view/pure (summarizing it as a value erases side effects)."""
+    contracts_by_fid: dict[int, list] = {}
+    for node in merged.values():
+        if node.get("nodeType") == "ContractDefinition":
+            sp = _span3(node)
+            if sp:
+                contracts_by_fid.setdefault(sp[2], []).append((sp[0], sp[1], node.get("name") or ""))
+    out: dict[str, tuple[str, bool, bool, bool]] = {}
+    for node in merged.values():
+        if node.get("nodeType") != "FunctionDefinition":
+            continue
+        sp = _span3(node)
+        if sp is None:
+            continue
+        cname = _enclosing(sp[0], contracts_by_fid.get(sp[2], [])) or ""
+        fname = node.get("name") or ""
+        qual = f"{cname}.{fname}" if cname else fname
+        params = _param_infos(node, "parameters")
+        rets = _param_infos(node, "returnParameters")
+        sig = f"{fname}({', '.join(t for t, _ in params)})" + (
+            f" -> {', '.join(t for t, _ in rets)}" if rets else "")
+        has_return = bool(rets)
+        types_ok = all(_expressible_typename(tn, merged) for _, tn in params + rets)
+        mutating = (node.get("stateMutability") or "") not in ("view", "pure")
+        out[qual] = (sig, has_return and types_ok, has_return, mutating)
+    return out
+
+
+def _caller_boundaries(edges: dict, sigs: dict, leaf: str, reachable: set[str] | None,
+                       max_hops: int = 4, limit: int = 4) -> list[Boundary]:
+    """Walk UP the call graph from `leaf` (a detected hasher) and return caller boundaries — places to
+    summarize instead of the leaf — ranked expressible-first then nearest. Restricted to `reachable`
+    (host-less free functions matched by bare name, as in the gate) when given, so suggestions are real."""
+    consumers: dict[str, set[str]] = {}
+    for caller, callees in edges.items():
+        for callee in callees:
+            consumers.setdefault(callee, set()).add(caller)
+    bare = {n.rpartition(".")[2] for n in reachable} if reachable is not None else set()
+    hops: dict[str, int] = {}
+    frontier, depth = {leaf}, 0
+    while frontier and depth < max_hops:
+        depth += 1
+        nxt: set[str] = set()
+        for f in frontier:
+            for c in consumers.get(f, ()):
+                if c not in hops and c != leaf:
+                    hops[c] = depth
+                    nxt.add(c)
+        frontier = nxt
+    out: list[Boundary] = []
+    for q, h in hops.items():
+        if reachable is not None and not _survives(q, reachable, bare):
+            continue
+        sig, expressible, has_return, mutating = sigs.get(q, (q, False, False, True))
+        out.append(Boundary(q, h, sig, expressible, has_return, mutating))
+    # expressible first, then view/pure over state-changing, then nearest — the cleanest, safest boundary
+    out.sort(key=lambda b: (not b.expressible, b.mutating, b.hops, b.function))
+    return out[:limit]
+
+
+# Nonlinear PRIMITIVES: arg-based math-library fns (Morpho MathLib, Solmate FixedPointMathLib, OZ Math,
+# ds-math, ...). A nonlinear hotspot METHOD usually just INLINES one of these; the difficulty report
+# attributes the ops to the method, so descending to the shared primitive names the real, arg-based
+# over-approx target. Name-based for now — extensible to an AST nonlinear-op body scan.
+_NONLINEAR_PRIMS = {
+    "mulDiv", "mulDivDown", "mulDivUp", "fullMulDiv", "fullMulDivUp", "mulDivRoundingUp",
+    "mulWad", "mulWadDown", "mulWadUp", "divWad", "divWadDown", "divWadUp", "sMulWad", "sDivWad",
+    "rpow", "wpow", "pow", "rmul", "rdiv", "wmul", "wdiv", "sqrt", "cbrt", "exp", "expWad", "ln", "lnWad",
+}
+
+
+def _is_nonlinear_prim(qual: str) -> bool:
+    return qual.rpartition(".")[2] in _NONLINEAR_PRIMS
+
+
+def _descend_to_prims(edges: dict, method: str, reachable: set[str] | None,
+                      max_depth: int = 4) -> dict[str, int]:
+    """BFS DOWN the call graph from `method`; return {nonlinear-primitive qual -> min call depth} for the
+    primitives it (transitively) inlines. Restricted to `reachable` (free functions bare-name matched, as
+    in the gate) so dead code is never suggested."""
+    bare = {n.rpartition(".")[2] for n in reachable} if reachable is not None else set()
+    prims: dict[str, int] = {}
+    seen = {method}
+    frontier, depth = {method}, 0
+    while frontier and depth < max_depth:
+        depth += 1
+        nxt: set[str] = set()
+        for f in frontier:
+            for callee in edges.get(f, ()):
+                if callee in seen:
+                    continue
+                seen.add(callee)
+                nxt.add(callee)
+                if (_is_nonlinear_prim(callee) and callee not in prims
+                        and (reachable is None or _survives(callee, reachable, bare))):
+                    prims[callee] = depth
+        frontier = nxt
+    return prims
 
 
 def reachable_from_main(ast_path: str | Path, cut: str, external_call_graph: str | Path | None = None) -> set[str]:

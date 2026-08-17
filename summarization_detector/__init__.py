@@ -7,6 +7,7 @@ only reuses AutoProver code (`smtool.difficulty`, `certora_autosetup`). Invoke v
 (`python -m summarization_detector` / `detect-summaries`).
 """
 from .detect import (
+    Boundary,
     Candidate,
     DetectionReport,
     HashSignal,
@@ -19,6 +20,7 @@ from .detect import (
 from .sources import detect_url, cut_from_conf, find_run_conf
 
 __all__ = [
+    "Boundary",
     "Candidate",
     "DetectionReport",
     "HashSignal",

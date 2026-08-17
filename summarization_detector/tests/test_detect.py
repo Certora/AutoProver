@@ -9,6 +9,7 @@ from pathlib import Path
 
 from summarization_detector.detect import (
     scan_ast, detect_from, HashSignal, reachable_from_main, cone_weights, _touch_missing_imported_specs,
+    _survives, _caller_boundaries, _expressible_typename,
 )
 from smtool.difficulty import DifficultyReport, Hotspot
 
@@ -172,6 +173,28 @@ def test_detect_from_fuses_and_classifies():
     assert rep.candidates == sorted(rep.candidates, key=lambda c: c.score, reverse=True)   # ranked
 
 
+def test_detect_from_drops_cvl_ghost_hotspots():
+    # a CVL/ghost hotspot is an ALREADY-APPLIED summary — must never be a candidate (it IS the summary)
+    diff = DifficultyReport(hotspots=[
+        Hotspot("CVL/Ghost Function 'mulDivDownSummary(x,y,denominator)'", 86, ""),   # already a summary
+        Hotspot("AmountConverter.getExpectedOut", 10, "contracts/AmountConverter.sol:134"),
+    ])
+    rep = detect_from([], diff, cut="Stonks")
+    fns = {c.function for c in rep.candidates}
+    assert "AmountConverter.getExpectedOut" in fns                                    # real math kept
+    assert not any("Ghost" in f or "CVL" in f for f in fns)                           # ghost summary dropped
+
+
+def test_detect_from_strips_internal_prefix_so_cut_own_fn_is_not_external():
+    # the prover prefixes inlined hotspots with "(internal)"; without stripping, the CUT's own function
+    # parses to contract "(internal) Stonks" != cut and is wrongly flagged a resolved-external.
+    diff = DifficultyReport(hotspots=[Hotspot("(internal) Stonks.estimateTradeOutput", 12, "S.sol:387")])
+    c = detect_from([], diff, cut="Stonks").candidates[0]
+    assert c.function == "Stonks.estimateTradeOutput"       # (internal) marker stripped
+    assert c.contract == "Stonks"                           # parses to the CUT
+    assert c.signals == ("nonlinear",) and "external" not in c.signals   # CUT's own math, NOT external
+
+
 def _fndef(off, length, name, vis="internal"):
     return _node("FunctionDefinition", off, length, name=name, stateMutability="pure", visibility=vis)
 
@@ -195,6 +218,125 @@ def _reach_fixture(tmp, orphan_name="orphan"):
         "32": _member_call(255, "encodePacked", "abi", "bytes"),
     }
     return _write_ast(tmp, {"src/Main.sol": nodes})
+
+
+def test_survives_matches_free_functions_by_bare_name():
+    # The prover attributes a free (file-level) function to an arbitrary host in the surviving set.
+    surviving = {"Ownable.computeBaseHash", "CombinatorialModule.getConditionId", "Router.convert"}
+    bare = {n.rpartition(".")[2] for n in surviving}
+    # host-less candidate (a free function) matches by bare name despite the mis-attributed host
+    assert _survives("computeBaseHash", surviving, bare)
+    # hosted candidate matches only exactly — a genuinely-unreachable CTHelpers.getConditionId is NOT
+    # resurrected by the same-named method on another contract
+    assert not _survives("CTHelpers.getConditionId", surviving, bare)
+    assert _survives("CombinatorialModule.getConditionId", surviving, bare)
+    # host-less candidate with no bare-name match stays out
+    assert not _survives("notReachable", surviving, bare)
+
+
+def _elem(name):
+    return {"nodeType": "ElementaryTypeName", "name": name}
+
+
+def _arr(base):
+    return {"nodeType": "ArrayTypeName", "baseType": base}
+
+
+def _udt(ref):
+    return {"nodeType": "UserDefinedTypeName", "referencedDeclaration": ref}
+
+
+def test_expressible_typename_recurses_arrays_and_structs():
+    # value types / fixed bytes expressible; dynamic bytes/string not
+    assert _expressible_typename(_elem("uint256"), {}) and _expressible_typename(_elem("bytes32"), {})
+    assert not _expressible_typename(_elem("bytes"), {}) and not _expressible_typename(_elem("string"), {})
+    # NESTING the flat check missed: bytes[] and struct-with-a-bytes-field are NOT expressible
+    assert _expressible_typename(_arr(_elem("uint256")), {})
+    assert not _expressible_typename(_arr(_elem("bytes")), {})            # bytes[]
+    merged = {
+        "10": {"nodeType": "UserDefinedValueTypeDefinition"},             # a UDVT (e.g. PositionId)
+        "20": {"nodeType": "StructDefinition", "members": [{"typeName": _elem("bytes")}]},
+        "30": {"nodeType": "StructDefinition", "members": [{"typeName": _elem("uint256")}]},
+        "50": {"nodeType": "StructDefinition",                            # struct WITH a mapping field
+               "members": [{"typeName": {"nodeType": "Mapping"}}, {"typeName": _elem("uint256")}]},
+    }
+    assert _expressible_typename(_udt(10), merged)                        # UDVT -> value-like
+    assert _expressible_typename(_arr(_udt(10)), merged)                  # PositionId[] -> expressible
+    assert not _expressible_typename(_udt(20), merged)                   # struct WITH a bytes field
+    assert _expressible_typename(_udt(30), merged)                       # struct of value types
+    assert not _expressible_typename({"nodeType": "Mapping"}, merged)    # mapping
+    assert not _expressible_typename(_udt(50), merged)                   # mapping nested in a struct
+
+
+def test_caller_boundaries_prefers_expressible_pure_callers():
+    # leaf <- encodeFromData (opaque) <- mutClose (clean but MUTATING, hop2) <- pureFar (clean+pure, hop3)
+    edges = {
+        "L.encodeFromData": {"computeBaseHash"},
+        "M.mutClose": {"L.encodeFromData"},
+        "M.pureFar": {"M.mutClose"},
+    }
+    sigs = {                                        # (signature, expressible, has_return, mutating)
+        "L.encodeFromData": ("encodeFromData(uint256, bytes) -> C", False, True, False),  # opaque bytes arg
+        "M.mutClose": ("mutClose(PositionId[]) -> C", True, True, True),                   # clean but mutating
+        "M.pureFar": ("pureFar(PositionId[]) -> C", True, True, False),                    # clean + pure
+    }
+    reach = {"computeBaseHash", "L.encodeFromData", "M.mutClose", "M.pureFar"}
+    b = _caller_boundaries(edges, sigs, "computeBaseHash", reach)
+    # pure+clean wins even though FARTHER; mutating-clean next; opaque last (view-preference beats distance)
+    assert [x.function for x in b] == ["M.pureFar", "M.mutClose", "L.encodeFromData"]
+    assert b[0].expressible and not b[0].mutating
+    assert b[1].expressible and b[1].mutating
+    assert not b[2].expressible
+
+
+def test_caller_boundaries_filters_to_reachable():
+    edges = {"C.caller": {"computeBaseHash"}}
+    sigs = {"C.caller": ("caller(uint256) -> bytes32", True, True, False)}
+    assert _caller_boundaries(edges, sigs, "computeBaseHash", reachable={"computeBaseHash"}) == []  # caller unreached
+    assert _caller_boundaries(edges, sigs, "computeBaseHash", reachable=None)                       # no filter -> kept
+
+
+def test_boundary_tags_distinguish_no_return_from_opaque_sig():
+    from summarization_detector.detect import DetectionReport, Candidate, Boundary
+    rep = DetectionReport(candidates=[Candidate(
+        "leaf", "", ("hashing",), "over_approx", 10.0, "ev",
+        boundaries=[
+            # void (all value-type args, no return) — NOT opaque, just nothing to model
+            Boundary("A.consumePermit", 1, "consumePermit(address, uint256)", expressible=False,
+                     has_return=False, mutating=True),
+            # has a return but an opaque `bytes` param — genuinely opaque signature
+            Boundary("A.encodeFromData", 1, "encodeFromData(bytes) -> b32", expressible=False,
+                     has_return=True, mutating=False),
+        ])])
+    lines = rep.format().splitlines()
+    permit_line = next(ln for ln in lines if "consumePermit" in ln)
+    enc_line = next(ln for ln in lines if "encodeFromData" in ln)
+    assert "no return value" in permit_line and "opaque sig" not in permit_line   # void -> distinct tag
+    assert "opaque sig" in enc_line                                               # opaque-type keeps its tag
+
+
+def test_descend_to_prims_finds_shared_nonlinear_primitive():
+    from summarization_detector.detect import _descend_to_prims, _is_nonlinear_prim
+    assert _is_nonlinear_prim("MathLib.mulDivDown") and not _is_nonlinear_prim("V.previewDeposit")
+    edges = {                                                   # both methods reach MathLib.mulDivDown
+        "V.previewDeposit": {"V.accrueInterestView", "MathLib.mulDivDown"},
+        "V.accrueInterestView": {"MathLib.mulDivDown"},
+        "V.deposit": {"V.previewDeposit"},
+    }
+    assert _descend_to_prims(edges, "V.previewDeposit", None) == {"MathLib.mulDivDown": 1}
+    assert _descend_to_prims(edges, "V.deposit", None) == {"MathLib.mulDivDown": 2}     # transitive, min depth
+    # a primitive not in the reachable set is dropped (never suggest dead code)
+    assert _descend_to_prims(edges, "V.previewDeposit", reachable={"V.previewDeposit"}) == {}
+
+
+def test_boundary_down_direction_renders_shared_count():
+    from summarization_detector.detect import DetectionReport, Candidate, Boundary
+    rep = DetectionReport(candidates=[Candidate(
+        "V.previewDeposit", "V", ("nonlinear",), "over_approx", 100.0, "ev",
+        boundaries=[Boundary("MathLib.mulDivDown", 2, "mulDivDown(uint256, uint256, uint256) -> uint256",
+                             expressible=True, has_return=True, mutating=False, direction="down", shared=8)])])
+    line = next(ln for ln in rep.format().splitlines() if "mulDivDown" in ln)
+    assert "↓" in line and "shared ×8" in line and "summarizable here" in line
 
 
 def test_reachable_from_main_internal_edges():
