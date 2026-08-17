@@ -284,10 +284,11 @@ class ValidateSpec(
     """
     Build your current spec and run the verifier over the {checks} you declared.
 
-    What runs is exactly what `map_checks` declared, so declare before validating. Each {check}
-    runs under its validation target; several {checks} may share one, and each distinct target runs
-    once. The report records the verdicts verbatim — including a {check} the verifier could not find
-    or never exercised, which does NOT pass.
+    Only the names `map_checks` listed are run — a {check} that is in the spec but not mapped is
+    not run — so declare before validating. Each {check} runs under its validation target; several
+    {checks} may share one, and each distinct target runs once. The report records the verdicts
+    verbatim — including a {check} the verifier could not find or never exercised, which does NOT
+    pass.
 
     The publish gate is stamped only by a run that covers EVERY declared {check} and comes back
     clean — where a {check} you marked with `expect_check_failure` counts as clean. Naming
@@ -312,8 +313,8 @@ class ValidateSpec(
             if not wanted:
                 return (
                     f"No {vocab.many} declared yet, so there is nothing to run. Use `map_checks` "
-                    f"to say which {vocab.many} in your spec verify which property — that "
-                    f"declaration is what gets validated."
+                    f"to say which {vocab.many} in your spec verify which property — only those "
+                    f"names are run."
                 )
             if self.checks is not None:
                 asked = set(self.checks)
@@ -642,9 +643,9 @@ class MapChecks(
     """
     Declare which {checks} in your spec verify which property.
 
-    This declaration is what gets run: the distinct {check} names in it are exactly what
-    `validate_spec` executes, and it is what the publish gate is validated against. Declare before
-    validating, and call this again to revise — each call replaces the whole declaration.
+    `validate_spec` runs only the names you list here — a {check} that is in the spec but not
+    mapped is not run — and the publish gate is held to this mapping. Declare before validating,
+    and call this again to revise — each call replaces the whole mapping.
 
     A property may need several {checks}, and one {check} may carry several properties: name it
     under each. Do not name a property you skipped.
@@ -662,7 +663,7 @@ class MapChecks(
             self.tool_call_id,
             f"Recorded: {len(self.property_checks)} propert"
             f"{'y' if len(self.property_checks) == 1 else 'ies'} mapped onto "
-            f"{', '.join(names)}. Validating now runs exactly these.",
+            f"{', '.join(names)}. `validate_spec` now runs only these names.",
             property_checks=self.property_checks,
         )
 
@@ -1011,7 +1012,8 @@ def _initial_prompt(prompt: Prompt, component: bool, vocab: CheckVocab) -> str:
         return prompt.instruction
     return (
         f"{prompt.instruction}\n\nDeclare with `map_checks` which {vocab.many} verify which "
-        f"property before you validate: that declaration is what gets run. Every property must be "
+        f"property before you validate. `validate_spec` runs only the names you list there — a "
+        f"{vocab.one} that is in the spec but not mapped is not run. Every property must be "
         f"verified by at least one {vocab.one} or skipped with a reason, every {vocab.one} you "
         f"declare must really be in your spec, and one {vocab.one} may carry several properties."
     )

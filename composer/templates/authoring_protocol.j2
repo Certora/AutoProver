@@ -22,10 +22,11 @@ ground truth: a failure is something to fix, not something to argue with. Its ap
 against the *exact* buffer it saw, so any later edit invalidates it and you must run it again.
 {% if has_checks %}
 **What gets checked.** `map_checks` declares which {{ check_noun }}s in your spec verify which
-property, and that declaration is what `{{ gate_tool }}` runs — so declare it before you validate,
-and re-declare it whenever the set of {{ check_noun }}s changes. A property may need several
-{{ check_noun }}s and one {{ check_noun }} may carry several properties. A {{ check_noun }} you name
-but did not actually write does not quietly pass: it comes back as not-run and the gate refuses.
+property. `{{ gate_tool }}` runs only the names you list there — a {{ check_noun }} that is in the
+spec but not mapped is not run. Declare it before you validate, and re-declare it whenever the set
+of {{ check_noun }}s changes. A property may need several {{ check_noun }}s and one {{ check_noun }}
+may carry several properties. A {{ check_noun }} you name but did not actually write does not
+quietly pass: it comes back as not-run and the gate refuses.
 
 **Skips.** If a property genuinely cannot be formalized here, `record_skip` it with a justification
 rather than writing a {{ check_noun }} that only appears to check it. A skip is reviewed like
