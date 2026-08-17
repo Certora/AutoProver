@@ -16,13 +16,13 @@ def check_completion(
     digest = compute_state_digest(state=state)
     m = state.get("validation", {})
     for req_v in ctxt.required_validations:
-        if req_v not in m or digest != m[req_v.to_key()]:
+        if req_v.to_key() not in m or digest != m[req_v.to_key()]:
             return Command(
                 update={
                     "messages": [
                         ToolMessage(
                             tool_call_id=tool_call_id,
-                            content=f"Result completion REJECTED; it appears you failed to satisfy the {req_v} requirement"
+                            content=f"Result completion REJECTED; it appears you failed to satisfy the {req_v.description()} requirement"
                         ),
                         HumanMessage(
                             content="You have apparently become confused about the status of your task. Evaluate the current "

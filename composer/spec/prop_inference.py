@@ -16,7 +16,9 @@ from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMes
 from composer.input.files import Document
 from composer.llm.types import CacheLevel
 from composer.spec.gen_types import TypedTemplate
+from composer.spec.util import combine_digests
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
+from composer.spec.key_family import KeyFamily
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.types import PropertyFormulation
@@ -111,33 +113,33 @@ def render_evm_property_prompt(
 class _AgentRoundWithHistory(_AgentRoundResult):
     agent_conversation: list[AnyMessage]
 
-def bug_analysis_key_from_digest(
+def _bug_analysis_key(
     threat_model_digest: str | None,
-    with_refinement: bool
-) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
+    with_refinement: bool,
+    extra_context_digest: str | None = None,
+) -> str:
     base_key = "bug_analysis"
     if with_refinement:
         base_key += "|refine"
-    if threat_model_digest is None:
-        return CacheKey[ComponentGroup, _BugAnalysisCache](base_key)
-    return CacheKey[ComponentGroup, _BugAnalysisCache](base_key + "-tm-" + threat_model_digest)
+    if threat_model_digest is not None:
+        base_key += "-tm-" + threat_model_digest
+    if extra_context_digest is not None:
+        base_key += "-xc-" + extra_context_digest
+    return base_key
 
-def bug_analysis_key(
-    threat_model: Document | None,
-    with_refinement: bool
-) -> CacheKey[ComponentGroup, _BugAnalysisCache]:
-    return bug_analysis_key_from_digest(
-        threat_model.to_digest() if threat_model is not None else None,
-        with_refinement,
-    )
+#: Parameterized on the *digests* of the documents that fed the prompt (not the
+#: documents) so a recorded digest — e.g. from a run's cache tags — can rebuild the key.
+#: Each input contributes a suffix only when present, so a run with neither document
+#: keeps the bare ``bug_analysis`` key.
+BUG_ANALYSIS_KEY = KeyFamily(ComponentGroup, _BugAnalysisCache, _bug_analysis_key)
 
 class _AgentResult(_BugAnalysisCache):
     final_history: list[AnyMessage]
 
-def agent_round_key(
-    i: int
-) -> CacheKey[_AgentResult, _AgentRoundWithHistory]:
-    return CacheKey[_AgentResult, _AgentRoundWithHistory](f"round-{i}")
+def _agent_round_key(i: int) -> str:
+    return f"round-{i}"
+
+AGENT_ROUND_KEY = KeyFamily(_AgentResult, _AgentRoundWithHistory, _agent_round_key)
 
 AGENT_RESULT_KEY = CacheKey[_BugAnalysisCache, _AgentResult]("agent_bug_analysis")
 
@@ -268,7 +270,7 @@ async def _run_bug_round(
     prev: list[_AgentRoundResult],
     system_prompt: str
 ) -> _AgentRoundWithHistory:
-    round_ctx = ctx.child(agent_round_key(round))
+    round_ctx = ctx.child(AGENT_ROUND_KEY(round))
     if (cached := await round_ctx.cache_get(_AgentRoundWithHistory)) is not None:
         return cached
 
@@ -376,6 +378,7 @@ async def run_property_inference[U: FeatureUnit](
     component: U,
     extra_input : Sequence[AnyPropertyGenerationInput] = tuple(),
     threat_model: Document | None = None,
+    extra_context: Sequence[Document] = (),
     refinement: ConversationContextProvider | None = None,
     max_rounds: int = 3,
     *,
@@ -391,9 +394,18 @@ async def run_property_inference[U: FeatureUnit](
     tests, each describing what is and isn't a fit for *their* verification surface. It lives in
     the system prompt (rendered once) rather than the per-round initial prompt so it stays inside
     the cached prefix.
+
+    ``extra_context`` is any number of documents the user supplied about the application.
+    Unlike ``threat_model`` they make no claim to be a list of *threats* — they are
+    presented as authoritative background, not a checklist. Rendered in the order given,
+    each labelled with its filename.
     """
 
-    component_analysis = ctx.child(bug_analysis_key(threat_model, refinement is not None))
+    component_analysis = ctx.child(BUG_ANALYSIS_KEY(
+        threat_model.to_digest() if threat_model is not None else None,
+        refinement is not None,
+        combine_digests([d.to_digest() for d in extra_context]),
+    ))
     if (cached := await component_analysis.cache_get(_BugAnalysisCache)) is not None:
         return cached.items
 
@@ -409,12 +421,39 @@ async def run_property_inference[U: FeatureUnit](
         actual_extra_input.append(CacheablePropertyGenerationInput(
             "certora:thread_model", "generic", "always",
             provide=lambda cache: [
-                "In addition, a coworker has already written a 'threat model' for this application, which may include vulnerabilities/issues that"
+                "In addition, a coworker has already written a 'threat model' for this application, which may include vulnerabilities/issues that "
                 "are common in this type of application. This threat model is written for the entire application (not just the component you are analyzing) "
                 "so some of the issues/vulnerabilities/attacks may not be relevant to your analysis. Do *NOT* overfit to this threat model; carefully "
                 "analyze what content of the provided threat model is worth considering vs out of scope. Further, this threat model is just a starting point, "
-                "you should ALSO look for threats *not* mentioned in this document.",
+                "you should ALSO look for threats *not* mentioned in this document.\n\n",
                 threat_model.to_dict(cache_level=to_cache_level(cache))
+            ]
+        ))
+    if extra_context:
+        def extra_context_blocks(cache: bool) -> list[RawMessageType]:
+            # Each document introduced by its filename, then its body. Only the final
+            # body carries the cache marker: a breakpoint is a prefix boundary, so
+            # marking an interior one spends one of the four without extending the
+            # cached prefix.
+            blocks: list[RawMessageType] = []
+            for i, doc in enumerate(extra_context):
+                is_last = i == len(extra_context) - 1
+                blocks.append(f"--- {doc.basename} ---\n\n")
+                blocks.append(doc.to_dict(cache_level=to_cache_level(cache and is_last)))
+            return blocks
+
+        actual_extra_input.append(CacheablePropertyGenerationInput(
+            "certora:extra_context", "generic", "always",
+            provide=lambda cache: [
+                f"In addition, the user requesting this analysis has provided the following extra context about "
+                f"the application ({len(extra_context)} document(s), each introduced by its filename below): "
+                "notes, assumptions, deployment details, or anything else they considered relevant. It was "
+                "written for the entire application (not just the component you are analyzing), so parts of it "
+                "may not bear on your analysis. Treat it as authoritative information about how the system is "
+                "intended to work and be deployed, and let it inform which behaviors count as violations. It "
+                "is *NOT* a list of the issues to look for and it is *NOT* exhaustive: keep looking for "
+                "problems it does not mention.\n\n",
+                *extra_context_blocks(cache),
             ]
         ))
 

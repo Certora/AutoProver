@@ -67,6 +67,7 @@ from typing import Any
 import uuid
 
 from composer.testing.harness_tape import HarnessFakeLLM, install_fake_llm
+from composer.spec.source.prover import STUCK_RULE_NAG_THRESHOLD
 from composer.spec.source.task_ids import (
     DESIGN_DOC_DISCOVERY_TASK_ID,
     SYSTEM_ANALYSIS_TASK_ID, HARNESS_TASK_ID, INVARIANTS_TASK_ID,
@@ -277,13 +278,14 @@ _APP_RESULT = {
 #
 # Shape must satisfy pydantic validation of
 # ``composer.spec.source.harness.AgentSystemDescription`` AND the
-# ``classifier_agent`` validator: every ``transitive_closure[*].name`` must
-# map to a known SourceExplicitContract, every ``external_interfaces[*].name``
+# ``classifier_agent`` validator: every ``transitive_closure[*].solidity_identifier``
+# must map to a known SourceExplicitContract, every ``external_interfaces[*].name``
 # must map to a known SourceExternalActor (with a path).
 #
-# We use ``num_instances=None`` so ``needs_harnessing()`` returns False and
-# the harness-generation sub-agent is skipped. ``erc20_contracts=[]`` and
-# ``external_interfaces=[]`` so the summaries sub-agent is skipped.
+# We use ``harness_determination=None`` (→ ``num_instances`` None) so
+# ``needs_harnessing()`` returns False and the harness-generation sub-agent is
+# skipped. ``erc20_contracts=[]`` and ``external_interfaces=[]`` so the
+# summaries sub-agent is skipped.
 
 _CLASSIFIER_RESULT = {
     "non_trivial_state": (
@@ -1455,6 +1457,256 @@ _CURTAILED_CVL_TAPE: list[BaseMessage] = [
 ]
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Stuck-rule nag variant lanes
+# ───────────────────────────────────────────────────────────────────────────
+# Alternate authoring lanes for the prover-nag integration test
+# (``tests/test_prover_nag_integration.py``). That test mocks ``run_prover``
+# and assigns statuses by rule name (every declared rule VERIFIED except
+# NAG_STUCK_RULE → SANITY_FAILED), so no prover jobs run; the spec is kept
+# live-prover-honest anyway: the third rule's contradictory ``require``s make
+# its body unreachable, so it typechecks (put_cvl_raw's real Typechecker gate
+# still runs) and a real run would report the same SANITY_FAILED via
+# ``rule_sanity: basic`` (forced by ``prover_config_overlay``) — with no
+# counterexample, so no CEX-analysis entries are consumed either way.
+# The author runs the spec ``STUCK_RULE_NAG_THRESHOLD`` times, nudging it with
+# a trailing comment between runs: the streak detector keys on (rule, status),
+# not spec digest, so the nudge doesn't reset it — while keeping every run's
+# digest distinct, clear of the identical-spec re-run gate in ``verify_spec``
+# (today it only fires on TIMEOUT results, but it is expected to broaden to
+# the other stuck statuses). The last run trips the stuck-rule detector, which appends a
+# NagMarker to ``prover_history`` and queues the reminder the author monitor
+# injects as a ``<system-reminder>`` HumanMessage. The author then reacts as
+# the reminder suggests — marks the rule expected-to-fail — and re-verifies
+# (the skipped rule no longer blocks ``all_verified``, and must NOT be
+# re-nagged). The judge round comes AFTER the streak: every put invalidates
+# the feedback stamp, so it is earned once, on the final spec text.
+
+#: The rule the nag tape gets stuck on (and then marks expected-to-fail).
+NAG_STUCK_RULE = "incrementOther_credits_target_when_distinct"
+
+# Same two passing increment() rules as COMPONENT_CVL; the third rule's
+# contradictory requires make it permanently vacuous → SANITY_FAILED.
+NAG_COMPONENT_CVL = """\
+methods {
+    function count() external returns (uint256) envfree;
+    function increments(address) external returns (uint256) envfree;
+    function increment() external;
+    function incrementOther(address) external;
+}
+
+rule increment_increases_count {
+    env e;
+    mathint before = count();
+    increment(e);
+    assert to_mathint(count()) == before + 1,
+        "increment() must increase count by exactly 1";
+}
+
+rule increment_increases_sender_tally {
+    env e;
+    address s = e.msg.sender;
+    mathint before = increments(s);
+    increment(e);
+    assert to_mathint(increments(s)) == before + 1,
+        "increment() must increase increments[msg.sender] by exactly 1";
+}
+
+rule incrementOther_credits_target_when_distinct {
+    env e;
+    address other;
+    require other != e.msg.sender;
+    require other == e.msg.sender;
+    mathint before_other = increments(other);
+    incrementOther(e, other);
+    assert to_mathint(increments(other)) == before_other + 1,
+        "incrementOther(other) must increase increments[other] by exactly 1 when other != msg.sender";
+}
+"""
+
+
+# Minimal happy-path invariant lane: the nag test doesn't re-pay the
+# broken-parse / bad-draft / CEX detours the main tape covers — one judge
+# round, one (passing) prover run, publish.
+_NAG_INVARIANT_CVL_TAPE: list[BaseMessage] = [
+    _ai(
+        "Drafting the structural invariants.",
+        _tc("put_cvl_raw", cvl_file=GOOD_INV_CVL),
+    ),
+    _ai(
+        "Requesting judge feedback.",
+        _tc("feedback_tool"),
+    ),
+    _ai(
+        "Judge: inspecting the spec.",
+        _tc("get_cvl"),
+        _tc(
+            "write_rough_draft",
+            rough_draft=(
+                "Both approved invariants (increments_sum_is_count, "
+                "zero_address_is_zero) are faithfully encoded, with the ghost "
+                "seeded by an init_state axiom. Verdict: GOOD."
+            ),
+        ),
+    ),
+    _ai(
+        "Judge: reading the draft.",
+        _tc("read_rough_draft"),
+    ),
+    _ai(
+        "Judge: approving the spec.",
+        _tc("result", good=True, feedback=""),
+    ),
+    _ai(
+        "Running the prover on the invariants.",
+        _tc("verify_spec", rules=None),
+    ),
+    _ai(
+        "Finalizing the invariant CVL.",
+        _tc(
+            "result",
+            commentary=(
+                "Formalized the two structural invariants "
+                "(increments_sum_is_count, zero_address_is_zero)."
+            ),
+            property_rules=[
+                {"property_title": "increments_sum_is_count", "rules": ["increments_sum_is_count"]},
+                {"property_title": "zero_address_is_zero", "rules": ["zero_address_is_zero"]},
+            ],
+        ),
+    ),
+]
+
+
+def _nag_attempt_spec(i: int) -> str:
+    """The spec for streak attempt ``i`` (0-based). Attempts differ only by a
+    trailing comment: the streak detector keys on (rule, status), so the nudge
+    doesn't reset it, while every run's spec digest stays distinct — clear of
+    the identical-spec re-run gate in ``verify_spec``."""
+    if i == 0:
+        return NAG_COMPONENT_CVL
+    return (
+        f"{NAG_COMPONENT_CVL}\n"
+        f"// Attempt {i + 1}: nudging the spec to retry the sanity failure.\n"
+    )
+
+
+def _nag_streak_turns() -> list[BaseMessage]:
+    """The stuck streak: threshold-many put/verify rounds. Each run: two rules
+    VERIFIED, the vacuous rule SANITY_FAILED (never VIOLATED → no CEX
+    entries). The final run reaches the threshold and fires the nag; the
+    author monitor injects the <system-reminder> before the next turn."""
+    turns: list[BaseMessage] = [
+        _ai(
+            "Writing the component spec covering all three properties.",
+            _tc("put_cvl_raw", cvl_file=_nag_attempt_spec(0)),
+        ),
+        _ai(
+            "Running the prover on the component spec.",
+            _tc("verify_spec", rules=None),
+        ),
+    ]
+    for i in range(1, STUCK_RULE_NAG_THRESHOLD):
+        turns.append(_ai(
+            f"The sanity failure could be transient — nudging the spec and "
+            f"trying again (attempt {i + 1}).",
+            _tc("put_cvl_raw", cvl_file=_nag_attempt_spec(i)),
+        ))
+        turns.append(_ai(
+            f"Re-running the prover (attempt {i + 1}).",
+            _tc("verify_spec", rules=None),
+        ))
+    return turns
+
+
+_NAG_CVL_TAPE: list[BaseMessage] = [
+
+    # NG1..NG{2×threshold} — put the component spec with the permanently-
+    # vacuous third rule, then the nudge/verify streak up to the threshold.
+    *_nag_streak_turns(),
+
+    # NG-react — the turn after the nag reminder landed. React as it suggests:
+    # take the stuck rule out of the verification obligation. rule_skips is
+    # not part of the validation digest, so the feedback stamp survives.
+    _ai(
+        "The reminder is right — the rule has failed sanity identically on "
+        "every run; its requires are unsatisfiable as written. Marking it "
+        "expected-to-fail and moving on rather than burning more prover runs.",
+        _tc(
+            "expect_rule_failure",
+            rule_name=NAG_STUCK_RULE,
+            reason=(
+                "Stuck in SANITY_FAILED across repeated identical runs (the "
+                "rule body is vacuous — the requires are contradictory). "
+                "Flagged by the stuck-rule reminder; excluded from the "
+                "verification obligation instead of re-running."
+            ),
+        ),
+    ),
+
+    # NG-verify — re-verify. The skipped rule is excluded from all_verified
+    # AND from the stuck-rule tally (no re-nag); the two increment() rules
+    # pass, so rules=None + all_verified stamps validations["prover"] at the
+    # digest of the final (attempt-nudged) spec.
+    _ai(
+        "Re-running the prover with the stuck rule excluded.",
+        _tc("verify_spec", rules=None),
+    ),
+
+    # NG-judge — the feedback round runs AFTER the streak: every nudge put
+    # invalidated any earlier feedback stamp, so it is earned once here, on
+    # the final spec text (matching the prover stamp above). The judge
+    # approves on property coverage — it doesn't run the prover, so the
+    # vacuity goes unnoticed, deliberately.
+    _ai(
+        "Requesting judge feedback on the component spec.",
+        _tc("feedback_tool"),
+    ),
+    _ai(
+        "Judge: inspecting the component spec.",
+        _tc("get_cvl"),
+        _tc(
+            "write_rough_draft",
+            rough_draft=(
+                "Three rules, one per extracted property, each asserting the "
+                "exact post-condition. The incrementOther rule is recorded as "
+                "expected-to-fail with a documented reason. Coverage is "
+                "complete. Verdict: GOOD."
+            ),
+        ),
+    ),
+    _ai(
+        "Judge: reading the draft.",
+        _tc("read_rough_draft"),
+    ),
+    _ai(
+        "Judge: approving the component spec.",
+        _tc("result", good=True, feedback=""),
+    ),
+
+    # NG-publish — coverage maps the third property onto the vacuous rule
+    # (allowed for expected-to-fail rules, mirroring the main tape's R6).
+    _ai(
+        "Finalizing the component CVL.",
+        _tc(
+            "result",
+            commentary=(
+                "Formalized all three extracted safety properties. The two "
+                "increment() rules verify. The incrementOther rule is stuck "
+                "in a sanity failure (vacuous body) and was marked "
+                "expected-to-fail after the stuck-rule reminder fired; it "
+                "needs a human rewrite."
+            ),
+            property_rules=[
+                {"property_title": "count_increments_by_one", "rules": ["increment_increases_count"]},
+                {"property_title": "sender_increments_by_one", "rules": ["increment_increases_sender_tally"]},
+                {"property_title": "other_increments_by_one", "rules": [NAG_STUCK_RULE]},
+            ],
+        ),
+    ),
+]
+
+
 # Design-doc discovery lane. Only consumed when the run omits the design doc
 # (system_doc=None); the finder lists the project, reads the design doc, and selects
 # it. Counter's design doc is ``system.md`` at the scenario root. A single flat lane:
@@ -1510,6 +1762,21 @@ _AUTOPROVE_CURTAILED_TAPE: dict[str, list[BaseMessage]] = {
 }
 
 
+# The stuck-rule nag variant: identical up-front phases, minimal invariant
+# authoring, and the nag-exercising formalize lane. The report lane is the
+# main tape's verbatim — this variant formalizes the same five properties.
+_AUTOPROVE_NAG_TAPE: dict[str, list[BaseMessage]] = {
+    DESIGN_DOC_DISCOVERY_TASK_ID: _DESIGN_DOC_TAPE,
+    SYSTEM_ANALYSIS_TASK_ID: _SYSTEM_ANALYSIS_TAPE,
+    HARNESS_TASK_ID: _HARNESS_TAPE,
+    INVARIANTS_TASK_ID: _INVARIANTS_TAPE,
+    INVARIANT_CVL_TASK_ID: _NAG_INVARIANT_CVL_TAPE,
+    extract_task_id(0): _BUG_TAPE,
+    formalize_task_id(0): _NAG_CVL_TAPE,
+    REPORT_TASK_ID: _REPORT_TAPE,
+}
+
+
 # ---------------------------------------------------------------------------
 # Install / configuration API
 # ---------------------------------------------------------------------------
@@ -1560,16 +1827,38 @@ def install_curtailment_tape(with_delay: bool = True) -> HarnessFakeLLM:
     return _install(get_autoprove_Counter_curtailment_llm(with_delay))
 
 
+def autoprove_nag_lanes() -> dict[str, list[BaseMessage]]:
+    """The nag-variant lane map, for callers that construct their own
+    ``HarnessFakeLLM`` (e.g. the nag test's reminder-sniffing subclass)."""
+    return dict(_AUTOPROVE_NAG_TAPE)
+
+
+def install_nag_tape(
+    with_delay: bool = True, *, fake: HarnessFakeLLM | None = None
+) -> HarnessFakeLLM:
+    """``install_harness_tape``, but with the stuck-rule nag tape. Pass ``fake``
+    (built over ``autoprove_nag_lanes()``) to install a custom subclass instead
+    of the default; ``with_delay`` only applies to the default construction."""
+    return _install(
+        fake if fake is not None
+        else HarnessFakeLLM(lanes=_AUTOPROVE_NAG_TAPE, with_human_delay=with_delay)
+    )
+
+
 __all__ = [
     "BAD_INV_CVL",
     "BROKEN_PARSE_CVL",
     "COMPONENT_CVL",
     "GOOD_INV_CVL",
+    "NAG_COMPONENT_CVL",
+    "NAG_STUCK_RULE",
     "SUBTLE_INV_CVL",
+    "autoprove_nag_lanes",
     "get_autoprove_Counter_llm",
     "get_autoprove_Counter_curtailment_llm",
     "install_harness_tape",
     "install_curtailment_tape",
+    "install_nag_tape",
 ]
 
 

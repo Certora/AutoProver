@@ -244,7 +244,7 @@ async def analyze_single_contract(
                 extra_input=[
                     CacheablePropertyGenerationInput(
                         "certora:system-doc", "generic", "always", lambda cache: [
-                            "For reference, the system document describing the entire application is as follows.",
+                            "For reference, the system document describing the entire application is as follows.\n\n",
                             system_doc.content.to_dict(CacheLevel.SHORT if cache else CacheLevel.NONE)
                         ]
                     )
