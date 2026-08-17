@@ -1,6 +1,6 @@
 from langchain_core.messages import ToolMessage
 from dataclasses import dataclass, field
-from typing import Callable, Concatenate
+from typing import Any, Callable, Concatenate
 
 from contextvars import ContextVar
 from contextlib import contextmanager, asynccontextmanager
@@ -368,7 +368,7 @@ def _register_tool_spec(
 
 from typing import TypeVar
 
-from graphcore.tools.schemas import WithAsyncDependencies, WithAsyncImplementation, WithImplementation, ToolBuilder, TemplatedTool
+from graphcore.tools.schemas import ToolFamilyParams, WithAsyncDependencies, WithAsyncImplementation, WithImplementation, ToolBuilder, _TemplatedTool, tool_family
 from langchain_core.tools import BaseTool
 from functools import wraps
 
@@ -457,10 +457,10 @@ def tool_family_display[**P, T: type[WithAsyncDependencies] | type[WithAsyncImpl
     label: ToolDisplayFamily[P],
     result: ResultFamilyDisplay[P],
     short_label: ToolDisplayFamily[P] | None = None
-) -> Callable[[TemplatedTool[T, P]], TemplatedTool[T, P]]:
+) -> Callable[[type[_TemplatedTool[T, Any, P]]], type[_TemplatedTool[T, Any, P]]]:
     def wrapper(
-        f: TemplatedTool[T, P]
-    ) -> TemplatedTool[T, P]:
+        f: type[_TemplatedTool[T, Any, P]]
+    ) -> type[_TemplatedTool[T, Any, P]]:
         old_with_template = f.with_template
         @wraps(old_with_template)
         def new_with_template(*args: P.args, **kwargs: P.kwargs) -> T:
