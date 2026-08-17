@@ -16,6 +16,7 @@ from pydantic import (
 from composer.input.types import (
     ExtendedModelOptions,
 )
+from composer.input.files import Document, resolve_document_paths
 
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.spec.context import SourceFields, WorkflowContext, SourceCode
@@ -149,6 +150,13 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
 
     @property
     def threat_model(self) -> str | None:
+        ...
+
+    @property
+    def extra_context(self) -> list[str] | None:
+        """Documents of user-supplied background about the application, fed to property
+        inference in the order given. A directory entry is swept for the documents in
+        it."""
         ...
 
     @property
@@ -328,6 +336,16 @@ async def cli_pipeline[P: enum.Enum, H](
                 await conns.uploader.get_document(pathlib.Path(threat_path))
                 if (threat_path := args.threat_model) is not None else None
             )
+            # Gathered rather than awaited one at a time: a swept directory of PDFs is
+            # one upload round trip each. ``gather`` preserves order, which the prompt
+            # and the bug-analysis cache key both depend on.
+            context_paths = resolve_document_paths(args.extra_context)
+            loaded = await asyncio.gather(*(conns.uploader.get_document(p) for p in context_paths))
+            extra_context: list[Document] = []
+            for path, doc in zip(context_paths, loaded):
+                if doc is None:
+                    raise ValueError(f"Fatal error, failed to read extra context: {path}")
+                extra_context.append(doc)
             if budget is not None:
                 await data_logger("budget", {
                     "total": budget.total, "caps": dict(budget.caps),
@@ -352,6 +370,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     memory_ns=memory_ns,
                     plugins=applicable_plugin_manifest(ecosystem.unit_type),
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
+                    extra_context_digests=[d.to_digest() for d in extra_context],
                     interactive=args.interactive,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
@@ -376,6 +395,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
                     threat_model=threat_model,
+                    extra_context=extra_context,
                     budget=budget,
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,

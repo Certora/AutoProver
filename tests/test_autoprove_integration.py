@@ -91,6 +91,7 @@ def _make_args(rag_conn: str, scenario_dir: Path, system_doc: str | None) -> Aut
         cloud=True,
         interactive=False,
         threat_model=None,
+        extra_context=None,
         recursion_limit=100,
         max_bug_rounds=1,
         # Part of the AutoProveArgs surface (`--budget`); these runs are unbudgeted.

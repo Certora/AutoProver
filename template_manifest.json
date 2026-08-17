@@ -59,6 +59,30 @@
     "template_name": "solana/property_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.pipeline.ecosystem:SOROBAN_ANALYSIS_SYSTEM_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_ANALYSIS_SYSTEM_TEMPLATE",
+    "template_name": "soroban/analysis_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_ANALYSIS_INITIAL_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_ANALYSIS_INITIAL_TEMPLATE",
+    "template_name": "soroban/analysis_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_PROPERTY_SYSTEM_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_PROPERTY_SYSTEM_TEMPLATE",
+    "template_name": "soroban/property_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_PROPERTY_INITIAL_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_PROPERTY_INITIAL_TEMPLATE",
+    "template_name": "soroban/property_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.rustapp.session:ProtocolTemplate": {
     "module": "composer.rustapp.session",
     "qualname": "ProtocolTemplate",

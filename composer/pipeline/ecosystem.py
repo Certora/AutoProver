@@ -16,7 +16,7 @@ Solana model + prompts and reuses the shared ``RUST`` language facet. See ``docs
 
 from dataclasses import dataclass
 from pathlib import PurePath
-from typing import Any, Callable, Literal, Mapping, TypedDict
+from typing import Any, Callable, Collection, Literal, Mapping, TypedDict
 
 from composer.spec.context import SourceCode
 from composer.spec.code_explorer import CODE_EXPLORER_SYS_PROMPT
@@ -53,6 +53,15 @@ from composer.spec.solana.model import (
     SolanaComponentInstance,
     SolanaProgram,
     SolanaProgramInstance,
+)
+from composer.spec.soroban.model import (
+    AuthorityInteraction as SorobanAuthorityInteraction,
+    SorobanApplication,
+    SorobanAuthority,
+    SorobanComponentInstance,
+    SorobanContract,
+    SorobanContractInstance,
+    StorageDurability,
 )
 from composer.spec.util import fs_forbidden_read, slugify_filename
 
@@ -148,11 +157,14 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     supports_greenfield: bool
 
 
-#: Names for the two concrete instantiations, so a consumer that is pinned to one chain can say so
+#: Names for the concrete instantiations, so a consumer that is pinned to one chain can say so
 #: without respelling the triple (or erasing it to ``Any``). :class:`Ecosystems` declares the same
 #: pairing; these are what its fields are typed with.
 type EvmEcosystem = Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance]
 type SolanaEcosystem = Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance]
+type SorobanEcosystem = Ecosystem[
+    SorobanApplication, SorobanContractInstance, SorobanComponentInstance
+]
 
 
 # ---------------------------------------------------------------------------
@@ -239,13 +251,16 @@ RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
 # the front half, and nothing in the Rust application framework itself, creates them: a Rust
 # backend need not build a crate to validate the program, nor use the sandbox at all.
 
+# Chain-neutral: the explorer reads the crate with file tools, so it meets each chain's idioms in
+# the source. If a chain's guidance ever needs to diverge, make this per-ecosystem — an override on
+# ``Ecosystem``, or a j2 template per chain — rather than growing a union here.
 RUST_CODE_EXPLORER_PROMPT = """\
-You are a code-exploration assistant analyzing Rust source for on-chain programs (e.g. Solana
-/ Anchor). You have file tools (list_files, get_file, grep_files) to explore the project.
-Answer the question concretely, citing the relevant items: instruction handlers, account
-validation structs (e.g. Anchor `#[derive(Accounts)]`), account/state types, PDA seed
-derivations, signer/owner checks, and cross-program invocations. Quote the exact Rust snippets
-that establish or omit a check; do not speculate about code you have not read.
+You are a code-exploration assistant analyzing the Rust source of an on-chain program. You have
+file tools (list_files, get_file, grep_files) to explore the project. Answer the question
+concretely, citing what you found: the entry points and the authorization each one performs (and
+which perform none); the state of the program and how it is addressed and stored; and the calls
+it makes into other programs, including where the callee's identity comes from. Quote the exact
+Rust snippets that establish or omit a check; do not speculate about code you have not read.
 """
 
 
@@ -260,6 +275,25 @@ RUST = Language(
 # ---------------------------------------------------------------------------
 # The Solana chain (RUST ⊕ solana)
 # ---------------------------------------------------------------------------
+
+
+def _fmt_names(items: Collection[str]) -> str:
+    return ", ".join(sorted(items)) if items else "(none)"
+
+
+def _analysis_feedback(errors: list[str], reference_lines: list[str]) -> str | None:
+    if not errors:
+        return None
+    reference = (
+        "\n\nFor reference, the names you declared in your submission:\n" + "\n".join(reference_lines)
+    )
+    if len(errors) == 1:
+        return errors[0] + reference
+    return (
+        "Multiple validation errors; fix all before resubmitting:\n"
+        + "\n".join(f"- {e}" for e in errors)
+        + reference
+    )
 
 
 def _validate_program_components(prog: SolanaProgram) -> list[str]:
@@ -371,31 +405,14 @@ def _solana_validate(app: SolanaApplication, expected_main: SourceIdentifier | N
             f"Expected a program with identifier {expected_main!r}; declared programs: "
             f"{sorted(known_identifiers) or '(none)'}."
         )
-    if not errors:
-        return None
-
-    # The declared-names reference block (EVM peer): every error above is a name that failed to
-    # resolve, so the retry is far more likely to land if it can see the vocabulary it submitted.
-    def _fmt(items: set[str]) -> str:
-        return ", ".join(sorted(items)) if items else "(none)"
 
     reference_lines = [
-        f"- Declared programs: {_fmt(set(known_components))}",
-        f"- Declared external authorities: {_fmt(known_authorities)}",
+        f"- Declared programs: {_fmt_names(set(known_components))}",
+        f"- Declared external authorities: {_fmt_names(known_authorities)}",
     ]
     for prog_name, comps in sorted(known_components.items()):
-        reference_lines.append(f"- Components of {prog_name}: {_fmt(comps)}")
-    reference = (
-        "\n\nFor reference, the names you declared in your submission:\n" + "\n".join(reference_lines)
-    )
-
-    if len(errors) == 1:
-        return errors[0] + reference
-    return (
-        "Multiple validation errors; fix all before resubmitting:\n"
-        + "\n".join(f"- {e}" for e in errors)
-        + reference
-    )
+        reference_lines.append(f"- Components of {prog_name}: {_fmt_names(comps)}")
+    return _analysis_feedback(errors, reference_lines)
 
 
 def _solana_locate_main(app: SolanaApplication, source: SourceCode) -> SolanaProgramInstance:
@@ -479,6 +496,184 @@ SOLANA: SolanaEcosystem = Ecosystem(
 )
 
 
+# ---------------------------------------------------------------------------
+# The Soroban chain (RUST ⊕ soroban)
+# ---------------------------------------------------------------------------
+
+
+def _validate_contract_components(contract: SorobanContract) -> list[str]:
+    errors: list[str] = []
+    dup_keys: dict[str, StorageDurability] = {}
+    for entry in contract.storage_entries:
+        if entry.key in dup_keys:
+            errors.append(
+                f"Storage key {entry.key!r} is declared twice in {contract.name} (durabilities "
+                f"{dup_keys[entry.key]!r} and {entry.durability!r}). The three durabilities are "
+                f"separate key spaces, so give each entry a key that identifies it uniquely."
+            )
+        else:
+            dup_keys[entry.key] = entry.durability
+    seen: set[str] = set()
+    slug_origin: dict[str, str] = {}
+    for comp in contract.components:
+        if comp.name in seen:
+            errors.append(f"Duplicate component names in {contract.name}: {comp.name}")
+        seen.add(comp.name)
+        slug = slugify_filename(comp.name)
+        if slug in slug_origin:
+            errors.append(
+                f"Components {slug_origin[slug]!r} and {comp.name!r} in {contract.name} both "
+                f"reduce to the filename slug {slug!r} (punctuation and symbols are normalized to "
+                f"underscores); give them names that differ in more than that."
+            )
+        else:
+            slug_origin[slug] = comp.name
+        for fn_name in comp.functions:
+            if fn_name not in contract.functions_by_name:
+                errors.append(
+                    f"Component {comp.name!r} of {contract.name} lists a function {fn_name!r} "
+                    f"that {contract.name} does not declare."
+                )
+        for key in comp.storage_keys:
+            if key not in contract.storage_by_key:
+                errors.append(
+                    f"Component {comp.name!r} of {contract.name} lists a storage key {key!r} that "
+                    f"is not among {contract.name}'s declared `storage_entries`."
+                )
+    referenced = {n for comp in contract.components for n in comp.functions}
+    unassigned = [f.name for f in contract.functions if f.name not in referenced]
+    if unassigned:
+        errors.append(
+            f"Function(s) {', '.join(repr(n) for n in unassigned)} of {contract.name} belong to no "
+            f"component; every function must appear in at least one component's `functions` "
+            f"(a function may appear in more than one)."
+        )
+    return errors
+
+
+def _soroban_validate(
+    app: SorobanApplication, expected_main: SourceIdentifier | None
+) -> str | None:
+    errors: list[str] = []
+    known_identifiers: set[str] = set()
+    known_components: dict[str, set[str]] = {}
+    contracts = [c for c in app.components if isinstance(c, SorobanContract)]
+    known_authorities = {c.name for c in app.components if isinstance(c, SorobanAuthority)}
+    for contract in contracts:
+        if contract.contract_identifier in known_identifiers:
+            errors.append(f"Duplicate contract identifier: {contract.contract_identifier}")
+        known_identifiers.add(contract.contract_identifier)
+        if contract.name in known_components:
+            errors.append(f"Duplicate contract names: {contract.name}")
+        known_components.setdefault(contract.name, set()).update(
+            c.name for c in contract.components
+        )
+        slug_origin: dict[str, str] = {}
+        for fn in contract.functions:
+            slug = slugify_filename(fn.name)
+            if slug in slug_origin:
+                errors.append(
+                    f"Functions {slug_origin[slug]!r} and {fn.name!r} in {contract.name} "
+                    f"reduce to the same filename slug {slug!r}; give them more-distinct names."
+                )
+            slug_origin[slug] = fn.name
+        errors.extend(_validate_contract_components(contract))
+
+    for contract in contracts:
+        for comp in contract.components:
+            where = f"Component {comp.name} of {contract.name} interacts with"
+            for inter in comp.interactions:
+                if isinstance(inter, SorobanAuthorityInteraction):
+                    if inter.authority not in known_authorities:
+                        errors.append(f"{where} unknown external authority: {inter.authority}")
+                elif inter.contract not in known_components:
+                    errors.append(f"{where} an unknown contract: {inter.contract}")
+                elif inter.component not in known_components[inter.contract]:
+                    errors.append(
+                        f"{where} unknown component {inter.component} of contract {inter.contract}"
+                    )
+
+    if expected_main is not None and expected_main not in known_identifiers:
+        errors.append(
+            f"Expected a contract with identifier {expected_main!r}; declared contracts: "
+            f"{sorted(known_identifiers) or '(none)'}."
+        )
+
+    reference_lines = [
+        f"- Declared contracts: {_fmt_names(set(known_components))}",
+        f"- Declared external authorities: {_fmt_names(known_authorities)}",
+    ]
+    for contract_name, comps in sorted(known_components.items()):
+        reference_lines.append(f"- Components of {contract_name}: {_fmt_names(comps)}")
+    return _analysis_feedback(errors, reference_lines)
+
+
+def _soroban_locate_main(app: SorobanApplication, source: SourceCode) -> SorobanContractInstance:
+    for i, contract in enumerate(app.contracts):
+        if contract.contract_identifier == source.contract_name:
+            return SorobanContractInstance(i, app)
+    raise ValueError(f"main contract {source.contract_name!r} not found in analyzed application")
+
+
+def _soroban_units(main: SorobanContractInstance) -> list[SorobanComponentInstance]:
+    return [
+        SorobanComponentInstance(ind=i, _contract=main)
+        for i in range(len(main.contract.components))
+    ]
+
+
+def _soroban_analysis_extra_input(source: SourceCode) -> list[str | dict]:
+    return [
+        f"The main contract of this application has been explicitly identified as "
+        f"{source.contract_name} at relative path {source.relative_path}. "
+        "Your output MUST contain a contract whose contract_identifier is this exact identifier."
+    ]
+
+
+@component_context
+class SorobanPropertyPromptParams(TypedDict):
+    context: SorobanComponentInstance
+    sort: Sort
+    prior_properties: list[_AgentRoundResult]
+
+
+SOROBAN_ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("soroban/analysis_system.j2")
+SOROBAN_ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("soroban/analysis_prompt.j2")
+SOROBAN_PROPERTY_SYSTEM_TEMPLATE = TypedTemplate[PropertySystemPromptParams]("soroban/property_system.j2")
+SOROBAN_PROPERTY_INITIAL_TEMPLATE = TypedTemplate[SorobanPropertyPromptParams]("soroban/property_prompt.j2")
+
+
+def _render_soroban_property_prompt(
+    context: SorobanComponentInstance,
+    sort: Sort,
+    prior_properties: list[_AgentRoundResult],
+) -> str:
+    return SOROBAN_PROPERTY_INITIAL_TEMPLATE.bind({
+        "context": context,
+        "sort": sort,
+        "prior_properties": prior_properties,
+    }).render_to(load_jinja_template)
+
+
+SOROBAN: SorobanEcosystem = Ecosystem(
+    name="soroban",
+    language=RUST,
+    system_model=SorobanApplication,
+    analysis_prompts=PromptPair(
+        SOROBAN_ANALYSIS_SYSTEM_TEMPLATE, SOROBAN_ANALYSIS_INITIAL_TEMPLATE
+    ),
+    property_prompts=PropertyPrompts(
+        SOROBAN_PROPERTY_SYSTEM_TEMPLATE, _render_soroban_property_prompt
+    ),
+    validate_analysis=_soroban_validate,
+    locate_main=_soroban_locate_main,
+    supports_greenfield=False,
+    units=_soroban_units,
+    unit_type=SorobanComponentInstance,
+    analysis_extra_input=_soroban_analysis_extra_input,
+)
+
+
 class Ecosystems(TypedDict):
     """Registry of available ecosystems, keyed by chain tag. The set is closed (a new chain
     means a new field here, not a new dict entry), so a ``TypedDict`` gives each entry its own
@@ -487,6 +682,7 @@ class Ecosystems(TypedDict):
 
     evm: EvmEcosystem
     solana: SolanaEcosystem
+    soroban: SorobanEcosystem
 
 
-ECOSYSTEMS: Ecosystems = {"evm": EVM, "solana": SOLANA}
+ECOSYSTEMS: Ecosystems = {"evm": EVM, "solana": SOLANA, "soroban": SOROBAN}
