@@ -1,12 +1,62 @@
 //! The sync, JSON-string boundary. [`export_app!`](crate::export_app) wraps these in
 //! `#[pyfunction]`s (compile/validate release the GIL); also unit-testable without Python.
+//!
+//! Every callout keeps a [`Result`] until this module writes the string the host reads. `Ok` is
+//! the payload type unchanged. `Err` is always [`CalloutError`] — the one extra inbound JSON
+//! shape — so a host bug cannot be read as an empty plan, a skipped review, or a failed build.
 
 use crate::args::AppArgs;
-use crate::authoring::{AuthorInput, Prompt};
+use crate::authoring::AuthorInput;
 use crate::backend::Backend;
-use crate::finalize::FinalizeInput;
-use crate::outcome::{CompileResult, Outcome, Target};
 use crate::sandbox::Workspace;
+use serde::{Deserialize, Serialize};
+
+/// Why a callout produced no payload. Success is the payload type unchanged; this is the only
+/// extra JSON shape on the inbound side of the seam.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub enum CalloutError {
+    Error { message: String },
+}
+
+/// JSON for a successful payload, or [`CalloutError`] when the callout could not produce one.
+pub fn encode<T: Serialize>(result: Result<T, String>) -> String {
+    match result {
+        Ok(value) => match serde_json::to_string(&value) {
+            Ok(json) => json,
+            Err(e) => encode_err(e),
+        },
+        Err(e) => encode_err(e),
+    }
+}
+
+fn encode_err(e: impl ToString) -> String {
+    match serde_json::to_string(&CalloutError::Error { message: e.to_string() }) {
+        Ok(json) => json,
+        Err(_) => "{\"kind\":\"error\",\"message\":\"unserializable error\"}".into(),
+    }
+}
+
+/// `None` is a successful empty answer (no judge, no files). A failed callout is `Some` of the
+/// error envelope, never `None`.
+fn encode_opt<T: Serialize>(result: Result<Option<T>, String>) -> Option<String> {
+    match result {
+        Ok(None) => None,
+        Ok(Some(value)) => Some(encode(Ok(value))),
+        Err(e) => Some(encode_err(e)),
+    }
+}
+
+/// Like [`encode_opt`], but a successful `Some` is returned as-is — a target name, a precondition
+/// or syntax complaint — rather than JSON-encoded.
+fn encode_opt_text(result: Result<Option<String>, String>) -> Option<String> {
+    match result {
+        Ok(value) => value,
+        Err(e) => Some(encode_err(e)),
+    }
+}
 
 fn parse<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Result<T, String> {
     serde_json::from_str(json).map_err(|e| format!("invalid {what} JSON: {e}"))
@@ -23,11 +73,11 @@ fn parse_input(json: &str) -> Result<AuthorInput, String> {
 }
 
 /// The workspace a blocking callout runs in, from the two strings the host sends it as.
-fn workspace(workdir: &str, sandbox_json: &str) -> Workspace {
-    Workspace {
+fn workspace(workdir: &str, sandbox_json: &str) -> Result<Workspace, String> {
+    Ok(Workspace {
         dir: std::path::PathBuf::from(workdir),
-        sandbox: parse(sandbox_json, "Sandbox").unwrap_or_default(),
-    }
+        sandbox: parse(sandbox_json, "Sandbox")?,
+    })
 }
 
 fn parse_args(json: &str) -> Result<AppArgs, String> {
@@ -36,68 +86,55 @@ fn parse_args(json: &str) -> Result<AppArgs, String> {
 
 /// `descriptor() -> str` (JSON).
 pub fn descriptor(b: &dyn Backend) -> String {
-    serde_json::to_string(&b.descriptor())
-        .unwrap_or_else(|e| format!("{{\"error\":\"descriptor serialize: {e}\"}}"))
+    encode(Ok(b.descriptor()))
 }
 
 /// `validate_preconditions(args_json) -> str | None` (None = ok). A payload this can't parse is a
-/// host bug, and it is reported as a failed precondition — the one callout with a channel to say so.
+/// [`CalloutError`], not a failed precondition: the host sent the args and a parse failure is a
+/// protocol bug, not something the wheel asked to refuse.
 pub fn validate_preconditions(b: &dyn Backend, args_json: &str) -> Option<String> {
-    match parse_args(args_json) {
-        Ok(args) => b.validate_preconditions(&args).err(),
-        Err(e) => Some(e),
-    }
+    encode_opt_text(parse_args(args_json).map(|args| b.validate_preconditions(&args).err()))
 }
 
 /// `target_for(input_json, check) -> str | None` — the target the named check runs under, `None`
-/// for its own. Pure. An unparseable input yields `None`, which groups every check separately: the
-/// honest answer when nothing is known about the unit being formalized.
+/// for its own. Pure. An unparseable input is a [`CalloutError`], not `None`: `None` means the
+/// check is its own target.
 pub fn target_for(b: &dyn Backend, input_json: &str, check: &str) -> Option<String> {
-    b.target_for(&parse_input(input_json).ok()?, check)
+    encode_opt_text(parse_input(input_json).map(|input| b.target_for(&input, check)))
 }
 
 /// `author_prompt(input_json) -> str` (JSON `Prompt`).
 pub fn author_prompt(b: &dyn Backend, input_json: &str) -> String {
-    let input = match parse_input(input_json) {
-        Ok(v) => v,
-        Err(e) => {
-            return serde_json::to_string(&Prompt { system: None, instruction: format!("ERROR: {e}") })
-                .unwrap_or_default()
-        }
-    };
-    serde_json::to_string(&b.author_prompt(&input)).unwrap_or_default()
+    encode(parse_input(input_json).map(|input| b.author_prompt(&input)))
 }
 
 /// `check_syntax(input_json, spec) -> str | None` (None = the spec may be written). A payload this
-/// can't parse rejects the write, naming the parse error: the alternative is accepting a spec no
-/// backend ever saw.
+/// can't parse is a [`CalloutError`]: the alternative is accepting a spec no backend ever saw.
 pub fn check_syntax(b: &dyn Backend, input_json: &str, spec: &str) -> Option<String> {
-    match parse_input(input_json) {
-        Ok(input) => b.check_syntax(&input, spec),
-        Err(e) => Some(e),
-    }
+    encode_opt_text(parse_input(input_json).map(|input| b.check_syntax(&input, spec)))
 }
 
 /// `judge(input_json) -> str | None` (JSON `Judge`; None = this wheel does not review this input).
-/// Takes no spec: it is asked once, before anything is authored.
+/// Takes no spec: it is asked once, before anything is authored. An unparseable input is a
+/// [`CalloutError`], not `None`: `None` means no judge.
 pub fn judge(b: &dyn Backend, input_json: &str) -> Option<String> {
-    let input = parse_input(input_json).ok()?;
-    b.judge(&input)
-        .map(|j| serde_json::to_string(&j).unwrap_or_default())
+    encode_opt(parse_input(input_json).map(|input| b.judge(&input)))
 }
 
 /// `judge_instruction(input_json, spec) -> str` — the instruction itself, not JSON. Asked per review
-/// round, only for an input `judge` claimed. An unparseable payload reaches the reviewer as its
-/// instruction, as in `author_prompt`: a host bug is better read than reviewed around.
+/// round, only for an input `judge` claimed. An unparseable payload is a [`CalloutError`] rather
+/// than an instruction the reviewer would be asked to follow.
 pub fn judge_instruction(b: &dyn Backend, input_json: &str, spec: &str) -> String {
     match parse_input(input_json) {
         Ok(input) => b.judge_instruction(&input, spec),
-        Err(e) => format!("ERROR: {e}"),
+        Err(e) => encode_err(e),
     }
 }
 
 /// `compile(input_json, spec | None, workdir, sandbox_json) -> str` (JSON `CompileResult`).
 /// BLOCKING. `None` is the preflight: nothing has been authored, so there is no spec at all.
+/// A payload this can't parse is a [`CalloutError`], not a failed build: the author cannot fix
+/// a host bug by revising the spec.
 pub fn compile(
     b: &dyn Backend,
     input_json: &str,
@@ -105,23 +142,18 @@ pub fn compile(
     workdir: &str,
     sandbox_json: &str,
 ) -> String {
-    let input = match parse_input(input_json) {
-        Ok(v) => v,
-        Err(e) => return serde_json::to_string(&CompileResult::Failed { errors: e }).unwrap_or_default(),
-    };
-    let r = b.compile(&input, spec, &workspace(workdir, sandbox_json));
-    serde_json::to_string(&r).unwrap_or_else(|e| {
-        serde_json::to_string(&CompileResult::Failed { errors: e.to_string() }).unwrap_or_default()
-    })
+    encode((|| {
+        let input = parse_input(input_json)?;
+        let ws = workspace(workdir, sandbox_json)?;
+        Ok(b.compile(&input, spec, &ws))
+    })())
 }
 
 /// `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` (JSON
 /// `ValidateOutcome`). BLOCKING.
 ///
-/// An unparseable target is the one payload with nowhere to report to — the check names a verdict
-/// would be keyed by are exactly what failed to parse — so it yields no verdicts. The host sent that
-/// target and knows what it covers, so an answer covering nothing is refused there as the protocol
-/// failure it is, rather than read as a run with nothing to object to.
+/// An unparseable target (or input, or sandbox) is a [`CalloutError`]. The host already has the
+/// target it sent, so a coverage miss would only hide the parse failure behind a different one.
 pub fn validate(
     b: &dyn Backend,
     input_json: &str,
@@ -130,37 +162,30 @@ pub fn validate(
     workdir: &str,
     sandbox_json: &str,
 ) -> String {
-    let target: Target = parse(target_json, "Target").unwrap_or_default();
-    let outcome = match parse_input(input_json) {
-        Ok(input) => b.validate(&input, spec, &target, &workspace(workdir, sandbox_json)),
-        Err(e) => target.all(Outcome::Error, Some(e)),
-    };
-    serde_json::to_string(&outcome).unwrap_or_default()
+    encode((|| {
+        let input = parse_input(input_json)?;
+        let target = parse(target_json, "Target")?;
+        let ws = workspace(workdir, sandbox_json)?;
+        Ok(b.validate(&input, spec, &target, &ws))
+    })())
 }
 
 /// `sandbox_grants(args_json) -> str` (JSON `SandboxGrants`).
 pub fn sandbox_grants(b: &dyn Backend, args_json: &str) -> String {
-    let args = parse_args(args_json).unwrap_or_default();
-    serde_json::to_string(&b.sandbox_grants(&args)).unwrap_or_else(|_| "{}".into())
+    encode(parse_args(args_json).map(|args| b.sandbox_grants(&args)))
 }
 
 /// `workspace_prep(input_json) -> str` (JSON `WorkspacePrep`). Pure.
 pub fn workspace_prep(b: &dyn Backend, input_json: &str) -> String {
-    match parse_input(input_json) {
-        Ok(input) => serde_json::to_string(&b.workspace_prep(&input)).unwrap_or_else(|_| "{}".into()),
-        Err(_) => "{}".into(),
-    }
+    encode(parse_input(input_json).map(|input| b.workspace_prep(&input)))
 }
 
 /// `finalize(outcomes_json) -> str | None` (JSON `{relpath: contents}`, or None).
 pub fn finalize(b: &dyn Backend, outcomes_json: &str) -> Option<String> {
-    let outcomes: FinalizeInput = parse(outcomes_json, "FinalizeInput").ok()?;
-    let files = b.finalize(&outcomes);
-    if files.is_empty() {
-        None
-    } else {
-        serde_json::to_string(&files).ok()
-    }
+    encode_opt(parse(outcomes_json, "FinalizeInput").map(|outcomes| {
+        let files = b.finalize(&outcomes);
+        (!files.is_empty()).then_some(files)
+    }))
 }
 
 #[cfg(test)]
@@ -168,10 +193,11 @@ mod tests {
     //! The boundary's own guarantees: what a backend receives is what the host sent, and a payload's
     //! `kind` decides what there is to read.
     use super::*;
+    use crate::authoring::Prompt;
     use crate::chain::ChainData;
     use crate::descriptor::AppDescriptor;
-    use crate::finalize::ComponentOutcome;
-    use crate::outcome::ValidateOutcome;
+    use crate::finalize::{ComponentOutcome, FinalizeInput};
+    use crate::outcome::{CompileResult, Target, ValidateOutcome};
     use crate::prep::WorkspacePrep;
     use serde::{Deserialize, Serialize};
     use std::sync::Mutex;
@@ -331,12 +357,37 @@ mod tests {
         assert_eq!(json.get("kind").and_then(|v| v.as_str()), Some("preflight"));
     }
 
+    fn assert_error(raw: &str, needle: &str) {
+        let CalloutError::Error { message } = serde_json::from_str(raw).expect("error envelope");
+        assert!(message.contains(needle), "{message}");
+    }
+
     #[test]
-    fn a_malformed_args_payload_is_reported_as_a_failed_precondition() {
-        // The only callout with a channel to say the host sent nonsense; the alternative is a
-        // silent default that reads as "no preconditions to check".
-        let err = validate_preconditions(&Spy::default(), "not json").expect("an error");
-        assert!(err.contains("AppArgs"), "{err}");
+    fn a_malformed_payload_is_the_error_envelope() {
+        // None of these may look like a successful empty answer: no judge, no files, the check is
+        // its own target, a failed build the author should revise.
+        let spy = Spy::default();
+        let input = component_json("{}", "{}");
+        assert_error(&author_prompt(&spy, "not json"), "AuthorInput");
+        assert_error(&compile(&spy, "not json", None, "/tmp", "{}"), "AuthorInput");
+        assert_error(&compile(&spy, &input, None, "/tmp", "not json"), "Sandbox");
+        let target = r#"{"name":"t","checks":[]}"#;
+        assert_error(&validate(&spy, "not json", "", target, "/tmp", "{}"), "AuthorInput");
+        assert_error(&validate(&spy, &input, "", "not json", "/tmp", "{}"), "Target");
+        assert_error(&validate(&spy, &input, "", target, "/tmp", "not json"), "Sandbox");
+        assert_error(&workspace_prep(&spy, "not json"), "AuthorInput");
+        assert_error(&sandbox_grants(&spy, "not json"), "AppArgs");
+        assert_error(&judge_instruction(&spy, "not json", ""), "AuthorInput");
+        assert_error(judge(&spy, "not json").as_deref().expect("Err is Some"), "AuthorInput");
+        assert_error(target_for(&spy, "not json", "c").as_deref().expect("Err is Some"), "AuthorInput");
+        assert_error(
+            validate_preconditions(&spy, "not json").as_deref().expect("Err is Some"),
+            "AppArgs",
+        );
+        assert_error(check_syntax(&spy, "not json", "").as_deref().expect("Err is Some"), "AuthorInput");
+        assert_error(finalize(&spy, "not json").as_deref().expect("Err is Some"), "FinalizeInput");
+        assert!(judge(&spy, &input).is_none(), "a valid input with no judge stays None");
+        assert!(target_for(&spy, &input, "c").is_none(), "Spy groups each check as its own");
     }
 
     #[test]

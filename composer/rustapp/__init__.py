@@ -62,6 +62,8 @@ from composer.rustapp.descriptor import (
 from composer.rustapp.result import RustArtifact, RustFormalResult
 from composer.rustapp.wire import (
     AuthorInput,
+    CalloutError,
+    CalloutFailed,
     CompileFailed,
     CompileOk,
     CompileResult,
@@ -148,6 +150,8 @@ __all__ = [
     "RustArtifact",
     "RustFormalResult",
     "AuthorInput",
+    "CalloutError",
+    "CalloutFailed",
     "CompileFailed",
     "CompileOk",
     "CompileResult",

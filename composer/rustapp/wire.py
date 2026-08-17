@@ -34,6 +34,7 @@ framework deliberately holds no schema for — see :mod:`composer.rustapp.toolch
 treatment ``model`` and ``unit`` already get, and for the same reason.
 """
 
+import json
 from collections import Counter
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Protocol, Self
 
@@ -440,6 +441,25 @@ class SandboxGrants(WireModel):
     extra_env: list[str]
 
 
+class CalloutError(WireModel):
+    """Why a callout produced no payload. Mirrors the Rust ``CalloutError``.
+
+    Success is the payload type unchanged; this is the only extra inbound JSON shape. A host bug
+    (bad input JSON, a serialize failure) is this, not an empty plan, a skipped review, or a
+    failed build the author should revise."""
+
+    kind: Literal["error"]
+    message: str
+
+
+class CalloutFailed(RuntimeError):
+    """A callout could not produce its payload — the Python face of :class:`CalloutError`."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 # ---------------------------------------------------------------------------
 # The FFI surface itself.
 # ---------------------------------------------------------------------------
@@ -497,6 +517,7 @@ CALLOUTS: tuple[str, ...] = tuple(RustAppModule.__annotations__)
 # ---------------------------------------------------------------------------
 # Parsing — one function per callout return, so every ``json.loads`` of a wheel's answer happens
 # here and nowhere else. A malformed payload raises ``pydantic.ValidationError`` naming the field.
+# A :class:`CalloutError` envelope raises :class:`CalloutFailed` before the payload parser runs.
 # ---------------------------------------------------------------------------
 
 _COMPILE_RESULT: TypeAdapter[CompileOk | CompileFailed] = TypeAdapter(CompileResult)
@@ -504,30 +525,53 @@ _VALIDATE_OUTCOME: TypeAdapter[ValidateBuildFailed | ValidateVerdicts] = TypeAda
 _FILES: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, str])
 
 
+def expect_payload(raw: str) -> str:
+    """Return ``raw`` unless it is the :class:`CalloutError` envelope, in which case raise
+    :class:`CalloutFailed`.
+
+    Non-JSON text (a target name, a ``judge_instruction``, a precondition complaint) is returned
+    as-is: those channels are not JSON, and only an envelope is a wire-level failure."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    if not isinstance(data, dict) or data.get("kind") != "error":
+        return raw
+    raise CalloutFailed(CalloutError.model_validate(data).message)
+
+
+def expect_text[T: str](raw: T | None) -> T | None:
+    """``None`` is a successful empty answer. A :class:`CalloutError` envelope raises."""
+    if raw is None:
+        return None
+    expect_payload(raw)
+    return raw
+
+
 def parse_compile(raw: str) -> CompileOk | CompileFailed:
-    return _COMPILE_RESULT.validate_json(raw)
+    return _COMPILE_RESULT.validate_json(expect_payload(raw))
 
 
 def parse_validate(raw: str) -> ValidateBuildFailed | ValidateVerdicts:
-    return _VALIDATE_OUTCOME.validate_json(raw)
+    return _VALIDATE_OUTCOME.validate_json(expect_payload(raw))
 
 
 def parse_prompt(raw: str) -> Prompt:
-    return Prompt.model_validate_json(raw)
+    return Prompt.model_validate_json(expect_payload(raw))
 
 
 def parse_judge(raw: str) -> Judge:
-    return Judge.model_validate_json(raw)
+    return Judge.model_validate_json(expect_payload(raw))
 
 
 def parse_workspace_prep(raw: str) -> WorkspacePrep:
-    return WorkspacePrep.model_validate_json(raw)
+    return WorkspacePrep.model_validate_json(expect_payload(raw))
 
 
 def parse_sandbox_grants(raw: str) -> SandboxGrants:
-    return SandboxGrants.model_validate_json(raw)
+    return SandboxGrants.model_validate_json(expect_payload(raw))
 
 
 def parse_files(raw: str) -> dict[str, str]:
     """``finalize``'s ``{relpath: contents}`` map."""
-    return _FILES.validate_json(raw)
+    return _FILES.validate_json(expect_payload(raw))

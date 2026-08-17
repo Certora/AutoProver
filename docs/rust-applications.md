@@ -66,6 +66,11 @@ impl.
 | `sandbox_grants(args_json) -> str` | pure | extra grants to union into the host's policy (§8) |
 | `finalize(outcomes_json) -> str \| None` | pure | run-level artifact files, `{relpath: contents}` (§9) |
 
+A callout that cannot produce its payload — bad input JSON, a serialize failure — returns
+`{"kind":"error","message":…}` instead. The host raises before that string can be read as a
+successful empty answer (no judge, no files, the check is its own target) or as a domain failure
+the author should revise. `None` on an optional callout stays a successful empty answer.
+
 `compile` and `validate` run the real toolchain: each spawns `run-confined` and waits, for minutes.
 They stay off the event loop without a bridge, by the pair that makes this whole design work — the
 `#[pyfunction]` wraps its work in `py.allow_threads(…)`, and Python calls it with
@@ -83,9 +88,9 @@ proper, plus the confinement wrapper, which belongs to the sandbox layer:
   friends), mirroring the Rust structs.
 - [wire.py](../composer/rustapp/wire.py) — the runtime half: `AuthorInput`, `Prompt`, `Failure`,
   `Check`, `Verdict`, `CompileResult`, `ValidateOutcome`, `WorkspacePrep`, `SandboxGrants`,
-  `FinalizeInput`. Every `json.loads` of a wheel's answer happens in one of its `parse_*`
-  functions, so a renamed field fails at the boundary naming the field, not three frames later as
-  an empty string.
+  `FinalizeInput`, and `CalloutError` (the envelope a callout returns instead of its payload).
+  Every `json.loads` of a wheel's answer happens in one of its `parse_*` functions, so a renamed
+  field fails at the boundary naming the field, not three frames later as an empty string.
 - `BackendSpec` in [sandbox/config.py](../composer/sandbox/config.py) — the `sandbox_json` argument
   the two blocking callouts receive, mirroring `autoprover_sdk::sandbox::Sandbox`. A `TypedDict`
   rather than a model, because the sandbox layer deliberately carries no pydantic dependency; it is

@@ -69,6 +69,7 @@ from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.wire import (
     AppArgs,
     AuthorInput,
+    CalloutError,
     CompileResult,
     ComponentOutcome,
     FinalizeComponent,
@@ -347,6 +348,7 @@ INBOUND = [
     Root("judge", Judge),
     Root("workspace_prep", WorkspacePrep),
     Root("sandbox_grants", SandboxGrants),
+    Root("callout_error", CalloutError),
 ]
 
 

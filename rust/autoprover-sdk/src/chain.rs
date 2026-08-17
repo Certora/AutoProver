@@ -37,7 +37,7 @@ impl ChainData {
     /// chain, which should be reported rather than read as "nothing". A caller that wants its own
     /// convention for both spells that at the call site (`.parse().unwrap_or_default()`).
     pub fn parse<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
-        serde_json::from_value(Value::Object(self.0.clone()))
+        T::deserialize(&self.0)
     }
 
     /// Nothing was established — no resolver for this chain, no such unit in the language, a layout

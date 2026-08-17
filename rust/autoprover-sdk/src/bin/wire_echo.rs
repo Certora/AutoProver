@@ -1,19 +1,20 @@
 //! The Rust half of the wire round-trip fuzzer (`tests/test_wire_roundtrip.py`).
 //!
-//! Speaks newline-delimited JSON on stdin/stdout so the Python side drives one long-lived process
-//! for a whole test rather than spawning one per example. Two operations, one per direction of the
-//! seam:
+//! Reads and writes one JSON object per line on stdin/stdout. Python keeps this process alive
+//! for a whole test instead of starting a new one per example.
 //!
-//!  * `echo` — deserialize a host-built payload into the mirrored Rust type and re-serialize it.
-//!    A field this side doesn't know is dropped on the way through, so the host's re-parse of the
-//!    answer differs from what it sent. That is the outbound check.
-//!  * `gen` — build a value from entropy the host supplies and serialize it. The entropy comes
-//!    from Hypothesis (as bytes) rather than a seeded RNG here, so one generator drives both
-//!    directions and shrinking still works. That is the inbound check: the host parses the answer,
-//!    dumps it, and sends it back through `echo` to compare.
+//! Two operations, one for each direction:
 //!
-//! Being generated from the *Rust* type is the point of `gen`: a field only this side declares is
-//! populated, which is the drift a generator derived from the host's schema cannot see.
+//!  * `echo` — parse a host-built payload as the matching Rust type and write it back. A field
+//!    this side does not know is dropped, so when the host parses the reply it no longer matches
+//!    what it sent. That is the outbound check.
+//!  * `gen` — build a value from bytes the host sends (Hypothesis entropy, not a local RNG) and
+//!    serialize it. One generator then drives both directions and shrinking still works. The host
+//!    parses the result, dumps it, and sends it back through `echo` to compare. That is the
+//!    inbound check.
+//!
+//! `gen` builds from the Rust type so a field only this side declares still appears. A generator
+//! built from the host's schema would never produce that field, and would miss that kind of drift.
 
 use std::io::{self, BufRead, Write};
 
@@ -23,6 +24,7 @@ use serde_json::Value;
 
 use autoprover_sdk::args::AppArgs;
 use autoprover_sdk::authoring::{AuthorInput, Judge, Prompt, Property};
+use autoprover_sdk::ffi::CalloutError;
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::finalize::{ComponentOutcome, FinalizeComponent, FinalizeInput};
 use autoprover_sdk::outcome::{Check, CompileResult, SkippedProperty, Target, ValidateOutcome};
@@ -54,6 +56,8 @@ enum WireType {
     Checks,
     WorkspacePrep,
     SandboxGrants,
+    // The error envelope any inbound callout may return instead of its payload.
+    CalloutError,
     // Nested — never a whole message. Addressable anyway so the field-set check can generate one on
     // its own and compare its keys against the host's mirror, rather than having to find them at
     // some depth inside a parent, below opaque payloads whose keys are not field names at all.
@@ -90,6 +94,7 @@ fn dispatch<O: Op>(ty: WireType, op: O) -> Result<Value, Fault> {
         WireType::Checks => op.run::<Vec<Check>>(),
         WireType::WorkspacePrep => op.run::<WorkspacePrep>(),
         WireType::SandboxGrants => op.run::<SandboxGrants>(),
+        WireType::CalloutError => op.run::<CalloutError>(),
         WireType::Property => op.run::<Property>(),
         WireType::SkippedProperty => op.run::<SkippedProperty>(),
         WireType::FinalizeComponent => op.run::<FinalizeComponent>(),

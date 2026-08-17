@@ -54,7 +54,8 @@ finalize(outcomes_json) -> str|None
 ```
 
 `export_app!` generates all of these. `compile`/`validate` release the GIL while their
-child process runs, so the host calls them with `asyncio.to_thread`.
+child process runs, so the host calls them with `asyncio.to_thread`. A callout that cannot
+produce its payload returns `{"kind":"error","message":…}` instead of a fake success.
 
 ## Writing a new application
 

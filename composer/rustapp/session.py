@@ -50,7 +50,7 @@ from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustFormalResult, RustSetupSpec
 from composer.rustapp.wire import (
     AuthorInput, CompileOk, Prompt, RustAppModule, Target, Check, ValidateBuildFailed,
-    parse_compile, parse_judge, parse_prompt, parse_validate,
+    expect_payload, expect_text, parse_compile, parse_judge, parse_prompt, parse_validate,
 )
 from composer.rustapp.wire import Verdict as WireVerdict
 from composer.sandbox.config import BackendSpec
@@ -198,7 +198,7 @@ def declared_checks(
         Check(
             name=name,
             properties=properties_of(mapping, name),
-            target=module.target_for(input_json, name),
+            target=expect_text(module.target_for(input_json, name)),
         )
         for name in declared_names(mapping)
     ]
@@ -542,7 +542,7 @@ def build_judge[K: (RustFormalResult, RustSetupSpec)](
         builder: JudgeBuilder, spec: str,
         skipped: Sequence[SkippedProperty], rebuttals: Sequence[RebuttalBase],
     ) -> JudgeBuilder:
-        return builder.with_initial_prompt(module.judge_instruction(input_json, spec))
+        return builder.with_initial_prompt(expect_payload(module.judge_instruction(input_json, spec)))
 
     def input_parts(
         spec: str, skipped: Sequence[SkippedProperty], rebuttals: Sequence[RebuttalBase],
@@ -788,7 +788,7 @@ class PutSpec(WithAsyncDependencies[Command | str, SyntaxCheck], WithInjectedId)
 
 def _syntax_check(module: RustAppModule, input_json: str) -> SyntaxCheck:
     def check(spec: str) -> str | None:
-        return module.check_syntax(input_json, spec)
+        return expect_text(module.check_syntax(input_json, spec))
     return check
 
 

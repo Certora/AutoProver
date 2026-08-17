@@ -32,7 +32,7 @@ from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.phases import PhaseModel, build_phase_model
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.store import RustArtifactStore
-from composer.rustapp.wire import CALLOUTS, AppArgs, RustAppModule
+from composer.rustapp.wire import CALLOUTS, AppArgs, RustAppModule, expect_payload, expect_text
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import SandboxConfig
 from composer.spec.artifacts import ArtifactStore
@@ -80,7 +80,7 @@ def load_module(module_name: str) -> RustAppModule:
 
 def load_descriptor(module: RustAppModule) -> AppDescriptor:
     """Parse a module's ``descriptor()`` JSON into an :class:`AppDescriptor`."""
-    return AppDescriptor.model_validate_json(module.descriptor())
+    return AppDescriptor.model_validate_json(expect_payload(module.descriptor()))
 
 
 def resolve_ecosystem(descriptor: AppDescriptor) -> Ecosystem[Any, Any, Any]:
@@ -222,7 +222,7 @@ class RustApplication:
 
     def validate_preconditions(self, args: AppArgs) -> str | None:
         """Delegate to the Rust precondition hook; return an error string or None."""
-        return self.module.validate_preconditions(args.model_dump_json())
+        return expect_text(self.module.validate_preconditions(args.model_dump_json()))
 
     def make_backend(self, source: SourceCode) -> RustBackend:
         """Build the backend for this run — on this application's own :attr:`phases`."""

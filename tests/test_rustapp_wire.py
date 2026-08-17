@@ -35,12 +35,28 @@ from composer.rustapp.wire import (
     ValidateBuildFailed,
     ValidateCoverageError,
     ValidateVerdicts,
+    CalloutFailed,
+    expect_payload,
+    expect_text,
     parse_compile,
+    parse_prompt,
     parse_validate,
     parse_workspace_prep,
 )
 from composer.spec.source.report.schema import Outcome
 from tests.conftest import wire_verdict, wire_workspace_prep
+
+
+def test_a_callout_error_is_not_read_as_a_payload():
+    # The envelope is the one extra inbound shape: a host bug must not parse as a Prompt, an
+    # empty plan, or a failed build the author should revise.
+    with pytest.raises(CalloutFailed, match="invalid AuthorInput"):
+        parse_prompt('{"kind": "error", "message": "invalid AuthorInput JSON: eof"}')
+    with pytest.raises(CalloutFailed, match="boom"):
+        expect_text('{"kind": "error", "message": "boom"}')
+    assert expect_text(None) is None
+    assert expect_text("c_farms") == "c_farms"
+    assert expect_payload("Review the spec.") == "Review the spec."
 
 
 def test_compile_result_is_discriminated_on_status():

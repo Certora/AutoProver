@@ -32,7 +32,8 @@
 //!  * [`finalize`] — the full outcome set the run-level deliverable is rendered from.
 //!  * [`prep`] — pure plans the host executes for the wheel (workspace prep, sandbox grants).
 //!  * [`sandbox`] — where a blocking callout runs its toolchain, and how it spawns.
-//!  * [`ffi`] — the JSON-string boundary [`export_app!`] wraps.
+//!  * [`ffi`] — the JSON-string boundary [`export_app!`] wraps, and the
+//!    [`CalloutError`](ffi::CalloutError) envelope a callout returns instead of its payload.
 
 pub mod args;
 pub mod authoring;
