@@ -307,14 +307,22 @@ def test_build_application_carries_resolved_ecosystem():
     assert app.ecosystem is EVM
 
 
-def test_resolve_ecosystem_rejects_unregistered_chain():
+def test_resolve_ecosystem_resolves_soroban():
+    from composer.pipeline.ecosystem import SOROBAN
     from composer.rustapp.host import resolve_ecosystem
 
     desc = AppDescriptor.model_validate_json(echoprover.descriptor())
-    # soroban is a valid ChainTag but not registered until a later phase.
-    unregistered = desc.model_copy(update={"ecosystem": "soroban"})
+    soroban = desc.model_copy(update={"ecosystem": "soroban"})
+    assert resolve_ecosystem(soroban) is SOROBAN
+
+
+def test_resolve_ecosystem_rejects_unregistered_chain(monkeypatch):
+    from composer.rustapp.host import resolve_ecosystem
+
+    desc = AppDescriptor.model_validate_json(echoprover.descriptor())
+    monkeypatch.setattr("composer.rustapp.host.ECOSYSTEMS", {})
     with pytest.raises(ValueError, match="not registered"):
-        resolve_ecosystem(unregistered)
+        resolve_ecosystem(desc)
 
 
 def test_a_descriptor_missing_a_field_is_refused():
