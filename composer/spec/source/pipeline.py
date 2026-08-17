@@ -92,15 +92,11 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
     """Immutable formalizer: per-batch CVL generation against a fixed prover
     config + resource set (already including ``invariants.spec`` when there are
     structural invariants), plus the in-memory invariant result for the report."""
-    # _store: ProverArtifactStore
     _prover_tool: BaseTool
     _prover_config: dict
     _resources: list[CVLResource]
     _invariant: tuple[list[PropertyFormulation], InvariantResult] | None
     _fetch: VerdictFetcher[GeneratedCVL]
-    # _editing: SourceEditing
-    # _analysis_store: CexAnalysisStore
-    # _prover_options: ProverOptions
     _deps: _ProverPipelineDeps
 
     tool_provider_type = CertoraProverTools

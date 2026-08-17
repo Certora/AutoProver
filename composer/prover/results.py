@@ -100,9 +100,9 @@ def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_ty
         if all(
             "timed-out" in err or ("did not run: BlockingCoroutine was cancelled") in err for err in messages
         ):
+            # time out masquerading as an error...    
             stat = "TIMEOUT"
         else:
-            # time out masquerading as an error...    
             return [RuleResult(
                 path=effective_path,
                 cex_dump=None,
@@ -133,7 +133,7 @@ def flatten_tree_view(context: Path, r: RuleNodeModel, path: RulePath, parent_ty
             )]
 
     if stat == "TIMEOUT":
-        if all(r.nodeType == "SANITY" for r in r.children):
+        if all(tc.nodeType == "SANITY" for tc in r.children):
             return [RuleResult(path=effective_path, cex_dump=None,status=stat, live_check_info=r.LiveCheckInfo)]
     assert stat == "TIMEOUT" or stat == "VIOLATED" or stat == "SANITY_FAILED"
     violated_assert_children = any([ c.nodeType == "VIOLATED_ASSERT" for c in r.children])
