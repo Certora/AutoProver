@@ -14,7 +14,9 @@ from .detect import (
     detect_from,
     scan_ast,
     reachable_from_main,
+    cone_weights,
 )
+from .sources import detect_url, cut_from_conf, find_run_conf
 
 __all__ = [
     "Candidate",
@@ -22,6 +24,10 @@ __all__ = [
     "HashSignal",
     "detect",
     "detect_from",
+    "detect_url",
     "scan_ast",
     "reachable_from_main",
+    "cone_weights",
+    "cut_from_conf",
+    "find_run_conf",
 ]

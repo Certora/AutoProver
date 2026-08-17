@@ -21,15 +21,23 @@ solc AST's internal call edges plus the prover's `externalCallGraph.json` (resol
 
 ## Usage
 
-```
-# AST-only hashing signal (no run needed):
-python -m summarization_detector --cut Router --conf run.conf
+The one input is a prover-run **URL** — it fetches the sources + conf, derives the main contract (the
+conf's `verify` field), generates the AST, and pulls the difficulty report:
 
-# with a prover run (adds nonlinear + external signals) and the reachability gate:
-python -m summarization_detector --cut Router --ast path/to/.asts.json \
-    --job-url https://.../output/<id>/<hash>/ \
-    --external-call-graph path/to/Reports/externalCallGraph.json
+```
+python -m summarization_detector --url https://.../output/<id>/<hash>/
+```
+
+Optional: `--cut` (override the derived contract), `--solc-dir` (so the conf's `solcN.NN` resolves),
+`--work-dir`, `--external-call-graph` (else auto-found in the fetched tree), `--include-dependencies`.
+
+Offline path (when you already have the artifacts instead of a URL):
+
+```
+python -m summarization_detector --cut Router --conf run.conf          # AST-only hashing signal
+python -m summarization_detector --cut Router --ast .asts.json \
+    --job-url https://.../ --external-call-graph Reports/externalCallGraph.json
 ```
 
 `externalCallGraph.json` is emitted by the prover (EVMVerifier `ExternalCallSiteCollector`) at scene
-setup — after call resolution, before the per-rule optimize pass.
+setup — after call resolution, before the per-rule optimize pass — and enables the reachability gate.

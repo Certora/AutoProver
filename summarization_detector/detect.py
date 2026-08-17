@@ -1,8 +1,17 @@
 """Summarization-target DETECTOR — from ONE prover run, rank the functions worth summarizing and say
 HOW (per-function over-approx via overapprox.py, or whole-contract symbolic model via driver.py).
 
-Autosetup calls this after a slow/timeout run to decide what to summarize; the overapprox/model tooling
-then does it. THREE signals, each catching a different cost class:
+Autosetup calls this on the SANITY run (a `satisfy true` per-method reachability check) to decide what to
+summarize BEFORE the real rules exist; the overapprox/model tooling then does it.
+
+We are therefore a STATIC PREDICTOR of what will be expensive for REAL rules — not a reader of runtime
+cost. The sanity run only needs one arbitrary path that exits a method, so it DODGES expensive code
+(branches around a hash, picks trivial inputs); its completing fast is NOT evidence the code is cheap. So
+a runtime signal (difficulty hotspot / timeout) is POSITIVE-ONLY — present means "so central even sanity
+couldn't avoid it" (strong), but ABSENT is never a reason to drop a candidate. Acceptance/ranking comes
+from the code's STRUCTURE (signals 2/3 + the reachability & cone-of-influence over the real call graph).
+
+THREE signals, each catching a different cost class:
 
   1. NONLINEAR (SMT phase)  — the prover's own difficulty report (`difficulty.fetch_difficulty`): ranked
      functions whose INLINED body contributes nonlinear ops (mulDiv, pow, sqrt, div). Catches the
@@ -31,7 +40,9 @@ decides WHAT to summarize; smtool generates the summaries), it only REUSES AutoP
 `smtool.difficulty` for the difficulty signal and `certora_autosetup.utils.file_utils` for the AST.
 """
 import json
+import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -148,13 +159,32 @@ def _is_dynamic_type(ts: str) -> bool:
     return False
 
 
-def _dynamic_input(sites: list) -> bool:
-    """Whether a function's hashing consumes unbounded-length data. `sites` are (pattern, arg_types) for
-    every hash/encode call in the function. An `abi.encode*` with any dynamic arg is the source of a
-    dynamic hash; a bare `keccak256(x)` counts only when no `abi.encode*` feeds it (otherwise its
-    `bytes memory` arg is just the encode result, whose length class the encode site already decided)."""
-    has_encode = any(p.startswith("abi.") for p, _ in sites)
-    for pattern, args in sites:
+def _refs(node) -> set:
+    """All positive `referencedDeclaration` ids in an expression subtree — the declarations it reads."""
+    out: set = set()
+    if isinstance(node, dict):
+        rd = node.get("referencedDeclaration")
+        if isinstance(rd, int) and rd > 0:
+            out.add(rd)
+        for v in node.values():
+            out |= _refs(v)
+    elif isinstance(node, list):
+        for v in node:
+            out |= _refs(v)
+    return out
+
+
+def _dynamic_input(sites: list, param_ids: set) -> bool:
+    """Whether a function's hashing consumes unbounded-length USER data. A site counts only when it has a
+    dynamic-typed operand AND the call references a function PARAMETER (`param_ids`) — so a hash over a
+    constant/immutable/literal (e.g. `keccak256(bytes(name))` for a fixed EIP-712 name) is NOT dynamic
+    despite the `bytes` type. `sites` are (pattern, arg_types, refs) per hash/encode call. An `abi.encode*`
+    with a dynamic arg is the source; a bare `keccak256(x)` counts only when no encoder feeds it (else its
+    `bytes memory` arg is just the encode result, whose class the encode site already decided)."""
+    has_encode = any(p.startswith("abi.") for p, _, _ in sites)
+    for pattern, args, refs in sites:
+        if not (refs & param_ids):                        # not user-controlled -> not the expensive case
+            continue
         if pattern.startswith("abi."):
             if any(_is_dynamic_type(t) for t in args):
                 return True
@@ -182,7 +212,9 @@ def scan_ast(ast_path: str | Path) -> list[HashSignal]:
     top-level entry), so a single pass over each file's nodes finds all FunctionCall/FunctionDefinition/
     ContractDefinition nodes; attribution is by src-offset containment."""
     out: dict[str, HashSignal] = {}
-    sites: dict[str, list] = {}       # fnkey -> [(pattern, arg_types)...] for the dynamic/fixed decision
+    sites: dict[str, list] = {}       # fnkey -> [(pattern, arg_types, refs)...] for the dynamic/fixed decision
+    hash_pats: dict[str, set] = {}    # fnkey -> the set of HASH-builtin names it calls (for ecrecover-only)
+    param_ids: dict[str, set] = {}    # fnkey -> its parameter declaration ids (for the user-input test)
     seen: set[str] = set()
     for _rel, pdata in stream_ast_files(Path(ast_path)):
         if not isinstance(pdata, dict):
@@ -192,8 +224,8 @@ def scan_ast(ast_path: str | Path) -> list[HashSignal]:
                 continue
             seen.add(absp)
             contracts: list = []          # ((start,end), name)
-            funcs: list = []              # ((start,end), name, mutability, visibility)
-            hits: list = []               # (offset, kind, pattern, arg_types)
+            funcs: list = []              # ((start,end), name, mutability, visibility, param_ids)
+            hits: list = []               # (offset, kind, pattern, arg_types, refs)
             for node in nodes.values():
                 if not isinstance(node, dict):
                     continue
@@ -204,45 +236,72 @@ def scan_ast(ast_path: str | Path) -> list[HashSignal]:
                 if nt == "ContractDefinition":
                     contracts.append((sp, node.get("name") or ""))
                 elif nt == "FunctionDefinition":
+                    pids = {p.get("id") for p in ((node.get("parameters") or {}).get("parameters") or [])
+                            if isinstance(p, dict) and isinstance(p.get("id"), int)}
                     funcs.append((sp, node.get("name") or "", node.get("stateMutability") or "",
-                                  node.get("visibility") or ""))
+                                  node.get("visibility") or "", pids))
                 elif nt == "FunctionCall":
                     kp = _classify_call(node)
                     if kp:
-                        hits.append((sp[0], kp[0], kp[1], _arg_types(node)))
+                        hits.append((sp[0], kp[0], kp[1], _arg_types(node), _refs(node.get("arguments"))))
             # AST source keys are project-relative (e.g. "lib/solady/src/tokens/ERC20.sol"), so test for a
             # dependency-root path COMPONENT rather than a "/lib/" substring (which misses a leading "lib/").
             parts = set(Path(absp).parts)
             is_dep = bool(parts & {"lib", "node_modules", ".certora_internal"})
-            has_hash: dict[str, bool] = {}    # fnkey -> does it actually call a hash builtin (the trigger)
             per_fn: dict[str, tuple] = {}     # fnkey -> (contract, name, mut, vis)
-            for off, kind, pat, argtypes in hits:
+            for off, kind, pat, argtypes, refs in hits:
                 f = _tightest(off, funcs)
                 if f is None:                         # a call at file scope — no owning fn
                     continue
-                (_fsp, fname, mut, vis) = f
+                (_fsp, fname, mut, vis, pids) = f
                 c = _tightest(f[0][0], contracts)
                 cname = c[1] if c else ""
                 key = f"{cname}.{fname}" if cname else fname
                 per_fn[key] = (cname, fname, mut, vis)
-                sites.setdefault(key, []).append((pat, argtypes))
-                has_hash[key] = has_hash.get(key, False) or (kind == "hash")
+                sites.setdefault(key, []).append((pat, argtypes, refs))
+                param_ids[key] = pids
+                if kind == "hash":
+                    hash_pats.setdefault(key, set()).add(pat)
             for key, (cname, fname, mut, vis) in per_fn.items():
-                if not has_hash.get(key):             # encoder-only (calldata/serialization) — not hashing
+                if not hash_pats.get(key):            # encoder-only (calldata/serialization) — not hashing
                     continue
-                pats = tuple(sorted({p for p, _ in sites[key]}))
+                pats = tuple(sorted({p for p, _, _ in sites[key]}))
                 rec = out.get(key)
                 if rec is None:
                     out[key] = HashSignal(function=key, contract=cname, name=fname, mutability=mut,
                                           visibility=vis, patterns=pats, file=absp, is_dependency=is_dep)
                 else:
                     rec.patterns = tuple(sorted({*rec.patterns, *pats}))
+    # ecrecover ONLY (signature recovery) is not usefully over-approximable — its result is a recovered
+    # address with no sound property tighter than havoc. Drop those (a function that also hashes stays).
+    out = {k: v for k, v in out.items() if not (hash_pats.get(k, set()) <= {"ecrecover"})}
     for key, rec in out.items():
-        rec.dynamic_input = _dynamic_input(sites.get(key, []))
+        rec.dynamic_input = _dynamic_input(sites.get(key, []), param_ids.get(key, set()))
     return sorted(out.values(), key=lambda h: h.function)
 
 
 # ---------------------------------------------------------------- AST acquisition (optional-arg design)
+_MISSING_IMPORT_RE = re.compile(r'\d+:\d+:"([^"]+)"')
+
+
+def _touch_missing_imported_specs(*outputs: str) -> list:
+    """Recreate empty placeholders for imports certoraRun reports as missing. The prover prints
+    `... import declarations do not import existing .spec files:` then `<line>:<col>:"<path>"` entries.
+    The real files were skipped on upload precisely because they are EMPTY, so an empty placeholder is
+    faithful. Returns the paths created (empty list if the failure is something else)."""
+    created: list = []
+    for out in outputs:
+        if "do not import existing" not in out:
+            continue
+        for m in _MISSING_IMPORT_RE.finditer(out):
+            p = Path("".join(m.group(1).split()))     # certoraRun wraps long paths across lines in captured
+            if not p.exists():                         # (non-tty) output — rejoin before treating as a path
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("")
+                created.append(p)
+    return created
+
+
 def ensure_ast(ast_path: str | Path | None = None, *, conf: str | Path | None = None,
                solc_dir: str | Path | None = None) -> Path:
     """Return a path to a solc AST dump. If `ast_path` is given (autosetup already ran `--dump_asts`, or a
@@ -262,8 +321,27 @@ def ensure_ast(ast_path: str | Path | None = None, *, conf: str | Path | None = 
     if solc_dir is not None:
         import os
         env_path = {**os.environ, "PATH": f"{solc_dir}:{os.environ.get('PATH', '')}"}
-    subprocess.run(["certoraRun", conf.name, "--compilation_steps_only", "--dump_asts"],
-                   cwd=work, env=env_path, check=True, capture_output=True, text=True)
+    cmd = ["certoraRun", conf.name, "--compilation_steps_only", "--dump_asts"]
+    proc = subprocess.run(cmd, cwd=work, env=env_path, capture_output=True, text=True)
+    # TEMPORARY WORKAROUND: the source-files upload skips EMPTY files, so an empty importable source that
+    # another file imports is dropped while its importer is kept — the fetched scene then fails to compile
+    # on the missing import (fixed upstream for NEW runs; existing runs stay broken). The missing file is
+    # empty by definition, so recreate the missing imported spec(s) as empty placeholders and retry.
+    for _ in range(5):
+        if proc.returncode == 0:
+            break
+        created = _touch_missing_imported_specs(proc.stdout or "", proc.stderr or "")
+        if not created:
+            break
+        print(f"[detect] created {len(created)} empty placeholder spec(s) for skipped-empty imports; retrying",
+              file=sys.stderr)
+        proc = subprocess.run(cmd, cwd=work, env=env_path, capture_output=True, text=True)
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stderr or proc.stdout or "").strip().splitlines()[-25:])
+        raise RuntimeError(
+            f"certoraRun AST generation failed (exit {proc.returncode}) in {work} for {conf.name}:\n{tail}\n"
+            f"(hint: if the error is a missing solc, pass solc_dir / --solc-dir so the conf's solcN.NN "
+            f"resolves; if it is a missing source/package, the fetched scene may be incomplete.)")
     dumps = sorted((work / ".certora_internal").rglob("*.asts.json"), key=lambda p: p.stat().st_mtime)
     if not dumps:
         raise FileNotFoundError(f"certoraRun produced no .asts.json under {work}/.certora_internal")
@@ -286,11 +364,14 @@ def _classify_mode(contract: str, signals: tuple[str, ...], external_multi: bool
 
 
 def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *, cut: str,
-                include_dependencies: bool = False) -> DetectionReport:
+                include_dependencies: bool = False,
+                cone_weight: dict[str, int] | None = None) -> DetectionReport:
     """Fuse the three signals into a ranked candidate list. `difficulty` supplies signals 1 (nonlinear)
     and 3 (its hotspots whose contract != `cut` are resolved-expensive externals); `hash_signals` supply
     signal 2. `cut` is the verified contract (its own methods are NOT "external"). Dependency-tree
-    functions (lib/) are dropped unless `include_dependencies`."""
+    functions (lib/) are dropped unless `include_dependencies`. `cone_weight` (per-function
+    cone-of-influence size) re-weights the build-phase hashing signal by how much code consumes the
+    result — the only cost proxy available there."""
     ext_counts: dict[str, int] = {}
     for h in difficulty.hotspots:
         c = _contract_of(h.function)
@@ -329,6 +410,18 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
         _bump(h.function, h.contract, "hashing", 20.0 if h.dynamic_input else 4.0,
               f"{'/'.join(h.patterns)} [{cls}] ({h.mutability or 'n/a'} {h.visibility})")
 
+    # cone-of-influence re-weighting for the hashing signal: build-phase cost has no per-function measure,
+    # so scale a hashing candidate by how much reachable code consumes its result (normalized within the
+    # candidate set, factor in [1, 2], so it stays comparable to the measured nonlinear pct). A hash whose
+    # id threads the protocol rises; a leaf digest (tiny cone) stays low.
+    if cone_weight:
+        hashing = [c for c in cand.values() if "hashing" in c.signals]
+        mx = max((cone_weight.get(c.function, 0) for c in hashing), default=0) or 1
+        for c in hashing:
+            w = cone_weight.get(c.function, 0)
+            c.score *= 1 + w / mx
+            c.evidence += f" | cone={w}"
+
     # classify mode per candidate
     for c in cand.values():
         external_multi = c.contract in ext_counts and ext_counts[c.contract] >= 2
@@ -341,19 +434,31 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
 def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
            conf: str | Path | None = None, cut: str, solc_dir: str | Path | None = None,
            include_dependencies: bool = False,
-           external_call_graph: str | Path | None = None) -> DetectionReport:
+           external_call_graph: str | Path | None = None,
+           surviving_set: set[str] | None = None) -> DetectionReport:
     """Orchestrate the detector. `job_url` (optional) supplies the difficulty report (signals 1+3); with
     none, only the static signal-2 (hashing) runs. The AST is resolved by `ensure_ast` (`ast_path` if
-    given, else generated from `conf`). `cut` is the verified contract name. When `external_call_graph`
-    (the prover's `externalCallGraph.json`) is given, signal-2 candidates are pruned to those REACHABLE
-    from the CUT (see `reachable_from_main`)."""
+    given, else generated from `conf`). `cut` is the verified contract name.
+
+    Reachability gate for signal-2: `surviving_set` (the prover's postOptimize surviving call graphs —
+    the functions that actually reach SMT) is authoritative and used when present. Otherwise we fall back
+    to AST + `external_call_graph` reachability from the CUT (see `reachable_from_main`)."""
     ast = ensure_ast(ast_path, conf=conf, solc_dir=solc_dir)
     hash_signals = scan_ast(ast)
-    if external_call_graph is not None:
-        reachable = reachable_from_main(ast, cut, external_call_graph)
+    cone: dict[str, int] = {}
+    reachable: set[str] = set()
+    g = _build_graph(ast, cut, external_call_graph)        # built once, for cone (rank) + reachability (gate)
+    if g is not None:
+        edges, roots, sizes = g
+        reachable = _bfs(edges, roots)
+        cone = _cone_weights(edges, reachable, sizes)
+    if surviving_set:                                     # authoritative: exactly what reached SMT
+        hash_signals = [h for h in hash_signals if h.function in surviving_set]
+    elif g is not None and external_call_graph is not None:   # fallback: complete cross-contract edges
         hash_signals = [h for h in hash_signals if h.function in reachable]
     difficulty = fetch_difficulty(job_url) if job_url else DifficultyReport()
-    return detect_from(hash_signals, difficulty, cut=cut, include_dependencies=include_dependencies)
+    return detect_from(hash_signals, difficulty, cut=cut, cone_weight=cone,
+                       include_dependencies=include_dependencies)
 
 
 # ---------------------------------------------------------------- reachability-from-main (signal-2 gate)
@@ -423,6 +528,7 @@ def _ast_call_graph(merged: dict, cut: str):
     qual_by_id: dict[str, str] = {}
     roots: set[str] = set()
     by_name: dict[str, set[str]] = {}
+    sizes: dict[str, int] = {}                              # qual -> body size (source bytes), for cone weight
     for nid, node in merged.items():
         if node.get("nodeType") != "FunctionDefinition":
             continue
@@ -434,6 +540,7 @@ def _ast_call_graph(merged: dict, cut: str):
         qual = f"{cname}.{fname}" if cname else fname
         fndefs_by_fid.setdefault(sp[2], []).append((sp[0], sp[1], qual))
         qual_by_id[nid] = qual
+        sizes[qual] = max(sizes.get(qual, 0), sp[1] - sp[0])
         if fname:
             by_name.setdefault(fname, set()).add(qual)
         if cname == cut and node.get("visibility") in ("external", "public"):
@@ -453,7 +560,7 @@ def _ast_call_graph(merged: dict, cut: str):
         caller = _enclosing(sp[0], fndefs_by_fid.get(sp[2], []))
         if caller:
             edges.setdefault(caller, set()).add(callee)
-    return edges, roots, by_name
+    return edges, roots, by_name, sizes
 
 
 def _add_external_edges(edges: dict, by_name: dict, external_call_graph: str | Path) -> None:
@@ -481,16 +588,19 @@ def _add_external_edges(edges: dict, by_name: dict, external_call_graph: str | P
                             edges.setdefault(caller, set()).add(callee)
 
 
-def reachable_from_main(ast_path: str | Path, cut: str, external_call_graph: str | Path | None = None) -> set[str]:
-    """The set of `Contract.fn` reachable from the CUT's external/public entry points, over the combined
-    call graph (AST internal edges + prover external/dispatch edges). Returns all functions if the CUT's
-    compilation unit can't be found (fail-open: never prune on incomplete data)."""
+def _build_graph(ast_path: str | Path, cut: str, external_call_graph: str | Path | None):
+    """(edges, roots, sizes) for the CUT's compilation unit — AST internal edges (+ prover external/dispatch
+    edges when given). None if the CUT's unit isn't found. Shared by reachability and the cone weight."""
     merged = _unit_declaring(ast_path, cut)
     if merged is None:
-        return set()                                        # caller treats empty as "don't prune" if desired
-    edges, roots, by_name = _ast_call_graph(merged, cut)
+        return None
+    edges, roots, by_name, sizes = _ast_call_graph(merged, cut)
     if external_call_graph is not None:
         _add_external_edges(edges, by_name, external_call_graph)
+    return edges, roots, sizes
+
+
+def _bfs(edges: dict, roots) -> set[str]:
     seen = set(roots)
     stack = list(roots)
     while stack:
@@ -500,3 +610,45 @@ def reachable_from_main(ast_path: str | Path, cut: str, external_call_graph: str
                 seen.add(nxt)
                 stack.append(nxt)
     return seen
+
+
+def _cone_weights(edges: dict, reachable: set, sizes: dict) -> dict[str, int]:
+    """Per reachable function, the total body size of its TRANSITIVE CONSUMERS — the code that (transitively)
+    calls it, hence reasons about its output. Invert the edges (callee -> callers) and walk from f toward its
+    callers, staying inside `reachable`."""
+    consumers: dict[str, set[str]] = {}
+    for caller, callees in edges.items():
+        for callee in callees:
+            consumers.setdefault(callee, set()).add(caller)
+    out: dict[str, int] = {}
+    for f in reachable:
+        seen: set[str] = set()
+        stack = [c for c in consumers.get(f, ()) if c in reachable]
+        while stack:
+            c = stack.pop()
+            if c in seen:
+                continue
+            seen.add(c)
+            stack.extend(x for x in consumers.get(c, ()) if x in reachable and x not in seen)
+        out[f] = sum(sizes.get(g, 0) for g in seen)
+    return out
+
+
+def reachable_from_main(ast_path: str | Path, cut: str, external_call_graph: str | Path | None = None) -> set[str]:
+    """The set of `Contract.fn` reachable from the CUT's external/public entry points, over the combined
+    call graph (AST internal edges + prover external/dispatch edges). Empty if the CUT's compilation unit
+    can't be found (caller treats empty as "don't prune")."""
+    g = _build_graph(ast_path, cut, external_call_graph)
+    return _bfs(g[0], g[1]) if g else set()
+
+
+def cone_weights(ast_path: str | Path, cut: str, external_call_graph: str | Path | None = None) -> dict[str, int]:
+    """Heuristic cone-of-influence weight per reachable function — the size of the code that consumes its
+    output (`_cone_weights`). The prover exposes no COI, so we approximate it over the call graph; it
+    over-approximates the true data-flow cone but orders candidates by how widely their result propagates
+    (a hash whose id threads the protocol outranks a leaf digest)."""
+    g = _build_graph(ast_path, cut, external_call_graph)
+    if g is None:
+        return {}
+    edges, roots, sizes = g
+    return _cone_weights(edges, _bfs(edges, roots), sizes)
