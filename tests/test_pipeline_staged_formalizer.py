@@ -59,7 +59,7 @@ class _Formalizer:
     def __init__(self, calls: list[tuple[str, list[str]]] | None = None):
         self.calls = [] if calls is None else calls
 
-    async def formalize(self, _label, feat, props, _ctx, _run):
+    async def formalize(self, _label, feat, props, _ctx, _run, _extra_tools):
         # A yield point, so a driver that started the fan-out before `begin` finished would
         # interleave here and be caught by the ordering assertion.
         await asyncio.sleep(0)
@@ -109,13 +109,19 @@ class _Cache:
     async def cache_get(self, _ty): return None
     async def cache_put(self, _v): return None
 
+    def child(self, key, tags = None):
+        if tags is None:
+            return _Cache()
+        async def thunk():
+            return _Cache()
+        return thunk()
+
+
 
 class _Ctx:
     recursion_limit = 10
 
     def child(self, *_a, **_kw): return self
-
-    async def achild(self, *_a, **_kw): return _Cache()
 
 
 class _FeatCtx:
@@ -137,7 +143,7 @@ class _Run:
     env = None
     ctx = _Ctx()
 
-    async def runner(self, _task_info, job):
+    async def runner(self, task_info, job):
         return await job()
 
 
