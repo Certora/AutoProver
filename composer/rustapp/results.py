@@ -13,12 +13,23 @@ Rust app whose results carry verdicts gets the same summary.
 
 from collections import Counter
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from composer.pipeline.core import CorePipelineResult, Delivered
 from composer.rustapp.result import RustFormalResult
 from composer.spec.source.report.render import outcome_glyph, outcome_label
 from composer.spec.source.report.schema import Outcome, ReportBackend
 from composer.spec.types import CheckName, PropertyTitle
+
+# ``RowName``: what a verdict row is called in the console/TUI listing. Phantom-typed like
+# ``CheckName`` / ``PropertyTitle`` / ``ComponentName`` so it is a sibling of all three — the
+# row is whatever :func:`_row_name` (or a component's display name) chose to show, and is never
+# looked up as one of them. Defined here because the row is a display concept of this rollup,
+# not an identity field of the analyzed system.
+if TYPE_CHECKING:
+    class RowName(str): ...
+else:
+    RowName = str
 
 # Tally display order — mirrors render.py's ``_OUTCOME_ORDER`` so the console and the HTML report
 # list outcomes in the same sequence.
@@ -29,10 +40,10 @@ _ORDER = [Outcome.GOOD, Outcome.BAD, Outcome.TIMEOUT, Outcome.ERROR, Outcome.UNK
 class CheckVerdict:
     """One check's outcome: its display name and the neutral ``Outcome``."""
 
-    #: Deliberately plain ``str``, not ``CheckName`` or ``PropertyTitle``: this is whatever
-    #: :func:`_row_name` chose to call the row — a property's title, a check's name, or a
-    #: component's display name — so it belongs to neither namespace and is never looked up.
-    name: str
+    #: Whatever :func:`_row_name` chose to call the row — a property's title, a check's name,
+    #: or a component's display name. A :class:`RowName` so it belongs to none of those
+    #: namespaces and is never looked up as one of them.
+    name: RowName
     outcome: Outcome
 
 
@@ -57,11 +68,11 @@ class VerdictSummary:
         )
 
 
-def _row_name(check: CheckName, properties: list[PropertyTitle]) -> str:
+def _row_name(check: CheckName, properties: list[PropertyTitle]) -> RowName:
     """What to call one check's row: the property's own words when it verifies exactly one, and
     otherwise the check's own name — the only thing that names the row unambiguously when one check
     discharges several properties (or the author mapped none to it)."""
-    return properties[0] if len(properties) == 1 else check
+    return RowName(properties[0] if len(properties) == 1 else check)
 
 
 def summarize_verdicts(
@@ -83,7 +94,7 @@ def summarize_verdicts(
             continue
         formalized = o.result.result
         if not formalized.verdicts:
-            verdicts.append(CheckVerdict(o.feat.display_name, Outcome.UNKNOWN))
+            verdicts.append(CheckVerdict(RowName(o.feat.display_name), Outcome.UNKNOWN))
             continue
         titles = formalized.check_properties()
         verdicts.extend(
