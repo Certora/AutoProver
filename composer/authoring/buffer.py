@@ -12,7 +12,7 @@ display, because those are not schema nouns.
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, overload, override
+from typing import Callable, Literal, overload, override
 from typing_extensions import TypedDict
 
 from langchain_core.messages import AIMessage
@@ -27,15 +27,6 @@ from graphcore.tools.schemas import (
 
 from composer.core.edit import EditErr, EditOk, replace_unique
 from composer.ui.tool_display import ToolDisplay, tool_display_of
-
-
-class WithGenericState[T](WithInjectedState[T]):
-    def __class_getitem__(cls, params: type[Any] | tuple[type[Any], ...]):
-        concrete = super().__class_getitem__(params)
-        # Specialized generic models do not inherit the origin's docstring.
-        if isinstance(concrete, type) and not concrete.__doc__:
-            concrete.__doc__ = cls.__doc__
-        return concrete
 
 
 #: Validates a candidate spec at write time. ``None`` accepts it; a string rejects the write and is
@@ -97,7 +88,7 @@ class GetDeps:
 @tool_family(BufferDoc)
 class GetSpec[T: SpecBuffer](
     WithInjectedId,
-    WithGenericState[T],
+    WithInjectedState[T],
     WithAsyncDependencies[str | Command, GetDeps],
 ):
     """{description}"""
@@ -167,7 +158,7 @@ class EditDeps:
 @tool_family(BufferDoc)
 class EditSpec[T: SpecBuffer](
     WithInjectedId,
-    WithGenericState[T],
+    WithInjectedState[T],
     WithAsyncDependencies[str | Command, EditDeps],
 ):
     """{description}"""
