@@ -15,7 +15,7 @@ and skipped without testcontainers. Run with ``-m expensive``.
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
@@ -88,6 +88,7 @@ def _make_args(rag_conn: str, scenario_dir: Path, system_doc: str | None) -> Aut
         cloud=True,
         interactive=False,
         threat_model=None,
+        extra_context=None,
         recursion_limit=100,
         max_bug_rounds=1,
         # Part of the AutoProveArgs surface (`--budget`); these runs are unbudgeted.
@@ -102,15 +103,22 @@ def _make_args(rag_conn: str, scenario_dir: Path, system_doc: str | None) -> Aut
         thinking_tokens=2048,
         memory_tool=False,
         interleaved_thinking=False,
+        time_budget=None
     ))
 
 
-def _install_mocks(monkeypatch, scenario_dir: Path) -> None:
+def _install_mocks(
+    monkeypatch,
+    scenario_dir: Path,
+    tape_installer: Callable[[], object] = lambda: install_harness_tape(with_delay=False),
+) -> None:
     """LLM / AutoSetup / embedding mocks (undone per test by ``monkeypatch``). The
     databases themselves — and the host/port connection redirection — are handled once
-    per session by the ``langgraph_db`` fixture."""
-    # Mock only the LLM (Counter tape) + disable the agent-index cache.
-    install_harness_tape(with_delay=False)
+    per session by the ``langgraph_db`` fixture. ``tape_installer`` selects which
+    tape backs the fake LLM (default: the main Counter tape); the sibling
+    integration tests pass their variant installers through it."""
+    # Mock only the LLM (the selected tape) + disable the agent-index cache.
+    tape_installer()
     # pipeline.cli imported `get_provider_for` by name, so install_harness_tape's
     # patch of registry.get_provider_for doesn't reach that binding — rebind it here.
     import composer.llm.registry as registry
@@ -188,7 +196,7 @@ async def test_autoprove_dumps_job_info_when_pipeline_crashes(scenario_provider,
             properties_key="bar"
         )
 
-        def __init__(self, store, _ignored):
+        def __init__(self, store, _opts_ignored, _editing_ignored, _analysis_ignored):
             self.artiface_store = store
             
         

@@ -27,18 +27,17 @@ from typing import override
 from langchain_core.tools import BaseTool
 
 from composer.io.multi_job import TaskInfo
-from composer.spec.context import WorkflowContext, CacheKey, CVLGeneration
+from composer.spec.context import WorkflowContext, CVLGeneration
 from composer.spec.types import PropertyFormulation
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
 from composer.spec.system_model import (
     ContractComponentInstance, ContractInstance, SourceApplication, HarnessedApplication,
-    SourceExplicitContract, HarnessedExplicitContract, SourceExternalActor,
-    HarnessDefinition, SolidityIdentifier,
 )
 from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.prop_inference import CERTORA_BACKEND_GUIDANCE
 from composer.spec.source.harness import (
     run_harness_creation, run_autosetup_phase, ContractSetup, SystemDescriptionHarnessed,
+    lift_harnessed
 )
 from composer.spec.source.summarizer import setup_summaries
 from composer.spec.source.struct_invariant import get_invariant_formulation
@@ -64,49 +63,15 @@ from composer.ui.autoprove_app import AutoProvePhase
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun, Delivered, GaveUp,
     CorePhases, SystemAnalysisSpec, ComponentOutcome,
-    COMMON_SYSTEM_CACHE_KEY, Curtailed
+    Curtailed
 )
+from composer.pipeline.keys import COMMON_SYSTEM_CACHE_KEY
 from composer.pipeline.ecosystem import main_instance
-
-
-INV_CVL_KEY = CacheKey[None, GeneratedCVL]("invariant-cvl")
+from composer.spec.source.keys import AP_PROPERTIES_KEY_NAME, INV_CVL_KEY
 
 #: The invariant CVL's slot in the report: a real delivery (imported by every component spec)
 #: or the quarantined leftovers of a budget-curtailed generation (appendix only).
 type InvariantResult = Delivered[GeneratedCVL] | Curtailed[Delivered[GeneratedCVL]]
-
-
-def _lift_harnessed(
-    s: SourceApplication, sys_desc: SystemDescriptionHarnessed,
-) -> HarnessedApplication:
-    """Re-key harness definitions by harnessed contract and fold them into a
-    ``HarnessedApplication`` — each ``SourceExplicitContract`` becomes a
-    ``HarnessedExplicitContract`` carrying the harnesses generated for it."""
-    contract_to_harness: dict[SolidityIdentifier, list[HarnessDefinition]] = {}
-    for c in sys_desc.transitive_closure:
-        if not c.harness_definition:
-            continue
-        contract_to_harness.setdefault(c.harness_definition.harness_of, []).append(
-            HarnessDefinition(name=c.solidity_identifier, path=c.path)
-        )
-
-    comp: list[SourceExternalActor | HarnessedExplicitContract] = []
-    for c in s.components:
-        if not isinstance(c, SourceExplicitContract):
-            comp.append(c)
-            continue
-        comp.append(HarnessedExplicitContract(
-            sort=c.sort,
-            name=c.name,
-            solidity_identifier=c.solidity_identifier,
-            components=c.components,
-            description=c.description,
-            path=c.path,
-            harnesses=contract_to_harness.get(c.solidity_identifier, []),
-        ))
-    return HarnessedApplication(
-        application_type=s.application_type, description=s.description, components=comp,
-    )
 
 
 @dataclass
@@ -341,8 +306,6 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
             lambda: get_invariant_formulation(run.ctx, run.source, run.env, self._harnessed),
         )
 
-AP_PROPERTIES_KEY_NAME = "ap-properties"
-
 @dataclass
 class ProverBackend:
     """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec,
@@ -369,7 +332,7 @@ class ProverBackend:
             TaskInfo(HARNESS_TASK_ID, "Harness Creation", AutoProvePhase.HARNESS),
             lambda: run_harness_creation(run.ctx, run.source, run.env, analyzed),
         )
-        harnessed = _lift_harnessed(analyzed, sys_desc)
+        harnessed = lift_harnessed(analyzed, sys_desc)
         # The materializing strategy covers every phase with one tool: an empty
         # VFS (invariants, or an author that never edited) runs in-situ; a
         # non-empty one runs in a temp materialization of the working copy.

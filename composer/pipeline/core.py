@@ -30,18 +30,18 @@ from contextlib import nullcontext
 from composer.io.multi_job import TaskInfo
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import (
-    WorkflowContext, CacheKey, Properties, ComponentGroup, SourceCode
+    WorkflowContext, ComponentGroup
 )
 from composer.spec.system_model import (
-    BaseApplication, ContractComponentInstance, FeatureUnit
+    BaseApplication, FeatureUnit
 )
 from composer.spec.types import PropertyFormulation, ArtifactIdentifier
+from composer.spec.util import combine_digests
 from composer.spec.system_analysis import run_component_analysis
 from composer.spec.prop_inference import (
     run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
 )
 from composer.llm.types import CacheLevel
-from composer.spec.util import string_hash
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
@@ -53,13 +53,17 @@ from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_I
 from composer.pipeline.ecosystem import Ecosystem
 from .ptypes import (
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp,
+    FinalProperties,
     PipelineRun, SystemAnalysisSpec, RunBudget, Curtailed
+)
+from .keys import (
+    COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY,
+    POST_PROPERTY_KEY, PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
 )
 from composer.diagnostics.budget import total_budget, named_budget_or_nop, time_budget
 from .plugin_api import PrePropertyInference, PostPropertyInference
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
 
-COMMON_SYSTEM_CACHE_KEY = "system-analysis"
 
 _log = logging.getLogger(__name__)
 
@@ -186,31 +190,10 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     def to_artifact_id(self, c: U) -> A: ...
 
 
-# ---- shared helpers (the de-duplicated cache keys + batch) -------------------
-def PROPERTIES_KEY(nm: str):
-    return CacheKey[None, Properties](nm)
-
-
+# ---- the per-unit batch -------------------------------------------------------
 @dataclass
 class _Batch[U: FeatureUnit](BackendJob[U]):
     feat_ctx: WorkflowContext[ComponentGroup]
-
-def _component_digest(c: FeatureUnit) -> str:
-    # ``cache_material`` is the ecosystem-agnostic view of what identifies a unit; EVM's
-    # implementation reproduces the previous inline key (app JSON | ind | contract ind) exactly.
-    return string_hash(c.cache_material())
-
-def _component_cache_key(c: FeatureUnit, plugin_digest: str | None) -> CacheKey[Properties, ComponentGroup]:
-    raw_digest = _component_digest(c)
-    if plugin_digest is not None:
-        raw_digest += f"-{plugin_digest}"
-    return CacheKey(raw_digest)
-
-
-def _batch_cache_key[FormT: BackendResult](
-    props: list[PropertyFormulation],
-) -> CacheKey[ComponentGroup, FormT]:  # pyright: ignore[reportInvalidTypeVarUse]
-    return CacheKey(string_hash("|".join(p.model_dump_json() for p in props)))
 
 
 def extract_task_id(idx: int) -> str:
@@ -238,6 +221,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
+    extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
     budget: RunBudget | None = None,
@@ -250,7 +234,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
         return await _run_pipeline_inner(
             backend, run, interactive=interactive, 
             max_bug_rounds=max_bug_rounds, threat_model=threat_model,
-            ecosystem=ecosystem
+            extra_context=extra_context, ecosystem=ecosystem
         )
 
 async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
@@ -259,6 +243,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     *,
     interactive: bool,
     threat_model: Document | None,
+    extra_context: Sequence[Document],
     max_bug_rounds: int,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
@@ -267,7 +252,7 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
     async with load_plugins(run, ecosystem.unit_type) as plugins:
         return await run_pipeline_inner(
             backend, run, plugins, interactive=interactive, threat_model=threat_model,
-            max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
+            extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
         )
 
 # ---- the driver --------------------------------------------------------------
@@ -278,6 +263,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     *,
     interactive: bool = False,
     threat_model: Document | None = None,
+    extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
 ) -> CorePipelineResult[FormT]:
@@ -293,7 +279,8 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         analyzed = await run.runner(
             TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
             lambda: run_component_analysis(
-                ty=ecosystem.system_model, child_ctxt=run.ctx.child(CacheKey(spec.analysis_key)),
+                ty=ecosystem.system_model,
+                child_ctxt=run.ctx.child(SYSTEM_ANALYSIS_KEY(ecosystem.system_model, spec.analysis_key)),
                 input=source, env=run.env,
                 extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
                 expected_main_id=source.contract_name,
@@ -326,6 +313,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         phases["extraction"],
         interactive,
         threat_model,
+        extra_context,
         max_bug_rounds,
         ecosystem,
         plugin_manager.bind_phase(
@@ -349,8 +337,22 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     async def _run(batch: _Batch[U]) -> ComponentOutcome[FormT, U]:
         result_key = backend.to_artifact_id(batch.feat)
         backend.artifact_store.write_properties(result_key, batch.props)
+
+        # Record the formalization edge's exact derivation inputs — the final
+        # (post-plugin) batch and the gated plugin ids — as a first-class cache
+        # entry, keyed like the bug analysis (the component namespace is shared
+        # across runs). Offline walkers reconstruct the edge from this instead
+        # of sniffing the store.
+        await batch.feat_ctx.child(
+            FINAL_PROPERTIES_KEY(
+                threat_model.to_digest() if threat_model is not None else None,
+                interactive,
+                combine_digests([d.to_digest() for d in extra_context]),
+            )
+        ).cache_put(FinalProperties(items=batch.props))
+
         child : WorkflowContext[FormT] = await batch.feat_ctx.child(
-            _batch_cache_key(batch.props),
+            FORMALIZATION_KEY(formalizer.formalized_type, batch.props),
             {"properties": [p.model_dump() for p in batch.props]},
         )
         cached_result: FormT | None = await child.cache_get(formalizer.formalized_type)
@@ -366,6 +368,15 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                     ),
                     lambda: formalizer.formalize(label, batch.feat, batch.props, child, run),
                 )
+            # Snapshot what the tools registered: a cache replay of this
+            # formalization never runs the tools, so the artifacts must ride
+            # the cache alongside the result they accompany.
+            if not isinstance(result, GaveUp):
+                # A curtailed partial is never the
+                # component's cached result — a later run redoes the
+                # formalization under a fresh budget.
+                if not isinstance(result, Curtailed):
+                    await child.cache_put(result)
         else:
             result = cached_result
 
@@ -428,21 +439,11 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
 
     return _tally(outcomes)
 
-def _pre_property_cache_key(feat: FeatureUnit, plugin: str) -> CacheKey[Properties, PrePropertyInference]:
-    key = f"{_component_digest(feat)}-{string_hash(plugin)}-pre"
-    return CacheKey(key)
-
-def _post_property_cache_key(feat: FeatureUnit, plugin: str, curr_props: list[PropertyFormulation]) -> CacheKey[Properties, PostPropertyInference]:
-    props = string_hash("|".join(
-        p.model_dump_json() for p in curr_props
-    ))
-    key = f"{_component_digest(feat)}-{string_hash(plugin)}-{props}"
-    return CacheKey(key)
-
 async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     prop_key: str,
     main: Main, backend_guidance: str, run: PipelineRun[P, H],
-    phase: P, interactive: bool, threat_model: Document | None, max_rounds: int,
+    phase: P, interactive: bool, threat_model: Document | None,
+    extra_context: Sequence[Document], max_rounds: int,
     # ``App`` stays ``Any`` here: this helper never touches the analyzed-model axis, only
     # ``Main``/``U`` (matching the caller's), so there's nothing to tie it to.
     ecosystem: Ecosystem[Any, Main, U],
@@ -453,7 +454,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
     async def _pre_plugin_inputs(feat: U) -> list[AnyPropertyGenerationInput]:
         async def run_one(runner: PluginPhaseRunner[P, U]) -> AnyPropertyGenerationInput | None:
             ctxt = await prop_ctx.child(
-                _pre_property_cache_key(feat, runner.plugin_id), {"plugin-name": runner.plugin_id}
+                PRE_PROPERTY_KEY(feat, runner.plugin_id), {"plugin-name": runner.plugin_id}
             )
             return await runner.plugin.property_inference_input_hook(
                 feat, runner.bind(str(feat.unit_index), ctxt)
@@ -474,7 +475,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
             sub_phase_id="post-inference", sub_phase_label="Property Post-Process", sorted_run=True
         ):
             ctxt = await prop_ctx.child(
-                _post_property_cache_key(feat, runner.plugin_id, accum),
+                POST_PROPERTY_KEY(feat, runner.plugin_id, accum),
                 {
                     "plugin-name": runner.plugin_id,
                     "props": [p.model_dump() for p in accum],
@@ -498,21 +499,22 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
                 CacheablePropertyGenerationInput(
                     "certora:system-doc", "generic", "always",
                     lambda cache, doc=design_doc: [
-                        "For reference, the system document describing the entire application is as follows.",
+                        "For reference, the system document describing the entire application is as follows.\n\n",
                         doc.to_dict(CacheLevel.SHORT if cache else CacheLevel.NONE)
                     ]
                 ),
             ]
 
         feat_ctx = await prop_ctx.child(
-            _component_cache_key(feat, plugins.plugin_digest),
+            COMPONENT_KEY(feat, plugins.plugin_digest),
             {**feat.context_tag(), "plugins": plugins.plugin_manifest},
         )
         props = await run.runner(
             TaskInfo(extract_task_id(feat.unit_index), feat.display_name, phase),
             lambda conv: run_property_inference(
                 feat_ctx, run.env, feat, refinement=conv if interactive else None,
-                threat_model=threat_model, max_rounds=max_rounds, backend_guidance=backend_guidance,
+                threat_model=threat_model, extra_context=extra_context,
+                max_rounds=max_rounds, backend_guidance=backend_guidance,
                 extra_input=pre_input,
                 system_template=ecosystem.property_prompts.system,
                 render_initial=ecosystem.property_prompts.render_initial,

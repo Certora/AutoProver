@@ -213,9 +213,9 @@ async def generate_cvl_batch(
 
     def stub_feedback_extras() -> list[str | dict]:
         return [
-            f"The current typechecking stub for the {contract_name} contract is",
+            f"The current typechecking stub for the {contract_name} contract is\n\n",
             stub_reader(),
-            "For reference, the system document for the application is",
+            "For reference, the system document for the application is\n\n",
             system_doc.content.to_dict(),
         ]
 
