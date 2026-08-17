@@ -126,7 +126,9 @@ class TruffleManager(BuildSystemManager):
 
         # Independent of whether the config itself evaluated: the packages list comes from
         # package.json/node_modules, which is what Truffle's own resolver uses.
-        packages = build_packages_from_remapping_sources(base_dir=config_file.parent, log_fn=self.log)
+        packages = build_packages_from_remapping_sources(
+            base_dir=config_file.parent, log_fn=self.log, run_root=self.project_root
+        )
         if packages:
             config.packages = packages
 

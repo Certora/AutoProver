@@ -44,5 +44,7 @@ def compute_state_digest(state: AIComposerState) -> str:
 
 def stamp(req: CodegenValidation, st: AIComposerState) -> dict:
     return {
-        req.to_key(): compute_state_digest(st)
+        "validation": {
+            req.to_key(): compute_state_digest(st)
+        }
     }

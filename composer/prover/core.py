@@ -310,8 +310,25 @@ class TrivialFanoutCexHandler(CexHandler):
                 await callbacks.on_analysis_complete(instance, analysis)
             return (instance, analysis)
 
-        jobs = [_one(r) for r in all_results if r.status == "VIOLATED"]
-        results = await asyncio.gather(*jobs)
+        violated = [r for r in all_results if r.status == "VIOLATED"]
+        # One counterexample's analysis failing is not a reason to lose the
+        # prover run that produced it: the rule keeps its status and only its
+        # explanation goes missing, so the report renders without it.
+        settled = await asyncio.gather(
+            *(_one(r) for r in violated), return_exceptions=True
+        )
+        results: list[tuple[RuleResult, str | None]] = []
+        for rule, outcome in zip(violated, settled):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, BaseException):
+                _logger.warning(
+                    "CEX analysis failed for rule %s, continuing without its explanation: %r",
+                    rule.name,
+                    outcome,
+                )
+                continue
+            results.append(outcome)
 
         to_cex_explanation = {
             r.name: stat for (r, stat) in results if stat is not None
@@ -332,8 +349,10 @@ class TrivialFanoutCexHandler(CexHandler):
             results=results_for_template,
         )
 
+        # Counted over every violated rule, not just the analyzed ones, so a
+        # failed analysis cannot move the summarization threshold.
         failed_count = sum(
-            1 for instance, _ in results
+            1 for instance in violated
             if instance.status != "VERIFIED"
         )
         if failed_count > self.summarization_threshold:
