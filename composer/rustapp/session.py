@@ -132,7 +132,7 @@ class PropertyCheckMapping(BaseModel):
     """Maps one property from the batch to the {checks} that carry it.
 
     Many-to-many: a property may need several {checks}, and one {check} may carry several
-    properties (a single rule discharging three related invariants)."""
+    properties (a single {check} discharging three related invariants)."""
     property_title: PropertyTitle = Field(
         description="The unique snake_case title of the property (from the batch listing) that "
         "these {checks} verify"
@@ -181,7 +181,7 @@ def properties_of(mapping: Sequence[PropertyCheckMapping], check: CheckName) -> 
 def declared_names(mapping: Sequence[PropertyCheckMapping]) -> list[CheckName]:
     """The check names the author's mapping references, in first-seen order and without repeats.
 
-    This is the set that runs. A name may be claimed by several properties (one rule discharging
+    This is the set that runs. A name may be claimed by several properties (one check discharging
     three invariants), so this is not the mapping flattened — it is its distinct names."""
     return list(dict.fromkeys(CheckName(n.strip()) for m in mapping for n in m.checks if n.strip()))
 
@@ -358,7 +358,7 @@ class ValidateSpec(
                 f"{vocab.one} with `expect_check_failure` and a reason."
             )
         # ``ran`` travels with the stamp: the publish gate validates the mapping against the
-        # {checks} THIS run covered, and any later edit invalidates the stamp, so a stale set can
+        # checks THIS run covered, and any later edit invalidates the stamp, so a stale set can
         # never be the one publish is held to.
         return tool_state_update(
             self.tool_call_id,
