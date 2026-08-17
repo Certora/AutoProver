@@ -23,6 +23,12 @@
     "template_name": "cvl_kb_index.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.pipeline.ecosystem:EVM_CODE_EXPLORER_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "EVM_CODE_EXPLORER_TEMPLATE",
+    "template_name": "code_explorer/solidity.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.pipeline.ecosystem:SOLANA_ANALYSIS_SYSTEM_TEMPLATE": {
     "module": "composer.pipeline.ecosystem",
     "qualname": "SOLANA_ANALYSIS_SYSTEM_TEMPLATE",
@@ -47,6 +53,12 @@
     "template_name": "solana/property_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.pipeline.ecosystem:SOLANA_CODE_EXPLORER_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOLANA_CODE_EXPLORER_TEMPLATE",
+    "template_name": "code_explorer/solana.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.pipeline.ecosystem:SOROBAN_ANALYSIS_SYSTEM_TEMPLATE": {
     "module": "composer.pipeline.ecosystem",
     "qualname": "SOROBAN_ANALYSIS_SYSTEM_TEMPLATE",
@@ -69,6 +81,12 @@
     "module": "composer.pipeline.ecosystem",
     "qualname": "SOROBAN_PROPERTY_INITIAL_TEMPLATE",
     "template_name": "soroban/property_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.pipeline.ecosystem:SOROBAN_CODE_EXPLORER_TEMPLATE": {
+    "module": "composer.pipeline.ecosystem",
+    "qualname": "SOROBAN_CODE_EXPLORER_TEMPLATE",
+    "template_name": "code_explorer/soroban.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.cvl_research:_ResearchSys": {

@@ -17,7 +17,11 @@ from graphcore.tools.results import result_tool_generator
 
 from composer.spec.agent_index import AgentIndex, RetrieveDocumentTool
 from composer.spec.source.versioned_index import VersionedAgentIndex, MigrationOracle
-from composer.spec.code_explorer import _ExploreCodeCommon, CODE_EXPLORER_SYS_PROMPT
+from composer.pipeline.ecosystem import Ecosystem
+from composer.spec.code_explorer import (
+    _ExploreCodeCommon,
+    render_code_explorer_prompt,
+)
 
 from composer.spec.context import SourceCode, user_data_ns
 from composer.spec.util import uniq_thread_id
@@ -119,27 +123,6 @@ class LiveEditTools:
 class _LiveExplorerState(MessagesState, VFSState):
     result: NotRequired[str]
 
-_VERSIONED_INDEXED_SYS_PROMPT = CODE_EXPLORER_SYS_PROMPT + """
-
-You may be provided with other question/answer pairs that were found to be similar
-to the question you are asked. These question/answer pairs *may* have been derived
-on a prior version of the codebase that you are exploring now; such pairs will be clearly
-marked as being (potentially) out of date. Use the following protocol to use these
-prior results effectively:
-
-1. If a prior finding is *not* marked as out of date, and directly answers the question you are asked,
-   use that answer as is; do not rephrase, re-investigate, or "verify" the answer
-2. If a prior finding is *not* marked as out of date, and *partially* answers the question you are asked,
-   use that answer as a verified starting point and fill in any missing details.
-
-If a prior question/answer pair that is marked as (potentially stale)
-either completely or partially answers the question posed to you, you *should*
-use your source tools to determine if the substantive and relevant details of the answer
-are still true on this version of the code. If you verify that these details
-remain true, you may reuse (in part or in whole) the existing answer as you would
-an up-to-date answer.
-"""
-
 def _prover_output_dirs(p: PurePath) -> bool:
     """Globally exclude prover outputs from the live tool surface AND the
     materializer: they are never compilation inputs, and copying prior runs'
@@ -157,7 +140,8 @@ def setup_live_edits(
     store: BaseStore,
     source_key: str,
     oracle: MigrationOracle,
-    recursion_limit: int
+    recursion_limit: int,
+    ecosystem: Ecosystem,
 ) -> LiveEditTools:
     x = VersionedAgentIndex(
         _wrapped=base_store,
@@ -195,7 +179,7 @@ def setup_live_edits(
             )
         ])
         .with_initial_prompt("Answer the following question")
-        .with_sys_prompt(_VERSIONED_INDEXED_SYS_PROMPT)
+        .with_sys_prompt(render_code_explorer_prompt(ecosystem.code_explorer_prompt, "versioned"))
         .with_output_key("result")
         .compile_async()
     )

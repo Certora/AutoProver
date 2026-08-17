@@ -56,7 +56,6 @@ ChainTag    = Literal["evm", "solana", "soroban"]
 class Language:
     name: LanguageTag
     default_forbidden_read: str          # fs-exclusion regex (Cargo layout vs Foundry layout)
-    code_explorer_prompt: str            # source-navigation framing ("Rust source" vs "Solidity")
     vulnerability_patterns_partial: str | None = None   # j2 partial of language-level vulnerability patterns
 
 @dataclass(frozen=True)
@@ -70,6 +69,7 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     locate_main: Callable[[App, SourceCode], Main]    # find the "main" contract/program
     units: Callable[[Main], list[Unit]]               # split into per-unit extraction items
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
+    code_explorer_prompt: TypedTemplate              # shared protocol + this chain's look-fors
 ```
 
 `Main` and `Unit` generalize what were EVM's `ContractInstance` / `ContractComponentInstance` —
@@ -102,7 +102,6 @@ backends run against it unchanged.
 SOLIDITY = Language(
     name="solidity",
     default_forbidden_read=fs_forbidden_read,          # Foundry layout: lib/, test/, .sol carve-out
-    code_explorer_prompt=CODE_EXPLORER_SYS_PROMPT,
 )
 
 EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] = Ecosystem(
@@ -115,6 +114,7 @@ EVM: Ecosystem[SourceApplication, ContractInstance, ContractComponentInstance] =
     locate_main=main_instance,                          # match by solidity_identifier
     units=_evm_units,                                   # one unit per contract component
     analysis_extra_input=_evm_analysis_extra_input,
+    code_explorer_prompt=EVM_CODE_EXPLORER_TEMPLATE,    # code_explorer/solidity.j2
 )
 ```
 
@@ -134,7 +134,6 @@ RUST = Language(
     name="rust",
     # Cargo/Anchor layout: hide build output, VCS, lockfiles, and the JS side; keep crate sources + tests/.
     default_forbidden_read=r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)",
-    code_explorer_prompt=RUST_CODE_EXPLORER_PROMPT,     # "Rust source … instruction handlers, Accounts, PDAs"
     vulnerability_patterns_partial="rust/_vulnerability_patterns.j2",     # overflow/underflow, panic!/unwrap/expect, ownership
 )
 
@@ -148,6 +147,7 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
     locate_main=_solana_locate_main,                    # match by program_identifier
     units=_solana_units,                                # one per ProgramComponent of the main program
     analysis_extra_input=_solana_analysis_extra_input,
+    code_explorer_prompt=SOLANA_CODE_EXPLORER_TEMPLATE, # rust/_common + PDAs / signers / CPI identity
 )
 ```
 
@@ -181,7 +181,13 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
 
 The `RUST` language facet is chain-independent, so its source conventions and vulnerability-pattern
 fragment are authored once and pulled into the chain's prompts by Jinja `{% include %}`. The
-Solana property template composes the shared Rust fragment with its own platform fragment:
+code-explorer system prompt is the same split, but on the *ecosystem*: a shared protocol
+(`code_explorer/_common.j2`) plus a Rust crate-navigation fragment
+(`code_explorer/rust/_common.j2`) plus the chain's look-fors (`code_explorer/solana.j2` /
+`code_explorer/soroban.j2`). A single Rust explorer prompt cannot name PDAs without lying to
+Soroban, or `require_auth` without lying to Solana.
+
+The Solana property template composes the shared Rust fragment with its own platform fragment:
 
 ```jinja
 {# composer/templates/solana/property_prompt.j2 #}
@@ -217,6 +223,7 @@ SOROBAN: SorobanEcosystem = Ecosystem(
     units=_soroban_units,
     unit_type=SorobanComponentInstance,
     analysis_extra_input=_soroban_analysis_extra_input,
+    code_explorer_prompt=SOROBAN_CODE_EXPLORER_TEMPLATE,  # rust/_common + require_auth / storage kind
 )
 ```
 
@@ -285,8 +292,8 @@ async def run_pipeline[..., U, Main, App](
 ## 7. What is shared and domain-neutral
 
 - Source tools (`fs_tools`, `code_explorer`, `code_document_ref`) — language-neutral; they read
-  Rust as well as Solidity. The only ecosystem inputs are the `forbidden_read` default and the
-  explorer prompt string.
+  Rust as well as Solidity. The language input is the `forbidden_read` default; the explorer
+  system prompt is an ecosystem template (shared protocol + chain look-fors).
 - The report (`collect` / `Verdict` / schema) and `ReportBackend`.
 - Caching, the multi-round property loop, interactive refinement, and the agent plumbing.
 - The backend seam itself — a verification backend is "just another backend," paired to an
@@ -306,6 +313,7 @@ async def run_pipeline[..., U, Main, App](
 | EVM system model + prompts | [composer/spec/system_model.py](../composer/spec/system_model.py) · `composer/templates/application_analysis_*.j2` · `property_analysis_*.j2` |
 | Solana system model | [composer/spec/solana/model.py](../composer/spec/solana/model.py) |
 | Solana prompts + shared Rust fragment | `composer/templates/solana/*.j2` · `composer/templates/rust/_vulnerability_patterns.j2` |
+| Code-explorer prompts (per ecosystem) | `composer/templates/code_explorer/` · `Ecosystem.code_explorer_prompt` |
 | Soroban system model | [composer/spec/soroban/model.py](../composer/spec/soroban/model.py) |
 | Soroban prompts (+ platform primer) | `composer/templates/soroban/*.j2` · [its README](../composer/templates/soroban/README.md) |
 | Template manifest (what the fuzzer renders) | [template_manifest.json](../template_manifest.json) · [composer/scripts/template_manifest.py](../composer/scripts/template_manifest.py) |
