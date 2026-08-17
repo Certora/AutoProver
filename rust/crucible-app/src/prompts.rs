@@ -173,7 +173,7 @@ mod tests {
         // …that such an action RECORDS the outcome rather than asserting on it. A tagged assertion
         // in the fixture fires in every component's campaign, and the components that do not own
         // the title cannot place the counterexample
-        // (docs/crucible-cross-component-attribution.md §4.2).
+        // (docs/crucible.md §7).
         has(&p.instruction, "the action ATTEMPTS, it never JUDGES");
         has(&p.instruction, "Never assert a property in the fixture");
         has(&p.instruction, "compiled into **every** component's fuzz target");
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn the_property_author_is_told_the_shape_of_the_checker_that_will_read_its_output() {
         // 33 of klend's 411 proposed properties were declined as unformalizable, and four shapes
-        // account for all of them (docs/crucible-uncheckable-properties.md). Each is decided when
+        // account for all of them (docs/crucible.md §9). Each is decided when
         // the property is *worded*, one phase before anyone tries to check it — and this prose is
         // the only thing that reaches that phase, since extraction runs before the fixture exists.
         let guidance = CrucibleApp.descriptor().backend_guidance;

@@ -1,7 +1,7 @@
 //! The **Crucible** application — AutoProver's Solana verification backend, which
 //! authors [Crucible](https://github.com/asymmetric-research/crucible) fuzz harnesses
 //! and gates them with the local `crucible` CLI. Pairs with the shared `solana`
-//! ecosystem front half (see `docs/crucible-application.md`).
+//! ecosystem front half (see `docs/crucible.md`).
 //!
 //! A passive [`Backend`](autoprover_sdk::Backend) (`docs/rust-applications.md`): it supplies the
 //! descriptor, toolchain precondition checks, the per-invariant `units`, the authoring prompts

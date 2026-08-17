@@ -9,7 +9,8 @@ Reference for the seam as built. The driver it plugs into is
 [formalization-abstraction.md](./formalization-abstraction.md) (`PipelineBackend` →
 `PreparedSystem` → `Formalizer`); the confinement it runs its toolchain under is
 [command-sandbox.md](./command-sandbox.md); the RAG corpus a wheel can declare is
-[rag-import-format.md](./rag-import-format.md).
+[rag-import-format.md](./rag-import-format.md). The first real application on this
+seam is [crucible.md](./crucible.md).
 
 ---
 
@@ -731,7 +732,7 @@ the choice of how the *source* deliverable lands:
 multi-unit build — a manifest's feature list, a crate root's module declarations — is a function of
 the *whole unit set*, which no per-unit callout can see. Without the hook a wheel must re-render it
 on every gated build from the one unit it happens to hold, and the real artifact is only ever
-assembled at the end, where nothing has built it (`docs/crucible-component-units.md` §17 is what that
+assembled at the end, where nothing has built it ([crucible.md](./crucible.md) §4 is what that
 cost). The host calls `crate_root` once, in `StagedFormalizer.begin` — the first point both the
 shared setup spec and the unit set exist — writes the result, and never rewrites it. A wheel that
 implements it should emit only per-unit files from `compile`/`validate`, so a gated build *is* the

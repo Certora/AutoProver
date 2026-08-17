@@ -65,7 +65,7 @@ def test_descriptor_declares_design_doc_discovery_phase():
 
 
 def test_every_check_of_a_component_shares_one_fuzz_target():
-    # Collapse (docs/crucible-unit-granularity.md §3): whatever the author named its checks, they
+    # Collapse (docs/crucible.md §8): whatever the author named its checks, they
     # all share ONE fuzz `target` (`c_invariants`), so the host runs a single build + fuzz and the
     # wheel attributes the outcome per property.
     component = _component_input("solvency", "conservation")

@@ -61,7 +61,7 @@ pub(crate) struct RootLayout<'a> {
 
 /// The `fuzz_assert*` wrappers the crate root interposes on crucible's macros, counting each
 /// assertion site's evaluations so a verdict can refuse `GOOD` for a check nothing evaluated
-/// ([`crate::tally`], docs/crucible-unexercised-checks.md). `ops` are the comparison-macro
+/// ([`crate::tally`], docs/crucible.md §8). `ops` are the comparison-macro
 /// suffixes to wrap — the authoring surface the cheat sheet offers.
 #[derive(Template)]
 #[template(path = "tally_macros.j2", escape = "none")]
@@ -112,7 +112,7 @@ pub(crate) struct GaveUpSection<'a> {
     pub(crate) reason: &'a str,
 }
 
-/// The wheel-authored fixture the **preflight** gate builds (`docs/crucible-application.md` §5.0) —
+/// The wheel-authored fixture the **preflight** gate builds (`docs/crucible.md` §4) —
 /// no LLM involved. `crate_id` names both the module the program's types come from and the `.so`
 /// basename, exactly as in an authored fixture, so the preflight proves the same two paths resolve.
 #[derive(Template)]

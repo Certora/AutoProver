@@ -556,7 +556,7 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         (which overlaps property extraction, so no properties exist yet), and it cannot happen
         lazily on first ``formalize`` (whichever unit won the race would decide the artifact the
         rest are then told to work within — see :class:`StagedFormalizer` and
-        docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two.
+        docs/crucible.md §7). The driver calls this exactly between the two.
 
         This is also the first moment the whole unit set is known, and scaffolding for a multi-unit
         build (a manifest's feature list, a crate root's module declarations) is a function of the set

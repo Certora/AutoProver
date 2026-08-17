@@ -2,7 +2,7 @@
 //!
 //! `fuzz_assert*` is silent on success, so a campaign's own output cannot distinguish a property
 //! that held from one whose assertion never ran — a guard that never opens, an unreachable site,
-//! or an assertion never written all exit clean (docs/crucible-unexercised-checks.md). The crate
+//! or an assertion never written all exit clean (docs/crucible.md §8). The crate
 //! root closes the gap by interposing counting wrappers on the assertion macros
 //! (`tally_macros.j2`): each site prints
 //! `[FUZZ_TALLY] site: <file>:<line>, evaluated: <n>, tag: <tag>` at every power-of-two count.
@@ -51,7 +51,7 @@ fn never_evaluated(c: &Check) -> String {
         "the campaign never evaluated a {}-tagged assertion, so this check was not exercised: its \
          guard never opened, the assertion is unreachable, or it was never written. Finding no \
          violation is a fact about the states explored, not about a check nothing ran \
-         (docs/crucible-unexercised-checks.md).",
+         (docs/crucible.md §8).",
         tags.join("/"),
     )
 }
@@ -100,7 +100,7 @@ pub(crate) fn gate(
 mod tests {
     //! A clean campaign's `GOOD` is only as good as the evidence its checks ran — the gap the
     //! 2026-08-12 vault run's guarded invariants made concrete (a fixture whose init is rejected
-    //! evaluates nothing and exits 0; docs/crucible-unexercised-checks.md).
+    //! evaluates nothing and exits 0; docs/crucible.md §8).
     use super::*;
     use crate::testkit::{prop, target_over, verdicts_of};
     use crate::triage::attribute_findings;

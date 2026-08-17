@@ -103,7 +103,7 @@ five steps and never inspects anything backend-specific:
    depends on the other, so the prover's expensive AutoSetup/summary/invariant work overlaps
    with per-unit property inference. Property extraction fans out one agent per *unit* —
    `ecosystem.units(main)` — one per **component** of the main contract/program in both
-   ecosystems (docs/crucible-component-units.md) — bounded by a semaphore
+   ecosystems ([docs/crucible.md](docs/crucible.md) §2) — bounded by a semaphore
    (`--max-concurrent`).
 4. **Per-unit formalization** (parallel). For each unit's properties, the backend's
    `Formalizer.formalize()` is invoked. Results are cached by the backend's result type.
@@ -258,8 +258,9 @@ the authoring agent. A callback protocol streams per-rule outcomes to the UI and
   Rust/Solana targets: a `SolanaApplication` analysis model, Solana-specific analysis/property
   prompts ([templates/solana/](composer/templates/solana/)), and per-component `units()` — one
   unit per `ProgramComponent`, the Solana analog of EVM's `ContractComponent`
-  ([docs/crucible-component-units.md](docs/crucible-component-units.md)). It plugs into the same
-  driver via the `SOLANA` ecosystem; the matching verification backend (Crucible) lands separately.
+  ([docs/crucible.md](docs/crucible.md) §2). It plugs into the same
+  driver via the `SOLANA` ecosystem; the matching verification backend is
+  [Crucible](docs/crucible.md).
 - **NatSpec** ([composer/spec/natspec/](composer/spec/natspec/)) — a *greenfield* workflow
   (its own asyncio orchestrator, not the generic driver) that goes from a design doc to Solidity
   interfaces, stub implementations, and CVL. A semaphore-serialized "semantic registry"

@@ -73,7 +73,7 @@ impl Backend for CrucibleApp {
     fn target_for(&self, input: &AuthorInput, _check: &str) -> Option<String> {
         // Every check of a component runs in ONE fuzz campaign — the component's harness fn, which
         // is also its Cargo feature and what a gated build selects
-        // (docs/crucible-component-units.md §8.1). So the grouping does not depend on the check:
+        // (docs/crucible.md §4). So the grouping does not depend on the check:
         // one build and one run for the whole property set, still a report row per property.
         // Neither the preflight gate nor the shared fixture formalizes anything, so neither has a
         // check to place.
@@ -121,7 +121,7 @@ impl Backend for CrucibleApp {
                 // ONLY this component's section. The crate root already declares it — written once
                 // from the whole unit set by `crate_root` — so a gated build is the delivered crate
                 // with one feature selected, not a separately-assembled lookalike
-                // (docs/crucible-component-units.md §17).
+                // (docs/crucible.md §4).
                 let fname = harness_fn(input);
                 (hspec.section_files(&fname, authored_spec), fname)
             }
@@ -235,7 +235,7 @@ impl Backend for CrucibleApp {
                 // `[FUZZ_TALLY]` lines (printed by the crate root's assertion wrappers) are the
                 // only evidence of that: a check whose tag was never evaluated is downgraded to
                 // UNKNOWN here, whichever branch above concluded it
-                // (docs/crucible-unexercised-checks.md).
+                // (docs/crucible.md §8).
                 let concluded = tally::gate(target, &tally::evaluations(&combined), concluded);
                 // What the campaign spent, on every row it answered for — a verdict is only worth
                 // what the run behind it cost, and the report has nowhere else to say so.

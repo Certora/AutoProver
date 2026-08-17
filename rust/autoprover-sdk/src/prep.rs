@@ -47,7 +47,7 @@ pub struct WorkspacePrep {
 /// Cargo manifest's feature list, a crate root's module declarations — which no per-unit callout can
 /// see. Without it a wheel must re-render the scaffolding on every gated build, from the one unit it
 /// happens to be holding, which means the artifact the run produces is only ever assembled for real
-/// at the end (`docs/crucible-component-units.md` §17 is what that cost).
+/// at the end (`docs/crucible.md` §4 is what that cost).
 ///
 /// The host writes the returned files under the workdir and does not write them again, so a wheel
 /// that implements [`Backend::crate_root`](crate::Backend::crate_root) can have its per-unit

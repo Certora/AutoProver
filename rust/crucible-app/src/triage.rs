@@ -290,7 +290,7 @@ fn unexplored(target: &Target, run_props: &[Property], stopper: &str) -> String 
 /// "Explored every check it covers" presumes the check's assertion was *evaluated* at all — which
 /// this attribution cannot see, and a guarded assertion whose guard never opens makes false. That
 /// premise is [`tally::gate`](crate::tally::gate)'s to collect, applied over this outcome in
-/// `validate` (docs/crucible-unexercised-checks.md).
+/// `validate` (docs/crucible.md §8).
 pub(crate) fn attribute_findings(
     target: &Target, run_props: &[Property], findings: &[String],
 ) -> ValidateOutcome {
@@ -332,7 +332,7 @@ pub(crate) fn attribute_findings(
 
 #[cfg(test)]
 mod attribution {
-    //! Attributing a shared-target finding (docs/crucible-cross-component-attribution.md): one
+    //! Attributing a shared-target finding (docs/crucible.md §8): one
     //! campaign covers a component's whole property set, and the fixture's assertions carry titles
     //! from components that campaign never asked about.
     use super::*;

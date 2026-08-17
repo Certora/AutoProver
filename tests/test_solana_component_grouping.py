@@ -1,9 +1,9 @@
 """Probe: run ONLY the Solana system-analysis phase against a real program and print the
 ``ProgramComponent`` grouping it produces.
 
-It stops after analysis (no property extraction, no backend), so it costs one agent run rather
-than a full front half, and it exercises the model, the prompt section, and
-``_solana_validate``'s component rules.
+It stops after analysis (no property extraction, no backend), so it costs one agent
+run rather than a full front half, and it exercises the model, the prompt section,
+and ``_solana_validate``'s component rules (docs/crucible.md §2).
 
 Points at a program via environment, and skips when unset (this repo carries no Solana program
 large enough for its grouping to prove anything):

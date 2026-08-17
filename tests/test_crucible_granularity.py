@@ -1,16 +1,17 @@
-"""Solana unit granularity: one unit per `ProgramComponent` — docs/crucible-component-units.md.
+"""Solana unit granularity: one unit per `ProgramComponent` — docs/crucible.md §2.
 
 Covers the pieces of the granularity change that need no toolchain or LLM:
 - the component unit wrapper (`SolanaComponentInstance`) and what it exposes to a backend,
 - the SOLANA ecosystem's per-component `units` enumeration,
 - the driver turning that enumeration into one extraction batch per component.
 
-History: Solana was per-instruction, then briefly a single whole-program unit
-(docs/crucible-unit-granularity.md). Both are gone — an instruction is a syntactic artifact, not a
-unit of behavior, and one extraction agent for a whole program is a hard cap on depth (§15 measures
-this on a 62-instruction program). `Main` (`SolanaProgramInstance`) is deliberately no longer a
-`FeatureUnit`; main and unit are different axes, as on EVM. That line is held by the type checker —
-`FeatureUnit` is not `@runtime_checkable`, and a structural isinstance could not hold it anyway.
+History: Solana was per-instruction, then briefly a single whole-program unit.
+Both are gone — an instruction is a syntactic artifact, not a unit of behavior,
+and one extraction agent for a whole program is a hard cap on depth. `Main`
+(`SolanaProgramInstance`) is deliberately no longer a `FeatureUnit`; main and
+unit are different axes, as on EVM. That line is held by the type checker —
+`FeatureUnit` is not `@runtime_checkable`, and a structural isinstance could not
+hold it anyway.
 """
 
 import types

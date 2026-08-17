@@ -7,7 +7,7 @@ that produces the formalizer. **From what**: the union of *every* unit's
 properties, not whichever unit happened to formalize first; the artifact is what makes those
 properties checkable, so a multi-component run whose fixture only knew one component's properties
 would tell the rest to work within a surface designed without them
-(docs/crucible-component-units.md (PR3) §8.2). **Caching**: authoring it is a full LLM loop, on a large
+(docs/crucible.md §7). **Caching**: authoring it is a full LLM loop, on a large
 program the longest single step of a run, so a re-run after something failed downstream must not pay
 for it again. Like the driver's other caches it only stores when the run has a cache namespace
 (``--cache-ns``); without one every step is recomputed, by design.
@@ -275,7 +275,7 @@ async def test_every_units_properties_reach_every_components_own_input(monkeypat
     # other than the one whose target is running. A gate told only its own properties cannot tell
     # that from a title nobody owns, and the safe reading of an unplaceable failure (refute
     # everything) is exactly wrong for the first case
-    # (docs/crucible-cross-component-attribution.md).
+    # (docs/crucible.md §8).
     store, authored = _Store(), []
     ctx = _ctx(store, namespace=None)
     run = _Run(ctx)

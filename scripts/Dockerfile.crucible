@@ -2,9 +2,9 @@
 #
 # Crucible toolchain overlay image — layered ON TOP of the lean base autoprove
 # image (scripts/Dockerfile). The base ships NONE of the Solana/Rust/Crucible
-# toolchain on purpose (docs/crucible-toolchain-versioning.md §1); most AutoProver
+# toolchain on purpose (docs/crucible.md §6); most AutoProver
 # containers don't need it. This image bakes exactly ONE blessed, mutually-
-# compatible combo — "Option 1 / pin-and-bump" from that doc — so `console-crucible`
+# compatible combo so `console-crucible`
 # runs fully inside the container. Bumping the combo = bumping the ARGs below and
 # rebuilding.
 #
@@ -20,7 +20,7 @@
 
 ARG BASE_IMAGE=autoprover-local:latest
 
-# ---- Blessed toolchain combo (docs/crucible-toolchain-versioning.md §6.1) ----
+# ---- Blessed toolchain combo (docs/crucible.md §6) ----
 # host rustc: the solana_vault scenario's rust-toolchain.toml pins 1.89.0.
 # solana/agave (cargo-build-sbf + sBPF rustc): 3.1.10 (platform-tools v1.52).
 # anchor CLI: 1.1.2 (the crucible_app wheel's REQUIRED_BINARIES demands `anchor`).

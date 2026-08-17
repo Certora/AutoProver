@@ -1,6 +1,6 @@
 """Build a Solana program to sBPF (and, optionally, its IDL).
 
-The shared "Solana build capability" (``docs/crucible-application.md (PR3)`` §5.1):
+The shared "Solana build capability" (``docs/crucible.md`` §6):
 ``source → .so [+ IDL]``. It is deliberately backend-agnostic — the Crucible
 backend calls it in *no-munge* mode (build the program as-is), and a future
 Certora-Prover/CVLR backend will call it in *munge-and-rebuild* mode (rewrite the

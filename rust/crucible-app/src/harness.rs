@@ -2,7 +2,7 @@
 //! file that renders from those two facts (manifest, toolchain pin, crate root, section paths).
 //!
 //! One renderer, so the crate a gated build compiles and the crate the user receives are the same
-//! bytes (docs/crucible-component-units.md §17).
+//! bytes (docs/crucible.md §4).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ use crate::templates::{
     TallyMacros,
 };
 
-// The crucible/solana/anchor stack a harness pins (docs/crucible-application.md §6.1). Hardcoded
+// The crucible/solana/anchor stack a harness pins (docs/crucible.md §6). Hardcoded
 // for now to the combination the installed toolchain matches (was Python's `CrucibleHarness`).
 pub(crate) const ANCHOR_VERSION: &str = "1.0.1";
 const SOLANA_VERSION: &str = "3.0";
@@ -61,7 +61,7 @@ pub(crate) fn crate_dep_usable(cr: &SolanaSourceUnit) -> bool {
 }
 
 /// Where the harness gets the program's Anchor types from — the one axis the crate rendering turns
-/// on (`docs/crucible-application.md` §6.1).
+/// on (`docs/crucible.md` §5).
 pub(crate) enum ProgramTypes {
     /// A path dependency on the program's crate: the real types, requiring a matching Anchor major.
     Crate,
@@ -248,7 +248,7 @@ impl HarnessSpec {
     /// and the unit set — and re-rendered identically by `crate_root`, whose job is to land these
     /// files for the run whose setup spec came from cache and so never reached that gate. One
     /// renderer and one set of inputs, so `main.rs` never exists in a provisional shape and the gated
-    /// builds compile the crate the user receives (docs/crucible-component-units.md §17).
+    /// builds compile the crate the user receives (docs/crucible.md §4).
     ///
     /// A `#[cfg]`-disabled `mod` is stripped before rustc resolves its file, so declaring every
     /// component here costs a build nothing — including the setup gate, which runs before a single
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn the_crate_root_interposes_tally_wrappers_on_every_assertion_macro() {
         // The wrappers are what let a verdict refuse GOOD for a never-evaluated check
-        // (docs/crucible-unexercised-checks.md): the explicit `pub(crate) use … as` re-exports
+        // (docs/crucible.md §8): the explicit `pub(crate) use … as` re-exports
         // shadow the fixture's `use crucible_fuzzer::*;` glob at this root, so a section's bare
         // `fuzz_assert*!` resolves to the counting wrapper. A `macro_rules!` under the original
         // name would instead be ambiguous beside that glob (E0659).

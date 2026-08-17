@@ -121,7 +121,7 @@ struct UnitRef {
 }
 
 /// The `#[invariant_test]` fn holding ALL of one component's properties — one harness fn, one
-/// build, one fuzz run per component (docs/crucible-component-units.md §8.1). The Crucible macro
+/// build, one fuzz run per component (docs/crucible.md §4). The Crucible macro
 /// self-gates `main()` by fn name == feature, so this doubles as the Cargo feature and the
 /// `crucible run <program> <feature>` target selector.
 ///

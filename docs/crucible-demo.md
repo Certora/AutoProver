@@ -180,7 +180,7 @@ Useful flags (`console-crucible --help` lists all):
 - `--fuzz-timeout SECONDS` — per-property fuzzing budget (default 30).
 - `--program-idl FILE` — generate the harness's types from this IDL instead of depending on the
   program's crate. Needed for a program built against a different Anchor/Solana stack than
-  Crucible's, which the harness cannot link ([crucible-application.md §6.2](./crucible-application.md));
+  Crucible's, which the harness cannot link ([crucible.md](./crucible.md) §5);
   that case is detected automatically, and the run tells you to pass this if no IDL can be built.
   Any Anchor IDL format works, including pre-0.30.
 - `--cache-ns NAME` — **enables cross-run caching** (off by default). Every expensive step — the
@@ -263,7 +263,7 @@ Instead of installing the toolchain on the host (§1), you can run the whole ver
 inside a container. The **crucible toolchain image** (`scripts/Dockerfile.crucible`)
 bakes one blessed, mutually-compatible combo — host Rust `1.89.0`, Solana platform-tools
 `3.1.10`, `anchor` `1.1.2`, and `crucible` `v0.2.0` (checkout + CLI) — on top of the lean
-base image, following Option 1 in [crucible-toolchain-versioning.md](./crucible-toolchain-versioning.md).
+base image (the blessed combo in [crucible.md](./crucible.md) §6).
 Programs that need a different combo are out of scope for this image; bump the ARGs in
 `scripts/Dockerfile.crucible` and rebuild to re-bless.
 

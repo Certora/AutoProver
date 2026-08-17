@@ -56,11 +56,10 @@ _SCENARIO = Path(__file__).parent.parent / "test_scenarios" / "solana_vault"
 _PROGRAM = "vault"
 _SLUG = "deposit"
 _FEATURE = f"c_{_SLUG}"  # this property's check (one per property)
-# Every Crucible property shares ONE fuzz target/harness fn (docs/crucible-unit-granularity.md
-# §3); its name gates `main` via the `#[invariant_test]` macro. `validate` is called with the
+# Every Crucible property shares ONE fuzz target/harness fn (docs/crucible.md §8);
+# its name gates `main` via the `#[invariant_test]` macro. `validate` is called with the
 # *target* (as the real pipeline does: `u["target"] or u["unit"]`), not the per-property unit —
-# building with any other feature leaves `main` cfg'd out (E0601). Mirrors crucible-app's
-# SINGLE_HARNESS_FN.
+# building with any other feature leaves `main` cfg'd out (E0601).
 _TARGET = "c_invariants"
 # The one fn name every component's suite defines (crucible-app's `SECTION_FN`), which the crate
 # root's generated entry calls into.
@@ -263,7 +262,7 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
         )
 
         # Place the crate root and manifest, which a per-component gate does NOT write: since
-        # sections moved into their own files (docs/crucible-component-units.md §17), `compile` and
+        # sections moved into their own files (docs/crucible.md §4), `compile` and
         # `validate` emit only `src/<feature>.rs` — the crate root is rendered ONCE from the fixture
         # plus the whole unit set. The pipeline does this in `adapter.write_crate_root` between the
         # setup step and fan-out; this drives the same callout with the same payload. Without it the
