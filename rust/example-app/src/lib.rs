@@ -109,7 +109,7 @@ impl Backend for EchoApp {
             if declared.contains(&c.name.as_str()) {
                 Verdict::with_outcome(Outcome::Good)
             } else {
-                Verdict::with_outcome(Outcome::Unknown)
+                Verdict::with_outcome(Outcome::Error)
                     .with_detail(Some(format!("the spec declares no rule named `{}`", c.name)))
             }
         })

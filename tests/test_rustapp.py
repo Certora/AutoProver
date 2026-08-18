@@ -123,7 +123,7 @@ def test_a_declared_check_the_spec_does_not_contain_does_not_pass():
     )
     (name, verdict), = res["verdicts"]
     assert name == "rule_ghost"
-    assert verdict["outcome"] == "UNKNOWN" and "rule_ghost" in (verdict["detail"] or "")
+    assert verdict["outcome"] == "ERROR" and "rule_ghost" in (verdict["detail"] or "")
 
 
 def test_result_round_trips_through_cache_serialization():
