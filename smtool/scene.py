@@ -148,3 +148,12 @@ def mutability_resolver(certora_internal_path: str = ".certora_internal"):
         return muts[0]
 
     return resolve
+
+
+def signature_from_scene(certora_internal_path, contract, name):
+    """Native `Signature` for `contract.name` from the compiled scene's `all_methods.json`, or None if
+    absent. Reuses AutoProver's `MethodParser` + `TypeAnalyzer` via `Signature.from_scene` — no string
+    parsing. (Fallback to `methods_from_build` when only the raw build json is present is a TODO.)"""
+    from .ir import Signature
+    m = method_dict(load_methods(certora_internal_path), contract, name)
+    return Signature.from_scene(m, type_resolver(certora_internal_path)) if m else None

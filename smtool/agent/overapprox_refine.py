@@ -44,6 +44,7 @@ class OverApproxRefineConfig:
     local: bool = False                # LocalProverRunner vs CloudProverRunner
     certora_run_path: str = "certoraRun"
     disable_cache: bool = False
+    run_url: str | None = None         # the ORIGINAL run — baseline verdicts + regression re-run
 
 
 @dataclass
@@ -168,6 +169,69 @@ def _record_verified(project: OverApproxProject, results: dict[str, V.VerifyResu
             project.mark_verified(fn)
 
 
+def _baseline_passing(url: str) -> set:
+    """User rules that VERIFIED (did not violate) in the ORIGINAL run — the ones the summary must NOT
+    break. From POU get_all_checks/get_violated_rules; prover built-ins dropped. vaas-dev needs AISS_ENV=dev."""
+    import os
+    if "vaas-dev" in url:
+        os.environ.setdefault("AISS_ENV", "dev")
+    from prover_output_utility import ProverOutputAPI
+    api = ProverOutputAPI(use_local=False)
+    def user(rn): return bool(rn) and "StaticCheck" not in rn and rn != "envfreeFuncsStaticCheck"
+    allr = {c.rule_name for c in api.get_all_checks(url) if user(c.rule_name or "")}
+    violated = {c.rule_name for c in api.get_violated_rules(url) if user(c.rule_name or "")}
+    return allr - violated
+
+
+def _write_regression_conf(project: OverApproxProject, cfg: OverApproxRefineConfig, rules: list) -> str:
+    """Install each VERIFIED summary into the run's verify spec (`import "<fn>Summary.spec";`, exactly the
+    driver's consumer-install) and write a conf that re-runs `rules` on the run's ORIGINAL scene with the
+    summaries active. Leaves the spec edited — the caller restores it."""
+    import copy, json
+    from ..project import _set_perf
+    spec_rel = cfg.setup_conf["verify"].split(":", 1)[1]
+    spec_path = Path(cfg.sources_root) / spec_rel
+    text = spec_path.read_text()
+    for fn in project.verified:
+        imp = f'import "{fn}Summary.spec";'
+        if imp not in text:
+            text = imp + "\n" + text
+    spec_path.write_text(text)
+    conf = copy.deepcopy(cfg.setup_conf)
+    conf["prover_args"] = [a for a in conf.get("prover_args", []) if a != "-skipFormulaChecking"]
+    conf["rule"] = rules
+    conf["msg"] = "overapprox regression (summary installed)"
+    conf = _set_perf(conf)
+    cpath = f"{cfg.out_dir}/conf/regression.conf"
+    Path(cpath).parent.mkdir(parents=True, exist_ok=True)
+    Path(cpath).write_text(json.dumps(conf, indent=4))
+    return cpath
+
+
+async def _regression_check(project: OverApproxProject, cfg: OverApproxRefineConfig):
+    """AFTER conformance passes: install the summaries + re-run the run's OWN rules. Returns (regressed
+    rules, job_url) — a rule that PASSED at baseline but now fails means the summary is TOO COARSE."""
+    if not cfg.run_url:
+        return [], None
+    baseline = await asyncio.to_thread(_baseline_passing, cfg.run_url)
+    if not baseline:
+        return [], None
+    spec_rel = cfg.setup_conf["verify"].split(":", 1)[1]
+    spec_path = Path(cfg.sources_root) / spec_rel
+    pristine = spec_path.read_text()
+    try:
+        cpath = _write_regression_conf(project, cfg, sorted(baseline))
+        common = dict(sources_root=cfg.sources_root, local=cfg.local,
+                      certora_run_path=cfg.certora_run_path, disable_cache=cfg.disable_cache)
+        results = await V.verify_all_early([cpath], **common)
+        r = next(iter(results.values()), None)
+        if r is None:
+            return [], None
+        return sorted(baseline & {v.rule for v in r.failures()}), r.job_url
+    finally:
+        spec_path.write_text(pristine)              # restore the run's spec (install was transient)
+
+
 def _make_verify(project: OverApproxProject, cfg: OverApproxRefineConfig, budget: list[int]):
     """Bound closure for the agent's `verify` tool: write, prove every conformance conf, enrich failures,
     record the verified targets, and return it all as one message (run INLINE in the conversation).
@@ -183,6 +247,13 @@ def _make_verify(project: OverApproxProject, cfg: OverApproxRefineConfig, budget
         results = await _prove_and_verify(project, cfg)
         _record_verified(project, results)
         msg = _format_verify_result(project, results)
+        if results and all(r.success for r in results.values()) and cfg and cfg.run_url:  # conformance PASSED -> regression gate
+            regressed, rurl = await _regression_check(project, cfg)
+            if regressed:
+                msg = ("PROVER: conformance PASSED, but installing the summary REGRESSED the run's own "
+                       "rules (they VERIFIED without it) -> Phi is TOO COARSE. TIGHTEN it so these pass "
+                       "again; do NOT call result:\n  " + "\n  ".join(regressed)
+                       + (f"\n  (regression run: {rurl})" if rurl else ""))
         return msg + f"\n\n(prover runs remaining: {budget[0]})"
     return verify_now
 

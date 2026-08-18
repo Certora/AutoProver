@@ -32,6 +32,8 @@ _BINOP = {
     "ExponentExp": "exponent", "PowExp": "exponent",
     "LandExp": "and", "LorExp": "or", "ImpliesExp": "implies", "IffExp": "iff",
     "EqExp": "eq", "NeExp": "ne", "GtExp": "gt", "GeExp": "ge", "LtExp": "lt", "LeExp": "le",
+    "BwLeftShiftExp": "bw_lshift", "BwRightShiftExp": "bw_rshift", "BwAndExp": "bw_and",
+    "BwOrExp": "bw_or", "BwXOrExp": "bw_xor",
 }
 
 

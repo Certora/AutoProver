@@ -274,16 +274,24 @@ def m_expr_summary(contract: str | None, name: str, named_params, return_expect,
                    summary_call: S.FunctionCall, with_env: str | None = "e",
                    visibility="external") -> S.ImportedFunction:
     """A methods{} expression-summary entry:
-    `function C.name(<named_params>) external [with (env e)] => summary_call expect (return_expect);`
+    `function C.name(<named_params>) external returns (<return_expect>) [with (env e)] => summary_call;`
+    Returns go in the SIGNATURE (not an `expect` clause) so the entry can MERGE with the target's
+    real scene body (installable over a PRESENT function, e.g. an over-approx of a CUT method).
     named_params: list[(type, name)]; return_expect: list[type names]."""
+    # DETERMINISTIC from the signature arity: a single (or zero) return goes in the SIGNATURE (like
+    # m_nondet) so the entry MERGES with the target's present real body (installable over an over-approx
+    # of a CUT/library method); a multi-return uses the `expect (tuple)` form (a methods{} summary body
+    # cannot declare a tuple return in the signature).
+    single = len(return_expect) <= 1
     return S.ImportedFunction(
         type="imported_function",
         signature=S.MethodSignature(
             method_ref=S.MethodReference(contract=contract, method_name=name),
             parameters=[vmparam(t, n) for t, n in named_params],
-            return_types=[], visibility=visibility, post_flags=[]),
+            return_types=[vmparam(t) for t in return_expect] if single else [],
+            visibility=visibility, post_flags=[]),
         summary=S.ExpressionSummary(type="expression", expression=summary_call,
-                                    expect_clause=expect_types(return_expect)),
+                                    expect_clause=None if single else expect_types(return_expect)),
         with_env=with_env,
     )
 

@@ -54,7 +54,7 @@ def test_envfree_conformance_and_summary_shape():
     summ = pr.render_summary("sqrt")
     assert "function sqrtCVL(uint256 x) returns uint256" in summ
     assert 'require(sqrtPhi(x, res)' in summ                 # havoc res + require Phi (over-approx)
-    assert "function C.sqrt(uint256 x) external => sqrtCVL(x) expect (uint256);" in summ
+    assert "function C.sqrt(uint256 x) external returns (uint256) => sqrtCVL(x);" in summ
 
     phi = pr.render_phi("sqrt")
     assert "function sqrtPhi(uint256 x, uint256 res) returns bool" in phi

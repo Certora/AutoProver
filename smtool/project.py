@@ -39,6 +39,8 @@ def _set_perf(conf: dict) -> dict:
     re-application pass on every write (which re-ran + re-logged for all confs each check/verify)."""
     conf.update(PERF_PROPERTIES)
     args = list(conf.get("prover_args", []))
+    # a conformance proof must run FULL formula checking — drop the scene's -skipFormulaChecking if inherited
+    args = [a for a in args if a and a.lstrip("-").split()[0] != "skipFormulaChecking"]
     have = {a.lstrip("-").split()[0] for a in args if a}
     for k, v in PERF_PROVER_ARGS.items():
         if k not in have:

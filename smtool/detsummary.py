@@ -14,7 +14,8 @@ as a FUNCTION of its input, which consumer proofs usually need:
     methods { function <cut>.<fn>(...) internal returns (<ret>) => <fn>CVL(...); [+ also_bind] }
 
 Determinism is correct-by-construction (a ghost function is deterministic; `persistent` keeps it stable
-across havoc/revert). NO injectivity here (add later, and only when a consumer needs distinct outputs).
+across havoc/revert). Injectivity is optional (`MemoTarget.injective`, gated on
+relational.build_injectivity_rule discharging) — add it only when a consumer needs distinct outputs.
 
 Keying reuses the model's principle (`driver._nested_ghost`: key on the param types, nothing to choose):
 - SCALAR params -> key the ghost directly on their CVL types (UDVT included; ghosts accept value types).
@@ -64,6 +65,10 @@ class MemoTarget:
     # discharging). monotone: list of (key_arg_index, increasing) — the memo ghost is monotone in that key
     # component. Scalar-keyed + numeric-return only (v1); each axiom is sound iff the real f has it.
     monotone: tuple = ()
+    # injective: the memo ghost is injective on its key (distinct keys => distinct result). Sound iff the
+    # real f is injective on the SAME key (relational.build_injectivity_rule); works for scalar-tuple and
+    # array-prefix keys.
+    injective: bool = False
 
     @property
     def array_param(self):
@@ -112,12 +117,40 @@ def _monotone_axiom(ghost: str, key_types: list, arg: int, increasing: bool) -> 
     return x.axiom(expr)
 
 
+def _injective_axiom(ghost: str, key_types: list) -> S.GhostAxiom:
+    """`fGhost` is injective on its key: distinct keys give distinct results. As a CLOSED ghost axiom, in
+    contrapositive form (avoids an OR over the key components):
+        forall p0..pn. forall q0..qn. fGhost(p..) == fGhost(q..) => (p0==q0 && .. && pn==qn)
+    Sound iff the real f has this property on the SAME key (proved by relational.build_injectivity_rule):
+    for a single-array target that key is the bounded prefix, so the rule proves distinct-prefix inputs
+    give distinct outputs. Works for scalar-tuple and array-prefix keys alike."""
+    n = len(key_types)
+    p = [f"p{i}" for i in range(n)]
+    q = [f"q{i}" for i in range(n)]
+    same_key = x.binop("eq", x.ident(p[0]), x.ident(q[0]))
+    for i in range(1, n):
+        same_key = x.binop("and", same_key, x.binop("eq", x.ident(p[i]), x.ident(q[i])))
+    body = x.binop("implies",
+                   x.binop("eq", x.call(ghost, [x.ident(v) for v in p]),
+                                 x.call(ghost, [x.ident(v) for v in q])),
+                   same_key)
+    expr = body
+    for i in reversed(range(n)):                          # bind every q, then every p (all universal)
+        expr = x.forall(key_types[i], q[i], expr)
+    for i in reversed(range(n)):
+        expr = x.forall(key_types[i], p[i], expr)
+    return x.axiom(expr)
+
+
 def _ghost_axioms(ghost: str, key_types: list, t: MemoTarget) -> list:
-    """Ghost axioms for the PROVED relational properties on this memo. v1: monotonicity, scalar-keyed
-    only (an array-prefix key has no natural per-component monotonicity)."""
-    if t.array_param is not None or not t.monotone:
-        return []
-    return [_monotone_axiom(ghost, key_types, arg, inc) for arg, inc in t.monotone]
+    """Ghost axioms for the PROVED relational properties on this memo. Monotonicity is scalar-keyed only
+    (an array-prefix key has no natural per-component order); injectivity applies to either key shape."""
+    axioms: list = []
+    if t.array_param is None:
+        axioms += [_monotone_axiom(ghost, key_types, arg, inc) for arg, inc in t.monotone]
+    if t.injective:
+        axioms.append(_injective_axiom(ghost, key_types))
+    return axioms
 
 
 def build_memo_summary(t: MemoTarget) -> S.CVLFile:
