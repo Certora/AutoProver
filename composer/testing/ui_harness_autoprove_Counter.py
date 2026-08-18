@@ -868,7 +868,7 @@ _INVARIANT_CVL_TAPE: list[BaseMessage] = [
         ),
     ),
 
-    # Q8 — exercise unskip_property. Empty-reason sentinel in _merge_skips
+    # Q8 — exercise unskip_property. Empty-reason sentinel in merge_skips
     # filters the entry out, so state["skipped"] returns to [].
     _ai(
         "Undoing the tentative skip.",

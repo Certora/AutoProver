@@ -15,17 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from composer.spec.types import PropertyFormulation
-
-type RuleName = str
-"""A CVL rule/invariant identifier as it appears in the prover report and in a component's
-``property_rules`` mapping."""
-
-type ComponentName = str
-"""Human name of an AIComposer component (e.g. "Increment"), or "Structural Invariants"."""
-
-type PropertyTitle = str
-"""A property's unique snake_case title — the key in a component's ``property_rules`` mapping."""
+from composer.spec.types import ComponentName, PropertyFormulation, PropertyTitle, RuleName
 
 type RuleRef = tuple[str, RuleName]
 """A rule's identity: ``(spec_file, name)``. A name is only unique within a spec, so the defining
@@ -54,6 +44,19 @@ class Outcome(str, Enum):
     ERROR = "ERROR"
     TIMEOUT = "TIMEOUT"
     UNKNOWN = "UNKNOWN"
+
+    @classmethod
+    def parse(cls, raw: str) -> "Outcome | None":
+        """``raw`` as an outcome, or ``None`` when it names none.
+
+        For values arriving from outside this repo — a backend wheel's JSON, a ``report.json`` read
+        cold — where an unrecognized label is version skew rather than a bug, and the caller decides
+        what to do about it (record UNKNOWN, drop a glyph). For a value we produced ourselves,
+        ``Outcome(raw)`` and its ValueError remain the right thing."""
+        try:
+            return cls(raw)
+        except ValueError:
+            return None
 
 
 class GroupStatus(str, Enum):
@@ -84,6 +87,11 @@ class RuleVerdict(BaseModel):
     line: int | None = None
     duration_seconds: float | None = None
     prover_link: str | None = None
+    message: str | None = Field(
+        default=None,
+        description="Human-readable explanation of a non-GOOD outcome (e.g. the fuzzer's "
+        "counterexample / failed-assertion message). Diagnostics only; may be absent.",
+    )
 
     @property
     def ref(self) -> RuleRef:
@@ -208,10 +216,31 @@ class SourceEditRecord(BaseModel):
     cumulative_diff: str
 
 
-type ReportBackend = Literal["prover", "foundry"]
+class VerificationArtifactRecord(BaseModel):
+    """A verification-supporting file a plugin's tool produced during one component's
+    formalization — a Lean proof discharging instrumented lemmas, an auxiliary
+    certificate, etc. The content lives on disk at ``path`` (project-relative, written
+    by the artifact store); the record carries provenance and a description for the
+    deliverable. Deliberately its own model: report.json is a persisted contract."""
+    component: ComponentName
+    #: The contributing plugin's id (its entry-point name).
+    plugin: str
+    #: File basename as registered by the tool.
+    name: str
+    #: Open vocabulary, e.g. "lean-proof".
+    kind: str
+    description: str
+    path: str
+
+
+type ReportBackend = Literal["prover", "foundry", "none"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
-this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test")
-for a report.json it reads cold."""
+this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
+vs "Unverified") for a report.json it reads cold. The producers are the CVL prover (``"prover"``),
+Foundry (``"foundry"``), and ``"none"`` — a pipeline that records properties without verifying them
+(the analysis-only null backend, ``composer.spec.solana.null_backend``), whose reports are all
+UNKNOWN and say so. The set is closed: every backend lives in this repo, so a verification backend
+adds its own literal here, plus its wording in ``report/render.py``."""
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +324,9 @@ class AutoProverReport(BaseModel):
     #: Source modifications each component's verification ran against; empty when every
     #: component was verified against the on-disk source.
     source_edits: list[SourceEditRecord] = Field(default_factory=list)
+    #: Verification-supporting artifacts registered by plugin tools during
+    #: formalization (Lean proofs et al.), written to disk by the artifact store.
+    verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
     coverage: CoverageReport
     #: Violated rules surfaced as audit issues (one per BAD rule; empty
     #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose

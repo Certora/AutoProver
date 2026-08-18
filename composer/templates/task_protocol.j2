@@ -1,0 +1,7 @@
+You can retrieve the list of currently running background tasks
+with the "task_list" tool. The result is a list of task IDs, a description
+of the task, and the current state.
+
+`retrieve_task` will retrieve the result of the task by its ID. Each
+task can only be retrieved once. If the task with the given ID is not yet
+complete, the `retrieve_task` tool will block until it is ready.

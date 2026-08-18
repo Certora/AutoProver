@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+# `run-confined` is a plain binary, not an extension module — this pyproject exists
+# only so the venv can build and carry it: maturin's `bin` bindings put the compiled
+# binary in the wheel's scripts dir, i.e. `.venv/bin/run-confined`, which is exactly
+# where `composer.sandbox.launcher._resolve_binary`'s PATH probe looks. `uv sync`
+# therefore builds the launcher, and nobody has to run `cargo build` by hand.
+#
+# Linux-only (Landlock + seccomp); the dependency edge in the root pyproject carries
+# a `sys_platform == 'linux'` marker so a macOS sync doesn't try to compile it.
+[project]
+name = "run-confined"
+version = "0.1.0"
+description = "Trusted launcher that confines a command (Landlock + seccomp + rlimits) and execs it."
+requires-python = ">=3.12"
+classifiers = ["Programming Language :: Rust"]
+
+[tool.maturin]
+bindings = "bin"
+
+[tool.uv]
+# See rust/example-app/pyproject.toml — without these, editing the launcher's Rust
+# would not invalidate the built wheel.
+cache-keys = [
+    { file = "src/**/*.rs" },
+    { file = "Cargo.toml" },
+    { file = "../Cargo.toml" },
+    { file = "../Cargo.lock" },
+]
