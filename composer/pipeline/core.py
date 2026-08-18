@@ -54,9 +54,10 @@ from composer.spec.prop_inference import (
 from composer.llm.types import CacheLevel
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
-from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
+from composer.spec.source.report.collect import ReportComponentInput, Verdict, Formalized
 from composer.spec.source.report.schema import (
-    AutoProverReport, RuleName, ReportBackend, SourceEditRecord,
+    AutoProverReport, Finding, FormalizedProperty, PropertyGroup, RuleName, ReportBackend,
+    RuleVerdict, SourceEditRecord,
 )
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
@@ -123,11 +124,26 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         Never called for gave-up or budget-curtailed components."""
         ...
 
-    def findings_evidence(self) -> EvidenceFetcher | None:
-        """The per-rule evidence source for findings synthesis, or None if this backend produces no
-        findings. Returning None is how a backend opts out — the report then builds no findings for
-        it, with no backend-specific branching in the report layer. Default: None."""
-        return None
+    async def findings(
+        self,
+        *,
+        contract_name: str,
+        rules: list[RuleVerdict],
+        properties: list[FormalizedProperty],
+        groups: list[PropertyGroup],
+        outcomes: list[ComponentOutcome[FormT, U]],
+        run: PipelineRun,
+    ) -> list[Finding]:
+        """This run's findings, ready to attach. Default: none.
+
+        Called from the report phase after collect + grouping, so the backend sees the same
+        rules/properties/groups the report will persist — the prover's write-up keys its
+        "audit-level claim(s)" on those groups. A backend that needs a model takes it off ``run``;
+        one that already knows its findings ignores ``run`` and ``groups``.
+
+        The findings are *finished* here: whatever prose, evidence or model a backend needs is its
+        own business, and the report never sees any of it."""
+        return []
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
@@ -464,17 +480,22 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         )
         for o in outcomes
     ] + formalizer.extra_report_inputs()
-    findings_evidence = formalizer.findings_evidence()
+    async def _findings(
+        *, contract_name: str, rules: list[RuleVerdict],
+        properties: list[FormalizedProperty], groups: list[PropertyGroup],
+    ) -> list[Finding]:
+        return await formalizer.findings(
+            contract_name=contract_name, rules=rules, properties=properties, groups=groups,
+            outcomes=outcomes, run=run,
+        )
+
     try:
         async def _report() -> AutoProverReport:
             return await build_report(
                 contract_name=source.contract_name, backend=formalizer.backend_tag,
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
                 source_edits=await formalizer.source_edits(outcomes, run),
-                # Findings only when the backend supplies evidence — skip the heavy model otherwise.
-                findings_llm=run.env.llm_heavy() if findings_evidence else None,
-                fetch_evidence=findings_evidence,
-
+                build_findings=_findings,
             )
         report = await run.runner(
             job=_report,

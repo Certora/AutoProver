@@ -1,15 +1,21 @@
-"""Synthesize findings from violated rules.
+"""The Certora Prover's write-up of its violated rules, as report findings.
 
-For each violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) this asks an LLM to write up
-the issue, grounded in the rule's counterexample analysis (captured during the run and looked up via
-the backend's `EvidenceFetcher`) and the properties the rule formalizes. The model assesses the impact
-and likelihood; this module computes the severity from them via a fixed matrix — the LLM never picks a
-severity directly. Findings are produced only when the backend supplies an evidence fetcher; each
-finding is best-effort, so a synthesis failure drops that one finding rather than the report.
+The prover's counterexample analysis runs during the run (see `cex_capture`); this is its
+continuation at report time. For each violated rule (a `RuleVerdict` with ``outcome ==
+Outcome.BAD``) it asks an LLM to write up the issue, grounded in that captured analysis and in the
+properties the rule formalizes. The model assesses the impact and likelihood; this module computes
+the severity from them via a fixed matrix — the LLM never picks a severity directly. Each finding is
+best-effort, so a synthesis failure drops that one finding rather than the report.
+
+Prover-only by construction: the write-up says "the Certora Prover found a concrete
+counterexample", and the evidence it cites exists only for a run that produced calltraces. The
+report layer neither owns nor knows about any of it — it receives the finished `Finding` objects
+through `Formalizer.findings`.
 """
 import asyncio
 import logging
-from typing import TypedDict
+from dataclasses import dataclass
+from typing import Protocol, TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -17,13 +23,32 @@ from pydantic import Field
 
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
-from composer.spec.source.report.collect import EvidenceFetcher, RuleEvidence
 from composer.spec.source.report.schema import (
     AuthoredContent, Finding, FindingProvenance, FormalizedProperty, ImpactLevel, IssueContent,
     LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleRef, RuleVerdict, SeverityTier,
 )
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RuleEvidence:
+    """One failing instance of a violated rule: the prover's root-cause explanation and a concrete
+    counterexample, either of which may be absent. A parametric rule (``rule r(method f)``) fails once
+    per binding, so a rule's evidence is a list of these; ``label`` names the instance ("" when the
+    rule is not parametric)."""
+    label: str = ""
+    analysis: str | None = None
+    counterexample: str | None = None
+
+
+class EvidenceFetcher(Protocol):
+    """Every captured failing instance of a violated rule, or ``[]`` when none was captured. The
+    run-scoped `CexAnalysisStore` behind :meth:`ProverRunner.findings` is the only implementation;
+    it is a parameter so this module can be driven without one."""
+    async def __call__(self, rule_name: str, /) -> list[RuleEvidence]:
+        ...
+
 
 #: Cap on concurrent findings-synthesis LLM calls (one per violated rule), so a violation-heavy run
 #: doesn't burst dozens of heavy-model requests at once (which rate limits would turn into dropped
@@ -95,13 +120,10 @@ async def build_findings(
     rules: list[RuleVerdict],
     properties: list[FormalizedProperty],
     groups: list[PropertyGroup],
-    fetch_evidence: EvidenceFetcher | None,
+    fetch_evidence: EvidenceFetcher,
     llm: BaseChatModel,
 ) -> list[Finding]:
-    """One `Finding` per violated rule (concurrent, best-effort). Findings are produced only when the
-    backend supplies an evidence fetcher; returns ``[]`` otherwise or when nothing is violated."""
-    if fetch_evidence is None:
-        return []
+    """One `Finding` per violated rule (concurrent, best-effort); ``[]`` when nothing is violated."""
     bad = [r for r in rules if r.outcome == Outcome.BAD]
     if not bad:
         return []

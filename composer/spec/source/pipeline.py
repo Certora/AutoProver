@@ -49,11 +49,13 @@ from composer.spec.source.artifacts import (
 )
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import (
-    Formalized, EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
+    Formalized, ReportComponentInput, Verdict, VerdictFetcher,
 )
 from composer.spec.source.report.schema import (
-    AppliedEditRecord, ComponentName, RuleName, SourceEditRecord,
+    AppliedEditRecord, ComponentName, Finding, FormalizedProperty, PropertyGroup, RuleName,
+    RuleVerdict, SourceEditRecord,
 )
+from composer.spec.source.findings import RuleEvidence, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 
@@ -152,11 +154,25 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         return records
 
     @override
-    def findings_evidence(self) -> EvidenceFetcher | None:
-        # Prover runs capture per-rule counterexample analysis, so this backend opts into findings.
-        return self._fetch_evidence
+    async def findings(
+        self,
+        *,
+        contract_name: str,
+        rules: list[RuleVerdict],
+        properties: list[FormalizedProperty],
+        groups: list[PropertyGroup],
+        outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]],
+        run: PipelineRun,
+    ) -> list[Finding]:
+        # Pass 2 of the prover's counterexample handling: the run analyzed each violation for the
+        # authoring agent (`CexAnalysisStore`), and this writes those up as audit issues. It reads
+        # the store rather than re-analyzing, so the heavy model is spent once per violated rule.
+        return await build_findings(
+            contract_name=contract_name, rules=rules, properties=properties, groups=groups,
+            fetch_evidence=self._evidence, llm=run.env.llm_heavy(),
+        )
 
-    async def _fetch_evidence(self, rule_name: str) -> list[RuleEvidence]:
+    async def _evidence(self, rule_name: str) -> list[RuleEvidence]:
         # Every instantiation the run analyzed, not just one: a parametric rule can fail differently
         # per binding while the report shows a single row for the whole rule.
         return [
