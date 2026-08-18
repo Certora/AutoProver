@@ -17,7 +17,7 @@ Stubs throughout: the "author" step is a counter, the store is a dict.
 
 import json
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -285,7 +285,7 @@ async def test_every_units_properties_reach_every_components_own_input(monkeypat
         monkeypatch, ctx, authored, tmp_path, run=run,
         jobs=_jobs(deposits, admin, names=["deposits", "admin"]),
     )
-    await f.formalize("Deposits", cast(object, _Unit("deposits")), deposits, ctx, run)  # type: ignore[arg-type]
+    await f.formalize("Deposits", cast(object, _Unit("deposits")), deposits, ctx, run, cast(Any, None))  # type: ignore[arg-type]
 
     component = authored[-1]
     assert component.kind == "component"

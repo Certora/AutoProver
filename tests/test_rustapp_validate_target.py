@@ -347,7 +347,7 @@ async def test_the_result_carries_the_authors_expected_failure_declarations(monk
     result = await formalizer.formalize(
         "Farms", cast(Any, _Feat()),
         [PropertyFormulation(title="stake matches", sort="invariant", description="d")],
-        cast(Any, _Ctx()), cast(Any, _Run(_Source(str(tmp_path)), _Ctx())),
+        cast(Any, _Ctx()), cast(Any, _Run(_Source(str(tmp_path)), _Ctx())), cast(Any, None),
     )
 
     assert isinstance(result, adapter.RustFormalResult)
