@@ -9,7 +9,6 @@ from graphcore.graph import FlowInput, build_async_workflow
 from graphcore.tools.results import result_tool_generator
 
 from langchain_core.tools import tool, BaseTool
-from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from langgraph.graph import MessagesState
@@ -26,7 +25,7 @@ from composer.tools.search import cvl_manual_tools
 from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.templates.loader import load_jinja_template
 from composer.io.protocol import IOHandler
-from composer.io.context import with_handler, run_graph
+from composer.io.context import with_handler, run_to_completion
 from composer.io.event_handler import NullEventHandler
 from composer.ui.tool_display import tool_display
 from composer.diagnostics.timing import set_current_task_id
@@ -149,8 +148,6 @@ async def get_requirements(
 
         thread_id = uuid.uuid1().hex
 
-        config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-
         sys_text = sys_doc.string_contents
         input_text : list[str | dict] = [
             "The system document is as follows:",
@@ -178,6 +175,13 @@ async def get_requirements(
 
         async with with_handler(io, NullEventHandler()):  # type: ignore[arg-type]
             with set_current_task_id(REQUIREMENTS_TASK_ID):
-                final_state = await run_graph(built, ExtractionContext(rag_db=db), graph_input, config, description="Requirements extraction")  
+                final_state = await run_to_completion(
+                    built,
+                    graph_input,
+                    thread_id=thread_id,
+                    context=ExtractionContext(rag_db=db),
+                    recursion_limit=250,
+                    description="Requirements extraction",
+                )
         assert "reqs" in final_state
         return ExtractionResult(reqs=final_state["reqs"], thread_id=thread_id)
