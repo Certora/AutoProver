@@ -3,8 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// The confinement wrapper for a command, authored by Python
 /// (`SandboxConfig.backend_spec`) and passed to `compile`/`validate`. The backend never
@@ -85,6 +89,12 @@ impl Workspace {
     }
 }
 
+/// How a spawned command finished: it exited, or the wall-clock timeout fired.
+enum ChildStatus {
+    Exited(ExitStatus),
+    TimedOut,
+}
+
 /// The body of [`Workspace::run`], over the parts rather than the bundle.
 fn run_confined<I, S>(
     sandbox: &Sandbox,
@@ -97,11 +107,37 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    materialize_files(workdir, files)?;
+    let mut cmd = confined_command(sandbox, program, args, workdir);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(not_found(cmd.get_program()));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let (t_out, t_err) = pipe_readers(&mut child);
+    let timeout_s = sandbox.timeout_s.max(1);
+    let status = wait_with_timeout(&mut child, timeout_s)?;
+    let stdout = lossy_utf8(t_out);
+    let stderr = lossy_utf8(t_err);
+    Ok(match status {
+        ChildStatus::Exited(st) => CommandOutput {
+            exit_code: st.code().unwrap_or(-1),
+            stdout,
+            stderr,
+        },
+        ChildStatus::TimedOut => CommandOutput {
+            exit_code: -1,
+            stdout,
+            stderr: format!("{stderr}\ncommand timed out after {timeout_s}s"),
+        },
+    })
+}
 
-    // 1. Materialize untrusted files (contents may be LLM-derived; the command line is not).
+/// Write `files` into `workdir`, rejecting absolute / `..` paths. Contents may be
+/// LLM-derived; the command line is not.
+fn materialize_files(workdir: &Path, files: &BTreeMap<String, String>) -> Result<(), String> {
     std::fs::create_dir_all(workdir).map_err(|e| e.to_string())?;
     for (rel, contents) in files {
         let target = confined_join(workdir, rel)?;
@@ -110,94 +146,85 @@ where
         }
         std::fs::write(&target, contents).map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
 
-    // 2. Build argv by prepending the (opaque, Python-authored) confinement prefix:
-    // `[*argv_prefix, program, *args]`. When the prefix is empty this is `program args`
-    // run directly; otherwise its first element is the launcher binary to spawn.
-    let (launch, mut launch_args): (&str, Vec<OsString>) = match sandbox.argv_prefix.split_first() {
-        Some((bin, rest)) => (bin, rest.iter().map(OsString::from).collect()),
-        None => (program, Vec::new()),
+/// `[*argv_prefix, program, *args]`, or `program args` when the prefix is empty.
+/// Owns a process group so the timeout SIGKILL takes descendants with the leader.
+/// `run-confined` execve's in place, so the group leader *is* the command; cargo/rustc
+/// children inherit the group unless they leave it.
+fn confined_command<I, S>(sandbox: &Sandbox, program: &str, args: I, workdir: &Path) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut cmd = match sandbox.argv_prefix.split_first() {
+        Some((bin, rest)) => {
+            // The prefix ends at its `--`; the wrapped command follows it.
+            let mut cmd = Command::new(bin);
+            cmd.args(rest).arg(program);
+            cmd
+        }
+        None => Command::new(program),
     };
-    if !sandbox.argv_prefix.is_empty() {
-        // The prefix ends at its `--`; the wrapped command follows it.
-        launch_args.push(OsString::from(program));
-    }
-    launch_args.extend(args.into_iter().map(|a| a.as_ref().to_os_string()));
-    let mut cmd = Command::new(launch);
-    cmd.args(&launch_args);
-    cmd.current_dir(workdir)
+    cmd.args(args)
+        .current_dir(workdir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // Own a process group so the timeout SIGKILL takes descendants with the leader.
-    // `run-confined` execve's in place, so the group leader *is* the command; cargo/rustc
-    // children inherit the group unless they leave it.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    cmd
+}
 
-    // 3. Spawn + capture with a timeout. Reader threads avoid a pipe-buffer deadlock.
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(CommandOutput {
-                exit_code: NOT_FOUND_EXIT,
-                stdout: String::new(),
-                stderr: format!("{launch}: not found"),
-            })
-        }
-        Err(e) => return Err(e.to_string()),
-    };
-    let mut out = child.stdout.take().expect("piped stdout");
-    let mut err = child.stderr.take().expect("piped stderr");
-    let t_out = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        let _ = out.read_to_end(&mut s);
-        s
-    });
-    let t_err = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        let _ = err.read_to_end(&mut s);
-        s
-    });
-
-    let deadline = Instant::now() + Duration::from_secs(sandbox.timeout_s.max(1));
-    let mut timed_out = false;
-    let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(st) => break Some(st),
-            None => {
-                if Instant::now() >= deadline {
-                    kill_spawned(&mut child);
-                    let _ = child.wait();
-                    timed_out = true;
-                    break None;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        }
-    };
-    let stdout = String::from_utf8_lossy(&t_out.join().unwrap_or_default()).into_owned();
-    let stderr = String::from_utf8_lossy(&t_err.join().unwrap_or_default()).into_owned();
-    if timed_out {
-        return Ok(CommandOutput {
-            exit_code: -1,
-            stdout,
-            stderr: format!("{stderr}\ncommand timed out after {}s", sandbox.timeout_s),
-        });
+fn not_found(program: &OsStr) -> CommandOutput {
+    CommandOutput {
+        exit_code: NOT_FOUND_EXIT,
+        stdout: String::new(),
+        stderr: format!("{}: not found", program.to_string_lossy()),
     }
-    Ok(CommandOutput {
-        exit_code: status.and_then(|s| s.code()).unwrap_or(-1),
-        stdout,
-        stderr,
+}
+
+/// Drain stdout/stderr on side threads so a full pipe cannot deadlock the waiter.
+fn pipe_readers(child: &mut Child) -> (JoinHandle<Vec<u8>>, JoinHandle<Vec<u8>>) {
+    let out = child.stdout.take().expect("piped stdout");
+    let err = child.stderr.take().expect("piped stderr");
+    (read_pipe(out), read_pipe(err))
+}
+
+fn read_pipe(mut pipe: impl Read + Send + 'static) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut s = Vec::new();
+        let _ = pipe.read_to_end(&mut s);
+        s
     })
+}
+
+fn lossy_utf8(buf: JoinHandle<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&buf.join().unwrap_or_default()).into_owned()
+}
+
+fn wait_with_timeout(child: &mut Child, timeout_s: u64) -> Result<ChildStatus, String> {
+    let deadline = Instant::now() + Duration::from_secs(timeout_s);
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(st) => return Ok(ChildStatus::Exited(st)),
+            None if Instant::now() >= deadline => {
+                kill_spawned(child);
+                let _ = child.wait();
+                return Ok(ChildStatus::TimedOut);
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 
 /// Kill the spawned command. On Unix this is the process group we created at spawn
 /// (`pgid == pid`); `Child::kill` would leave descendants running.
-fn kill_spawned(child: &mut std::process::Child) {
+fn kill_spawned(child: &mut Child) {
     #[cfg(unix)]
     {
         let pid = child.id() as i32;
