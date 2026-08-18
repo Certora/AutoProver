@@ -10,7 +10,6 @@ backend's state type. A thin factory still binds the tool name, write-time valid
 display, because those are not schema nouns.
 """
 
-import inspect
 from dataclasses import dataclass
 from typing import Callable, Literal, overload, override
 from typing_extensions import TypedDict
@@ -141,7 +140,7 @@ def get_spec_tool(
     validator knows the review actually looked at the draft rather than at the copy in its prompt.
     """
     return tool_display_of(display)(
-        GetSpec.with_template(description=inspect.cleandoc(description))[ty]
+        GetSpec.with_template(description=description)[ty]
         .bind(GetDeps(missing=missing, set_did_read=set_did_read))
         .as_tool(name)
     )
@@ -216,7 +215,7 @@ def edit_spec_tool[S: SpecBuffer](
     reducer. A single edit alongside a different tool is allowed.
     """
     return tool_display_of(display)(
-        EditSpec.with_template(description=inspect.cleandoc(description))[ty]
+        EditSpec.with_template(description=description)[ty]
         .bind(EditDeps(
             name=name, missing=missing, validator=validator, reset_read=reset_read,
         ))

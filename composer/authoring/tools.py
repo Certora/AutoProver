@@ -11,7 +11,6 @@ What varies on skip and give-up is LLM-facing text, so those are
 instantiate time. Unskip does not vary.
 """
 
-import inspect
 from typing import Callable, Sequence, override
 
 from langchain_core.messages import ToolMessage
@@ -39,11 +38,6 @@ def _as_titles(titles: Titles | Sequence[PropertyTitle]) -> Titles:
         return titles
     snapshot = titles
     return lambda: snapshot
-
-
-def _llm_doc(text: str) -> str:
-    """Class ``__doc__`` is already ``cleandoc``'d; a ``{description}`` substitution is not."""
-    return inspect.cleandoc(text)
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +126,7 @@ def skip_tools(
     """The skip / unskip pair, bound to the batch's property titles."""
     get = _as_titles(titles)
     return [
-        RecordSkip.with_template(description=_llm_doc(skip_description), reason=skip_reason)
+        RecordSkip.with_template(description=skip_description, reason=skip_reason)
         .bind(get)
         .as_tool("record_skip"),
         Unskip.bind(get).as_tool("unskip_property"),
@@ -182,7 +176,7 @@ def give_up_tool(
     A session that gives up is a real outcome, not an error: the reason is the agent's own account
     of why the task could not be completed, and it reaches the report."""
     return GiveUp.with_template(
-        description=_llm_doc(description),
+        description=description,
         reason=reason_description,
         label=label,
     ).as_tool(name)
