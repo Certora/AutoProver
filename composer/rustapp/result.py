@@ -108,6 +108,13 @@ class RustFormalResult(BaseModel):
             for name, verdict in self.verdicts.items()
         }
 
+    def display_name(self, check: CheckName) -> str:
+        """What to call one check's row: the property's own words when it verifies exactly one, and
+        otherwise the check's own name — the only thing that names the row unambiguously when one
+        check discharges several properties (or the author mapped none to it)."""
+        titles = self.check_properties().get(check, [])
+        return titles[0] if len(titles) == 1 else check
+
     def check_properties(self) -> dict[CheckName, list[PropertyTitle]]:
         """``checks`` inverted: check name -> the property titles it verifies. For display, where
         the property's own words ("Balance never overflows") read better than the backend's check

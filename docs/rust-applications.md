@@ -573,10 +573,12 @@ that looks merely inconclusive. `Verdict.detail` carries the counterexample or e
 `BAD` is never unexplained.
 
 [`results.py`](../composer/rustapp/results.py) rolls these up for the console/TUI: one row per
-*check*, with the tally in the report's own display order and wording. A row is named by the property
-title when the check verifies exactly one, and otherwise by the check's own name — the only thing
-that names it unambiguously once one check can carry several properties. A delivered component that
-bakes no verdicts contributes one `UNKNOWN` row so the listing accounts for every component.
+*check*, with the tally in the report's own display order and wording. A row is named by
+`RustFormalResult.display_name` — the property title when the check verifies exactly one, and
+otherwise the check's own name, the only thing that names it unambiguously once one check can carry
+several properties. `findings` titles its findings by the same method, so a finding and its verdict
+row are never called different things. A delivered component that bakes no verdicts contributes one
+`UNKNOWN` row so the listing accounts for every component.
 
 ---
 

@@ -58,7 +58,7 @@ into one `Finding`:
 
 | Field | Source |
 |---|---|
-| `title` | The property's own words when the check verifies exactly one; otherwise the check name |
+| `title` | `RustFormalResult.display_name` — the property's own words when the check verifies exactly one, otherwise the check name. The same rule the console rollup names rows by, so a finding and its verdict row cannot be called different things |
 | `content.description` | The row's own message — the declared reason leads it, `NOT REPRODUCED` follows when this run reached no counterexample, evidence last |
 | `content.summary` | Its opening line. Not a second write-up |
 | `content.proof_of_concept` | The wheel's counterexample — only where the run actually produced one |

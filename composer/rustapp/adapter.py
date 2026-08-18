@@ -425,7 +425,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     ) -> list[Finding]:
         # No model and no second write-up: the crash and the author's declaration already say what
         # this run found, so the mapper only reshapes them.
-        return compose_findings(rules=rules, properties=properties, outcomes=outcomes)
+        return compose_findings(rules=rules, outcomes=outcomes)
 
     @override
     async def finalize(
