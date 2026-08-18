@@ -392,13 +392,27 @@ sees it — there is nothing to build — so the next prompt is told exactly tha
 
 ### 4.5 Report and finalize
 
-`fetch_verdicts` maps the wire verdicts `validate` baked into the result onto the report's own
+`fetch_verdicts` maps the verdicts `validate` baked into the result onto the report's own
 `Verdict` (its `message` is the wire `detail`), filling `unit_file` from the component when the
-wheel didn't name one. The store writes the per-component artifacts and metadata (§9), and
+wheel didn't name one. It reads `RustFormalResult.reported_verdicts()`, not the raw ones: the
+wheel reports what its run observed, and the author's `expect_check_failure` declarations are
+folded in on top (§6). The store writes the per-component artifacts and metadata (§9), and
 `finalize` receives the whole outcome set as `FinalizeInput` — program, crate, IDL path, the shared
 setup spec, and per component its `artifact_text`, `property_checks` and the `targets` its
 checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
+
+`findings` answers the report's other question — *what did this run find* — with no model and no
+second write-up ([findings.py](../composer/rustapp/findings.py)): the wheel's crash with its
+reproducing sequence, and the author's declared reason, already are the finding. One `Finding` per
+BAD row, which after the declaration fold includes a declared check this run did not reproduce;
+`ERROR` and `TIMEOUT` stay verdict rows, being coverage gaps rather than things the run found. The
+counterexample rides `proof_of_concept` only where the run actually produced one, so an
+unreproduced finding never displays evidence it does not have, and the declared reason rides
+`provenance.risk_reasoning` so the two are distinguishable without reading the evidence. Severity
+is `informational` and `impact` is empty on every one of them: nothing in this pipeline has
+assessed what a fuzzer crash is worth, and a fabricated `high` would be worse than an honest
+blank.
 
 ---
 
@@ -527,6 +541,15 @@ answer to be *exactly* the target's check set: a name no check has, a covered ch
 or the same check twice raises `ValidateCoverageError`. The unanswered case is the one worth the
 machinery — a missing verdict is not a failing verdict, so it gives the publish gate nothing to
 object to, and a wheel that answered for nothing would stamp a component nothing had checked.
+
+A check the author marked with `expect_check_failure` is the one place the wheel's attribution is
+not the last word. The declaration is the author's — "the failure here IS the finding" — and the
+publish gate accepts such a check as clean without ever requiring the run to reproduce it, so
+nothing else stands between a documented finding and a green row. `reported_verdicts()` folds the
+two together on the host side: a declared check reports `BAD` whatever the run said, and the detail
+says which case it is — a reproduced finding carries its counterexample, an unreproduced one says
+`NOT REPRODUCED` and names the outcome the run did reach. Both the report and the console rollup
+read the fold, so they cannot disagree about whether the run found something.
 
 A stamping run records what it covered as `ran` — the targets, each with its checks — and that is
 what the publish gate validates the declared mapping against, in both directions: every claimed name
@@ -783,6 +806,7 @@ Facts about the seam as it stands, not open design questions:
 | Declarative ABI mirror | [composer/rustapp/descriptor.py](../composer/rustapp/descriptor.py) |
 | Runtime ABI mirror + parsers | [composer/rustapp/wire.py](../composer/rustapp/wire.py) |
 | The backend, preflight, prep, report | [composer/rustapp/adapter.py](../composer/rustapp/adapter.py) |
+| Report rows → audit-issue findings | [composer/rustapp/findings.py](../composer/rustapp/findings.py) |
 | The authoring session (buffer, gate, review, publish) | [composer/rustapp/session.py](../composer/rustapp/session.py) |
 | The shared authoring workflow | [composer/authoring/](../composer/authoring/) |
 | Application assembly (enum, phases, store, backend) | [composer/rustapp/host.py](../composer/rustapp/host.py) |
@@ -797,6 +821,7 @@ Tests: `tests/test_rustapp.py` (the wheel round-trip, end to end through the hos
 Hypothesis, against the real serde types), `test_rustapp_preflight.py`, `test_rustapp_workspace_prep.py`,
 `test_rustapp_setup_cache.py`, `test_rustapp_verdicts.py`, `test_rustapp_toolchain_sem.py`,
 `test_rustapp_gate.py`, `test_rustapp_validate_target.py`, `test_rustapp_discovery_phase.py`,
+`test_rustapp_findings.py` (the declaration fold and the findings it produces),
 `test_rust_llm_agent.py`,
 `test_rust_frontend.py`, plus `test_sandbox_run_confined.py` / `test_sandbox_escape.py` for the
 launcher contract.
