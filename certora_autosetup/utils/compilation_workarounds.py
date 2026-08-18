@@ -284,9 +284,7 @@ class CompilationWorkaroundManager:
         ``abstract``.
 
         The file is None when the diagnostic carries no source location. This is a
-        source-level defect — most often in a generated harness, which is written
-        against the target's own file and misses the functions the target inherits
-        from elsewhere — so the compilation settings have no bearing on it.
+        source-level defect, so the compilation settings have no bearing on it.
         """
         match = _UNIMPLEMENTED_CONTRACT_RE.search(_normalize_ws(output))
         if match is None:
@@ -574,10 +572,10 @@ class CompilationWorkaroundManager:
                     f"verified. Re-run with a concrete implementation as the main contract."
                 )
 
-            # Terminal for the same reason, one step earlier: a contract in the input
-            # inherits functions it never implements, so solc refuses to compile it at
-            # all. Only editing that contract fixes it; without this the catch-all
-            # workaround fires and spends further compilations reaching the same error.
+            # Also terminal: a contract in the input inherits functions it never
+            # implements, so solc refuses to compile it at all. Only editing that
+            # contract fixes it; without this the catch-all workaround fires and spends
+            # further compilations reaching the same error.
             unimplemented = self._detect_unimplemented_contract(output)
             if unimplemented is not None:
                 contract_name, declared_in = unimplemented
