@@ -32,7 +32,7 @@ BUILD_CONFIG_FILENAMES = (
 # against the project's own config (see `HardhatManager._extract_config_via_node`), which
 # is more than these helpers need: they only have to recognise a built project, and the
 # managers resolve the real path later. Foundry's `out` is the one override read here,
-# because a TOML parse costs nothing.
+# because a TOML parse is easy.
 HARDHAT_DEFAULT_ARTIFACT_DIR = Path("artifacts")
 TRUFFLE_DEFAULT_BUILD_DIR = Path("build") / "contracts"
 

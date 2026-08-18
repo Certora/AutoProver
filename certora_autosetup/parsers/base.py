@@ -85,7 +85,7 @@ class ContractExtractor(ABC):
 
         The default directory name is only a guess. A project can configure its output
         elsewhere (Foundry's ``out``, Hardhat's ``paths.artifacts``) and still have a
-        directory by the default name, most often as the *parent* of the configured one:
+        directory by the default name, for example as the *parent* of the configured one:
         ``out = "out/foundry"`` leaves a bare ``out/`` that exists and holds nothing the
         extractor can read. So the default only counts while it actually holds artifacts,
         and the config decides otherwise. The config is the second question because it is
