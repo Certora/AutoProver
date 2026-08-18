@@ -14,7 +14,7 @@ use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::finalize::FinalizeInput;
 use autoprover_sdk::outcome::{
-    Check, CompileResult, Exploration, Outcome, Target, ValidateOutcome,
+    CompileResult, Exploration, Outcome, Target, ValidateOutcome,
 };
 use autoprover_sdk::prep::{CrateRootInput, SandboxGrants, WorkspacePrep};
 use autoprover_sdk::sandbox::Workspace;
@@ -45,30 +45,15 @@ impl Backend for CrucibleApp {
         toolchain::preconditions(args)
     }
 
-    fn checks(&self, input: &AuthorInput) -> Vec<Check> {
-        // Only a component has checks — neither the preflight gate nor the shared fixture
-        // formalizes anything. One component's properties all live in ONE
-        // harness fn ([`harness_fn`]) — a single build + fuzz run per component
-        // (docs/crucible-component-units.md §8.1) — but each property is still its own report row,
-        // mapping to that shared fuzz target. The host runs each distinct target once and
-        // attributes a counterexample to the offending property via the finding message.
-        let Authored::Component { .. } = input.authored else {
-            return Vec::new();
-        };
-        input
-            .props
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let slug = if p.slug.is_empty() { format!("inv{i}") } else { p.slug.clone() };
-                // One check per property; they share the component's fn as their fuzz target.
-                Check {
-                    property: p.title.clone(),
-                    name: format!("c_{slug}"),
-                    target: Some(harness_fn(input)),
-                }
-            })
-            .collect()
+    fn target_for(&self, input: &AuthorInput, _check: &str) -> Option<String> {
+        // Every check of a component runs in ONE fuzz campaign — the component's harness fn, which
+        // is also its Cargo feature and what a gated build selects
+        // (docs/crucible-component-units.md §8.1). So the grouping does not depend on the check:
+        // one build and one run for the whole property set, still a report row per property.
+        // Neither the preflight gate nor the shared fixture formalizes anything, so neither has a
+        // check to place.
+        let Authored::Component { .. } = input.authored else { return None };
+        Some(harness_fn(input))
     }
 
     fn author_prompt(&self, input: &AuthorInput) -> Prompt {
@@ -200,7 +185,16 @@ impl Backend for CrucibleApp {
                     // hide it).
                     attribute_findings(target, &input.run_props, &found)
                 } else if out.exit_code == 0 {
-                    // Ran to the budget with no violation = every invariant it covers held.
+                    // Ran to the budget with no violation, so nothing this campaign covers was
+                    // refuted.
+                    //
+                    // KNOWN GAP against the verdict contract on `Backend::validate`: `GOOD` per
+                    // check also claims each one was *exercised*, and a campaign reports crashes,
+                    // not which tagged assertions it evaluated. So a property whose assertion was
+                    // never written, or written where the fuzzer cannot reach it, passes here. The
+                    // fix is `fuzz_assert!` recording each evaluation and the campaign reporting the
+                    // tally (docs/author-determined-checks.md); until then this is the one place a
+                    // Crucible verdict claims more than the run established.
                     target.all(Outcome::Good, None)
                 } else if is_build_error(&combined) {
                     // Shared build; re-author the whole spec (docs/rust-applications.md).
@@ -353,38 +347,35 @@ mod tests {
     }
 
     #[test]
-    fn every_property_of_a_component_shares_that_components_fuzz_target() {
-        // Checks stay per-property (attribution); the fuzz target is the component's one fn.
+    fn every_check_of_a_component_shares_that_components_fuzz_target() {
+        // Whatever the author called its checks, they all run in the component's one campaign —
+        // one build and one run for the whole property set.
         let app = CrucibleApp;
         let input = component_input(
             "farms", "Farms Integration",
             vec![prop("stake matches position", "stake_matches"), prop("no double stake", "no_dbl")],
         );
-        let checks = app.checks(&input);
-        assert_eq!(
-            checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
-            vec!["c_stake_matches", "c_no_dbl"],
-        );
-        for c in &checks {
-            assert_eq!(c.target_or_name(), "c_farms");
+        for name in ["c_stake_matches", "whatever_the_author_called_it"] {
+            assert_eq!(app.target_for(&input, name).as_deref(), Some("c_farms"));
         }
         // …and a different component gets a different target, so the host runs one campaign each.
         let other = component_input("referrals", "Referrals", vec![prop("fees capped", "fees")]);
-        assert_eq!(app.checks(&other)[0].target_or_name(), "c_referrals");
+        assert_eq!(app.target_for(&other, "c_fees").as_deref(), Some("c_referrals"));
     }
 
     #[test]
-    fn only_a_component_has_report_units() {
-        // The shared fixture formalizes nothing, and the gate runs before anything is analyzed.
+    fn only_a_component_groups_its_checks() {
+        // The shared fixture formalizes nothing, and the gate runs before anything is analyzed, so
+        // neither has a check to place.
         let app = CrucibleApp;
         let mut input = component_input("farms", "Farms", vec![prop("p", "p")]);
-        assert_eq!(app.checks(&input).len(), 1);
+        assert!(app.target_for(&input, "c_p").is_some());
         for authored in [
             Authored::Setup { model: serde_json::Value::Null, units: Vec::new() },
             Authored::Preflight,
         ] {
             input.authored = authored;
-            assert!(app.checks(&input).is_empty());
+            assert!(app.target_for(&input, "c_p").is_none());
         }
     }
 

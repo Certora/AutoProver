@@ -334,6 +334,9 @@ async def test_the_result_carries_the_authors_expected_failure_declarations(monk
             commentary="done", spec=SPEC, skipped=[],
             property_checks=[("stake matches", ["c_stake"])],
             verdicts={"c_stake": Verdict.with_outcome(Outcome.GOOD)},
+            ran=[Target(name="c_farms", checks=[
+                Check(name="c_stake", properties=["stake matches"], target="c_farms"),
+            ])],
             expected_failures={"c_stake": "klend makes no such guarantee"},
         )
 

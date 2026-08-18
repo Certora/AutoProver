@@ -334,11 +334,6 @@ class ValidateSpec(
                         f"{vocab.many} are: {', '.join(c.name for c in wanted)}."
                     )
                 wanted = [c for c in wanted if c.name in asked]
-            if not wanted:
-                return (
-                    "Nothing to validate: every property is currently skipped. Un-skip one, or "
-                    "`give_up` if none of them can be formalized."
-                )
             covered = targets_of(
                 wanted,
                 Exploration.UNTIL_FIRST_FINDING if partial else Exploration.TO_BUDGET,

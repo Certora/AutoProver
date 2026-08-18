@@ -195,10 +195,10 @@ mod tests {
         assert_eq!(harness_fn(&hyphen), "c_admin_config");
 
         // The fn name IS the Cargo feature and the `crucible run` selector, so every producer of
-        // it must agree — units()' target included.
+        // it must agree — the target the host groups a check under included.
         let app = CrucibleApp;
         let unit = component_input("Withdraw-Queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
-        assert_eq!(app.checks(&unit)[0].target_or_name(), "c_withdraw_queue");
+        assert_eq!(app.target_for(&unit, "c_fifo").as_deref(), Some("c_withdraw_queue"));
 
         for ident in ["c_vault_initialization", "c_admin_config", "c_withdraw_queue"] {
             let body = ident.strip_prefix("c_").unwrap();

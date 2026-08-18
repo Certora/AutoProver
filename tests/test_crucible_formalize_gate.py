@@ -31,8 +31,8 @@ from composer.kb.knowledge_base import DefaultEmbedder
 from composer.pipeline.core import GaveUp, PipelineRun
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
 from composer.rustapp.adapter import emit_event
-from composer.rustapp.session import run_session, targets_of
-from composer.rustapp.wire import ComponentInput, Property, parse_checks
+from composer.rustapp.session import run_session
+from composer.rustapp.wire import ComponentInput, Property
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.rustapp.host import build_phase_model, load_descriptor, load_module
 from composer.spec.context import SourceCode, WorkflowContext
@@ -261,7 +261,6 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             args={"fuzz_timeout": 15},
         )
         input_json = component_input.model_dump_json()
-        checks = parse_checks(module.checks(input_json))
         sandbox_dict = {"argv_prefix": [], "timeout_s": 1200}
         sandbox_json = json.dumps(sandbox_dict)
 
@@ -269,8 +268,8 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
         outcome = await run.runner(
             TaskInfo("crucible_fmz", "Harness Authoring", phases.member("formalization")),
             lambda: run_session(
-                module=module, input=component_input, kind="component", checks=checks,
-                titles=[p["title"] for p in _PROPS], env=env, ctx=ctx, run=run,
+                module=module, input=component_input,
+                kind="component", titles=[p["title"] for p in _PROPS], env=env, ctx=ctx, run=run,
                 workdir=Path(_SCENARIO), sandbox_dict=sandbox_dict, descriptor=descriptor,
                 emit=emit_event, description="Harness Authoring",
             ),
@@ -279,12 +278,13 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             pytest.fail(f"per-component authoring gave up: {outcome.reason}")
         test_src = outcome.spec
 
-        # Every check maps to the one shared *target* `c_invariants`, whose fn name gates `main` —
-        # the grouping the session hands to `validate`, asserted here as the pipeline computes it.
-        targets = list(dict.fromkeys(c.target_or_name() for c in checks))
-        assert targets == [_TARGET], checks
+        # Whatever the author named its checks, they all map to the one shared *target*
+        # `c_invariants`, whose fn name gates `main` — the grouping the session handed `validate`,
+        # asserted here as the stamping run recorded it.
+        checks = [c for t in outcome.ran for c in t.checks]
+        assert [t.name for t in outcome.ran] == [_TARGET], checks
         # validate is the fused build+fuzz; a clean vault run → GOOD verdicts (not build_failed).
-        target = targets_of(checks)[0].model_dump_json()
+        target = outcome.ran[0].model_dump_json()
         res = json.loads(
             await asyncio.to_thread(module.validate, input_json, test_src, target, str(_SCENARIO), sandbox_json)
         )
@@ -294,7 +294,10 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
     assert "#[invariant_test]" in test_src or "#[crucible_fuzz]" in test_src
     assert res["kind"] == "verdicts", res
     (check_name, verdict), = res["verdicts"]
-    assert check_name == _FEATURE, res
     assert verdict["outcome"] == "GOOD", res
-    # property → its report unit (c_<slug>), all sharing the one fuzz target.
-    assert units == [{"property": _PROPS[0]["title"], "unit": _FEATURE, "target": _TARGET}]
+    # The author declared it, so the name is its own — what must hold is that the one property is
+    # carried by the check that ran, under the one fuzz target.
+    assert [(c.name, c.properties, c.target_or_name()) for c in checks] == [
+        (check_name, [_PROPS[0]["title"]], _TARGET)
+    ]
+    assert dict(outcome.property_checks) == {_PROPS[0]["title"]: [check_name]}

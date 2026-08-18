@@ -114,16 +114,17 @@ pub(crate) fn prop(title: &str, slug: &str) -> Property {
     owned("Withdraw Queue", title, slug)
 }
 
-/// The target one component's properties share, exactly as `checks()` builds it — explored to
-/// budget, which is what the host asks for on any run whose verdicts are reported.
+/// The target one component's properties share, exactly as the host builds it from an author's
+/// one-check-per-property declaration — explored to budget, which is what the host asks for on any
+/// run whose verdicts are reported.
 pub(crate) fn target_over(feature: &str, props: &[Property]) -> Target {
     Target {
         name: feature.into(),
         checks: props
             .iter()
             .map(|p| Check {
-                property: p.title.clone(),
                 name: format!("c_{}", p.slug),
+                properties: vec![p.title.clone()],
                 target: Some(feature.into()),
             })
             .collect(),

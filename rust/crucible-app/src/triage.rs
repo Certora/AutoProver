@@ -210,7 +210,7 @@ fn finding_detail(line: &str, workdir: &Path, program: &str, unit: &str) -> Opti
 /// foreign assertion. Longest title wins, so one title being a prefix of another resolves to the
 /// more specific of the two.
 fn foreign_owner<'a>(target: &Target, run_props: &'a [Property], detail: &str) -> Option<&'a Property> {
-    let mine = |title: &str| target.checks.iter().any(|c| c.property == title);
+    let mine = |title: &str| target.checks.iter().any(|c| c.properties.iter().any(|t| t == title));
     run_props
         .iter()
         .filter(|p| !p.title.is_empty() && detail.contains(&p.title) && !mine(&p.title))
@@ -235,7 +235,9 @@ fn unexplored(target: &Target, run_props: &[Property], stopper: &str) -> String 
 
 /// Attribute a shared-target campaign's counterexamples across the rows the target covers. Crucible
 /// tags each assertion message with its property title (`[<title>]`), so a finding names the
-/// invariant it refutes, and there are three things that title can be. This is the backend's own
+/// invariant it refutes — which is why a [`Check`] carries the properties its author claimed for it,
+/// rather than this having to place a finding by a name the author chose. There are three things
+/// that title can be. This is the backend's own
 /// attribution — the host never parses a finding.
 ///
 /// **One of this target's own properties.** That row is `BAD`, carrying the findings that name it —
@@ -259,7 +261,12 @@ fn unexplored(target: &Target, run_props: &[Property], stopper: &str) -> String 
 pub(crate) fn attribute_findings(
     target: &Target, run_props: &[Property], findings: &[String],
 ) -> ValidateOutcome {
-    let refutes = |c: &Check, d: &String| !c.property.is_empty() && d.contains(&c.property);
+    // By the properties the author claimed for the check, not by its name: the fixture tags each
+    // assertion with a property *title*, so that is what a finding names. A check claiming several
+    // properties is refuted by a finding naming any of them.
+    let refutes = |c: &Check, d: &String| {
+        c.properties.iter().any(|t| !t.is_empty() && d.contains(t))
+    };
     let is_mine = |d: &String| target.checks.iter().any(|c| refutes(c, d));
 
     // A finding no one in the run owns could be refuting anything this target covers, so it

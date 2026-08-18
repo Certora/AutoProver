@@ -1,7 +1,7 @@
 """Unit tests for the Crucible backend's pure callouts (no toolchain / LLM).
 
 The Rust wheel is now a passive service (docs/rust-applications.md): these exercise the pure
-callouts (`units` / `author_prompt` / `judge` / `judge_instruction` / `checks` / `validate`)
+callouts (`units` / `author_prompt` / `judge` / `judge_instruction` / `target_for` / `validate`)
 directly.
 """
 
@@ -64,19 +64,18 @@ def test_descriptor_declares_design_doc_discovery_phase():
     assert _discovery_phase(app) is app.phases.member("discover_design_doc")
 
 
-def test_each_property_is_its_own_check_sharing_one_fuzz_target():
-    # Collapse (docs/crucible-unit-granularity.md §3): every property is its own check
-    # (`c_<slug>`) but they all share ONE fuzz `target` (`c_invariants`), so the host runs a
-    # single build + fuzz and attributes the outcome per property.
-    checks = json.loads(crucible_app.checks(_component_input("solvency", "conservation")))
-    assert checks == [
-        {"property": "p solvency", "name": "c_solvency", "target": "c_invariants"},
-        {"property": "p conservation", "name": "c_conservation", "target": "c_invariants"},
-    ]
+def test_every_check_of_a_component_shares_one_fuzz_target():
+    # Collapse (docs/crucible-unit-granularity.md §3): whatever the author named its checks, they
+    # all share ONE fuzz `target` (`c_invariants`), so the host runs a single build + fuzz and the
+    # wheel attributes the outcome per property.
+    component = _component_input("solvency", "conservation")
+    for name in ("c_solvency", "whatever_the_author_called_it"):
+        assert crucible_app.target_for(component, name) == "c_invariants"
 
 
-def test_setup_has_no_checks():
-    assert json.loads(crucible_app.checks(_setup_input())) == []
+def test_setup_groups_no_checks():
+    # The shared fixture formalizes nothing, so it has no check to place.
+    assert crucible_app.target_for(_setup_input(), "c_solvency") is None
 
 
 def test_component_author_prompt_asks_for_one_invariant_fn_covering_all_props():
@@ -191,7 +190,7 @@ def test_validate_returns_per_check_verdicts_and_the_host_records_them():
     # checks the target it was handed covers, which is the one part of the payload that did parse.
     target = json.dumps(
         {"name": "c_invariants",
-         "checks": [{"property": "p", "name": "c_invariants", "target": None}],
+         "checks": [{"name": "c_invariants", "properties": ["p"], "target": None}],
          "exploration": "to_budget"}
     )
     out = json.loads(crucible_app.validate("not json", "spec", target, "/tmp", "{}"))

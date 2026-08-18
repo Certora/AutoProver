@@ -11,6 +11,10 @@ Properties to check (assert each; PREFIX every assertion message with its proper
 `"[{{ first }}] ..."`, so a counterexample names the property it refutes):
 {{ listed }}
 
+Then declare with `map_checks` which harness function verifies which property: one per property, named
+`c_<property title>`. That tag prefix is what places a counterexample on the right property, so a check whose
+property title never appears in a tagged assertion has nothing behind it.
+
 This component (its instructions are the ones the properties are about; drive them via the fixture's `action_*`
 methods, and see the fixture source below for the full set of actions the fuzzer can take):
 {{ component }}
@@ -40,8 +44,8 @@ a trace an assertion could read, because the operation *succeeds* and the damage
 `record_skip` that: a skip is filed where a reader looks for coverage gaps, and this is the opposite of a gap. Publish
 it instead:
 
-- write the `c_<slug>` fn with a `// FINDING: <property title> — <what the source shows>; not observable from
-  post-action state because <why>` comment in place of the assertion you cannot write;
+- declare its check as usual, and put a `// FINDING: <property title> — <what the source shows>; not observable
+  from post-action state because <why>` comment in `invariants` in place of the assertion you cannot write;
 - mark it `expect_check_failure`, and make the reason name the **source evidence** — the file, the function, the call
   that is missing or the argument that is unpinned — and say outright that the fuzzer cannot reproduce it.
 
