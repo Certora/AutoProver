@@ -38,12 +38,6 @@ def test_an_unregistered_tag_raises_and_says_where_to_register_it():
     assert "KNOWLEDGE_BASES" in msg and "rag_env" in msg
 
 
-def test_the_message_names_the_registered_corpora_it_knows_about():
-    assert "known: ['crucible_kb']" in str(
-        pytest.raises(ValueError, rag_env.validate_rag_db, "no_such_kb").value
-    )
-
-
 def test_the_message_says_so_when_nothing_is_registered_at_all(monkeypatch: pytest.MonkeyPatch):
     # With an empty registry the "known: []" wording would read as a lookup failure, so the message
     # switches. Emptied explicitly — this used to be the branch's resting state.

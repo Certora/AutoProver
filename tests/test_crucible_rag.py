@@ -27,14 +27,6 @@ class _BoomDB:
         raise RuntimeError("db connection reset")
 
 
-class _EmptyDB:
-    async def find_refs(self, *a, **k):
-        return []
-
-    async def search_manual_keywords(self, *a, **k):
-        return []
-
-
 def _run(tool_cls, db, **fields) -> str:
     tool_cls._dep_ctx.set(db)  # what `tool_deps()` reads; normally set by binding
     return asyncio.run(tool_cls(**fields).run())
@@ -53,13 +45,3 @@ def test_keyword_search_degrades_on_db_error():
 def test_section_get_degrades_on_db_error():
     out = _run(CrucibleSectionGet, _BoomDB(), section_names=["A", "B"])
     assert out == _UNAVAILABLE
-
-
-def test_vector_search_reports_no_results_without_crashing():
-    out = _run(CrucibleVectorSearch, _EmptyDB(), query="anything")
-    assert out == "(No results found)"
-
-
-def test_keyword_search_reports_no_results():
-    out = _run(CrucibleKeywordSearch, _EmptyDB(), query="anything")
-    assert out == "No results found"

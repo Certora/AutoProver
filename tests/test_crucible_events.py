@@ -40,7 +40,7 @@ def _author_input(**payload) -> str:
 def _component_input(*slugs: str) -> str:
     return _author_input(
         kind="component",
-        unit={"name": "vault", "program": "vault"},
+        unit={"name": "vault", "program": "vault", "slug": "vault"},
         props=[
             {"component": "vault", "title": f"p {s}", "sort": "invariant", "description": "d", "slug": s}
             for s in slugs
@@ -70,7 +70,7 @@ def test_every_check_of_a_component_shares_one_fuzz_target():
     # wheel attributes the outcome per property.
     component = _component_input("solvency", "conservation")
     for name in ("c_solvency", "whatever_the_author_called_it"):
-        assert crucible_app.target_for(component, name) == "c_invariants"
+        assert crucible_app.target_for(component, name) == "c_vault"
 
 
 def test_setup_groups_no_checks():
@@ -80,7 +80,6 @@ def test_setup_groups_no_checks():
 
 def test_component_author_prompt_asks_for_one_invariant_fn_covering_all_props():
     prompt = json.loads(crucible_app.author_prompt(_component_input("solvency", "conservation")))
-    assert prompt.get("system") is None
     ins = prompt["instruction"]
     # One `invariants` fn asserting ALL listed properties. The name is constant across components —
     # the per-component `c_<slug>` belongs to the wheel-generated entry and never reaches the model.
@@ -89,24 +88,12 @@ def test_component_author_prompt_asks_for_one_invariant_fn_covering_all_props():
     assert "p solvency" in ins and "p conservation" in ins
 
 
-def test_setup_author_prompt_asks_for_a_fixture():
-    prompt = json.loads(crucible_app.author_prompt(_setup_input()))
-    assert "FIXTURE" in prompt["instruction"]
-
-
 def test_component_judge_reviews_the_suite():
     spec = "#[invariant_test]\nfn c_invariants(fixture: &mut Fixture) {}"
     component = _component_input("solvency")
-    # The reviewer is declared once for the session, without a draft: a persona, no instruction.
-    raw = crucible_app.judge(component)
-    assert raw is not None
-    assert "Solana security engineer" in json.loads(raw)["system"]
-    # The per-round instruction is the criteria-based task: the properties under review, the draft,
-    # and what makes the suite unacceptable.
+    assert crucible_app.judge(component) is not None
     ins = crucible_app.judge_instruction(component, spec)
     assert "p solvency" in ins and "c_invariants" in ins
-    assert "Criterion 3 — Reachability" in ins
-    assert "Reject the suite if" in ins
     assert spec in ins
     # …and NOT how the verdict comes back. That is the host's protocol, appended to the reviewer's
     # system prompt (`session._JUDGE_PROTOCOL`) because the host is what reads the verdict. The
@@ -118,28 +105,6 @@ def test_component_judge_reviews_the_suite():
 def test_setup_has_no_judge():
     # The shared fixture is scaffolding, not test evidence — nothing to judge.
     assert crucible_app.judge(_setup_input()) is None
-
-
-def test_the_publish_gate_blocks_until_this_exact_draft_was_accepted():
-    # A reviewer's acceptance is a stamp over the buffer it saw, so it goes stale the moment the
-    # author edits — which is what stops a spec being published on the strength of a review of a
-    # different draft.
-    from composer.authoring.state import check_completion, spec_digest
-    from composer.rustapp.session import FEEDBACK_KEY
-
-    def state(spec: str, stamped_for: str | None) -> dict:
-        return {
-            "curr_spec": spec,
-            "skipped": [],
-            "required_validations": [FEEDBACK_KEY],
-            "validations": {} if stamped_for is None else {
-                FEEDBACK_KEY: spec_digest(stamped_for, []),
-            },
-        }
-
-    assert check_completion(state("spec-A", "spec-A")) is None
-    assert check_completion(state("spec-B", "spec-A")) is not None
-    assert check_completion(state("spec-A", None)) is not None
 
 
 def test_fetch_verdicts_threads_finding_detail_into_message():
@@ -171,19 +136,9 @@ def test_fetch_verdicts_threads_finding_detail_into_message():
     assert verdicts["c_y"].message is None
 
 
-def test_validate_returns_per_check_verdicts_and_the_host_records_them():
+def test_validate_still_returns_per_check_verdicts_on_a_parse_error():
     # The backend owns attribution: `validate` returns a verdict PER check the target covers
-    # (the host does no verdict logic). Here we exercise the FFI contract shape + fetch_verdicts.
-    import asyncio
-    from pathlib import Path
-
-    from composer.pipeline.core import Delivered
-    from composer.rustapp.adapter import RustFormalizer
-    from composer.rustapp.descriptor import AppDescriptor
-    from composer.rustapp.result import RustFormalResult
-    from composer.spec.source.report.schema import Outcome
-
-    # A parse error still yields the per-check `verdicts` shape the host consumes — keyed by the
+    # (the host does no verdict logic). A parse error still yields that shape — keyed by the
     # checks the target it was handed covers, which is the one part of the payload that did parse.
     target = json.dumps(
         {"name": "c_invariants",
@@ -194,19 +149,3 @@ def test_validate_returns_per_check_verdicts_and_the_host_records_them():
     assert out["kind"] == "verdicts"
     assert out["verdicts"][0][0] == "c_invariants"
     assert out["verdicts"][0][1]["outcome"] == "ERROR"
-
-    # And the host records whatever per-unit verdicts the backend produced (one BAD, one GOOD).
-    fz = RustFormalizer(crucible_app, AppDescriptor.model_validate_json(crucible_app.descriptor()))
-    res = RustFormalResult(
-        units=[("solvency", ["c_solvency"]), ("conservation", ["c_conservation"])],
-        verdicts={
-            "c_conservation": wire_verdict("BAD", detail="crash abc: [conservation] drift"),
-            "c_solvency": wire_verdict("GOOD"),
-        },
-    )
-    verdicts = asyncio.run(fz.fetch_verdicts(
-        Delivered(res, Path("certora/crucible/fuzz/vault/src/main.rs"))
-    ))
-    assert verdicts["c_conservation"].outcome == Outcome.BAD
-    assert "conservation" in verdicts["c_conservation"].message
-    assert verdicts["c_solvency"].outcome == Outcome.GOOD

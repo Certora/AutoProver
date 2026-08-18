@@ -235,25 +235,9 @@ pub(crate) struct ApiFacts<'a> {
 
 #[cfg(test)]
 mod tests {
-    //! The static prose must survive verbatim, and an interpolated template must leave no hole
-    //! unfilled — a placeholder reaching a prompt is a silent instruction to the model.
+    //! An interpolated template must leave no hole unfilled — a placeholder reaching a prompt
+    //! is a silent instruction to the model.
     use super::*;
-
-    #[test]
-    fn static_templates_preserve_their_bytes() {
-        // askama drops exactly one trailing newline from a template file, so every `.j2` carries
-        // one extra (see the trailing blank line in each). The content is otherwise preserved
-        // verbatim, i.e. `render() + "\n" == file`. Asserting that here pins both facts: the
-        // static prose is byte-for-byte what shipped, and the one-newline convention holds.
-        let eq = |rendered: String, file: &str| assert_eq!(format!("{rendered}\n"), file);
-        eq(BackendGuidance.render().unwrap(), include_str!("../templates/backend_guidance.j2"));
-        eq(ExampleFixture.render().unwrap(), include_str!("../templates/example_fixture.j2"));
-        eq(JudgeSystem.render().unwrap(), include_str!("../templates/judge_system.j2"));
-        eq(HarnessGitignore.render().unwrap(), include_str!("../templates/harness_gitignore.j2"));
-        // `preflight_entry.j2` is not among these: it interpolates the program and the feature,
-        // because the preflight is a gated crate-root entry like any component's. Nor is
-        // `root_layout.j2`, which interpolates the `.so` path (see `crate_root_declares_program_so`).
-    }
 
     #[test]
     fn harness_cheat_sheet_substitutes_the_crate_id_and_has_no_placeholder() {

@@ -482,13 +482,17 @@ def test_render_html_group_rows_and_edge_labels():
 
 
 def test_render_html_uses_backend_labels():
-    """The prover backend renders a GOOD outcome as 'Verified'; foundry renders it 'Successful test'."""
+    """Each backend renders a GOOD outcome in its own vocabulary, not another backend's."""
     prover_html = render_html(_mini_report())
     assert "Verified" in prover_html and "Successful test" not in prover_html
 
     foundry = _mini_report().model_copy(update={"backend": "foundry"})
     foundry_html = render_html(foundry)
     assert "Successful test" in foundry_html and "Verified" not in foundry_html
+
+    crucible = _mini_report().model_copy(update={"backend": "crucible"})
+    crucible_html = render_html(crucible)
+    assert "No counterexample" in crucible_html and "Verified" not in crucible_html
 
 
 def test_render_html_uses_backend_nouns():
