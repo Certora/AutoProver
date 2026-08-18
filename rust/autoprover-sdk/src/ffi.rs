@@ -410,7 +410,7 @@ mod tests {
             "AuthorInput",
         );
         assert_error(&compile(&spy, &input, None, "/tmp", "not json"), "Sandbox");
-        let target = r#"{"name":"t","checks":[]}"#;
+        let target = r#"{"name":"t","checks":[],"exploration":"to_budget"}"#;
         assert_error(
             &validate(&spy, "not json", "", target, "/tmp", "{}"),
             "AuthorInput",

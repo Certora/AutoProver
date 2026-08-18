@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from composer.rustapp.wire import CalloutFailed, parse_validate
 from tests.conftest import wire_verdict
 
 crucible_app = pytest.importorskip(
@@ -136,16 +137,17 @@ def test_fetch_verdicts_threads_finding_detail_into_message():
     assert verdicts["c_y"].message is None
 
 
-def test_validate_still_returns_per_check_verdicts_on_a_parse_error():
-    # The backend owns attribution: `validate` returns a verdict PER check the target covers
-    # (the host does no verdict logic). A parse error still yields that shape — keyed by the
-    # checks the target it was handed covers, which is the one part of the payload that did parse.
+def test_validate_reports_a_parse_error_as_the_error_envelope():
+    # A payload that will not parse is a host bug, and the wheel says so: `{"kind":"error"}`,
+    # which `parse_validate` raises as `CalloutFailed`. It is deliberately NOT a verdict set —
+    # an ERROR per covered check is a claim about the user's program, so fabricating one here
+    # would hide a broken seam behind a finding the run never made.
     target = json.dumps(
         {"name": "c_invariants",
          "checks": [{"name": "c_invariants", "properties": ["p"], "target": None}],
          "exploration": "to_budget"}
     )
-    out = json.loads(crucible_app.validate("not json", "spec", target, "/tmp", "{}"))
-    assert out["kind"] == "verdicts"
-    assert out["verdicts"][0][0] == "c_invariants"
-    assert out["verdicts"][0][1]["outcome"] == "ERROR"
+    raw = crucible_app.validate("not json", "spec", target, "/tmp", "{}")
+    assert json.loads(raw)["kind"] == "error"
+    with pytest.raises(CalloutFailed, match="AuthorInput"):
+        parse_validate(raw)
