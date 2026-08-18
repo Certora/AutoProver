@@ -246,10 +246,9 @@ adds its own literal here, plus its wording in ``report/render.py``."""
 # ---------------------------------------------------------------------------
 # Findings — violated rules surfaced as audit issues.
 #
-# A `Finding` records a violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) as an audit
-# issue: a ``title``, a ``severity``, and the ``content`` write-up. The backend produces them (see
-# ``Formalizer.findings``); the report only carries them. The field
-# set follows the "Submit Issue" body of the Sherlock Audit Engine API — schema at
+# A `Finding` is a title, a severity, and a write-up. The backend produces them
+# (``Formalizer.findings``); the report only carries them. The field set follows
+# the "Submit Issue" body of the Sherlock Audit Engine API — schema at
 # https://api-audit-engine.sherlock.xyz/v1/docs/public — so a finding maps cleanly onto a submission,
 # but the source ``locations`` a submission needs
 # (``{owner}/{repo}`` / file / line) are NOT produced here: a run knows only local paths and CVL-spec
@@ -328,7 +327,6 @@ class AutoProverReport(BaseModel):
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
     coverage: CoverageReport
-    #: Violated rules surfaced as audit issues (one per BAD rule; empty when nothing is violated
-    #: and for a backend that submits none). Written by the backend, not here — see
-    #: ``Formalizer.findings``.
+    #: Audit issues for violated rules (one per BAD rule). Empty when nothing is
+    #: violated or the backend submits none. Written by ``Formalizer.findings``.
     findings: list[Finding] = Field(default_factory=list)

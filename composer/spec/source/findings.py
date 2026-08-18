@@ -1,16 +1,11 @@
-"""The Certora Prover's write-up of its violated rules, as report findings.
+"""Write up Certora Prover violations as report findings.
 
-The prover's counterexample analysis runs during the run (see `cex_capture`); this is its
-continuation at report time. For each violated rule (a `RuleVerdict` with ``outcome ==
-Outcome.BAD``) it asks an LLM to write up the issue, grounded in that captured analysis and in the
-properties the rule formalizes. The model assesses the impact and likelihood; this module computes
-the severity from them via a fixed matrix — the LLM never picks a severity directly. Each finding is
-best-effort, so a synthesis failure drops that one finding rather than the report.
+For each BAD rule, an LLM writes the issue from the captured CEX analysis and the
+properties the rule formalizes. The model assesses impact and likelihood; a fixed
+matrix turns that pair into a severity. A failed write-up drops that one finding.
 
-Prover-only by construction: the write-up says "the Certora Prover found a concrete
-counterexample", and the evidence it cites exists only for a run that produced calltraces. The
-report layer neither owns nor knows about any of it — it receives the finished `Finding` objects
-through `Formalizer.findings`.
+Prover-only: the prompt says the Prover found a counterexample, and the evidence
+exists only for a run that produced calltraces.
 """
 import asyncio
 import logging
@@ -33,19 +28,19 @@ _log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RuleEvidence:
-    """One failing instance of a violated rule: the prover's root-cause explanation and a concrete
-    counterexample, either of which may be absent. A parametric rule (``rule r(method f)``) fails once
-    per binding, so a rule's evidence is a list of these; ``label`` names the instance ("" when the
-    rule is not parametric)."""
+    """One failing instance of a violated rule.
+
+    A parametric rule fails once per binding, so a rule's evidence is a list of these.
+    ``label`` names the instance (empty when the rule is not parametric)."""
     label: str = ""
     analysis: str | None = None
     counterexample: str | None = None
 
 
 class EvidenceFetcher(Protocol):
-    """Every captured failing instance of a violated rule, or ``[]`` when none was captured. The
-    run-scoped `CexAnalysisStore` behind :meth:`ProverRunner.findings` is the only implementation;
-    it is a parameter so this module can be driven without one."""
+    """Captured failing instances of a violated rule, or ``[]``.
+
+    A parameter so this module can be driven without a live ``CexAnalysisStore``."""
     async def __call__(self, rule_name: str, /) -> list[RuleEvidence]:
         ...
 

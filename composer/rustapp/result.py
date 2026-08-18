@@ -34,10 +34,7 @@ class RustSetupSpec(BaseModel):
 
 
 def _declared_finding(ran: Verdict, reason: str) -> Verdict:
-    """``ran`` restated as the finding the author declared it to be, keeping whatever the run itself
-    said. Never drops the run's own ``detail``: for a reproduced finding that is the counterexample,
-    and for an unreproduced one it is the error text behind an ERROR/TIMEOUT that explains why the
-    run reached no verdict."""
+    """Mark ``ran`` as a declared finding, keeping the run's own ``detail``."""
     if ran.outcome is Outcome.BAD:
         lead = f"DECLARED EXPECTED TO FAIL — the violation below is the finding: {reason}"
     else:
@@ -61,14 +58,10 @@ class RustFormalResult(BaseModel):
     checks: list[tuple[PropertyTitle, list[CheckName]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
     output_link: str | None = None
-    # Per-check verdicts baked in at formalize time by a self-contained backend (check name -> the
-    # wheel's :class:`~composer.rustapp.wire.Verdict`, validated at the seam). Empty for
-    # run-service-backed backends (they use fetch_verdicts). The wheel's mechanical observation,
-    # verbatim — read ``reported_verdicts`` for what to report.
+    # Per-check verdicts from the wheel (what the run observed). Empty for run-service-backed
+    # backends (they use fetch_verdicts). Use ``reported_verdicts`` for what to report.
     verdicts: dict[CheckName, Verdict] = Field(default_factory=dict)
-    # The checks the author declared expected to fail, check name -> why a failure there is the
-    # finding rather than a defect in the check. The wheel never sees these: it reports what its run
-    # observed, while the declaration is the author's, so the two only meet here.
+    # Checks the author marked expected-to-fail, name -> why. The wheel never sees these.
     expected_failures: dict[CheckName, str] = Field(default_factory=dict)
     # What the stamping gate run covered: each validation *target* — one invocation of the checker —
     # with the checks it covered, in the order they ran. Several checks may share one target
@@ -86,19 +79,12 @@ class RustFormalResult(BaseModel):
         return [(title, list(names)) for title, names in self.checks]
 
     def reported_verdicts(self) -> dict[CheckName, Verdict]:
-        """``verdicts`` with the author's expected-failure declarations folded in — what the report
-        and the console rollup say, as opposed to what the run mechanically observed.
+        """Verdicts as the report and console should show them.
 
-        A declared check is a finding either way, so it reports BAD whatever the run said. It has to
-        be BAD rather than the run's own outcome because the failure mode this exists to prevent is
-        a documented finding reaching the report as a pass: the publish gate accepts a declared
-        check without ever requiring the run to reproduce it, so nothing else stands between "the
-        author found a bug" and a green row.
-
-        The two cases are not the same evidence, though, and the detail says which: a run that
-        reproduced the finding carries its counterexample, and one that did not says so — an
-        unreproduced finding rests on the author's reading alone, and a reader has to be able to
-        tell those apart."""
+        A declared check reports BAD even if this run did not reproduce it, so a
+        documented finding cannot show as a pass. The detail says which case it is:
+        a reproduced finding keeps the counterexample; an unreproduced one says
+        ``NOT REPRODUCED``."""
         return {
             name: (
                 _declared_finding(verdict, self.expected_failures[name])
@@ -109,9 +95,7 @@ class RustFormalResult(BaseModel):
         }
 
     def display_name(self, check: CheckName) -> str:
-        """What to call one check's row: the property's own words when it verifies exactly one, and
-        otherwise the check's own name — the only thing that names the row unambiguously when one
-        check discharges several properties (or the author mapped none to it)."""
+        """Row name for one check: the property title when it verifies exactly one, else the check name."""
         titles = self.check_properties().get(check, [])
         return titles[0] if len(titles) == 1 else check
 

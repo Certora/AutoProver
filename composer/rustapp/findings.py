@@ -1,15 +1,8 @@
-"""What this run found, as report `Finding`\\ s — no second model, no second write-up.
+"""Map a Rust run's BAD rows to report ``Finding``s.
 
-A Rust backend's findings are already written by the time the report asks for them. The wheel
-reported a crash with its reproducing sequence, or the author declared a check expected to fail and
-said why (``expect_check_failure``); :meth:`RustFormalResult.reported_verdicts` folded those two
-together, and ``fetch_verdicts`` put the result on the report's rows. This maps that into the
-report's audit-issue shape.
-
-Deliberately not an assessment. Severity is ``informational`` and ``impact`` is empty on every
-finding here, because nothing in this pipeline has judged a fuzzer crash's real-world consequence —
-a fabricated ``high`` would be worse than an honest blank. The two fields exist for a later pass
-that actually assesses risk.
+No second write-up: the wheel's crash (and reproducing sequence) and the author's
+``expect_check_failure`` reason already are the finding. Severity is ``informational``
+and impact is empty — nothing here has judged what a fuzzer crash is worth.
 """
 
 from dataclasses import dataclass
@@ -26,29 +19,20 @@ type RustOutcomes = list[ComponentOutcome[RustFormalResult, FeatureUnit]]
 
 @dataclass(frozen=True)
 class _Observed:
-    """This run's own record of one reported check, before ``fetch_verdicts`` flattened it into a
-    single `RuleVerdict.message`. Kept structured so the mapper reads the declaration and the
-    counterexample as fields rather than recovering them from rendered text."""
+    """One delivered check, still split into the run's outcome and the author's declaration."""
 
-    #: What the wheel mechanically observed — BAD only when this run actually produced a
-    #: counterexample, which a declared finding does not require.
-    ran: Outcome
-    #: The wheel's counterexample (BAD) or error text, verbatim.
-    detail: str | None
-    #: Why the author declared a failure here to be the finding, when they declared one.
-    declared: str | None
-    #: What to call the row — the property's own words where the check verifies exactly one.
-    #: :meth:`RustFormalResult.display_name`, the same rule the console rollup names rows by.
-    title: str
+    ran: Outcome           # wheel's outcome; BAD only if this run produced a counterexample
+    detail: str | None     # wheel's counterexample or error text
+    declared: str | None   # author's expect_check_failure reason, if any
+    title: str             # same name as the console / report verdict row
 
 
 def _observations(outcomes: RustOutcomes) -> dict[RuleRef, _Observed]:
-    """Every delivered check, keyed the way the report identifies its rows.
+    """Every delivered check, keyed as the report keys its rows: ``(file, name)``.
 
-    The key has to be rebuilt rather than looked up: ``collect`` derives ``(file, name)`` from the
-    fetched verdict's own file with the component's artifact as the fallback, and a callout-mode
-    wheel gives every component that same fallback — so the check name alone does not identify a
-    row."""
+    Rebuilt rather than looked up: ``collect`` uses the verdict's file, falling back
+    to the component artifact, and a callout-mode wheel gives every component that
+    same fallback — so the check name alone does not identify a row."""
     observed: dict[RuleRef, _Observed] = {}
     for o in outcomes:
         if not isinstance(o.result, Delivered):
@@ -66,18 +50,13 @@ def _observations(outcomes: RustOutcomes) -> dict[RuleRef, _Observed]:
 
 
 def _summary(description: str) -> str:
-    """The description's opening line. Both shapes lead with the sentence that says what happened —
-    the declaration's reason, or the crash line above its reproducing sequence — so this is a real
-    first sentence rather than an invented one."""
+    """First non-empty line of the description."""
     return next((line.strip() for line in description.splitlines() if line.strip()), "")
 
 
 def _finding(rule: RuleVerdict, observed: _Observed | None) -> Finding:
-    # ``rule.message`` is the description because it is already the reader-facing account: the
-    # declaration's reason leads it, the NOT REPRODUCED caveat follows when this run reached no
-    # counterexample, and the evidence comes last. The proof of concept is narrower — the wheel's
-    # own text, and only where the run actually produced a violation, so an unreproduced finding
-    # never displays a counterexample it does not have.
+    # Description is the row message. Proof of concept is only the wheel's text, and
+    # only when this run produced a violation.
     description = rule.message or ""
     proof = observed.detail if observed is not None and observed.ran is Outcome.BAD else None
     declared = observed.declared if observed is not None else None
@@ -96,19 +75,16 @@ def _finding(rule: RuleVerdict, observed: _Observed | None) -> Finding:
             spec_file=rule.spec_file,
             outcome=rule.outcome,
             prover_link=rule.prover_link,
-            # Carried as a field so a reader can tell a declared finding from one the run tripped
-            # over — and a reproduced one from a NOT REPRODUCED one — without reading the evidence.
             risk_reasoning=declared,
         ),
     )
 
 
 def compose_findings(*, rules: list[RuleVerdict], outcomes: RustOutcomes) -> list[Finding]:
-    """One `Finding` per violated check, in report order.
+    """One ``Finding`` per BAD row, in report order.
 
-    BAD only, which after the expected-failure fold already includes the checks an author declared
-    and this run did not reproduce. ERROR and TIMEOUT stay verdict-table rows: a check that could
-    not be run is a gap in coverage, not something the run found."""
+    Includes a declared check this run did not reproduce. ERROR and TIMEOUT stay
+    in the verdict table: a check that never ran is a coverage gap, not a finding."""
     observed = _observations(outcomes)
     return [
         _finding(rule, observed.get(rule.ref)) for rule in rules if rule.outcome is Outcome.BAD

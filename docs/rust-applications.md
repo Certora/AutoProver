@@ -402,17 +402,30 @@ setup spec, and per component its `artifact_text`, `property_checks` and the `ta
 checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
 
-`findings` answers the report's other question — *what did this run find* — with no model and no
-second write-up ([findings.py](../composer/rustapp/findings.py)): the wheel's crash with its
-reproducing sequence, and the author's declared reason, already are the finding. One `Finding` per
-BAD row, which after the declaration fold includes a declared check this run did not reproduce;
-`ERROR` and `TIMEOUT` stay verdict rows, being coverage gaps rather than things the run found. The
-counterexample rides `proof_of_concept` only where the run actually produced one, so an
-unreproduced finding never displays evidence it does not have, and the declared reason rides
-`provenance.risk_reasoning` so the two are distinguishable without reading the evidence. Severity
-is `informational` and `impact` is empty on every one of them: nothing in this pipeline has
-assessed what a fuzzer crash is worth, and a fabricated `high` would be worse than an honest
-blank.
+`findings` answers a different question from `fetch_verdicts`: *what did this run find*. A Rust
+backend does not ask a model to write this up
+([findings.py](../composer/rustapp/findings.py)). The finding is already there — the wheel's crash
+and reproducing sequence, and the reason the author gave when they called `expect_check_failure`.
+
+`reported_verdicts()` combines those two sources (§6). `findings` then turns each resulting BAD
+row into one `Finding`. That includes a check the author declared even if this run did not
+reproduce it. `ERROR` and `TIMEOUT` stay in the verdict table: a check that never ran is a
+coverage gap, not something the run found.
+
+Each field comes from what the run already has:
+
+| Field | Source |
+| --- | --- |
+| `title` | `RustFormalResult.display_name` — the property title when the check verifies exactly one property, otherwise the check name. Same rule as the console rollup, so a finding and its verdict row have the same name |
+| `content.description` | The row's message: the author's reason first, then `NOT REPRODUCED` if this run produced no counterexample, then the evidence |
+| `content.summary` | The first line of that description |
+| `content.proof_of_concept` | The wheel's counterexample — only if this run actually produced one |
+| `content.impact` | Empty |
+| `provenance.risk_reasoning` | The author's declared reason, so a reader can tell a declared finding from one the run tripped over without reading the evidence |
+| `severity` | `informational` |
+
+Severity stays `informational` and impact stays empty because nothing in this pipeline has judged
+what a fuzzer crash is worth. Inventing `high` would be worse than leaving it blank.
 
 ---
 

@@ -400,8 +400,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     async def fetch_verdicts(
         self, formalized: Formalized[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
-        # ``reported_verdicts``, not the raw ones: a check the author declared expected to fail is a
-        # finding whether or not this run's campaign reached it, and must never read as a pass.
+        # Fold in expect_check_failure so a declared check cannot show as a pass.
         return {
             name: Verdict(
                 outcome=v.outcome,
@@ -424,8 +423,6 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]],
         run: PipelineRun,
     ) -> list[Finding]:
-        # No model and no second write-up: the crash and the author's declaration already say what
-        # this run found, so the mapper only reshapes them.
         return compose_findings(rules=rules, outcomes=outcomes)
 
     @override

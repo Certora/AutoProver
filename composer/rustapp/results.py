@@ -3,10 +3,8 @@
 The canonical results artifact is ``report.json`` (the shared report phase). But — as with the
 CVL and Foundry backends — the console/TUI otherwise surface only a counts block, so a completed
 run reads as "success" with no visible verdicts. This turns the per-check verdicts baked into the
-pipeline result (:meth:`RustFormalResult.reported_verdicts`, published by ``validate`` and folded
-together with the author's expected-failure declarations) into a compact tally + per-check listing,
-using the report's own outcome labels so the wording matches the HTML report — including on a
-declared finding, which must not read differently here than it does in the report.
+pipeline result (:meth:`RustFormalResult.reported_verdicts`) into a compact tally + listing,
+using the report's own outcome labels so a declared finding reads the same here as in the HTML.
 
 Backend-agnostic: the outcome wording is parametrized by the descriptor's ``backend_tag``, so any
 Rust app whose results carry verdicts gets the same summary.

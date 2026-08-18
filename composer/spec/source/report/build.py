@@ -3,8 +3,8 @@
 `build_report` is the entry point a pipeline's final phase calls. It builds and *returns* the
 `AutoProverReport`; persisting it is the caller's job (via the pipeline's `ArtifactStore`). It is
 backend-agnostic: the caller supplies a `VerdictFetcher` (how to get per-unit `Outcome`s for this
-backend), a `FindingsBuilder` (this run's ready `Finding`s — the report attaches them, it does not
-write them) and a `backend` tag (used only to pick render labels). It is structured so that any single
+backend), a `FindingsBuilder` (ready `Finding`s — the report attaches them) and a `backend` tag
+(used only to pick render labels). It is structured so that any single
 failure (LLM, validation, an empty grouping) degrades to a single ``general`` bucket rather than
 producing no high-level section; the caller additionally treats the whole phase as best-effort.
 """
@@ -39,7 +39,7 @@ RERAISE_REPORT_FAILURES = False
 
 
 async def no_findings(**_kwargs) -> list[Finding]:
-    """The default `FindingsBuilder`: a caller with no findings source contributes none."""
+    """Default `FindingsBuilder`: no findings."""
     return []
 
 
@@ -56,9 +56,8 @@ async def build_report[R: ReportableResult](
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
-    ``build_findings`` is the backend's ready findings for this report (best-effort: a failure
-    there yields no findings rather than failing the report). This function does not write them —
-    findings prose, evidence and models all live on the backend side of that hook."""
+    ``build_findings`` is the backend's ready findings. A failure there yields no
+    findings rather than failing the report."""
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         components, fetch_verdicts=fetch_verdicts
     )
@@ -116,9 +115,7 @@ async def build_report[R: ReportableResult](
         if c.formalized is not None and not isinstance(c.formalized, Curtailed)
         and c.formalized.run_link
     }
-    # The backend's findings. Its own guard: a broken findings hook must never fail the report (the
-    # whole phase is also best-effort in the caller, but this keeps a working report even when only
-    # findings break).
+    # Best-effort: a broken findings hook must not fail the report.
     findings: list[Finding] = []
     try:
         findings = await build_findings(

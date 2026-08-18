@@ -485,24 +485,28 @@ async def findings(self, *, contract_name, rules, properties, groups, outcomes, 
     return await build_findings(..., fetch_evidence=self._evidence, llm=run.env.llm_heavy())
 ```
 
-`fetch_verdicts` answers "did each rule hold"; this answers "what did this run find", and it is
-the report's *first* section for that reason. The backend returns finished `Finding`s — title,
-severity, write-up, provenance — and the report attaches them. It never synthesizes any of it,
-holds no model, and has no evidence protocol: whatever a backend needs to know its findings is
-that backend's own business.
+`fetch_verdicts` answers "did each rule hold". `findings` answers "what did this run find", and
+that is the report's first section.
 
-For the prover that is a second LLM pass
-([spec/source/findings.py](../composer/spec/source/findings.py)), continuing the counterexample
-analysis its run already captured for the authoring agent: BAD rules only, evidence from the
-run-scoped `CexAnalysisStore`, and a severity computed from the model's impact × likelihood by a
-fixed matrix rather than chosen by it. A Rust backend needs no model at all — the wheel's crash
-and the author's `expect_check_failure` reason are already the write-up
-([rustapp/findings.py](../composer/rustapp/findings.py)). Foundry keeps the default `[]`.
+The backend returns finished `Finding`s — title, severity, write-up, provenance. The report
+attaches them. It does not write them, hold a model, or fetch evidence. Whatever a backend needs
+to produce a finding is that backend's own business.
 
-The hook runs after collect + grouping, so it sees the same rules/properties/groups the report will
-persist — the prover's write-up keys its "audit-level claim(s)" on those groups. `outcomes` is the
-full outcome set, as for `finalize` and `source_edits`, for a backend whose findings come from its
-own results. A failure here costs the findings, never the report.
+The hook runs after collect and grouping, so it sees the same rules, properties, and groups the
+report will persist. The prover's write-up uses those groups for its "audit-level claim(s)". The
+driver also passes `outcomes` and `run`, the same way it does for `finalize` and `source_edits`,
+so a backend whose findings come from its own results does not have to recover them from
+rendered `RuleVerdict.message` text.
+
+How each backend fills the hook:
+
+| Backend | What it does |
+| --- | --- |
+| CVL / prover ([spec/source/findings.py](../composer/spec/source/findings.py)) | A second LLM pass over each BAD rule. Evidence comes from the run-scoped `CexAnalysisStore` (already captured for the authoring agent). The model assesses impact and likelihood; a fixed matrix turns that pair into a severity — the model never picks one. |
+| Rust ([rustapp/findings.py](../composer/rustapp/findings.py)) | No model. The wheel's crash and the author's `expect_check_failure` reason already are the write-up. See [rust-applications.md §4.5](./rust-applications.md). |
+| Foundry | Default `[]`. The HTML omits the Findings section. |
+
+A failure here costs the findings, never the report.
 
 ### 4.7 `finalize` — run-level artifact
 

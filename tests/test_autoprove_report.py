@@ -705,8 +705,7 @@ def _finding(severity: SeverityTier = "high") -> Finding:
 
 @pytest.mark.asyncio
 async def test_build_report_attaches_what_the_backend_submits():
-    """The report attaches ready findings; it does not synthesize them. No model, no evidence, no
-    inspection of what came back."""
+    """The report attaches the backend's findings; it does not write them."""
     gen = _gen({"p_bad": ["r_bad"]})
     fetch = _fetcher({"L1": [_fake_check("r_bad", NodeStatus.VIOLATED, file="autospec_C.spec")]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
@@ -723,7 +722,7 @@ async def test_build_report_attaches_what_the_backend_submits():
         llm=grouping, fetch_verdicts=fetch, build_findings=_findings,
     )
     assert report.findings == [_finding()]
-    # The hook runs after collect + grouping, on what the report will persist.
+    # The hook sees the collected rules and groups.
     assert seen["contract_name"] == "C"
     assert [r.name for r in seen["rules"]] == ["r_bad"]
     assert [g.slug for g in seen["groups"]] == ["g"]
@@ -731,7 +730,7 @@ async def test_build_report_attaches_what_the_backend_submits():
 
 @pytest.mark.asyncio
 async def test_build_report_no_findings_by_default():
-    """The default hook contributes none — the report never had a findings source of its own."""
+    """Default hook: no findings."""
     gen = _gen({"p_bad": ["r_bad"]})
     fetch = _fetcher({"L1": [_fake_check("r_bad", NodeStatus.VIOLATED)]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
@@ -746,7 +745,7 @@ async def test_build_report_no_findings_by_default():
 
 @pytest.mark.asyncio
 async def test_a_failing_findings_hook_still_yields_a_report():
-    """A backend's findings hook is best-effort: it must never take the report down with it."""
+    """A failing findings hook must not take the report down with it."""
     gen = _gen({"p_bad": ["r_bad"]})
     fetch = _fetcher({"L1": [_fake_check("r_bad", NodeStatus.VIOLATED)]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
