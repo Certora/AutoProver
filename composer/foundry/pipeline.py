@@ -40,6 +40,7 @@ from composer.pipeline.ecosystem import main_instance
 from composer.pipeline.keys import COMMON_SYSTEM_CACHE_KEY
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import Formalized, Verdict
+from composer.spec.source.report.schema import RuleName
 from composer.spec.context import (
     WorkflowContext, SourceCode, FoundryGeneration
 )
@@ -141,7 +142,9 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstan
         )
 
     @override
-    async def fetch_verdicts(self, formalized: Formalized[GeneratedFoundryTest]) -> dict[str, Verdict]:
+    async def fetch_verdicts(
+        self, formalized: Formalized[GeneratedFoundryTest]
+    ) -> dict[RuleName, Verdict]:
         return await _foundry_verdicts(formalized)
 
 @dataclass
@@ -169,10 +172,17 @@ class FoundryBackend:
 
     foundry_conf: _ForgeRunConfig
 
+    async def preflight(self, run: PipelineRun[FoundryPhase, None]) -> None:
+        """Nothing to do ahead of analysis. Foundry authors `.t.sol` into a project `forge` already
+        builds, so there is no workspace to prepare; the existing project is the precondition (a
+        `forge build` smoke test would be the natural thing to add here)."""
+        return None
+
     async def prepare_system(
         self,
         analyzed: SourceApplication,
-        run: PipelineRun[FoundryPhase, None]
+        run: PipelineRun[FoundryPhase, None],
+        preflight: None,
     ) -> PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]:
         return FoundrySystem(
             main_instance(

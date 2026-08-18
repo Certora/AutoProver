@@ -15,16 +15,16 @@ from typing_extensions import TypedDict, ReadOnly
 
 from langchain_core.tools import tool, InjectedToolCallId, BaseTool
 from langgraph.types import Command
-from langgraph.prebuilt import InjectedState
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field
 
+from composer.authoring.buffer import (
+    READ_KEY, SPEC_KEY, SpecBuffer, SpecBufferSet, SpecBufferWithRead,
+    apply_spec_update, edit_spec_tool, get_spec_tool,
+)
 from composer.certora_env import typechecker_jar
-from composer.core.edit import replace_unique, EditOk, EditErr
 from composer.cvl.schema import CVLFile
 from composer.cvl.pretty_print import pretty_print
 from composer.ui.tool_display import tool_display_of, CommonTools, ToolDisplay, suppress_ack
-
-from graphcore.graph import tool_state_update
 
 _logger = logging.getLogger(__name__)
 
@@ -59,9 +59,9 @@ class PutCVLSchemaLG(BaseModel):
 
 PutCVLSchemaLG.__doc__ = put_cvl_description
 
-DEFAULT_READ_KEY = "did_read"
+DEFAULT_READ_KEY = READ_KEY
 
-DEFAULT_SPEC_KEY = "curr_spec"
+DEFAULT_SPEC_KEY = SPEC_KEY
 
 
 class PutCVLRaw(BaseModel):
@@ -76,19 +76,13 @@ class PutCVLRaw(BaseModel):
     tool_call_id: Annotated[str, InjectedToolCallId]
 
 
-def maybe_update_cvl(
-    *,
-    tool_call_id: str,
-    pp: str,
-    spec_key: str,
-    ast_json: dict | None = None,
-    reset_read: str | None = None
-) -> str | Command:
-    """
-    Validate CVL syntax and update state if valid.
+def cvl_syntax_error(pp: str, ast_json: dict | None = None) -> str | None:
+    """The CVL parser's complaint about ``pp``, or ``None`` if it parses — the
+    :data:`~composer.authoring.buffer.SpecValidator` for every CVL buffer write.
 
-    Uses the Certora emv.jar parser to validate the CVL syntax.
-    Returns a Command to update state on success, or an error message on failure.
+    ``ast_json`` is the AST a structured put was rendered from; it is dumped alongside the
+    pretty-printed text when the parse fails, since a rejection there is a pretty-printer bug
+    rather than a spec the agent can fix.
     """
     # Resolve the typechecker jar and run it. A failure in either step is an
     # environment/plumbing problem (jar not packaged, CERTORA misconfigured, java
@@ -129,14 +123,29 @@ stdout:
 stderr:
 {res.stderr}
 """
-    update = {}
-    update[spec_key] = pp
-    if reset_read:
-        update[reset_read] = False
-    return tool_state_update(
+    return None
+
+
+def maybe_update_cvl(
+    *,
+    tool_call_id: str,
+    pp: str,
+    spec_key: str,
+    ast_json: dict | None = None,
+    reset_read: str | None = None
+) -> str | Command:
+    """
+    Validate CVL syntax and update state if valid.
+
+    Uses the Certora emv.jar parser to validate the CVL syntax.
+    Returns a Command to update state on success, or an error message on failure.
+    """
+    return apply_spec_update(
         tool_call_id=tool_call_id,
-        content="Accepted",
-        **update
+        text=pp,
+        spec_key=spec_key,
+        reset_read=reset_read,
+        validator=lambda text: cvl_syntax_error(text, ast_json),
     )
 
 
@@ -163,35 +172,30 @@ def put_cvl_raw(
     """Put a CVL file using raw surface syntax."""
     return maybe_update_cvl(tool_call_id=tool_call_id, pp=cvl_file, reset_read=DEFAULT_READ_KEY, spec_key=DEFAULT_SPEC_KEY)
 
-class WithCurrSpec(TypedDict):
-    curr_spec: ReadOnly[str | None]
+#: The CVL flows' names for the shared buffer state shapes.
+WithCurrSpec = SpecBuffer
+WithCurrSpecAndDidRead = SpecBufferWithRead
+WithCurrSpecNonNull = SpecBufferSet
 
-class WithCurrSpecAndDidRead(WithCurrSpec):
-    did_read: bool
-
-class WithCurrSpecNonNull(TypedDict):
-    curr_spec: str
-
-class GetCVLSchemaTemplate(BaseModel):
-    """
+_GET_CVL_DESCRIPTION = """
     Retrive the textual representation of the current specification.
     """
 
 @overload
-def get_cvl[S: WithCurrSpecAndDidRead](
+def get_cvl[S: SpecBufferWithRead](
     ty: type[S],
     *,
     set_did_read: Literal[True],
 ) -> BaseTool: ...
 
 @overload
-def get_cvl[S: WithCurrSpecNonNull](
+def get_cvl[S: SpecBufferSet](
     ty: type[S],
 ) -> BaseTool: ...
 
 
 @overload
-def get_cvl[S: WithCurrSpec](
+def get_cvl[S: SpecBuffer](
     ty: type[S],
 ) -> BaseTool: ...
 
@@ -200,36 +204,24 @@ def get_cvl(
     *,
     set_did_read: bool = False,
 ) -> BaseTool:
-    extra_fields: dict = {}
+    """The CVL read-back tool over ``curr_spec``. ``set_did_read`` additionally stamps
+    ``did_read``, which the property judge's completion validator requires."""
     if set_did_read:
-        extra_fields["tool_call_id"] = (Annotated[str, InjectedToolCallId], ...)
-    schema = create_model(
-        "GetCVL",
-        __base__=GetCVLSchemaTemplate,
-        __doc__=GetCVLSchemaTemplate.__doc__,
-        state=(Annotated[ty, InjectedState], ...),
-        **extra_fields,
+        return get_spec_tool(
+            ty,
+            name="get_cvl",
+            description=_GET_CVL_DESCRIPTION,
+            missing="No spec file written yet",
+            display=_get_cvl_display,
+            set_did_read=True,
+        )
+    return get_spec_tool(
+        ty,
+        name="get_cvl",
+        description=_GET_CVL_DESCRIPTION,
+        missing="No spec file written yet",
+        display=_get_cvl_display,
     )
-    @tool_display_of(_get_cvl_display)
-    @tool(args_schema=schema)
-    def get_cvl(
-        **args
-    ) -> str | Command:
-        st = args["state"]
-        if st["curr_spec"] is None:
-            return "No spec file written yet"
-        spec = st["curr_spec"]
-        if set_did_read:
-            update = {
-                DEFAULT_READ_KEY: True
-            }
-            return tool_state_update(
-                tool_call_id=args["tool_call_id"],
-                content=spec,
-                **update
-            )
-        return spec
-    return get_cvl
 
 
 edit_cvl_description = """
@@ -249,42 +241,14 @@ multiple edits, you must spread them across distinct turns.
 """
 
 
-class EditCVLTemplate(BaseModel):
-    old_string: str = Field(
-        description="The exact span of the current spec to replace. Must occur exactly once; "
-        "include surrounding context to disambiguate."
-    )
-    new_string: str = Field(description="The text to replace `old_string` with.")
-
-
-def edit_cvl[S: WithCurrSpec](ty: type[S]) -> BaseTool:
+def edit_cvl[S: SpecBuffer](ty: type[S]) -> BaseTool:
     """A surgical-edit tool over the ``curr_spec`` buffer: single-occurrence
     string replace, then re-validate the result exactly like ``put_cvl_raw``."""
-    schema = create_model(
-        "EditCVL",
-        __base__=EditCVLTemplate,
-        __doc__=edit_cvl_description,
-        state=(Annotated[ty, InjectedState], ...),
-        tool_call_id=(Annotated[str, InjectedToolCallId], ...),
+    return edit_spec_tool(
+        ty,
+        name="edit_cvl",
+        description=edit_cvl_description,
+        missing="No spec file written yet — use put_cvl or put_cvl_raw first.",
+        display=_edit_cvl_display,
+        validator=cvl_syntax_error,
     )
-
-    @tool_display_of(_edit_cvl_display)
-    @tool(args_schema=schema)
-    def edit_cvl(**args) -> str | Command:
-        st = args["state"]
-        if st["curr_spec"] is None:
-            return "No spec file written yet — use put_cvl or put_cvl_raw first."
-        last = st["messages"][-1]
-        if isinstance(last, AIMessage) and len([ t for t in last.tool_calls if t["name"] == "edit_cvl"]) > 1:
-            return "`edit_cvl` tool cannot be called in parallel within the same turn."
-        match replace_unique(st["curr_spec"], args["old_string"], args["new_string"]):
-            case EditErr(message=msg):
-                return msg
-            case EditOk(text=new_text):
-                return maybe_update_cvl(
-                    tool_call_id=args["tool_call_id"],
-                    pp=new_text,
-                    spec_key=DEFAULT_SPEC_KEY,
-                    reset_read=DEFAULT_READ_KEY,
-                )
-    return edit_cvl

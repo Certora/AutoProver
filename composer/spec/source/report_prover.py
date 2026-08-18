@@ -45,7 +45,8 @@ def _fetch(api: ProverOutputAPI, link: str) -> dict[RuleName, Verdict]:
             c.duration or None,
             Path(loc.file).name if (loc and loc.file) else None,
         )
-        verdicts[c.rule_name] = cand.merge(verdicts.get(c.rule_name))
+        name = RuleName(c.rule_name)
+        verdicts[name] = cand.merge(verdicts.get(name))
     return verdicts
 
 

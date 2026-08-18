@@ -57,7 +57,7 @@ class FoundryTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
     """Per-task handler that doubles as its own ``EventHandler``.
 
     Streams ``forge_test_run`` summaries into a collapsible ``RichLog``
-    mounted under the task panel.
+    pinned at the top of the task panel.
     """
 
     def __init__(
@@ -81,9 +81,7 @@ class FoundryTaskHandler(MultiJobTaskHandler[None], NullEventHandler):
             log = RichLog(highlight=True, markup=False)
             log.styles.min_height = 15
             self._forge_log = log
-            await self._mount_to(
-                self._panel, Collapsible(log, title="Forge Test Runs"),
-            )
+            await self._mount_fixture(Collapsible(log, title="Forge Test Runs"))
         return self._forge_log
 
     @override
