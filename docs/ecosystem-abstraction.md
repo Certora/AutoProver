@@ -182,8 +182,8 @@ SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInsta
 The `RUST` language facet is chain-independent, so its source conventions and vulnerability-pattern
 fragment are authored once and pulled into the chain's prompts by Jinja `{% include %}`. The
 code-explorer system prompt is the same split, but on the *ecosystem*: a shared protocol
-(`code_explorer/_common.j2`) plus a Rust crate-navigation fragment
-(`code_explorer/rust/_common.j2`) plus the chain's look-fors (`code_explorer/solana.j2` /
+(`code_explorer/common_fragment.j2`) plus a Rust crate-navigation fragment
+(`code_explorer/rust/common_fragment.j2`) plus the chain's look-fors (`code_explorer/solana.j2` /
 `code_explorer/soroban.j2`). A single Rust explorer prompt cannot name PDAs without lying to
 Soroban, or `require_auth` without lying to Solana.
 

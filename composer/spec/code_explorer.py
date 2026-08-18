@@ -5,14 +5,14 @@ Creates a BaseTool that delegates focused source code questions to a
 sub-agent with file system tools (list_files, get_file, grep_files).
 """
 
-from typing import Literal, NotRequired, override, Protocol, Any, TypedDict
+from typing import Callable, Literal, NotRequired, override, Protocol, Any, TypedDict
 
 from pydantic import Field, BaseModel
 
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
-from graphcore.graph import FlowInput, MessagesState
+from graphcore.graph import FlowInput, MessagesState, TemplateLoader
 from graphcore.tools.schemas import WithAsyncImplementation, WithInjectedId
 
 from composer.spec.gen_types import TypedTemplate
@@ -20,7 +20,6 @@ from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.spec.tool_env import BaseSourceTools, BasicAgentTools
 from composer.spec.util import uniq_thread_id
 from composer.spec.agent_index import AgentIndex, IndexedTool
-from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display_of, CommonTools
 
 
@@ -38,11 +37,13 @@ class CodeExplorerPromptParams(TypedDict):
     prior_findings: PriorFindingsMode
 
 
-def render_code_explorer_prompt(
+def code_explorer_sys_prompt(
     template: TypedTemplate[CodeExplorerPromptParams],
     prior_findings: PriorFindingsMode,
-) -> str:
-    return template.bind({"prior_findings": prior_findings}).render_to(load_jinja_template)
+) -> Callable[[TemplateLoader], str]:
+    """The bound prompt as a deferred render, for `with_sys_prompt` to resolve
+    against the builder's own loader."""
+    return template.bind({"prior_findings": prior_findings}).render_to
 
 class _ExplorerST(MessagesState):
     result: NotRequired[str]
@@ -52,7 +53,7 @@ class CodeExplorerEnv(BaseSourceTools, BasicAgentTools, Protocol):
 
 def _code_explorer_graph(
     env: CodeExplorerEnv,
-    sys_prompt: str,
+    sys_prompt: Callable[[TemplateLoader], str],
 ) -> CompiledStateGraph[_ExplorerST, None, FlowInput, Any]:
     return bind_standard(
         env.builder, _ExplorerST, "Your findings about the source code"
@@ -112,7 +113,7 @@ def code_explorer_tool(
         A BaseTool named ``explore_code``.
     """
     graph = _code_explorer_graph(
-        env, sys_prompt=render_code_explorer_prompt(explorer_prompt, "none")
+        env, sys_prompt=code_explorer_sys_prompt(explorer_prompt, "none")
     )
 
     @tool_display_of(CommonTools.code_explorer)
@@ -148,7 +149,7 @@ def indexed_code_explorer_tool(
     explorer_prompt: TypedTemplate[CodeExplorerPromptParams],
 ) -> BaseTool:
     builder_graph = _code_explorer_graph(
-        env, sys_prompt=render_code_explorer_prompt(explorer_prompt, "established")
+        env, sys_prompt=code_explorer_sys_prompt(explorer_prompt, "established")
     )
 
     @tool_display_of(CommonTools.code_explorer)

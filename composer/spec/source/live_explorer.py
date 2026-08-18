@@ -20,7 +20,7 @@ from composer.spec.source.versioned_index import VersionedAgentIndex, MigrationO
 from composer.pipeline.ecosystem import Ecosystem
 from composer.spec.code_explorer import (
     _ExploreCodeCommon,
-    render_code_explorer_prompt,
+    code_explorer_sys_prompt,
 )
 
 from composer.spec.context import SourceCode, user_data_ns
@@ -179,7 +179,7 @@ def setup_live_edits(
             )
         ])
         .with_initial_prompt("Answer the following question")
-        .with_sys_prompt(render_code_explorer_prompt(ecosystem.code_explorer_prompt, "versioned"))
+        .with_sys_prompt(code_explorer_sys_prompt(ecosystem.code_explorer_prompt, "versioned"))
         .with_output_key("result")
         .compile_async()
     )

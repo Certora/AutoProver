@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from composer.pipeline.ecosystem import EVM, SOLANA, SOROBAN
-from composer.spec.code_explorer import PriorFindingsMode, render_code_explorer_prompt
+from composer.spec.code_explorer import (
+    CodeExplorerPromptParams,
+    PriorFindingsMode,
+    code_explorer_sys_prompt,
+)
+from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 
 
@@ -18,10 +23,16 @@ VERSIONED = "(potentially) out of date"
 _MODES: tuple[PriorFindingsMode, ...] = ("none", "established", "versioned")
 
 
+def _render(
+    template: TypedTemplate[CodeExplorerPromptParams], mode: PriorFindingsMode
+) -> str:
+    return code_explorer_sys_prompt(template, mode)(load_jinja_template)
+
+
 @pytest.mark.parametrize("ecosystem", [EVM, SOLANA, SOROBAN], ids=["evm", "solana", "soroban"])
 @pytest.mark.parametrize("mode", _MODES)
 def test_shared_protocol(ecosystem, mode: PriorFindingsMode):
-    text = render_code_explorer_prompt(ecosystem.code_explorer_prompt, mode)
+    text = _render(ecosystem.code_explorer_prompt, mode)
     assert PROTOCOL in text
     assert DO_NOT_GUESS in text
     assert (ESTABLISHED in text) is (mode == "established")
@@ -29,7 +40,7 @@ def test_shared_protocol(ecosystem, mode: PriorFindingsMode):
 
 
 def test_evm_cites_solidity_not_chain_lookfors():
-    text = render_code_explorer_prompt(EVM.code_explorer_prompt, "none")
+    text = _render(EVM.code_explorer_prompt, "none")
     assert "function signatures" in text
     assert "state variable" in text
     assert "PDA" not in text
@@ -37,7 +48,7 @@ def test_evm_cites_solidity_not_chain_lookfors():
 
 
 def test_solana_cites_pdas_not_soroban_auth():
-    text = render_code_explorer_prompt(SOLANA.code_explorer_prompt, "none")
+    text = _render(SOLANA.code_explorer_prompt, "none")
     assert "Cargo.toml" in text
     assert "PDA" in text
     assert "CPI" in text
@@ -55,11 +66,11 @@ _CHAIN_TERMS = re.compile(
 
 _SHARED_EXPLORER_DIR = Path(__file__).resolve().parent.parent / "composer" / "templates" / "code_explorer"
 _SHARED_EXPLORER_TEMPLATES = (
-    "_common.j2",
-    "_index_addendum.j2",
-    "_versioned_index_addendum.j2",
-    "_prior_findings.j2",
-    "rust/_common.j2",
+    "common_fragment.j2",
+    "index_addendum_fragment.j2",
+    "versioned_index_addendum_fragment.j2",
+    "prior_findings_fragment.j2",
+    "rust/common_fragment.j2",
 )
 
 
@@ -71,7 +82,7 @@ def test_shared_explorer_templates_are_chain_neutral(rel: str):
 
 
 def test_soroban_cites_auth_and_storage_kind_not_pdas():
-    text = render_code_explorer_prompt(SOROBAN.code_explorer_prompt, "none")
+    text = _render(SOROBAN.code_explorer_prompt, "none")
     assert "Cargo.toml" in text
     assert "require_auth" in text
     assert "DataKey" in text
