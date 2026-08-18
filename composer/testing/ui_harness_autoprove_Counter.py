@@ -295,9 +295,8 @@ _CLASSIFIER_RESULT = {
     ),
     "transitive_closure": [
         {
-            "name": "Counter",
             "link_fields": [],
-            "num_instances": None,
+            "harness_determination": None,
             "solidity_identifier": "Counter"
         }
     ],
