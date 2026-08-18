@@ -79,7 +79,10 @@ mod tests {
 
     #[test]
     fn a_chain_shaped_value_round_trips_through_the_opaque_form() {
-        let facts = Facts { dir: "programs/lend".into(), package: "example-lending".into() };
+        let facts = Facts {
+            dir: "programs/lend".into(),
+            package: "example-lending".into(),
+        };
         let data = ChainData::of(&facts).expect("an object");
         assert!(!data.is_empty());
         assert_eq!(data.parse::<Facts>().expect("the same shape"), facts);
@@ -103,6 +106,8 @@ mod tests {
         // two ends disagree about more than a field name.
         assert!(serde_json::from_str::<ChainData>("[]").is_err());
         assert!(serde_json::from_str::<ChainData>(r#""idl.json""#).is_err());
-        assert!(serde_json::from_str::<ChainData>("{}").expect("an object").is_empty());
+        assert!(serde_json::from_str::<ChainData>("{}")
+            .expect("an object")
+            .is_empty());
     }
 }

@@ -101,7 +101,12 @@ impl Target {
     /// A verdict per covered check, keyed by check name so a backend never spells one itself.
     pub fn verdicts(&self, mut of: impl FnMut(&Check) -> Verdict) -> ValidateOutcome {
         ValidateOutcome::Verdicts {
-            verdicts: CheckVerdicts(self.checks.iter().map(|c| (c.name.clone(), of(c))).collect()),
+            verdicts: CheckVerdicts(
+                self.checks
+                    .iter()
+                    .map(|c| (c.name.clone(), of(c)))
+                    .collect(),
+            ),
         }
     }
 }
@@ -121,7 +126,9 @@ pub struct CheckVerdicts(Vec<(String, Verdict)>);
 impl CheckVerdicts {
     /// Each covered check's name and what it concluded.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Verdict)> {
-        self.0.iter().map(|(name, verdict)| (name.as_str(), verdict))
+        self.0
+            .iter()
+            .map(|(name, verdict)| (name.as_str(), verdict))
     }
 }
 
@@ -185,7 +192,13 @@ pub struct Verdict {
 impl Verdict {
     /// A bare verdict: just the outcome, no diagnostics. Set the fields you have on the result.
     pub fn with_outcome(outcome: Outcome) -> Self {
-        Verdict { outcome, line: None, duration_seconds: None, unit_file: None, detail: None }
+        Verdict {
+            outcome,
+            line: None,
+            duration_seconds: None,
+            unit_file: None,
+            detail: None,
+        }
     }
 
     /// A failing verdict carrying its explanation — the shape a backend almost always wants for a

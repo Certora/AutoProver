@@ -7,6 +7,9 @@ build; the Rust backend's own toolchain runs now go through ``run-confined`` in 
 wheel, see ``docs/rust-applications.md`` §8.)
 """
 
+import os
+import time
+
 import pytest
 
 from composer.sandbox.command import (
@@ -14,6 +17,17 @@ from composer.sandbox.command import (
     UnsafePath,
     run_local_command,
 )
+
+
+def _pid_gone(pid: int, timeout_s: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.02)
+    return False
 
 
 @pytest.mark.asyncio
@@ -62,3 +76,19 @@ async def test_run_local_command_timeout(tmp_path):
     res = await run_local_command("sleep", ["5"], {}, workdir=tmp_path, timeout_s=1)
     assert res.exit_code == -1
     assert "timed out" in res.stderr
+
+
+@pytest.mark.asyncio
+async def test_run_local_command_timeout_kills_process_group(tmp_path):
+    """A forked grandchild must die with the timed-out leader (process-group SIGKILL)."""
+    res = await run_local_command(
+        "sh",
+        ["-c", "sleep 100 & echo $! > child.pid; exec sleep 100"],
+        {},
+        workdir=tmp_path,
+        timeout_s=1,
+    )
+    assert res.exit_code == -1
+    assert "timed out" in res.stderr
+    grandchild = int((tmp_path / "child.pid").read_text().strip())
+    assert _pid_gone(grandchild), f"grandchild {grandchild} still alive after timeout"

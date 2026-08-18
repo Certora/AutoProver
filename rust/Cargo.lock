@@ -72,6 +72,7 @@ name = "autoprover-sdk"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
+ "libc",
  "pyo3",
  "serde",
  "serde_json",

@@ -28,3 +28,7 @@ arbitrary = { version = "1", features = ["derive"], optional = true }
 # macro body. The app crate still lists pyo3 to enable `extension-module` /
 # `abi3-py312`; cargo feature-unifies the two.
 pyo3 = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# process-group SIGKILL on timeout (`kill(-pgid, SIGKILL)`); std has no killpg.
+libc = "0.2"

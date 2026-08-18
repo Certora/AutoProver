@@ -33,7 +33,9 @@ pub fn encode<T: Serialize>(result: Result<T, String>) -> String {
 }
 
 fn encode_err(e: impl ToString) -> String {
-    match serde_json::to_string(&CalloutError::Error { message: e.to_string() }) {
+    match serde_json::to_string(&CalloutError::Error {
+        message: e.to_string(),
+    }) {
         Ok(json) => json,
         Err(_) => "{\"kind\":\"error\",\"message\":\"unserializable error\"}".into(),
     }
@@ -286,7 +288,11 @@ mod tests {
             ),
         );
         let seen = spy.seen.lock().unwrap();
-        assert_eq!(seen.len(), 3, "every callout that carries project facts was exercised");
+        assert_eq!(
+            seen.len(),
+            3,
+            "every callout that carries project facts was exercised"
+        );
         for data in seen.iter() {
             assert_eq!(
                 data.parse::<CargoUnit>().expect("the chain's own shape"),
@@ -310,7 +316,10 @@ mod tests {
         let seen = spy.seen.lock().unwrap();
         let data = seen.first().expect("target_for was called");
         assert!(data.is_empty());
-        assert!(data.parse::<CargoUnit>().is_err(), "empty is not a resolved unit");
+        assert!(
+            data.parse::<CargoUnit>().is_err(),
+            "empty is not a resolved unit"
+        );
     }
 
     #[test]
@@ -324,7 +333,12 @@ mod tests {
                 "props":[],"setup":"struct Fixture {}","args":{"fuzz_timeout":900}}"#,
         )
         .expect("parse");
-        assert_eq!(comp.unit().and_then(|u| u.get("slug")).and_then(|v| v.as_str()), Some("farms"));
+        assert_eq!(
+            comp.unit()
+                .and_then(|u| u.get("slug"))
+                .and_then(|v| v.as_str()),
+            Some("farms")
+        );
         assert!(comp.model().is_none());
         assert_eq!(comp.setup.as_deref(), Some("struct Fixture {}"));
         assert_eq!(comp.args.get::<u64>("fuzz_timeout"), Some(900));
@@ -341,8 +355,14 @@ mod tests {
         // The one turn holding the whole unit set: it is the run's, not this spec's, which is why
         // it arrives here and not through `unit()`.
         assert_eq!(setup.units().len(), 2);
-        assert!(comp.units().is_empty(), "a component turn holds its own unit, not the set");
-        assert!(setup.prep_facts.is_empty(), "a prep that established nothing says so");
+        assert!(
+            comp.units().is_empty(),
+            "a component turn holds its own unit, not the set"
+        );
+        assert!(
+            setup.prep_facts.is_empty(),
+            "a prep that established nothing says so"
+        );
 
         let pre: AuthorInput = serde_json::from_str(
             r#"{"kind":"preflight","program":"vault","source_unit":{},"prep_facts":{},
@@ -350,7 +370,10 @@ mod tests {
         )
         .expect("parse");
         assert!(pre.unit().is_none() && pre.model().is_none() && pre.props.is_empty());
-        assert!(pre.units().is_empty(), "nothing is analyzed yet, so there is no unit set");
+        assert!(
+            pre.units().is_empty(),
+            "nothing is analyzed yet, so there is no unit set"
+        );
 
         // …and it round-trips flat, which is what the host parses back.
         let json = serde_json::to_value(&pre).expect("serialize");
@@ -369,25 +392,61 @@ mod tests {
         let spy = Spy::default();
         let input = component_json("{}", "{}");
         assert_error(&author_prompt(&spy, "not json"), "AuthorInput");
-        assert_error(&compile(&spy, "not json", None, "/tmp", "{}"), "AuthorInput");
+        assert_error(
+            &compile(&spy, "not json", None, "/tmp", "{}"),
+            "AuthorInput",
+        );
         assert_error(&compile(&spy, &input, None, "/tmp", "not json"), "Sandbox");
         let target = r#"{"name":"t","checks":[]}"#;
-        assert_error(&validate(&spy, "not json", "", target, "/tmp", "{}"), "AuthorInput");
-        assert_error(&validate(&spy, &input, "", "not json", "/tmp", "{}"), "Target");
-        assert_error(&validate(&spy, &input, "", target, "/tmp", "not json"), "Sandbox");
+        assert_error(
+            &validate(&spy, "not json", "", target, "/tmp", "{}"),
+            "AuthorInput",
+        );
+        assert_error(
+            &validate(&spy, &input, "", "not json", "/tmp", "{}"),
+            "Target",
+        );
+        assert_error(
+            &validate(&spy, &input, "", target, "/tmp", "not json"),
+            "Sandbox",
+        );
         assert_error(&workspace_prep(&spy, "not json"), "AuthorInput");
         assert_error(&sandbox_grants(&spy, "not json"), "AppArgs");
         assert_error(&judge_instruction(&spy, "not json", ""), "AuthorInput");
-        assert_error(judge(&spy, "not json").as_deref().expect("Err is Some"), "AuthorInput");
-        assert_error(target_for(&spy, "not json", "c").as_deref().expect("Err is Some"), "AuthorInput");
         assert_error(
-            validate_preconditions(&spy, "not json").as_deref().expect("Err is Some"),
+            judge(&spy, "not json").as_deref().expect("Err is Some"),
+            "AuthorInput",
+        );
+        assert_error(
+            target_for(&spy, "not json", "c")
+                .as_deref()
+                .expect("Err is Some"),
+            "AuthorInput",
+        );
+        assert_error(
+            validate_preconditions(&spy, "not json")
+                .as_deref()
+                .expect("Err is Some"),
             "AppArgs",
         );
-        assert_error(check_syntax(&spy, "not json", "").as_deref().expect("Err is Some"), "AuthorInput");
-        assert_error(finalize(&spy, "not json").as_deref().expect("Err is Some"), "FinalizeInput");
-        assert!(judge(&spy, &input).is_none(), "a valid input with no judge stays None");
-        assert!(target_for(&spy, &input, "c").is_none(), "Spy groups each check as its own");
+        assert_error(
+            check_syntax(&spy, "not json", "")
+                .as_deref()
+                .expect("Err is Some"),
+            "AuthorInput",
+        );
+        assert_error(
+            finalize(&spy, "not json").as_deref().expect("Err is Some"),
+            "FinalizeInput",
+        );
+        assert!(
+            judge(&spy, &input).is_none(),
+            "a valid input with no judge stays None"
+        );
+        assert!(
+            target_for(&spy, &input, "c").is_none(),
+            "Spy groups each check as its own"
+        );
     }
 
     #[test]
@@ -403,12 +462,22 @@ mod tests {
         )
         .expect("parse");
         // What ships is rendered from the same facts the gated builds used.
-        assert_eq!(input.source_unit.parse::<CargoUnit>().expect("the chain's shape").package, "l");
+        assert_eq!(
+            input
+                .source_unit
+                .parse::<CargoUnit>()
+                .expect("the chain's shape")
+                .package,
+            "l"
+        );
         assert!(input.prep_facts.is_empty());
         assert_eq!(input.setup.as_deref(), Some("struct Fixture {}"));
         // A component that gave up carries nothing to read, and `delivered` skips it.
         let delivered: Vec<&str> = input.delivered().map(|(name, _)| name).collect();
         assert_eq!(delivered, vec!["Farms"]);
-        assert!(matches!(input.components[1].outcome, ComponentOutcome::GaveUp));
+        assert!(matches!(
+            input.components[1].outcome,
+            ComponentOutcome::GaveUp
+        ));
     }
 }

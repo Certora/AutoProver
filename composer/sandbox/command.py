@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import signal
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
@@ -143,6 +144,7 @@ async def run_local_command(
                 env=child_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
         except FileNotFoundError:
             return CommandResult(NOT_FOUND_EXIT, "", f"{spec.argv[0]}: not found on PATH")
@@ -151,7 +153,12 @@ async def run_local_command(
                 proc.communicate(), timeout=timeout_s
             )
         except asyncio.TimeoutError:
-            proc.kill()
+            # Process group (pgid == pid via start_new_session) so descendants
+            # die with the leader. killpg before wait: do not reap then reuse a pid.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             await proc.wait()
             return CommandResult(-1, "", f"command timed out after {timeout_s}s")
         rc = proc.returncode if proc.returncode is not None else -1

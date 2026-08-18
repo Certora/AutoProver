@@ -64,7 +64,8 @@ impl Workspace {
     /// Materialize `files` into the workdir (path-confined), then run `program args` there behind
     /// the sandbox's `argv_prefix` — i.e. `[*argv_prefix, program, *args]` (or `program args`
     /// directly, when the prefix is empty). Blocks on the child; the host already calls the
-    /// blocking callouts with the GIL released. Enforces `sandbox.timeout_s`.
+    /// blocking callouts with the GIL released. Enforces `sandbox.timeout_s` by SIGKILL of the
+    /// child's process group, so descendants die with the leader.
     ///
     /// The **command line (`program`/`args`) is authored by the trusted backend**; only file
     /// *contents* may derive from the LLM (`docs/command-sandbox.md` §2,
@@ -128,6 +129,14 @@ where
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Own a process group so the timeout SIGKILL takes descendants with the leader.
+    // `run-confined` execve's in place, so the group leader *is* the command; cargo/rustc
+    // children inherit the group unless they leave it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
 
     // 3. Spawn + capture with a timeout. Reader threads avoid a pipe-buffer deadlock.
     let mut child = match cmd.spawn() {
@@ -161,7 +170,7 @@ where
             Some(st) => break Some(st),
             None => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
+                    kill_spawned(&mut child);
                     let _ = child.wait();
                     timed_out = true;
                     break None;
@@ -184,4 +193,78 @@ where
         stdout,
         stderr,
     })
+}
+
+/// Kill the spawned command. On Unix this is the process group we created at spawn
+/// (`pgid == pid`); `Child::kill` would leave descendants running.
+fn kill_spawned(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        // Negative pid = process group. Kill the group *before* wait so we cannot
+        // reap the leader and then killpg a reused pid.
+        let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn unique_workdir() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ap-sandbox-pg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ))
+    }
+
+    fn pid_gone(pid: i32, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        loop {
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn timeout_kills_the_process_group() {
+        let dir = unique_workdir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let sandbox = Sandbox {
+            argv_prefix: Vec::new(),
+            timeout_s: 1,
+        };
+        let out = run_confined(
+            &sandbox,
+            "sh",
+            ["-c", "sleep 100 & echo $! > child.pid; exec sleep 100"],
+            &BTreeMap::new(),
+            &dir,
+        )
+        .unwrap();
+        assert_eq!(out.exit_code, -1, "{}", out.stderr);
+        assert!(out.stderr.contains("timed out"), "{}", out.stderr);
+        let child_pid: i32 = std::fs::read_to_string(dir.join("child.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("grandchild pid");
+        let gone = pid_gone(child_pid, Duration::from_secs(2));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(gone, "grandchild {child_pid} still alive after timeout");
+    }
 }

@@ -48,8 +48,12 @@ pub enum PhaseRole {
 impl PhaseRole {
     /// The four steps the shared driver runs itself, and therefore tags every run with. Every
     /// application must claim each of them.
-    pub const REQUIRED: [PhaseRole; 4] =
-        [Self::Analysis, Self::Extraction, Self::Formalization, Self::Report];
+    pub const REQUIRED: [PhaseRole; 4] = [
+        Self::Analysis,
+        Self::Extraction,
+        Self::Formalization,
+        Self::Report,
+    ];
 }
 
 /// One task-grouping phase. `key` becomes the synthesized `enum.Enum` member name; `label`/`order`
@@ -67,7 +71,12 @@ pub struct PhaseSpec {
 impl PhaseSpec {
     /// A phase that only groups tasks.
     pub fn grouping(key: impl Into<String>, label: impl Into<String>, order: u32) -> Self {
-        Self { key: key.into(), label: label.into(), order, role: PhaseRole::Grouping }
+        Self {
+            key: key.into(),
+            label: label.into(),
+            order,
+            role: PhaseRole::Grouping,
+        }
     }
 
     /// A phase that groups — and declares — the step `role`.
@@ -77,7 +86,12 @@ impl PhaseSpec {
         order: u32,
         role: PhaseRole,
     ) -> Self {
-        Self { key: key.into(), label: label.into(), order, role }
+        Self {
+            key: key.into(),
+            label: label.into(),
+            order,
+            role,
+        }
     }
 }
 
@@ -126,12 +140,20 @@ pub struct EventKind {
 impl EventKind {
     /// A streaming event kind — rendered as a line in the collapsible events log.
     pub fn log(kind: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { kind: kind.into(), label: label.into(), notice: false }
+        Self {
+            kind: kind.into(),
+            label: label.into(),
+            notice: false,
+        }
     }
 
     /// A notice event kind — surfaced as a persistent callout + toast.
     pub fn notice(kind: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { kind: kind.into(), label: label.into(), notice: true }
+        Self {
+            kind: kind.into(),
+            label: label.into(),
+            notice: true,
+        }
     }
 }
 
@@ -236,11 +258,15 @@ pub struct AppDescriptor {
 /// The evidence an author can usually offer, for a wheel with no reason to name its own: the build
 /// failed, the checker said so, the checker produced a counterexample, the manual says so, or the
 /// author is arguing. The last is deliberately last — an argument is a conversation, not a veto.
-pub const EVIDENCE_KINDS: [&str; 5] =
-    ["build_failure", "check_output", "counterexample", "manual_citation", "reasoned"];
+pub const EVIDENCE_KINDS: [&str; 5] = [
+    "build_failure",
+    "check_output",
+    "counterexample",
+    "manual_citation",
+    "reasoned",
+];
 
 /// [`EVIDENCE_KINDS`] as the descriptor field wants it.
 pub fn default_evidence_kinds() -> Vec<String> {
     EVIDENCE_KINDS.iter().map(|s| (*s).to_string()).collect()
 }
-

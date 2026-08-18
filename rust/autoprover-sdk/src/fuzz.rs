@@ -94,7 +94,9 @@ impl<'a> Arbitrary<'a> for Authored {
                 model: json(u, JSON_DEPTH)?,
                 units: Vec::arbitrary(u)?,
             },
-            _ => Authored::Component { unit: json(u, JSON_DEPTH)? },
+            _ => Authored::Component {
+                unit: json(u, JSON_DEPTH)?,
+            },
         })
     }
 }

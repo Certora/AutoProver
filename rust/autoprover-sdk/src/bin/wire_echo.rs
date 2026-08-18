@@ -24,8 +24,8 @@ use serde_json::Value;
 
 use autoprover_sdk::args::AppArgs;
 use autoprover_sdk::authoring::{AuthorInput, Judge, Prompt, Property};
-use autoprover_sdk::ffi::CalloutError;
 use autoprover_sdk::descriptor::AppDescriptor;
+use autoprover_sdk::ffi::CalloutError;
 use autoprover_sdk::finalize::{ComponentOutcome, FinalizeComponent, FinalizeInput};
 use autoprover_sdk::outcome::{Check, CompileResult, SkippedProperty, Target, ValidateOutcome};
 use autoprover_sdk::prep::{SandboxGrants, WorkspacePrep};
@@ -170,7 +170,9 @@ fn handle(line: &str) -> Response {
     match serde_json::from_str::<Request>(line) {
         Ok(Request::Echo { ty, payload }) => dispatch(ty, Echo(payload)).into(),
         Ok(Request::Gen { ty, entropy }) => dispatch(ty, Gen(Unstructured::new(&entropy))).into(),
-        Err(e) => Response::Error { message: format!("malformed request: {e}") },
+        Err(e) => Response::Error {
+            message: format!("malformed request: {e}"),
+        },
     }
 }
 
