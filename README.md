@@ -56,6 +56,9 @@ not enough: `rust-toolchain.toml` pins the toolchain and rustup is what reads it
 rustup toolchain install --no-self-update
 ```
 
+Re-run that after any bump to `rust-toolchain.toml`'s `channel` — rustup would otherwise install the new toolchain from
+inside the build, where the concurrent cargo calls a sync makes race each other and one dies mid-download.
+
 Not working on the Rust side? `uv sync --no-dev` skips the crates entirely — the Rust tests then skip themselves instead
 of failing, and the CI pyright job runs this way.
 
