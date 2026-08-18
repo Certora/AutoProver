@@ -90,7 +90,10 @@ from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceFields, WorkflowContext
 from composer.spec.key_family import KeyFamily
 from composer.spec.source.report.collect import Formalized, ReportComponentInput, Verdict
-from composer.spec.source.report.schema import RuleName
+from composer.spec.source.report.schema import (
+    Finding, FormalizedProperty, PropertyGroup, RuleName, RuleVerdict,
+)
+from composer.rustapp.findings import compose_findings
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import ComponentName, PropertyFormulation
 from composer.spec.util import slugify_filename, string_hash
@@ -385,6 +388,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             checks=outcome.property_checks,
             skipped=outcome.skipped,
             verdicts=outcome.verdicts,
+            expected_failures=outcome.expected_failures,
             # What the stamping run actually covered, in the order the host ran it — each target
             # with its checks. A callout-mode wheel keys its deliverable sections on the names, and
             # carrying the checks alongside is what makes "which properties are these results
@@ -396,6 +400,8 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     async def fetch_verdicts(
         self, formalized: Formalized[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
+        # ``reported_verdicts``, not the raw ones: a check the author declared expected to fail is a
+        # finding whether or not this run's campaign reached it, and must never read as a pass.
         return {
             name: Verdict(
                 outcome=v.outcome,
@@ -404,8 +410,23 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 unit_file=v.unit_file or formalized.unit_file,
                 message=v.detail,
             )
-            for name, v in formalized.result.verdicts.items()
+            for name, v in formalized.result.reported_verdicts().items()
         }
+
+    @override
+    async def findings(
+        self,
+        *,
+        contract_name: str,
+        rules: list[RuleVerdict],
+        properties: list[FormalizedProperty],
+        groups: list[PropertyGroup],
+        outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]],
+        run: PipelineRun,
+    ) -> list[Finding]:
+        # No model and no second write-up: the crash and the author's declaration already say what
+        # this run found, so the mapper only reshapes them.
+        return compose_findings(rules=rules, properties=properties, outcomes=outcomes)
 
     @override
     async def finalize(
