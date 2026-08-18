@@ -28,7 +28,7 @@ from langchain_core.tools import BaseTool
 
 from composer.io.multi_job import TaskInfo
 from composer.spec.context import WorkflowContext, CVLGeneration
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, PropertyTitle
 from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
 from composer.spec.system_model import (
     ContractComponentInstance, ContractInstance, SourceApplication, HarnessedApplication,
@@ -44,14 +44,17 @@ from composer.spec.source.struct_invariant import get_invariant_formulation
 from composer.spec.source.autosetup import SetupSuccess
 from composer.spec.source.prover import get_prover_tool, materializing_project
 from composer.spec.source.author import batch_cvl_generation, SourceEditing
-from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
+from composer.spec.source.artifacts import (
+    ProverArtifactStore, ComponentSpec, InvariantSpec,
+)
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import (
     Formalized, EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
 )
-from composer.spec.source.report.schema import RuleName
+from composer.spec.source.report.schema import (
+    AppliedEditRecord, ComponentName, RuleName, SourceEditRecord,
+)
 from composer.spec.source.cex_capture import CexAnalysisStore
-from composer.spec.source.report.schema import AppliedEditRecord, RuleName, SourceEditRecord
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 
 from composer.spec.source.task_ids import (
@@ -119,7 +122,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
             return []
         inv_props, inv = self._invariant
         return [ReportComponentInput(
-            name="Structural Invariants", props=inv_props, formalized=inv,
+            name=ComponentName("Structural Invariants"), props=inv_props, formalized=inv,
         )]
 
     @override
@@ -201,7 +204,9 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
         invariant: tuple[list[PropertyFormulation], InvariantResult] | None = None
         if invariants.inv:
             inv_props = [
-                PropertyFormulation(title=inv.name, description=inv.description, sort="invariant")
+                PropertyFormulation(
+                    title=PropertyTitle(inv.name), description=inv.description, sort="invariant",
+                )
                 for inv in invariants.inv
             ]
             self._store.write_properties(InvariantSpec(), inv_props)
@@ -308,9 +313,8 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
 
 @dataclass
 class ProverBackend:
-    """PipelineBackend[AutoProvePhase, GeneratedCVL, None, ComponentSpec,
-    ContractComponentInstance, ContractInstance, SourceApplication]
-    (P, FormT, H, A, Unit, Main, App)."""
+    """``PipelineBackend[AutoProvePhase, GeneratedCVL, None, SpecIdentity, ContractComponentInstance,
+    ContractInstance, SourceApplication, None]`` (P, FormT, H, A, Unit, Main, App, Pre) — structural."""
     backend_guidance = CERTORA_BACKEND_GUIDANCE
     core_phases = CorePhases({
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
@@ -325,8 +329,15 @@ class ProverBackend:
     editing: SourceEditing
     analysis_store: CexAnalysisStore
 
+    async def preflight(self, run: PipelineRun[AutoProvePhase, None]) -> None:
+        """Nothing to do ahead of analysis. The prover's expensive pre-work (AutoSetup, summaries,
+        structural invariants) needs the *harnessed* model, so it stays in ``prepare_formalization``,
+        where it already overlaps property extraction."""
+        return None
+
     async def prepare_system(
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
+        preflight: None,
     ) -> PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]:
         sys_desc = await run.runner(
             TaskInfo(HARNESS_TASK_ID, "Harness Creation", AutoProvePhase.HARNESS),

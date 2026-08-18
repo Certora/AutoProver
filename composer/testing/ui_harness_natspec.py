@@ -583,7 +583,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     ),
 
     # A11 — exercise unskip_property. The empty-reason sentinel inside
-    # _merge_skips then filters the entry out of state["skipped"], so the
+    # merge_skips then filters the entry out of state["skipped"], so the
     # final skipped list going into feedback_tool is []. Important: the
     # feedback digest includes skipped — changing skipped between a passing
     # feedback verdict and publish would invalidate the digest.

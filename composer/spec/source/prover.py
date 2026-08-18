@@ -44,7 +44,8 @@ from composer.diagnostics.stream import (
     ProverOutputEvent, CloudPollingEvent, RuleAnalysisResult,
     CEXAnalysisStart, ProverRun, ProverLink, ProverResult
 )
-from composer.spec.cvl_generation import CVLGenerationState, make_validation_stamper
+from composer.authoring.state import make_validation_stamper
+from composer.spec.cvl_generation import CVLGenerationState
 from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file

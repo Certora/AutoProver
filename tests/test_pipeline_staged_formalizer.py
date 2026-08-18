@@ -46,7 +46,7 @@ class _Result:
     artifact_text = ""
     unit_file = None
     run_link = None
-    def property_units(self): return []
+    def property_checks(self): return []
 
 
 class _Formalizer:
@@ -100,7 +100,9 @@ class _Backend:
 
     def __init__(self, prepared): self._prepared = prepared
 
-    async def prepare_system(self, _analyzed, _run): return self._prepared
+    async def preflight(self, _run): return None
+
+    async def prepare_system(self, _analyzed, _run, _preflight): return self._prepared
 
     def to_artifact_id(self, _c): return "artifact-id"
 

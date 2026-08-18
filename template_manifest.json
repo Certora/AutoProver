@@ -11,6 +11,18 @@
     "template_name": "stub_generation_prompt.j2",
     "ty_sort": "PartialTemplate"
   },
+  "composer.foundry.author:_FoundryJudgeTemplate": {
+    "module": "composer.foundry.author",
+    "qualname": "_FoundryJudgeTemplate",
+    "template_name": "foundry_feedback_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.foundry.author:_FoundryJudgeSystemTemplate": {
+    "module": "composer.foundry.author",
+    "qualname": "_FoundryJudgeSystemTemplate",
+    "template_name": "foundry_property_judge_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.foundry.author:_FoundryPropertyGenTemplate": {
     "module": "composer.foundry.author",
     "qualname": "_FoundryPropertyGenTemplate",
@@ -69,6 +81,12 @@
     "module": "composer.pipeline.ecosystem",
     "qualname": "SOROBAN_PROPERTY_INITIAL_TEMPLATE",
     "template_name": "soroban/property_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.rustapp.session:ProtocolTemplate": {
+    "module": "composer.rustapp.session",
+    "qualname": "ProtocolTemplate",
+    "template_name": "authoring_protocol.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.cvl_research:_ResearchSys": {

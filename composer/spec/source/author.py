@@ -15,15 +15,17 @@ from graphcore.tools.vfs import VFSAccessor, VFSState
 from graphcore.graph import tool_state_update
 from graphcore.summary import SummaryConfig
 
+from composer.authoring.judge import PropertyFeedbackProtocol
+from composer.authoring.state import SkippedProperty, check_completion
+from composer.authoring.tools import give_up_tool
 from composer.spec.cvl_generation import (
     static_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
-    check_completion, validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
-    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase, SkippedProperty,
-    PropertyFeedbackProtocol,
+    validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
+    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
 )
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, PropertyTitle
 from composer.pipeline.core import Curtailed, GaveUp
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
@@ -125,7 +127,7 @@ class ExpectRulePassage(WithAsyncImplementation[Command], WithInjectedId):
     result=None,
 )
 class PublishResultTool(
-    WithAsyncDependencies[Command | str, list[str]],
+    WithAsyncDependencies[Command | str, list[PropertyTitle]],
     WithInjectedState[SourceCVLGenerationState],
     WithInjectedId,
 ):
@@ -156,27 +158,13 @@ class PublishResultTool(
         )
 
 
-@tool_display(
-    label=lambda p: f"Giving up on CVL generation: {p['reason']}",
-    result=None,
-)
-class GiveUpTool(WithImplementation[Command], WithInjectedId):
-    """
+_GIVE_UP_DESCRIPTION = """
     Call this tool to give up on the CVL generation for this task.
 
     This should only ever be called as a LAST RESORT when you have exhausted all other
     mechanisms to complete your task.
     """
-    reason: str = Field(description="The reason for giving up on your task")
 
-    @override
-    def run(self) -> Command:
-        return tool_state_update(
-            self.tool_call_id,
-            "Accepted",
-            failed=True,
-            result=self.reason,
-        )
 
 class ResourceView(TypedDict):
     """A CVLResource prepared for the prompt: ``import_path`` is the CVL import
@@ -731,7 +719,7 @@ async def batch_cvl_generation(
         [prover_tool,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
-         GiveUpTool.as_tool("give_up"),
+         give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation"),
          PublishResultTool.bind(titles).as_tool("result"),
          ctx.get_memory_tool()]
     ).with_state(

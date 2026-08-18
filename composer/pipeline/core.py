@@ -3,12 +3,22 @@
 Phase chain — each link is immutable and its existence proves the prior phase ran, so ordering is
 a constructor dependency rather than a call-order convention; there is no half-initialized state:
 
-    Backend ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
-    (config, source)            (.main: structure)                        (formalize / persist / report)
+    Backend ──preflight──▶ Pre ──prepare_system──▶ PreparedSystem ──prepare_formalization──▶ Formalizer
+    (config, source)       (built    (.main: structure)                                      (formalize /
+                            workspace)                                                        persist / report)
 
-A backend whose units all build on one *shared* artifact inserts a link: ``prepare_formalization`` returns
-a :class:`StagedFormalizer`, and its ``begin`` — handed every unit's properties — is what produces the
-:class:`Formalizer`.
+Two links are *overlapped* with the LLM steps they don't depend on, since both are usually builds:
+``preflight`` runs alongside system analysis, and ``prepare_formalization`` alongside property
+extraction. ``preflight`` is additionally a *gate*: it and the analysis run in a task group, so a
+failure on either side cancels the other rather than letting it spend on a run that can no longer
+complete — a broken toolchain does not wait out the analysis agent, and a failed analysis does not
+wait out the workspace build. The second pair is simply awaited in turn.
+
+A backend whose units all build on one *shared* artifact inserts a link rather than a call-order
+convention: ``prepare_formalization`` returns a :class:`StagedFormalizer`, and its ``begin`` — handed
+every unit's properties — is what produces the :class:`Formalizer`. Same rule as the rest of the
+chain, so it needs no new rule: the artifact is a constructor argument to the only object that uses
+it, and no formalizer ever exists without it.
 
 The driver owns the genuinely-shared steps: system analysis, per-component property extraction, the
 result-type-keyed cache, and (since the report is backend-agnostic) building + persisting the
@@ -21,7 +31,7 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Protocol, cast, ContextManager, Any
+from typing import Any, ContextManager, Protocol, cast
 from collections.abc import Sequence
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
@@ -52,6 +62,7 @@ from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID
 from composer.pipeline.ecosystem import Ecosystem
 from .ptypes import (
+    DEFAULT_MAX_CPU_TASKS,
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult, Delivered, GaveUp,
     FinalProperties,
     PipelineRun, SystemAnalysisSpec, RunBudget, Curtailed
@@ -169,7 +180,7 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         ...
 
 
-class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](Protocol):
+class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
     @property
     def backend_guidance(self) -> str: ...
 
@@ -182,9 +193,26 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
     @property
     def artifact_store(self) -> ArtifactStore[A, FormT]: ...
 
+
+    async def preflight(self, run: PipelineRun[P, H]) -> Pre:
+        """Whatever the backend can do before it knows anything about the program — run
+        *concurrently with system analysis*, and awaited before :meth:`prepare_system`.
+
+        This is where a backend that must build something puts the build. Crucible prepares its
+        harness crate, compiles the program to sBPF, and gates a wheel-authored skeleton harness
+        through the real toolchain; none of that reads the analyzed model, so serializing it behind
+        analysis buys nothing, while running it alongside means a broken dependency graph or an
+        unbuildable program surfaces before the run has spent meaningfully on the model.
+
+        ``Pre`` is opaque to the driver — it only carries the result to ``prepare_system``, so a
+        backend can hand its own prep forward as immutable state rather than stashing it on itself.
+        ``None`` for a backend with nothing to do ahead of time."""
+        ...
+
     async def prepare_system(
         self, analyzed: App,
-        run: PipelineRun[P, H]
+        run: PipelineRun[P, H],
+        preflight: Pre,
     ) -> PreparedSystem[FormT, U, Main]: ...
 
     def to_artifact_id(self, c: U) -> A: ...
@@ -215,8 +243,8 @@ def _time_context(time_budget_s: float | None) -> ContextManager[None]:
     else:
         return nullcontext()
 
-async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
     run: PipelineRun[P, H],
     *,
     interactive: bool = False,
@@ -237,8 +265,8 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
             extra_context=extra_context, ecosystem=ecosystem
         )
 
-async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
     run: PipelineRun[P, H],
     *,
     interactive: bool,
@@ -256,8 +284,8 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
         )
 
 # ---- the driver --------------------------------------------------------------
-async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
-    backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
+    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
     run: PipelineRun[P, H],
     plugin_manager: PluginManager[P, U],
     *,
@@ -273,28 +301,49 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     assert ecosystem.supports_greenfield or run.env.sort != "greenfield", (
         f"ecosystem {ecosystem.name!r} has no greenfield prompts; got sort='greenfield'"
     )
-    with named_budget_or_nop("system_analysis"):
-        # 1. System analysis (shared primitive; the ecosystem supplies the analyzed model type,
-        #    prompts, validation, and front-matter — EVM reproduces prior behavior exactly).
-        analyzed = await run.runner(
-            TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
-            lambda: run_component_analysis(
-                ty=ecosystem.system_model,
-                child_ctxt=run.ctx.child(SYSTEM_ANALYSIS_KEY(ecosystem.system_model, spec.analysis_key)),
-                input=source, env=run.env,
-                extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
-                expected_main_id=source.contract_name,
-                system_template=ecosystem.analysis_prompts.system,
-                initial_template=ecosystem.analysis_prompts.initial,
-                validate=ecosystem.validate_analysis,
-            ),
-        )
+
+    # 1. Backend preflight ∥ system analysis. The preflight (Crucible: build the program and gate a
+    #    skeleton harness through the real toolchain) reads nothing analysis produces, so it starts
+    #    at t=0. Neither side outlives the other's failure: whichever breaks first, the group cancels
+    #    the one still running rather than let it spend — money on the analysis agent, minutes on the
+    #    workspace build — on a run that can no longer complete. The analysis itself is the shared
+    #    primitive; the ecosystem supplies the analyzed model type, prompts, validation, front-matter.
+    #    The budget scope is entered inside the coroutine (not around create_task) so the
+    #    cost-center binding lives in the spawned task's own context.
+    async def _run_analysis():
+        with named_budget_or_nop("system_analysis"):
+            return await run.runner(
+                TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
+                lambda: run_component_analysis(
+                    ty=ecosystem.system_model,
+                    child_ctxt=run.ctx.child(SYSTEM_ANALYSIS_KEY(ecosystem.system_model, spec.analysis_key)),
+                    input=source, env=run.env,
+                    extra_input=[*ecosystem.analysis_extra_input(source), *spec.extra_input],
+                    expected_main_id=source.contract_name,
+                    system_template=ecosystem.analysis_prompts.system,
+                    initial_template=ecosystem.analysis_prompts.initial,
+                    validate=ecosystem.validate_analysis,
+                ),
+            )
+
+    try:
+        async with asyncio.TaskGroup() as overlap:
+            preflight_task = overlap.create_task(backend.preflight(run))
+            analysis_task = overlap.create_task(_run_analysis())
+    except BaseExceptionGroup as eg:
+        # Callers expect the failure itself, not a wrapper, so unwrap the usual case: one side
+        # failed and the other was cancelled, and a cancelled task adds nothing to the group.
+        # Both failing at once is the only case with two real errors; keep the group there.
+        if len(eg.exceptions) == 1:
+            raise eg.exceptions[0] from None
+        raise
+    preflight, analyzed = preflight_task.result(), analysis_task.result()
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
 
     # 2. Backend transform + main-contract location (prover: harness lift; foundry: identity).
     with named_budget_or_nop("system_preparation"):
-        prepared = await backend.prepare_system(analyzed, run)
+        prepared = await backend.prepare_system(analyzed, run, preflight)
 
     # 3. Pre-formalization setup runs CONCURRENTLY with extraction (neither needs the other) —
     #    this preserves the prover's autosetup ∥ bug-analysis overlap, generically.

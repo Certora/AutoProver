@@ -1,13 +1,14 @@
 """A null Solana backend — records extracted properties without verifying them.
 
-It satisfies the full ``PipelineBackend`` contract over the Solana ecosystem's
+It implements the full ``PipelineBackend`` contract over the Solana ecosystem's
 ``(SolanaApplication, SolanaProgramInstance, SolanaComponentInstance)`` triple, but its
 ``formalize`` just echoes the extracted properties into a trivial result and its
 ``fetch_verdicts`` returns nothing.
 
 **Role:** a **test double** for the Solana front half (analysis + property extraction)
 without a real verifier — see ``tests/test_solana_gate.py``. Production Solana
-verification is the Crucible fuzzer backend.
+verification is the Crucible fuzzer backend — a Rust wheel hosted by
+:mod:`composer.rustapp`.
 """
 
 import enum
@@ -28,7 +29,7 @@ from composer.pipeline.core import (
 )
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
-from composer.spec.cvl_generation import SkippedProperty
+from composer.authoring.state import SkippedProperty
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
@@ -36,7 +37,7 @@ from composer.spec.solana.model import (
 )
 from composer.spec.source.report.collect import Formalized, Verdict
 from composer.spec.source.report.schema import RuleName
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, PropertyTitle
 from composer.spec.util import ensure_dir
 
 SOLANA_NULL_GUIDANCE: str = """\
@@ -58,16 +59,16 @@ class NullResult(BaseModel):
     """A trivial formalization result: it just carries the properties back out."""
 
     commentary: str = ""
-    property_rules: list[tuple[str, list[str]]] = Field(default_factory=list)
+    property_rules: list[tuple[PropertyTitle, list[RuleName]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
 
-    def property_units(self) -> list[tuple[str, list[str]]]:
+    def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]:
         return [(t, list(u)) for t, u in self.property_rules]
 
     @property
     def artifact_text(self) -> str:
         return json.dumps(
-            {"commentary": self.commentary, "properties": self.property_units()}, indent=2
+            {"commentary": self.commentary, "properties": self.property_checks()}, indent=2
         )
 
     @property
@@ -92,7 +93,7 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
     def __init__(self, project_root: str):
         super().__init__(
             project_root,
-            "property_units",
+            "property_checks",
             deliverable_dir="certora/solana_null",
             internal_dir=".certora_internal/solana_null",
             report_dir="certora/solana_null/reports",
@@ -105,13 +106,10 @@ class NullSolanaArtifactStore(ArtifactStore[NullArtifact, NullResult]):
 
 class NullSolanaFormalizer(Formalizer[NullResult, SolanaComponentInstance]):
     def __init__(self) -> None:
-        # The tag is provenance only — it picks the report's outcome labels, and this backend's
-        # results are all-UNKNOWN either way. So borrow ``"prover"``, an existing member of
-        # ``ReportBackend``: the real Solana verifier's own tag is added to that literal by the
-        # backend that introduces it, and until then a value outside the literal is not merely
-        # untyped but unusable — ``AutoProverReport`` is a pydantic model, so it would fail
-        # validation in ``build_report`` and lose the report phase to a swallowed exception.
-        super().__init__(NullResult, "prover")
+        # ``"none"``: this backend verifies nothing, and its report should say so rather than
+        # borrow a real verifier's vocabulary — every unit comes out UNKNOWN, which that tag's
+        # wording renders as "Unverified".
+        super().__init__(NullResult, "none")
 
     @override
     async def formalize(
@@ -125,7 +123,9 @@ class NullSolanaFormalizer(Formalizer[NullResult, SolanaComponentInstance]):
         return NullResult(
             commentary=f"Null formalization of instruction {feat.display_name} "
             f"({len(props)} properties recorded, unverified).",
-            property_rules=[(p.title, [p.title]) for p in props],
+            # The pseudo-check is named after the title itself: nothing runs, so the property's
+            # own words are the only name its report row could have.
+            property_rules=[(p.title, [RuleName(p.title)]) for p in props],
         )
 
     @override
@@ -149,7 +149,7 @@ class NullSolanaPrepared(PreparedSystem[NullResult, SolanaComponentInstance, Sol
 @dataclass
 class NullSolanaBackend:
     """``PipelineBackend[SolanaPhase, NullResult, None, NullArtifact, SolanaComponentInstance,
-    SolanaProgramInstance, SolanaApplication]`` (P, FormT, H, A, Unit, Main, App) — structural."""
+    SolanaProgramInstance, SolanaApplication, None]`` (P, FormT, H, A, Unit, Main, App, Pre) — structural."""
 
     artifact_store: NullSolanaArtifactStore
     backend_guidance = SOLANA_NULL_GUIDANCE
@@ -163,8 +163,12 @@ class NullSolanaBackend:
         }
     )
 
+    async def preflight(self, run: PipelineRun[SolanaPhase, None]) -> None:
+        """Nothing to prepare — this backend builds nothing and only records properties."""
+        return None
+
     async def prepare_system(
-        self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None]
+        self, analyzed: SolanaApplication, run: PipelineRun[SolanaPhase, None], preflight: None
     ) -> PreparedSystem[NullResult, SolanaComponentInstance, SolanaProgramInstance]:
         # Use the Solana ecosystem's locate_main so the backend and ecosystem agree on the
         # target program (imported lazily to avoid an import cycle with pipeline.ecosystem).

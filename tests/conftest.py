@@ -14,6 +14,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "dummy-key-for-tests")
 from typing import Any, AsyncIterator, Iterator, Callable, Iterable, TYPE_CHECKING, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import numpy as np
 import psycopg
@@ -45,10 +46,43 @@ try:
 except ImportError:
     _HAS_TESTCONTAINERS = False
 
+def _external_pg_url() -> str | None:
+    """Admin DSN of an already-running postgres to use INSTEAD of testcontainers.
+
+    Set by the containerized test flow (docs/crucible-demo.md (PR3)) so DB-backed tests
+    run inside the crucible container against the compose `postgres` service — no
+    docker-in-docker. Must be a superuser DSN (tests CREATE ROLE/DATABASE)."""
+    return os.environ.get("COMPOSER_TEST_PG_URL") or None
+
+
 needs_postgres = pytest.mark.skipif(
-    not _HAS_TESTCONTAINERS,
-    reason="testcontainers[postgres] not installed",
+    not (_HAS_TESTCONTAINERS or _external_pg_url()),
+    reason="no postgres: install testcontainers[postgres] or set COMPOSER_TEST_PG_URL",
 )
+
+
+class _ExternalPostgres:
+    """Minimal ``PostgresContainer`` stand-in for an already-running postgres, so
+    DB-backed tests run unchanged against the compose `postgres` service. Only the
+    surface the tests use is implemented."""
+
+    def __init__(self, url: str) -> None:
+        p = urlparse(url)
+        self.username = p.username or "postgres"
+        self.password = p.password or ""
+        self._host = p.hostname or "localhost"
+        self._port = p.port or 5432
+        self._db = (p.path or "/postgres").lstrip("/") or "postgres"
+
+    def get_connection_url(self, host: str | None = None, driver: str | None = "psycopg2") -> str:
+        scheme = "postgresql" if not driver else f"postgresql+{driver}"
+        return f"{scheme}://{self.username}:{self.password}@{self._host}:{self._port}/{self._db}"
+
+    def get_container_host_ip(self) -> str:
+        return self._host
+
+    def get_exposed_port(self, port: int) -> int:
+        return self._port
 
 
 @pytest.fixture(autouse=True)
@@ -242,8 +276,13 @@ async def langgraph_db() -> AsyncIterator[LanggraphDBSetup | None]:
 
 @pytest.fixture(scope="session")
 def pg_container() -> Iterator["PostgresContainer | None"]:
+    ext = _external_pg_url()
+    if ext:
+        yield _ExternalPostgres(ext)  # type: ignore[misc]
+        return
     if not _HAS_TESTCONTAINERS:
-        return None
+        yield None
+        return
     with PostgresContainer("pgvector/pgvector:pg16") as pg:
         yield pg
 
@@ -341,3 +380,79 @@ def certora_prover(
         return the_tool
 
     return bind_tool
+
+
+# ---------------------------------------------------------------------------
+# Rust ABI payloads (``composer.rustapp.wire`` / ``.descriptor``)
+#
+# The seam carries no defaults on the side that deserializes: both halves ship together, so an
+# absent field is a drifted mirror, not an older wheel. That is right for the ABI and wrong for a
+# fixture — a test spelling all fifteen descriptor fields to exercise one of them buries what it is
+# testing. These builders stand in for the wheel that would have sent the rest, so what they
+# produce is exactly what a real wheel emits. Scaffolding, not tolerance.
+# ---------------------------------------------------------------------------
+
+def wire_phase(key: str, label: str, order: int, role: str = "grouping") -> dict[str, Any]:
+    """One ``PhaseSpec``. ``role`` defaults to grouping — a phase declaring no step of its own."""
+    return {"key": key, "label": label, "order": order, "role": role}
+
+
+def wire_required_phases() -> list[dict[str, Any]]:
+    """The four steps the driver runs itself, which every application must claim. A fresh list, so a
+    caller can splice its own phase in without reaching into another test's fixture."""
+    return [
+        wire_phase("analysis", "A", 0, "analysis"),
+        wire_phase("extraction", "E", 1, "extraction"),
+        wire_phase("formalization", "F", 2, "formalization"),
+        wire_phase("report", "R", 3, "report"),
+    ]
+
+
+def wire_descriptor(**overrides: Any) -> dict[str, Any]:
+    """A complete ``AppDescriptor`` payload, with ``overrides`` applied."""
+    return {
+        "name": "demoprover",
+        "header_text": "h",
+        "ecosystem": "evm",
+        "backend_tag": "prover",
+        "backend_guidance": "g",
+        "analysis_key": "k",
+        "phases": wire_required_phases(),
+        "args": [],
+        "rag_db_default": None,
+        "event_kinds": [],
+        "artifact_layout": {
+            "deliverable_dir": "d", "internal_dir": "i", "report_dir": "r", "artifact_dir": "a",
+            "artifact_prefix": "p", "artifact_extension": "rs", "property_suffix": "s",
+        },
+        "deliverable_mode": {"mode": "per_component"},
+        "serialize_toolchain": False,
+        "confine_by_default": False,
+        "component_noun": None,
+        "check_noun": None,
+        "evidence_kinds": ["build_failure", "check_output", "counterexample", "reasoned"],
+        **overrides,
+    }
+
+
+def wire_check(prop: str, name: str, target: str | None = None) -> dict[str, Any]:
+    """One check (``Check``); ``target`` null means the check is its own validation target."""
+    return {"property": prop, "name": name, "target": target}
+
+
+def wire_verdict(outcome: str, **overrides: Any) -> dict[str, Any]:
+    """One ``Verdict`` — every diagnostic field null unless ``overrides`` says otherwise."""
+    return {
+        "outcome": outcome, "line": None, "duration_seconds": None,
+        "unit_file": None, "detail": None, **overrides,
+    }
+
+
+def wire_prompt(instruction: str, system: str | None = None) -> dict[str, Any]:
+    """One authoring ``Prompt``."""
+    return {"instruction": instruction, "system": system}
+
+
+def wire_workspace_prep(**overrides: Any) -> dict[str, Any]:
+    """A ``WorkspacePrep`` plan that asks for nothing, plus ``overrides``."""
+    return {"files": {}, "toolchain_request": {}, **overrides}

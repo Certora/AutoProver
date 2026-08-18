@@ -37,6 +37,7 @@ from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, backend
 )
 from composer.pipeline.cli import cli_pipeline, user_ns, AtExit
+from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
 
 _log = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
     main_contract: str
     system_doc: str | None
     max_concurrent: int
+    max_cpu_tasks: int
     cache_ns: str | None
     memory_ns: str | None
     interactive: bool
@@ -127,6 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("main_contract", help="Main contract as path:ContractName")
     parser.add_argument("system_doc", nargs="?", default=None, help="Path to the design document (text or PDF). Optional — auto-discovered from the project when omitted.")
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
+    parser.add_argument("--max-cpu-tasks", type=int, default=DEFAULT_MAX_CPU_TASKS, help=f"Max concurrent CPU-bound tasks — toolchain builds and the like (default: {DEFAULT_MAX_CPU_TASKS})")
     parser.add_argument("--max-forge-runners", default=1, type=int, help="Max concurrent forge runners (default: 1)")
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")

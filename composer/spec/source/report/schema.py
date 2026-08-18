@@ -15,17 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from composer.spec.types import PropertyFormulation
-
-type RuleName = str
-"""A CVL rule/invariant identifier as it appears in the prover report and in a component's
-``property_rules`` mapping."""
-
-type ComponentName = str
-"""Human name of an AIComposer component (e.g. "Increment"), or "Structural Invariants"."""
-
-type PropertyTitle = str
-"""A property's unique snake_case title — the key in a component's ``property_rules`` mapping."""
+from composer.spec.types import ComponentName, PropertyFormulation, PropertyTitle, RuleName
 
 type RuleRef = tuple[str, RuleName]
 """A rule's identity: ``(spec_file, name)``. A name is only unique within a spec, so the defining
@@ -54,6 +44,19 @@ class Outcome(str, Enum):
     ERROR = "ERROR"
     TIMEOUT = "TIMEOUT"
     UNKNOWN = "UNKNOWN"
+
+    @classmethod
+    def parse(cls, raw: str) -> "Outcome | None":
+        """``raw`` as an outcome, or ``None`` when it names none.
+
+        For values arriving from outside this repo — a backend wheel's JSON, a ``report.json`` read
+        cold — where an unrecognized label is version skew rather than a bug, and the caller decides
+        what to do about it (record UNKNOWN, drop a glyph). For a value we produced ourselves,
+        ``Outcome(raw)`` and its ValueError remain the right thing."""
+        try:
+            return cls(raw)
+        except ValueError:
+            return None
 
 
 class GroupStatus(str, Enum):
@@ -84,6 +87,11 @@ class RuleVerdict(BaseModel):
     line: int | None = None
     duration_seconds: float | None = None
     prover_link: str | None = None
+    message: str | None = Field(
+        default=None,
+        description="Human-readable explanation of a non-GOOD outcome (e.g. the fuzzer's "
+        "counterexample / failed-assertion message). Diagnostics only; may be absent.",
+    )
 
     @property
     def ref(self) -> RuleRef:
@@ -208,10 +216,14 @@ class SourceEditRecord(BaseModel):
     cumulative_diff: str
 
 
-type ReportBackend = Literal["prover", "foundry"]
+type ReportBackend = Literal["prover", "foundry", "none"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
-this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test")
-for a report.json it reads cold."""
+this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
+vs "Unverified") for a report.json it reads cold. The producers are the CVL prover (``"prover"``),
+Foundry (``"foundry"``), and ``"none"`` — a pipeline that records properties without verifying them
+(the analysis-only null backend, ``composer.spec.solana.null_backend``), whose reports are all
+UNKNOWN and say so. The set is closed: every backend lives in this repo, so a verification backend
+adds its own literal here, plus its wording in ``report/render.py``."""
 
 
 # ---------------------------------------------------------------------------
