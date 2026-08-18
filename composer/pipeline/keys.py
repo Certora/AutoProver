@@ -27,8 +27,8 @@ registry: ``composer.spec.source.keys``.
 
 from typing import Any
 
-from composer.pipeline.ptypes import FinalProperties
-from composer.spec.context import ComponentGroup, Properties
+from composer.pipeline.ptypes import FinalProperties, RegisteredArtifacts
+from composer.spec.context import CacheKey, ComponentGroup, Properties
 from composer.spec.key_family import KeyFamily, PolyKeyFamily
 from composer.spec.prop_inference import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
@@ -37,7 +37,7 @@ from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 from composer.spec.util import string_hash
 
-from .plugin_api import PostPropertyInference, PrePropertyInference
+from .plugin_api import PostPropertyInference, PrePropertyInference, FormalizationTool
 
 __all__ = [
     "AGENT_RESULT_KEY",
@@ -47,6 +47,7 @@ __all__ = [
     "COMPONENT_KEY",
     "FINAL_PROPERTIES_KEY",
     "FORMALIZATION_KEY",
+    "PLUGIN_ARTIFACTS_KEY",
     "POST_PROPERTY_KEY",
     "PRE_PROPERTY_KEY",
     "PROPERTIES_KEY",
@@ -118,10 +119,27 @@ def _final_properties_key(
 #: read by offline walkers (``composer.meta.run``) to reconstruct that edge.
 FINAL_PROPERTIES_KEY = KeyFamily(ComponentGroup, FinalProperties, _final_properties_key)
 
+
+def _props_and_plugins(props: list[PropertyFormulation], plugins: list[str] | None = None) -> str:
+    if not plugins:
+        return _props_digest(props)
+    return _props_digest(props) + "-" + string_hash("|".join(plugins))
+
 #: One unit's formalization result, keyed by the exact property batch. The
 #: child is the backend's result type — pass ``formalizer.formalized_type``.
-FORMALIZATION_KEY = PolyKeyFamily(ComponentGroup, _props_digest)
+FORMALIZATION_KEY = PolyKeyFamily(ComponentGroup, _props_and_plugins)
 
+#: The verification artifacts a batch's plugin tools registered, cached under
+#: the formalization child so cache replays (where the tools never run) still
+#: carry them into the report. Parent is the backend's result-typed namespace,
+#: which no static declaration can name — hence ``Any``.
+PLUGIN_ARTIFACTS_KEY = CacheKey[Any, RegisteredArtifacts]("plugin-artifacts")
+
+
+def _plugin_formalization_key(plugin: str):
+    return f"formalization-plugin-{plugin}"
+
+PLUGIN_FORMALIZATION_KEY = KeyFamily(ComponentGroup, FormalizationTool, _plugin_formalization_key)
 
 def _pre_property_key(feat: FeatureUnit, plugin: str) -> str:
     return f"{component_digest(feat)}-{string_hash(plugin)}-pre"

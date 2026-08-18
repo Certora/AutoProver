@@ -394,6 +394,39 @@ def materializing_project(
             await asyncio.to_thread(stack.close)
     return provide
 
+@contextmanager
+def setup_prover_config_in(
+    *,
+    working_dir: str,
+    config: dict,
+    spec_contents: str,
+    spec_stem: str | None = None,
+    main_contract: str,
+    rule: list[str] | None,
+    conf_dir: Path = CERTORA_DIR,
+    **config_extra
+):
+    with tmp_spec(
+        root=working_dir,
+        content=spec_contents,
+        name=spec_stem
+    ) as generated_path:
+        config = prover_config_overlay(
+            config, main_contract=main_contract, verify_target=f"{main_contract}:{generated_path}"
+        )
+        config.update(config_extra)
+        if rule is not None:
+            config["rule"] = rule
+        with temp_certora_file(
+            root=working_dir,
+            content=json.dumps(config, indent=2),
+            ext="conf",
+            name=spec_stem,
+            prefix="verify",
+            dest_dir=conf_dir,
+        ) as conf_path:
+            yield (conf_path, config)
+
 def get_prover_tool(
     llm: LLM,
     main_contract: str,
@@ -445,39 +478,34 @@ def get_prover_tool(
         conf_dir = (CERTORA_DIR / "confs") if spec_stem is not None else CERTORA_DIR
         lock = spec_locks.setdefault(spec_stem, asyncio.Lock()) if spec_stem is not None else nullcontext()
 
+        summary = get_run_summary()
+
+        component = (spec_stem or main_contract).removeprefix("autospec_")
+        iteration = len(state["prover_history"]) + 1
+        prover_msg = f"{component} iteration number {iteration}"
+
+
         async def run_in(run_root: str) -> str | Command:
-            with tmp_spec(root=run_root, content=spec, name=spec_stem) as generated:
-                config = prover_config_overlay(
-                    conf, main_contract=main_contract, verify_target=f"{main_contract}:{generated}"
-                )
-
-                if rules:
-                    config["rule"] = rules
-
-                summary = get_run_summary()
-
-                component = (spec_stem or main_contract).removeprefix("autospec_")
-                iteration = len(state["prover_history"]) + 1
-                config["msg"] = f"{component} iteration number {iteration}"
-
-                with temp_certora_file(
-                    root=run_root,
-                    content=json.dumps(config, indent=2),
-                    ext="conf",
-                    name=spec_stem,
-                    prefix="verify",
-                    dest_dir=conf_dir,
-                ) as config_path:
-                    async with sem:
-                        result = await run_prover(
-                            Path(run_root),
-                            [config_path],
-                            tool_call_id,
-                            prover_opts,
-                            _SpecCallbacks(get_stream_writer(), tool_call_id, summary, config,
-                                           analysis_store=analysis_store),
-                            DefaultCexHandler(llm, state, summarization_threshold=10)
-                        )
+            with setup_prover_config_in(
+                working_dir=run_root,
+                main_contract=main_contract,
+                spec_stem=spec_stem,
+                spec_contents=spec,
+                conf_dir=conf_dir,
+                config=conf,
+                rule=rules,
+                msg=prover_msg
+            ) as (config_path, config):
+                async with sem:
+                    result = await run_prover(
+                        Path(run_root),
+                        [config_path],
+                        tool_call_id,
+                        prover_opts,
+                        _SpecCallbacks(get_stream_writer(), tool_call_id, summary, config,
+                                        analysis_store=analysis_store),
+                        DefaultCexHandler(llm, state, summarization_threshold=10)
+                    )
 
             if isinstance(result, str):
                 return result

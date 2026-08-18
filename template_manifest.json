@@ -131,6 +131,12 @@
     "template_name": "property_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.source.author:_PropertyGenSysTemplate": {
+    "module": "composer.spec.source.author",
+    "qualname": "_PropertyGenSysTemplate",
+    "template_name": "property_generation_system_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.source.design_doc_finder:_FINDER_PROMPT": {
     "module": "composer.spec.source.design_doc_finder",
     "qualname": "_FINDER_PROMPT",

@@ -85,7 +85,7 @@ async def test_formalize_echoes_properties_into_result():
     props = _props()
 
     result = await NullSolanaFormalizer().formalize(
-        "batch", feat, props, cast(Any, None), cast(Any, None)
+        "batch", feat, props, cast(Any, None), cast(Any, None), cast(Any, None)
     )
 
     assert isinstance(result, NullResult)
@@ -109,7 +109,7 @@ async def test_formalize_echoes_properties_into_result():
 @pytest.mark.asyncio
 async def test_formalize_with_no_properties_records_empty():
     result = await NullSolanaFormalizer().formalize(
-        "batch", _unit(), [], cast(Any, None), cast(Any, None)
+        "batch", _unit(), [], cast(Any, None), cast(Any, None), cast(Any, None)
     )
     assert isinstance(result, NullResult)
     assert result.property_checks() == []

@@ -65,15 +65,19 @@ def _result(commentary: str) -> ToolCallDict:
 
 def _raw_report(**rule_status: bool) -> ProverReport:
     return ProverReport(result_str="Prover report output", link="local://test-run", raw_rule_status={
-        RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
-    })
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        },
+        certora_run_stdout="certoraRun output"
+    )
 
 
 def _summarized_report(todo: str, **rule_status: bool) -> ProverReport:
     return ProverReport(
         result_str=todo, link="local://test-run", raw_rule_status={
-        RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
-    })
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        },
+        certora_run_stdout="certoraRun output"
+    )
 
 
 # ---------------------------------------------------------------------------
