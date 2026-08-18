@@ -1,14 +1,12 @@
 """Probe: run ONLY the Solana system-analysis phase against a real program and print the
 ``ProgramComponent`` grouping it produces.
 
-This is the tool docs/crucible-component-units.md (PR3) §13 staging step 1 calls for — *"ship the model
-+ prompt + validation, then read the groupings that come back on real programs"*. It stops after
-analysis (no property extraction, no backend), so it costs one agent run rather than a full front
-half, and it exercises exactly the three things stage 1 added: the model, the prompt section, and
+It stops after analysis (no property extraction, no backend), so it costs one agent run rather
+than a full front half, and it exercises the model, the prompt section, and
 ``_solana_validate``'s component rules.
 
-Points at a program via environment, and skips when unset (there is no large Solana program in
-this repo — ``test_scenarios/solana_vault`` is a 3-instruction toy whose grouping proves nothing):
+Points at a program via environment, and skips when unset (this repo carries no Solana program
+large enough for its grouping to prove anything):
 
     SOLANA_PROBE_ROOT=/path/to/workspace \\
     SOLANA_PROBE_DOC=docs/DESIGN.md \\
@@ -156,9 +154,13 @@ async def test_component_grouping_on_a_real_program(pg_container: "PostgresConta
 
     args = _model_args()
     root_s = str(root)
+    # Built BEFORE the connections: `standard_connections` takes the resolved provider
+    # service (it asks it for an uploader and the memory tool), not a provider name.
+    tiered = get_provider_for(tiered=cast(Any, args))
     async with (
         standard_connections(
-            provider="anthropic", embedder=DefaultEmbedder(MockSentenceTransformer())
+            provider=tiered.provider_service,
+            embedder=DefaultEmbedder(MockSentenceTransformer()),
         ) as conns,
         async_tool_context(),
     ):
@@ -171,7 +173,6 @@ async def test_component_grouping_on_a_real_program(pg_container: "PostgresConta
             relative_path=src_rel,
             forbidden_read=RUST_FORBIDDEN_READ,
         )
-        tiered = get_provider_for(tiered=cast(Any, args))
         models = ModelProvider(
             heavy_model=tiered.heavy, lite_model=tiered.lite, checkpointer=conns.checkpointer
         )
