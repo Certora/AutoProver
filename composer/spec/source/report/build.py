@@ -3,7 +3,8 @@
 `build_report` is the entry point a pipeline's final phase calls. It builds and *returns* the
 `AutoProverReport`; persisting it is the caller's job (via the pipeline's `ArtifactStore`). It is
 backend-agnostic: the caller supplies a `VerdictFetcher` (how to get per-unit `Outcome`s for this
-backend) and a `backend` tag (used only to pick render labels). It is structured so that any single
+backend), a `FindingsBuilder` (this run's ready `Finding`s — the report attaches them, it does not
+write them) and a `backend` tag (used only to pick render labels). It is structured so that any single
 failure (LLM, validation, an empty grouping) degrades to a single ``general`` bucket rather than
 producing no high-level section; the caller additionally treats the whole phase as best-effort.
 """
@@ -14,10 +15,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from composer.spec.types import Curtailed
 from composer.spec.source.report.collect import (
-    EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
+    FindingsBuilder, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
 from composer.spec.source.report.coverage import ValidationError, validate
-from composer.spec.source.report.findings import build_findings
 from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
@@ -38,6 +38,11 @@ _log = logging.getLogger(__name__)
 RERAISE_REPORT_FAILURES = False
 
 
+async def no_findings(**_kwargs) -> list[Finding]:
+    """The default `FindingsBuilder`: a caller with no findings source contributes none."""
+    return []
+
+
 async def build_report[R: ReportableResult](
     *,
     contract_name: str,
@@ -46,16 +51,14 @@ async def build_report[R: ReportableResult](
     llm: BaseChatModel,
     fetch_verdicts: VerdictFetcher[R],
     source_edits: list[SourceEditRecord] | None = None,
+    build_findings: FindingsBuilder = no_findings,
     verification_artifacts: list[VerificationArtifactRecord] | None = None,
-    findings_llm: BaseChatModel | None = None,
-    fetch_evidence: EvidenceFetcher | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
-    When ``findings_llm`` is supplied, violated rules are additionally synthesized into
-    audit-issue `Finding`s (best-effort; a synthesis failure yields no findings
-    rather than failing the report). ``fetch_evidence`` supplies each violation's captured
-    counterexample analysis; it is optional."""
+    ``build_findings`` is the backend's ready findings for this report (best-effort: a failure
+    there yields no findings rather than failing the report). This function does not write them —
+    findings prose, evidence and models all live on the backend side of that hook."""
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         components, fetch_verdicts=fetch_verdicts
     )
@@ -113,20 +116,18 @@ async def build_report[R: ReportableResult](
         if c.formalized is not None and not isinstance(c.formalized, Curtailed)
         and c.formalized.run_link
     }
-    # Violated rules -> findings. Its own guard: findings synthesis must never fail the report
-    # (the whole phase is also best-effort in the caller, but this keeps a working report even when
-    # only findings break).
+    # The backend's findings. Its own guard: a broken findings hook must never fail the report (the
+    # whole phase is also best-effort in the caller, but this keeps a working report even when only
+    # findings break).
     findings: list[Finding] = []
-    if findings_llm is not None:
-        try:
-            findings = await build_findings(
-                contract_name=contract_name, rules=rules, properties=properties, groups=groups,
-                fetch_evidence=fetch_evidence, llm=findings_llm,
-            )
-        except Exception as e:  # noqa: BLE001
-            if RERAISE_REPORT_FAILURES:
-                raise
-            _log.warning("report: findings synthesis failed (%s); continuing without findings", e)
+    try:
+        findings = await build_findings(
+            contract_name=contract_name, rules=rules, properties=properties, groups=groups,
+        )
+    except Exception as e:  # noqa: BLE001
+        if RERAISE_REPORT_FAILURES:
+            raise
+        _log.warning("report: findings failed (%s); continuing without findings", e)
 
     report = AutoProverReport(
         backend=backend,
