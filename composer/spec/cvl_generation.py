@@ -31,7 +31,7 @@ from composer.spec.context import (
     WorkflowContext, CacheKey, CVLGeneration, CVLJudge,
 )
 from composer.spec.guidance import ERC20TokenGuidance, UnresolvedCallGuidance
-from composer.spec.types import PropertyTitle, RuleName
+from composer.spec.types import CheckName, PropertyTitle, RuleName
 from composer.spec.graph_builder import run_to_completion
 from composer.cvl.tools import put_cvl_raw, put_cvl, get_cvl, edit_cvl
 from composer.ui.tool_display import tool_display
@@ -138,11 +138,14 @@ def validate_property_rules(
     property_rules: list[PropertyRuleMapping],
     skipped: list[SkippedProperty],
     titles: list[PropertyTitle],
+    known_rules: set[str] | None = None
 ) -> str | None:
     """Validate the property->rules mapping declared at completion time. ``titles`` is the batch's
     full set of property titles; returns None if valid, else one message enumerating all problems."""
     return validate_check_mapping(
-        [(m.property_title, m.rules) for m in property_rules], skipped, titles, _CVL_MAPPING,
+        [(m.property_title, m.rules) for m in property_rules], skipped, titles, _CVL_MAPPING, ran=[
+            CheckName(it) for it in known_rules
+        ] if known_rules else None
     )
 
 
