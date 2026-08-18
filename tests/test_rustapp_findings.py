@@ -4,6 +4,19 @@ A check marked ``expect_check_failure`` must report as a finding even if this ru
 did not reproduce it. Those rows become ``Finding``s with no second write-up —
 the crash and the declaration are the write-up. Reproduced and unreproduced
 findings must stay distinguishable.
+
+``expect_check_failure`` is how an author says "the failure here IS the finding". The
+publish gate accepts such a check as clean and nothing downstream ever asked the run to
+reproduce it, so on the klend run of 2026-08-10 four declared findings reached
+``report.html``: one as a violation (its campaign happened to hit it first) and three as
+**"No counterexample"** — including ``block_price_usage_kill_switch_effective``, which the
+author had reproduced at iteration 11619 and whose commentary documents the reproducing
+sequence.
+
+The declaration is the author's and the outcome is the wheel's; they meet on
+``RustFormalResult``, and the first group below pins that meeting down for both consumers
+of it — the HTML report and the console rollup, which must not disagree about whether a
+run found something.
 """
 
 import pathlib
@@ -20,7 +33,9 @@ from composer.rustapp.findings import compose_findings
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
+from composer.spec.source.report.collect import ReportComponentInput, collect
 from composer.spec.source.report.schema import Outcome, RuleVerdict
+from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor
 
 #: Crash text from a real Crucible hit, trimmed.
@@ -310,3 +325,78 @@ async def test_the_formalizer_submits_them_through_the_report_hook():
 
     assert [f.title for f in findings] == ["Stored prices are never in the future"]
     assert findings[0].content.proof_of_concept == COUNTEREXAMPLE
+
+
+# ---------------------------------------------------------------------------
+# Crucible's one-crate deliverable
+# ---------------------------------------------------------------------------
+
+async def _collected(*components: tuple[str, RustFormalResult]) -> list[RuleVerdict]:
+    """The rows the real collector builds — the same list ``build_report`` hands ``findings``."""
+    formalizer = adapter.RustFormalizer(
+        cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
+    )
+    _, rules, *_ = await collect(
+        [
+            ReportComponentInput(
+                name=cast(Any, name),
+                props=[
+                    PropertyFormulation(title=title, sort="invariant", description="d")
+                    for title, _ in res.checks
+                ],
+                formalized=cast(Any, _Formalized(res)),
+            )
+            for name, res in components
+        ],
+        fetch_verdicts=formalizer.fetch_verdicts,
+    )
+    return rules
+
+
+@pytest.mark.asyncio
+async def test_two_crucible_sections_naming_one_check_keep_their_own_crash():
+    """Crucible delivers one crate, so `validate` files each verdict under its section's file.
+
+    Two authors given the same property title write the same check name, and the report
+    keys a row by ``(file, name)`` — the section file is the only thing that keeps the two
+    rows apart. The findings mapper keys observations the same way, so a section's finding
+    must carry that section's crash and not the other's.
+    """
+    left = _result({"c_auth_immutable": _verdict(Outcome.BAD, "crash A")}, {},
+                   checks=[("Authority is immutable", ["c_auth_immutable"])])
+    right = _result({"c_auth_immutable": _verdict(Outcome.BAD, "crash B")}, {},
+                    checks=[("Authority is immutable", ["c_auth_immutable"])])
+    for res, section in ((left, "c_vault_initialization.rs"), (right, "c_lamport_custody.rs")):
+        res.verdicts["c_auth_immutable"].unit_file = section
+
+    rules = await _collected(("Vault Initialization", left), ("Lamport Custody", right))
+    findings = compose_findings(
+        rules=rules, outcomes=[_outcome(left), _outcome(right)],
+    )
+
+    assert len(findings) == 2, "one row per section, so one finding per section"
+    by_section = {f.provenance.spec_file: f for f in findings if f.provenance}
+    assert by_section["c_vault_initialization.rs"].content.proof_of_concept == "crash A"
+    assert by_section["c_lamport_custody.rs"].content.proof_of_concept == "crash B"
+
+
+@pytest.mark.asyncio
+async def test_a_finding_on_a_collapsed_row_reads_the_run_that_row_came_from():
+    """Without a section file the two rows do collapse — and the finding must follow the row.
+
+    ``collect`` keeps the first run naming a ``(file, name)``; the mapper has to keep the same
+    one, or the row's message and the finding's proof of concept describe different runs.
+    """
+    first = _result({"c_auth_immutable": _verdict(Outcome.BAD, "crash A")}, {},
+                    checks=[("Authority is immutable", ["c_auth_immutable"])])
+    second = _result({"c_auth_immutable": _verdict(Outcome.BAD, "crash B")}, {},
+                     checks=[("Authority is immutable", ["c_auth_immutable"])])
+
+    rules = await _collected(("Vault Initialization", first), ("Lamport Custody", second))
+    findings = compose_findings(
+        rules=rules, outcomes=[_outcome(first), _outcome(second)],
+    )
+
+    assert len(findings) == 1
+    assert findings[0].content.proof_of_concept == "crash A"
+    assert "crash A" in (rules[0].message or "")

@@ -328,7 +328,7 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
 async def test_the_result_carries_the_authors_expected_failure_declarations(monkeypatch, tmp_path):
     # The wheel reports what its run observed; that a failure IS the finding is the author's, and
     # the session is the only place that knows it. Dropping it here is what let a documented klend
-    # finding reach report.html as "No counterexample" (tests/test_rustapp_declared_findings.py).
+    # finding reach report.html as "No counterexample" (tests/test_rustapp_findings.py).
     async def fake_session(**_kw):
         return SessionResult(
             commentary="done", spec=SPEC, skipped=[],

@@ -32,7 +32,10 @@ def _observations(outcomes: RustOutcomes) -> dict[RuleRef, _Observed]:
 
     Rebuilt rather than looked up: ``collect`` uses the verdict's file, falling back
     to the component artifact, and a callout-mode wheel gives every component that
-    same fallback — so the check name alone does not identify a row."""
+    same fallback — so the check name alone does not identify a row.
+
+    First component naming a key wins, as in ``collect``: where two of them do collapse
+    onto one row, the evidence here has to be the same run's as the message there."""
     observed: dict[RuleRef, _Observed] = {}
     for o in outcomes:
         if not isinstance(o.result, Delivered):
@@ -40,12 +43,12 @@ def _observations(outcomes: RustOutcomes) -> dict[RuleRef, _Observed]:
         res = o.result.result
         for check, verdict in res.verdicts.items():
             ref = (verdict.unit_file or o.result.unit_file, check)
-            observed[ref] = _Observed(
+            observed.setdefault(ref, _Observed(
                 ran=verdict.outcome,
                 detail=verdict.detail,
                 declared=res.expected_failures.get(check),
                 title=res.display_name(check),
-            )
+            ))
     return observed
 
 
