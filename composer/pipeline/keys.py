@@ -7,10 +7,12 @@ traverses below the run root, in tree order::
     ├── {analysis key}                         SYSTEM_ANALYSIS_KEY  → ecosystem App model
     └── {properties key}                       PROPERTIES_KEY       → Properties
         ├── {unit digest}[-{plugin digest}]    COMPONENT_KEY        → ComponentGroup
-        │   ├── bug_analysis[|refine][-tm-…]   BUG_ANALYSIS_KEY     → _BugAnalysisCache
+        │   ├── bug_analysis[|refine][-tm-…][-xc-…]
+        │   │                                  BUG_ANALYSIS_KEY     → _BugAnalysisCache
         │   │   └── agent_bug_analysis         AGENT_RESULT_KEY     → _AgentResult
         │   │       └── round-{i}              AGENT_ROUND_KEY      → _AgentRoundWithHistory
-        │   ├── final_props[|refine][-tm-…]    FINAL_PROPERTIES_KEY → FinalProperties
+        │   ├── final_props[|refine][-tm-…][-xc-…]
+        │   │                                  FINAL_PROPERTIES_KEY → FinalProperties
         │   └── {props digest}                 FORMALIZATION_KEY    → backend result (FormT)
         │       └── plugin-artifacts           PLUGIN_ARTIFACTS_KEY → RegisteredArtifacts
         ├── {unit digest}-{plugin}-pre         PRE_PROPERTY_KEY     → PrePropertyInference
@@ -25,8 +27,8 @@ registry: ``composer.spec.source.keys``.
 
 from typing import Any
 
-from composer.pipeline.ptypes import FinalProperties
-from composer.spec.context import ComponentGroup, Properties
+from composer.pipeline.ptypes import FinalProperties, RegisteredArtifacts
+from composer.spec.context import CacheKey, ComponentGroup, Properties
 from composer.spec.key_family import KeyFamily, PolyKeyFamily
 from composer.spec.prop_inference import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
@@ -35,7 +37,7 @@ from composer.spec.system_model import FeatureUnit
 from composer.spec.types import PropertyFormulation
 from composer.spec.util import string_hash
 
-from .plugin_api import PostPropertyInference, PrePropertyInference
+from .plugin_api import PostPropertyInference, PrePropertyInference, FormalizationTool
 
 __all__ = [
     "AGENT_RESULT_KEY",
@@ -45,6 +47,7 @@ __all__ = [
     "COMPONENT_KEY",
     "FINAL_PROPERTIES_KEY",
     "FORMALIZATION_KEY",
+    "PLUGIN_ARTIFACTS_KEY",
     "POST_PROPERTY_KEY",
     "PRE_PROPERTY_KEY",
     "PROPERTIES_KEY",
@@ -92,7 +95,11 @@ def _component_key(feat: FeatureUnit, plugin_digest: str | None) -> str:
 #: plugin set changes (``plugins.manifest_digest``).
 COMPONENT_KEY = KeyFamily(Properties, ComponentGroup, _component_key)
 
-def _final_properties_key(threat_model_digest: str | None, with_refinement: bool) -> str:
+def _final_properties_key(
+    threat_model_digest: str | None,
+    with_refinement: bool,
+    extra_context_digest: str | None = None,
+) -> str:
     # Parameterized exactly like BUG_ANALYSIS_KEY: the component namespace is
     # shared across runs, so the entry must be keyed by what distinguishes one
     # run's extraction from another's — a single fixed leaf would be
@@ -100,9 +107,11 @@ def _final_properties_key(threat_model_digest: str | None, with_refinement: bool
     base_key = "final_props"
     if with_refinement:
         base_key += "|refine"
-    if threat_model_digest is None:
-        return base_key
-    return base_key + "-tm-" + threat_model_digest
+    if threat_model_digest is not None:
+        base_key += "-tm-" + threat_model_digest
+    if extra_context_digest is not None:
+        base_key += "-xc-" + extra_context_digest
+    return base_key
 
 #: The property batch as it left the property pipeline (post-inference plugin
 #: rewrites applied) plus the tool-contributing plugin ids — the exact
@@ -110,10 +119,27 @@ def _final_properties_key(threat_model_digest: str | None, with_refinement: bool
 #: read by offline walkers (``composer.meta.run``) to reconstruct that edge.
 FINAL_PROPERTIES_KEY = KeyFamily(ComponentGroup, FinalProperties, _final_properties_key)
 
+
+def _props_and_plugins(props: list[PropertyFormulation], plugins: list[str] | None = None) -> str:
+    if not plugins:
+        return _props_digest(props)
+    return _props_digest(props) + "-" + string_hash("|".join(plugins))
+
 #: One unit's formalization result, keyed by the exact property batch. The
 #: child is the backend's result type — pass ``formalizer.formalized_type``.
-FORMALIZATION_KEY = PolyKeyFamily(ComponentGroup, _props_digest)
+FORMALIZATION_KEY = PolyKeyFamily(ComponentGroup, _props_and_plugins)
 
+#: The verification artifacts a batch's plugin tools registered, cached under
+#: the formalization child so cache replays (where the tools never run) still
+#: carry them into the report. Parent is the backend's result-typed namespace,
+#: which no static declaration can name — hence ``Any``.
+PLUGIN_ARTIFACTS_KEY = CacheKey[Any, RegisteredArtifacts]("plugin-artifacts")
+
+
+def _plugin_formalization_key(plugin: str):
+    return f"formalization-plugin-{plugin}"
+
+PLUGIN_FORMALIZATION_KEY = KeyFamily(ComponentGroup, FormalizationTool, _plugin_formalization_key)
 
 def _pre_property_key(feat: FeatureUnit, plugin: str) -> str:
     return f"{component_digest(feat)}-{string_hash(plugin)}-pre"

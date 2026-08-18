@@ -7,7 +7,7 @@ entries). Wired as ``cache-autoprove`` in ``pyproject.toml``.
 Usage::
 
     # by run id (recommended — recovers the cache root, memory namespace,
-    # threat-model digest and plugin manifest from the run's ``cache_root``
+    # threat-model / extra-context digests and plugin manifest from the run's ``cache_root``
     # tags; works even when the design doc was auto-discovered):
     cache-autoprove run <run_id>
 
@@ -15,7 +15,7 @@ Usage::
     # the design doc, so it does NOT work for auto-discovered runs):
     cache-autoprove inputs <project_root> <main_contract> <system_doc> \\
         --cache-ns <ns> [--memory-ns <ns>] [--threat-model <path>] \\
-        [--plugins <name> ...]
+        [--extra-context <path>]... [--plugins <name> ...]
 """
 
 import argparse
@@ -29,7 +29,7 @@ from typing import AsyncGenerator
 from langgraph.store.base import BaseStore
 
 from composer.input.types import DEFAULT_RECURSION_LIMIT
-from composer.input.files import file_digest
+from composer.input.files import file_digest, resolve_document_paths
 from composer.ui.cache_explorer import (
     CacheNode, StoreNode, CacheTreeNode, CacheExplorerApp, DummyServices,
     node, section, node_for, leaf, memory, collect_tree,
@@ -52,6 +52,7 @@ from composer.pipeline.run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.core.user import get_uid
 from composer.workflow.services import store_context
 from composer.io.run_index import get_run_data
+from composer.spec.util import combine_digests
 from composer.spec.source.keys import (
     AP_PROPERTIES_KEY_NAME, CVL_JUDGE_KEY, HARNESS_ANALYSIS_KEY,
     HARNESS_GENERATION_KEY, INV_CVL_KEY, LAST_ATTEMPT_KEY, STRUCTURAL_INV_KEY,
@@ -169,19 +170,25 @@ async def _resolve_bug_key(
     feat_ctx: WorkflowContext,
     tags: AutoProveCacheTags,
 ) -> CacheKey:
-    """The bug-analysis key is parameterized on the threat-model digest and
-    the refinement (interactive) flag. Both come from the run tags; records
+    """The bug-analysis key is parameterized on the threat-model and extra-context
+    digests and the refinement (interactive) flag. All come from the run tags; records
     written before the ``interactive`` tag existed leave it ``None``, in
     which case probe both variants and use whichever was written."""
+    xc_digest = combine_digests(tags.extra_context_digests)
     if tags.interactive is not None:
         return BUG_ANALYSIS_KEY(
             tags.threat_model_digest, with_refinement=tags.interactive,
+            extra_context_digest=xc_digest,
         )
     for refine in (False, True):
-        candidate = BUG_ANALYSIS_KEY(tags.threat_model_digest, refine)
+        candidate = BUG_ANALYSIS_KEY(
+            tags.threat_model_digest, refine, extra_context_digest=xc_digest,
+        )
         if await feat_ctx.child(candidate).cache_get(_BugAnalysisCache) is not None:
             return candidate
-    return BUG_ANALYSIS_KEY(tags.threat_model_digest, with_refinement=False)
+    return BUG_ANALYSIS_KEY(
+        tags.threat_model_digest, with_refinement=False, extra_context_digest=xc_digest,
+    )
 
 
 async def _build_cvl_gen_nodes(
@@ -480,6 +487,11 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
         file_digest(pathlib.Path(args.threat_model))
         if args.threat_model is not None else None
     )
+    # The run's own resolver, so the order (hence the key) is reproduced exactly.
+    xc_digests = [
+        file_digest(p)
+        for p in resolve_document_paths(args.extra_context)
+    ]
 
     return AutoProveCacheTags(
         cache_root=list(root_ns),
@@ -487,6 +499,7 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
         memory_ns=memory_ns,
         plugins=plugins,
         threat_model_digest=tm_digest,
+        extra_context_digests=xc_digests,
         # Not recoverable from the inputs — the tree builder probes both
         # refinement variants of the bug-analysis key.
         interactive=None,
@@ -545,6 +558,8 @@ async def _async_main(args: argparse.Namespace) -> int:
             status += f"  |  Plugins: {', '.join(tags.plugins)}"
         if tags.threat_model_digest:
             status += f"  |  TM digest: {tags.threat_model_digest}"
+        if tags.extra_context_digests:
+            status += f"  |  XC digests: {', '.join(tags.extra_context_digests)}"
 
         app = CacheExplorerApp(
             build_tree=lambda: build_tree(root_ctx, store, tags),
@@ -565,7 +580,8 @@ def main() -> int:
     p_run = sub.add_parser(
         "run",
         help="Explore a run by id (recommended). Reads the tags the run recorded "
-             "in its metadata (cache root, memory ns, plugins, threat-model digest) "
+             "in its metadata (cache root, memory ns, plugins, threat-model and "
+             "extra-context digests) "
              "— works even when the design doc was auto-discovered.",
     )
     p_run.add_argument("run_id", help="Run id (from the autoprove logs / ap-trail).")
@@ -590,6 +606,12 @@ def main() -> int:
                           help="Path to the threat model used for the original run — its "
                                "digest parameterizes the bug-analysis cache key. Omit for "
                                "runs without one.")
+    p_inputs.add_argument("--extra-context", dest="extra_context", action="append",
+                          default=None, metavar="PATH",
+                          help="Extra-context document (or directory of them) used for the "
+                               "original run — their combined digest also parameterizes the "
+                               "bug-analysis cache key. Repeat in the original order; a swept "
+                               "directory must still hold the same files.")
     p_inputs.add_argument("--plugins", dest="plugins", nargs="*", default=None,
                           help="Plugin names active for the original run — the manifest "
                                "digest is suffixed onto per-component cache keys. Defaults "

@@ -15,7 +15,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.tools import BaseTool, tool, InjectedToolCallId
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import ToolMessage
-from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import get_runtime
 
 from composer.templates.loader import load_jinja_template
@@ -23,7 +22,7 @@ from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
 from composer.core.state import AIComposerState
 from composer.core.validation import ReqsValidation
 from composer.core.context import AIComposerContext, stamp
-from composer.io.context import run_graph
+from composer.io.context import run_to_completion
 from composer.ui.tool_display import tool_display
 
 class JudgeInput(FlowInput, RoughDraftState):
@@ -150,12 +149,13 @@ def get_judge_tool(
         state: AIComposerState,
         tool_call_id: Annotated[str, InjectedToolCallId]
     ) -> Command | str:
-        judge_config: RunnableConfig = {"configurable": {"thread_id": uuid.uuid1().hex}}
-        judge_state = await run_graph(
+        judge_state = await run_to_completion(
             compiled_graph,
-            None,
             JudgeInput(input=[req_list], vfs=state["vfs"], orig_reqs=reqs, memory=None, did_read=False),
-            judge_config,
+            thread_id=uuid.uuid1().hex,
+            context=None,
+            # Preserves the langgraph default this run has always ridden on.
+            recursion_limit=250,
             description="Requirements evaluation",
             within_tool=tool_call_id
         )

@@ -10,7 +10,7 @@ from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 
 from composer.diagnostics.timing import RunSummary
 from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
-from composer.input.parsing import add_protocol_args
+from composer.input.parsing import add_extra_context_args, add_protocol_args
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.pipeline.core import CorePipelineResult
 
@@ -18,6 +18,7 @@ from composer.spec.context import (
     SourceFields
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
+from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -48,11 +49,13 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     main_contract: str
     system_doc: str | None
     max_concurrent: int
+    max_cpu_tasks: int
     cache_ns: str | None
     memory_ns: str | None
     cloud: bool
     interactive: bool
     threat_model: str
+    extra_context: list[str] | None
     recursion_limit: int
     max_bug_rounds: int
     budget: str | None
@@ -77,11 +80,13 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("main_contract", help="Main contract as path:ContractName")
     parser.add_argument("system_doc", nargs="?", default=None, help="Path to the design document (text or PDF). Optional — auto-discovered from the project when omitted.")
     parser.add_argument("--max-concurrent", type=int, default=4, help="Max concurrent agents (default: 4)")
+    parser.add_argument("--max-cpu-tasks", type=int, default=DEFAULT_MAX_CPU_TASKS, help=f"Max concurrent CPU-bound tasks — toolchain builds and the like (default: {DEFAULT_MAX_CPU_TASKS})")
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
     parser.add_argument("--cloud", action="store_true", help="Run prover jobs in the cloud")
     parser.add_argument("--interactive", action="store_true", help="Interactively refine the security properties after extraction")
-    parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'thread' model (text or pdf) with which to seed the property extraction process")
+    parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'threat' model (text or pdf) with which to seed the property extraction process")
+    add_extra_context_args(parser)
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
     parser.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
@@ -132,7 +137,6 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 thread_id=thread_id,
                 task_handler=handler,
                 at_exit=exit_logger,
-
                 workflow="autoprove"
             ) as (staged, cont),
             PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag_db
