@@ -471,6 +471,13 @@ counterexample reaches the report *as a finding with a justification* rather tha
 examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 `expect_test_failure`.
 
+**Every verdict says what the run behind it cost.** A `GOOD` from a campaign that explored to a
+ten-minute budget is a real claim and one from a twelve-second campaign is nearly none, and a report
+row carries only its check, its outcome and its `message`. So Crucible's `validate` ends every
+verdict — green ones included — with the component it came from and what its campaign spent against
+what it was allowed (`crucible-app/src/campaign.rs`). The note goes *last*: a `BAD`'s first line is
+the only one the live console shows, so accounting must never displace a counterexample.
+
 The marking is the *author's*, and the verdict is the *wheel's*; they meet on `RustFormalResult`,
 whose `reported_verdicts()` is what both the report and the console rollup read. A declared check
 reports `BAD` whatever its run said, because the alternative is the failure this exists to prevent:

@@ -5,6 +5,7 @@
 //! the seam and nothing else.
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use askama::Template;
 use autoprover_sdk::args::AppArgs;
@@ -21,8 +22,9 @@ use autoprover_sdk::Backend;
 use autoprover_solana::{SolanaPrep, SolanaPrepFacts, SolanaSourceUnit};
 
 use crate::build_log::{build_errors, is_build_error};
+use crate::campaign::Campaign;
 use crate::harness::{crate_dep_usable, HarnessSpec};
-use crate::layout::{feature_of_unit, harness_fn, PREFLIGHT_FEATURE, PREFLIGHT_ROOT};
+use crate::layout::{feature_of_unit, harness_fn, unit_name, PREFLIGHT_FEATURE, PREFLIGHT_ROOT};
 use crate::section::{delivered_sections, Section};
 use crate::templates::SkeletonFixture;
 use crate::triage::{attribute_findings, findings};
@@ -132,7 +134,7 @@ impl Backend for CrucibleApp {
         ws: &Workspace,
     ) -> ValidateOutcome {
         let program = &input.program;
-        let timeout: u64 = input.args.get("fuzz_timeout").unwrap_or(30);
+        let budget_s: u64 = input.args.get("fuzz_timeout").unwrap_or(30);
         // The target's name is the harness fn, which is also the Cargo feature and the selector.
         let fname = &target.name;
         // Only this component's section, against the crate root `crate_root` already wrote — so what
@@ -140,7 +142,7 @@ impl Backend for CrucibleApp {
         let hspec = HarnessSpec::of(input);
         let files = hspec.section_files(fname, spec);
         let dir = hspec.dir_arg(&ws.dir);
-        let timeout = timeout.to_string();
+        let timeout = budget_s.to_string();
         // `--mode explore` is NOT used, though these are its settings: it also turns on
         // `--stop-on-crash`, and a campaign that quits at the first crash leaves every other check
         // it covers unexplored while still answering for them. Spelling the settings out is what
@@ -155,6 +157,7 @@ impl Backend for CrucibleApp {
         if target.exploration == Exploration::UntilFirstFinding {
             args.push("--stop-on-crash");
         }
+        let started = Instant::now();
         match ws.run("crucible", args, &files) {
             Ok(out) => {
                 let combined = format!("{}\n{}", out.stdout, out.stderr);
@@ -163,7 +166,7 @@ impl Backend for CrucibleApp {
                 // classify those first — only a *non-zero* exit with build markers is a real
                 // build failure. This keeps `error[...]`-looking runtime/log text in a clean
                 // (exit 0) fuzz run from being misread as a build failure.
-                if !found.is_empty() {
+                let concluded = if !found.is_empty() {
                     // Each crash refutes ONE invariant — pin BAD to the property each finding names
                     // (every assertion is tagged `[<title>]`), and let `exploration` say what the
                     // checks nothing named get. A title belonging to another component is left to
@@ -179,7 +182,11 @@ impl Backend for CrucibleApp {
                 } else {
                     // Non-zero exit with no build markers and no finding — capture the tail.
                     target.all(Outcome::Error, Some(build_errors(&out)))
-                }
+                };
+                // What the campaign spent, on every row it answered for — a verdict is only worth
+                // what the run behind it cost, and the report has nowhere else to say so.
+                Campaign::of(&unit_name(input), budget_s, started.elapsed(), &combined)
+                    .annotate(target, concluded)
             }
             Err(e) => target.all(Outcome::Error, Some(e)),
         }

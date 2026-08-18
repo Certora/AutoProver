@@ -111,6 +111,15 @@ tests may not send instructions or add actions. Say so in the feedback so the ga
 judge the suite on what it does with the surface it has. Declaring such a property uncoverable, in
 a comment naming what is missing, is the CORRECT handling and is not itself a defect; asserting
 something vacuous to appear to cover it is a C1 defect and always is.
+- A fn whose body is a `// FINDING: <title> — <source evidence>; not observable from post-action
+state because <why>` comment is claiming the program is DEFECTIVE and that no assertion could show
+it — the author publishes it as a finding rather than filing it as a gap. **Do not read it as a C1
+vacuous assertion**: it asserts nothing on purpose, and rejecting it forces a real defect back into
+the skip list where nobody reads it as one. Judge the *evidence* instead, and reject when either
+half fails: the comment must point at specific source (the file/function, the check that is absent,
+the argument left unpinned) rather than a suspicion, AND the property must genuinely leave no trace
+— if any sequence of `action_*` calls would produce state an assertion could read, this is a test
+the author owes you, so say which sequence.
 - Flag redundant tests (different names, same fact about the same state); note any property left
 uncovered as a result.
 

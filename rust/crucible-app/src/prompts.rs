@@ -293,4 +293,31 @@ mod tests {
         // property, not a covered one — the judge is the only thing that sees both halves.
         assert!(norm.contains("The assertion must be in THIS suite"), "{norm}");
     }
+
+    #[test]
+    fn a_source_confirmed_defect_is_published_as_a_finding_rather_than_skipped() {
+        // klend filed two confirmed bugs — reasons opening "KNOWN VULNERABILITY" and "The bug is
+        // real (confirmed in source: …)" — through `record_skip`, so the report showed them under
+        // "Formalization gaps" beside 31 genuine ones. They are not gaps; a gap is the absence of a
+        // claim about the program, and these are claims.
+        let app = CrucibleApp;
+        let input = component_input("flash_loans", "Flash Loans", vec![prop("gating", "gating")]);
+        let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let author = norm(&app.author_prompt(&input).instruction);
+
+        assert!(author.contains("is a FINDING, not a gap"), "{author}");
+        assert!(author.contains("// FINDING:"), "{author}");
+        assert!(author.contains("mark it `expect_check_failure`"), "{author}");
+        // The two rules that keep it from becoming a channel for guesses.
+        assert!(author.contains("name the **source evidence**"), "{author}");
+        assert!(author.contains("never use it for a suspicion you have not confirmed"), "{author}");
+
+        // The judge has to know too, or it rejects the exact handling the author was told to use:
+        // a `// FINDING:` fn asserts nothing, which is Criterion 1 on its face.
+        let judge = norm(&app.judge_instruction(&input, "fn c_gating() {}"));
+        assert!(judge.contains("Do not read it as a C1 vacuous assertion"), "{judge}");
+        // …but it is not a free pass. The judge is pointed at the two ways the claim fails.
+        assert!(judge.contains("point at specific source"), "{judge}");
+        assert!(judge.contains("say which sequence"), "{judge}");
+    }
 }

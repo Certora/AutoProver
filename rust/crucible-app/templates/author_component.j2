@@ -32,6 +32,22 @@ Two things you may NOT do, both of which break the campaign rather than the buil
 whatever the program does (re-reading a field nothing can change, `x >= 0` on a `u64`, a limit set so high nothing
 reaches it) is worse than nothing: it reports a property as covered when it is not. Write the honest thing instead — a
 `// UNCOVERABLE: <property title> — needs <the action or actor the fixture lacks>` comment, and check what you *can*.
+
+**A defect you can see in the source but cannot observe from state is a FINDING, not a gap.** Sometimes you read the
+program and the bug is plainly there — the permission check that exists on the sibling handler is absent here, a
+caller-supplied account is passed where the handler should have pinned its own — and yet no sequence of actions leaves
+a trace an assertion could read, because the operation *succeeds* and the damage is that it was allowed. Do not
+`record_skip` that: a skip is filed where a reader looks for coverage gaps, and this is the opposite of a gap. Publish
+it instead:
+
+- write the `c_<slug>` fn with a `// FINDING: <property title> — <what the source shows>; not observable from
+  post-action state because <why>` comment in place of the assertion you cannot write;
+- mark it `expect_check_failure`, and make the reason name the **source evidence** — the file, the function, the call
+  that is missing or the argument that is unpinned — and say outright that the fuzzer cannot reproduce it.
+
+The report then carries it as a finding resting on your reading, which is exactly what it is. Two rules keep this
+honest, and it is worthless without them: never use it for a suspicion you have not confirmed in the source, and never
+use it for a property you simply found hard to check — that is `// UNCOVERABLE:`, or a skip.
 Fixture source for reference:
 ```rust
 {{ fixture }}

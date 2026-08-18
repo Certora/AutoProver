@@ -30,6 +30,7 @@
 
 mod app;
 mod build_log;
+mod campaign;
 mod declaration;
 mod facts;
 mod harness;
