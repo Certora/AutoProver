@@ -1,38 +1,28 @@
 
 import inspect
 from dataclasses import dataclass
-from typing import Callable, NotRequired, Protocol, Sequence, Awaitable
+from typing import Awaitable, Callable, NotRequired, Sequence
 from typing_extensions import TypedDict
 from composer.spec.service_host import Sort, ServiceHost
 
-from pydantic import BaseModel, Field
-
-from langchain_core.tools import BaseTool
-from langgraph.graph import MessagesState
-
-from graphcore.graph import Builder, FlowInput
+from graphcore.graph import Builder
 from graphcore.tools.vfs import VFSState
 
+from composer.authoring.judge import (
+    JudgeInput, JudgeState, JudgeToolHost, ContextualFeedbackThunk,
+    build_feedback_judge_generic, judge_host_of,
+)
+from composer.authoring.state import SkippedProperty
 from composer.spec.context import (
     WorkflowContext, CVLJudge
 )
 from composer.spec.types import PropertyFormulation
-from composer.spec.graph_builder import bind_standard, run_to_completion
 from composer.cvl.tools import get_cvl
-from composer.tools.thinking import RoughDraftState, get_rough_draft_tools
-from composer.spec.cvl_generation import FeedbackServices, Rebuttal, SkippedProperty
-from composer.spec.source.live_explorer import VersionedHistory
-from composer.spec.system_model import ContractComponentInstance
 from composer.spec.gen_types import TemplateInstantiation, TypedTemplate, ITypedTemplate, PartialTemplate
+from composer.spec.cvl_generation import FeedbackServices, Rebuttal
+from composer.spec.source.live_explorer import VersionedHistory
 from composer.spec.system_model import ContractComponentInstance, component_context
-from composer.spec.util import uniq_thread_id
-
-class PropertyFeedback(BaseModel):
-    """
-    The feedback on the properties
-    """
-    good: bool = Field(description="Whether the properties are good as is, or if there is room for improvement")
-    feedback: str = Field(description="The feedback on the rule if work is needed. Can be empty if there is no feedback")
+from composer.kb.kb_context import with_cvl_context
 
 class Properties(TypedDict):
     properties: list[PropertyFormulation]
@@ -73,16 +63,6 @@ class JudgeSystemParams(TypedDict):
 FeedbackSystemTemplate = TypedTemplate[JudgeSystemParams]("property_judge_system_prompt.j2")
 
 
-class JudgeExtra(RoughDraftState):
-    curr_spec: str
-
-
-class FeedbackBaseState(MessagesState, JudgeExtra):
-    result: NotRequired[PropertyFeedback]
-
-class FeedbackBaseInput(FlowInput, JudgeExtra):
-    pass
-
 # Extra input parts prepended to every judge invocation. A bare list is static;
 # a callable is evaluated per invocation (and may be async) so the producer can
 # reflect state that changes between review rounds — e.g. a notice that the
@@ -94,133 +74,72 @@ type ExtraInputPrompt = (
     | None
 )
 
-type ContextualFeedbackToolImpl[Ctx] = Callable[
-    [Ctx, str, list[SkippedProperty], list[Rebuttal], str],
-    Awaitable[PropertyFeedback]
-]
+type ContextualFeedbackToolImpl[Ctx] = ContextualFeedbackThunk[Rebuttal, Ctx]
 
 
-class JudgeToolHost(Protocol):
-    """The judge's construction surface: a builder, the workflow ``sort``, and
-    the tool suite the judge runs with. Callers vary the FS-read strategy
-    through ``judge_tools`` — frozen fs tools over the project root, or
-    vfs-aware tools reading the author's working copy — without the judge
-    machinery knowing which. ``ServiceHost`` consumers adapt via
-    :func:`judge_host_of`."""
-
-    def builder_heavy(self) -> Builder[None, None, None]: ...
-
-    @property
-    def sort(self) -> Sort: ...
-
-    @property
-    def judge_tools(self) -> tuple[BaseTool, ...]: ...
-
-
-@dataclass(frozen=True)
-class _ServiceHostJudge:
-    """The vanilla adapter: judge runs with the host's full tool surface."""
-    env: ServiceHost
-
-    def builder_heavy(self) -> Builder[None, None, None]:
-        return self.env.builder_heavy()
-
-    @property
-    def sort(self) -> Sort:
-        return self.env.sort
-
-    @property
-    def judge_tools(self) -> tuple[BaseTool, ...]:
-        return self.env.all_tools
-
-
-def judge_host_of(env: ServiceHost) -> JudgeToolHost:
-    return _ServiceHostJudge(env)
-
-
-def property_feedback_judge_generic[
-    S: FeedbackBaseState,
-    I: FeedbackBaseInput,
-    Ctx
-](
+def property_feedback_judge_generic[S: JudgeState, I: JudgeInput, Ctx](
     st: type[S],
-    i: type[I],
+    inp: type[I],
     ctx: WorkflowContext[CVLJudge],
     host: JudgeToolHost,
     prompt: ITypedTemplate[FeedbackInputs],
     props: list[PropertyFormulation],
-
     extra_inputs: ExtraInputPrompt,
     system_prompt: TemplateInstantiation | None,
-
-    input_lift: Callable[[FeedbackBaseInput, Ctx], I],
+    input_lift: Callable[[JudgeInput, Ctx], I],
     source_editing: bool = False,
 ) -> ContextualFeedbackToolImpl[Ctx]:
+    """The CVL property judge, generic over its state/input pair and a per-invocation context.
+
+    The batch's properties, skips and rebuttals are all rendered into the judge's *prompt* here
+    (``property_judge_prompt.j2``); only the spec under review and the caller's ``extra_inputs``
+    ride in as input text."""
 
     if system_prompt is None:
         system_prompt = FeedbackSystemTemplate.bind(
             {"sort": host.sort, "source_editing": source_editing}
         )
+    bound_system = system_prompt
 
-    builder = host.builder_heavy().with_tools(
-        host.judge_tools
-    )
+    def apply_prompt(
+        builder: Builder[S, None, I], _cvl: str,
+        skipped: Sequence[SkippedProperty], rebuttals: Sequence[Rebuttal],
+    ) -> Builder[S, None, I]:
+        return builder.with_initial_prompt(with_cvl_context(prompt.bind({
+            "properties": props,
+            "rebuttals": rebuttals,
+            "skipped": skipped,
+        }).render_to))
 
-    rough_draft_tools = get_rough_draft_tools(st)
-
-    def did_rough_draft_read(s: S, _) -> str | None:
-        if not s["did_read"]:
-            return "Completion REJECTED: never read rough draft for review"
-        return None
-
-    mem = ctx.get_memory_tool()
-
-    staged_workflow = bind_standard(
-        builder, st, validator=did_rough_draft_read
-    ).with_input(
-        i
-    ).inject(
-        lambda g: system_prompt.render_to(g.with_sys_prompt_template)
-    ).with_tools([*rough_draft_tools, mem, get_cvl(st), ])
-
-    async def the_tool(
-        exec_ctx: Ctx,
-        cvl: str,
-        skipped: Sequence[SkippedProperty],
-        rebuttals: Sequence[Rebuttal],
-        within_tool: str,
-    ) -> PropertyFeedback:
-        workflow = staged_workflow.inject(
-            lambda b: prompt.bind({
-                "properties": props,
-                "rebuttals": rebuttals,
-                "skipped": skipped
-            }).render_to(b.with_initial_prompt_template)
-        ).compile_async()
-
-        input_parts: list[str | dict] = []
+    async def input_parts(
+        cvl: str, _skipped: Sequence[SkippedProperty], _rebuttals: Sequence[Rebuttal]
+    ) -> list[str | dict]:
+        parts: list[str | dict] = []
         if extra_inputs:
             if isinstance(extra_inputs, list):
-                input_parts.extend(extra_inputs)
+                parts.extend(extra_inputs)
             else:
                 produced = extra_inputs()
                 if inspect.isawaitable(produced):
                     produced = await produced
-                input_parts.extend(produced)
+                parts.extend(produced)
+        parts.append("The proposed CVL file is")
+        parts.append(cvl)
+        return parts
 
-        input_parts.append("The proposed CVL file is")
-        input_parts.append(cvl)
-        res = await run_to_completion(
-            workflow,
-            input_lift(FeedbackBaseInput(input=input_parts, curr_spec=cvl, memory=None, did_read=False), exec_ctx),
-            thread_id=uniq_thread_id("feedback"),
-            recursion_limit=ctx.recursion_limit,
-            description="Property feedback judge",
-            within_tool=within_tool,
-        )
-        assert "result" in res
-        return res["result"]
-    return the_tool
+    return build_feedback_judge_generic(
+        st=st,
+        inp=inp,
+        ctx=ctx,
+        host=host,
+        apply_system=lambda b: bound_system.render_to(b.with_sys_prompt_template),
+        apply_prompt=apply_prompt,
+        input_parts=input_parts,
+        readback=get_cvl(st),
+        description="Property feedback judge",
+        thread_prefix="feedback",
+        input_lift=input_lift,
+    )
 
 
 def property_feedback_judge(
@@ -235,16 +154,19 @@ def property_feedback_judge(
     """The vanilla judge: the full ``ServiceHost`` tool surface (frozen FS
     reads), no source editing. Returns the services bundle the property-
     management tool suite binds against."""
+    def lift(i: JudgeInput, _: None) -> JudgeInput:
+        return i
+
     to_wrap = property_feedback_judge_generic(
-        st=FeedbackBaseState,
-        i=FeedbackBaseInput,
+        st=JudgeState,
+        inp=JudgeInput,
         ctx=ctx,
         host=judge_host_of(env),
         extra_inputs=extra_inputs,
         prompt=prompt,
         props=props,
         system_prompt=system_prompt,
-        input_lift=lambda i, _: i,
+        input_lift=lift,
     )
 
     return FeedbackServices(
@@ -267,11 +189,11 @@ class SourceSnapshot:
     version_history: list[str]
 
 
-class VfsJudgeState(FeedbackBaseState, VFSState, VersionedHistory):
+class VfsJudgeState(JudgeState, VFSState, VersionedHistory):
     pass
 
 
-class VfsJudgeInput(FeedbackBaseInput, VFSState, VersionedHistory):
+class VfsJudgeInput(JudgeInput, VFSState, VersionedHistory):
     pass
 
 
@@ -289,7 +211,7 @@ def source_feedback_judge(
     :class:`SourceSnapshot`); the returned impl takes that snapshot as its
     leading argument on every invocation."""
 
-    def lift(base: FeedbackBaseInput, snap: SourceSnapshot) -> VfsJudgeInput:
+    def lift(base: JudgeInput, snap: SourceSnapshot) -> VfsJudgeInput:
         return VfsJudgeInput(
             **base,
             vfs=snap.vfs,
@@ -298,7 +220,7 @@ def source_feedback_judge(
 
     return property_feedback_judge_generic(
         st=VfsJudgeState,
-        i=VfsJudgeInput,
+        inp=VfsJudgeInput,
         ctx=ctx,
         host=host,
         extra_inputs=extra_inputs,

@@ -1,23 +1,30 @@
-from typing import AsyncContextManager, Protocol, Callable, Awaitable, Any
+from typing import AsyncContextManager, Protocol, Callable, Awaitable, Any, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from abc import ABC, abstractmethod
-from graphcore.graph import TemplateLoader
+
+from langchain_core.tools import BaseTool
+
+from graphcore.graph import TemplateLoader, PromptInput
 from jinja2.loaders import BaseLoader, PackageLoader, ChoiceLoader, PrefixLoader
 
 from composer.templates.loader import base_loader, load_jinja_template, _autoescape
 from composer.spec.system_model import FeatureUnit
-from composer.pipeline.ptypes import PipelineRun
 from composer.spec.context import WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, VerificationArtifact
 from composer.spec.prop_inference import AnyPropertyGenerationInput
 
-class PluginContext[C](Protocol):
+class PluginRunContext[C](Protocol):
+    """The run's services, without the task runner: what a tool-binding hook gets.
+    Tool hooks bind tools into the backend's authoring graph — they don't run
+    top-level tasks, so the runner capability lives only on :class:`PluginContext`,
+    the task-hook context."""
+
     @property
     def ctx(self) -> WorkflowContext[C]:
         ...
-    
+
     @property
     def env(self) -> ServiceHost:
         ...
@@ -26,6 +33,7 @@ class PluginContext[C](Protocol):
     def source(self) -> SourceCode:
         ...
 
+class PluginContext[C](PluginRunContext[C], Protocol):
     async def runner[T](
         self,
         label: str,
@@ -33,10 +41,35 @@ class PluginContext[C](Protocol):
     ) -> T:
         ...
 
+
+class ArtifactRegistrar(Protocol):
+    """How a plugin's contributed tool reports a verification artifact it
+    produced (a Lean proof, an auxiliary certificate, …). Registration is
+    in-memory and synchronous — the driver persists registered artifacts via
+    the run's artifact store and records them in the report, attributed to the
+    registering plugin. Call it from tool bodies as they produce results; the
+    driver collects per formalization batch."""
+
+    def register(self, artifact: VerificationArtifact) -> None:
+        ...
+
+
+class PluginToolContext[C](PluginRunContext[C], Protocol):
+    """What a tool-binding hook receives: the run's services plus the artifact
+    registrar for the batch being formalized. Still no task runner — tool hooks
+    bind tools, they don't run top-level tasks."""
+
+    @property
+    def artifacts(self) -> ArtifactRegistrar:
+        ...
+
 class PrePropertyInference:
     pass
 
 class PostPropertyInference:
+    pass
+
+class FormalizationTool:
     pass
 
 import jinja2
@@ -68,8 +101,43 @@ class _PluginEnvironment(Environment):
             return prefix + template
         return template
 
+@dataclass
+class ProvidedTools:
+    tools: Sequence[BaseTool]
+    system_prompt_injection: PromptInput
+
+def plugin_jinja_loader(
+    loader: BaseLoader | None | type
+) -> TemplateLoader:
+    if loader is None:
+        return load_jinja_template
+
+    if isinstance(loader, type):
+        try:
+            loader = PackageLoader(loader.__module__)
+        except ValueError:
+            return load_jinja_template
+    
+    new_jinja_loader = ChoiceLoader([
+        loader,
+        _NonStrippingPrefixLoader({
+            "autoprover": base_loader
+        })
+    ])
+    compilation_env = _PluginEnvironment(loader=new_jinja_loader, autoescape=_autoescape)
+    def _load_jinja_template(template_name: str, **kwargs: Any) -> str:
+        """Load and render a Jinja template from the script directory"""
+        template = compilation_env.get_template(template_name)
+        return template.render(**kwargs)
+    return _load_jinja_template
+
+
 class PipelinePlugin[U: FeatureUnit](ABC):
-    """A pipeline plugin, parameterized by the unit type its hooks accept."""
+    """A pipeline plugin, parameterized by the unit type its hooks accept. Tool
+    contribution is not declared here: a plugin opts in by deriving from a
+    tool-provider subclass instead of this base directly — a backend's own
+    (``composer.spec.source.plugin.CertoraProverTools``,
+    ``composer.foundry.plugin.FoundryTools``) or :class:`AnyBackendTools` below."""
 
     NAME: str
 
@@ -79,27 +147,11 @@ class PipelinePlugin[U: FeatureUnit](ABC):
             return PackageLoader(t)
         except ValueError:
             return None
-    
+
     @cached_property
     def load_jinja_template(self) -> TemplateLoader:
         loader = self.plugin_loader()
-        if loader is None:
-            return load_jinja_template
-        
-    
-        new_jinja_loader = ChoiceLoader([
-            loader,
-            _NonStrippingPrefixLoader({
-                "autoprover": base_loader
-            })
-        ])
-        compilation_env = _PluginEnvironment(loader=new_jinja_loader, autoescape=_autoescape)
-        def _load_jinja_template(template_name: str, **kwargs: Any) -> str:
-            """Load and render a Jinja template from the script directory"""
-            template = compilation_env.get_template(template_name)
-            return template.render(**kwargs)
-        return _load_jinja_template
-
+        return plugin_jinja_loader(loader)
 
     async def property_inference_input_hook(
         self,
@@ -116,6 +168,41 @@ class PipelinePlugin[U: FeatureUnit](ABC):
     ) -> list[PropertyFormulation]:
         return props
 
+
+# ---------------------------------------------------------------------------
+# Tool contribution — deriving a tool-provider subclass IS the declaration
+# ---------------------------------------------------------------------------
+#
+# A plugin contributes formalization tools by deriving from a tool-provider
+# subclass of PipelinePlugin: each backend defines its own in its own package
+# (the prover's ``composer.spec.source.plugin.CertoraProverTools``, foundry's
+# ``composer.foundry.plugin.FoundryTools``) and hands it to the driver as a
+# ``ToolExtension`` (see ``composer.pipeline.core``) — this module stays
+# backend-agnostic. The driver dispatches — and perturbs the formalization
+# cache key for — exactly the plugins deriving the running backend's provider
+# class, so declaration and implementation cannot drift, and a plugin that
+# derives none (property-inference-only plugins) leaves every formalization
+# key plugin-free. Each hook returns one tool bundle, or None when it has
+# nothing for this particular unit/batch (None keeps the plugin in the cache
+# key: whether it yields is only knowable at dispatch time).
+
+
+class AnyBackendTools[U: FeatureUnit](PipelinePlugin[U]):
+    """The one backend-agnostic tool provider: the same tools for every backend,
+    present and future — so no staged backend state, since none is common across
+    backends. Always projected by the driver's binder, so it perturbs every
+    backend's formalization keys; prefer a backend's own provider class when the
+    tools are backend-specific. Composes with those: on a backend whose provider
+    class the plugin also derives, both hooks fire and both bundles are injected."""
+
+    @abstractmethod
+    async def backend_tools(
+        self,
+        comp: U,
+        prop: Sequence[PropertyFormulation],
+        tool_context: PluginToolContext[FormalizationTool],
+    ) -> ProvidedTools | None:
+        ...
 
 # ---------------------------------------------------------------------------
 # Scope — which runs a plugin applies to

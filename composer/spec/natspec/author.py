@@ -10,10 +10,12 @@ from langgraph.types import Command
 
 from graphcore.summary import SummaryConfig
 from graphcore.graph import tool_state_update
-from graphcore.tools.schemas import WithImplementation, WithInjectedId, WithInjectedState, WithAsyncDependencies
+from graphcore.tools.schemas import WithInjectedId, WithInjectedState, WithAsyncDependencies
+from composer.authoring.state import check_completion
+from composer.authoring.tools import give_up_tool
 from composer.spec.cvl_generation import (
     static_tools, property_tools, run_cvl_generator, CVLGenerationInput, CVLGenerationState,
-    check_completion, CVLGenerationExtra
+    CVLGenerationExtra
 )
 
 from composer.spec.service_host import Sort
@@ -24,8 +26,10 @@ from composer.spec.types import PropertyFormulation
 from composer.spec.feedback import property_feedback_judge, Properties, FeedbackTemplate
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.system_model import ContractComponentInstance, ContractName, component_context
-from composer.spec.cvl_generation import CVL_JUDGE_KEY, static_tools, SkippedProperty
+from composer.authoring.state import SkippedProperty
+from composer.spec.cvl_generation import CVL_JUDGE_KEY
 from composer.spec.service_host import ServiceHost
+from composer.kb.kb_context import with_cvl_context
 from composer.ui.tool_display import tool_display, suppress_ack
 from composer.spec.natspec.task_description import Assembler, ConfigurationBuilder
 from composer.spec.natspec.typecheck import TypeChecker
@@ -108,27 +112,12 @@ class GaveUp(BaseModel):
 class AuthorResult(BaseModel):
     result_wrapped: Annotated[GaveUp | GenerationSuccess, Discriminator("ty")]
 
-@tool_display(
-    label=lambda p: f"Giving up on property generation: {p['reason']}",
-    result=None,
-)
-class GiveUpTool(WithImplementation[Command], WithInjectedId):
-    """
+_GIVE_UP_DESCRIPTION = """
     Call this tool to give up on the property generation for this task.
 
     This should only ever be called as a LAST RESORT when you have exhausted all other
     mechanisms to complete your task
     """
-    reason : str = Field(description="The reason for giving up on your task")
-
-    @override
-    def run(self) -> Command:
-        return tool_state_update(
-            self.tool_call_id,
-            "Accepted",
-            failed=True,
-            result=self.reason
-        )
     
 @dataclass
 class ContractConfiguration:
@@ -212,9 +201,9 @@ async def generate_cvl_batch(
 
     def stub_feedback_extras() -> list[str | dict]:
         return [
-            f"The current typechecking stub for the {contract_name} contract is",
+            f"The current typechecking stub for the {contract_name} contract is\n\n",
             stub_reader(),
-            "For reference, the system document for the application is",
+            "For reference, the system document for the application is\n\n",
             system_doc.content.to_dict(),
         ]
 
@@ -234,7 +223,7 @@ async def generate_cvl_batch(
         .with_tools(static_tools())
         .with_tools(property_tools(feedback_services))
         .with_tools([
-            GiveUpTool.as_tool("give_up"),
+            give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="property generation"),
             AdvisoryTypecheck.bind(typechecker).as_tool("advisory_typecheck"),
             PublishTool.bind(typechecker).as_tool("publish"),
             ctx.get_memory_tool()
@@ -243,13 +232,14 @@ async def generate_cvl_batch(
         .with_input(NatspecGenerationInput)
         .with_state(NatspecGenerationState)
         .with_sys_prompt_template("nosource_property_generation_system_prompt.j2")
-        .inject(
-            lambda b: NoSourceGen.bind({
+        .with_initial_prompt(with_cvl_context(
+            NoSourceGen.bind({
                 "context": component,
                 "properties": props,
                 "sort": env.sort,
-            }).render_to(b.with_initial_prompt_template)
-        ).with_summary_config(_CVLConfig(contract_name, stub_path)).compile_async()
+            }).render_to
+        ))
+        .with_summary_config(_CVLConfig(contract_name, stub_path)).compile_async()
     )
 
     res = await run_cvl_generator(

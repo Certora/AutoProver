@@ -402,8 +402,8 @@ _COUNTER_TAPE: list[BaseMessage] = [
     # ─────────────────────────────────────────────────────────────────
     # Tools available to the author:
     #   - env.all_tools = source_tools (fs) + rag_tools (cvl_manual_search,
-    #     cvl_keyword_search, get_cvl_manual_section, scan_knowledge_base,
-    #     get_knowledge_base_article, cvl_research, cvl_document_ref)
+    #     cvl_keyword_search, get_cvl_manual_section, get_cvl_recipe,
+    #     cvl_research, cvl_document_ref)
     #   - injected_tools: request_stub_field, register_verification_file,
     #     list_verification_files
     #   - static_tools: put_cvl, put_cvl_raw, feedback_tool, record_skip,
@@ -442,24 +442,19 @@ _COUNTER_TAPE: list[BaseMessage] = [
         _tc("cvl_keyword_search", query="rule env", min_depth=0, limit=5),
     ),
 
-    # A3 — exercise section retrieval + knowledge-base scan.
+    # A3 — exercise section retrieval + recipe retrieval (hit path).
     _ai(
-        "Reading the referenced manual section and scanning the knowledge base.",
+        "Reading the referenced manual section and retrieving a recipe.",
         _tc("get_cvl_manual_section", headers=["Rules"]),
-        _tc(
-            "scan_knowledge_base",
-            symptom="increment monotonic property",
-            limit=5,
-            offset=0,
-        ),
+        _tc("get_cvl_recipe", id="R1"),
     ),
 
-    # A4 — exercise the direct-fetch KB path and the unresolved-call guidance.
-    # The KB fetch is expected to miss (the title won't exist in the store) —
+    # A4 — exercise the recipe miss path and the unresolved-call guidance.
+    # The recipe id is expected to miss (no such entry in the index) —
     # the harness cares about exercising the path, not about the result.
     _ai(
-        "Checking the knowledge base for prior notes and unresolved-call guidance.",
-        _tc("get_knowledge_base_article", title="Monotonic counter rule"),
+        "Checking for a recipe and unresolved-call guidance.",
+        _tc("get_cvl_recipe", id="R99"),
         _tc("unresolved_call_guidance"),
     ),
 
@@ -588,7 +583,7 @@ _COUNTER_TAPE: list[BaseMessage] = [
     ),
 
     # A11 — exercise unskip_property. The empty-reason sentinel inside
-    # _merge_skips then filters the entry out of state["skipped"], so the
+    # merge_skips then filters the entry out of state["skipped"], so the
     # final skipped list going into feedback_tool is []. Important: the
     # feedback digest includes skipped — changing skipped between a passing
     # feedback verdict and publish would invalidate the digest.

@@ -9,6 +9,7 @@ import composer.bind as _
 
 import argparse
 import asyncio
+import logging
 import json
 import pathlib
 import sys
@@ -24,7 +25,7 @@ from composer.rag.db import PostgreSQLRAGDatabase
 from composer.rag.models import get_model
 from composer.workflow.services import standard_connections
 from composer.spec.service_host import ModelProvider
-from composer.kb.knowledge_base import DefaultEmbedder, DEFAULT_KB_NS
+from composer.rag.models import DefaultEmbedder
 from composer.spec.services import build_rag_tool_env
 
 from composer.spec.context import (
@@ -40,6 +41,8 @@ from composer.ui.tool_display import async_tool_context
 
 from composer.ui.pipeline_app import NatspecPipelineApp
 from composer.cli.natspec_startup import build_mental_model, make_source_factory
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +183,6 @@ async def _main() -> int:
                 ),
                 db=rag,
                 cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
-                kb_ns=DEFAULT_KB_NS,
                 store=conn.indexed_store,
                 recursion_limit=args.recursion_limit,
             )
@@ -235,9 +237,11 @@ async def _main() -> int:
                     )
                     await app.on_pipeline_done(result)
                 except Exception as exc:
+                    # A toast alone loses the failure the moment it fades — and the traceback with it.
+                    _log.exception("pipeline failed")
                     app.notify(f"Pipeline failed: {exc}", severity="error")
                     await app.mount_error(exc)
-                    app._pipeline_done = True
+                    app.mark_pipeline_done()
 
             app.set_work(work)
             await app.run_async()

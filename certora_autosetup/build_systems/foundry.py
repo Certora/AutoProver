@@ -182,7 +182,10 @@ class FoundryManager(BuildSystemManager):
             # Build the packages list from forge remappings + foundry.toml + remappings.txt
             # + package.json for the resolved profile.
             packages = build_packages_from_remapping_sources(
-                base_dir=config_file.parent, log_fn=self.log, profile=profile
+                base_dir=config_file.parent,
+                log_fn=self.log,
+                profile=profile,
+                run_root=self.project_root,
             )
             if packages:
                 config.packages = packages
