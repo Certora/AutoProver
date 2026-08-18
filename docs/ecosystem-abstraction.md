@@ -56,7 +56,7 @@ ChainTag    = Literal["evm", "solana", "soroban"]
 class Language:
     name: LanguageTag
     default_forbidden_read: str          # fs-exclusion regex (Cargo layout vs Foundry layout)
-    vulnerability_patterns_partial: str | None = None   # j2 partial of language-level vulnerability patterns
+    vulnerability_patterns_fragment: str | None = None   # j2 fragment of language-level vulnerability patterns
 
 @dataclass(frozen=True)
 class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
@@ -134,7 +134,7 @@ RUST = Language(
     name="rust",
     # Cargo/Anchor layout: hide build output, VCS, lockfiles, and the JS side; keep crate sources + tests/.
     default_forbidden_read=r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)",
-    vulnerability_patterns_partial="rust/_vulnerability_patterns.j2",     # overflow/underflow, panic!/unwrap/expect, ownership
+    vulnerability_patterns_fragment="rust/vulnerability_patterns_fragment.j2",     # overflow/underflow, panic!/unwrap/expect, ownership
 )
 
 SOLANA: Ecosystem[SolanaApplication, SolanaProgramInstance, SolanaComponentInstance] = Ecosystem(
@@ -191,13 +191,13 @@ The Solana property template composes the shared Rust fragment with its own plat
 
 ```jinja
 {# composer/templates/solana/property_prompt.j2 #}
-{% include "rust/_vulnerability_patterns.j2"   %}   {# shared: overflow, panics, unwrap, lossy casts #}
-{% include "solana/_vulnerability_patterns.j2" %}   {# chain-specific: signer/owner/PDA/CPI checks #}
+{% include "rust/vulnerability_patterns_fragment.j2"   %}   {# shared: overflow, panics, unwrap, lossy casts #}
+{% include "solana/vulnerability_patterns_fragment.j2" %}   {# chain-specific: signer/owner/PDA/CPI checks #}
 ```
 
-`rust/_vulnerability_patterns.j2` (the language facet) states language-level vulnerability
+`rust/vulnerability_patterns_fragment.j2` (the language facet) states language-level vulnerability
 patterns — integer overflow/underflow, `panic!`/`unwrap`/`expect` aborts, lossy conversions,
-unchecked results — independent of any chain; `solana/_vulnerability_patterns.j2` adds the
+unchecked results — independent of any chain; `solana/vulnerability_patterns_fragment.j2` adds the
 Solana-native ones. Because the Rust facet is factored out this way, it is reusable by any future
 Rust chain without copying.
 
@@ -238,7 +238,7 @@ SOROBAN: SorobanEcosystem = Ecosystem(
 - **Validation** checks duplicate contract identifiers/names, duplicate function slugs, duplicate
   component names/slugs, unknown component links, unknown storage keys, duplicate storage keys, and
   functions that belong to no component.
-- **Templates** include `soroban/_platform_model.j2` in both the analysis and property prompts, so
+- **Templates** include `soroban/platform_model_fragment.j2` in both the analysis and property prompts, so
   Soroban execution facts live in one shared place. See
   [composer/templates/soroban/README.md](../composer/templates/soroban/README.md).
 - **Backend guidance** still belongs to the backend. A future Certora Sunbeam backend should provide
@@ -312,7 +312,7 @@ async def run_pipeline[..., U, Main, App](
 | `FeatureUnit` protocol | [composer/spec/system_model.py](../composer/spec/system_model.py) |
 | EVM system model + prompts | [composer/spec/system_model.py](../composer/spec/system_model.py) · `composer/templates/application_analysis_*.j2` · `property_analysis_*.j2` |
 | Solana system model | [composer/spec/solana/model.py](../composer/spec/solana/model.py) |
-| Solana prompts + shared Rust fragment | `composer/templates/solana/*.j2` · `composer/templates/rust/_vulnerability_patterns.j2` |
+| Solana prompts + shared Rust fragment | `composer/templates/solana/*.j2` · `composer/templates/rust/vulnerability_patterns_fragment.j2` |
 | Code-explorer prompts (per ecosystem) | `composer/templates/code_explorer/` · `Ecosystem.code_explorer_prompt` |
 | Soroban system model | [composer/spec/soroban/model.py](../composer/spec/soroban/model.py) |
 | Soroban prompts (+ platform primer) | `composer/templates/soroban/*.j2` · [its README](../composer/templates/soroban/README.md) |

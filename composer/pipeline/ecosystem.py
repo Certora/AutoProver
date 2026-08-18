@@ -107,9 +107,9 @@ class Language:
     #: path (Solidity's ``fs_forbidden_read``, whose carve-outs don't fit a regex) or a plain
     #: exclusion pattern where one suffices. Both shapes are what ``GlobalExcludeArg`` accepts.
     default_forbidden_read: str | Callable[[PurePath], bool]
-    # The j2 partial with this language's vulnerability patterns (overflow, panics, …). Reserved
+    # The j2 fragment with this language's vulnerability patterns (overflow, panics, …). Reserved
     # for the prompt-fragment split; unused while prompts are still monolithic.
-    vulnerability_patterns_partial: str | None = None
+    vulnerability_patterns_fragment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -209,7 +209,7 @@ def _evm_analysis_extra_input(source: SourceCode) -> list[str | dict]:
 
 # Adding Vyper support (a second EVM source language) would, at a very high level:
 #   1. Extend ``LanguageTag`` with ``"vyper"`` and add a ``VYPER`` ``Language`` facet here (its
-#      own ``forbidden_read`` and — eventually — failure-modes partial).
+#      own ``forbidden_read`` and — eventually — failure-modes fragment).
 #   2. Bind it to a Vyper-flavored EVM ``Ecosystem`` (its own analysis/property/code-explorer
 #      prompts) and route to it by detecting the target's source language at the entry point.
 #   3. Loosen the analysis model's Solidity assumptions: contracts are keyed by
@@ -259,7 +259,7 @@ RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
 RUST = Language(
     name="rust",
     default_forbidden_read=RUST_FORBIDDEN_READ,
-    vulnerability_patterns_partial="rust/_vulnerability_patterns.j2",
+    vulnerability_patterns_fragment="rust/vulnerability_patterns_fragment.j2",
 )
 
 
