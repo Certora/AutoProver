@@ -5,8 +5,8 @@ It stops after analysis (no property extraction, no backend), so it costs one ag
 run rather than a full front half, and it exercises the model, the prompt section,
 and ``_solana_validate``'s component rules (docs/crucible.md §2).
 
-Points at a program via environment, and skips when unset (this repo carries no Solana program
-large enough for its grouping to prove anything):
+Points at a program via environment, and skips when unset (there is no large Solana program in
+this repo — ``test_scenarios/solana_vault`` is a 3-instruction toy whose grouping proves nothing):
 
     SOLANA_PROBE_ROOT=/path/to/workspace \\
     SOLANA_PROBE_DOC=docs/DESIGN.md \\
