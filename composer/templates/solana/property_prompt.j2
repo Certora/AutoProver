@@ -35,17 +35,7 @@ Security properties fall into three categories:
    Good: "No sequence of actions lets a user withdraw more than they have deposited."
    Bad: "A user should not be able to hack the program" (overly broad).
 
-3. **Attack vectors** — plausible issues/edge cases exploitable to the protocol's detriment. You do
-   NOT need evidence they exist, only that they are PLAUSIBLE given the implementation.
-   Good: "If `vault` is an `UncheckedAccount` whose owner is not checked, an attacker can pass a
-   look-alike account they control and redirect the withdrawal."
-   Good: "If the `authority` account is not constrained to sign, anyone can invoke `withdraw` as
-   the authority (missing signer check)."
-   Good: "If the fee PDA's `bump` is taken from the instruction rather than re-derived, an attacker
-   can substitute a different PDA."
-   Bad: "The program could be exploited somehow" (overly broad).
-
-When reasoning about attack vectors and the checks each account requires, consider these vulnerability patterns:
+When reasoning about safety property and the checks each account requires, consider these vulnerability patterns:
 
 {% include "rust/_vulnerability_patterns.j2" %}
 
@@ -75,8 +65,4 @@ Output the results using the result tool.
     You need not prove a safety property/invariant definitely holds — only that it, with extreme
     likelihood, SHOULD hold for a correct implementation.
   </hard_requirement>
-  <reminder>
-     For attack vectors you need not find evidence the issue exists — only that it is plausible
-     given the program and its implementation.
-  </reminder>
 </guidance>

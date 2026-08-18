@@ -84,8 +84,8 @@ class Curtailed[T]:
 
 from pydantic import BaseModel, Field
 
-type PropertyType = Literal["attack_vector", "safety_property", "invariant"]
-"""The kind of a property: an attack vector, a safety property, or a state
+type PropertyType = Literal["safety_property", "invariant"]
+"""The kind of a property: a safety property or a state
 invariant. Shared so every layer (inference, report, grouping) addresses the
 same vocabulary instead of redeclaring the literal."""
 
@@ -96,8 +96,6 @@ class UntitledPropertyFormulation(BaseModel):
     @property
     def sort_description(self) -> str:
         match self.sort:
-            case "attack_vector":
-                return "Attack Vector"
             case "invariant":
                 return "Invariant"
             case "safety_property":
