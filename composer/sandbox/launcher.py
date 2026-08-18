@@ -16,6 +16,7 @@ shells out to ``run-confined --probe`` once to confirm the kernel supports Landl
 import asyncio
 import os
 import shutil
+import sysconfig
 from pathlib import Path
 
 from composer.sandbox.policy import (
@@ -30,18 +31,23 @@ _PROBE_TIMEOUT_S = 10
 
 
 def _resolve_binary() -> str | None:
-    """Locate the ``run-confined`` binary: ``$RUN_CONFINED_BIN`` → ``PATH`` → the
-    dev build under ``rust/target/release`` (repo-relative). ``None`` if unbuilt."""
+    """Locate the ``run-confined`` binary: ``$RUN_CONFINED_BIN`` → ``PATH`` → this
+    interpreter's scripts dir. ``None`` if unbuilt.
+
+    The env var is for deployments that mount the binary elsewhere (the sandbox compose
+    overlay). The two probes both target the normal development install:
+    ``rust/run-confined`` builds as a maturin *bin* wheel that ``uv sync`` puts in
+    ``.venv/bin`` (see the ``apps`` dependency group) — PATH finds it under `uv run` or
+    an activated venv, and ``sysconfig`` finds it when the venv's interpreter is invoked
+    by path without activation."""
     override = os.environ.get("RUN_CONFINED_BIN")
     if override and Path(override).is_file():
         return override
     on_path = shutil.which(_BIN_NAME)
     if on_path:
         return on_path
-    # Dev fallback: composer/sandbox/launcher.py → repo root is parents[2].
-    repo_root = Path(__file__).resolve().parents[2]
-    cand = repo_root / "rust" / "target" / "release" / _BIN_NAME
-    return str(cand) if cand.is_file() else None
+    in_venv = Path(sysconfig.get_path("scripts")) / _BIN_NAME
+    return str(in_venv) if in_venv.is_file() else None
 
 
 class LauncherProvider:
@@ -61,8 +67,8 @@ class LauncherProvider:
     async def available(self) -> Availability:
         if self._binary is None:
             return Reason(
-                f"{_BIN_NAME} binary not found; build rust/run-confined "
-                f"(cargo build -p run-confined --release) or set RUN_CONFINED_BIN"
+                f"{_BIN_NAME} binary not found; run `uv sync` (builds it from "
+                f"rust/run-confined into .venv/bin) or set RUN_CONFINED_BIN"
             )
         try:
             proc = await asyncio.create_subprocess_exec(

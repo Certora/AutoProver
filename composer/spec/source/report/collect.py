@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from composer.spec.cvl_generation import SkippedProperty
+from composer.authoring.state import SkippedProperty
 from composer.spec.types import Curtailed, PropertyFormulation
 from composer.spec.source.report.schema import (
     ComponentName, CurtailedComponent, CurtailedSkip, DraftedProperty, FormalizedProperty,
@@ -29,12 +29,12 @@ _log = logging.getLogger(__name__)
 class ReportableResult(Protocol):
     """The backend-agnostic view the report needs of a successful generation result. Both
     `GeneratedCVL` and `GeneratedFoundryTest` satisfy it: ``skipped`` are the properties the author
-    declined, and ``property_units()`` is the property->formalizing-units adapter (CVL rules /
+    declined, and ``property_checks()`` is the property->checks adapter (CVL rules /
     foundry tests — the underlying field names differ, hence the method rather than structural
     matching)."""
     skipped: list[SkippedProperty]
 
-    def property_units(self) -> list[tuple[PropertyTitle, list[RuleName]]]: ...
+    def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]: ...
 
     @property
     def output_link(self) -> str | None:
@@ -77,10 +77,14 @@ class Verdict:
     line: int | None = None
     duration_seconds: float | None = None
     unit_file: str | None = None
+    #: Human-readable explanation of a non-GOOD outcome (a counterexample / assertion message for
+    #: a BAD, error text for an ERROR). Provenance/diagnostics only; ``None`` when the backend
+    #: gives no detail (the prover/foundry fetchers don't).
+    message: str | None = None
 
     def merge(self, other: "Verdict | None") -> "Verdict":
         """Combine two results for one unit within a run: higher-priority outcome wins,
-        line/duration/unit_file kept from whichever side has them."""
+        line/duration/unit_file/message kept from whichever side has them."""
         if other is None:
             return self
         hi, lo = (
@@ -93,6 +97,7 @@ class Verdict:
             hi.line if hi.line is not None else lo.line,
             hi.duration_seconds if hi.duration_seconds is not None else lo.duration_seconds,
             hi.unit_file or lo.unit_file,
+            hi.message or lo.message,
         )
 
 
@@ -124,7 +129,7 @@ def _curtailed_component[R: ReportableResult](
         )
     res = c.partial.result
     skip_reasons = {s.property_title: s.reason for s in res.skipped}
-    mapping = dict(res.property_units())
+    mapping = dict(res.property_checks())
     drafted: list[DraftedProperty] = []
     skipped: list[CurtailedSkip] = []
     unattempted: list[PropertyFormulation] = []
@@ -209,9 +214,9 @@ async def collect[R: ReportableResult](
         unit_file = inp.formalized.unit_file
         run_link = inp.formalized.run_link
         skip_reasons = {s.property_title: s.reason for s in res.skipped}
-        mapping = dict(res.property_units())
+        mapping = dict(res.property_checks())
 
-        def _ref(unit_name: str) -> RuleRef:
+        def _ref(unit_name: RuleName) -> RuleRef:
             v = verdicts.get(unit_name)
             return ((v.unit_file if v and v.unit_file else unit_file), unit_name)
 
@@ -240,7 +245,7 @@ async def collect[R: ReportableResult](
             if key not in rules_by_key:
                 rules_by_key[key] = RuleVerdict(
                     name=unit_name, spec_file=key[0], outcome=v.outcome, line=v.line,
-                    duration_seconds=v.duration_seconds, prover_link=run_link,
+                    duration_seconds=v.duration_seconds, prover_link=run_link, message=v.message,
                 )
 
     # A referenced unit with no verdict still needs an (UNKNOWN) entry to render.

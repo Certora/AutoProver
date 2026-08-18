@@ -140,6 +140,7 @@ def emit_custom_event(payload: Mapping[str, Any]):
         raise ValueError("No IO handler installed")
     curr_io[0].push(ProgressEvent(dict(payload)))
 
+
 async def run_graph[S: StateLike, C: StateLike | None, I: StateLike](
     graph: CompiledStateGraph[S, C, I, Any],
     ctxt: C,

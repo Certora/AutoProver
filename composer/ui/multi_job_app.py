@@ -409,6 +409,14 @@ class MultiJobTaskHandler[H]:
         if target.max_scroll_y - target.scroll_y <= 3:
             target.scroll_end(animate=False)
 
+    async def _mount_fixture(self, widget: Widget) -> None:
+        """Mount a task-lifetime fixture: pinned above the conversation stream as the
+        panel's first child, rather than appended at whatever stream position it was
+        first needed. For widgets that accumulate for the task's whole life (e.g. a
+        streaming event log); output anchored to one moment in the conversation
+        belongs in ``_mount_to``."""
+        await self._panel.mount(widget, before=0)
+
     # ── Content links ───────────────────────────────────────
 
     async def render_content_link(self, label: str, content: str, filename: str) -> None:
@@ -666,6 +674,14 @@ class MultiJobApp[P: HasName, T: MultiJobTaskHandler](LogViewerMixin, FileConten
 
         self._previous_view = switcher.current
         switcher.current = pane_id
+
+    def mark_pipeline_done(self) -> None:
+        """The run has ended — successfully or not — so quitting is allowed from here on.
+
+        Every entry point's worker calls this in *both* its success and its failure path: until it
+        does, :meth:`action_quit_app` swallows the quit key, so the user can't close the app (and
+        lose every panel with it) while work is still streaming in."""
+        self._pipeline_done = True
 
     def action_quit_app(self) -> None:
         if self._pipeline_done:

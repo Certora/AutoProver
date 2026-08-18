@@ -22,7 +22,8 @@ from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, Finding, Outcome, PropertyKey, ReportBackend, RuleRef, SourceEditRecord
+    AutoProverReport, Finding, Outcome, PropertyKey, ReportBackend, RuleRef, SourceEditRecord,
+    VerificationArtifactRecord,
 )
 
 _log = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ async def build_report[R: ReportableResult](
     llm: BaseChatModel,
     fetch_verdicts: VerdictFetcher[R],
     source_edits: list[SourceEditRecord] | None = None,
+    verification_artifacts: list[VerificationArtifactRecord] | None = None,
     findings_llm: BaseChatModel | None = None,
     fetch_evidence: EvidenceFetcher | None = None,
 ) -> AutoProverReport:
@@ -138,6 +140,7 @@ async def build_report[R: ReportableResult](
         gave_up_components=gave_up,
         curtailed_components=curtailed,
         source_edits=source_edits or [],
+        verification_artifacts=verification_artifacts or [],
         coverage=coverage,
         findings=findings,
     )

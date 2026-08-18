@@ -10,7 +10,7 @@ from composer.spec.source.author import ExpectRuleFailure, ExpectRulePassage
 from composer.spec.source.prover import (
     StateWithSkips, VALIDATION_KEY,
 )
-from composer.spec.cvl_generation import check_completion
+from composer.authoring.state import check_completion
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
 from composer.prover.results import StatusCodes
@@ -65,15 +65,19 @@ def _result(commentary: str) -> ToolCallDict:
 
 def _raw_report(**rule_status: bool) -> ProverReport:
     return ProverReport(result_str="Prover report output", link="local://test-run", raw_rule_status={
-        RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
-    })
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        },
+        certora_run_stdout="certoraRun output"
+    )
 
 
 def _summarized_report(todo: str, **rule_status: bool) -> ProverReport:
     return ProverReport(
         result_str=todo, link="local://test-run", raw_rule_status={
-        RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
-    })
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        },
+        certora_run_stdout="certoraRun output"
+    )
 
 
 # ---------------------------------------------------------------------------

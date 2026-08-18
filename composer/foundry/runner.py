@@ -3,7 +3,7 @@
 Exposes ``ForgeTestTool`` (and a convenience ``get_forge_test_tool`` factory)
 that:
 
-* Reads ``curr_test`` from injected state.
+* Reads the ``curr_spec`` test buffer from injected state.
 * Stages it into ``<project_root>/test/_composer_draft_<key>.t.sol`` for
   the duration of one ``forge test`` run, then deletes the staged file.
   ``<key>`` is either the agent-supplied ``seed`` arg (stable across
@@ -48,10 +48,11 @@ from graphcore.tools.schemas import (
 
 from composer.ui.tool_display import tool_display
 
+from composer.authoring.state import make_validation_stamper
+from composer.spec.types import CheckName
 from composer.foundry.state import (
     FORGE_TEST_VALIDATION_KEY,
     FoundryGenerationState,
-    make_foundry_validation_stamper,
 )
 
 
@@ -81,7 +82,7 @@ class ForgeTestRunEvent(TypedDict):
 
 @dataclass(frozen=True)
 class _TestResult:
-    name: str
+    name: CheckName
     status: str
     reason: str | None
 
@@ -100,7 +101,7 @@ class ForgeTestTool(
     """
     Run the project's foundry test suite against your current draft.
 
-    The current ``curr_test`` buffer is written into
+    The current test buffer is written into
     ``<project_root>/test/`` as a ``.t.sol`` file, then
     ``forge test --json --match-path test/<that>`` runs.
 
@@ -140,7 +141,7 @@ class ForgeTestTool(
 
     @override
     async def run(self) -> Command | str:
-        if self.state["curr_test"] is None:
+        if self.state["curr_spec"] is None:
             return "No test written yet. Call put_test_raw before forge_test."
         
         with self.tool_deps() as deps:
@@ -160,7 +161,7 @@ class ForgeTestTool(
                 seeded = self.seed is not None
                 staged_name = f"_composer_draft_{path_key}.t.sol"
                 staged = test_dir / staged_name
-                staged.write_text(self.state["curr_test"])
+                staged.write_text(self.state["curr_spec"])
 
                 try:
                     proc = await asyncio.create_subprocess_exec(
@@ -250,7 +251,7 @@ class ForgeTestTool(
         test_names = [r.name for r in results]
 
         if clean and not seeded:
-            stamper = make_foundry_validation_stamper(FORGE_TEST_VALIDATION_KEY)
+            stamper = make_validation_stamper(FORGE_TEST_VALIDATION_KEY)
             return tool_state_update(
                 tool_call_id=self.tool_call_id,
                 content=(
@@ -387,7 +388,7 @@ def _parse_forge_json(stdout: str) -> list[_TestResult] | None:
     report = _FORGE_REPORT.validate_python(doc)
     return [
         _TestResult(
-            name=signature.split("(", 1)[0].strip(),
+            name=CheckName(signature.split("(", 1)[0].strip()),
             status=entry.status,
             reason=entry.reason,
         )
@@ -396,7 +397,7 @@ def _parse_forge_json(stdout: str) -> list[_TestResult] | None:
     ]
 
 
-def _format_summary(results: list[_TestResult], expected_failures: dict[str, str]) -> str:
+def _format_summary(results: list[_TestResult], expected_failures: dict[CheckName, str]) -> str:
     """Render a compact human-readable summary of the JSON results."""
     if not results:
         return "(no tests reported)"
