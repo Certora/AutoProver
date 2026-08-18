@@ -97,9 +97,12 @@ def summarize_verdicts(
             verdicts.append(CheckVerdict(RowName(o.feat.display_name), Outcome.UNKNOWN))
             continue
         titles = formalized.check_properties()
+        # ``reported_verdicts`` so the console and ``report.html`` cannot disagree about whether the
+        # run found something — a row reading "Verified" here and "Violated" there is worse than
+        # either being wrong alone.
         verdicts.extend(
-            CheckVerdict(_row_name(name, titles.get(name, [])), baked.outcome)
-            for name, baked in formalized.verdicts.items()
+            CheckVerdict(_row_name(name, titles.get(name, [])), reported.outcome)
+            for name, reported in formalized.reported_verdicts().items()
         )
     return VerdictSummary(verdicts, backend_tag)
 

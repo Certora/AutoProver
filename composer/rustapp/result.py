@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from composer.rustapp.wire import Target, Verdict
 from composer.authoring.state import SkippedProperty
+from composer.spec.source.report.schema import Outcome
 from composer.spec.types import CheckName, PropertyTitle
 
 
@@ -30,6 +31,23 @@ class RustSetupSpec(BaseModel):
     of a run), it is authored once for the whole run, and every component builds on it."""
 
     source: str
+
+
+def _declared_finding(ran: Verdict, reason: str) -> Verdict:
+    """``ran`` restated as the finding the author declared it to be, keeping whatever the run itself
+    said. Never drops the run's own ``detail``: for a reproduced finding that is the counterexample,
+    and for an unreproduced one it is the error text behind an ERROR/TIMEOUT that explains why the
+    run reached no verdict."""
+    if ran.outcome is Outcome.BAD:
+        lead = f"DECLARED EXPECTED TO FAIL — the violation below is the finding: {reason}"
+    else:
+        lead = (
+            f"DECLARED EXPECTED TO FAIL — a violation here is the finding: {reason}\n"
+            f"NOT REPRODUCED: this run reported {ran.outcome.value}, so the finding rests on the "
+            f"author's reading rather than on a counterexample from this run."
+        )
+    body = f"{lead}\n\n{ran.detail}" if ran.detail else lead
+    return ran.model_copy(update={"outcome": Outcome.BAD, "detail": body})
 
 
 class RustFormalResult(BaseModel):
@@ -45,8 +63,13 @@ class RustFormalResult(BaseModel):
     output_link: str | None = None
     # Per-check verdicts baked in at formalize time by a self-contained backend (check name -> the
     # wheel's :class:`~composer.rustapp.wire.Verdict`, validated at the seam). Empty for
-    # run-service-backed backends (they use fetch_verdicts).
+    # run-service-backed backends (they use fetch_verdicts). The wheel's mechanical observation,
+    # verbatim — read ``reported_verdicts`` for what to report.
     verdicts: dict[CheckName, Verdict] = Field(default_factory=dict)
+    # The checks the author declared expected to fail, check name -> why a failure there is the
+    # finding rather than a defect in the check. The wheel never sees these: it reports what its run
+    # observed, while the declaration is the author's, so the two only meet here.
+    expected_failures: dict[CheckName, str] = Field(default_factory=dict)
     # What the stamping gate run covered: each validation *target* — one invocation of the checker —
     # with the checks it covered, in the order they ran. Several checks may share one target
     # (Crucible puts a component's whole property set in one fuzz target), so this is neither
@@ -61,6 +84,29 @@ class RustFormalResult(BaseModel):
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
         return [(title, list(names)) for title, names in self.checks]
+
+    def reported_verdicts(self) -> dict[CheckName, Verdict]:
+        """``verdicts`` with the author's expected-failure declarations folded in — what the report
+        and the console rollup say, as opposed to what the run mechanically observed.
+
+        A declared check is a finding either way, so it reports BAD whatever the run said. It has to
+        be BAD rather than the run's own outcome because the failure mode this exists to prevent is
+        a documented finding reaching the report as a pass: the publish gate accepts a declared
+        check without ever requiring the run to reproduce it, so nothing else stands between "the
+        author found a bug" and a green row.
+
+        The two cases are not the same evidence, though, and the detail says which: a run that
+        reproduced the finding carries its counterexample, and one that did not says so — an
+        unreproduced finding rests on the author's reading alone, and a reader has to be able to
+        tell those apart."""
+        return {
+            name: (
+                _declared_finding(verdict, self.expected_failures[name])
+                if name in self.expected_failures
+                else verdict
+            )
+            for name, verdict in self.verdicts.items()
+        }
 
     def check_properties(self) -> dict[CheckName, list[PropertyTitle]]:
         """``checks`` inverted: check name -> the property titles it verifies. For display, where
