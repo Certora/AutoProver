@@ -36,6 +36,7 @@ from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.io.context import DefaultRetryPolicy, install_retry_policy
 from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
@@ -143,7 +144,11 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
     @property
     def max_concurrent(self) -> int:
         ...
-    
+
+    @property
+    def max_cpu_tasks(self) -> int:
+        ...
+
     @property
     def threat_model(self) -> str | None:
         ...
@@ -200,10 +205,10 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+        backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
         ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
@@ -242,12 +247,18 @@ async def cli_pipeline[P: enum.Enum, H](
     tiered = get_provider_for(tiered=args)
 
     semaphore = asyncio.Semaphore(args.max_concurrent)
+    cpu_semaphore = asyncio.Semaphore(args.max_cpu_tasks)
 
     model = get_model()
     text_log, events_log = setup_autoprove_logging(project_root, thread_id)
     print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
     print(f"Selected run id: {summary.run_id}")
     install_run_summary(summary)
+    # Run-wide retry floor: transient provider failures (as classified by the
+    # provider itself) resume any graph in the run from its last checkpoint
+    # instead of killing the whole pipeline. Installed once here — contextvar
+    # inheritance carries it into every task the run spawns.
+    install_retry_policy(DefaultRetryPolicy(tiered.provider_service.should_retry))
 
     disc_cache_ns: tuple[str, ...] | None = (
         user_ns(args.cache_ns, "discovery",
@@ -354,9 +365,9 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+                backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
                 ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
                 await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
@@ -380,7 +391,8 @@ async def cli_pipeline[P: enum.Enum, H](
                     ctx=full_ctx,
                     source=full_source,
                     env=env,
-                    _semaphore=semaphore,
+                    _agent_semaphore=semaphore,
+                    _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler
                 )
                 return await run_pipeline(

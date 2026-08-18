@@ -16,18 +16,37 @@ from composer.spec.system_model import FeatureUnit
 from composer.spec.util import combine_digests, string_hash
 from .ptypes import PipelineRun
 from .plugin_api import (
-    AnyEcosystem, ForEcosystem, PipelinePluginLoader, PipelinePlugin, PluginContext, PluginScope,
+    AnyEcosystem, ArtifactRegistrar, ForEcosystem, PipelinePluginLoader, PipelinePlugin,
+    PluginContext, PluginRunContext, PluginScope, PluginToolContext,
 )
 
 class _RunnerFun(Protocol):
     async def __call__[T](self, label: str, job: Callable[[], Awaitable[T]]) -> T: ...
 
+
+def _with_plugin_loader(env: ServiceHost, plugin: PipelinePlugin[Any]) -> ServiceHost:
+    """The run's services with the plugin's own template loader swapped in, so the
+    plugin's prompts resolve against its package (falling back to the autoprover
+    namespace — see ``plugin_api.plugin_jinja_loader``)."""
+    return replace(env, models=replace(env.models, _loader=plugin.load_jinja_template))
+
+
 @dataclass
-class PluginRunner[C]:
+class _PluginServices[C]:
+    """The runner-less :class:`PluginRunContext` implementation."""
     ctx: WorkflowContext[C]
     env: ServiceHost
     source: SourceCode
 
+
+@dataclass
+class _PluginToolServices[C](_PluginServices[C]):
+    """The :class:`PluginToolContext` implementation — what tool-binding hooks
+    receive: run services plus the batch's artifact registrar."""
+    artifacts: ArtifactRegistrar
+
+@dataclass
+class PluginRunner[C](_PluginServices[C]):
     runner: _RunnerFun
 
 class DisplayStrings(tuple[str, str]):
@@ -50,7 +69,7 @@ class DisplayStrings(tuple[str, str]):
 class PluginPhaseRunner[P: enum.Enum, U: FeatureUnit]:
     plugin: PipelinePlugin[U]
     _run: PipelineRun[P, Any]
-    _phase: tuple[P, str]
+    _phase: P
     _sub_phase: DisplayStrings
     plugin_id: str
 
@@ -59,21 +78,18 @@ class PluginPhaseRunner[P: enum.Enum, U: FeatureUnit]:
         uid: str,
         ctxt: WorkflowContext[C]
     ) -> PluginContext[C]:
-        new_loader = self.plugin.load_jinja_template
-        env = self._run.env
-        env = replace(env, models=replace(env.models, _loader=new_loader))
         async def run[T](
             label: str,
             job: Callable[[], Awaitable[T]]
         ) -> T:
             label = f"(Plugin {self._sub_phase.display_str}) {self.plugin.NAME}: {label}"
             return await self._run.runner(
-                TaskInfo(f"{self._phase[0].name}-{self._sub_phase.id_str}-{self.plugin_id}-{uid}", label, self._phase[0]),
+                TaskInfo(f"{self._phase.name}-{self._sub_phase.id_str}-{self.plugin_id}-{uid}", label, self._phase),
                 job,
             )
         return PluginRunner(
             ctxt,
-            env,
+            _with_plugin_loader(self._run.env, self.plugin),
             self._run.source,
             run
         )
@@ -139,16 +155,34 @@ class PluginManager[P: enum.Enum, U: FeatureUnit]:
     def plugin_manifest(self) -> list[str]:
         return sorted(self._plugins.keys())
 
+    def sorted_plugins(self) -> Iterable[tuple[str, PipelinePlugin[U]]]:
+        """Deterministic ``(plugin id, plugin)`` iteration — the order tool
+        contributions are bound in (injection order is prompt content)."""
+        return sorted(self._plugins.items(), key=lambda r: r[0])
+
+    def tool_context[C](
+        self,
+        plugin: PipelinePlugin[U],
+        ctxt: WorkflowContext[C],
+        artifacts: ArtifactRegistrar,
+    ) -> PluginToolContext[C]:
+        """The context a tool-binding hook receives: the run's services under the
+        plugin's template loader, the batch's artifact registrar, and deliberately
+        NO task runner — tool hooks bind tools, they don't run top-level tasks."""
+        return _PluginToolServices(
+            ctxt, _with_plugin_loader(self._run.env, plugin), self._run.source, artifacts
+        )
+
     def bind_phase(
-        self, phase: P, label: str
+        self, phase: P
     ) -> "PluginPhaseManager[P, U]":
         return PluginPhaseManager(
-            self._plugins, self._run, (phase, label)
+            self._plugins, self._run, phase
         )
 
 @dataclass
 class PluginPhaseManager[P: enum.Enum, U: FeatureUnit](PluginManager[P, U]):
-    _phase: tuple[P, str]
+    _phase: P
 
     def runners(self, *, sub_phase_id: str, sub_phase_label: str, sorted_run: bool = False) -> Iterable[PluginPhaseRunner[P, U]]:
         to_iter : Iterable[tuple[str, PipelinePlugin[U]]] = sorted(

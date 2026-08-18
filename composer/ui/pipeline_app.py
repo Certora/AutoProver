@@ -143,7 +143,7 @@ class NatspecPipelineApp(MultiJobApp[Phase, NatspecTaskHandler]):
         stub, and specs under ``<output_root>/natspec_output/`` (defaulting
         to ``cwd/natspec_output/`` when no ``--output-root`` was passed).
         """
-        self._pipeline_done = True
+        self.mark_pipeline_done()
 
         summary = self.query_one("#summary", VerticalScroll)
         switcher = self.query_one("#switcher", ContentSwitcher)
@@ -173,7 +173,7 @@ class NatspecPipelineApp(MultiJobApp[Phase, NatspecTaskHandler]):
         ``on_pipeline_done`` uses) and renders the exception + traceback, so
         per-task error panels stay visible alongside the top-level cause.
         """
-        self._pipeline_done = True
+        self.mark_pipeline_done()
         summary = self.query_one("#summary", VerticalScroll)
         switcher = self.query_one("#switcher", ContentSwitcher)
         switcher.current = "summary"

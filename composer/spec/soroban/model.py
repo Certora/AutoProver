@@ -232,7 +232,7 @@ class SorobanComponentInstance:
         return [c for i, c in enumerate(self.app.contracts) if i != self._contract.ind]
 
     @property
-    def display_name(self) -> str:
+    def display_name(self) -> ComponentName:
         return self.component.name
 
     @property

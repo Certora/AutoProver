@@ -252,9 +252,11 @@ EVM: EvmEcosystem = Ecosystem(
 #: ``fs_forbidden_read``, nothing needs carving back out of an excluded directory.
 RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
 # NOTE: the confined-build scratch dirs (``.sandbox_cargo`` / ``.sandbox_rustup`` /
-# ``.sandbox_tmp`` and nested ``target/``) are also excluded, but that extension lives with the
-# rust-framework layer that introduces confined Rust builds — no build runs in this front-half, so
-# those dirs never exist here.
+# ``.sandbox_tmp`` and nested ``target/``) also have to be excluded — a build fills them with
+# hundreds of MB the source tools' file-listing would pull into the model's context — but that
+# extension lives with the *backend* that runs confined Rust builds inside the workdir. Nothing in
+# the front half, and nothing in the Rust application framework itself, creates them: a Rust
+# backend need not build a crate to validate the program, nor use the sandbox at all.
 
 RUST = Language(
     name="rust",
