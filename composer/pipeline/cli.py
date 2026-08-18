@@ -36,6 +36,7 @@ from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.io.context import DefaultRetryPolicy, install_retry_policy
 from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
@@ -253,6 +254,11 @@ async def cli_pipeline[P: enum.Enum, H](
     print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
     print(f"Selected run id: {summary.run_id}")
     install_run_summary(summary)
+    # Run-wide retry floor: transient provider failures (as classified by the
+    # provider itself) resume any graph in the run from its last checkpoint
+    # instead of killing the whole pipeline. Installed once here — contextvar
+    # inheritance carries it into every task the run spawns.
+    install_retry_policy(DefaultRetryPolicy(tiered.provider_service.should_retry))
 
     disc_cache_ns: tuple[str, ...] | None = (
         user_ns(args.cache_ns, "discovery",
