@@ -23,7 +23,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@6554089b63ce5f3a1ad7259bc54625b15777d045",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@88387d24cfa1a49687a27af7f2e52e1ab866f9e9",
     "aiohttp>=3.13",
     "attrs>=26.1",
     "Jinja2>=3.1",
@@ -129,6 +129,15 @@ apps = [
 ]
 
 [tool.uv]
+# The `apps` group builds several maturin crates. On a machine that does not have the
+# pinned toolchain yet, each one's cargo call asks rustup to install it, and rustup's
+# install path is not safe against concurrent invocations — whichever call wins clears
+# $RUSTUP_HOME/downloads and the others die renaming a half-downloaded component.
+# Costs next to nothing: the crates share one cargo workspace, so their builds already
+# serialize on rust/target's build-dir lock. This only covers builds uv itself drives;
+# installing the toolchain first (see README) also covers rust-analyzer and a second
+# terminal.
+concurrent-builds = 1
 conflicts = [
     [{ extra = "cpu" }, { extra = "cuda" }],
     [
