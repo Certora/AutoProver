@@ -1,17 +1,9 @@
-"""What a Rust backend run reports as its findings.
+"""Tests for a Rust backend's findings.
 
-Two rules meet here. First, a check the author declared expected-to-fail must reach the report as a
-finding: ``expect_check_failure`` is how an author says "the failure here IS the finding" — the
-counterexample is real and the property is kept precisely to record it. The publish gate accepts
-such a check as clean and nothing downstream ever asks the run to reproduce it, so on the klend run
-of 2026-08-10 four declared findings reached ``report.html`` — one as a violation (its campaign
-happened to hit it first) and three as **"No counterexample"**, including one the author had
-reproduced at iteration 11619. The declaration is the author's and the outcome is the wheel's; they
-meet on `RustFormalResult`.
-
-Second, those rows become `Finding`s without a model: the crash and the declaration are the
-write-up. What must survive the mapping is the distinction between a finding this run reproduced
-and one resting on the author's reading alone.
+A check marked ``expect_check_failure`` must report as a finding even if this run
+did not reproduce it. Those rows become ``Finding``s with no second write-up —
+the crash and the declaration are the write-up. Reproduced and unreproduced
+findings must stay distinguishable.
 """
 
 import pathlib
@@ -31,14 +23,14 @@ from composer.rustapp.wire import Verdict
 from composer.spec.source.report.schema import Outcome, RuleVerdict
 from tests.conftest import wire_descriptor
 
-#: The real one, trimmed: what Crucible reported for the finding its campaign did hit.
+#: Crash text from a real Crucible hit, trimmed.
 COUNTEREXAMPLE = (
     "crash crash_93d45d29a130d36f: [stored_price_timestamp_not_in_future] reserve 8J5W stored "
     "market_price_last_updated_ts=2 which is ahead of the current unix timestamp 0\n"
     "reproducing sequence (iteration 11, 3 action(s)):\n  1. refresh_reserves_batch -> OK"
 )
 
-#: …and the reason the author gave for the one it did not, verbatim in shape.
+#: Author's reason for a check this run did not hit.
 REASON = "UpdateBlockPriceUsage only mark_stale()s, so PRICE_USAGE_ALLOWED survives the kill switch"
 
 
@@ -69,17 +61,13 @@ def test_a_declared_finding_the_run_reproduced_reports_bad_with_its_counterexamp
 
     assert reported["c_ts"].outcome is Outcome.BAD
     detail = reported["c_ts"].detail or ""
-    # The declaration is what turns a bare violation into a *reported finding*, so it has to be
-    # visible — a reader otherwise cannot tell a real bug from a check that needs fixing.
+    # Declaration and counterexample both have to survive the fold.
     assert REASON in detail
-    # …and the evidence must survive intact. This is the case that already worked; the point here
-    # is that folding the declaration in does not cost the counterexample.
     assert COUNTEREXAMPLE in detail
 
 
 def test_a_declared_finding_the_run_did_not_reproduce_still_reports_as_a_finding():
-    # The klend case. The campaign stopped at the first crash, ~11600 iterations before this check
-    # would have fired, and the wheel — correctly, for what it observed — said GOOD.
+    # Wheel said GOOD; the declaration still makes it a finding.
     reported = _result(
         {"c_kill": _verdict(Outcome.GOOD)}, {"c_kill": REASON}
     ).reported_verdicts()
@@ -87,14 +75,13 @@ def test_a_declared_finding_the_run_did_not_reproduce_still_reports_as_a_finding
     assert reported["c_kill"].outcome is Outcome.BAD, "a documented finding must not read as a pass"
     detail = reported["c_kill"].detail or ""
     assert REASON in detail
-    # It is a weaker claim than the reproduced case and must say so: no counterexample backs it.
+    # Weaker claim: say so, and name the outcome the run actually reached.
     assert "NOT REPRODUCED" in detail
     assert "GOOD" in detail, "the run's own outcome is what makes the claim weaker; name it"
 
 
 def test_an_undeclared_check_is_left_exactly_as_the_wheel_reported_it():
-    # Attribution is the wheel's. This only ever adds the author's declaration on top; with none
-    # made, every row is the wheel's verbatim — including a BAD it found on its own.
+    # No declaration: leave the wheel's verdicts untouched.
     verdicts = {
         "c_good": _verdict(Outcome.GOOD),
         "c_bad": _verdict(Outcome.BAD, COUNTEREXAMPLE),
@@ -104,8 +91,7 @@ def test_an_undeclared_check_is_left_exactly_as_the_wheel_reported_it():
 
 
 def test_a_declared_check_whose_run_errored_keeps_the_error_text():
-    # ERROR/TIMEOUT is neither a reproduction nor a clean run. It reports as the declared finding
-    # like any other, but throwing away what went wrong would leave the row unexplainable.
+    # Keep the error text so the row still explains what happened.
     reported = _result(
         {"c_kill": _verdict(Outcome.ERROR, "harness build timed out")}, {"c_kill": REASON}
     ).reported_verdicts()
@@ -117,8 +103,7 @@ def test_a_declared_check_whose_run_errored_keeps_the_error_text():
 
 
 def test_a_declaration_naming_a_check_that_did_not_run_adds_no_row():
-    # An author can mark a check and then skip its property; the marking survives in session state.
-    # Rows come from what ran, so the stale declaration must not conjure one.
+    # A declaration for a check that never ran must not invent a row.
     reported = _result({"c_good": _verdict(Outcome.GOOD)}, {"c_gone": REASON}).reported_verdicts()
 
     assert list(reported) == ["c_good"]
@@ -150,7 +135,7 @@ async def test_the_report_gets_the_declared_finding():
 
     assert verdicts["c_kill"].outcome is Outcome.BAD
     assert REASON in (verdicts["c_kill"].message or "")
-    # The neighbours of a declared check are untouched — this is not a component-wide verdict.
+    # Only the declared check changes.
     assert verdicts["c_plain"].outcome is Outcome.GOOD
 
 
@@ -161,8 +146,7 @@ class _Feat:
 
 
 def test_the_console_rollup_agrees_with_the_report():
-    # Two views of one run. A row that reads "Violated" in report.html and "Verified" in the
-    # terminal is worse than either being wrong on its own.
+    # Report and console must agree on whether the run found something.
     result = _result(
         {"c_kill": _verdict(Outcome.GOOD), "c_plain": _verdict(Outcome.GOOD)}, {"c_kill": REASON}
     )
@@ -187,15 +171,11 @@ def test_the_console_rollup_agrees_with_the_report():
 
 @pytest.mark.asyncio
 async def test_a_wheels_own_file_beats_the_components_fallback():
-    """A verdict that names its own source file keeps it, and only a verdict that names none falls
-    back to the component's artifact.
+    """A verdict that names its own file keeps it; otherwise use the component artifact.
 
-    The report identifies a rule row by ``(file, name)`` so that one definition seen through several
-    runs collapses into a single row. A callout-mode wheel delivers ONE artifact, so every component
-    shares that fallback name — and two components whose authors named an invariant the same way
-    (they are given the same property title, so they do) would collapse into one row, silently
-    dropping the second component's verdict. The wheel says which of its sections a check came from;
-    this is the wiring that lets it.
+    The report keys a row by ``(file, name)``. A callout-mode wheel delivers one
+    artifact, so every component would share that fallback — two same-named checks
+    would collapse. The wheel's ``unit_file`` is what keeps them apart.
     """
     formalizer = adapter.RustFormalizer(
         cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
@@ -234,9 +214,7 @@ def test_a_reproduced_declared_finding_carries_its_counterexample_and_its_reason
 
     assert len(findings) == 1
     f = findings[0]
-    # Named by the property it verifies, not by the check.
     assert f.title == "Stored prices are never in the future"
-    # The run produced this counterexample, so it is the proof of concept.
     assert f.content.proof_of_concept == COUNTEREXAMPLE
     assert REASON in f.content.description
     assert f.provenance is not None and f.provenance.risk_reasoning == REASON
@@ -250,7 +228,6 @@ def test_an_unreproduced_declared_finding_claims_no_counterexample():
 
     assert len(findings) == 1
     f = findings[0]
-    # The whole point of the row: it IS a finding, and it says the evidence is the author's.
     assert "NOT REPRODUCED" in f.content.description
     assert f.content.proof_of_concept is None
     assert f.provenance is not None and f.provenance.risk_reasoning == REASON
@@ -262,14 +239,12 @@ def test_a_crash_the_run_found_needs_no_declaration():
 
     assert len(findings) == 1
     assert findings[0].content.proof_of_concept == COUNTEREXAMPLE
-    # Nothing here was declared, so there is no author's reason to record.
     assert findings[0].provenance is not None
     assert findings[0].provenance.risk_reasoning is None
 
 
 def test_findings_assess_no_risk():
-    """Severity and impact stay blank: nothing in this pipeline has judged what a crash is worth,
-    and a fabricated 'high' would be worse than an honest blank."""
+    """Severity and impact stay blank: nothing here has judged what a crash is worth."""
     result = _result({"c_bad": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
     f = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])[0]
     assert f.severity == "informational"
@@ -280,13 +255,12 @@ def test_a_check_verifying_several_properties_is_named_after_itself():
     result = _result({"c_multi": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {},
                      checks=[("Prices are fresh", ["c_multi"]), ("Prices are signed", ["c_multi"])])
     findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
-    # No single property title names this row, so the check's own name is the only unambiguous one.
+    # Several properties: the check name is the only unambiguous title.
     assert findings[0].title == "c_multi"
 
 
 def test_only_violations_become_findings():
-    """ERROR and TIMEOUT stay verdict rows — a check that could not be run is a coverage gap, not
-    something the run found."""
+    """ERROR and TIMEOUT stay verdict rows, not findings."""
     result = _result(
         {
             "c_good": _verdict(Outcome.GOOD),
@@ -301,15 +275,13 @@ def test_only_violations_become_findings():
 
 
 def test_a_clean_campaign_produces_no_findings():
-    """Not a "no findings" placeholder — the empty list is what makes the report omit the section."""
+    """An empty list is what makes the report omit the Findings section."""
     result = _result({"c_good": _verdict(Outcome.GOOD)}, {})
     assert compose_findings(rules=_rows(result), outcomes=[_outcome(result)]) == []
 
 
 def test_two_components_sharing_one_artifact_keep_their_own_evidence():
-    """A callout-mode wheel delivers one file, so both components fall back to the same unit file
-    and only the check name separates their rows. Each finding must still get its own component's
-    declaration and counterexample."""
+    """Two components sharing one artifact file must still keep their own evidence."""
     left = _result({"c_a": _verdict(Outcome.BAD, "crash A")}, {})
     right = _result({"c_b": _verdict(Outcome.GOOD)}, {"c_b": REASON})
     findings = compose_findings(
@@ -325,8 +297,7 @@ def test_two_components_sharing_one_artifact_keep_their_own_evidence():
 
 @pytest.mark.asyncio
 async def test_the_formalizer_submits_them_through_the_report_hook():
-    """The seam itself: the report asks the backend for findings and gets ready ones — no evidence
-    protocol, no model, nothing for the report layer to synthesize."""
+    """The formalizer returns ready findings through the report hook."""
     formalizer = adapter.RustFormalizer(
         cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
     )

@@ -1,9 +1,7 @@
-"""Tests for the Certora Prover's findings write-up (composer.spec.source.findings).
+"""Tests for the Certora Prover's findings write-up.
 
-Pass 2 of the prover's counterexample handling: captured analysis + the properties a violated rule
-formalizes -> an audit-issue `Finding`. No real model — the LLM is a `BaseChatModel` stub whose
-structured output is preset, so the real call path (templates, the `isinstance` check, the severity
-matrix) still runs.
+The LLM is a stub with preset structured output, so the real call path
+(templates, isinstance check, severity matrix) still runs.
 """
 from typing import Any
 
@@ -36,8 +34,7 @@ def _pg(slug, members, status=GroupStatus.GOOD) -> PropertyGroup:
 
 
 class _StructuredStubModel(BaseChatModel):
-    """A `BaseChatModel` whose structured-output binding returns a preset object, so tests drive the
-    real caller (template rendering + the `isinstance` check) without a live model."""
+    """`BaseChatModel` stub: structured output is preset; no live model."""
     output: Any
 
     def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
@@ -68,7 +65,7 @@ def _evidence(by_rule: dict[str, list[RuleEvidence]]):
 
 
 def test_severity_for_matrix():
-    """Severity is computed from the impact × likelihood matrix, not chosen by the LLM."""
+    """Severity comes from the impact × likelihood matrix, not from the LLM."""
     assert severity_for("high", "high") == "critical"
     assert severity_for("high", "medium") == "high"
     assert severity_for("high", "low") == "medium"
@@ -82,9 +79,7 @@ def test_severity_for_matrix():
 
 @pytest.mark.asyncio
 async def test_one_finding_per_violation():
-    """Only the violated rule becomes a finding; severity is computed from the model's impact/
-    likelihood, the counterexample rides proof_of_concept, the run link is a reference, and provenance
-    traces back to the rule. No locations are produced at report time (submission builds those)."""
+    """One finding per BAD rule: computed severity, CEX as proof of concept, provenance back to the rule."""
     rules = [_rv("autospec_C.spec", "r_ok"),
              _rv("autospec_C.spec", "r_bad", Outcome.BAD, prover_link="L1")]
     props = [_fp("C", "p_good", [("autospec_C.spec", "r_ok")]),
@@ -114,8 +109,7 @@ async def test_one_finding_per_violation():
 
 @pytest.mark.asyncio
 async def test_degrades_without_analysis():
-    """A violated rule whose evidence fetch yields nothing still produces a finding from the
-    property/group text; proof_of_concept is simply absent."""
+    """A violation with no captured evidence still becomes a finding; proof of concept is absent."""
     findings = await build_findings(
         contract_name="Vault", rules=[_rv("c.spec", "r_bad", Outcome.BAD)],
         properties=[_fp("C", "p_bad", [("c.spec", "r_bad")], desc="balances stay solvent")],
@@ -132,7 +126,7 @@ async def test_degrades_without_analysis():
 
 @pytest.mark.asyncio
 async def test_a_failed_synthesis_drops_only_that_finding():
-    """Best-effort per rule: one write-up blowing up must not cost the others."""
+    """One failed write-up must not drop the others."""
     class _HalfBroken(_StructuredStubModel):
         def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
             def _run(messages):
@@ -151,8 +145,7 @@ async def test_a_failed_synthesis_drops_only_that_finding():
 
 
 def test_prompt_lists_all_properties_a_rule_formalizes():
-    """A rule may jointly formalize several properties; the prompt presents ALL of them so the model
-    grounds the write-up in the one the counterexample actually breaks (not a pre-picked one)."""
+    """The prompt lists every property a rule formalizes, not a pre-picked one."""
     from composer.templates.loader import load_jinja_template
     user = load_jinja_template(
         "autoprove_report_findings_prompt.j2",

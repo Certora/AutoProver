@@ -136,13 +136,9 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     ) -> list[Finding]:
         """This run's findings, ready to attach. Default: none.
 
-        Called from the report phase after collect + grouping, so the backend sees the same
-        rules/properties/groups the report will persist — the prover's write-up keys its
-        "audit-level claim(s)" on those groups. A backend that needs a model takes it off ``run``;
-        one that already knows its findings ignores ``run`` and ``groups``.
-
-        The findings are *finished* here: whatever prose, evidence or model a backend needs is its
-        own business, and the report never sees any of it."""
+        Called after collect + grouping, so the backend sees the same rules, properties,
+        and groups the report will persist. The backend writes the findings; the report
+        only attaches them."""
         return []
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:

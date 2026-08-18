@@ -164,9 +164,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]],
         run: PipelineRun,
     ) -> list[Finding]:
-        # Pass 2 of the prover's counterexample handling: the run analyzed each violation for the
-        # authoring agent (`CexAnalysisStore`), and this writes those up as audit issues. It reads
-        # the store rather than re-analyzing, so the heavy model is spent once per violated rule.
+        # Write each captured violation up as an audit issue; do not re-analyze.
         return await build_findings(
             contract_name=contract_name, rules=rules, properties=properties, groups=groups,
             fetch_evidence=self._evidence, llm=run.env.llm_heavy(),

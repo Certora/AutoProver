@@ -154,11 +154,10 @@ def _curtailed_component[R: ReportableResult](
     )
 
 class FindingsBuilder(Protocol):
-    """Backend hook: the ready findings for this report, or ``[]``.
+    """Backend hook: this report's findings, or ``[]``.
 
-    Called after collect + grouping, with the same rules/properties/groups the report will persist.
-    The report *attaches* what this returns — it never synthesizes prose, reads evidence, or holds a
-    model of its own, so nothing here is backend-shaped."""
+    Called after collect + grouping, with the same rules, properties, and groups
+    the report will persist. The report attaches what this returns; it does not write them."""
     async def __call__(
         self,
         *,
