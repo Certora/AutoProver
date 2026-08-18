@@ -151,6 +151,18 @@ class OpenAIService(ProviderServiceBase):
             OpenAIFileUploader.lazy
         )
 
+    @override
+    def should_retry(self, exc: Exception) -> bool:
+        """Same shape as the Anthropic mapping — the OpenAI SDK shares the
+        Stainless exception taxonomy: connection-level failures and
+        408/409/429/5xx statuses are transient; 400-class request errors are
+        deterministic and excluded."""
+        if isinstance(exc, openai.APIConnectionError):
+            return True
+        if isinstance(exc, openai.APIStatusError):
+            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+        return False
+
 @dataclass
 class OpenAIRenderer:
     def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
