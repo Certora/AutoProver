@@ -29,8 +29,8 @@ from pydantic import BaseModel, Field, create_model
 
 from graphcore.graph import FlowInput, tool_state_update
 from graphcore.tools.schemas import (
-    TemplatedTool, ToolFamilyParams, WithAsyncDependencies, WithAsyncImplementation,
-    WithInjectedId, WithInjectedState, tool_family,
+    ToolFamilyParams, WithAsyncDependencies, WithAsyncImplementation,
+    WithInjectedId, WithInjectedState, tool_family, family_param
 )
 
 from composer.authoring.buffer import (
@@ -128,6 +128,7 @@ ProtocolTemplate = TypedTemplate[ProtocolParams]("authoring_protocol.j2")
 # State
 # ---------------------------------------------------------------------------
 
+@family_param(CheckNouns)
 class PropertyCheckMapping(BaseModel):
     """Maps one property from the batch to the {checks} that carry it.
 
@@ -634,6 +635,9 @@ class PublishDeps:
     titles: list[PropertyTitle]
 
 
+@tool_family_display(
+    lambda p, *, check, checks: f"Declaring {checks}", None
+)
 @tool_family(CheckNouns)
 class MapChecks(
     WithInjectedId,
@@ -967,20 +971,7 @@ def _map_tool(vocab: CheckVocab) -> BaseTool:
     # the nested PropertyCheckMapping would still show ``{checks}``. Template the element first,
     # then splice it in. Display is applied after the splice so ``as_tool`` closes over the
     # spliced schema, not the unspliced templated base.
-    mapping = TemplatedTool(PropertyCheckMapping).with_template(
-        check=vocab.one, checks=vocab.many,
-    )
-    templated = MapChecks.with_template(check=vocab.one, checks=vocab.many)
-    schema = create_model(
-        "MapChecks",
-        __doc__=templated.__doc__,
-        __base__=templated,
-        property_checks=(list[mapping], Field(  # type: ignore[valid-type]
-            description=templated.model_fields["property_checks"].description,
-        )),
-    )
-    tool_display_of(ToolDisplay(f"Declaring {vocab.many}", None))(schema)
-    return schema.as_tool("map_checks")
+    return MapChecks.with_template(check=vocab.one, checks=vocab.many).as_tool("map_checks")
 
 
 def _publish_tool(deps: PublishDeps) -> BaseTool:
