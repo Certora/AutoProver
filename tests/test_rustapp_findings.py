@@ -28,9 +28,7 @@ from composer.rustapp.findings import compose_findings
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
-from composer.spec.source.report.schema import (
-    FormalizedProperty, Outcome, RuleVerdict,
-)
+from composer.spec.source.report.schema import Outcome, RuleVerdict
 from tests.conftest import wire_descriptor
 
 #: The real one, trimmed: what Crucible reported for the finding its campaign did hit.
@@ -48,9 +46,13 @@ def _verdict(outcome: Outcome, detail: str | None = None) -> Verdict:
     return Verdict(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=detail)
 
 
-def _result(verdicts: dict[str, Verdict], declared: dict[str, str]) -> RustFormalResult:
+def _result(
+    verdicts: dict[str, Verdict],
+    declared: dict[str, str],
+    checks: list[tuple[str, list[str]]] | None = None,
+) -> RustFormalResult:
     return RustFormalResult(
-        checks=[(f"{name}_prop", [name]) for name in verdicts],
+        checks=checks if checks is not None else [(f"{name}_prop", [name]) for name in verdicts],
         verdicts=verdicts,
         expected_failures=declared,
     )
@@ -225,17 +227,10 @@ def _rows(result: RustFormalResult, unit_file: str = "main.rs") -> list[RuleVerd
     ]
 
 
-def _prop(title: str, refs: list[tuple[str, str]]) -> FormalizedProperty:
-    return FormalizedProperty(component="Oracle-Driven Refresh", title=title,
-                              sort="safety_property", description="d", rule_refs=refs)
-
-
 def test_a_reproduced_declared_finding_carries_its_counterexample_and_its_reason():
-    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {"c_ts": REASON})
-    findings = compose_findings(
-        rules=_rows(result), outcomes=[_outcome(result)],
-        properties=[_prop("Stored prices are never in the future", [("main.rs", "c_ts")])],
-    )
+    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {"c_ts": REASON},
+                     checks=[("Stored prices are never in the future", ["c_ts"])])
+    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
 
     assert len(findings) == 1
     f = findings[0]
@@ -249,11 +244,9 @@ def test_a_reproduced_declared_finding_carries_its_counterexample_and_its_reason
 
 
 def test_an_unreproduced_declared_finding_claims_no_counterexample():
-    result = _result({"c_kill": _verdict(Outcome.GOOD)}, {"c_kill": REASON})
-    findings = compose_findings(
-        rules=_rows(result), outcomes=[_outcome(result)],
-        properties=[_prop("The kill switch stops price usage", [("main.rs", "c_kill")])],
-    )
+    result = _result({"c_kill": _verdict(Outcome.GOOD)}, {"c_kill": REASON},
+                     checks=[("The kill switch stops price usage", ["c_kill"])])
+    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
 
     assert len(findings) == 1
     f = findings[0]
@@ -265,10 +258,7 @@ def test_an_unreproduced_declared_finding_claims_no_counterexample():
 
 def test_a_crash_the_run_found_needs_no_declaration():
     result = _result({"c_bad": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
-    findings = compose_findings(
-        rules=_rows(result), outcomes=[_outcome(result)],
-        properties=[_prop("Stored prices are never in the future", [("main.rs", "c_bad")])],
-    )
+    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
 
     assert len(findings) == 1
     assert findings[0].content.proof_of_concept == COUNTEREXAMPLE
@@ -281,18 +271,15 @@ def test_findings_assess_no_risk():
     """Severity and impact stay blank: nothing in this pipeline has judged what a crash is worth,
     and a fabricated 'high' would be worse than an honest blank."""
     result = _result({"c_bad": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
-    f = compose_findings(rules=_rows(result), outcomes=[_outcome(result)], properties=[])[0]
+    f = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])[0]
     assert f.severity == "informational"
     assert f.content.impact == ""
 
 
 def test_a_check_verifying_several_properties_is_named_after_itself():
-    result = _result({"c_multi": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
-    findings = compose_findings(
-        rules=_rows(result), outcomes=[_outcome(result)],
-        properties=[_prop("Prices are fresh", [("main.rs", "c_multi")]),
-                    _prop("Prices are signed", [("main.rs", "c_multi")])],
-    )
+    result = _result({"c_multi": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {},
+                     checks=[("Prices are fresh", ["c_multi"]), ("Prices are signed", ["c_multi"])])
+    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
     # No single property title names this row, so the check's own name is the only unambiguous one.
     assert findings[0].title == "c_multi"
 
@@ -309,14 +296,14 @@ def test_only_violations_become_findings():
         },
         {},
     )
-    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)], properties=[])
+    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
     assert [f.provenance.rule_name for f in findings if f.provenance] == ["c_bad"]
 
 
 def test_a_clean_campaign_produces_no_findings():
     """Not a "no findings" placeholder — the empty list is what makes the report omit the section."""
     result = _result({"c_good": _verdict(Outcome.GOOD)}, {})
-    assert compose_findings(rules=_rows(result), outcomes=[_outcome(result)], properties=[]) == []
+    assert compose_findings(rules=_rows(result), outcomes=[_outcome(result)]) == []
 
 
 def test_two_components_sharing_one_artifact_keep_their_own_evidence():
@@ -326,9 +313,7 @@ def test_two_components_sharing_one_artifact_keep_their_own_evidence():
     left = _result({"c_a": _verdict(Outcome.BAD, "crash A")}, {})
     right = _result({"c_b": _verdict(Outcome.GOOD)}, {"c_b": REASON})
     findings = compose_findings(
-        rules=_rows(left) + _rows(right),
-        outcomes=[_outcome(left), _outcome(right)],
-        properties=[],
+        rules=_rows(left) + _rows(right), outcomes=[_outcome(left), _outcome(right)],
     )
     by_rule = {f.provenance.rule_name: f for f in findings if f.provenance}
     assert by_rule["c_a"].content.proof_of_concept == "crash A"
@@ -345,11 +330,11 @@ async def test_the_formalizer_submits_them_through_the_report_hook():
     formalizer = adapter.RustFormalizer(
         cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
     )
-    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {"c_ts": REASON})
+    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {"c_ts": REASON},
+                     checks=[("Stored prices are never in the future", ["c_ts"])])
     findings = await formalizer.findings(
-        contract_name="klend", rules=_rows(result),
-        properties=[_prop("Stored prices are never in the future", [("main.rs", "c_ts")])],
-        groups=[], outcomes=[_outcome(result)], run=cast(Any, object()),
+        contract_name="klend", rules=_rows(result), properties=[], groups=[],
+        outcomes=[_outcome(result)], run=cast(Any, object()),
     )
 
     assert [f.title for f in findings] == ["Stored prices are never in the future"]

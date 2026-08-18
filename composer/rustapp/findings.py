@@ -17,8 +17,7 @@ from dataclasses import dataclass
 from composer.pipeline.ptypes import ComponentOutcome, Delivered
 from composer.rustapp.result import RustFormalResult
 from composer.spec.source.report.schema import (
-    Finding, FindingProvenance, FormalizedProperty, IssueContent, Outcome, PropertyTitle, RuleRef,
-    RuleVerdict,
+    Finding, FindingProvenance, IssueContent, Outcome, RuleRef, RuleVerdict,
 )
 from composer.spec.system_model import FeatureUnit
 
@@ -38,6 +37,9 @@ class _Observed:
     detail: str | None
     #: Why the author declared a failure here to be the finding, when they declared one.
     declared: str | None
+    #: What to call the row — the property's own words where the check verifies exactly one.
+    #: :meth:`RustFormalResult.display_name`, the same rule the console rollup names rows by.
+    title: str
 
 
 def _observations(outcomes: RustOutcomes) -> dict[RuleRef, _Observed]:
@@ -58,19 +60,9 @@ def _observations(outcomes: RustOutcomes) -> dict[RuleRef, _Observed]:
                 ran=verdict.outcome,
                 detail=verdict.detail,
                 declared=res.expected_failures.get(check),
+                title=res.display_name(check),
             )
     return observed
-
-
-def _titles(properties: list[FormalizedProperty]) -> dict[RuleRef, PropertyTitle]:
-    """The property title to name a row by: only where the check verifies exactly one. A check that
-    discharges several has no single title to be called after, and one the author mapped to none has
-    no title at all — both fall back to the check's own name."""
-    by_ref: dict[RuleRef, list[PropertyTitle]] = {}
-    for p in properties:
-        for ref in p.rule_refs:
-            by_ref.setdefault(ref, []).append(p.title)
-    return {ref: titles[0] for ref, titles in by_ref.items() if len(titles) == 1}
 
 
 def _summary(description: str) -> str:
@@ -80,9 +72,7 @@ def _summary(description: str) -> str:
     return next((line.strip() for line in description.splitlines() if line.strip()), "")
 
 
-def _finding(
-    rule: RuleVerdict, title: PropertyTitle | None, observed: _Observed | None
-) -> Finding:
+def _finding(rule: RuleVerdict, observed: _Observed | None) -> Finding:
     # ``rule.message`` is the description because it is already the reader-facing account: the
     # declaration's reason leads it, the NOT REPRODUCED caveat follows when this run reached no
     # counterexample, and the evidence comes last. The proof of concept is narrower — the wheel's
@@ -92,7 +82,7 @@ def _finding(
     proof = observed.detail if observed is not None and observed.ran is Outcome.BAD else None
     declared = observed.declared if observed is not None else None
     return Finding(
-        title=title or rule.name,
+        title=observed.title if observed is not None else rule.name,
         severity="informational",
         content=IssueContent(
             summary=_summary(description),
@@ -113,21 +103,13 @@ def _finding(
     )
 
 
-def compose_findings(
-    *,
-    rules: list[RuleVerdict],
-    properties: list[FormalizedProperty],
-    outcomes: RustOutcomes,
-) -> list[Finding]:
+def compose_findings(*, rules: list[RuleVerdict], outcomes: RustOutcomes) -> list[Finding]:
     """One `Finding` per violated check, in report order.
 
     BAD only, which after the expected-failure fold already includes the checks an author declared
     and this run did not reproduce. ERROR and TIMEOUT stay verdict-table rows: a check that could
     not be run is a gap in coverage, not something the run found."""
-    titles = _titles(properties)
     observed = _observations(outcomes)
     return [
-        _finding(rule, titles.get(rule.ref), observed.get(rule.ref))
-        for rule in rules
-        if rule.outcome is Outcome.BAD
+        _finding(rule, observed.get(rule.ref)) for rule in rules if rule.outcome is Outcome.BAD
     ]
