@@ -141,6 +141,20 @@ def lint_model_spec(project) -> list[str]:
                 v.append(f"model function {b.name} uses `assert` — assertions belong in a conformance "
                          f"rule (add_helper_lemma), not in the model body")
                 break
+            # SOUNDNESS: a `require_uintN`/`require_intN` CAST assumes the value fits, silently PRUNING
+            # out-of-range (overflow) inputs — the conformance then passes VACUOUSLY on exactly those
+            # inputs (unsound; a require_* has no revert, so !realRev=>!modelRev never fires). Use the
+            # `assert_*` cast so the prover CHECKS the cast is total: a provably-in-range one passes, an
+            # overflowing one is CAUGHT. Model a genuine wrap explicitly (e.g. assert_uint256(x % 2^256)).
+            for fa in walk.calls(b):
+                nm = fa.name
+                if nm.startswith("require_uint") or nm.startswith("require_int"):
+                    v.append(f"model function {b.name} uses `{nm}` (a require_* cast) — it ASSUMES the "
+                             f"value is in range, silently pruning out-of-range/overflow inputs and making "
+                             f"the conformance vacuous there. Use `assert_{nm.split('_', 1)[1]}` instead "
+                             f"(the prover checks the cast is total); model a real wrap explicitly if the "
+                             f"value can exceed the type.")
+                    break
     if spec.import_specs:
         v.append("model spec must not import setup specs (disjoint namespace)")
     return v

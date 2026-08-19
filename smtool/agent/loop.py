@@ -62,7 +62,12 @@ Do NOT guess behavior from prose — read the CUT's Solidity (grep_files / get_f
 - NONDET only view/pure functions whose result the checked output does not depend on.
 - Math mirrors reimplement the CUT library math in EXACT structural form.
 - CVL arithmetic is `mathint` (`a+b`, `a*b`, `a/b` are all mathint); storing back into a `uintN` needs an
-  explicit cast `require_uintN(expr)` / `assert_uintN(expr)`. This is the main CVL-vs-Solidity difference.
+  explicit cast. Use `assert_uintN(expr)`, NEVER `require_uintN(expr)`: a require_* cast ASSUMES the value
+  fits and silently PRUNES out-of-range (overflow) inputs, so the conformance passes VACUOUSLY there
+  (unsound — the linter rejects require_* casts). `assert_uintN` makes the prover CHECK the cast is total:
+  a provably-in-range value passes, an overflow is CAUGHT. If the real Solidity WRAPS (unchecked add/sub),
+  model the wrap explicitly — e.g. `assert_uint256((a + b) % 2^256)` — so the model MATCHES real (a real,
+  reachable success), rather than pruning it away. This is the main CVL-vs-Solidity difference.
 
 ## 3. WHEN A CONFORMANCE PROOF IS VIOLATED (a CORRECTNESS problem — the model is WRONG)
 The prover returns a COUNTEREXAMPLE: a concrete input + call trace on which the model disagrees with the
@@ -73,11 +78,11 @@ and fix the model BODY with set_model_method_body (or retract a bad lemma). The 
 tells you WHICH kind of divergence it is; the main cases:
 - REVERT conformance (msg ~ "real success must imply model success"): on the counterexample the REAL
   function succeeds but your model REVERTS (or vice versa). Find the revert in `<f>CVL` that fires wrongly
-  — an over-eager `if (cond) revert();`, or an ARITHMETIC revert (require_uintN(...) underflow, division
+  — an over-eager `if (cond) revert();`, or a bad ARITHMETIC cast (assert_uintN(...) overflow/underflow, division
   by zero, a narrowing cast) — and align its conditions to the real source at those input values.
 - RETURN value (msg ~ "returns must agree"): on a non-reverting input the model returns the wrong value.
   Trace the call trace to the line of `<f>CVL` that computes it and fix the arithmetic (mathint rounding,
-  require_uintN casts).
+  assert_uintN casts / an unmodeled wrap).
 - STATE effect (msg ~ "observable ... effect must agree"): after the call a model observable ghost
   disagrees with the real getter — your body writes the wrong value to that ghost; fix the write.
 - A HELPER LEMMA you added fails (the assert message is one YOU wrote): its claim is false on the
