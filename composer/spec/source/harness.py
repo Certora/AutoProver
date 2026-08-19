@@ -18,27 +18,37 @@ Two entry points:
     compilation, and returns a ``Configuration``.
 """
 
-from typing import NotRequired, TypedDict
+from typing import AsyncIterator, NotRequired, TypedDict, override
+from contextlib import ExitStack, asynccontextmanager
+from logging import getLogger
 from pathlib import Path
-import subprocess
+import asyncio
+import shutil
 
-from pydantic import Field, BaseModel
+from pydantic import Field, BaseModel, ValidationError
 
 from langgraph.graph import MessagesState
 
 from composer.prover.core import ProverOptions
+from composer.spec.natspec.async_result import AsyncResultTool
 from graphcore.graph import FlowInput
-from graphcore.tools.vfs import VFSState, VFSToolConfig, vfs_tools
-from graphcore.tools.results import result_tool_generator
+from graphcore.tools.schemas import WithInjectedState
+from graphcore.tools.vfs import VFSAccessor, VFSState, VFSToolConfig, vfs_tools
 
 from composer.diagnostics.timing import get_run_summary
 from composer.spec.graph_builder import run_to_completion, bind_standard
 from composer.spec.source.autosetup import run_autosetup, read_autosetup_usage, read_autosetup_prover_usage, SetupFailure, SetupSuccess
 from composer.spec.service_host import ServiceHost
 from composer.spec.context import WorkflowContext, SourceCode, CacheKey
+from composer.spec.key_family import KeyFamily
 from composer.spec.util import string_hash
 from composer.spec.gen_types import TypedTemplate, certora_relative_to_project, under_project
-from composer.spec.system_model import SolidityIdentifier, SourceApplication, SourceExternalActor, SourceExplicitContract
+from composer.spec.system_model import (
+    HarnessDefinition, HarnessedApplication, HarnessedExplicitContract,
+    SolidityIdentifier, SourceApplication, SourceExternalActor, SourceExplicitContract,
+)
+
+_logger = getLogger(__name__)
 
 def system_setup_key(s: SourceApplication) -> CacheKey["ContractSetup", "SystemDescriptionHarnessed"]:
     return CacheKey["ContractSetup", "SystemDescriptionHarnessed"](
@@ -71,7 +81,22 @@ class ClosureContract(ClosureContractBase):
     """
     A contract in the transitive closure.
     """
-    num_instances : int | None = Field(description="The number of instances of this contract needed to model a non-trivial state (None if N/A)")
+    num_instances : int | None = Field(description="The number of instances (> 1) of this contract needed to model a non-trivial state; None if a single instance is sufficient")
+
+class HarnessingDetermination(BaseModel):
+    """
+    A determination that a multiple harness instances are required for this contract
+    """
+    n : int = Field(description="The number of harnesses needed for a non-trivial state; must be > 1", gt=1)
+
+class TaggedClosureContract(ClosureContractBase):
+    __doc__ = ClosureContract.__doc__
+    
+    harness_determination : HarnessingDetermination | None = Field(description="The harnessing determination for this contract")
+
+    @property
+    def num_instances(self) -> int | None:
+        return None if self.harness_determination is None else self.harness_determination.n
 
 class HarnessDef(BaseModel):
     harness_of: SolidityIdentifier
@@ -99,7 +124,7 @@ class SystemDescriptionBase[T: ClosureContractBase](BaseModel):
     external_interfaces: list[ExternalInterface] = Field(description="A list of the external contract actors interacted with by the closure")
 
 
-class AgentSystemDescription(SystemDescriptionBase[ClosureContract]):
+class AgentSystemDescription(SystemDescriptionBase[TaggedClosureContract]):
     """
     The result of your analysis
     """
@@ -127,6 +152,45 @@ class HarnessAnalysisParams(TypedDict):
 class ContractSetup(BaseModel):
     system_description: SystemDescriptionHarnessed
     config: SetupSuccess
+
+
+def lift_harnessed(
+    s: SourceApplication, sys_desc: SystemDescriptionHarnessed,
+) -> HarnessedApplication:
+    """Re-key harness definitions by harnessed contract and fold them into a
+    ``HarnessedApplication`` — each ``SourceExplicitContract`` becomes a
+    ``HarnessedExplicitContract`` carrying the harnesses generated for it.
+
+    Declared beside the models because every consumer of the harnessed view
+    must build it identically — the prover pipeline, and any offline walker
+    re-deriving component cache keys (``composer.meta.run``): the harnessed
+    app is part of the unit's ``cache_material``."""
+    contract_to_harness: dict[SolidityIdentifier, list[HarnessDefinition]] = {}
+    for c in sys_desc.transitive_closure:
+        if not c.harness_definition:
+            continue
+        contract_to_harness.setdefault(c.harness_definition.harness_of, []).append(
+            HarnessDefinition(name=c.solidity_identifier, path=c.path)
+        )
+
+    comp: list[SourceExternalActor | HarnessedExplicitContract] = []
+    for c in s.components:
+        if not isinstance(c, SourceExplicitContract):
+            comp.append(c)
+            continue
+        comp.append(HarnessedExplicitContract(
+            sort=c.sort,
+            name=c.name,
+            solidity_identifier=c.solidity_identifier,
+            components=c.components,
+            description=c.description,
+            path=c.path,
+            harnesses=contract_to_harness.get(c.solidity_identifier, []),
+        ))
+    return HarnessedApplication(
+        application_type=s.application_type, description=s.description, components=comp,
+    )
+
 
 HarnessAnalysis = TypedTemplate[HarnessAnalysisParams]("state_analysis.j2")
 
@@ -199,6 +263,92 @@ async def classifier_agent(
     await child.cache_put(res["result"])
     return res["result"]
 
+_HARNESS_CHECK_TIMEOUT_S = 900
+
+
+class ForgeDiagnostic(BaseModel):
+    """One diagnostic of a ``forge build`` report."""
+    severity: str
+    message: str = ""
+    formatted_message: str = Field(default="", alias="formattedMessage")
+
+    @property
+    def rendered(self) -> str:
+        """The diagnostic as solc rendered it: the source excerpt and the notes
+        that go with it, falling back to the bare message if forge gave none."""
+        return self.formatted_message or self.message
+
+
+class ForgeReport(BaseModel):
+    """A ``forge build --json`` report.
+
+    ``errors`` holds every diagnostic, warnings included; ``severity`` is what
+    separates them. The exit code carries no information — forge exits 0
+    whether or not the sources compiled.
+    """
+    errors: list[ForgeDiagnostic] = Field(default_factory=list)
+
+    @property
+    def compile_errors(self) -> list[str]:
+        return [d.rendered for d in self.errors if d.severity == "error"]
+
+
+@asynccontextmanager
+async def _materialized[S](accessor: VFSAccessor[S], state: S) -> AsyncIterator[str]:
+    """The agent's filesystem view as a real directory, for the block's
+    duration. The copy and its teardown run in a worker thread: materializing a
+    whole project is blocking IO that would otherwise stall the event loop."""
+    stack = ExitStack()
+    project_dir = await asyncio.to_thread(stack.enter_context, accessor.materialize(state))
+    try:
+        yield project_dir
+    finally:
+        await asyncio.to_thread(stack.close)
+
+
+async def _compile_check(project_dir: str, harness_paths: list[str]) -> str | None:
+    """Type-check the named harnesses within a materialized copy of the project.
+
+    Returns the compiler's error output, or None when they compile — or when
+    the project offers nothing to check them with (not a foundry project, no
+    forge binary, or a build that never produced a report), in which case the
+    candidates are accepted unchecked.
+    """
+    root = Path(project_dir)
+    forge = shutil.which("forge")
+    if forge is None or not (root / "foundry.toml").is_file():
+        _logger.info("Harness compile check skipped: needs forge and a foundry project")
+        return None
+    proc = await asyncio.create_subprocess_exec(
+        forge, "build", "--json", *sorted(harness_paths),
+        cwd=str(root),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(
+            proc.communicate(), timeout=_HARNESS_CHECK_TIMEOUT_S
+        )
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        _logger.warning(
+            "Harness compile check skipped: forge build exceeded %ds", _HARNESS_CHECK_TIMEOUT_S
+        )
+        return None
+
+    try:
+        report = ForgeReport.model_validate_json(stdout_b.decode())
+    except ValidationError:
+        _logger.warning(
+            "Harness compile check skipped: forge emitted no report: %s", stderr_b.decode()[-500:]
+        )
+        return None
+    if not report.compile_errors:
+        return None
+    return "\n".join(report.compile_errors)
+
+
 class GeneratedHarness(BaseModel):
     """A generated harness file that creates a uniquely-named contract extending an external contract."""
     path: str = Field(description="Path to the harness definition")
@@ -215,7 +365,6 @@ class HarnessAgentResult(BaseModel):
         "A map from each target contract's `solidity_identifier` (exactly as given in "
         "the input list) to the harnesses chosen for it."
     ))
-    solidity_compiler: str = Field(description=f"The solidity compiler to use for compiling these harnesses.")
 
 class HarnessResult(BaseModel):
     identifier_to_source: dict[SolidityIdentifier, list[GeneratedHarnessSource]]
@@ -230,10 +379,17 @@ class HarnessGenParams(TypedDict):
 
 _HarnessGenerationPrompt = TypedTemplate[HarnessGenParams]("harness_generation_prompt.j2")
 
-def harness_generation_key(
-    instructions: AgentSystemDescription
-) -> CacheKey[SystemDescriptionHarnessed, HarnessResult]:
-    return CacheKey[SystemDescriptionHarnessed, HarnessResult](string_hash(instructions.model_dump_json()))
+def _system_setup_key(s: SourceApplication) -> str:
+    return "system-setup-" + string_hash(s.model_dump_json())
+
+SYSTEM_SETUP_KEY = KeyFamily(ContractSetup, SystemDescriptionHarnessed, _system_setup_key)
+
+def _harness_generation_key(instructions: AgentSystemDescription) -> str:
+    return string_hash(instructions.model_dump_json())
+
+HARNESS_GENERATION_KEY = KeyFamily(
+    SystemDescriptionHarnessed, HarnessResult, _harness_generation_key
+)
 
 async def generate_harnesses(
     context: WorkflowContext[SystemDescriptionHarnessed],
@@ -242,7 +398,7 @@ async def generate_harnesses(
     application: SourceApplication,
     instructions: AgentSystemDescription
 ) -> HarnessResult:
-    child = await context.child(harness_generation_key(instructions), instructions.model_dump())
+    child = await context.child(HARNESS_GENERATION_KEY(instructions), instructions.model_dump())
     if (cached := await child.cache_get(HarnessResult)) is not None:
         return cached
 
@@ -284,48 +440,42 @@ async def generate_harnesses(
     }
 
 
-    def result_validator(
-        s: GenerationState,
-        res: HarnessAgentResult,
-        tid: str
-    ) -> str | None:
-        check_copy = expected.copy()
-        all_files = [
-            
-        ]
-        for (nm, r) in res.identifier_to_source.items():
-            if nm not in check_copy:
-                return f"Delivered result for contract {nm}, but no instructions were given to harness it"
-            if len(r) != check_copy[nm]:
-                return f"Delivered {len(r)} harnesses for {nm}, but {check_copy[nm]} were required"
-            for res_c in r:
-                if mat.get(s, res_c.path) is None:
-                    return f"Delivered harness {res_c.harness_name} at {res_c.path} for {nm}, but it doesn't exist on the VFS"
-                all_files.append(res_c.path)
-            del check_copy[nm]
-        if len(check_copy) != 0:
-            error = ", ".join(
-                [ f"contract {k} ({n} copies)" for (k,n) in check_copy.items() ]
-            )
-            return f"Missing harnesses in results: {error}"
-        if False: # this doesn't work
-            with mat.materialize(s) as temp_dir:
-                compile_result = subprocess.run(
-                    [res.solidity_compiler] + all_files,
-                    cwd=temp_dir,
-                    capture_output=True,
-                    text=True
-                )
-                if compile_result.returncode != 0 and False:
-                    return f"Harness compilation failed:\nstdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
-        return None
+    class HarnessResultTool(AsyncResultTool[HarnessAgentResult], WithInjectedState[GenerationState]):
+        """Signal the completion of your workflow. Triggers a compile of the
+        delivered harnesses against the project; a compile failure is reported
+        back to you for a retry.
+        """
 
-    result_tool = result_tool_generator(
-        "result",
-        HarnessAgentResult,
-        "Signal the completion of your workflow",
-        validator=(GenerationState, result_validator)
-    )
+        @override
+        async def validate_result(self, res: HarnessAgentResult) -> str | None:
+            check_copy = expected.copy()
+            harness_paths: list[str] = []
+            for (nm, r) in res.identifier_to_source.items():
+                if nm not in check_copy:
+                    return f"Delivered result for contract {nm}, but no instructions were given to harness it"
+                if len(r) != check_copy[nm]:
+                    return f"Delivered {len(r)} harnesses for {nm}, but {check_copy[nm]} were required"
+                for res_c in r:
+                    if mat.get(self.state, res_c.path) is None:
+                        return f"Delivered harness {res_c.harness_name} at {res_c.path} for {nm}, but it doesn't exist on the VFS"
+                    harness_paths.append(res_c.path)
+                del check_copy[nm]
+            if len(check_copy) != 0:
+                error = ", ".join(
+                    [ f"contract {k} ({n} copies)" for (k,n) in check_copy.items() ]
+                )
+                return f"Missing harnesses in results: {error}"
+            # Compile the agent's view of the project, not the project on disk: the
+            # harnesses it wrote live on the VFS, and a helper it wrote but did not
+            # deliver still has to be there for their imports to resolve.
+            async with _materialized(mat, self.state) as project_dir:
+                compile_errors = await _compile_check(project_dir, harness_paths)
+            if compile_errors is not None:
+                return (
+                    "The delivered harnesses do not compile. Repair them and deliver again; "
+                    "the compiler reported:\n" + compile_errors
+                )
+            return None
 
     g = env.builder_lite().with_input(
         GenerationInput
@@ -338,7 +488,7 @@ async def generate_harnesses(
     ).with_sys_prompt_template(
         "harness_generation_system_prompt.j2"
     ).with_tools(
-        v_tools + [result_tool]
+        v_tools + [HarnessResultTool.as_tool("result")]
     ).with_default_summarizer().compile_async()
 
     res_state = await run_to_completion(
@@ -436,7 +586,7 @@ async def run_setup_part1(
     env: ServiceHost,
     application_desc: SourceApplication
 ) -> SystemDescriptionHarnessed:
-    setup_ctx = await context.child(system_setup_key(application_desc), application_desc.model_dump())
+    setup_ctx = await context.child(SYSTEM_SETUP_KEY(application_desc), application_desc.model_dump())
     if (cached := await setup_ctx.cache_get(SystemDescriptionHarnessed)):
         return cached
 
@@ -513,9 +663,6 @@ async def run_and_apply_part1(
 
 config_key = CacheKey[None, ContractSetup]("config")
 
-from logging import getLogger
-_logger = getLogger(__name__)
-
 
 # ---------------------------------------------------------------------------
 # Split phases.
@@ -523,7 +670,7 @@ _logger = getLogger(__name__)
 # Harness creation and AutoSetup are exposed as two separate, independently
 # cached steps so the pipeline can run AutoSetup in parallel with invariant/bug
 # analysis. They share the ``config_key`` parent context, so existing
-# harness-creation caches (keyed by ``system_setup_key``) still hit; the
+# harness-creation caches (keyed by ``SYSTEM_SETUP_KEY``) still hit; the
 # AutoSetup result is cached under its own key.
 # ---------------------------------------------------------------------------
 
@@ -541,18 +688,18 @@ async def run_harness_creation(
     return await run_and_apply_part1(config_ctxt, source, env, application_desc)
 
 
-def autosetup_key(
+def _autosetup_key(
     app: SourceApplication,
     prover_opts: ProverOptions,
-) -> CacheKey[ContractSetup, SetupSuccess]:
-    """Cache key for the AutoSetup phase. Includes ``prover_opts`` so cloud and
-    local configurations never collide (the old composite ``config_key`` omitted
-    them, which could reuse a stale config across modes)."""
-    return CacheKey[ContractSetup, SetupSuccess](
-        "autosetup-" + string_hash(
-            app.model_dump_json() + "\x00" + "\x00".join(prover_opts.extra_args)
-        )
+) -> str:
+    return "autosetup-" + string_hash(
+        app.model_dump_json() + "\x00" + "\x00".join(prover_opts.extra_args)
     )
+
+#: Cache key for the AutoSetup phase. Includes ``prover_opts`` so cloud and
+#: local configurations never collide (the old composite ``config_key`` omitted
+#: them, which could reuse a stale config across modes).
+AUTOSETUP_KEY = KeyFamily(ContractSetup, SetupSuccess, _autosetup_key)
 
 
 async def run_autosetup_phase(
@@ -569,7 +716,7 @@ async def run_autosetup_phase(
     Cache hits are guarded by the on-disk existence of ``summaries_path``."""
     config_ctxt = context.child(config_key)
     cache = await config_ctxt.child(
-        autosetup_key(application_desc, prover_opts),
+        AUTOSETUP_KEY(application_desc, prover_opts),
         application_desc.model_dump(),
     )
     if (cached := await cache.cache_get(SetupSuccess)) is not None:

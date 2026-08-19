@@ -36,6 +36,14 @@ class ProviderService(Protocol):
     def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
         ...
 
+    def should_retry(self, exc: Exception) -> bool:
+        """Whether ``exc`` is a transient provider-side failure worth retrying
+        (rate limits, overload, dropped connections) — as opposed to a
+        deterministic request error (an over-long prompt 400s identically
+        every time). The harness assembles this into the run-wide retry
+        policy (``composer.io.context.install_retry_policy``)."""
+        ...
+
 class ProviderServiceBase(ABC):
     def __init__(self,
         mem_fact: Callable[["AsyncPostgresBackend"], "BaseTool"],
@@ -58,6 +66,11 @@ class ProviderServiceBase(ABC):
 
     def cache_marker(self, payload: "RawMessageType", cache_level: CacheLevel) -> "RawMessageType":
         return payload
+
+    def should_retry(self, exc: Exception) -> bool:
+        # Providers opt in to retryability explicitly; unknown exceptions are
+        # never worth an automatic re-run.
+        return False
 
 
 class ModelProvider(Protocol):

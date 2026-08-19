@@ -10,8 +10,10 @@ from composer.spec.source.author import ExpectRuleFailure, ExpectRulePassage
 from composer.spec.source.prover import (
     StateWithSkips, VALIDATION_KEY,
 )
-from composer.spec.cvl_generation import check_completion
+from composer.authoring.state import check_completion
 from composer.prover.core import ProverReport
+from composer.prover.ptypes import RulePath
+from composer.prover.results import StatusCodes
 
 from graphcore.testing import Scenario, tool_call_raw, ToolCallDict
 from graphcore.tools.results import result_tool_generator
@@ -62,12 +64,19 @@ def _result(commentary: str) -> ToolCallDict:
 
 
 def _raw_report(**rule_status: bool) -> ProverReport:
-    return ProverReport(rule_status=rule_status, result_str="Prover report output", link="local://test-run")
+    return ProverReport(result_str="Prover report output", link="local://test-run", raw_rule_status={
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        },
+        certora_run_stdout="certoraRun output"
+    )
 
 
 def _summarized_report(todo: str, **rule_status: bool) -> ProverReport:
     return ProverReport(
-        rule_status=rule_status, result_str=todo, link="local://test-run",
+        result_str=todo, link="local://test-run", raw_rule_status={
+            RulePath(rule=k): "VERIFIED" if v else "VIOLATED" for (k,v) in rule_status.items()
+        },
+        certora_run_stdout="certoraRun output"
     )
 
 
@@ -106,6 +115,7 @@ def _scenario(
         required_validations=required if required is not None else [VALIDATION_KEY],
         rule_skips=rule_skips or {},
         config={"files": ["src/Foo.sol"]},
+        reminders_channel=[],
         # verify_spec's stamp is bound to the applied-edit history; the source
         # pipeline always seeds it, so the test state must too.
         version_history=[],

@@ -18,12 +18,18 @@ from typing import TypedDict, Unpack
 
 from composer.diagnostics.timing import RunSummary
 from composer.spec.gen_types import PROPERTIES_SUBDIR, under_project
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import CheckName, PropertyFormulation, PropertyTitle, VerificationArtifact
 from composer.spec.util import ensure_dir
 from .types import ArtifactIdentifier, FormalResult
 from composer.spec.source.report.schema import AutoProverReport
 
 _log = logging.getLogger(__name__)
+
+#: Terminal suffix for artifacts persisted from a budget-curtailed generation. The
+#: suffix keeps the file inert — no conf can reference a ``.spec.unverified`` and
+#: forge won't compile a ``.t.sol.unverified`` — while stating exactly what's wrong
+#: with it: the content never passed the validation gates.
+QUARANTINE_SUFFIX = ".unverified"
 
 
 class StoreConfiguration(TypedDict):
@@ -60,8 +66,33 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         self._write_commentary(i.stem, artifact.commentary)
         self._write_property_map(
             i.stem, self._property_suffix,
-            {k: v for (k,v) in artifact.property_units()},
+            {k: v for (k,v) in artifact.property_checks()},
         )
+        return target_path.relative_to(self._project_root)
+
+    def write_quarantined(self, i: I, artifact: FormT) -> Path:
+        """Persist a budget-curtailed artifact for inspection under a poisoned name
+        (``{artifact_file}.unverified``). Only the artifact text is written — no
+        commentary, property map, or backend bundle — so nothing runnable or
+        machine-readable points at content that never passed the validation gates."""
+        target_dir = ensure_dir(self._artifact_dir())
+        target_path = target_dir / (i.artifact_file + QUARANTINE_SUFFIX)
+        target_path.write_text(artifact.artifact_text)
+        return target_path.relative_to(self._project_root)
+
+    def write_plugin_artifact(
+        self, i: I, plugin: str, artifact: VerificationArtifact
+    ) -> Path:
+        """A verification-supporting artifact a plugin's tool registered for unit
+        ``i`` → ``{artifact_dir}/certificates/{stem}/{plugin}/{name}``. The name is
+        reduced to its basename and namespaced per unit and plugin, so tools cannot
+        traverse or collide. Returns the project-relative path (what the report
+        records)."""
+        target_dir = ensure_dir(
+            self._artifact_dir() / "certificates" / i.stem / plugin
+        )
+        target_path = target_dir / Path(artifact.name).name
+        target_path.write_text(artifact.content)
         return target_path.relative_to(self._project_root)
 
     def _deliverable_dir(self) -> Path:
@@ -95,7 +126,7 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         (self._properties_dir() / f"{stem}.commentary.md").write_text(commentary)
 
     def _write_property_map(
-        self, stem: str, suffix: str, mapping: dict[str, list[str]],
+        self, stem: str, suffix: str, mapping: dict[PropertyTitle, list[CheckName]],
     ) -> None:
         """A ``{property title: [demonstrating names]}`` map → ``{stem}.{suffix}.json``.
         Titles are unique (enforced at extraction). ``suffix`` is the workflow's term
