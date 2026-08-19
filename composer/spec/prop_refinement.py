@@ -137,11 +137,9 @@ def diff_states(state_a: list[str], state_b: list[str]) -> Group:
     return Group(*out)
 
 def sort_to_string(
-    s: Literal["attack_vector", "invariant", "safety_property"]
+    s: Literal["invariant", "safety_property"]
 ) -> str:
     match s:
-        case "attack_vector":
-            return "Attack Vector"
         case "invariant":
             return "Invariant"
         case "safety_property":

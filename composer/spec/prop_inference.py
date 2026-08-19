@@ -152,11 +152,10 @@ plausibly formally stated or reasoned about in a symbolic reasoning tool
 properties which are difficult or impossible to prove using the Certora
 Prover:
 
-1. Attack vectors or invariants that reference off-chain events (like
+1. Invariants or safety properties that reference off-chain events (like
    key compromising, phishing, etc.)
 2. Reasoning about hash function behavior or hash collisions (e.g.,
    "invalid signatures should be rejected")
-3. Event emission (not impossible, simply difficult and tedious)
 
 In addition, due to the advent of checked arithmetic, properties that
 assert no overflow are considered uninteresting. Further, properties

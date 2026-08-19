@@ -44,19 +44,15 @@ Understand the properties being formalized:
 {% for prop in properties %}
 <{{ prop.sort }}>
   Property {{ loop.index }} (`{{ prop.title }}`): {{ prop.description }}
-  {% if prop.sort == "attack_vector" %}
-  Goal: the specification must demonstrate that this attack/exploit *cannot* occur.
-  {% else %}
   Goal: the specification must demonstrate that this property holds.
-  {% endif %}
 </{{ prop.sort }}>
 {% endfor %}
 
-**IMPORTANT**: If the attack vector *DOES* exist, or the safety property/invariant *DOES NOT*
-exist, then a specification *must* produce a violation (an unsatisfied proof) in the corresponding properties.
+**IMPORTANT**: If the safety property/invariant *DOES NOT* hold,
+then a specification *must* produce a violation (an unsatisfied proof) in the corresponding properties.
 A "green" verification result should *never* testify to the presence of a bug, only to a lack of them.
 A rule/invariant that fails to verify against the current code because it demonstrates a potential
-vulnerability/attack vector is the *desired* result.
+vulnerability/violation is the *desired* result.
 
 ## Step 3
 

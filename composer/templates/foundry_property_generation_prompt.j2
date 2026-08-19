@@ -10,11 +10,7 @@ for the contract `{{ contract_name }}`:
 {% for prop in properties %}
 <{{ prop.sort }}>
   Property {{ loop.index }} (`{{ prop.title }}`): {{ prop.description }}
-  {% if prop.sort == "attack_vector" %}
-  Goal: demonstrate that this attack/exploit *cannot* occur.
-  {% else %}
   Goal: demonstrate that this property holds.
-  {% endif %}
 </{{ prop.sort }}>
 {% endfor %}
 
@@ -69,12 +65,13 @@ Call `forge_test()`. It runs `forge test` on your current buffer.
     pick a different precondition.
   - Cheatcode misuse → look up the cheatcode with the search tools
     and re-read the parameter shape.
-* If a test is *supposed* to fail (the failure itself proves an
-  attack vector exists), mark it via `expect_test_failure` and
+* If a test is *supposed* to fail (the failure itself proves a 
+  safety property is violated),
+  mark it via `expect_test_failure` and
   re-run `forge_test`. The runner excludes expected-fail tests from
   the all-green check.
 
-Remember: If an attack vector *IS* possible, or a safety property/invariant
+Remember: If a safety property/invariant
 does *NOT* hold, you should produce a test that *fails* and mark it
 as an expected failure. Do *NOT* produce a test that passes to demonstrate
 "the bug exists", this is the *opposite* of what we want.

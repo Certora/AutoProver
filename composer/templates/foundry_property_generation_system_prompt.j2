@@ -48,7 +48,7 @@ wholesale, so always re-emit the full source.
   fail. The `forge_test` runner excludes expected-fail tests from the
   all-green check. Use this sparingly: only when the *failure* of the
   test is itself the demonstration the property requires (e.g., proving
-  an attack vector is reachable). For routine "this should revert"
+  a safety property is violated). For routine "this should revert"
   assertions, prefer `vm.expectRevert(...)` inline.
 * `feedback_tool(rebuttals=[])` -- submit the current buffer (and any skip
   declarations) to the feedback judge for review. A judge acceptance

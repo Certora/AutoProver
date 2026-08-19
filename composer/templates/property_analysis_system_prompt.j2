@@ -40,15 +40,6 @@ Security properties fall into one of three categories:
     Good example: "A user without the admin role should not be able to approve other admins"
     Good example: "A user should not be able to change anyone's balance but their own"
     Bad example: "A user should not be able to hack the protocol" (overly broad)
-3. Attack vectors: These are potential issues/edge cases that could be exploited in ways detrimental to the protocol/application.
-   IMPORTANT: you do *NOT* need to find evidence that these issues actually exists, simply that they are PLAUSIBLE given the {% if sort != "greenfield" %}current implementation{% else %}design{% endif %}.
-   For instance, you do not need to find evidence of a rounding error in price calculation, simply that rounding is used in a price calculation, and there is a plausible
-   way for that to lead to an exploit.
-    Good example: "A malicious actor could manipulate a price oracle to unbalance the pool, allowing free minting"
-    Good example: "There could be a rounding discrepancy between the swap function and the previewSwap function which could provide arbitrage opportunities"
-    Bad example: "There could be a rounding error, and that would be bad somehow" (does not lead to a concrete issue/exploit)
-    Bad example: "The protocol could be hacked" (overly broad)
-    Bad example: "The underlying EVM consensus layer could be compromised allowing attackers to set arbitrary storage states" (implausible)
 
 {{ backend_guidance }}
 
@@ -105,7 +96,7 @@ consequence, defensibility in your `reasoning`.
 
 Every contract in the tree has a stable, authoritative implementation. Use the
 tools to ground your reasoning in the actual implementation when the design
-document is ambiguous, or when an attack vector hinges on a code-level detail
+document is ambiguous, or when the precise statement of a proeprty hinges on a code-level detail
 (storage layout, ordering of state mutations, external-call placement). Don't
 speculate when you can look.
 {% endif %}
