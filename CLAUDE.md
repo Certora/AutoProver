@@ -29,6 +29,12 @@ loose). Both flags matter:
   every non-default group the two commands above need, `ci` (pyright) included, or the sync
   that fixes one of them breaks the other:
   `uv sync --group test --group ci --group ragbuild --extra cpu --extra certora-cli`.
+- **The Rust toolchain.** That sync's default `dev` group builds the maturin crates under
+  `rust/`, so it needs cargo. If the toolchain `rust-toolchain.toml` pins is not installed
+  yet, install it first and on its own — `rustup toolchain install --no-self-update`, no
+  argument, so rustup reads the channel, profile and components from that file. uv builds
+  those crates concurrently and rustup's on-demand install is not concurrency-safe, so
+  letting the build trigger it races.
 
 ## Python
 

@@ -122,17 +122,20 @@ def test_rust_build_policy_shape(tmp_path, monkeypatch):
 
 
 def test_rust_build_policy_offline_sets_cargo_net_offline(tmp_path):
-    """Default (offline) forces every cargo — incl. the one `crucible run` spawns —
-    offline via CARGO_NET_OFFLINE; opting out drops it."""
+    """Default (offline) forces every cargo — incl. a nested one a checker spawns — offline via
+    CARGO_NET_OFFLINE; opting out drops it.
+
+    The value has to be exactly `true`: cargo parses this as a config boolean and refuses
+    anything else, so `1` fails the build *and* leaves it online."""
     on = rust_build_policy(tmp_path)
-    assert on.env_allowlist.get("CARGO_NET_OFFLINE") == "1"
+    assert on.env_allowlist.get("CARGO_NET_OFFLINE") == "true"
     off = rust_build_policy(tmp_path, offline=False)
     assert "CARGO_NET_OFFLINE" not in off.env_allowlist
 
 
 def test_config_enabled_policy_is_offline_by_default(tmp_path):
     pol = SandboxConfig(provider="launcher").build_policy(tmp_path)
-    assert pol.env_allowlist.get("CARGO_NET_OFFLINE") == "1"
+    assert pol.env_allowlist.get("CARGO_NET_OFFLINE") == "true"
     pol_net = SandboxConfig(provider="launcher", offline=False).build_policy(tmp_path)
     assert "CARGO_NET_OFFLINE" not in pol_net.env_allowlist
 

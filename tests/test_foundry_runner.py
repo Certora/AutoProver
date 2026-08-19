@@ -34,11 +34,11 @@ def test_parse_forge_json_parses_a_minimal_report() -> None:
     assert [(r.name, r.status) for r in results] == [("test_Foo", "Success")]
 
 
-def _min_state(curr_test: str) -> dict:
+def _min_state(curr_spec: str) -> dict:
     """The minimal FoundryGenerationState the runner's build-failure branch reads."""
     return {
         "messages": [],
-        "curr_test": curr_test,
+        "curr_spec": curr_spec,
         "skipped": [],
         "property_tests": [],
         "validations": {},
@@ -46,6 +46,7 @@ def _min_state(curr_test: str) -> dict:
         "expected_failures": {},
         "last_test_names": ["stale_name"],
         "failed": None,
+        "budget_curtailed": False
     }
 
 
