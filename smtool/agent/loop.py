@@ -187,14 +187,14 @@ def build_smtool_graph(builder: Builder, deps: SmtoolDeps, *, extra_tools: Itera
 
 async def run_smtool_agent(project: Project, task: str, *, builder: Builder | None = None,
                            llm: BaseChatModel | None = None, thread_id: str = "smtool",
-                           recursion_limit: int = 80) -> SmtoolResult | None:
+                           recursion_limit: int = 80, max_prompt_tokens: int = 100_000) -> SmtoolResult | None:
     """Run the fill agent to completion and return its `result`. Pipeline: pass
     `builder=env.builder_lite()` (inside a with_handler scope). Dev/standalone: pass `llm=<model>`.
     `task` = the per-method instruction + context (which method, the CUT source, etc.)."""
     if builder is None:
         if llm is None:
             raise ValueError("pass builder=env.builder_lite() (pipeline) or llm=<model> (dev)")
-        builder = Builder().with_llm(llm)
+        builder = Builder().with_llm(llm, max_prompt_tokens=max_prompt_tokens)
     graph = build_smtool_graph(builder, SmtoolDeps(project)).with_initial_prompt(task).compile_async()
     res = await run_to_completion(graph, SmtoolInput(input=[task]), thread_id=thread_id,
                                   recursion_limit=recursion_limit, description="smtool fill agent")

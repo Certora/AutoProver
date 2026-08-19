@@ -108,7 +108,7 @@ class Project:
                         getters[key] = f
         union = list(methods.values()) + list(getters.values())
         model_input = ToolInput(
-            cut=base.cut, functions=union, model_spec_name=base.model_spec_name,
+            cut=base.cut, functions=union, alias=base.alias, model_spec_name=base.model_spec_name,
             conformance_prefix_name=base.conformance_prefix_name, specs_dir=base.specs_dir)
         model_cls = classify(union)
         model = driver.build_model_spec(model_input, model_cls)

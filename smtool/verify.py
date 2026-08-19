@@ -96,7 +96,11 @@ async def prune_reachable(project, reachable_conf_path: str | Path, *,
     TODO(discovery): source the candidate invariants from composer's generate->prove->cex pass."""
     res = await verify(reachable_conf_path, sources_root=sources_root, certora_run_path=certora_run_path,
                        local=local, disable_cache=disable_cache, msg="smtool reachable invariants")
-    verified = {v.rule for v in res.rules if v.passed}
+    # An invariant explodes into many checks (base case + one preservation per method) that all share
+    # its rule name; it holds only if EVERY check passed. Subtract any name with a failing instance so a
+    # passing sibling can't mask a VIOLATED/TIMEOUT one — an invariant survives only when fully proven.
+    failed = {v.rule for v in res.rules if not v.passed}
+    verified = {v.rule for v in res.rules if v.passed} - failed
     candidates = set(project.reachable_invariant_names())
     kept = candidates & verified
     project.drop_invariants(candidates - verified)

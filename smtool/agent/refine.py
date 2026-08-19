@@ -251,7 +251,7 @@ def _make_verify(project: Project, cfg: RefineConfig):
 async def run_refine_loop(project: Project, fill_task: str, cfg: RefineConfig, *,
                           llm: BaseChatModel | None = None, builder: Builder | None = None,
                           extra_tools: Iterable[BaseTool] = (), thread_id: str = "smtool",
-                          fill_steps: int = 90, max_rounds: int = 4,
+                          fill_steps: int = 90, max_rounds: int = 4, max_prompt_tokens: int = 100_000,
                           callbacks: Iterable[BaseCallbackHandler] = (),
                           transcript_path: str | None = None,
                           on_round: Callable[[int, list[str], list[str], dict], None] | None = None
@@ -268,7 +268,7 @@ async def run_refine_loop(project: Project, fill_task: str, cfg: RefineConfig, *
     if builder is None:
         if llm is None:
             raise ValueError("pass llm=<model> (dev) or builder=env.builder_lite() (pipeline)")
-        builder = Builder().with_llm(llm)
+        builder = Builder().with_llm(llm, max_prompt_tokens=max_prompt_tokens)
     ckpt = InMemorySaver()
     deps = SmtoolDeps(project, full_typecheck=_make_full_typecheck(project, cfg),
                       verify=_make_verify(project, cfg))

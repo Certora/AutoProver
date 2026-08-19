@@ -179,6 +179,13 @@ def if_(cond, then_cmds, else_cmds=None) -> S.IfCmd:
     return S.IfCmd(type="if", condition=cond, then_cmd=list(then_cmds), else_block=else_block)
 
 
+def havoc(targets: list, assumption=None) -> S.HavocCmd:
+    """`havoc t0, t1, ... [assuming <expr>];` — targets are ghost names (str) or LHS/expr nodes.
+    The assumption is the frame condition (e.g. forall over untouched keys) using `@new`/`@old`."""
+    lhs = [S.IdLhs(type="id", name=t) if isinstance(t, str) else t for t in targets]
+    return S.HavocCmd(type="havoc", targets=lhs, assumption=assumption)
+
+
 def block(commands) -> S.CodeBlock:
     return S.CodeBlock(commands=list(commands))
 

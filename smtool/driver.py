@@ -135,6 +135,21 @@ def _cap(name: str) -> str:
 # So CUT calls need NO alias/host, and the CUT-as-address value is `currentContract`.
 CURRENT = "currentContract"
 
+
+def _cut_addr(inp) -> str:
+    """CVL value for the CUT-as-address (model `self`, `CUT_ARG`): the using-ALIAS when the modeled
+    contract is a dependency reached via alias (the consumer stays the verify target), else
+    `currentContract` (the modeled contract IS the verify target)."""
+    return inp.alias or CURRENT
+
+
+def _cut_host(inp, getter=None):
+    """Host for a CUT method/getter call: the alias when set, else None (unqualified -> currentContract).
+    A setup-hosted getter is a CVL function -> always None regardless of alias."""
+    if getter is not None and getter.getter_host != "cut":
+        return None
+    return inp.alias
+
 # The single SHARED reachability function every conformance rule calls (after the glue) to assume the
 # CUT's proven invariants. Lives in the dedicated reachable spec (build_reachable_spec), NOT in the
 # per-method conformance spec — so `glue` stays the sole FunctionDef there. add_requireInvariant fills
@@ -170,7 +185,7 @@ def build_summary_spec(inp: ToolInput, cls: ModelLayout) -> S.CVLFile:
     entries = []
     for m in cls.model:
         call = x.call(model_fn_name(m.name),
-                      [x.ident(CURRENT), *[x.ident(p.name) for p in m.params], x.ident("e")])
+                      [x.ident(_cut_addr(inp)), *[x.ident(p.name) for p in m.params], x.ident("e")])
         entries.append(x.m_expr_summary(inp.cut, m.name, [(p.type, p.name) for p in m.params],
                                         list(m.returns), call, with_env="e"))
     for b in cls.bindings:
@@ -190,9 +205,19 @@ def build_summary_spec(inp: ToolInput, cls: ModelLayout) -> S.CVLFile:
 
 
 def _reachable_key(cls: ModelLayout) -> tuple[str, str]:
-    """The (type, name) `assumeReachable` is keyed by — the model method's leading param (the entity
-    key). TODO(generalize): derive the union of the requireInvariants' actual keys instead of
-    assuming the leading param."""
+    """The (type, name) `assumeReachable` is keyed by — the ADDRESS the state-effect FRAMES over (a fresh
+    free var). A reachable invariant is universal (holds for every account), so assuming it for the
+    ARBITRARY compared account covers MULTI-ACCOUNT methods (e.g. `transferFrom` credits `to`, whose
+    balance can overflow, not the leading param `from`). Falls back to the leading model-method param
+    when no state-effect address frame var exists (e.g. a return-only method)."""
+    for b in cls.bindings:
+        if not b.state_effect:
+            continue
+        for fa in b.frame_arg_names:
+            if fa.startswith(FREE_PREFIX):
+                _, ty, var = fa.split(":", 2)
+                if ty == "address":
+                    return (ty, var)
     p = cls.model[0].params[0]
     return (p.type, p.name)
 
@@ -219,7 +244,7 @@ def _resolve_arg(inp: ToolInput, name: str):
     `CALLER_ARG` is the calling account (`e.msg.sender`, requires `env e` in scope — true in the glue
     fn and the stateEffect rule); else a plain identifier (a method param or a glue-local like `u`)."""
     if name == CUT_ARG:
-        return x.ident(CURRENT)
+        return x.ident(_cut_addr(inp))
     if name == CALLER_ARG:
         return x.field(x.field(x.ident("e"), "msg"), "sender")
     return x.ident(name)
@@ -231,7 +256,7 @@ def _getter_call(inp: ToolInput, b: Binding, arg_names: list[str]):
     currentContract; a setup-sourced getter is a CVL function. (A CUT getter is never NONDET-summarized —
     add_nondet refuses CUT functions — so its concrete `envfree` decl always governs these spec reads.)"""
     args = ([x.ident("e")] if b.envful else []) + [_resolve_arg(inp, a) for a in arg_names]
-    return x.call(b.getter.name, args, host=None)
+    return x.call(b.getter.name, args, host=_cut_host(inp, b.getter))
 
 
 def _group_by_getter(bindings: list, args_of) -> list:
@@ -264,7 +289,7 @@ def build_glue(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -> S.FunctionD
     for group in _group_by_getter(cls.bindings, lambda b: b.glue_arg_names):
         b0 = group[0]
         args = [_resolve_arg(inp, a) for a in b0.glue_arg_names]
-        call = x.call(b0.getter.name, ([x.ident("e")] if b0.envful else []) + args, host=None)
+        call = x.call(b0.getter.name, ([x.ident("e")] if b0.envful else []) + args, host=_cut_host(inp, b0.getter))
         if b0.is_multi_return:
             names = b0.component_names
             for cn, ct in zip(names, b0.getter.returns):
@@ -296,13 +321,13 @@ def _call_real(inp: ToolInput, m: FunctionSpec, withrevert=True):
     """Call the REAL CUT method — `f(e, args...)`, unqualified (resolves to currentContract),
     `@withrevert` so the rule can inspect `lastReverted` for revert-conformance."""
     args = [x.ident("e")] + [x.ident(p.name) for p in m.params]
-    return x.call(m.name, args, host=None, annotation="withrevert" if withrevert else None)
+    return x.call(m.name, args, host=_cut_host(inp), annotation="withrevert" if withrevert else None)
 
 
 def _call_model(inp: ToolInput, m: FunctionSpec, withrevert=True):
     """Call the MODEL method — `fCVL(currentContract, args..., e)`, `@withrevert`. The leading
     arg is the CUT address for `<f>CVL`'s `self` param; the `env e` goes last (model convention)."""
-    args = [x.ident(CURRENT)] + [x.ident(p.name) for p in m.params] + [x.ident("e")]
+    args = [x.ident(_cut_addr(inp))] + [x.ident(p.name) for p in m.params] + [x.ident("e")]
     return x.call(model_fn_name(m.name), args, annotation="withrevert" if withrevert else None)
 
 
@@ -377,14 +402,14 @@ def _frame_resolve(inp: ToolInput, name: str):
     return None, _resolve_arg(inp, name)
 
 
-def _group_load(group: list, args: list, suffix: str) -> tuple[list, "callable"]:
+def _group_load(inp, group: list, args: list, suffix: str) -> tuple[list, "callable"]:
     """Load a getter shared by `group` (same getter+args) ONCE at the current point; return
     (decls, value) where value(b) is the tracked scalar for binding b. A multi-return getter binds its
     components to fresh `<component>_<suffix>` locals (suffix disambiguates the pre vs post read); a
     single-return getter needs no decls and value is the call itself. Coalesces the per-component
     double-load (see _group_by_getter)."""
     b0 = group[0]
-    call = x.call(b0.getter.name, ([x.ident("e")] if b0.envful else []) + args, host=None)
+    call = x.call(b0.getter.name, ([x.ident("e")] if b0.envful else []) + args, host=_cut_host(inp, b0.getter))
     if not b0.is_multi_return:
         return [], (lambda b, call=call: call)
     names = [f"{cn}_{suffix}" for cn in b0.component_names]
@@ -406,7 +431,6 @@ def build_state_effect_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -
     ret = _glue_returns(cls)
     cmds: list = [x.declare("env", "e")]
     cmds.append(_glue_apply(inp, cls, m, bind_to="u" if ret else None))
-    cmds.append(_assume_reachable(m))
     # free-var framing decls + pre-pins, GROUPED so a getter shared by several observables loads once
     framed: list = []
     for group in _group_by_getter(se, lambda b: b.frame_arg_names):
@@ -418,18 +442,21 @@ def build_state_effect_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -
                 decls.append(d)
             args.append(expr)
         cmds += decls
-        gdecls, value = _group_load(group, args, "pre")
+        gdecls, value = _group_load(inp, group, args, "pre")
         cmds += gdecls
         for b in group:
             reader = x.call(b.reader_name, args)
             cmds.append(x.require(x.binop("eq", reader, value(b)), f"pin pre: model == real for {b.getter.name}"))
         framed.append((group, args))
+    # assume the CUT reachable invariants over the FRAMED account (now declared) — covers the
+    # arbitrary compared account, incl. a multi-account method's credit target.
+    cmds.append(x.apply(x.call(ASSUME, [x.ident(_reachable_key(cls)[1])])))
     cmds += [x.apply(_call_real(inp, m)), x.declare("bool", "realRev", x.ident("lastReverted")),
              x.apply(_call_model(inp, m)), x.declare("bool", "modelRev", x.ident("lastReverted")),
              x.assert_(x.binop("implies", x.unop_not(x.ident("realRev")), x.unop_not(x.ident("modelRev"))),
                        "real success must imply model success (soundness)")]
     for group, args in framed:
-        gdecls, value = _group_load(group, args, "post")
+        gdecls, value = _group_load(inp, group, args, "post")
         cmds += gdecls
         for b in group:
             reader = x.call(b.reader_name, args)
@@ -497,7 +524,11 @@ def rewrite_reachable_conf(setup_conf: dict, inp: ToolInput, invariant_names: li
     """The conf that PROVES the reachable invariants: the setup conf (scene) with verify pointed at
     <CUT>ReachableProof.spec and `rule` = the invariant names. Run once; feeds verify.prune_reachable."""
     conf = copy.deepcopy(setup_conf)
-    conf["verify"] = f"{inp.cut}:{inp.specs_dir}/{inp.cut}ReachableProof.spec"
+    # ALIAS path: the modeled contract is a dependency; the CONSUMER stays the verify target (so the
+    # imported setup spec's unqualified consumer methods resolve, and the invariant — stated over the
+    # alias — is proven in the same scene as the conformance). Non-alias: the modeled contract IS the CUT.
+    verify_target = setup_conf["verify"].split(":", 1)[0] if inp.alias else inp.cut
+    conf["verify"] = f"{verify_target}:{inp.specs_dir}/{inp.cut}ReachableProof.spec"
     conf["msg"] = f"{inp.cut} reachable invariants"
     conf["rule"] = list(invariant_names)
     conf["multi_assert_check"] = True
@@ -525,7 +556,11 @@ def rewrite_conf(setup_conf: dict, inp: ToolInput, m: FunctionSpec,
     conformance rules (via verifiable_names on the post-mutation spec)."""
     conf = copy.deepcopy(setup_conf)
     spec = f"{inp.specs_dir}/{inp.conformance_prefix}{_cap(m.name)}Conformance.spec"
-    conf["verify"] = f"{inp.cut}:{spec}"
+    # ALIAS path: the modeled contract is a dependency (reached via alias); the CONSUMER stays the verify
+    # target (from the setup conf), so the conformance runs in exactly the consumer scene. Non-alias:
+    # the modeled contract IS the verify target (inp.cut).
+    verify_target = setup_conf["verify"].split(":", 1)[0] if inp.alias else inp.cut
+    conf["verify"] = f"{verify_target}:{spec}"
     conf["msg"] = f"{inp.conformance_prefix} {m.name} conformance"
     conf["multi_assert_check"] = True
     # rule-filter (complete-by-construction): run exactly our rules, so the setup's imported `sanity`

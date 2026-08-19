@@ -209,6 +209,9 @@ class Binding:
 class ToolInput:
     cut: str                       # contract NAME == currentContract (verify target); qualifies methods{}
     functions: list[FunctionSpec]
+    alias: str | None = None       # using-alias for the modeled contract when it is a DEPENDENCY
+                                   # reached via alias (consumer stays the verify target); None =>
+                                   # the modeled contract IS the verify target (unqualified/currentContract)
     model_spec_name: str | None = None  # override; default derived from the CUT (see `model_spec`)
     conformance_prefix_name: str | None = None  # override; default derived from the CUT (see below)
     specs_dir: str = "certora/specs"  # where verify points, for the conf rewrite
