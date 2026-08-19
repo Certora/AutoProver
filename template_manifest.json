@@ -101,12 +101,6 @@
     "template_name": "code_explorer/soroban.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.rustapp.findings:_RUST_SYSTEM": {
-    "module": "composer.rustapp.findings",
-    "qualname": "_RUST_SYSTEM",
-    "template_name": "autoprove_report_findings_rust_system.j2",
-    "ty_sort": "TypedTemplate"
-  },
   "composer.rustapp.findings:_RUST_PROMPT": {
     "module": "composer.rustapp.findings",
     "qualname": "_RUST_PROMPT",
@@ -185,16 +179,22 @@
     "template_name": "harness_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.prover_findings:_FINDINGS_SYSTEM": {
+  "composer.spec.source.prover_findings:_PROVER_DOMAIN": {
     "module": "composer.spec.source.prover_findings",
-    "qualname": "_FINDINGS_SYSTEM",
-    "template_name": "autoprove_report_findings_system.j2",
+    "qualname": "_PROVER_DOMAIN",
+    "template_name": "autoprove_report_findings_prover_domain.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.source.prover_findings:_FINDINGS_PROMPT": {
     "module": "composer.spec.source.prover_findings",
     "qualname": "_FINDINGS_PROMPT",
     "template_name": "autoprove_report_findings_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.report.findings:_SYSTEM": {
+    "module": "composer.spec.source.report.findings",
+    "qualname": "_SYSTEM",
+    "template_name": "autoprove_report_findings_system.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.source.report.render:_REPORT_TEMPLATE": {

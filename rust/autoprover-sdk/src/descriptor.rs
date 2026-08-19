@@ -216,9 +216,9 @@ pub enum DeliverableMode {
 #[serde(deny_unknown_fields)]
 pub struct FindingsDeclaration {
     /// The *domain* half of the write-up system prompt — what this backend's evidence is, what it
-    /// does and does not establish, and what its markers mean. The host appends the output contract
-    /// (the sections asked for, the grounding rules), so no wheel restates it.
-    pub system: String,
+    /// does and does not establish, and what its markers mean. The host wraps it in the contract
+    /// (how severity is reached, which sections come back), so no wheel restates that.
+    pub domain: String,
 }
 
 /// The complete declaration the Python host reads once at load time.

@@ -26,13 +26,6 @@ from composer.templates.loader import load_jinja_template
 type RustOutcomes = list[ComponentOutcome[RustFormalResult, FeatureUnit]]
 
 
-class RustFindingsSystemParams(TypedDict):
-    """The full, typed context of ``autoprove_report_findings_rust_system.j2``."""
-    #: The wheel's own prose: what its evidence is and what its markers mean.
-    domain: str
-
-
-_RUST_SYSTEM = TypedTemplate[RustFindingsSystemParams]("autoprove_report_findings_rust_system.j2")
 _RUST_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_rust_prompt.j2")
 
 
@@ -81,6 +74,6 @@ def rust_findings(
 
     return FindingsPolicy(
         fetch_evidence=fetch,
-        system=_RUST_SYSTEM.bind({"domain": declared.system}).render_to(load_jinja_template),
+        domain=declared.domain,
         prompt=_RUST_PROMPT,
     )

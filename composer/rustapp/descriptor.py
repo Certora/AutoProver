@@ -103,9 +103,9 @@ class FindingsDeclaration(WireModel):
     everything around that — which rows, their properties and groups, the concurrency, grouping the
     rows that share one finding, composing the record — and none of the prose."""
 
-    #: The *domain* half of the write-up system prompt. The host appends the output contract (the
-    #: sections asked for, the grounding rules), so no wheel restates it.
-    system: str
+    #: The *domain* half of the write-up system prompt. The host wraps it in the contract (how
+    #: severity is reached, which sections come back), so no wheel restates that.
+    domain: str
 
 
 class PhaseSpec(WireModel):

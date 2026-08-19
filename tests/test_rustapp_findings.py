@@ -419,13 +419,15 @@ def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
 # ---------------------------------------------------------------------------
 
 class _CountingModel(_StubModel):
-    """Counts the write-ups actually asked for, and keeps the prompt of each."""
+    """Counts the write-ups actually asked for, and keeps both messages of each."""
     calls: list[str] = []
+    systems: list[str] = []
 
     def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
-        out, calls = self.output, self.calls
+        out, calls, systems = self.output, self.calls, self.systems
 
         def _invoke(messages):
+            systems.append(messages[0].content)
             calls.append(messages[-1].content)
             return out
         return RunnableLambda(_invoke)
@@ -437,9 +439,10 @@ UNPLACEABLE = (
 )
 
 
-async def _written_by(model: _CountingModel, *outcomes: ComponentOutcome) -> list[Finding]:
+async def _written_by(model: _CountingModel, *outcomes: ComponentOutcome,
+                      descriptor: dict[str, Any] | None = None) -> list[Finding]:
     fz = adapter.RustFormalizer(
-        cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
+        cast(Any, object()), AppDescriptor.model_validate(descriptor or wire_descriptor())
     )
     _, rules, *_ = await collect(
         [
@@ -479,7 +482,7 @@ async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
     checks = [f"c_{i}" for i in range(6)]
     result = _result(
         {c: _verdict(Outcome.BAD, UNPLACEABLE, ACCOUNTING, finding="c_vault") for c in checks}, {})
-    model = _CountingModel(output=_draft(), calls=[])
+    model = _CountingModel(output=_draft(), calls=[], systems=[])
 
     findings = await _written_by(model, _outcome(result))
 
@@ -498,7 +501,7 @@ async def test_the_loop_binds_this_runs_evidence_into_the_write_up_prompt():
     binding the wrong thing — and a write-up rendered against absent evidence still produces a
     plausible finding rather than an error."""
     result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE, ACCOUNTING)}, {})
-    model = _CountingModel(output=_draft(), calls=[])
+    model = _CountingModel(output=_draft(), calls=[], systems=[])
 
     await _written_by(model, _outcome(result))
 
@@ -512,7 +515,7 @@ async def test_distinct_crashes_stay_distinct_findings():
     """Two crashes the wheel *could* place carry no key, so they stay two findings."""
     result = _result({"c_a": _verdict(Outcome.BAD, "crash A", ACCOUNTING),
                       "c_b": _verdict(Outcome.BAD, "crash B", ACCOUNTING)}, {})
-    model = _CountingModel(output=_draft(), calls=[])
+    model = _CountingModel(output=_draft(), calls=[], systems=[])
 
     findings = await _written_by(model, _outcome(result))
 
@@ -530,7 +533,7 @@ async def test_two_unreproduced_declarations_are_two_findings():
     result = _result({"c_kill": _verdict(Outcome.GOOD, None, ACCOUNTING),
                       "c_stale": _verdict(Outcome.GOOD, None, ACCOUNTING)},
                      {"c_kill": REASON, "c_stale": "a different documented bug"})
-    model = _CountingModel(output=_draft(), calls=[])
+    model = _CountingModel(output=_draft(), calls=[], systems=[])
 
     findings = await _written_by(model, _outcome(result))
 
@@ -560,20 +563,22 @@ def test_a_wheel_that_declares_no_findings_policy_produces_none():
     assert fz.findings_policy([_outcome(result)]) is None
 
 
-def test_the_write_up_is_told_what_this_wheels_evidence_is():
-    """The wheel's own prose leads the system prompt, and the host's output contract follows it.
+@pytest.mark.asyncio
+async def test_the_write_up_is_told_what_this_wheels_evidence_is():
+    """The wheel's own prose leads the system prompt, and the host's contract follows it.
 
     The two halves are separable for the same reason `judge` splits them: what the evidence *is* is
-    the backend's claim, and which sections come back is the host's, so neither restates the other.
+    the backend's claim, and how severity is reached and which sections come back is the host's, so
+    neither restates the other. The CVL backend's prompt is the same template with its own domain.
     """
-    fz = adapter.RustFormalizer(
-        cast(Any, object()),
-        AppDescriptor.model_validate(wire_descriptor(findings={
-            "system": "MARKER: this backend reads tea leaves.",
-        })),
-    )
-    policy = fz.findings_policy([])
-    assert policy is not None
+    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
+    model = _CountingModel(output=_draft(), calls=[], systems=[])
 
-    assert policy.system.startswith("MARKER: this backend reads tea leaves.")
-    assert "Rate impact and likelihood" in policy.system, "the host's half follows the wheel's"
+    await _written_by(model, _outcome(result), descriptor=wire_descriptor(findings={
+        "domain": "MARKER: this backend reads tea leaves.",
+    }))
+
+    system = model.systems[0]
+    assert system.startswith("MARKER: this backend reads tea leaves.")
+    assert system.index("MARKER") < system.index("HOW SEVERITY IS REACHED") < system.index(
+        "WHAT TO PRODUCE"), "the wheel's claim leads; the host's contract follows it"

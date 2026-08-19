@@ -116,7 +116,7 @@ pub(crate) fn descriptor() -> AppDescriptor {
         // exists to flag). The write-up model rates exploitability from it either way, so what it
         // is told about the evidence is the only thing keeping that rating honest.
         findings: Some(FindingsDeclaration {
-            system: FindingsSystem.render().expect("render findings_system"),
+            domain: FindingsSystem.render().expect("render findings_system"),
         }),
     }
 }

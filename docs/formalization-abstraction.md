@@ -517,7 +517,7 @@ survives serialization was never behaviour.
 | Field | Why it is the backend's |
 | --- | --- |
 | `fetch_evidence` | Keyed by `RuleRef` — `(file, name)`, how the report identifies a row. A name alone does not: one deliverable can hold several components' checks, and two authors given the same property write the same name. The only hook, because it is the only one that does I/O |
-| `system` | The prompt is a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's |
+| `domain` | The *domain* half of the system message — a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's. The host wraps it in the shared contract (how severity is reached, which sections come back), so a backend restates none of that |
 | `prompt` | A `TypedTemplate[FindingsPromptParams]`, not a callable. Both backends' prompts take the same fields — rule, properties, groups, evidence, `also_covers` — so the backend owns the prose and `build_findings` owns the binding |
 
 Severity is not among them. Every backend's findings are rated the same way: the model assesses

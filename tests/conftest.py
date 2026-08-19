@@ -434,7 +434,7 @@ def wire_descriptor(**overrides: Any) -> dict[str, Any]:
         # A findings declaration by default: most tests that reach the report want findings
         # written, and the ones about a wheel that declines override it with None.
         "findings": {
-            "system": "The demo backend read the spec back and it did not say what was asked.",
+            "domain": "The demo backend read the spec back and it did not say what was asked.",
         },
         **overrides,
     }

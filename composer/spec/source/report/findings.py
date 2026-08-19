@@ -147,6 +147,17 @@ class RuleEvidence:
     finding: str | None = None
 
 
+class FindingsSystemParams(TypedDict):
+    """The full, typed context of ``autoprove_report_findings_system.j2``.
+
+    One template for every backend, because the two halves of a findings system prompt split the
+    same way everywhere: what this evidence *is* is the backend's claim, and how severity is reached
+    and what sections come back is the host's contract. Only the first varies."""
+    #: The backend's own prose: what its evidence is, what it does and does not establish, and how to
+    #: read its own markers. Leads the message; the contract follows it.
+    domain: str
+
+
 class FindingsPromptParams(TypedDict):
     """The full, typed context of every backend's findings prompt: one violated rule and everything
     known about it.
@@ -175,6 +186,8 @@ class FindingsPromptParams(TypedDict):
 #: does not: one deliverable can hold several components' checks, and two authors given the same
 #: property write the same name.
 type EvidenceFetcher = Callable[[RuleRef], Awaitable[list[RuleEvidence]]]
+
+_SYSTEM = TypedTemplate[FindingsSystemParams]("autoprove_report_findings_system.j2")
 
 
 def proof_of_concept(evidence: list[RuleEvidence]) -> str | None:
@@ -222,8 +235,9 @@ class FindingsPolicy:
     fetcher is a function, because only it does I/O."""
 
     fetch_evidence: EvidenceFetcher
-    #: System message. Constant across this backend's rules — the per-rule context is `prompt`.
-    system: str
+    #: The backend's half of the system message — see `FindingsSystemParams.domain`. Constant across
+    #: this backend's rules; the per-rule context is `prompt`.
+    domain: str
     #: The user message's template, bound by `build_findings` from `FindingsPromptParams`. The
     #: backend owns the prose because the prompt is a claim about what its evidence *is*; it does not
     #: own the binding, because the fields are the same for everyone.
@@ -257,6 +271,7 @@ async def build_findings(
     group_by_key: dict[PropertyKey, PropertyGroup] = {k: g for g in groups for k in g.members}
 
     bound = llm.with_structured_output(FindingDraft)
+    system = _SYSTEM.bind({"domain": policy.domain}).render_to(load_jinja_template)
 
     async def _evidence(rule: RuleVerdict) -> list[RuleEvidence] | None:
         """This rule's evidence, or None when fetching it failed — which drops the rule rather than
@@ -295,7 +310,7 @@ async def build_findings(
                 "contract_name": contract_name, "rule_name": rule.name, "properties": props,
                 "groups": rule_groups, "evidence": evidence, "also_covers": covers,
             }).render_to(load_jinja_template)
-            draft = await bound.ainvoke([SystemMessage(policy.system), HumanMessage(user)])
+            draft = await bound.ainvoke([SystemMessage(system), HumanMessage(user)])
             assert isinstance(draft, FindingDraft)
             return _compose(rule, draft, evidence, rule_groups)
         except Exception:  # noqa: BLE001 — one finding failing must never fail the report

@@ -14,13 +14,13 @@ from composer.spec.source.report.findings import (
 from composer.templates.loader import load_jinja_template
 
 
-class FindingsSystemParams(TypedDict):
-    """``autoprove_report_findings_system.j2`` takes no parameters — the instructions are static.
+class ProverDomainParams(TypedDict):
+    """``autoprove_report_findings_prover_domain.j2`` takes no parameters — the prose is static.
     Declared empty rather than skipped so the template is still covered by the strict-render fuzz
     test: adding a ``{{ ... }}`` without declaring it here then fails."""
 
 
-_FINDINGS_SYSTEM = TypedTemplate[FindingsSystemParams]("autoprove_report_findings_system.j2")
+_PROVER_DOMAIN = TypedTemplate[ProverDomainParams]("autoprove_report_findings_prover_domain.j2")
 _FINDINGS_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_prompt.j2")
 
 
@@ -28,6 +28,6 @@ def prover_findings(fetch_evidence: EvidenceFetcher) -> FindingsPolicy:
     """The Prover's findings policy, around the run-scoped capture that holds its evidence."""
     return FindingsPolicy(
         fetch_evidence=fetch_evidence,
-        system=_FINDINGS_SYSTEM.bind({}).render_to(load_jinja_template),
+        domain=_PROVER_DOMAIN.bind({}).render_to(load_jinja_template),
         prompt=_FINDINGS_PROMPT,
     )

@@ -166,7 +166,7 @@ def test_the_wheel_declares_what_its_findings_rest_on():
     desc = AppDescriptor.model_validate_json(crucible_app.descriptor())
     declared = desc.findings
     assert declared is not None, "a wheel that declares nothing writes no findings at all"
-    assert "SUSPECT HARNESS BUG" in declared.system
+    assert "SUSPECT HARNESS BUG" in declared.domain
     # The declaration/reproduction split is the one distinction this evidence cannot make on the
     # outcome alone, so the prompt has to make it.
-    assert "DECLARED" in declared.system
+    assert "DECLARED" in declared.domain

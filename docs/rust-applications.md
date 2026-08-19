@@ -186,7 +186,7 @@ One struct, serialized at load time, that drives everything non-backend.
 | `component_noun` | the human noun for one formalized component in the console/TUI ("instruction"); `None` → "component", read through `unit_noun()` |
 | `check_noun` | what this backend calls one check **to the model** ("rule", "harness function"); `None` → "check", read through `check_label()` |
 | `evidence_kinds` | the closed set an author may cite when rebutting the judge (§5) |
-| `findings` | how a violated check is written up as an audit finding: the domain half of the system prompt, saying what this wheel's evidence is (§4.5). `None` → this wheel produces no findings |
+| `findings` | how a violated check is written up as an audit finding: the domain half of the system prompt, saying what this wheel's evidence is — the host supplies the rest (§4.5). `None` → this wheel produces no findings |
 
 **Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host resolves these once into a
 `PhaseModel` ([`build_phase_model`](../composer/rustapp/host.py)): the synthesized
@@ -420,14 +420,17 @@ whether a reader is looking at something the run found or a claim the author mad
 `analysis` stays empty. A wheel reports what its run found, not a reading of why the check broke, and
 the prompt has to be able to tell a reader which of the two it is holding.
 
-**`FindingsDeclaration.system` says what the evidence is**, and it is the wheel's prose because it
-is the wheel's claim. Crucible's says a fuzzer drove a harness the author wrote from a state that harness
-set up, and did not refute anything symbolically — so `SUSPECT HARNESS BUG` is something the write-up
-must lead with, an unreproduced declaration must not be given a counterexample it does not have, and
-the harness caveats belong in `assumptions_and_uncertainties`. The host appends the output contract
-(which sections, and the grounding rules) so no wheel restates it. **A wheel that declares nothing
-produces no findings**: a write-up asserts what its evidence is, and a host that guessed would be
-publishing prose nothing stands behind.
+**`FindingsDeclaration.domain` says what the evidence is**, and it is the wheel's prose because it
+is the wheel's claim. Crucible's says a fuzzer drove a harness the author wrote from a state that
+harness set up, and did not refute anything symbolically — so `SUSPECT HARNESS BUG` is something the
+write-up must lead with, an unreproduced declaration must not be given a counterexample it does not
+have, and the harness caveats belong in `assumptions_and_uncertainties`.
+
+It is only the *domain* half. The host wraps it in the contract — how severity is reached, which
+sections come back — using the same `autoprove_report_findings_system.j2` the CVL backend gets, whose
+own domain half is a template beside it. A wheel restates none of that. **A wheel that declares
+nothing produces no findings**: a write-up asserts what its evidence is, and a host that guessed
+would be publishing prose nothing stands behind.
 
 **Severity is the host's, and it is the same for every backend**: the write-up model rates impact
 and likelihood, and `severity_for` maps the pair through a fixed matrix. A wheel does not get to
