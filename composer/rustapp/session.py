@@ -25,7 +25,7 @@ from typing import Annotated, Any, Callable, Literal, NotRequired, Sequence, ove
 from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
 from langgraph.types import Command
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from graphcore.graph import FlowInput, tool_state_update
 from graphcore.tools.schemas import (
@@ -128,7 +128,6 @@ ProtocolTemplate = TypedTemplate[ProtocolParams]("authoring_protocol.j2")
 # State
 # ---------------------------------------------------------------------------
 
-@family_param(CheckNouns)
 class PropertyCheckMapping(BaseModel):
     """Maps one property from the batch to the {checks} that carry it.
 
@@ -141,6 +140,30 @@ class PropertyCheckMapping(BaseModel):
     checks: list[CheckName] = Field(
         description="The names of the {checks} in your spec that verify this property"
     )
+
+
+# Splitting the tool-facing model from the state model works around a graphcore defect: a
+# `family_param` class is a `_TemplatedTool` *wrapper* around the decorated class, but
+# `with_template` instantiates `create_model(__base__=wrapped)` — a subclass of the wrapped
+# class, which does NOT have the wrapper in its MRO. So the class the decorator binds the name
+# to is never the class the tool produces. `family_param` is declared to return `type[T]`, so
+# the two read as one type and no checker flags the divergence. Annotate state with the wrapper
+# and every instance `map_checks` writes fails `isinstance`, so every later tool taking the
+# injected state fails validation — as an error under `loc=('state', ...)`, which langgraph's
+# `_filter_validation_errors` strips as injected, leaving the model an empty error string it
+# cannot act on and retries against forever. Remove this split once graphcore makes the
+# templated class a subtype of the name the decorator binds.
+@family_param(CheckNouns)
+class TemplatedPropertyCheckMapping(PropertyCheckMapping):
+    """Maps one property from the batch to the {checks} that carry it.
+
+    The tool-facing view of :class:`PropertyCheckMapping`: `map_checks` declares its argument as
+    this so the wheel's check noun reaches the nested schema's prose. State stays annotated with
+    the plain class, which this subclasses."""
+
+    # The schema title is prompt text, and templating takes it from this class's name. Pin it so
+    # splitting the two classes stays invisible to the model.
+    model_config = ConfigDict(title="PropertyCheckMapping")
 
 
 class RustSpecExtra(AuthoringExtra):
@@ -676,7 +699,7 @@ class MapChecks(
     A property may need several {checks}, and one {check} may carry several properties: name it
     under each. Do not name a property you skipped.
     """
-    property_checks: list[PropertyCheckMapping] = Field(
+    property_checks: list[TemplatedPropertyCheckMapping] = Field(
         description="For every property you did NOT skip, the {checks} in your spec that verify it."
     )
 

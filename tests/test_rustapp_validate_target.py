@@ -23,7 +23,7 @@ from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.session import (
     VALIDATE_KEY, CheckVocab, GateDeps, PropertyCheckMapping, RustSessionState, SessionResult,
-    _validate_tool,
+    _map_tool, _validate_tool,
 )
 from composer.rustapp.wire import Target, Check, Exploration, ValidateCoverageError, Verdict
 from composer.spec.source.report.schema import Outcome
@@ -356,3 +356,34 @@ async def test_the_result_carries_the_authors_expected_failure_declarations(monk
     # (``reported_verdicts``), not folded into the record of what ran.
     assert result.verdicts["c_stake"].outcome is Outcome.GOOD
     assert result.reported_verdicts()["c_stake"].outcome is Outcome.BAD
+
+
+@pytest.mark.asyncio
+async def test_what_map_checks_writes_is_accepted_as_state_by_the_next_tool(tmp_path):
+    # The mapping travels from one tool to the next through the session state, so what `map_checks`
+    # writes has to satisfy the state annotation every later tool validates its injected `state`
+    # against. Constructing a `PropertyCheckMapping` here would not test that: the tool builds the
+    # *templated* subclass instead, and only that class's instances go through the wire the model
+    # drives. When the two diverged, every state-taking tool failed with an error langgraph strips
+    # as injected — the model saw an empty string and retried until the session gave up.
+    map_tool = _map_tool(CheckVocab("check", "checks"))
+    written = await map_tool.ainvoke({
+        "name": "map_checks",
+        "type": "tool_call",
+        "id": "t1",
+        "args": {
+            "state": _state(property_checks=[]),
+            "tool_call_id": "t1",
+            "property_checks": [{"property_title": "stake matches", "checks": ["c_stake"]}],
+        },
+    })
+    mapping = written.update["property_checks"]
+    assert all(isinstance(m, PropertyCheckMapping) for m in mapping), (
+        f"map_checks wrote {[type(m).__mro__ for m in mapping]}, which the state annotation "
+        "does not accept"
+    )
+
+    wheel = _Wheel()
+    out = await _validate(wheel, tmp_path, state=_state(property_checks=mapping))
+    assert not isinstance(out, str), f"the gate tool rejected the mapping map_checks wrote: {out}"
+    assert [c.name for t in wheel.targets for c in t.checks] == ["c_stake"]
