@@ -7,8 +7,8 @@ Evidence has one shape for every backend. Backends differ in what they can *fill
 root-cause analysis and a counterexample trace, a fuzzing wheel has a crashing input and an account
 of what its run covered — but "instance, explanation, reproducer, and what the run itself did" is not
 a claim about any one of them. What is genuinely per-backend is where that evidence is *fetched*
-from, what the model is told it means, and whether the evidence can carry a risk judgement at all; a
-`FindingsPolicy` carries those — as values, not hooks, save the fetcher.
+from and what the model is told it means; a `FindingsPolicy` carries those — as values, not hooks,
+save the fetcher.
 
 The rest is shared outright: walking the BAD rules, resolving each one's properties and the audit
 groups they sit in, collapsing rows that are one finding, binding the prompt, building the proof of
@@ -64,21 +64,12 @@ def severity_for(impact: ImpactLevel, likelihood: LikelihoodLevel) -> SeverityTi
 
 
 class FindingDraft(AuthoredContent):
-    """The least a findings model must return: the authored sections, plus a title.
+    """What a findings model must return: the authored sections, a title, and the two axes
+    `severity_for` maps to a tier.
 
-    A backend subclasses this to ask for more — the prover adds the impact and likelihood axes its
-    severity is computed from — and names the subclass in its `FindingsPolicy`, so the model is
-    only ever asked for what that backend's evidence can support."""
+    The model never picks the tier, only the axes, so the severity a reader sees is reproducible
+    from what the model actually said."""
     title: str = Field(description="A one-line title naming the specific broken guarantee.")
-
-
-class AssessedFindingDraft(FindingDraft):
-    """The draft for a backend whose evidence can carry a risk judgement: the authored sections plus
-    the two axes `severity_for` maps to a tier.
-
-    Shared rather than per-backend because the axes are a property of the *rating scheme*, not of
-    what produced the violation — a backend that can rate at all rates on these. A backend whose
-    evidence cannot support one asks for `FindingDraft` instead, so the question is never put."""
     impact_level: ImpactLevel = Field(description=(
         "How severe the consequence is if exploited: 'high' (funds lost or stolen, protocol "
         "insolvency, permanently frozen assets, or unauthorized privileged control), 'medium' "
@@ -99,66 +90,25 @@ class AssessedFindingDraft(FindingDraft):
 
 @dataclass(frozen=True)
 class Assessment:
-    """A backend's risk verdict on one draft: the severity, and the record of how it was reached.
+    """The risk verdict on one draft: the severity, and the record of how it was reached.
 
-    The three optional fields are provenance, not inputs — they say what the severity *rests on*.
-    A backend that assesses risk from the model's axes records them; one that assigns a constant
-    leaves them empty rather than fabricating a rating nothing produced."""
+    The three axes are provenance — they say what the tier *rests on*, so a reader can see the
+    judgement behind it rather than only its result."""
     severity: SeverityTier
-    impact: ImpactLevel | None = None
-    likelihood: LikelihoodLevel | None = None
-    reasoning: str | None = None
+    impact: ImpactLevel
+    likelihood: LikelihoodLevel
+    reasoning: str
 
 
-@dataclass(frozen=True)
-class Assessed:
-    """The model rates impact and likelihood and this maps them to a tier — for a backend whose
-    evidence establishes a reachable state of the program itself, so exploitability is a judgement
-    that evidence can carry.
-
-    The model never picks the tier, only the axes, so the tier is reproducible from what it said."""
-
-    draft: ClassVar[type[FindingDraft]] = AssessedFindingDraft
-
-    def assess(self, draft: FindingDraft, _evidence: list["RuleEvidence"]) -> Assessment:
-        # Guaranteed by `draft`: the model was asked in exactly this schema.
-        assert isinstance(draft, AssessedFindingDraft)
-        return Assessment(
-            severity=severity_for(draft.impact_level, draft.likelihood_level),
-            impact=draft.impact_level,
-            likelihood=draft.likelihood_level,
-            reasoning=draft.risk_reasoning,
-        )
-
-
-@dataclass(frozen=True)
-class Fixed:
-    """Every finding gets ``tier`` and the model is never asked to rate — for a backend whose
-    evidence does not establish who could profit or how.
-
-    Not asking is the point: a schema with the axes on it invites a rating whatever the instructions
-    say, and a fabricated one is worse than none on a finding a reader trusts. The axes stay empty
-    for the same reason, so their absence records that nothing assessed them. The reasoning is the
-    author's declaration where there is one, which lets a reader tell a finding the author
-    documented from one the run tripped over without reading the evidence."""
-
-    tier: SeverityTier
-
-    draft: ClassVar[type[FindingDraft]] = FindingDraft
-
-    def assess(self, _draft: FindingDraft, evidence: list["RuleEvidence"]) -> Assessment:
-        return Assessment(
-            severity=self.tier,
-            reasoning=next((e.declared for e in evidence if e.declared), None),
-        )
-
-
-#: Where a backend's severity comes from. The variants carry their own `draft` because the choice is
-#: really about what the model is *asked*: `assess` can only read what came back, so pairing them
-#: separately would let a backend ask for axes it then ignores, or assign a constant while the model
-#: still rates.
-type SeverityFrom = Assessed | Fixed
-
+def assess(draft: FindingDraft) -> Assessment:
+    """Severity from the matrix. Every backend's, because every backend's evidence is a violation
+    that happened — what differs is what a violation *is* there, which is what the prompt says."""
+    return Assessment(
+        severity=severity_for(draft.impact_level, draft.likelihood_level),
+        impact=draft.impact_level,
+        likelihood=draft.likelihood_level,
+        reasoning=draft.risk_reasoning,
+    )
 
 
 @dataclass(frozen=True)
@@ -267,8 +217,8 @@ class FindingsPolicy:
     """What one backend's findings rest on: where its evidence comes from, what the model is told
     that evidence is, and what it can be asked to conclude from it.
 
-    Values, not hooks. Three of the four are things a backend *declares* — a Rust wheel ships two of
-    them across the FFI boundary as JSON, which is the proof they were never behaviour. Only the
+    Values, not hooks: the prose is a string and the prompt is a template — a Rust wheel ships the
+    first across the FFI boundary as JSON, which is the proof it was never behaviour. Only the
     fetcher is a function, because only it does I/O."""
 
     fetch_evidence: EvidenceFetcher
@@ -278,7 +228,6 @@ class FindingsPolicy:
     #: backend owns the prose because the prompt is a claim about what its evidence *is*; it does not
     #: own the binding, because the fields are the same for everyone.
     prompt: TypedTemplate[FindingsPromptParams]
-    severity: SeverityFrom
 
 
 async def build_findings(
@@ -307,7 +256,7 @@ async def build_findings(
             props_by_ref.setdefault(ref, []).append(p)
     group_by_key: dict[PropertyKey, PropertyGroup] = {k: g for g in groups for k in g.members}
 
-    bound = llm.with_structured_output(policy.severity.draft)
+    bound = llm.with_structured_output(FindingDraft)
 
     async def _evidence(rule: RuleVerdict) -> list[RuleEvidence] | None:
         """This rule's evidence, or None when fetching it failed — which drops the rule rather than
@@ -347,8 +296,8 @@ async def build_findings(
                 "groups": rule_groups, "evidence": evidence, "also_covers": covers,
             }).render_to(load_jinja_template)
             draft = await bound.ainvoke([SystemMessage(policy.system), HumanMessage(user)])
-            assert isinstance(draft, policy.severity.draft)
-            return _compose(rule, draft, policy, evidence, rule_groups)
+            assert isinstance(draft, FindingDraft)
+            return _compose(rule, draft, evidence, rule_groups)
         except Exception:  # noqa: BLE001 — one finding failing must never fail the report
             _log.warning("report: finding synthesis failed for rule %r; skipping", rule.name, exc_info=True)
             return None
@@ -367,11 +316,10 @@ async def build_findings(
 def _compose(
     rule: RuleVerdict,
     draft: FindingDraft,
-    policy: FindingsPolicy,
     evidence: list[RuleEvidence],
     groups: list[PropertyGroup],
 ) -> Finding:
-    risk = policy.severity.assess(draft, evidence)
+    risk = assess(draft)
     return Finding(
         title=draft.title,
         severity=risk.severity,

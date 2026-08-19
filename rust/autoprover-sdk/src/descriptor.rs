@@ -203,37 +203,6 @@ pub enum DeliverableMode {
     },
 }
 
-/// An audit finding's severity band, as the report records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
-pub enum SeverityTier {
-    Critical,
-    High,
-    Medium,
-    Low,
-    Informational,
-}
-
-/// How a backend's findings get their severity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "policy", rename_all = "snake_case")]
-#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
-#[serde(deny_unknown_fields)]
-pub enum SeverityPolicy {
-    /// The write-up model rates impact and likelihood against the evidence, and the host maps the
-    /// pair to a tier. For a backend whose evidence can carry that judgement — one that establishes
-    /// a violation is reachable in the program as deployed.
-    Assessed,
-    /// Every finding gets `tier`, and the model is never asked to rate anything.
-    ///
-    /// What a backend declares when nothing in its pipeline has assessed exploitability: a run
-    /// showing that an assertion can be made to fail has not shown that anyone can profit from it,
-    /// and asking for a rating the evidence cannot support invites a fabricated one — worse than a
-    /// blank on a finding a reader trusts.
-    Fixed { tier: SeverityTier },
-}
-
 /// How a violated check of this backend becomes a written audit finding.
 ///
 /// Declared by the wheel because a write-up rests on claims only the wheel can make: what its
@@ -250,7 +219,6 @@ pub struct FindingsDeclaration {
     /// does and does not establish, and what its markers mean. The host appends the output contract
     /// (the sections asked for, the grounding rules), so no wheel restates it.
     pub system: String,
-    pub severity: SeverityPolicy,
 }
 
 /// The complete declaration the Python host reads once at load time.

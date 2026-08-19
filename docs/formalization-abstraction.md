@@ -509,23 +509,22 @@ nothing of that kind", so the fields mean the same thing whoever produced them a
 what is missing instead of guessing. An earlier design made this a type parameter; it bought nothing,
 because the only code that ever reads a field is the backend's own prompt.
 
-What a backend supplies is a `FindingsPolicy` — four things, only one of which is a function. It is
-a record rather than a table of hooks, which is why the name says *policy*: a Rust wheel ships two
-of its fields across the FFI boundary as JSON (`FindingsDeclaration`), and anything that survives
-serialization was never behaviour.
+What a backend supplies is a `FindingsPolicy` — three things, only one of which is a function. It
+is a record rather than a table of hooks, which is why the name says *policy*: a Rust wheel ships
+one of its fields across the FFI boundary as JSON (`FindingsDeclaration`), and anything that
+survives serialization was never behaviour.
 
 | Field | Why it is the backend's |
 | --- | --- |
 | `fetch_evidence` | Keyed by `RuleRef` — `(file, name)`, how the report identifies a row. A name alone does not: one deliverable can hold several components' checks, and two authors given the same property write the same name. The only hook, because it is the only one that does I/O |
 | `system` | The prompt is a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's |
 | `prompt` | A `TypedTemplate[FindingsPromptParams]`, not a callable. Both backends' prompts take the same fields — rule, properties, groups, evidence, `also_covers` — so the backend owns the prose and `build_findings` owns the binding |
-| `severity` | `Assessed` or `Fixed(tier)`. Each variant carries the `draft` schema it implies, so a backend cannot ask the model for axes it then ignores, nor assign a constant while the model still rates |
 
-`severity` is one choice rather than a schema plus a rating rule because the schema is what decides
-what the model can be *asked*: a backend whose evidence does not establish who could profit or how
-must not be handed a draft with `impact_level` on it, since a schema invites a rating whatever the
-instructions say. `Fixed` records the author's declared reason as the finding's `risk_reasoning` and
-leaves the axes empty, so their absence says nothing assessed them.
+Severity is not among them. Every backend's findings are rated the same way: the model assesses
+impact and likelihood on the one `FindingDraft`, and `severity_for` maps the pair through a fixed
+matrix — the model never picks a tier, so the severity a reader sees is re-derivable from what the
+write-up said. What differs between backends is what a violation *is*, and that is the prompt's job
+to say.
 
 Everything else the loop used to take as a hook turned out to be derivable from the evidence itself,
 and is now shared: `proof_of_concept` joins the reproducers from instances the run actually refuted

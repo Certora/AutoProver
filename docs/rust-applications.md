@@ -186,7 +186,7 @@ One struct, serialized at load time, that drives everything non-backend.
 | `component_noun` | the human noun for one formalized component in the console/TUI ("instruction"); `None` → "component", read through `unit_noun()` |
 | `check_noun` | what this backend calls one check **to the model** ("rule", "harness function"); `None` → "check", read through `check_label()` |
 | `evidence_kinds` | the closed set an author may cite when rebutting the judge (§5) |
-| `findings` | how a violated check is written up as an audit finding: the domain half of the system prompt, and how severity is reached (§4.5). `None` → this wheel produces no findings |
+| `findings` | how a violated check is written up as an audit finding: the domain half of the system prompt, saying what this wheel's evidence is (§4.5). `None` → this wheel produces no findings |
 
 **Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host resolves these once into a
 `PhaseModel` ([`build_phase_model`](../composer/rustapp/host.py)): the synthesized
@@ -425,18 +425,17 @@ is the wheel's claim. Crucible's says a fuzzer drove a harness the author wrote 
 set up, and did not refute anything symbolically — so `SUSPECT HARNESS BUG` is something the write-up
 must lead with, an unreproduced declaration must not be given a counterexample it does not have, and
 the harness caveats belong in `assumptions_and_uncertainties`. The host appends the output contract
-(which sections, and the grounding rules) so no wheel restates it. **A wheel that declares no policy
+(which sections, and the grounding rules) so no wheel restates it. **A wheel that declares nothing
 produces no findings**: a write-up asserts what its evidence is, and a host that guessed would be
 publishing prose nothing stands behind.
 
-**`FindingsDeclaration.severity` says what the evidence can support.** Crucible fixes it at
-`informational`, with `impact` and `likelihood` left empty and the model never asked for them: a
-campaign establishes that an assertion can be made to fail, not that anyone can profit from it — a
-crash on a failed precondition looks exactly like a crash on a real one. Asking for a rating anyway
-buys a fabricated one. `provenance.risk_reasoning` instead carries the author's declaration where
-there is one, so a documented finding is distinguishable from one the run tripped over without
-reading the evidence. A wheel whose evidence *can* carry the judgement declares `assessed`, and the
-host turns that into `Assessed` — which brings the axes and the severity matrix with it.
+**Severity is the host's, and it is the same for every backend**: the write-up model rates impact
+and likelihood, and `severity_for` maps the pair through a fixed matrix. A wheel does not get to
+opt out — which puts the whole weight on `system`, because a campaign establishes that an assertion
+can be made to fail, not that anyone can profit from it, and a crash on a failed precondition looks
+exactly like a crash on a real one. Crucible's prose says so, and says what `SUSPECT HARNESS BUG`
+means, so the rating is made against what the evidence actually shows. `provenance` keeps the axes
+and the model's reasoning, so a reader can re-derive the tier rather than take it on trust.
 
 **A conclusion the wheel could not attribute to one check is one finding, not one per row.**
 `attribute_findings` condemns every check a campaign covered when a crash names a property no

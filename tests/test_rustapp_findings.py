@@ -37,7 +37,9 @@ from composer.rustapp.wire import Verdict
 from composer.spec.source.report.collect import ReportComponentInput, collect
 from composer.spec.source.report.findings import FindingDraft, RuleEvidence, build_findings
 from composer.templates.loader import load_jinja_template
-from composer.spec.source.report.schema import Finding, Outcome
+from composer.spec.source.report.schema import (
+    Finding, ImpactLevel, LikelihoodLevel, Outcome,
+)
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor
 
@@ -228,10 +230,12 @@ class _StubModel(BaseChatModel):
         return "stub"
 
 
-def _draft() -> FindingDraft:
+def _draft(impact: ImpactLevel = "medium", likelihood: LikelihoodLevel = "low") -> FindingDraft:
     return FindingDraft(
         title="Initialization is accepted without the authority's signature",
         summary="s", description="d", impact="the authority guarantee is lost",
+        impact_level=impact, likelihood_level=likelihood,
+        risk_reasoning="the run reached it from a state the harness set up",
     )
 
 
@@ -288,19 +292,19 @@ async def test_an_unreproduced_declared_finding_claims_no_counterexample():
 
     assert len(findings) == 1
     assert findings[0].content.proof_of_concept is None, "no crash means no proof of concept"
-    prov = findings[0].provenance
-    assert prov is not None and prov.risk_reasoning == REASON
 
 
 @pytest.mark.asyncio
-async def test_a_fuzz_finding_carries_no_risk_rating():
-    """Severity is fixed and the axes stay empty: nothing here has assessed exploitability."""
+async def test_a_fuzz_finding_is_rated_like_any_other():
+    """The axes are the model's and the tier is the matrix's, so a reader can re-derive the severity
+    from what the write-up actually said rather than taking it on trust."""
     result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
     f = (await _written(_outcome(result)))[0]
 
-    assert f.severity == "informational"
     prov = f.provenance
-    assert prov is not None and prov.impact is None and prov.likelihood is None
+    assert prov is not None
+    assert (prov.impact, prov.likelihood) == ("medium", "low")
+    assert f.severity == "low", "the matrix maps medium x low, and nothing else assigns a tier"
 
 
 @pytest.mark.asyncio
@@ -531,8 +535,10 @@ async def test_two_unreproduced_declarations_are_two_findings():
     findings = await _written_by(model, _outcome(result))
 
     assert len(findings) == 2, "two declarations are two findings"
-    reasons = {f.provenance.risk_reasoning for f in findings if f.provenance}
-    assert reasons == {REASON, "a different documented bug"}
+    # Each is written up against its own declaration — the reason is what makes them two claims.
+    assert len(model.calls) == 2
+    assert {REASON in c for c in model.calls} == {True, False}
+    assert {"a different documented bug" in c for c in model.calls} == {True, False}
 
 
 # ---------------------------------------------------------------------------
@@ -564,33 +570,10 @@ def test_the_write_up_is_told_what_this_wheels_evidence_is():
         cast(Any, object()),
         AppDescriptor.model_validate(wire_descriptor(findings={
             "system": "MARKER: this backend reads tea leaves.",
-            "severity": {"policy": "fixed", "tier": "low"},
         })),
     )
     policy = fz.findings_policy([])
     assert policy is not None
 
     assert policy.system.startswith("MARKER: this backend reads tea leaves.")
-    # A fixed tier is named, and the model is told not to rate — asking for a rating this evidence
-    # cannot support is how a fabricated one gets into a finding a reader trusts.
-    assert "fixed at low" in policy.system
-    assert "Do not assign or imply a severity" in policy.system
-    # …and the schema it answers in carries no axes to fill in either.
-    assert "impact_level" not in policy.severity.draft.model_fields
-
-
-def test_a_wheel_that_assesses_risk_is_asked_for_the_axes():
-    """The other half of the policy: a backend whose evidence *can* carry a risk judgement gets the
-    assessed draft and the matrix, not a constant."""
-    fz = adapter.RustFormalizer(
-        cast(Any, object()),
-        AppDescriptor.model_validate(wire_descriptor(findings={
-            "system": "This backend proves things.", "severity": {"policy": "assessed"},
-        })),
-    )
-    policy = fz.findings_policy([])
-    assert policy is not None
-
-    assert "impact_level" in policy.severity.draft.model_fields
-    assert "Rate impact and likelihood" in policy.system
-    assert "Do not assign" not in policy.system
+    assert "Rate impact and likelihood" in policy.system, "the host's half follows the wheel's"

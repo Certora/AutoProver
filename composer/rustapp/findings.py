@@ -13,13 +13,13 @@ produces no findings — see `AppDescriptor.findings`.
 from typing import TypedDict
 
 from composer.pipeline.ptypes import ComponentOutcome, Delivered
-from composer.rustapp.descriptor import AssessedSeverity, FindingsDeclaration, FixedSeverity
+from composer.rustapp.descriptor import FindingsDeclaration
 from composer.rustapp.result import RustFormalResult
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.source.report.findings import (
-    Assessed, FindingsPolicy, FindingsPromptParams, Fixed, RuleEvidence, SeverityFrom,
+    FindingsPolicy, FindingsPromptParams, RuleEvidence,
 )
-from composer.spec.source.report.schema import RuleRef, SeverityTier
+from composer.spec.source.report.schema import RuleRef
 from composer.spec.system_model import FeatureUnit
 from composer.templates.loader import load_jinja_template
 
@@ -30,9 +30,6 @@ class RustFindingsSystemParams(TypedDict):
     """The full, typed context of ``autoprove_report_findings_rust_system.j2``."""
     #: The wheel's own prose: what its evidence is and what its markers mean.
     domain: str
-    #: The tier every finding gets under a fixed-severity policy, or ``None`` when the model is
-    #: asked to assess. Drives which of the two mutually exclusive rating instructions is given.
-    fixed_severity: SeverityTier | None
 
 
 _RUST_SYSTEM = TypedTemplate[RustFindingsSystemParams]("autoprove_report_findings_rust_system.j2")
@@ -69,12 +66,6 @@ def observations(outcomes: RustOutcomes) -> dict[RuleRef, RuleEvidence]:
     return observed
 
 
-def _severity(declared: AssessedSeverity | FixedSeverity) -> SeverityFrom:
-    """The wheel's declared policy as the host's. Both sides model it as one choice rather than a
-    schema and a rating rule that could disagree; this is only the wire crossing."""
-    return Assessed() if isinstance(declared, AssessedSeverity) else Fixed(tier=declared.tier)
-
-
 def rust_findings(
     outcomes: RustOutcomes, declared: FindingsDeclaration | None,
 ) -> FindingsPolicy | None:
@@ -88,13 +79,8 @@ def rust_findings(
         found = observed.get(ref)
         return [found] if found is not None else []
 
-    severity = _severity(declared.severity)
     return FindingsPolicy(
         fetch_evidence=fetch,
-        system=_RUST_SYSTEM.bind({
-            "domain": declared.system,
-            "fixed_severity": severity.tier if isinstance(severity, Fixed) else None,
-        }).render_to(load_jinja_template),
+        system=_RUST_SYSTEM.bind({"domain": declared.system}).render_to(load_jinja_template),
         prompt=_RUST_PROMPT,
-        severity=severity,
     )

@@ -156,20 +156,17 @@ def test_validate_reports_a_parse_error_as_the_error_envelope():
 def test_the_wheel_declares_what_its_findings_rest_on():
     """A findings write-up is prose about what the evidence means, and only the wheel knows.
 
-    Crucible declares both halves. Severity is fixed at ``informational`` because nothing in this
-    pipeline assesses exploitability: a campaign shows a tagged assertion can be made to fail
-    against a fixture the author wrote, and a crash on a broken precondition looks exactly like one
-    on a real path. And the system prompt has to teach the reader's model what that evidence is —
-    above all `SUSPECT HARNESS BUG`, where the likely defect is the harness rather than the program.
+    The write-up model rates exploitability from whatever it is handed, so the prose is what keeps
+    that rating honest: a campaign shows a tagged assertion can be made to fail against a fixture
+    the author wrote, and a crash on a broken precondition looks exactly like one on a real path.
+    Above all `SUSPECT HARNESS BUG`, where the likely defect is the harness rather than the program.
     """
-    from composer.rustapp.descriptor import AppDescriptor, FixedSeverity
+    from composer.rustapp.descriptor import AppDescriptor
 
     desc = AppDescriptor.model_validate_json(crucible_app.descriptor())
-    policy = desc.findings
-    assert policy is not None, "a wheel with no policy writes no findings at all"
-    assert isinstance(policy.severity, FixedSeverity)
-    assert policy.severity.tier == "informational"
-    assert "SUSPECT HARNESS BUG" in policy.system
+    declared = desc.findings
+    assert declared is not None, "a wheel that declares nothing writes no findings at all"
+    assert "SUSPECT HARNESS BUG" in declared.system
     # The declaration/reproduction split is the one distinction this evidence cannot make on the
     # outcome alone, so the prompt has to make it.
-    assert "DECLARED" in policy.system
+    assert "DECLARED" in declared.system

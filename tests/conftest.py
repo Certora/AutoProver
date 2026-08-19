@@ -431,11 +431,10 @@ def wire_descriptor(**overrides: Any) -> dict[str, Any]:
         "component_noun": None,
         "check_noun": None,
         "evidence_kinds": ["build_failure", "check_output", "counterexample", "reasoned"],
-        # A findings policy by default: most tests that reach the report want findings written, and
-        # the ones about a wheel that declines override it with None.
+        # A findings declaration by default: most tests that reach the report want findings
+        # written, and the ones about a wheel that declines override it with None.
         "findings": {
             "system": "The demo backend read the spec back and it did not say what was asked.",
-            "severity": {"policy": "fixed", "tier": "informational"},
         },
         **overrides,
     }

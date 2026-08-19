@@ -9,7 +9,7 @@ from typing import TypedDict
 
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.source.report.findings import (
-    Assessed, EvidenceFetcher, FindingsPromptParams, FindingsPolicy,
+    EvidenceFetcher, FindingsPolicy, FindingsPromptParams,
 )
 from composer.templates.loader import load_jinja_template
 
@@ -25,13 +25,9 @@ _FINDINGS_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_finding
 
 
 def prover_findings(fetch_evidence: EvidenceFetcher) -> FindingsPolicy:
-    """The Prover's findings policy, around the run-scoped capture that holds its evidence.
-
-    Severity is `Assessed`: a counterexample is a concrete reachable state of the program itself, so
-    the axes are a judgement the evidence can carry."""
+    """The Prover's findings policy, around the run-scoped capture that holds its evidence."""
     return FindingsPolicy(
         fetch_evidence=fetch_evidence,
         system=_FINDINGS_SYSTEM.bind({}).render_to(load_jinja_template),
         prompt=_FINDINGS_PROMPT,
-        severity=Assessed(),
     )

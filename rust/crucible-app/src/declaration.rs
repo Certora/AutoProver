@@ -6,7 +6,7 @@ use askama::Template;
 
 use autoprover_sdk::descriptor::{
     AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind,
-    FindingsDeclaration, PhaseRole, PhaseSpec, SeverityPolicy, SeverityTier,
+    FindingsDeclaration, PhaseRole, PhaseSpec,
 };
 
 use crate::layout::{CRATE_ROOT, HARNESS_ROOT, REPORT_ROOT};
@@ -110,14 +110,13 @@ pub(crate) fn descriptor() -> AppDescriptor {
             "manual_citation".into(),
             "reasoned".into(),
         ],
-        // Severity is fixed rather than assessed because nothing in this pipeline establishes
-        // exploitability: a campaign shows an assertion can be made to fail against a fixture the
-        // author wrote, and a crash on a broken precondition looks exactly like one on a real path
-        // (which is what `SUSPECT HARNESS BUG` exists to flag). Asking the write-up model to rate
-        // impact and likelihood off that would buy a number with nothing behind it.
+        // The prose has to carry what this evidence does *not* establish: a campaign shows an
+        // assertion can be made to fail against a fixture the author wrote, and a crash on a broken
+        // precondition looks exactly like one on a real path (which is what `SUSPECT HARNESS BUG`
+        // exists to flag). The write-up model rates exploitability from it either way, so what it
+        // is told about the evidence is the only thing keeping that rating honest.
         findings: Some(FindingsDeclaration {
             system: FindingsSystem.render().expect("render findings_system"),
-            severity: SeverityPolicy::Fixed { tier: SeverityTier::Informational },
         }),
     }
 }

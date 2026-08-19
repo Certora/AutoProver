@@ -12,7 +12,7 @@ from langchain_core.runnables import Runnable, RunnableLambda
 
 from composer.spec.types import PropertyType
 from composer.spec.source.report.findings import (
-    AssessedFindingDraft, RuleEvidence, build_findings, severity_for,
+    FindingDraft, RuleEvidence, build_findings, severity_for,
 )
 from composer.spec.source.prover_findings import prover_findings
 from composer.spec.source.report.schema import (
@@ -51,8 +51,8 @@ class _StructuredStubModel(BaseChatModel):
 
 
 def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLevel = "medium",
-           title: str = "Reentrancy drains vault") -> AssessedFindingDraft:
-    return AssessedFindingDraft(
+           title: str = "Reentrancy drains vault") -> FindingDraft:
+    return FindingDraft(
         title=title, impact_level=impact_level, likelihood_level=likelihood_level,
         risk_reasoning="High impact (fund loss); medium likelihood (needs a specific state).",
         summary="s", description="d", impact="funds at risk", attack_path="1..2..3",

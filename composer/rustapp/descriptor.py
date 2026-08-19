@@ -13,7 +13,7 @@ from pydantic import Field
 
 from composer.rustapp.wire import WireModel
 
-from composer.spec.source.report.schema import ReportBackend, SeverityTier
+from composer.spec.source.report.schema import ReportBackend
 
 #: Ecosystem/chain tag. Mirrors ``composer.pipeline.ecosystem.ChainTag`` (kept local so this
 #: ABI-mirror module stays decoupled from the pipeline); the host resolves it against the
@@ -95,25 +95,6 @@ class Callout(WireModel):
 DeliverableMode = Annotated[PerComponent | Callout, Field(discriminator="mode")]
 
 
-class AssessedSeverity(WireModel):
-    """The write-up model rates impact and likelihood against the evidence, and the host maps the
-    pair to a tier — for a backend whose evidence can carry that judgement."""
-
-    policy: Literal["assessed"] = "assessed"
-
-
-class FixedSeverity(WireModel):
-    """Every finding gets :attr:`tier`, and the model is never asked to rate anything — what a
-    backend declares when nothing in its pipeline has assessed exploitability."""
-
-    policy: Literal["fixed"] = "fixed"
-    tier: SeverityTier
-
-
-#: How a backend's findings get their severity — tagged on ``policy`` (Rust ``SeverityPolicy``).
-SeverityPolicy = Annotated[AssessedSeverity | FixedSeverity, Field(discriminator="policy")]
-
-
 class FindingsDeclaration(WireModel):
     """How a violated check of this backend becomes a written audit finding.
 
@@ -125,7 +106,6 @@ class FindingsDeclaration(WireModel):
     #: The *domain* half of the write-up system prompt. The host appends the output contract (the
     #: sections asked for, the grounding rules), so no wheel restates it.
     system: str
-    severity: SeverityPolicy
 
 
 class PhaseSpec(WireModel):
