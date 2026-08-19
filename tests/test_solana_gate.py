@@ -17,6 +17,7 @@ import pytest
 from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
+from composer.input.types import DEFAULT_RECURSION_LIMIT
 from composer.pipeline.core import PipelineRun, run_pipeline
 from composer.pipeline.ecosystem import SOLANA, RUST_FORBIDDEN_READ
 from composer.spec.context import SourceCode, WorkflowContext
@@ -103,12 +104,15 @@ async def test_solana_vault_front_half(pg_container: "PostgresContainer", monkey
             heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
         basic = build_basic_source_tools(root=str(_SCENARIO), forbidden_read=RUST_FORBIDDEN_READ)
-        full = build_source_tools(basic, model_provider, conns.indexed_store, ("solana_gate", "src"), recursion_limit=100)
+        full = build_source_tools(
+            basic, model_provider, conns.indexed_store, ("solana_gate", "src"),
+            recursion_limit=DEFAULT_RECURSION_LIMIT, ecosystem=SOLANA,
+        )
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
 
         ctx = WorkflowContext.create(
             services=conns.memory,
-            thread_id="solana_gate", store=conns.store, recursion_limit=100,
+            thread_id="solana_gate", store=conns.store, recursion_limit=DEFAULT_RECURSION_LIMIT,
             cache_namespace=None, memory_namespace=None,
         )
 

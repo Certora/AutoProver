@@ -26,10 +26,11 @@ import pytest
 from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
+from composer.input.types import DEFAULT_RECURSION_LIMIT
 from composer.io.multi_job import TaskInfo
 from composer.rag.models import DefaultEmbedder
 from composer.pipeline.core import GaveUp, PipelineRun
-from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
+from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.rustapp.adapter import emit_event, write_wheel_files
 from composer.rustapp.session import run_session
 from composer.rustapp.wire import ComponentInput, CrateRootInput, Property, parse_files
@@ -239,11 +240,14 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
             heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
         basic = build_basic_source_tools(root=str(_SCENARIO), forbidden_read=RUST_FORBIDDEN_READ)
-        full = build_source_tools(basic, model_provider, conns.indexed_store, ("crucible_fmz", "src"), recursion_limit=100)
+        full = build_source_tools(
+            basic, model_provider, conns.indexed_store, ("crucible_fmz", "src"),
+            recursion_limit=DEFAULT_RECURSION_LIMIT, ecosystem=SOLANA,
+        )
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
         ctx = WorkflowContext.create(
             services=conns.memory,
-            thread_id="crucible_fmz", store=conns.store, recursion_limit=100,
+            thread_id="crucible_fmz", store=conns.store, recursion_limit=DEFAULT_RECURSION_LIMIT,
             cache_namespace=None, memory_namespace=None,
         )
 
@@ -272,9 +276,11 @@ async def test_crucible_per_component_formalize(pg_container: "PostgresContainer
         # `source_unit`/`prep_facts` are left at their defaults deliberately: `component_input`
         # carries none either, so both callouts derive the same crate (the `programs/<program>`
         # layout convention, crate path, no IDL) and the root matches what `validate` builds.
-        write_wheel_files(Path(_SCENARIO), parse_files(module.crate_root(CrateRootInput(
+        crate_root = module.crate_root(CrateRootInput(
             program=_PROGRAM, setup=_FIXTURE, units=[_COMPONENT],
-        ).model_dump_json())))
+        ).model_dump_json())
+        assert crate_root is not None, "wheel declared no crate root"
+        write_wheel_files(Path(_SCENARIO), parse_files(crate_root))
         input_json = component_input.model_dump_json()
         sandbox_dict = {"argv_prefix": [], "timeout_s": 1200}
         sandbox_json = json.dumps(sandbox_dict)

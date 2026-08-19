@@ -16,7 +16,6 @@ instruction. Same prerequisites as the other crucible gates (toolchain, `crucibl
 """
 
 import asyncio
-import json
 import os
 import shutil
 import subprocess
@@ -30,12 +29,15 @@ import pytest
 from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
+from composer.input.types import DEFAULT_RECURSION_LIMIT
 from composer.rag.models import DefaultEmbedder
 from composer.pipeline.core import Delivered
-from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
+from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.rustapp.frontend import GenericRustConsoleHandler
+from composer.rustapp.adapter import source_unit_of
+from composer.rustapp.entry import build_confinement
 from composer.rustapp.host import build_application, run_application
-from composer.sandbox.config import SandboxConfig
+from composer.rustapp.wire import AppArgs
 from composer.sandbox.recipes import sandbox_cargo_home, sandbox_rustup_home
 from composer.spec.context import SourceCode, WorkflowContext
 from composer.spec.service_host import ModelProvider, PureServiceHost
@@ -178,11 +180,14 @@ async def test_crucible_full_vertical(
             heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
         basic = build_basic_source_tools(root=str(scenario), forbidden_read=RUST_FORBIDDEN_READ)
-        full = build_source_tools(basic, model_provider, conns.indexed_store, (thread, "src"), recursion_limit=100)
+        full = build_source_tools(
+            basic, model_provider, conns.indexed_store, (thread, "src"),
+            recursion_limit=DEFAULT_RECURSION_LIMIT, ecosystem=SOLANA,
+        )
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
         ctx = WorkflowContext.create(
             services=conns.memory,
-            thread_id=thread, store=conns.store, recursion_limit=100,
+            thread_id=thread, store=conns.store, recursion_limit=DEFAULT_RECURSION_LIMIT,
             cache_namespace=None, memory_namespace=None,
         )
 
@@ -193,12 +198,15 @@ async def test_crucible_full_vertical(
         # validate fuzzes). Mirror what the entry point does: thread the fuzz budget in as a
         # declared arg and build the launcher policy from the wheel's sandbox grants.
         app = build_application("crucible_app", command_timeout_s=1800)
-        app.options.declared_args = {"fuzz_timeout": 12}
-        grants = json.loads(app.module.sandbox_grants("{}"))
-        app.options.sandbox = SandboxConfig(
-            provider=os.environ.get("COMPOSER_SANDBOX_PROVIDER", "launcher"),
-            extra_ro=tuple(Path(p) for p in grants.get("extra_ro", [])),
-        )
+        declared = {"fuzz_timeout": 12}
+        app.options.declared_args = declared
+        app.options.sandbox = build_confinement(app, AppArgs(
+            project_root=str(scenario), program=_PROGRAM,
+            source_path=f"programs/{_PROGRAM}/src/lib.rs",
+            system_doc=str(scenario / "system.md"),
+            source_unit=source_unit_of(app.ecosystem, source),
+            declared=declared,
+        ))
         result = await run_application(
             app, source, ctx, handler.make_handler, env,
             max_concurrent=2, max_bug_rounds=1, interactive=False,

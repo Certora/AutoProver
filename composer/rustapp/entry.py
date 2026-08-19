@@ -115,7 +115,7 @@ def build_default_env(
     ).bind_source_tools(full)
 
 
-def _build_confinement(app: RustApplication, args: AppArgs) -> SandboxConfig:
+def build_confinement(app: RustApplication, args: AppArgs) -> SandboxConfig:
     """The default command-sandbox config for a wheel that sets ``confine_by_default`` — the
     fail-closed ``launcher`` provider (overridable by ``COMPOSER_SANDBOX_PROVIDER``), with the
     wheel's ``sandbox_grants`` (extra read-only paths / env names) unioned in. Python owns the
@@ -391,7 +391,7 @@ async def rust_entry_point(
             # declared sandbox grants. Both are inert for a wheel that declares neither.
             app.options.declared_args = declared_args
             if app.options.sandbox is None and app.descriptor.confine_by_default:
-                app.options.sandbox = _build_confinement(app, app_args)
+                app.options.sandbox = build_confinement(app, app_args)
 
             return await run_application(
                 app,

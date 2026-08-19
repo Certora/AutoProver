@@ -27,6 +27,7 @@ import pytest
 from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
+from composer.input.types import DEFAULT_RECURSION_LIMIT
 from composer.io.multi_job import TaskInfo
 from composer.rag.models import DefaultEmbedder
 from composer.llm.registry import get_provider_for
@@ -178,14 +179,15 @@ async def test_component_grouping_on_a_real_program(pg_container: "PostgresConta
         )
         basic = build_basic_source_tools(root=root_s, forbidden_read=RUST_FORBIDDEN_READ)
         full = build_source_tools(
-            basic, models, conns.indexed_store, ("solana_grouping", "src"), recursion_limit=100
+            basic, models, conns.indexed_store, ("solana_grouping", "src"),
+            recursion_limit=DEFAULT_RECURSION_LIMIT, ecosystem=SOLANA,
         )
         env = PureServiceHost(models=models, rag_tools=(), sort="existing").bind_source_tools(full)
         ctx: WorkflowContext[Any] = WorkflowContext.create(
             services=conns.memory,
             thread_id="solana_grouping",
             store=conns.store,
-            recursion_limit=100,
+            recursion_limit=DEFAULT_RECURSION_LIMIT,
             cache_namespace=None,
             memory_namespace=None,
         )

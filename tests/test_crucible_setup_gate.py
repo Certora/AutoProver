@@ -28,10 +28,11 @@ import pytest
 from psycopg.sql import SQL, Identifier, Literal
 
 import composer.workflow.services as services
+from composer.input.types import DEFAULT_RECURSION_LIMIT
 from composer.io.multi_job import TaskInfo
 from composer.rag.models import DefaultEmbedder
 from composer.pipeline.core import GaveUp, PipelineRun
-from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
+from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.rustapp.adapter import emit_event
 from composer.rustapp.session import run_session
 from composer.rustapp.wire import SetupInput
@@ -173,12 +174,15 @@ async def test_crucible_fixture_authoring(pg_container: "PostgresContainer", mon
             heavy_model=_tiered.heavy, lite_model=_tiered.lite, checkpointer=conns.checkpointer,
         )
         basic = build_basic_source_tools(root=str(_SCENARIO), forbidden_read=RUST_FORBIDDEN_READ)
-        full = build_source_tools(basic, model_provider, conns.indexed_store, ("crucible_setup", "src"), recursion_limit=100)
+        full = build_source_tools(
+            basic, model_provider, conns.indexed_store, ("crucible_setup", "src"),
+            recursion_limit=DEFAULT_RECURSION_LIMIT, ecosystem=SOLANA,
+        )
         env = PureServiceHost(models=model_provider, rag_tools=(), sort="existing").bind_source_tools(full)
 
         ctx = WorkflowContext.create(
             services=conns.memory,
-            thread_id="crucible_setup", store=conns.store, recursion_limit=100,
+            thread_id="crucible_setup", store=conns.store, recursion_limit=DEFAULT_RECURSION_LIMIT,
             cache_namespace=None, memory_namespace=None,
         )
 
@@ -197,7 +201,7 @@ async def test_crucible_fixture_authoring(pg_container: "PostgresContainer", mon
         result = await run.runner(
             TaskInfo("crucible_setup", "Harness Fixture", phases.member("harness_fixture")),
             lambda: run_session(
-                module=module, input=setup_input, kind="setup", checks=[], titles=[],
+                module=module, input=setup_input, kind="setup", titles=[],
                 env=env, ctx=ctx, run=run, workdir=Path(_SCENARIO),
                 sandbox_dict=sandbox_dict, descriptor=descriptor, emit=emit_event,
                 description="Harness Fixture",
