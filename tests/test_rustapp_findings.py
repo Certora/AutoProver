@@ -1,9 +1,7 @@
-"""Tests for a Rust backend's findings.
+"""The declaration fold: what a Rust backend reports for a check its author declared broken.
 
 A check marked ``expect_check_failure`` must report as a finding even if this run
-did not reproduce it. Those rows become ``Finding``s with no second write-up —
-the crash and the declaration are the write-up. Reproduced and unreproduced
-findings must stay distinguishable.
+did not reproduce it. Reproduced and unreproduced findings must stay distinguishable.
 
 ``expect_check_failure`` is how an author says "the failure here IS the finding". The
 publish gate accepts such a check as clean and nothing downstream ever asked the run to
@@ -29,13 +27,10 @@ from composer.pipeline.core import CorePipelineResult, Delivered
 from composer.pipeline.ptypes import ComponentOutcome
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
-from composer.rustapp.findings import compose_findings
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
-from composer.spec.source.report.collect import ReportComponentInput, collect
-from composer.spec.source.report.schema import Outcome, RuleVerdict
-from composer.spec.types import PropertyFormulation
+from composer.spec.source.report.schema import Outcome
 from tests.conftest import wire_descriptor
 
 #: Crash text from a real Crucible hit, trimmed.
@@ -201,202 +196,3 @@ async def test_a_wheels_own_file_beats_the_components_fallback():
     verdicts = await formalizer.fetch_verdicts(cast(Any, _Formalized(result)))
     assert verdicts["c_authority_immutable"].unit_file == "c_lamport_custody.rs"
     assert verdicts["c_unplaced"].unit_file == "main.rs"
-
-
-# ---------------------------------------------------------------------------
-# Report rows -> findings
-# ---------------------------------------------------------------------------
-
-def _outcome(result: RustFormalResult, unit_file: str = "main.rs") -> ComponentOutcome:
-    return ComponentOutcome(
-        cast(Any, _Feat("Oracle-Driven Refresh")), [], Delivered(result, pathlib.Path(unit_file))
-    )
-
-
-def _rows(result: RustFormalResult, unit_file: str = "main.rs") -> list[RuleVerdict]:
-    """The report rows ``collect`` would build from one component's reported verdicts."""
-    return [
-        RuleVerdict(name=name, spec_file=v.unit_file or unit_file, outcome=v.outcome,
-                    message=v.detail)
-        for name, v in result.reported_verdicts().items()
-    ]
-
-
-def test_a_reproduced_declared_finding_carries_its_counterexample_and_its_reason():
-    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {"c_ts": REASON},
-                     checks=[("Stored prices are never in the future", ["c_ts"])])
-    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
-
-    assert len(findings) == 1
-    f = findings[0]
-    assert f.title == "Stored prices are never in the future"
-    assert f.content.proof_of_concept == COUNTEREXAMPLE
-    assert REASON in f.content.description
-    assert f.provenance is not None and f.provenance.risk_reasoning == REASON
-    assert f.provenance.rule_name == "c_ts" and f.provenance.outcome is Outcome.BAD
-
-
-def test_an_unreproduced_declared_finding_claims_no_counterexample():
-    result = _result({"c_kill": _verdict(Outcome.GOOD)}, {"c_kill": REASON},
-                     checks=[("The kill switch stops price usage", ["c_kill"])])
-    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
-
-    assert len(findings) == 1
-    f = findings[0]
-    assert "NOT REPRODUCED" in f.content.description
-    assert f.content.proof_of_concept is None
-    assert f.provenance is not None and f.provenance.risk_reasoning == REASON
-
-
-def test_a_crash_the_run_found_needs_no_declaration():
-    result = _result({"c_bad": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
-    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
-
-    assert len(findings) == 1
-    assert findings[0].content.proof_of_concept == COUNTEREXAMPLE
-    assert findings[0].provenance is not None
-    assert findings[0].provenance.risk_reasoning is None
-
-
-def test_findings_assess_no_risk():
-    """Severity and impact stay blank: nothing here has judged what a crash is worth."""
-    result = _result({"c_bad": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
-    f = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])[0]
-    assert f.severity == "informational"
-    assert f.content.impact == ""
-
-
-def test_a_check_verifying_several_properties_is_named_after_itself():
-    result = _result({"c_multi": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {},
-                     checks=[("Prices are fresh", ["c_multi"]), ("Prices are signed", ["c_multi"])])
-    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
-    # Several properties: the check name is the only unambiguous title.
-    assert findings[0].title == "c_multi"
-
-
-def test_only_violations_become_findings():
-    """ERROR and TIMEOUT stay verdict rows, not findings."""
-    result = _result(
-        {
-            "c_good": _verdict(Outcome.GOOD),
-            "c_err": _verdict(Outcome.ERROR, "linker died"),
-            "c_slow": _verdict(Outcome.TIMEOUT, "gave up after 30m"),
-            "c_bad": _verdict(Outcome.BAD, COUNTEREXAMPLE),
-        },
-        {},
-    )
-    findings = compose_findings(rules=_rows(result), outcomes=[_outcome(result)])
-    assert [f.provenance.rule_name for f in findings if f.provenance] == ["c_bad"]
-
-
-def test_a_clean_campaign_produces_no_findings():
-    """An empty list is what makes the report omit the Findings section."""
-    result = _result({"c_good": _verdict(Outcome.GOOD)}, {})
-    assert compose_findings(rules=_rows(result), outcomes=[_outcome(result)]) == []
-
-
-def test_two_components_sharing_one_artifact_keep_their_own_evidence():
-    """Two components sharing one artifact file must still keep their own evidence."""
-    left = _result({"c_a": _verdict(Outcome.BAD, "crash A")}, {})
-    right = _result({"c_b": _verdict(Outcome.GOOD)}, {"c_b": REASON})
-    findings = compose_findings(
-        rules=_rows(left) + _rows(right), outcomes=[_outcome(left), _outcome(right)],
-    )
-    by_rule = {f.provenance.rule_name: f for f in findings if f.provenance}
-    assert by_rule["c_a"].content.proof_of_concept == "crash A"
-    assert by_rule["c_a"].provenance is not None and by_rule["c_a"].provenance.risk_reasoning is None
-    assert by_rule["c_b"].content.proof_of_concept is None
-    assert by_rule["c_b"].provenance is not None
-    assert by_rule["c_b"].provenance.risk_reasoning == REASON
-
-
-@pytest.mark.asyncio
-async def test_the_formalizer_submits_them_through_the_report_hook():
-    """The formalizer returns ready findings through the report hook."""
-    formalizer = adapter.RustFormalizer(
-        cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
-    )
-    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {"c_ts": REASON},
-                     checks=[("Stored prices are never in the future", ["c_ts"])])
-    findings = await formalizer.findings(
-        contract_name="klend", rules=_rows(result), properties=[], groups=[],
-        outcomes=[_outcome(result)], run=cast(Any, object()),
-    )
-
-    assert [f.title for f in findings] == ["Stored prices are never in the future"]
-    assert findings[0].content.proof_of_concept == COUNTEREXAMPLE
-
-
-# ---------------------------------------------------------------------------
-# Crucible's one-crate deliverable
-# ---------------------------------------------------------------------------
-
-async def _collected(*components: tuple[str, RustFormalResult]) -> list[RuleVerdict]:
-    """The rows the real collector builds — the same list ``build_report`` hands ``findings``."""
-    formalizer = adapter.RustFormalizer(
-        cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
-    )
-    _, rules, *_ = await collect(
-        [
-            ReportComponentInput(
-                name=cast(Any, name),
-                props=[
-                    PropertyFormulation(title=title, sort="invariant", description="d")
-                    for title, _ in res.checks
-                ],
-                formalized=cast(Any, _Formalized(res)),
-            )
-            for name, res in components
-        ],
-        fetch_verdicts=formalizer.fetch_verdicts,
-    )
-    return rules
-
-
-@pytest.mark.asyncio
-async def test_two_crucible_sections_naming_one_check_keep_their_own_crash():
-    """Crucible delivers one crate, so `validate` files each verdict under its section's file.
-
-    Two authors given the same property title write the same check name, and the report
-    keys a row by ``(file, name)`` — the section file is the only thing that keeps the two
-    rows apart. The findings mapper keys observations the same way, so a section's finding
-    must carry that section's crash and not the other's.
-    """
-    left = _result({"c_auth_immutable": _verdict(Outcome.BAD, "crash A")}, {},
-                   checks=[("Authority is immutable", ["c_auth_immutable"])])
-    right = _result({"c_auth_immutable": _verdict(Outcome.BAD, "crash B")}, {},
-                    checks=[("Authority is immutable", ["c_auth_immutable"])])
-    for res, section in ((left, "c_vault_initialization.rs"), (right, "c_lamport_custody.rs")):
-        res.verdicts["c_auth_immutable"].unit_file = section
-
-    rules = await _collected(("Vault Initialization", left), ("Lamport Custody", right))
-    findings = compose_findings(
-        rules=rules, outcomes=[_outcome(left), _outcome(right)],
-    )
-
-    assert len(findings) == 2, "one row per section, so one finding per section"
-    by_section = {f.provenance.spec_file: f for f in findings if f.provenance}
-    assert by_section["c_vault_initialization.rs"].content.proof_of_concept == "crash A"
-    assert by_section["c_lamport_custody.rs"].content.proof_of_concept == "crash B"
-
-
-@pytest.mark.asyncio
-async def test_a_finding_on_a_collapsed_row_reads_the_run_that_row_came_from():
-    """Without a section file the two rows do collapse — and the finding must follow the row.
-
-    ``collect`` keeps the first run naming a ``(file, name)``; the mapper has to keep the same
-    one, or the row's message and the finding's proof of concept describe different runs.
-    """
-    first = _result({"c_auth_immutable": _verdict(Outcome.BAD, "crash A")}, {},
-                    checks=[("Authority is immutable", ["c_auth_immutable"])])
-    second = _result({"c_auth_immutable": _verdict(Outcome.BAD, "crash B")}, {},
-                     checks=[("Authority is immutable", ["c_auth_immutable"])])
-
-    rules = await _collected(("Vault Initialization", first), ("Lamport Custody", second))
-    findings = compose_findings(
-        rules=rules, outcomes=[_outcome(first), _outcome(second)],
-    )
-
-    assert len(findings) == 1
-    assert findings[0].content.proof_of_concept == "crash A"
-    assert "crash A" in (rules[0].message or "")

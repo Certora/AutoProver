@@ -56,7 +56,7 @@ from composer.spec.source.report.schema import (
     AppliedEditRecord, ComponentName, Finding, FormalizedProperty, PropertyGroup, RuleName,
     RuleVerdict, SourceEditRecord,
 )
-from composer.spec.source.findings import RuleEvidence, build_findings
+from composer.spec.source.report.collect import EvidenceFetcher, RuleEvidence
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 
@@ -168,21 +168,8 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         return records
 
     @override
-    async def findings(
-        self,
-        *,
-        contract_name: str,
-        rules: list[RuleVerdict],
-        properties: list[FormalizedProperty],
-        groups: list[PropertyGroup],
-        outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]],
-        run: PipelineRun,
-    ) -> list[Finding]:
-        # Write each captured violation up as an audit issue; do not re-analyze.
-        return await build_findings(
-            contract_name=contract_name, rules=rules, properties=properties, groups=groups,
-            fetch_evidence=self._evidence, llm=run.env.llm_heavy(),
-        )
+    def findings_evidence(self) -> EvidenceFetcher:
+        return self._evidence
 
     async def _evidence(self, rule_name: str) -> list[RuleEvidence]:
         # Every instantiation the run analyzed, not just one: a parametric rule can fail differently

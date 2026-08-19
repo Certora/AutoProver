@@ -85,9 +85,8 @@ formalizer = await staged.begin(batches, run) if isinstance(staged, StagedFormal
 settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
 await formalizer.finalize(outcomes, run)
 
-# 6. shared: build + persist the report from the outcomes + backend verdicts/findings
-report = await build_report(..., fetch_verdicts=formalizer.fetch_verdicts,
-                            build_findings=formalizer.findings)
+# 6. shared: build + persist the report from the outcomes + backend verdicts
+report = await build_report(..., fetch_verdicts=formalizer.fetch_verdicts)
 ```
 
 The key structural point is the two overlaps, and both fall out of the driver generically. For the
@@ -153,16 +152,12 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         return []                     # synthetic report rows; default none
 
-    async def findings(self, *, contract_name, rules, properties, groups, outcomes, run
-                       ) -> list[Finding]:
-        return []                     # what this run found, ready to attach; default none
-
     async def finalize(self, outcomes, run) -> None:
         return None                   # run-level artifacts from the full outcome set; default none
 ```
 
 The contract is deliberately small — one required producer (`formalize`), one required
-reader (`fetch_verdicts`), and three optional hooks. The second type parameter `U` is the
+reader (`fetch_verdicts`), and two optional hooks. The second type parameter `U` is the
 *formalized unit* the backend consumes (EVM's `ContractComponentInstance`, a Rust backend's
 `FeatureUnit`): the backend reads its concrete unit's members without casts while the driver stays
 unit-agnostic. Crucially, a `Formalizer` is **immutable and fully constructed** by whatever produced
@@ -478,37 +473,7 @@ to one entry, and uses `Verdict.merge` (priority `BAD > ERROR > TIMEOUT > UNKNOW
 roll up multiple results for one rule. Foundry's fetcher instead reads pass/fail straight off
 the result with no run service — same protocol, different source.
 
-### 4.6 `findings` — what the run found
-
-```python
-async def findings(self, *, contract_name, rules, properties, groups, outcomes, run):
-    return await build_findings(..., fetch_evidence=self._evidence, llm=run.env.llm_heavy())
-```
-
-`fetch_verdicts` answers "did each rule hold". `findings` answers "what did this run find", and
-that is the report's first section.
-
-The backend returns finished `Finding`s — title, severity, write-up, provenance. The report
-attaches them. It does not write them, hold a model, or fetch evidence. Whatever a backend needs
-to produce a finding is that backend's own business.
-
-The hook runs after collect and grouping, so it sees the same rules, properties, and groups the
-report will persist. The prover's write-up uses those groups for its "audit-level claim(s)". The
-driver also passes `outcomes` and `run`, the same way it does for `finalize` and `source_edits`,
-so a backend whose findings come from its own results does not have to recover them from
-rendered `RuleVerdict.message` text.
-
-How each backend fills the hook:
-
-| Backend | What it does |
-| --- | --- |
-| CVL / prover ([spec/source/findings.py](../composer/spec/source/findings.py)) | A second LLM pass over each BAD rule. Evidence comes from the run-scoped `CexAnalysisStore` (already captured for the authoring agent). The model assesses impact and likelihood; a fixed matrix turns that pair into a severity — the model never picks one. |
-| Rust ([rustapp/findings.py](../composer/rustapp/findings.py)) | No model. The wheel's crash and the author's `expect_check_failure` reason already are the write-up. See [rust-applications.md §4.5](./rust-applications.md). |
-| Foundry | Default `[]`. The HTML omits the Findings section. |
-
-A failure here costs the findings, never the report.
-
-### 4.7 `finalize` — run-level artifact
+### 4.6 `finalize` — run-level artifact
 
 ```python
 async def finalize(self, outcomes, run) -> None:
@@ -683,7 +648,6 @@ system analysis, property extraction, caching, and the report, and contributes o
 | shared artifact (`StagedFormalizer`) | none — `invariants.spec` is built from the model, in `prepare_formalization` | none |
 | `formalize` | authoring session, gated by `verify_spec` | authoring session, gated by `forge_test` |
 | `fetch_verdicts` | query prover output off-thread | read ran/expected tests off the result |
-| `findings` | LLM write-up of each violated rule, from captured CEX analysis | none (default `[]`) |
 | `extra_report_inputs` | synthetic "Structural Invariants" | none |
 | `finalize` | `components_to_prover_runs.json` | none |
 | artifact bundle | `.spec` + `.conf` | `.t.sol` + metadata |
@@ -742,8 +706,7 @@ _entry_point → cli_pipeline → cont(env, ProverBackend, EVM)
                                               ─▶ ComponentOutcome
       ProverRunner.finalize(outcomes) ─▶ components_to_prover_runs.json
    5. build_report( per-component inputs + extra_report_inputs(),
-                    fetch_verdicts=ProverRunner.fetch_verdicts,
-                    build_findings=ProverRunner.findings ) ─▶ certora/ap_report/report.json
+                    fetch_verdicts=ProverRunner.fetch_verdicts ) ─▶ certora/ap_report/report.json
 ```
 
 ---
@@ -755,8 +718,7 @@ _entry_point → cli_pipeline → cont(env, ProverBackend, EVM)
 | Driver + the seam (`PipelineBackend`, `Formalizer`, `StagedFormalizer`, `PreparedSystem`) | [composer/pipeline/core.py](../composer/pipeline/core.py) |
 | The driver's data types (`BackendResult`, `Delivered`, `GaveUp`, `ComponentOutcome`, `PipelineRun`, …) | [composer/pipeline/ptypes.py](../composer/pipeline/ptypes.py) |
 | Result protocols (`FormalResult`, `ArtifactIdentifier`) | [composer/spec/types.py](../composer/spec/types.py) |
-| `ReportableResult`, `Verdict`, `VerdictFetcher`, `FindingsBuilder`, `collect` | [composer/spec/source/report/collect.py](../composer/spec/source/report/collect.py) |
-| The prover's findings write-up (pass 2 of its CEX analysis) | [composer/spec/source/findings.py](../composer/spec/source/findings.py) |
+| `ReportableResult`, `Verdict`, `VerdictFetcher`, `collect` | [composer/spec/source/report/collect.py](../composer/spec/source/report/collect.py) |
 | CVL backend (the three phase objects) | [composer/spec/source/pipeline.py](../composer/spec/source/pipeline.py) |
 | The shared authoring session (buffer, stamps, judge, publish gate) | [composer/authoring/](../composer/authoring/) |
 | CVL authoring agent (`batch_cvl_generation`) | [composer/spec/source/author.py](../composer/spec/source/author.py) |

@@ -19,9 +19,8 @@ from typing import Protocol
 from composer.authoring.state import SkippedProperty
 from composer.spec.types import Curtailed, PropertyFormulation
 from composer.spec.source.report.schema import (
-    ComponentName, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FormalizedProperty,
-    GaveUpComponent, Outcome, PropertyGroup, PropertyTitle, RuleName, RuleRef, RuleVerdict,
-    SkippedClaim,
+    ComponentName, CurtailedComponent, CurtailedSkip, DraftedProperty, FormalizedProperty,
+    GaveUpComponent, Outcome, PropertyTitle, RuleName, RuleRef, RuleVerdict, SkippedClaim,
 )
 
 _log = logging.getLogger(__name__)
@@ -153,19 +152,22 @@ def _curtailed_component[R: ReportableResult](
         unattempted=unattempted,
     )
 
-class FindingsBuilder(Protocol):
-    """Backend hook: this report's findings, or ``[]``.
+@dataclass(frozen=True)
+class RuleEvidence:
+    """One failing instance of a violated rule: the backend's root-cause explanation and a concrete
+    counterexample, either of which may be absent. A parametric rule (``rule r(method f)``) fails once
+    per binding, so a rule's evidence is a list of these; ``label`` names the instance ("" when the
+    rule is not parametric)."""
+    label: str = ""
+    analysis: str | None = None
+    counterexample: str | None = None
 
-    Called after collect + grouping, with the same rules, properties, and groups
-    the report will persist. The report attaches what this returns; it does not write them."""
-    async def __call__(
-        self,
-        *,
-        contract_name: str,
-        rules: list[RuleVerdict],
-        properties: list[FormalizedProperty],
-        groups: list[PropertyGroup],
-    ) -> list[Finding]: ...
+
+class EvidenceFetcher(Protocol):
+    """Backend hook: every captured failing instance of a violated rule, or ``[]`` when the backend has
+    none for it. Prover reads the run-scoped CEX-analysis capture."""
+    async def __call__(self, rule_name: str, /) -> list[RuleEvidence]:
+        ...
 
 
 async def collect[R: ReportableResult](

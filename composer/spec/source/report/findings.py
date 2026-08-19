@@ -1,16 +1,15 @@
-"""Write up Certora Prover violations as report findings.
+"""Synthesize findings from violated rules.
 
-For each BAD rule, an LLM writes the issue from the captured CEX analysis and the
-properties the rule formalizes. The model assesses impact and likelihood; a fixed
-matrix turns that pair into a severity. A failed write-up drops that one finding.
-
-Prover-only: the prompt says the Prover found a counterexample, and the evidence
-exists only for a run that produced calltraces.
+For each violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) this asks an LLM to write up
+the issue, grounded in the rule's counterexample analysis (captured during the run and looked up via
+the backend's `EvidenceFetcher`) and the properties the rule formalizes. The model assesses the impact
+and likelihood; this module computes the severity from them via a fixed matrix — the LLM never picks a
+severity directly. Findings are produced only when the backend supplies an evidence fetcher; each
+finding is best-effort, so a synthesis failure drops that one finding rather than the report.
 """
 import asyncio
 import logging
-from dataclasses import dataclass
-from typing import Protocol, TypedDict
+from typing import TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -18,32 +17,13 @@ from pydantic import Field
 
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
+from composer.spec.source.report.collect import EvidenceFetcher, RuleEvidence
 from composer.spec.source.report.schema import (
     AuthoredContent, Finding, FindingProvenance, FormalizedProperty, ImpactLevel, IssueContent,
     LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleRef, RuleVerdict, SeverityTier,
 )
 
 _log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class RuleEvidence:
-    """One failing instance of a violated rule.
-
-    A parametric rule fails once per binding, so a rule's evidence is a list of these.
-    ``label`` names the instance (empty when the rule is not parametric)."""
-    label: str = ""
-    analysis: str | None = None
-    counterexample: str | None = None
-
-
-class EvidenceFetcher(Protocol):
-    """Captured failing instances of a violated rule, or ``[]``.
-
-    A parameter so this module can be driven without a live ``CexAnalysisStore``."""
-    async def __call__(self, rule_name: str, /) -> list[RuleEvidence]:
-        ...
-
 
 #: Cap on concurrent findings-synthesis LLM calls (one per violated rule), so a violation-heavy run
 #: doesn't burst dozens of heavy-model requests at once (which rate limits would turn into dropped
@@ -115,10 +95,13 @@ async def build_findings(
     rules: list[RuleVerdict],
     properties: list[FormalizedProperty],
     groups: list[PropertyGroup],
-    fetch_evidence: EvidenceFetcher,
+    fetch_evidence: EvidenceFetcher | None,
     llm: BaseChatModel,
 ) -> list[Finding]:
-    """One `Finding` per violated rule (concurrent, best-effort); ``[]`` when nothing is violated."""
+    """One `Finding` per violated rule (concurrent, best-effort). Findings are produced only when the
+    backend supplies an evidence fetcher; returns ``[]`` otherwise or when nothing is violated."""
+    if fetch_evidence is None:
+        return []
     bad = [r for r in rules if r.outcome == Outcome.BAD]
     if not bad:
         return []

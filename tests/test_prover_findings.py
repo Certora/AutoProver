@@ -11,7 +11,7 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
 from composer.spec.types import PropertyType
-from composer.spec.source.findings import (
+from composer.spec.source.report.findings import (
     FindingDraft, RuleEvidence, build_findings, severity_for,
 )
 from composer.spec.source.report.schema import (

@@ -402,31 +402,6 @@ setup spec, and per component its `artifact_text`, `property_checks` and the `ta
 checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
 
-`findings` answers a different question from `fetch_verdicts`: *what did this run find*. A Rust
-backend does not ask a model to write this up
-([findings.py](../composer/rustapp/findings.py)). The finding is already there — the wheel's crash
-and reproducing sequence, and the reason the author gave when they called `expect_check_failure`.
-
-`reported_verdicts()` combines those two sources (§6). `findings` then turns each resulting BAD
-row into one `Finding`. That includes a check the author declared even if this run did not
-reproduce it. `ERROR` and `TIMEOUT` stay in the verdict table: a check that never ran is a
-coverage gap, not something the run found.
-
-Each field comes from what the run already has:
-
-| Field | Source |
-| --- | --- |
-| `title` | `RustFormalResult.display_name` — the property title when the check verifies exactly one property, otherwise the check name. Same rule as the console rollup, so a finding and its verdict row have the same name |
-| `content.description` | The row's message: the author's reason first, then `NOT REPRODUCED` if this run produced no counterexample, then the evidence |
-| `content.summary` | The first line of that description |
-| `content.proof_of_concept` | The wheel's counterexample — only if this run actually produced one |
-| `content.impact` | Empty |
-| `provenance.risk_reasoning` | The author's declared reason, so a reader can tell a declared finding from one the run tripped over without reading the evidence |
-| `severity` | `informational` |
-
-Severity stays `informational` and impact stays empty because nothing in this pipeline has judged
-what a fuzzer crash is worth. Inventing `high` would be worse than leaving it blank.
-
 ---
 
 ## 5. Authoring and review
@@ -607,8 +582,7 @@ that looks merely inconclusive. `Verdict.detail` carries the counterexample or e
 *check*, with the tally in the report's own display order and wording. A row is named by
 `RustFormalResult.display_name` — the property title when the check verifies exactly one, and
 otherwise the check's own name, the only thing that names it unambiguously once one check can carry
-several properties. `findings` titles its findings by the same method, so a finding and its verdict
-row are never called different things. A delivered component that bakes no verdicts contributes one
+several properties. A delivered component that bakes no verdicts contributes one
 `UNKNOWN` row so the listing accounts for every component.
 
 ---
@@ -860,7 +834,6 @@ Facts about the seam as it stands, not open design questions:
 | Declarative ABI mirror | [composer/rustapp/descriptor.py](../composer/rustapp/descriptor.py) |
 | Runtime ABI mirror + parsers | [composer/rustapp/wire.py](../composer/rustapp/wire.py) |
 | The backend, preflight, prep, report | [composer/rustapp/adapter.py](../composer/rustapp/adapter.py) |
-| Report rows → audit-issue findings | [composer/rustapp/findings.py](../composer/rustapp/findings.py) |
 | The authoring session (buffer, gate, review, publish) | [composer/rustapp/session.py](../composer/rustapp/session.py) |
 | The shared authoring workflow | [composer/authoring/](../composer/authoring/) |
 | Application assembly (enum, phases, store, backend) | [composer/rustapp/host.py](../composer/rustapp/host.py) |
@@ -875,7 +848,7 @@ Tests: `tests/test_rustapp.py` (the wheel round-trip, end to end through the hos
 Hypothesis, against the real serde types), `test_rustapp_preflight.py`, `test_rustapp_workspace_prep.py`,
 `test_rustapp_setup_cache.py`, `test_rustapp_verdicts.py`, `test_rustapp_toolchain_sem.py`,
 `test_rustapp_gate.py`, `test_rustapp_validate_target.py`, `test_rustapp_discovery_phase.py`,
-`test_rustapp_findings.py` (the declaration fold and the findings it produces),
+`test_rustapp_findings.py` (the declaration fold),
 `test_rust_llm_agent.py`,
 `test_rust_frontend.py`, plus `test_sandbox_run_confined.py` / `test_sandbox_escape.py` for the
 launcher contract.

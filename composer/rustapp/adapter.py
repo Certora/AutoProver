@@ -92,10 +92,7 @@ from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceFields, WorkflowContext
 from composer.spec.key_family import KeyFamily
 from composer.spec.source.report.collect import Formalized, ReportComponentInput, Verdict
-from composer.spec.source.report.schema import (
-    Finding, FormalizedProperty, PropertyGroup, RuleName, RuleVerdict,
-)
-from composer.rustapp.findings import compose_findings
+from composer.spec.source.report.schema import RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import ComponentName, PropertyFormulation
 from composer.spec.util import slugify_filename, string_hash
@@ -429,19 +426,6 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             )
             for name, v in formalized.result.reported_verdicts().items()
         }
-
-    @override
-    async def findings(
-        self,
-        *,
-        contract_name: str,
-        rules: list[RuleVerdict],
-        properties: list[FormalizedProperty],
-        groups: list[PropertyGroup],
-        outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]],
-        run: PipelineRun,
-    ) -> list[Finding]:
-        return compose_findings(rules=rules, outcomes=outcomes)
 
     @override
     async def finalize(
