@@ -38,8 +38,8 @@ because a wire name and a direction are not properties of a class. So two checks
 being silently exercised by nothing.
 
 Everything talks to the ``wire-echo`` binary over one long-lived pipe (see its module docs). The
-round trips are marked ``fuzz``; the field-set and completeness checks are deterministic and always
-run.
+round trips are marked ``wire`` rather than ``fuzz``, since selecting them commits a job to
+building that binary; the field-set and completeness checks are deterministic and always run.
 """
 
 import enum
@@ -366,7 +366,7 @@ _EXAMPLES = 200
 # `deadline=None` throughout: an example spans a subprocess round trip, so per-example timing is
 # noisy enough to trip the default deadline for reasons unrelated to the protocol.
 
-@pytest.mark.fuzz
+@pytest.mark.wire
 @pytest.mark.parametrize("case", OUTBOUND, ids=[c.ty for c in OUTBOUND])
 @settings(deadline=None, max_examples=_EXAMPLES)
 @given(data=st.data())
@@ -380,7 +380,7 @@ def test_outbound_payload_survives_the_wheel(
     assert case.adapter.validate_python(echoed) == case.adapter.validate_python(sent)
 
 
-@pytest.mark.fuzz
+@pytest.mark.wire
 @pytest.mark.parametrize("case", INBOUND, ids=[c.ty for c in INBOUND])
 @settings(deadline=None, max_examples=_EXAMPLES)
 @given(entropy=st.binary(min_size=1, max_size=512))
