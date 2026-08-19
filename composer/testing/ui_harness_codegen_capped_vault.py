@@ -370,6 +370,7 @@ _CODEGEN_TAPE: list[BaseMessage] = [
             loop_iter=1,
             rule=None,
             use_working_spec=False,
+            target_spec="rules.spec"
         ),
     ),
 
@@ -470,6 +471,7 @@ _CODEGEN_TAPE: list[BaseMessage] = [
                 "(a legal no-op) no longer counts as a violation. Behavior-preserving "
                 "for positive deposits."
             ),
+            target_path="rules.spec"
         ),
     ),
 
@@ -484,6 +486,7 @@ _CODEGEN_TAPE: list[BaseMessage] = [
             loop_iter=1,
             rule=None,
             use_working_spec=False,
+            target_spec="rules.spec"
         ),
     ),
 

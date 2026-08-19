@@ -4,13 +4,22 @@ import os
 import re
 import uuid
 from pathlib import Path, PurePath
-from typing import Iterator
+from typing import Iterator, Sequence
 
 from composer.spec.gen_types import CERTORA_DIR
 
 
 def string_hash(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:16]
+
+
+def combine_digests(digests: Sequence[str]) -> str | None:
+    """Fold digests into one fixed-width value for keying a cache on a *list* of things;
+    ``None`` for an empty sequence. Order-sensitive: a different order is a different
+    prompt (or manifest) and must not share a cache entry."""
+    if not digests:
+        return None
+    return string_hash("|".join(digests))
 
 
 def slugify_filename(name: str) -> str:

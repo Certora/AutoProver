@@ -85,12 +85,12 @@ async def test_formalize_echoes_properties_into_result():
     props = _props()
 
     result = await NullSolanaFormalizer().formalize(
-        "batch", feat, props, cast(Any, None), cast(Any, None)
+        "batch", feat, props, cast(Any, None), cast(Any, None), cast(Any, None)
     )
 
     assert isinstance(result, NullResult)
     # Every property is echoed back verbatim as its own single-rule mapping.
-    assert result.property_units() == [
+    assert result.property_checks() == [
         ("balance_conserved", ["balance_conserved"]),
         ("only_authority_withdraws", ["only_authority_withdraws"]),
     ]
@@ -109,10 +109,10 @@ async def test_formalize_echoes_properties_into_result():
 @pytest.mark.asyncio
 async def test_formalize_with_no_properties_records_empty():
     result = await NullSolanaFormalizer().formalize(
-        "batch", _unit(), [], cast(Any, None), cast(Any, None)
+        "batch", _unit(), [], cast(Any, None), cast(Any, None), cast(Any, None)
     )
     assert isinstance(result, NullResult)
-    assert result.property_units() == []
+    assert result.property_checks() == []
     assert "0 properties" in result.commentary
 
 
@@ -128,7 +128,7 @@ async def test_prepare_system_locates_main_and_builds_formalizer(tmp_path):
     backend = _backend(str(tmp_path))
     run = cast(Any, SimpleNamespace(source=SimpleNamespace(contract_name="vault")))
 
-    prepared = await backend.prepare_system(feat.app, run)
+    prepared = await backend.prepare_system(feat.app, run, await backend.preflight(run))
 
     assert isinstance(prepared, NullSolanaPrepared)
     # prepare_system routes through SOLANA.locate_main, so main is the matched program.

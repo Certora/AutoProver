@@ -46,7 +46,7 @@ class _Result:
     artifact_text = ""
     unit_file = None
     run_link = None
-    def property_units(self): return []
+    def property_checks(self): return []
 
 
 class _Formalizer:
@@ -59,7 +59,7 @@ class _Formalizer:
     def __init__(self, calls: list[tuple[str, list[str]]] | None = None):
         self.calls = [] if calls is None else calls
 
-    async def formalize(self, _label, feat, props, _ctx, _run):
+    async def formalize(self, _label, feat, props, _ctx, _run, _extra_tools):
         # A yield point, so a driver that started the fan-out before `begin` finished would
         # interleave here and be caught by the ordering assertion.
         await asyncio.sleep(0)
@@ -100,7 +100,9 @@ class _Backend:
 
     def __init__(self, prepared): self._prepared = prepared
 
-    async def prepare_system(self, _analyzed, _run): return self._prepared
+    async def preflight(self, _run): return None
+
+    async def prepare_system(self, _analyzed, _run, _preflight): return self._prepared
 
     def to_artifact_id(self, _c): return "artifact-id"
 
@@ -109,17 +111,28 @@ class _Cache:
     async def cache_get(self, _ty): return None
     async def cache_put(self, _v): return None
 
+    def child(self, key, tags = None):
+        if tags is None:
+            return _Cache()
+        async def thunk():
+            return _Cache()
+        return thunk()
+
+
 
 class _Ctx:
     recursion_limit = 10
 
     def child(self, *_a, **_kw): return self
 
-    async def achild(self, *_a, **_kw): return _Cache()
-
 
 class _FeatCtx:
-    async def child(self, *_a, **_kw): return _Cache()
+    def child(self, key, tags = None):
+        if tags is None:
+            return _Cache()
+        async def thunk():
+            return _Cache()
+        return thunk()
 
 
 class _Source:
@@ -132,7 +145,7 @@ class _Run:
     env = None
     ctx = _Ctx()
 
-    async def runner(self, _task_info, job):
+    async def runner(self, task_info, job):
         return await job()
 
 

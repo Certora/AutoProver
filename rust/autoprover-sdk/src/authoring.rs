@@ -1,0 +1,195 @@
+//! What the host sends *into* the authoring/gating callouts, and the prompt it gets back.
+
+use serde::{Deserialize, Serialize};
+
+use crate::args::DeclaredArgs;
+use crate::chain::ChainData;
+
+/// What kind of thing a property states (mirrors `composer.spec.types.PropertyType`). An enum
+/// rather than a free string for the reason [`Outcome`](crate::outcome::Outcome) is one: the set
+/// is closed and shared with the host, so a typo fails to compile instead of reaching a prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+pub enum PropertyKind {
+    AttackVector,
+    SafetyProperty,
+    Invariant,
+}
+
+impl PropertyKind {
+    /// The wire spelling, which is also how a prompt listing properties refers to one.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AttackVector => "attack_vector",
+            Self::SafetyProperty => "safety_property",
+            Self::Invariant => "invariant",
+        }
+    }
+}
+
+impl std::fmt::Display for PropertyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One property to formalize (mirrors `composer.spec.types.PropertyFormulation`), the unit it was
+/// inferred for, and the `slug` the host assigned it: unique within the batch, and what a backend
+/// names this property's [`Check`](crate::outcome::Check) after (Crucible: `c_<slug>`; the example
+/// app: `rule_<slug>`).
+///
+/// The slug is only guaranteed *filesystem*-safe, which is weaker than identifier-safe — a backend
+/// that spells it into generated code folds it first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct Property {
+    /// The unit whose analysis produced this property (the host's `FeatureUnit::display_name`).
+    ///
+    /// A title identifies a property only within its own unit, so the two together are what
+    /// identifies one across a run. On a component turn every property names that turn's unit; on a
+    /// [setup](Authored::Setup) turn, which is sent every unit's properties at once, this is how two
+    /// same-titled properties are told apart and how each is tied to the surface it must be
+    /// checkable against.
+    pub component: String,
+    pub title: String,
+    pub sort: PropertyKind,
+    pub description: String,
+    pub slug: String,
+}
+
+/// What is being authored or gated, and the payload that exists only for it. The host sends three,
+/// and each carries something the other two have nothing to say about — which is why this is a
+/// variant rather than a tag beside fields that are empty two times in three.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
+pub enum Authored {
+    /// Nothing is authored: the wheel renders its own skeleton and `compile` gates the prepared
+    /// workspace (see [`PhaseRole::Preflight`](crate::descriptor::PhaseRole::Preflight)). It runs
+    /// before analysis has finished, so there is no model, no unit, and [`AuthorInput::props`] is
+    /// empty.
+    Preflight,
+    /// The shared spec every unit builds on (Crucible's fixture), authored once from the
+    /// analyzed model and *every* unit's properties (see
+    /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup)).
+    Setup {
+        /// The analyzed system model, opaque to the SDK — its shape is the ecosystem's.
+        model: serde_json::Value,
+        /// Every unit the run is about to formalize, each the same [chain-shaped](ChainData) value a
+        /// component turn gets as [`Authored::Component::unit`].
+        ///
+        /// This is the only callout that sees the set whole: a per-unit turn holds one, and a
+        /// preflight runs before any exists. A wheel whose setup gate builds scaffolding the *whole*
+        /// set implies — a manifest's feature list, a crate root's module declarations — can
+        /// therefore build the real thing here rather than a provisional form something later has to
+        /// complete.
+        units: Vec<ChainData>,
+    },
+    /// One unit's spec.
+    Component {
+        /// The unit being formalized, opaque to the SDK — its shape is the ecosystem's
+        /// (`FeatureUnit::feature_json`).
+        unit: serde_json::Value,
+    },
+}
+
+/// The input to the authoring/gating callouts for one spec.
+///
+/// The one wire type without `#[serde(deny_unknown_fields)]`: serde rejects that attribute
+/// alongside a `flatten` field, and [`Authored`] has to flatten so the tag and the payload it
+/// selects arrive at the same level as everything else. A field the host declares and this side
+/// doesn't is therefore silently ignored *here* — caught by `tests/test_wire_roundtrip.py`, which
+/// re-reads what this side made of a payload, rather than at the callout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+pub struct AuthorInput {
+    /// What is being authored, with its payload.
+    #[serde(flatten)]
+    pub authored: Authored,
+    /// The analysis identifier of the program/contract under test (the `Name` half of the host's
+    /// `path:Name` argument) — a label and a namespace, never the name of a build-system unit: that
+    /// is [`AuthorInput::source_unit`], and the two are independent.
+    pub program: String,
+    /// Where the analyzed code lives as a unit of *its own* build system, resolved once per run by
+    /// the chain's registered `ProjectToolchain` and carried unchanged from here on — so prep, every
+    /// gated build and the delivered artifact all name the same thing.
+    ///
+    /// [Chain-shaped](ChainData): a Cargo crate is a directory, a package name, a lib target and an
+    /// Anchor requirement; a Move package is not. Empty when nothing was resolved, which is when a
+    /// wheel applies its own convention.
+    pub source_unit: ChainData,
+    /// The properties this spec must make checkable. Empty for a preflight; for a setup, every
+    /// unit's.
+    pub props: Vec<Property>,
+    /// The compiled shared setup spec, for a wheel that declared a
+    /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase — the fixture a component's
+    /// spec builds on.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub setup: Option<String>,
+    /// What workspace prep established, from the wheel's own
+    /// [`WorkspacePrep::toolchain_request`](crate::prep::WorkspacePrep::toolchain_request) —
+    /// [chain-shaped](ChainData) like [`AuthorInput::source_unit`], and produced by the same
+    /// `ProjectToolchain`. Empty when the plan asked for nothing beyond placing files.
+    ///
+    /// A fact here means *the thing it describes is in place*, which is what a wheel reads to decide
+    /// how it sources the program's types (Solana: a generated IDL, or a dependency on the crate).
+    pub prep_facts: ChainData,
+    /// The run's values for the wheel's own declared flags.
+    pub args: DeclaredArgs,
+}
+
+impl AuthorInput {
+    /// The unit being formalized, on a component turn. `None` on the two turns that formalize no
+    /// unit — a preflight (nothing is analyzed yet) and the shared setup spec.
+    pub fn unit(&self) -> Option<&serde_json::Value> {
+        match &self.authored {
+            Authored::Component { unit } => Some(unit),
+            _ => None,
+        }
+    }
+
+    /// The analyzed system model, on a setup turn.
+    pub fn model(&self) -> Option<&serde_json::Value> {
+        match &self.authored {
+            Authored::Setup { model, .. } => Some(model),
+            _ => None,
+        }
+    }
+
+    /// Every unit the run is about to formalize, on a setup turn. Empty on the turns that hold no
+    /// set: a preflight (nothing is analyzed yet), and a component turn, which holds its own
+    /// [`unit`](Self::unit) instead.
+    pub fn units(&self) -> &[ChainData] {
+        match &self.authored {
+            Authored::Setup { units, .. } => units,
+            _ => &[],
+        }
+    }
+}
+
+/// An authoring instruction (+ optional backend-defined system prompt) for one LLM turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct Prompt {
+    #[serde(deserialize_with = "crate::required::present")]
+    pub system: Option<String>,
+    pub instruction: String,
+}
+
+/// The reviewer a wheel declares for an input — everything about a review that is fixed for the
+/// whole authoring session, which is why [`Backend::judge`](crate::Backend::judge) is asked once
+/// and without a draft. What to ask about a *particular* draft is
+/// [`Backend::judge_instruction`](crate::Backend::judge_instruction), per round.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct Judge {
+    /// The *domain* half of the reviewer's system prompt — who is reviewing and what they know.
+    /// The host appends the review protocol (how the verdict comes back) and falls back to a
+    /// neutral role when this is `None`.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub system: Option<String>,
+}

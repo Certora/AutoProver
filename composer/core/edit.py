@@ -30,7 +30,7 @@ class EditErr:
     message: str
 
 
-def replace_unique(buffer: str, old: str, new: str) -> EditOk | EditErr:
+def replace_unique(buffer: str, old: str, new: str, replace_all: bool = False) -> EditOk | EditErr:
     """Replace the single occurrence of ``old`` in ``buffer`` with ``new``.
 
     An edit must identify exactly one site. Returns :class:`EditErr` when
@@ -38,16 +38,20 @@ def replace_unique(buffer: str, old: str, new: str) -> EditOk | EditErr:
     surrounding context) rather than risk silently editing the wrong place.
     On success returns :class:`EditOk` with the rewritten buffer.
     """
-    count = buffer.count(old)
-    if count == 0:
-        return EditErr(
-            "`old_string` was not found in the current buffer. It must match an "
-            "exact span of the contents, including whitespace and indentation. "
-            "Read the buffer back and copy the target span verbatim."
-        )
-    if count > 1:
-        return EditErr(
-            f"`old_string` matched {count} locations; it must match exactly one. "
-            "Include more surrounding context so the target span is unique."
-        )
-    return EditOk(buffer.replace(old, new, 1))
+    if not replace_all:
+        count = buffer.count(old)
+        if count == 0:
+            return EditErr(
+                "`old_string` was not found in the current buffer. It must match an "
+                "exact span of the contents, including whitespace and indentation. "
+                "Read the buffer back and copy the target span verbatim."
+            )
+        if count > 1:
+            return EditErr(
+                f"`old_string` matched {count} locations; it must match exactly one. "
+                "Include more surrounding context so the target span is unique."
+            )
+        replace_count = 1
+    else:
+        replace_count = -1
+    return EditOk(buffer.replace(old, new, replace_count))

@@ -40,9 +40,23 @@ class AbstractMainContractError(Exception):
     abstract (or lacks a constructor) and therefore cannot be verified."""
 
 
+class UnimplementedContractError(Exception):
+    """Raised when a contract in the compilation input leaves a function it inherits
+    unimplemented, which Solidity accepts only on an ``abstract`` contract."""
+
+
 class UnsatisfiableSolcPinError(Exception):
     """Raised when a contract's pinned solc binary is absent and no installed compiler
     satisfies its pragma, so no substitution can make the project compile."""
+
+
+# The contract name is quoted by solc, so it survives the hard wrap that
+# ``_normalize_ws`` folds away; the source location that follows is optional
+# because only the diagnostic itself is guaranteed to be in the output.
+_UNIMPLEMENTED_CONTRACT_RE = re.compile(
+    r'Contract "(?P<name>[^"]+)" should be marked as abstract\.'
+    r"(?: --> (?P<path>[^\s:]+):\d+:\d+)?"
+)
 
 
 @dataclass(frozen=True)
@@ -297,6 +311,19 @@ class CompilationWorkaroundManager:
             return None
         no_bytecode = {m.group(1) for m in re.finditer(r"Contract (\S+) has no bytecode", output)}
         return main_contract if main_contract in no_bytecode else None
+
+    def _detect_unimplemented_contract(self, output: str) -> Optional[Tuple[str, Optional[str]]]:
+        """Return the (contract name, declaring file) a contract in the input was
+        rejected for: it inherits functions it does not implement, and is not declared
+        ``abstract``.
+
+        The file is None when the diagnostic carries no source location. This is a
+        source-level defect, so the compilation settings have no bearing on it.
+        """
+        match = _UNIMPLEMENTED_CONTRACT_RE.search(_normalize_ws(output))
+        if match is None:
+            return None
+        return match.group("name"), match.group("path")
 
     # =========================================================================
     # Main entry point for running compilation with workarounds
@@ -594,6 +621,22 @@ class CompilationWorkaroundManager:
                     f"Main contract '{abstract_main_contract}' compiled to no bytecode: it is abstract "
                     f"(or is missing a constructor), so it is not deployable and cannot be "
                     f"verified. Re-run with a concrete implementation as the main contract."
+                )
+
+            # Also terminal: a contract in the input inherits functions it never
+            # implements, so solc refuses to compile it at all. Only editing that
+            # contract fixes it; without this the catch-all workaround fires and spends
+            # further compilations reaching the same error.
+            unimplemented = self._detect_unimplemented_contract(output)
+            if unimplemented is not None:
+                contract_name, declared_in = unimplemented
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                location = f" ({declared_in})" if declared_in else ""
+                raise UnimplementedContractError(
+                    f"Contract '{contract_name}'{location} does not implement every function it "
+                    f"inherits, so Solidity requires it to be marked abstract and refuses to "
+                    f"compile it as written. See the 'Missing implementation' notes in the "
+                    f"compiler output for the functions it still owes."
                 )
 
             # Terminal, non-recoverable case: a contract is pinned to a compiler that
@@ -1734,5 +1777,8 @@ class CompilationWorkaroundManager:
         """
         # Read from the directory that owns the build config (the run root unless the
         # contract lives in a monorepo sub-project); the helper resolves every relative
-        # target absolute against it, so the emitted paths are valid from the run CWD.
-        return build_packages_from_remapping_sources(base_dir=self.build_config_dir, log_fn=self.log)
+        # target absolute against it, so the emitted paths are valid from the run CWD, and
+        # re-expresses remapping contexts against the run root, where solc matches them.
+        return build_packages_from_remapping_sources(
+            base_dir=self.build_config_dir, log_fn=self.log, run_root=self.project_root
+        )
