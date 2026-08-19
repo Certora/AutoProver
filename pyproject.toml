@@ -173,7 +173,8 @@ explicit = true
 [tool.pytest.ini_options]
 markers = [
     "expensive: hits the real prover / network — deselect with -m 'not expensive'",
-    "fuzz: fuzz tests"
+    "fuzz: fuzz tests",
+    "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time"
 ]
 # optional but recommended once you're registering marks:
 addopts = "--strict-markers"   # a typo'd mark becomes an error, not a silent no-match
