@@ -39,6 +39,8 @@ def contract_type(host: str, type_name: str) -> S.ContractType:
 def ty(name_or_type):
     if not isinstance(name_or_type, str):
         return name_or_type
+    if name_or_type.endswith("[]"):               # dynamic array T[] (e.g. uint256[], Token.Id[])
+        return S.ArrayType(type="dyn_array", base_type=ty(name_or_type[:-2]))
     if name_or_type in SPECIAL_TYPES:
         return special(name_or_type)
     if "." in name_or_type:                       # a contract/struct type, e.g. IFoo.Bar
@@ -68,6 +70,24 @@ def boollit(b: bool) -> S.BoolLiteral:
     return S.BoolLiteral(type="bool_literal", value=b)
 
 
+def idx(base, index) -> S.ArrayAccess:
+    """`base[index]` — an array-access expression over PREBUILT sub-expressions (base, index)."""
+    return S.ArrayAccess(type="array_access", base=base, index=index)
+
+
+def index(base, i) -> S.ArrayAccess:
+    """`base[i]` — array access with COERCION: `base`/`i` may be strings (idents), ints (number
+    literals), or prebuilt expressions. A convenience over `idx` for the common `arr[k]` element case."""
+    b = ident(base) if isinstance(base, str) else base
+    ie = num(i) if isinstance(i, int) else (ident(i) if isinstance(i, str) else i)
+    return idx(b, ie)
+
+
+def length(base):
+    """`base.length` — the array length (a field-access)."""
+    return field(ident(base) if isinstance(base, str) else base, "length")
+
+
 def binop(op: str, l, r) -> S.BinaryOp:
     return S.BinaryOp(type="binary_op", operator=op, left=l, right=r)
 
@@ -78,10 +98,6 @@ def unop(op: str, operand) -> S.UnaryOp:
 
 def unop_not(operand) -> S.UnaryOp:
     return unop("not", operand)
-
-
-def idx(base, index) -> S.ArrayAccess:
-    return S.ArrayAccess(type="array_access", base=base, index=index)
 
 
 def field(base, field_name: str) -> S.FieldAccess:

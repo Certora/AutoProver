@@ -129,8 +129,13 @@ def add_requireInvariant(project: Project, *, inv_name: str,
     reach = work.reachable
     if reach is None:
         return Result(False, "no reachable spec to hold the invariant")
-    if inv_name not in driver.invariant_names(reach):
-        reach.blocks.append(x.invariant(inv_name, inv_params, inv_expr))
+    new_inv = x.invariant(inv_name, inv_params, inv_expr)
+    existing = next((b for b in reach.blocks
+                     if isinstance(b, S.Invariant) and b.name == inv_name), None)
+    if existing is not None:
+        reach.blocks[reach.blocks.index(existing)] = new_inv   # re-add REPLACES (fix a bad invariant)
+    else:
+        reach.blocks.append(new_inv)
     fn = work.find_func(reach, driver.ASSUME)
     if fn is None:
         return Result(False, f"no {driver.ASSUME} function in the reachable spec")

@@ -248,6 +248,22 @@ def _make_verify(project: Project, cfg: RefineConfig):
     return verify_now
 
 
+def _array_guidance(project) -> str:
+    """A per-run prefix telling the agent the run's loop_iter and how to unroll array-param methods —
+    emitted ONLY when some modeled method takes an array (T[]) param, else "". CVL has no loops/recursion,
+    so the model addresses each array by fixed indices 0..loop_iter-1 (the run's bound)."""
+    li = project.inp.loop_iter
+    arr_methods = [f.name for f in project.inp.functions
+                   if f.is_model_method and any(p.type.endswith("[]") for p in f.params)]
+    if not arr_methods:
+        return ""
+    return (f"NOTE — this run's loop_iter is {li}: every array is bounded to length <= {li}. The methods "
+            f"{', '.join(arr_methods)} take array params. CVL has no loops/recursion, so unroll each over "
+            f"its length: branch on `arr.length` for each value 0..{li} and, in the branch of length n, act "
+            f"on the fixed elements arr[0]..arr[n-1] (e.g. a batch op is n single ops). The conformance "
+            f"pins the observables at arr[0..{li-1}] for you.\n\n")
+
+
 async def run_refine_loop(project: Project, fill_task: str, cfg: RefineConfig, *,
                           llm: BaseChatModel | None = None, builder: Builder | None = None,
                           extra_tools: Iterable[BaseTool] = (), thread_id: str = "smtool",
@@ -269,6 +285,7 @@ async def run_refine_loop(project: Project, fill_task: str, cfg: RefineConfig, *
         if llm is None:
             raise ValueError("pass llm=<model> (dev) or builder=env.builder_lite() (pipeline)")
         builder = Builder().with_llm(llm, max_prompt_tokens=max_prompt_tokens)
+    fill_task = _array_guidance(project) + fill_task
     ckpt = InMemorySaver()
     deps = SmtoolDeps(project, full_typecheck=_make_full_typecheck(project, cfg),
                       verify=_make_verify(project, cfg))

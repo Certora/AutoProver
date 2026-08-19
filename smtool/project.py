@@ -86,11 +86,17 @@ class Project:
 
     @classmethod
     def from_method_specs(cls, method_specs: list[ToolInput],
-                          setup_spec_import: str | None = None, declared=None) -> "Project":
+                          setup_spec_import: str | None = None, declared=None,
+                          precise_reverts: bool = False, loop_iter: int = 3) -> "Project":
         """Build ONE Project with a SINGLE shared model + per-method conformance. The model is the
         union of the per-method observables (deduped by getter name; the observable occurrence wins,
         so it defines the ghost) plus one <f>CVL stub per method. Each method's conformance is built
-        from ITS OWN spec (per-method getter roles), importing the one shared model. No merge."""
+        from ITS OWN spec (per-method getter roles), importing the one shared model. No merge.
+        `precise_reverts` (the single smtool switch) sets EXACT revert conformance everywhere; default
+        False = the sound OVER-APPROXIMATION."""
+        for spec in method_specs:
+            spec.precise_reverts = precise_reverts
+            spec.loop_iter = loop_iter
         base = method_specs[0]
         methods: dict[str, object] = {}
         getters: dict[str, object] = {}
@@ -109,7 +115,8 @@ class Project:
         union = list(methods.values()) + list(getters.values())
         model_input = ToolInput(
             cut=base.cut, functions=union, alias=base.alias, model_spec_name=base.model_spec_name,
-            conformance_prefix_name=base.conformance_prefix_name, specs_dir=base.specs_dir)
+            conformance_prefix_name=base.conformance_prefix_name, specs_dir=base.specs_dir,
+            precise_reverts=precise_reverts, loop_iter=loop_iter)
         model_cls = classify(union)
         model = driver.build_model_spec(model_input, model_cls)
         reachable = driver.build_reachable_spec(model_input, model_cls)   # ONE shared reachable spec

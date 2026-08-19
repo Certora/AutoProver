@@ -126,6 +126,17 @@ class AddModelGhostAxiom(_Tool):
 
 
 # ---------------------------------------------------------------- reachability / conformance
+def _is_trivial_invariant(e) -> bool:
+    """A vacuous invariant: a bare boolean literal, or an X==X / X!=X tautology over structurally-equal
+    operands. It constrains nothing, and with no params it also renders as invalid CVL."""
+    d = e.model_dump()
+    if d.get("type") == "bool_literal":
+        return True
+    if d.get("type") == "binary_op" and d.get("operator") in ("eq", "ne"):
+        return d.get("left") == d.get("right")
+    return False
+
+
 class AddRequireInvariant(_Tool):
     """Declare a real-CUT reachable invariant AND requireInvariant it in the shared assumeReachable,
     atomically (never a bare/unproven assumption). Idempotent across methods. The invariant is a
@@ -141,6 +152,11 @@ class AddRequireInvariant(_Tool):
             e = parse_expression(self.inv_expr)
         except CVLParseError as ex:
             return f"REJECTED: CVL parse error in inv_expr: {ex}"
+        if _is_trivial_invariant(e):
+            return (f"REJECTED: `{self.inv_expr}` is trivially true (a bare literal or an X==X / X!=X "
+                    f"tautology) — it constrains nothing. An invariant must state a REAL, non-trivial "
+                    f"reachability fact over real getters. If the model reverts faithfully and needs NO "
+                    f"reachable assumption, add NO invariant at all — an empty assumeReachable is correct.")
         with self.tool_deps() as d:
             return _res(mut.add_requireInvariant(d.project, inv_name=self.inv_name,
                                                  inv_params=self.inv_params, inv_expr=e,

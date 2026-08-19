@@ -284,10 +284,13 @@ def build_glue(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -> S.FunctionD
     _group_by_getter), derived keys (glue_args referencing a local like `u`), and an optional return of
     a designated component local."""
     params = [(p.type, p.name) for p in m.params]
+    array_params = {p.name for p in m.params if p.type.endswith("[]")}
     cmds: list = []
     ret_local, ret_type = None, []
     for group in _group_by_getter(cls.bindings, lambda b: b.glue_arg_names):
         b0 = group[0]
+        if any(a in array_params for a in b0.glue_arg_names):
+            continue                                  # array-keyed observable: pinned per-element by _field_pins
         args = [_resolve_arg(inp, a) for a in b0.glue_arg_names]
         call = x.call(b0.getter.name, ([x.ident("e")] if b0.envful else []) + args, host=_cut_host(inp, b0.getter))
         if b0.is_multi_return:
@@ -346,29 +349,48 @@ def _assume_reachable(m: FunctionSpec) -> S.ApplyCmd:
     return x.apply(x.call(ASSUME, [x.ident(m.params[0].name)]))
 
 
+def _revert_conf(inp: ToolInput):
+    """The revert-conformance assert. DEFAULT (`precise_reverts=False`) = OVER-APPROXIMATION: real
+    success => model success — the model may be MORE permissive (revert LESS), a sound coarsening that
+    lets a model soundly ignore e.g. access-control reverts unreachable in the consumer. `precise_reverts`
+    switches to EXACT: `realRev == modelRev`, forbidding any over-approximation (the model must revert
+    exactly like real)."""
+    if inp.precise_reverts:
+        return x.assert_(x.binop("eq", x.ident("realRev"), x.ident("modelRev")),
+                         "model must revert exactly when real reverts (precise)")
+    return x.assert_(x.binop("implies", x.unop_not(x.ident("realRev")), x.unop_not(x.ident("modelRev"))),
+                     "real success must imply model success (over-approximation)")
+
+
 def build_return_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -> S.RuleBlock | None:
     """`conformance_<f>_return`: glue + assumeReachable, then call real and model `@withrevert` and
-    assert revert-conformance (`!realRev => !modelRev`) + return agreement on real success. Single vs
+    assert return agreement WHEN BOTH SUCCEED. The revert conformance (`realRev == modelRev`) is asserted
+    in the state-effect rule for a state changer (de-dup), or HERE for a return-only method. Single vs
     multi-return handled separately; multi compares only the `return_compare`-flagged components.
     Returns None for a VOID method (no return to compare — `() = call` is not valid CVL): its
     revert-conformance is asserted by the state-effect rule (which every state-changing method gets)."""
     if not m.returns:
         return None
     params = [(p.type, p.name) for p in m.params]
-    cmds: list = [x.declare("env", "e"), _glue_apply(inp, cls, m), _assume_reachable(m)]
+    cmds: list = [x.declare("env", "e"), _glue_apply(inp, cls, m)]
+    cmds += _field_pins(inp, cls, m, [])   # conservative typed model==real pins (no frame vars here)
+    cmds.append(_assume_reachable(m))
     # HOLE-P: previewBefore capture + A assertion go here when the return is accrue-sensitive.
     single = len(m.returns) == 1
+    # Revert conformance (realRev == modelRev) is asserted by the STATE-EFFECT rule for a state changer;
+    # a return-only method (no state-effect rule) carries it here. Return agreement is checked only when
+    # BOTH sides succeed (a revert mismatch is the state-effect / here-only revert assert's job).
+    both_ok = x.binop("and", x.unop_not(x.ident("realRev")), x.unop_not(x.ident("modelRev")))
+    revert_assert = [] if m.is_state_changing else [_revert_conf(inp)]
     if single:
         cmds += [
             x.declare(m.returns[0], "retSol", _call_real(inp, m)),
             x.declare("bool", "realRev", x.ident("lastReverted")),
             x.declare(m.returns[0], "retModel", _call_model(inp, m)),
             x.declare("bool", "modelRev", x.ident("lastReverted")),
-            x.assert_(x.binop("implies", x.unop_not(x.ident("realRev")), x.unop_not(x.ident("modelRev"))),
-                      "real success must imply model success (soundness)"),
-            x.assert_(x.binop("implies", x.unop_not(x.ident("realRev")),
-                              x.binop("eq", x.ident("retSol"), x.ident("retModel"))),
-                      "returns must agree on real success"),
+            *revert_assert,
+            x.assert_(x.binop("implies", both_ok, x.binop("eq", x.ident("retSol"), x.ident("retModel"))),
+                      "returns must agree when both succeed"),
         ]
     else:
         # multi-return: bind both tuples, compare the flagged components (others over-approximated).
@@ -382,14 +404,13 @@ def build_return_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -> S.Ru
             cmds.append(x.declare(rt, n))
         cmds.append(x.assign_multi(model_ns, _call_model(inp, m)))
         cmds.append(x.declare("bool", "modelRev", x.ident("lastReverted")))
-        cmds.append(x.assert_(x.binop("implies", x.unop_not(x.ident("realRev")), x.unop_not(x.ident("modelRev"))),
-                              "real success must imply model success (soundness)"))
+        cmds += revert_assert
         compare = m.return_compare or [True] * len(m.returns)
         for i, (rn, mn) in enumerate(zip(real_ns, model_ns)):
             if compare[i]:
-                cmds.append(x.assert_(x.binop("implies", x.unop_not(x.ident("realRev")),
+                cmds.append(x.assert_(x.binop("implies", both_ok,
                             x.binop("eq", x.ident(rn), x.ident(mn))),
-                            f"return component {i} must agree on real success"))
+                            f"return component {i} must agree when both succeed"))
     return x.rule(f"conformance_{m.name}_return", params, cmds)
 
 
@@ -416,6 +437,96 @@ def _group_load(inp, group: list, args: list, suffix: str) -> tuple[list, "calla
     decls = [x.declare(ct, n) for n, ct in zip(names, b0.getter.returns)]
     decls.append(x.assign_multi(names, call))
     return decls, (lambda b, names=names: x.ident(names[b.component_index]))
+
+
+def _numeric_ty(ty: str) -> bool:
+    return ty == "mathint" or ty.startswith("uint") or ty.startswith("int")
+
+
+def _is_udvt(ty: str) -> bool:
+    """A user value type (e.g. Token.Id) — not a CVL primitive. It wraps a number, and the
+    readers coerce it into a numeric key slot (exactly as the model body already does)."""
+    if ty in ("address", "bool", "string", "bytes", "mathint") or _numeric_ty(ty) or ty.startswith("bytes"):
+        return False
+    return True
+
+
+def _key_matches(var_ty: str, key_ty: str) -> bool:
+    """May an in-scope var of `var_ty` fill a mapping key of `key_ty`? Exact match, or — for a numeric
+    key — any numeric or UDVT var (the coercion the reader call already relies on)."""
+    if var_ty == key_ty:
+        return True
+    if _numeric_ty(key_ty):
+        return _numeric_ty(var_ty) or _is_udvt(var_ty)
+    return False
+
+
+# TODO(perf): this pins the WHOLE allowed set unconditionally (safe default, zero agent burden, but it
+# over-pins — every pin is a live getter call, a keccak slot read on assembly tokens). Over-pinning is
+# only a PERFORMANCE cost, never a soundness one (more `model==real` pre-pins can't hide a divergence).
+# Optimization to consider IF timing shows the pins cost: expose this set as a deterministic ALLOWED
+# MENU and let the agent add pins from it SELECTIVELY (in response to an unpinned-read counterexample),
+# instead of emitting all upfront. Sound because the menu is sound-by-construction (the agent can only
+# pick a valid pin) and a MISSING needed pin surfaces as a VIOLATION, not a silent pass (self-correcting;
+# relies on the require-cast lint having removed the vacuity path). Needs a constrained `add_pin` tool +
+# a precise "real succeeded but model read unpinned cell X" message (the agent once mis-read this exact
+# gap as an auth problem). Alternative with no agent rounds: deterministic BODY-SCAN (pin exactly the
+# reader-calls in the filled body) — same precision, but requires rebuilding the glue on body change.
+def _field_pins(inp: ToolInput, cls: ModelLayout, m: FunctionSpec, frame_vars: list) -> list:
+    """Conservative model==real PRE-pins for every single-return observable FIELD, at the TYPED cross
+    product of the in-scope vars for each key position (method params + e.msg.sender + `frame_vars`).
+    Body-free and over-pinning: pinning `ghost[k] == getter(k)` at more keys only strengthens the
+    'model starts equal to real' premise, and it guarantees every key the model READS is pinned — so
+    the model can't diverge on an unpinned (havoc'd) cell (e.g. a transfer's credit-side balance).
+    Scalars pin once. A key position with no matching in-scope var yields no combo for that field; the
+    per-frame pin (kept alongside) remains its fallback."""
+    import itertools
+    # scope: (key_type, key_EXPR). Scalars contribute their identifier; an ARRAY param T[] contributes
+    # its bounded elements arr[0..loop_iter) as element-typed keys (CVL has no loops, so arrays are
+    # addressed by fixed indices up to the run's loop_iter). NOT the frame free vars: those are pinned
+    # by the per-frame pre-pin (kept alongside).
+    _ = frame_vars
+    scope: list = []
+    for p in m.params:
+        if p.type.endswith("[]"):
+            elem = p.type[:-2]
+            for k in range(inp.loop_iter):
+                scope.append((elem, x.index(p.name, k)))
+        else:
+            scope.append((p.type, x.ident(p.name)))
+    scope.append(("address", _resolve_arg(inp, CALLER_ARG)))
+    def vars_of(kt: str) -> list:
+        return [e for (ty, e) in scope if _key_matches(ty, kt)]
+    cmds: list = []
+    seen: set = set()
+    for b in cls.bindings:
+        if b.is_multi_return:
+            continue                                  # multi-return: covered by the frame pin (TODO)
+        kts = b.key_types
+        combos = [()] if not kts else itertools.product(*[vars_of(kt) for kt in kts])
+        for combo in combos:
+            key = (b.reader_name, tuple(str(e.model_dump()) for e in combo))
+            if key in seen:
+                continue
+            seen.add(key)
+            argexprs = list(combo)
+            reader = x.call(b.reader_name, argexprs)
+            getter = x.call(b.getter.name, ([x.ident("e")] if b.envful else []) + argexprs,
+                            host=_cut_host(inp, b.getter))
+            cmds.append(x.require(x.binop("eq", reader, getter), f"pin: model == real for {b.getter.name}"))
+    return cmds
+
+
+def _frame_free_vars(cls: ModelLayout) -> list:
+    """The distinct FREE frame vars (type, name) declared across the bindings' frame args."""
+    out, seen = [], set()
+    for b in cls.bindings:
+        for fa in b.frame_arg_names:
+            if fa.startswith(FREE_PREFIX):
+                _, ty, var = fa.split(":", 2)
+                if var not in seen:
+                    seen.add(var); out.append((ty, var))
+    return out
 
 
 def build_state_effect_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -> S.RuleBlock:
@@ -448,13 +559,15 @@ def build_state_effect_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -
             reader = x.call(b.reader_name, args)
             cmds.append(x.require(x.binop("eq", reader, value(b)), f"pin pre: model == real for {b.getter.name}"))
         framed.append((group, args))
+    # conservative typed pinning: model==real for every field at the cross product of in-scope vars
+    # per key type (subsumes the single frame pre-pin; pins the keys the model reads, e.g. a credit `to`).
+    cmds += _field_pins(inp, cls, m, _frame_free_vars(cls))
     # assume the CUT reachable invariants over the FRAMED account (now declared) — covers the
     # arbitrary compared account, incl. a multi-account method's credit target.
     cmds.append(x.apply(x.call(ASSUME, [x.ident(_reachable_key(cls)[1])])))
     cmds += [x.apply(_call_real(inp, m)), x.declare("bool", "realRev", x.ident("lastReverted")),
              x.apply(_call_model(inp, m)), x.declare("bool", "modelRev", x.ident("lastReverted")),
-             x.assert_(x.binop("implies", x.unop_not(x.ident("realRev")), x.unop_not(x.ident("modelRev"))),
-                       "real success must imply model success (soundness)")]
+             _revert_conf(inp)]
     for group, args in framed:
         gdecls, value = _group_load(inp, group, args, "post")
         cmds += gdecls

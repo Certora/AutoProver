@@ -215,6 +215,13 @@ class ToolInput:
     model_spec_name: str | None = None  # override; default derived from the CUT (see `model_spec`)
     conformance_prefix_name: str | None = None  # override; default derived from the CUT (see below)
     specs_dir: str = "certora/specs"  # where verify points, for the conf rewrite
+    precise_reverts: bool = False  # revert conformance. False (default) = OVER-APPROXIMATION
+                                   # (`real success => model success`; the model may revert LESS, a
+                                   # sound coarsening). True = EXACT (`realRev == modelRev`; the model
+                                   # must revert exactly like real — no silent over-approximation).
+    loop_iter: int = 3             # the run's loop_iter — arrays are bounded to this length. The
+                                   # conformance pins an array-keyed observable at elements [0..loop_iter)
+                                   # and the model UNROLLS by length (CVL has no loops); share with agent.
 
     @property
     def model_spec(self) -> str:

@@ -58,8 +58,16 @@ Do NOT guess behavior from prose — read the CUT's Solidity (grep_files / get_f
 - A model body reverts via `if (cond) revert();` — NEVER `require`/`assert`.
 - Restrictions on real/glued storage are PROVED reachable invariants (add_require_invariant) stated over
   REAL getters ONLY — never a model reader (`modelReader == realGetter` is the GLUE, not an invariant).
-  A model axiom may only DEFINE non-glued internal state.
+  A model axiom may only DEFINE non-glued internal state. Add an invariant ONLY for a real, non-trivial
+  reachability fact; if the model reverts FAITHFULLY (mirrors every real revert) it needs NO reachable
+  assumption — add NONE, leave assumeReachable empty. Never add a placeholder/tautology (`true`, `x==x`).
 - NONDET only view/pure functions whose result the checked output does not depend on.
+- ARRAYS (T[] params): CVL has NO loops and NO recursion. Model an array-param method by UNROLLING over
+  the array length up to the run's loop_iter (given in your task): branch `if (arr.length == n)` for each
+  n = 0..loop_iter and, inside that branch, operate on the fixed elements arr[0]..arr[n-1] — a batch op of
+  length n is just n single-element ops applied in order (reuse the single-element helper). Index arrays
+  only by these fixed literals; never by a symbolic loop variable. The conformance already pins the
+  element observables at arr[0..loop_iter-1].
 - Math mirrors reimplement the CUT library math in EXACT structural form.
 - CVL arithmetic is `mathint` (`a+b`, `a*b`, `a/b` are all mathint); storing back into a `uintN` needs an
   explicit cast. Use `assert_uintN(expr)`, NEVER `require_uintN(expr)`: a require_* cast ASSUMES the value
