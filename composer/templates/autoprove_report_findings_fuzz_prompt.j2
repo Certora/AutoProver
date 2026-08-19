@@ -1,0 +1,41 @@
+Program: {{ contract_name }}
+
+Failing check: {{ check_name }}
+
+{% if properties -%}
+Properties this check verifies (the violation breaks at least one of them — determine which):
+{% for p in properties %}
+  - ({{ p.sort }}) {{ p.title }}: {{ p.description }}
+{%- endfor %}
+{% endif -%}
+{% if groups -%}
+Audit-level claim(s) it belongs to:
+{% for g in groups %}
+  - {{ g.title }}: {{ g.description }}
+{%- endfor %}
+{% endif %}
+{% if observations -%}
+{% for o in observations %}
+--- Campaign observation: {{ o.component }} ---
+{% if o.declared -%}
+DECLARED BY THE AUTHOR as expected to fail. Their reason:
+{{ o.declared }}
+{% if o.ran.value == "BAD" -%}
+The campaign also reproduced it, so the crash below is evidence for that claim.
+{%- else -%}
+The campaign did NOT reproduce it — it reported {{ o.ran.value }}. The author's reason above is the
+only evidence there is. Do not describe a counterexample; say what the claim rests on.
+{%- endif %}
+{% endif -%}
+{% if o.ran.value == "BAD" %}
+The campaign's crash, with the sequence that reproduces it and what the campaign spent:
+{{ o.detail }}
+{%- elif not o.declared %}
+The campaign reported {{ o.ran.value }} for this check. What it said:
+{{ o.detail }}
+{%- endif %}
+{%- endfor %}
+{%- else -%}
+(No campaign observation was captured for this check — reason only from the properties above, and
+say that no evidence was recorded.)
+{%- endif %}

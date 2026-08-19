@@ -402,6 +402,35 @@ setup spec, and per component its `artifact_text`, `property_checks` and the `ta
 checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
 
+`findings_synthesis` answers a different question from `fetch_verdicts`: *what did this run find*.
+The write-up loop is shared ([formalization-abstraction.md §4.6](./formalization-abstraction.md));
+what a Rust backend supplies is in [findings.py](../composer/rustapp/findings.py).
+
+**Evidence is a `FuzzEvidence` per check**, keyed by `(file, name)` exactly as the report keys its
+rows — which for Crucible means the section file, since one crate holds every component's checks and
+two authors given the same property title write the same check name. Each carries the campaign's
+own text, the wheel's *own* outcome (`ran`), and the author's `expect_check_failure` reason. The last
+two are the split that matters: a declared check reports `BAD` either way, so only `ran` and
+`declared` together say whether a reader is looking at a crash the fuzzer found or a claim the author
+made. A `RuleEvidence` has nowhere to put either.
+
+**The prompt says what the evidence is.** A fuzzer drove a harness the author wrote from a state that
+harness set up; it did not refute a rule symbolically. So the campaign's `SUSPECT HARNESS BUG` marker
+is something the write-up must lead with, an unreproduced declaration must not be given a
+counterexample it does not have, and the harness caveats belong in
+`assumptions_and_uncertainties`.
+
+**Severity is always `informational`**, with `impact` and `likelihood` left empty. A campaign
+establishes that an assertion can be made to fail, not that anyone can profit from it — a crash on a
+failed precondition looks exactly like a crash on a real one. `provenance.risk_reasoning` instead
+carries the author's declaration where there is one, so a documented finding is distinguishable from
+one the run tripped over without reading the evidence.
+
+One thing the evidence still cannot separate: `Verdict.detail` is the counterexample with the
+campaign accounting appended, and nothing host-side can tell where one ends. The accounting is
+therefore inside the proof of concept. Splitting them is a wire change — `Verdict` carrying the
+accounting on its own field, with `fetch_verdicts` recomposing the row message — not a parse.
+
 ---
 
 ## 5. Authoring and review
@@ -834,6 +863,7 @@ Facts about the seam as it stands, not open design questions:
 | Declarative ABI mirror | [composer/rustapp/descriptor.py](../composer/rustapp/descriptor.py) |
 | Runtime ABI mirror + parsers | [composer/rustapp/wire.py](../composer/rustapp/wire.py) |
 | The backend, preflight, prep, report | [composer/rustapp/adapter.py](../composer/rustapp/adapter.py) |
+| Campaign observations → written findings | [composer/rustapp/findings.py](../composer/rustapp/findings.py) |
 | The authoring session (buffer, gate, review, publish) | [composer/rustapp/session.py](../composer/rustapp/session.py) |
 | The shared authoring workflow | [composer/authoring/](../composer/authoring/) |
 | Application assembly (enum, phases, store, backend) | [composer/rustapp/host.py](../composer/rustapp/host.py) |
@@ -848,7 +878,7 @@ Tests: `tests/test_rustapp.py` (the wheel round-trip, end to end through the hos
 Hypothesis, against the real serde types), `test_rustapp_preflight.py`, `test_rustapp_workspace_prep.py`,
 `test_rustapp_setup_cache.py`, `test_rustapp_verdicts.py`, `test_rustapp_toolchain_sem.py`,
 `test_rustapp_gate.py`, `test_rustapp_validate_target.py`, `test_rustapp_discovery_phase.py`,
-`test_rustapp_findings.py` (the declaration fold),
+`test_rustapp_findings.py` (the declaration fold and the findings written from it),
 `test_rust_llm_agent.py`,
 `test_rust_frontend.py`, plus `test_sandbox_run_confined.py` / `test_sandbox_escape.py` for the
 launcher contract.

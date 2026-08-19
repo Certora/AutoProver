@@ -20,17 +20,26 @@ run found something.
 import pathlib
 from dataclasses import dataclass
 from typing import Any, cast
+from typing import Any, cast
 
 import pytest
+from langchain_core.language_models import BaseChatModel
+from langchain_core.outputs import ChatResult
+from langchain_core.runnables import Runnable, RunnableLambda
 
 from composer.pipeline.core import CorePipelineResult, Delivered
 from composer.pipeline.ptypes import ComponentOutcome
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
+from composer.rustapp import findings as findings_mod
+from composer.rustapp.findings import FuzzEvidence
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
-from composer.spec.source.report.schema import Outcome
+from composer.spec.source.report.collect import ReportComponentInput, collect
+from composer.spec.source.report.findings import FindingDraft, FindingRequest, build_findings
+from composer.spec.source.report.schema import Finding, Outcome, RuleVerdict
+from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor
 
 #: Crash text from a real Crucible hit, trimmed.
@@ -196,3 +205,150 @@ async def test_a_wheels_own_file_beats_the_components_fallback():
     verdicts = await formalizer.fetch_verdicts(cast(Any, _Formalized(result)))
     assert verdicts["c_authority_immutable"].unit_file == "c_lamport_custody.rs"
     assert verdicts["c_unplaced"].unit_file == "main.rs"
+
+
+# ---------------------------------------------------------------------------
+# Report rows -> written findings
+# ---------------------------------------------------------------------------
+
+class _StubModel(BaseChatModel):
+    """Structured output is preset, so the real path (prompt render, assess, compose) still runs."""
+    output: Any
+
+    def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
+        out = self.output
+        return RunnableLambda(lambda _messages: out)
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        raise NotImplementedError("stub is structured-output only")
+
+    @property
+    def _llm_type(self) -> str:
+        return "stub"
+
+
+def _draft() -> FindingDraft:
+    return FindingDraft(
+        title="Initialization is accepted without the authority's signature",
+        summary="s", description="d", impact="the authority guarantee is lost",
+    )
+
+
+def _outcome(result: RustFormalResult, unit_file: str = "harness.rs",
+             component: str = "Vault Initialization") -> ComponentOutcome:
+    return ComponentOutcome(
+        cast(Any, _Feat(component)), [], Delivered(result, pathlib.Path(unit_file))
+    )
+
+
+async def _written(*outcomes: ComponentOutcome) -> list[Finding]:
+    """The findings the report would carry, through the real collector and the real loop."""
+    fz = adapter.RustFormalizer(
+        cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
+    )
+    _, rules, *_ = await collect(
+        [
+            ReportComponentInput(
+                name=cast(Any, o.feat.display_name),
+                props=[
+                    PropertyFormulation(title=t, sort="invariant", description="d")
+                    for t, _ in cast(Delivered, o.result).result.checks
+                ],
+                formalized=cast(Any, _Formalized(cast(Delivered, o.result).result,
+                                                 cast(Delivered, o.result).deliverable.name)),
+            )
+            for o in outcomes
+        ],
+        fetch_verdicts=fz.fetch_verdicts,
+    )
+    return await build_findings(
+        contract_name="klend", rules=rules, properties=[], groups=[],
+        synthesis=fz.findings_synthesis(list(outcomes)), llm=_StubModel(output=_draft()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_reproduced_crash_is_the_proof_of_concept():
+    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
+    findings = await _written(_outcome(result))
+
+    assert len(findings) == 1
+    assert findings[0].content.proof_of_concept == COUNTEREXAMPLE
+    # The model wrote the prose; the campaign text is evidence, not the description.
+    assert findings[0].content.description == "d"
+
+
+@pytest.mark.asyncio
+async def test_an_unreproduced_declared_finding_claims_no_counterexample():
+    """Its only ground is the author's reading, and the finding has to say so rather than show one."""
+    result = _result({"c_kill": _verdict(Outcome.GOOD, "campaign spent 41231 executions")},
+                     {"c_kill": REASON})
+    findings = await _written(_outcome(result))
+
+    assert len(findings) == 1
+    assert findings[0].content.proof_of_concept is None, "no crash means no proof of concept"
+    prov = findings[0].provenance
+    assert prov is not None and prov.risk_reasoning == REASON
+
+
+@pytest.mark.asyncio
+async def test_a_fuzz_finding_carries_no_risk_rating():
+    """Severity is fixed and the axes stay empty: nothing here has assessed exploitability."""
+    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
+    f = (await _written(_outcome(result)))[0]
+
+    assert f.severity == "informational"
+    prov = f.provenance
+    assert prov is not None and prov.impact is None and prov.likelihood is None
+
+
+@pytest.mark.asyncio
+async def test_two_sections_naming_one_check_keep_their_own_crash():
+    """Crucible delivers one crate, so `validate` files each verdict under its section's file.
+
+    Two authors given the same property title write the same check name, and the report keys a row
+    by ``(file, name)`` — the section file is the only thing keeping the two rows apart. The
+    evidence is keyed the same way, so a section's finding must carry that section's crash.
+    """
+    left = _result({"c_auth": _verdict(Outcome.BAD, "crash A")}, {})
+    right = _result({"c_auth": _verdict(Outcome.BAD, "crash B")}, {})
+    for res, section in ((left, "c_vault_initialization.rs"), (right, "c_lamport_custody.rs")):
+        res.verdicts["c_auth"].unit_file = section
+
+    findings = await _written(_outcome(left, component="Vault Initialization"),
+                              _outcome(right, component="Lamport Custody"))
+
+    assert len(findings) == 2, "one row per section, so one finding per section"
+    by_section = {f.provenance.spec_file: f for f in findings if f.provenance}
+    assert by_section["c_vault_initialization.rs"].content.proof_of_concept == "crash A"
+    assert by_section["c_lamport_custody.rs"].content.proof_of_concept == "crash B"
+
+
+@pytest.mark.asyncio
+async def test_a_finding_on_a_collapsed_row_reads_the_run_that_row_came_from():
+    """Without a section file the two rows do collapse — the finding must follow the row.
+
+    ``collect`` keeps the first run naming a ``(file, name)``; the evidence has to keep the same
+    one, or the row's message and its finding's proof of concept describe different runs.
+    """
+    first = _result({"c_auth": _verdict(Outcome.BAD, "crash A")}, {})
+    second = _result({"c_auth": _verdict(Outcome.BAD, "crash B")}, {})
+
+    findings = await _written(_outcome(first), _outcome(second, component="Lamport Custody"))
+
+    assert len(findings) == 1
+    assert findings[0].content.proof_of_concept == "crash A"
+
+
+def test_the_prompt_offers_no_counterexample_for_a_finding_the_run_did_not_reproduce():
+    """The prompt is where a model could be led to invent one, so the distinction lives there too."""
+    req = FindingRequest(
+        contract_name="klend",
+        rule=RuleVerdict(name="c_kill", spec_file="c_oracle.rs", outcome=Outcome.BAD),
+        properties=[], groups=[],
+        evidence=[FuzzEvidence("Oracle", "c_kill", Outcome.GOOD, "campaign spent 41231", REASON)],
+    )
+    user = findings_mod._prompt(req)
+
+    assert "did NOT reproduce" in user and REASON in user
+    assert "Do not describe a counterexample" in user

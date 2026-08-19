@@ -114,7 +114,9 @@ class FindingsSynthesis[E, D: FindingDraft]:
     #: System message. Constant across this backend's rules — the per-rule context is `prompt`.
     system: str
     prompt: FindingPrompt[E]
-    assess: Callable[[D], Assessment]
+    #: Takes the evidence as well as the draft: what a severity rests on is not always something
+    #: the model said — a declared finding's ground is the author's reason, which is evidence.
+    assess: Callable[[D, list[E]], Assessment]
     #: The finding's ``proof_of_concept`` from its evidence, or None when the evidence is not one.
     proof: Callable[[list[E]], str | None]
 
@@ -178,7 +180,7 @@ def _compose[E, D: FindingDraft](
     evidence: list[E],
     groups: list[PropertyGroup],
 ) -> Finding:
-    risk = synthesis.assess(draft)
+    risk = synthesis.assess(draft, evidence)
     return Finding(
         title=draft.title,
         severity=risk.severity,

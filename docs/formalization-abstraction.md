@@ -681,6 +681,7 @@ system analysis, property extraction, caching, and the report, and contributes o
 | `formalize` | authoring session, gated by `verify_spec` | authoring session, gated by `forge_test` |
 | `fetch_verdicts` | query prover output off-thread | read ran/expected tests off the result |
 | `findings_synthesis` | LLM write-up per violated rule, from the captured CEX analysis | none (default `None`) |
+
 | `extra_report_inputs` | synthetic "Structural Invariants" | none |
 | `finalize` | `components_to_prover_runs.json` | none |
 | artifact bundle | `.spec` + `.conf` | `.t.sol` + metadata |

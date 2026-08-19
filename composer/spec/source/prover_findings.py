@@ -81,7 +81,7 @@ def _prompt(req: FindingRequest[RuleEvidence]) -> str:
     }).render_to(load_jinja_template)
 
 
-def _assess(draft: ProverFindingDraft) -> Assessment:
+def _assess(draft: ProverFindingDraft, _evidence: list[RuleEvidence]) -> Assessment:
     """Severity from the matrix — the model assesses the two axes, never the tier itself."""
     return Assessment(
         severity=severity_for(draft.impact_level, draft.likelihood_level),

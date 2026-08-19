@@ -101,6 +101,18 @@
     "template_name": "code_explorer/soroban.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.rustapp.findings:_FUZZ_SYSTEM": {
+    "module": "composer.rustapp.findings",
+    "qualname": "_FUZZ_SYSTEM",
+    "template_name": "autoprove_report_findings_fuzz_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.rustapp.findings:_FUZZ_PROMPT": {
+    "module": "composer.rustapp.findings",
+    "qualname": "_FUZZ_PROMPT",
+    "template_name": "autoprove_report_findings_fuzz_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.rustapp.session:ProtocolTemplate": {
     "module": "composer.rustapp.session",
     "qualname": "ProtocolTemplate",
@@ -161,18 +173,6 @@
     "template_name": "design_doc_finder_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.prover_findings:_FINDINGS_SYSTEM": {
-    "module": "composer.spec.source.prover_findings",
-    "qualname": "_FINDINGS_SYSTEM",
-    "template_name": "autoprove_report_findings_system.j2",
-    "ty_sort": "TypedTemplate"
-  },
-  "composer.spec.source.prover_findings:_FINDINGS_PROMPT": {
-    "module": "composer.spec.source.prover_findings",
-    "qualname": "_FINDINGS_PROMPT",
-    "template_name": "autoprove_report_findings_prompt.j2",
-    "ty_sort": "TypedTemplate"
-  },
   "composer.spec.source.harness:HarnessAnalysis": {
     "module": "composer.spec.source.harness",
     "qualname": "HarnessAnalysis",
@@ -183,6 +183,18 @@
     "module": "composer.spec.source.harness",
     "qualname": "_HarnessGenerationPrompt",
     "template_name": "harness_generation_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.prover_findings:_FINDINGS_SYSTEM": {
+    "module": "composer.spec.source.prover_findings",
+    "qualname": "_FINDINGS_SYSTEM",
+    "template_name": "autoprove_report_findings_system.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.prover_findings:_FINDINGS_PROMPT": {
+    "module": "composer.spec.source.prover_findings",
+    "qualname": "_FINDINGS_PROMPT",
+    "template_name": "autoprove_report_findings_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.source.report.render:_REPORT_TEMPLATE": {
