@@ -124,15 +124,16 @@ class FoundryManager(BuildSystemManager):
     error handling, and integrated compilation management.
     """
 
-    def __init__(self, project_root: Path, scope):
+    def __init__(self, project_root: Path, scope, run_root: Optional[Path] = None):
         """
         Initialize foundry manager.
 
         Args:
-            project_root: Root directory of the project
+            project_root: Directory the foundry.toml is anchored on
             scope: Centralized scope for consistent filtering
+            run_root: Directory certoraRun is invoked from (defaults to project_root)
         """
-        super().__init__(project_root, scope, "FoundryManager")
+        super().__init__(project_root, scope, "FoundryManager", run_root=run_root)
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
@@ -185,7 +186,7 @@ class FoundryManager(BuildSystemManager):
                 base_dir=config_file.parent,
                 log_fn=self.log,
                 profile=profile,
-                run_root=self.project_root,
+                run_root=self.run_root,
             )
             if packages:
                 config.packages = packages

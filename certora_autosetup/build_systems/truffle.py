@@ -75,15 +75,16 @@ class TruffleConfig(BuildSystemConfig):
 class TruffleManager(BuildSystemManager):
     """Truffle project manager: config parsing and artifact discovery."""
 
-    def __init__(self, project_root: Path, scope):
+    def __init__(self, project_root: Path, scope, run_root: Optional[Path] = None):
         """
         Initialize Truffle manager.
 
         Args:
-            project_root: Root directory of the project
+            project_root: Directory the truffle config is anchored on
             scope: Centralized scope for consistent filtering
+            run_root: Directory certoraRun is invoked from (defaults to project_root)
         """
-        super().__init__(project_root, scope, "TruffleManager")
+        super().__init__(project_root, scope, "TruffleManager", run_root=run_root)
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
@@ -127,7 +128,7 @@ class TruffleManager(BuildSystemManager):
         # Independent of whether the config itself evaluated: the packages list comes from
         # package.json/node_modules, which is what Truffle's own resolver uses.
         packages = build_packages_from_remapping_sources(
-            base_dir=config_file.parent, log_fn=self.log, run_root=self.project_root
+            base_dir=config_file.parent, log_fn=self.log, run_root=self.run_root
         )
         if packages:
             config.packages = packages

@@ -11,7 +11,7 @@ import os
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, List, Set
+from typing import Callable, List, Optional, Set
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
 
@@ -25,16 +25,22 @@ class BuildSystemManager(ABC):
     build-system-specific parsing and command generation.
     """
 
-    def __init__(self, project_root: Path, scope, component_name: str):
+    def __init__(self, project_root: Path, scope, component_name: str, run_root: Optional[Path] = None):
         """
         Initialize build system manager.
 
         Args:
-            project_root: Root directory of the project
+            project_root: Directory the build config is anchored on — where config discovery
+                starts and artifacts are read from. In a monorepo this is the sub-project that
+                owns the main contract, not the run root.
             scope: Centralized scope for consistent filtering
             component_name: Name for logging (e.g. "FoundryManager", "HardhatManager")
+            run_root: Directory certoraRun is invoked from. Remapping contexts are expressed
+                against it and the hoisted-package walk is bounded by it. Defaults to
+                project_root, which is correct whenever the build config sits at the run root.
         """
         self.project_root = project_root
+        self.run_root = run_root or project_root
         self.scope = scope
         self.component = component_name
 
