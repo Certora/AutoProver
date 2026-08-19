@@ -46,7 +46,7 @@ class UnsatisfiableSolcPinError(Exception):
 
 
 @dataclass(frozen=True)
-class BlockedPin:
+class BlockedSolcPin:
     """A contract whose pragma no installed compiler can satisfy."""
 
     contract_name: str
@@ -55,16 +55,18 @@ class BlockedPin:
 
 @dataclass(frozen=True)
 class SolcFallbackPlan:
-    """Per-contract substitutions for a missing solc binary.
+    """Which installed compiler, if any, stands in for ``failed_solc`` at each
+    contract pinned to it.
 
-    ``rewrites`` covers the contracts an installed compiler can serve; ``blocked``
-    the ones it cannot. A plan with any ``blocked`` entry is terminal: substituting
-    a compiler the pragma rejects would fail identically on the next compile.
+    ``compliant`` maps such a contract to an installed compiler its pragma admits;
+    ``blocked`` holds the ones no installed compiler can serve. A plan with any
+    ``blocked`` entry is terminal: substituting a compiler the pragma rejects would
+    fail identically on the next compile.
     """
 
     failed_solc: str
-    rewrites: Dict[str, str]
-    blocked: Tuple[BlockedPin, ...]
+    compliant: Dict[str, str]
+    blocked: Tuple[BlockedSolcPin, ...]
 
 
 def _normalize_ws(text: str) -> str:
@@ -103,39 +105,6 @@ def _path_from_source_location_line(line: str) -> Optional[str]:
     line, or None if ``line`` isn't one."""
     match = _SOURCE_LOCATION_RE.match(line)
     return match.group("path") if match else None
-
-
-def _flatten_conf(cmd: List[str], compilation_config: Dict, updated_config_dict: Dict) -> Dict[str, str]:
-    """Leaf path -> canonical JSON value, e.g. ``compilation_config.compiler_map.Foo``
-    -> ``'"solc6.4"'``. Recurses into dicts only; lists and scalars are leaves.
-    """
-    flat: Dict[str, str] = {}
-
-    def walk(prefix: str, value: Any) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                walk(f"{prefix}.{key}", child)
-        else:
-            flat[prefix] = json.dumps(value, sort_keys=True, default=str)
-
-    walk("cmd", cmd)
-    walk("compilation_config", compilation_config)
-    walk("updated_config_dict", updated_config_dict)
-    return flat
-
-
-def _conf_delta(before: Dict[str, str], after: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
-    """Sorted (path, new value) for every key an apply added or changed, plus
-    (path, '<removed>') for keys it deleted.
-
-    The previous value is deliberately absent: a change is identified by what it
-    sets, so "pin Foo to solc6.4" is the same change whichever value it replaced.
-    Including the old value would make each half of an A-undoes-B cycle look new
-    forever.
-    """
-    changes = [(path, value) for path, value in after.items() if before.get(path) != value]
-    changes += [(path, "<removed>") for path in before if path not in after]
-    return tuple(sorted(changes))
 
 
 def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
@@ -177,11 +146,6 @@ class CompilationWorkaround:
     exclusive: bool = False
     # Catch-all: only tried when no other workaround applied in the pass.
     last_resort: bool = False
-    # The workaround's progress lives outside the conf (generated sources on disk,
-    # the contracts list), so its conf delta repeats even when it is doing new work.
-    # Exempt from the repeat-detection below; such a workaround must carry its own
-    # termination guard.
-    progress_outside_conf: bool = False
 
 
 class CompilationWorkaroundManager:
@@ -210,10 +174,6 @@ class CompilationWorkaroundManager:
         # Installed compilers usable as a substitute, probed once (shutil.which +
         # subprocess per candidate) and reused across every pass of the loop.
         self._solc_candidates: Optional[List[Tuple[str, str]]] = None
-        # (workaround name, conf delta) for every application in this run. Seeing one
-        # twice means a later workaround undid it, so the loop is circling rather than
-        # converging — see the repeat check in run_compilation_with_workarounds.
-        self._applied_changes: Set[Tuple[str, str]] = set()
         # consumer -> [(lib_name, lib_path), ...] in insertion order. A second
         # firing for the same consumer (different missing library) regenerates the
         # consumer's harness covering every library it has needed so far.
@@ -405,11 +365,6 @@ class CompilationWorkaroundManager:
         # Rebuilt from each failed output, before the workaround table runs.
         solc_fallback_plan: Optional[SolcFallbackPlan] = None
 
-        # Scoped to this loop: a caller may run the loop again on the same manager
-        # (fixconf does, once either side of the import patch), and the second run
-        # legitimately re-applies what the first one did.
-        self._applied_changes.clear()
-
         # Initialize workarounds list
         workarounds = [
             CompilationWorkaround(
@@ -430,7 +385,7 @@ class CompilationWorkaroundManager:
                 name="solc_not_found_fallback",
                 # The plan is built once per pass below, because a plan with no viable
                 # substitution is terminal and has to be acted on before this table runs.
-                detect_fn=lambda output: solc_fallback_plan if (solc_fallback_plan and solc_fallback_plan.rewrites) else None,
+                detect_fn=lambda output: solc_fallback_plan if (solc_fallback_plan and solc_fallback_plan.compliant) else None,
                 apply_fn=self._apply_solc_fallback_workaround,
                 enabled=solc_pinned,
             ),
@@ -572,13 +527,11 @@ class CompilationWorkaroundManager:
                 apply_fn=self._apply_missing_library_harness_to_config,
                 enabled=True,
                 # Firing again for the same consumer with a different library
-                # regenerates the harness source covering every library so far —
-                # real progress, but on disk and in the contracts list, so its conf
-                # delta can repeat while it is still doing new work. Bounded by
-                # max_retries: its _harnessed_libs guard is keyed on the consumer
-                # name, which this apply replaces with the harness's, so a recurring
-                # link error is looked up under a name that was never recorded.
-                progress_outside_conf=True,
+                # regenerates the harness source covering every library so far. Its
+                # _harnessed_libs guard cannot bound that — the guard is keyed on the
+                # consumer name, which this apply replaces with the harness's, so a
+                # recurring link error is looked up under a name that was never
+                # recorded; max_retries is the bound.
             ),
             # Catch-all: final attempt before setup_prover falls back to the
             # import-patch pass.
@@ -607,6 +560,12 @@ class CompilationWorkaroundManager:
         self._mirror_compile_flags(compilation_config, updated_config_dict)
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
+
+        # Every state this loop has compiled, starting with the one the first compile
+        # runs on. Local to the call: a caller may run the loop again on the same
+        # manager (fixconf does, once either side of the import patch), and the second
+        # run legitimately revisits what the first one did.
+        seen_states = {self._retry_state(cmd, compilation_config, updated_config_dict)}
 
         output = ""
         while retry_count <= max_retries:
@@ -664,9 +623,6 @@ class CompilationWorkaroundManager:
             # gated on conf/manager state (e.g. _remappings_workaround_applied)
             # see the pass's own effects.
             applied_this_pass.clear()
-            repeated_this_pass: List[Tuple[str, str]] = []
-            new_this_pass: List[Tuple[str, str]] = []
-            state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
 
             def try_workaround(workaround: CompilationWorkaround) -> bool:
                 """Detect and, on a hit, apply — returns whether it applied."""
@@ -675,7 +631,6 @@ class CompilationWorkaroundManager:
                 if detect_result is None:
                     return False
                 self.log(f"Applying {workaround.name} workaround")
-                conf_before = _flatten_conf(cmd, compilation_config, updated_config_dict)
                 updated_config_dict = workaround.apply_fn(
                     detect_result,
                     updated_config_dict,
@@ -683,12 +638,6 @@ class CompilationWorkaroundManager:
                     config_file,
                     contracts,
                 )
-                if not workaround.progress_outside_conf:
-                    delta = _conf_delta(conf_before, _flatten_conf(cmd, compilation_config, updated_config_dict))
-                    if delta:
-                        change = (workaround.name, json.dumps(delta))
-                        (repeated_this_pass if change in self._applied_changes else new_this_pass).append(change)
-                        self._applied_changes.add(change)
                 # If we disabled build_cache in config, also remove from CLI command
                 if workaround.name == "cached_autofinder_failure" and "--build_cache" in cmd:
                     cmd.remove("--build_cache")
@@ -720,29 +669,20 @@ class CompilationWorkaroundManager:
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return False, output, updated_config_dict
 
-            # If the whole pass changed nothing, recompiling would reproduce the
-            # identical failure — stop here instead of burning another certoraRun.
-            if self._retry_state(cmd, compilation_config, updated_config_dict) == state_before:
+            # A state this loop has already compiled produces the same failure again,
+            # whether the pass changed nothing at all or a later workaround undid what
+            # an earlier one did. Either way retrying cannot converge.
+            state = self._retry_state(cmd, compilation_config, updated_config_dict)
+            if state in seen_states:
                 self.log(
-                    f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf "
-                    f"and command are unchanged — retrying would fail identically, giving up",
+                    f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf and "
+                    f"command are back to a state that already failed to compile — retrying would "
+                    f"fail identically, giving up",
                     "ERROR",
                 )
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return False, output, updated_config_dict
-
-            # Every change this pass has been made before, so a later workaround has
-            # been undoing an earlier one and the loop is circling rather than
-            # converging. A pass that also lands a new change is still progressing.
-            if repeated_this_pass and not new_this_pass:
-                repeats = ", ".join(sorted(name for name, _ in repeated_this_pass))
-                self.log(
-                    f"Workarounds applied ({repeats}) only repeat changes already made earlier — "
-                    f"another workaround is undoing them, so retrying cannot converge, giving up",
-                    "ERROR",
-                )
-                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
-                return False, output, updated_config_dict
+            seen_states.add(state)
 
             retry_count += 1
             conf_contents = json.dumps(compilation_config, indent=2)
@@ -764,10 +704,9 @@ class CompilationWorkaroundManager:
     def _retry_state(cmd: List[str], compilation_config: Dict, updated_config_dict: Dict) -> str:
         """Serialized snapshot of everything a workaround can change to make the
         next compilation retry behave differently: the command line and both
-        config dicts. Used by the no-progress check in
-        ``run_compilation_with_workarounds`` — a pass that leaves this snapshot
-        identical was a no-op, so retrying would reproduce the same failure
-        verbatim.
+        config dicts. ``run_compilation_with_workarounds`` memoizes it per pass and
+        stops when one comes round again — the same command over the same conf
+        reproduces the same failure verbatim, so the loop is circling.
 
         Invariant on apply_fns: any application that makes real progress MUST
         change the command or one of the two conf dicts. Progress expressed
@@ -1415,14 +1354,14 @@ class CompilationWorkaroundManager:
     ) -> Dict:
         """Substitute a missing versioned solc binary per the plan."""
         # solc is seeded into compiler_map up front (see _seed_compile_maps), so
-        # rewrite the bad binary there — every entry pinned to it — rather than
+        # replace the bad binary there — every entry pinned to it — rather than
         # setting the scalar solc, which can't coexist with compiler_map. A
         # uniform map collapses back to scalar solc in _normalize_compile_maps.
         # compilation_config shares this map object with updated_config_dict,
         # so the in-place rewrite is visible in the disk write below too — no mirroring needed.
         cmap = updated_config_dict.get("compiler_map")
         assert isinstance(cmap, dict), "compiler_map is seeded before any workaround runs"
-        for name, replacement in plan.rewrites.items():
+        for name, replacement in plan.compliant.items():
             self.log(f"Falling back from '{plan.failed_solc}' to '{replacement}' for {name}", "WARNING")
             cmap[name] = replacement
 
@@ -1435,9 +1374,8 @@ class CompilationWorkaroundManager:
         """Installed compilers that may stand in for a missing binary, as
         (binary name, semantic version), best first.
 
-        Only compilers whose version is known are offered: a substitution has to be
-        checkable against a contract's pragma, and one that cannot be checked cannot
-        be defended.
+        Compilers of unknown version are omitted: the version is what a contract's
+        pragma is checked against.
         """
         if self._solc_candidates is None:
             candidates: List[Tuple[str, str]] = []
@@ -1456,11 +1394,13 @@ class CompilationWorkaroundManager:
     def _plan_solc_fallback(
         self, output: str, updated_config_dict: Dict, contracts: List[ContractHandle]
     ) -> Optional[SolcFallbackPlan]:
-        """Work out, per contract, which installed compiler may replace a missing one.
+        """The plan for the missing binary named in ``output``: for each contract
+        pinned to it in ``compiler_map``, the first installed compiler its pragma
+        admits, or an entry in ``blocked`` when no candidate qualifies.
 
-        A contract is rewritten only to a compiler its pragma admits. An unreadable or
-        unparseable pragma is no evidence of a conflict, so those contracts take the
-        first candidate.
+        None when ``output`` reports no missing binary. An unreadable or unparseable
+        pragma is no evidence of a conflict, so those contracts take the first
+        candidate.
         """
         failed_solc = self._detect_solc_not_found(output)
         if failed_solc is None:
@@ -1474,18 +1414,18 @@ class CompilationWorkaroundManager:
         }
         candidates = self._solc_fallback_candidates()
 
-        rewrites: Dict[str, str] = {}
-        blocked: List[BlockedPin] = []
+        compliant: Dict[str, str] = {}
+        blocked: List[BlockedSolcPin] = []
         for name in pinned:
             pragma = pragma_by_contract.get(name)
             for binary, version in candidates:
                 if pragma is None or pragma_admits(pragma, version) is not False:
-                    rewrites[name] = binary
+                    compliant[name] = binary
                     break
             else:
-                blocked.append(BlockedPin(contract_name=name, pragma_spec=pragma or "unknown"))
+                blocked.append(BlockedSolcPin(contract_name=name, pragma_spec=pragma or "unknown"))
 
-        return SolcFallbackPlan(failed_solc=failed_solc, rewrites=rewrites, blocked=tuple(blocked))
+        return SolcFallbackPlan(failed_solc=failed_solc, compliant=compliant, blocked=tuple(blocked))
 
     @staticmethod
     def _extract_version_from_solc_name(solc_name: str) -> Optional[str]:

@@ -785,11 +785,11 @@ def test_a_pin_autosetup_seeded_itself_is_not_terminal(manager, monkeypatch, tmp
     assert success is False
 
 
-def test_the_ledger_is_scoped_to_one_loop_not_to_the_manager(
+def test_the_seen_state_memo_is_scoped_to_one_loop_not_to_the_manager(
     manager, monkeypatch, tmp_path
 ) -> None:
     # fixconf runs the loop twice on one manager, either side of the import patch;
-    # the second run must be free to re-apply what the first one did.
+    # the second run must be free to revisit the states the first one reached.
     monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     for _ in range(2):
@@ -802,7 +802,7 @@ def test_the_ledger_is_scoped_to_one_loop_not_to_the_manager(
             extra_config={"compiler_map": {"Foo": "solc6.4"}},
         )
         assert success is False
-        assert fake_run.calls == 3
+        assert fake_run.calls == 2
 
 
 def test_no_installed_candidate_blocks_instead_of_guessing(
@@ -826,8 +826,8 @@ def test_no_installed_candidate_blocks_instead_of_guessing(
 # The two halves of a real cycle. A contract is pinned to a compiler that is not
 # installed; the fallback substitutes the default one; the next compile reports the
 # pragma mismatch and pins the missing compiler again. The two fire on mutually
-# exclusive outputs, so they land in different passes and neither pass repeats its
-# own conf state — the within-pass no-op guard cannot see it.
+# exclusive outputs, so they land in different passes and every pass changes the
+# conf — only the states the loop has already compiled reveal the cycle.
 MISSING_PIN_OUTPUT = (
     "attribute/flag 'compiler_map': Solidity executable solc6.4 not found in path\n"
 )
@@ -841,10 +841,10 @@ PIN_DEMANDED_AGAIN_OUTPUT = (
 )
 
 
-def test_a_change_repeated_across_passes_stops_the_loop(manager, monkeypatch, tmp_path) -> None:
+def test_a_conf_state_seen_before_stops_the_loop(manager, monkeypatch, tmp_path) -> None:
     # Foo's source is not on disk, so its pragma is unreadable and the fallback plan
     # has no constraint to refuse on — the substitution is allowed and the cycle is
-    # reachable. This is the residual case the ledger exists for.
+    # reachable. This is the residual case the seen-state memo exists for.
     monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, _, _, fake_run = _run_loop(
@@ -856,13 +856,65 @@ def test_a_change_repeated_across_passes_stops_the_loop(manager, monkeypatch, tm
         extra_config={"compiler_map": {"Foo": "solc6.4"}},
     )
     assert success is False
-    # substitute, re-pin, then the substitution repeats and the loop stops.
+    # Substitute, then re-pin — which lands back on the conf the first compile ran on.
+    assert fake_run.calls == 2
+
+
+# A missing-library link error, one per consumer. The harness workaround reacts by
+# generating a harness source on disk and swapping the consumer for it in `files`.
+def _missing_library_output(consumer_path: str, consumer: str, lib: str, lib_path: str) -> str:
+    return (
+        f"Compiling {consumer_path}...\n"
+        f"Failed to find a dependency library while building the constructor bytecode of {consumer}.\n"
+        f"Failed to find a contract named {lib} in file {lib_path}.\n"
+    )
+
+
+def test_the_harness_workaround_is_not_stopped_by_the_seen_state_memo(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # Part of this workaround's progress is the generated harness source, which the
+    # memo cannot see. What it can see is the `files` swap the same apply performs,
+    # and that reaches a new state on every firing — so consecutive firings must not
+    # be read as a cycle.
+    (tmp_path / "contracts").mkdir(parents=True, exist_ok=True)
+    for lib in ("LibA", "LibB"):
+        (tmp_path / "contracts" / f"{lib}.sol").write_text(
+            f"pragma solidity ^0.8.0;\nlibrary {lib} {{\n"
+            f"    function value() public pure returns (uint256) {{ return 1; }}\n}}\n"
+        )
+    contracts = []
+    for name in ("Foo", "Bar"):
+        (tmp_path / "contracts" / f"{name}.sol").write_text(
+            f"pragma solidity ^0.8.0;\ncontract {name} {{\n"
+            f"    function ping() external pure returns (uint256) {{ return 1; }}\n}}\n"
+        )
+        contracts.append(
+            ContractHandle(contract_name=name, source_file=f"contracts/{name}.sol")
+        )
+
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [
+            _missing_library_output("contracts/Foo.sol", "Foo", "LibA", "contracts/LibA.sol"),
+            _missing_library_output("contracts/Bar.sol", "Bar", "LibB", "contracts/LibB.sol"),
+        ],
+        contracts,
+    )
+    assert success is True
+    # Both firings landed, and the third compile is the one that succeeds.
     assert fake_run.calls == 3
+    files = compilation_config["files"]
+    assert any("FooHarness" in entry for entry in files)
+    assert any("BarHarness" in entry for entry in files)
 
 
 def test_a_new_change_alongside_a_repeat_keeps_going(manager, monkeypatch, tmp_path) -> None:
-    # A pass that re-applies a known change while also landing a new one is still
-    # converging and must not be stopped.
+    # The same cycle, but the second pass also lands an orthogonal change. That takes
+    # the loop to a conf it has not compiled, so it must keep going — and it still
+    # terminates one full turn of the cycle later.
     monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, _, compilation_config, fake_run = _run_loop(
@@ -871,8 +923,8 @@ def test_a_new_change_alongside_a_repeat_keeps_going(manager, monkeypatch, tmp_p
         tmp_path,
         [
             MISSING_PIN_OUTPUT,
-            PIN_DEMANDED_AGAIN_OUTPUT,
-            MISSING_PIN_OUTPUT + UNNAMED_RETURN_WARNING_OUTPUT,
+            PIN_DEMANDED_AGAIN_OUTPUT + UNNAMED_RETURN_WARNING_OUTPUT,
+            MISSING_PIN_OUTPUT,
             PIN_DEMANDED_AGAIN_OUTPUT,
         ],
         contracts,
