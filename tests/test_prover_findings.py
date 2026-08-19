@@ -11,9 +11,9 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
 from composer.spec.types import PropertyType
-from composer.spec.source.report.findings import build_findings, severity_for
+from composer.spec.source.report.findings import AssessedFindingDraft, build_findings, severity_for
 from composer.spec.source.prover_findings import (
-    ProverFindingDraft, RuleEvidence, prover_findings,
+    RuleEvidence, prover_findings,
 )
 from composer.spec.source.report.schema import (
     FormalizedProperty, GroupStatus, ImpactLevel, LikelihoodLevel, Outcome, PropertyGroup,
@@ -51,8 +51,8 @@ class _StructuredStubModel(BaseChatModel):
 
 
 def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLevel = "medium",
-           title: str = "Reentrancy drains vault") -> ProverFindingDraft:
-    return ProverFindingDraft(
+           title: str = "Reentrancy drains vault") -> AssessedFindingDraft:
+    return AssessedFindingDraft(
         title=title, impact_level=impact_level, likelihood_level=likelihood_level,
         risk_reasoning="High impact (fund loss); medium likelihood (needs a specific state).",
         summary="s", description="d", impact="funds at risk", attack_path="1..2..3",

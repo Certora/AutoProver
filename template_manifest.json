@@ -101,16 +101,16 @@
     "template_name": "code_explorer/soroban.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.rustapp.findings:_FUZZ_SYSTEM": {
+  "composer.rustapp.findings:_RUST_SYSTEM": {
     "module": "composer.rustapp.findings",
-    "qualname": "_FUZZ_SYSTEM",
-    "template_name": "autoprove_report_findings_fuzz_system.j2",
+    "qualname": "_RUST_SYSTEM",
+    "template_name": "autoprove_report_findings_rust_system.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.rustapp.findings:_FUZZ_PROMPT": {
+  "composer.rustapp.findings:_RUST_PROMPT": {
     "module": "composer.rustapp.findings",
-    "qualname": "_FUZZ_PROMPT",
-    "template_name": "autoprove_report_findings_fuzz_prompt.j2",
+    "qualname": "_RUST_PROMPT",
+    "template_name": "autoprove_report_findings_rust_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.rustapp.session:ProtocolTemplate": {

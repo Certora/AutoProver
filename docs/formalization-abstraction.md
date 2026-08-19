@@ -488,15 +488,16 @@ the report's first section. Both read the same BAD rows; they differ in what the
 
 The write-up loop is shared ([report/findings.py](../composer/spec/source/report/findings.py)):
 walk the BAD rules, resolve each one's properties and the audit groups they sit in, ask a model,
-bound the concurrency, compose the `Finding`. What a backend supplies is a `FindingsSynthesis` —
-five things, all of which differ between a symbolic prover and a fuzzer:
+bound the concurrency, group the rows that share one finding, compose the `Finding`. What a backend
+supplies is a `FindingsSynthesis` — six things, all of which differ between a symbolic prover and a
+fuzzer:
 
 | Field | Why it is the backend's |
 | --- | --- |
 | `fetch_evidence` | Keyed by `RuleRef` — `(file, name)`, how the report identifies a row. A name alone does not: one deliverable can hold several components' checks, and two authors given the same property write the same name |
-| `draft` | The structured-output schema. Subclass `FindingDraft` to ask for more, so a model is only ever asked for what this backend's evidence can support |
+| `draft` | The structured-output schema. Subclass `FindingDraft` to ask for more, so a model is only ever asked for what this backend's evidence can support. A backend that rates risk asks for `AssessedFindingDraft`, whose axes `assessed` maps through the matrix |
 | `system` / `prompt` | The prompt is a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's |
-| `assess` | The severity, and the record of how it was reached. The prover's is the impact × likelihood matrix; a backend whose evidence does not establish exploitability returns a constant instead of a rating nothing produced |
+| `assess` | The severity, and the record of how it was reached. The prover's is the impact × likelihood matrix (`assessed`); a backend whose evidence does not establish exploitability returns a constant instead of a rating nothing produced |
 | `proof` | The finding's `proof_of_concept` from its evidence, or None where the evidence is not one |
 | `collapse` | Identity of the *finding* behind a row. Rows sharing a key are written up once, against the first of them, with the rest on `FindingRequest.also_covers`. A backend whose rows map one-to-one onto findings returns `rule.ref` and nothing ever collapses |
 
@@ -505,6 +506,11 @@ took down. A fuzz campaign covers a component's whole property set, and a crash 
 condemns every check in it — on a klend-sized component that is 26 BAD rows of one crash. Written up
 per row it would be 26 heavy-model calls publishing 26 accounts of the same finding, each guessing a
 different check it might have been.
+
+It is deliberately the *backend's* answer and not something this layer infers from matching
+evidence: rows fanned out from one conclusion look exactly like several checks that failed the same
+way, and those are two different facts about the program. Only whatever produced the verdicts knows
+which it is — a Rust wheel says so on `Verdict.finding`.
 
 Returning `None` is how a backend opts out; the report then builds no findings for it and never
 starts the heavy model. `outcomes` is passed because a backend whose evidence is in its own results

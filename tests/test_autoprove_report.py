@@ -30,9 +30,8 @@ from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.source.report import build
 from composer.spec.source.report.collect import ReportComponentInput, collect
 from composer.spec.source.report.coverage import ValidationError, validate
-from composer.spec.source.prover_findings import (
-    ProverFindingDraft, RuleEvidence, prover_findings,
-)
+from composer.spec.source.prover_findings import RuleEvidence, prover_findings
+from composer.spec.source.report.findings import AssessedFindingDraft
 from composer.spec.source.report.grouping import (
     FALLBACK_SLUG, GroupingResult, PropertyGroupDraft, aggregate_status,
     build_fallback_grouping, build_groups,
@@ -712,8 +711,8 @@ def _finding(severity: SeverityTier = "high") -> Finding:
 
 
 def _draft(impact_level: ImpactLevel = "high",
-           likelihood_level: LikelihoodLevel = "medium") -> ProverFindingDraft:
-    return ProverFindingDraft(
+           likelihood_level: LikelihoodLevel = "medium") -> AssessedFindingDraft:
+    return AssessedFindingDraft(
         title="Reentrancy drains vault",
         impact_level=impact_level, likelihood_level=likelihood_level,
         risk_reasoning="High impact; medium likelihood.",

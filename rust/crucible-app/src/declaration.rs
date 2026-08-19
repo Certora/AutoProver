@@ -5,12 +5,12 @@
 use askama::Template;
 
 use autoprover_sdk::descriptor::{
-    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, PhaseRole,
-    PhaseSpec,
+    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, FindingsPolicy,
+    PhaseRole, PhaseSpec, SeverityPolicy, SeverityTier,
 };
 
 use crate::layout::{CRATE_ROOT, HARNESS_ROOT, REPORT_ROOT};
-use crate::templates::BackendGuidance;
+use crate::templates::{BackendGuidance, FindingsSystem};
 
 /// Everything this application declares about itself.
 pub(crate) fn descriptor() -> AppDescriptor {
@@ -110,5 +110,14 @@ pub(crate) fn descriptor() -> AppDescriptor {
             "manual_citation".into(),
             "reasoned".into(),
         ],
+        // Severity is fixed rather than assessed because nothing in this pipeline establishes
+        // exploitability: a campaign shows an assertion can be made to fail against a fixture the
+        // author wrote, and a crash on a broken precondition looks exactly like one on a real path
+        // (which is what `SUSPECT HARNESS BUG` exists to flag). Asking the write-up model to rate
+        // impact and likelihood off that would buy a number with nothing behind it.
+        findings: Some(FindingsPolicy {
+            system: FindingsSystem.render().expect("render findings_system"),
+            severity: SeverityPolicy::Fixed { tier: SeverityTier::Informational },
+        }),
     }
 }

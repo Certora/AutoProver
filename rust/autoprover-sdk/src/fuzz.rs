@@ -118,6 +118,7 @@ impl<'a> Arbitrary<'a> for Verdict {
             unit_file: Option::arbitrary(u)?,
             detail: Option::arbitrary(u)?,
             accounting: Option::arbitrary(u)?,
+            finding: Option::arbitrary(u)?,
         })
     }
 }
@@ -149,6 +150,7 @@ impl<'a> Arbitrary<'a> for AppDescriptor {
             component_noun: Option::arbitrary(u)?,
             check_noun: Option::arbitrary(u)?,
             evidence_kinds: Vec::<String>::arbitrary(u)?,
+            findings: Option::arbitrary(u)?,
         })
     }
 }

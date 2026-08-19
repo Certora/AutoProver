@@ -76,7 +76,7 @@ pub(crate) fn gate(
     let by_name: Vec<(&str, &Verdict)> = verdicts.iter().collect();
     target.verdicts(|c| {
         let found = by_name.iter().find(|(n, _)| *n == c.name).map(|(_, v)| (*v).clone());
-        let mut v = found.unwrap_or_else(|| Verdict::with_outcome(Outcome::Unknown));
+        let v = found.unwrap_or_else(|| Verdict::with_outcome(Outcome::Unknown));
         if v.outcome != Outcome::Good {
             return v;
         }

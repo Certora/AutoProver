@@ -61,6 +61,31 @@ class FindingDraft(AuthoredContent):
     title: str = Field(description="A one-line title naming the specific broken guarantee.")
 
 
+class AssessedFindingDraft(FindingDraft):
+    """The draft for a backend whose evidence can carry a risk judgement: the authored sections plus
+    the two axes `severity_for` maps to a tier.
+
+    Shared rather than per-backend because the axes are a property of the *rating scheme*, not of
+    what produced the violation — a backend that can rate at all rates on these. A backend whose
+    evidence cannot support one asks for `FindingDraft` instead, so the question is never put."""
+    impact_level: ImpactLevel = Field(description=(
+        "How severe the consequence is if exploited: 'high' (funds lost or stolen, protocol "
+        "insolvency, permanently frozen assets, or unauthorized privileged control), 'medium' "
+        "(limited, conditional, or recoverable loss, or temporary denial of service), 'low' (a minor "
+        "deviation with no funds at risk), or 'none' (no real-world exploit path — a specification or "
+        "code-quality observation)."
+    ))
+    likelihood_level: LikelihoodLevel = Field(description=(
+        "How reachable the violation is: 'high' (any actor, no special preconditions), 'medium' "
+        "(a specific but reachable state, ordering, or setup), or 'low' (privileged access, an unusual "
+        "configuration, or a narrow window)."
+    ))
+    risk_reasoning: str = Field(description=(
+        "One to three sentences justifying the impact and likelihood you assigned, grounded in the "
+        "evidence you were given."
+    ))
+
+
 @dataclass(frozen=True)
 class Assessment:
     """A backend's risk verdict on one draft: the severity, and the record of how it was reached.
@@ -72,6 +97,18 @@ class Assessment:
     impact: ImpactLevel | None = None
     likelihood: LikelihoodLevel | None = None
     reasoning: str | None = None
+
+
+def assessed(draft: AssessedFindingDraft, _evidence: object) -> Assessment:
+    """Severity from the matrix — the model assesses the two axes, never the tier itself. The
+    `FindingsSynthesis.assess` every backend asking for an `AssessedFindingDraft` wants."""
+    return Assessment(
+        severity=severity_for(draft.impact_level, draft.likelihood_level),
+        impact=draft.impact_level,
+        likelihood=draft.likelihood_level,
+        reasoning=draft.risk_reasoning,
+    )
+
 
 
 @dataclass(frozen=True)

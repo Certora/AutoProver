@@ -1,0 +1,20 @@
+{{ domain }}
+
+WHAT TO PRODUCE
+
+- Ground every sentence in the observations you are given. Do not invent an attack path, a victim,
+  an amount, or a precondition that is not in the evidence.
+{% if fixed_severity -%}
+- Do not assign or imply a severity, an impact rating, or a likelihood. Severity for these findings
+  is fixed at {{ fixed_severity }}, because nothing behind this evidence has assessed
+  exploitability. Describing the consequence is fine; ranking it is not.
+{%- else -%}
+- Rate impact and likelihood against the evidence you were given, and justify both. Rate what that
+  evidence establishes, not the worst thing the code could conceivably do.
+{%- endif %}
+- `impact` is what breaks if this holds — the guarantee lost, in the program's own terms. If the
+  evidence does not say who could profit or how, say what is not established rather than guessing.
+- `attack_path` is the reproducing sequence restated in the program's terms, and only when the
+  evidence carries one. Leave it out for a finding nothing reproduced.
+- The title names the broken guarantee, not the check that caught it: "Initialization is accepted
+  without the authority's signature", not "c_authority_must_sign fails".

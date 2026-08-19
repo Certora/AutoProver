@@ -13,7 +13,7 @@ from pydantic import Field
 
 from composer.rustapp.wire import WireModel
 
-from composer.spec.source.report.schema import ReportBackend
+from composer.spec.source.report.schema import ReportBackend, SeverityTier
 
 #: Ecosystem/chain tag. Mirrors ``composer.pipeline.ecosystem.ChainTag`` (kept local so this
 #: ABI-mirror module stays decoupled from the pipeline); the host resolves it against the
@@ -93,6 +93,39 @@ class Callout(WireModel):
 
 #: How the source deliverable is written — tagged on ``mode`` (Rust ``DeliverableMode``).
 DeliverableMode = Annotated[PerComponent | Callout, Field(discriminator="mode")]
+
+
+class AssessedSeverity(WireModel):
+    """The write-up model rates impact and likelihood against the evidence, and the host maps the
+    pair to a tier — for a backend whose evidence can carry that judgement."""
+
+    policy: Literal["assessed"] = "assessed"
+
+
+class FixedSeverity(WireModel):
+    """Every finding gets :attr:`tier`, and the model is never asked to rate anything — what a
+    backend declares when nothing in its pipeline has assessed exploitability."""
+
+    policy: Literal["fixed"] = "fixed"
+    tier: SeverityTier
+
+
+#: How a backend's findings get their severity — tagged on ``policy`` (Rust ``SeverityPolicy``).
+SeverityPolicy = Annotated[AssessedSeverity | FixedSeverity, Field(discriminator="policy")]
+
+
+class FindingsPolicy(WireModel):
+    """How a violated check of this backend becomes a written audit finding.
+
+    Declared by the wheel because a write-up rests on claims only the wheel can make: what its
+    evidence *is*, what that evidence establishes, and how to read its own markers. The host owns
+    everything around that — which rows, their properties and groups, the concurrency, grouping the
+    rows that share one finding, composing the record — and none of the prose."""
+
+    #: The *domain* half of the write-up system prompt. The host appends the output contract (the
+    #: sections asked for, the grounding rules), so no wheel restates it.
+    system: str
+    severity: SeverityPolicy
 
 
 class PhaseSpec(WireModel):
@@ -215,6 +248,10 @@ class AppDescriptor(WireModel):
     #: rebuttal tool's ``evidence_type`` is built from. Declared per wheel because the evidence a
     #: backend can produce is a property of that backend.
     evidence_kinds: list[str]
+    #: How this backend's violated checks are written up as audit findings — ``None`` produces none,
+    #: and the report carries only the verdict rows. Declining is the default because a write-up has
+    #: to say what the evidence behind it is, and only the wheel knows.
+    findings: FindingsPolicy | None
 
     def unit_noun(self, *, plural: bool = False) -> str:
         """The noun for a formalized unit, with the generic default applied — so no frontend

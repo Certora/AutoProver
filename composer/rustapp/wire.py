@@ -411,14 +411,18 @@ class Verdict(WireModel):
     #: they are separate claims — one is evidence about the program, the other about the run — and a
     #: reader asking for a counterexample should not be handed run accounting inside one.
     accounting: str | None
+    #: Which *finding* this verdict belongs to, when one piece of evidence condemns several checks
+    #: at once — an opaque key produced by the wheel and only ever compared, never read into. Rows
+    #: sharing one are written up once; ``None`` is a verdict standing on its own evidence.
+    finding: str | None
 
     @classmethod
     def with_outcome(cls, outcome: Outcome) -> "Verdict":
         """A bare verdict: the outcome, no diagnostics. Mirrors the Rust ``Verdict::with_outcome``,
         and exists for the same reason — every field being required is right for the wire and no
-        reason for a caller that has only an outcome to spell five nulls to say so."""
+        reason for a caller that has only an outcome to spell six nulls to say so."""
         return cls(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=None,
-                   accounting=None)
+                   accounting=None, finding=None)
 
 
 class ValidateBuildFailed(WireModel):

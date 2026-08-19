@@ -61,7 +61,7 @@ from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
-from composer.rustapp.findings import FuzzEvidence, fuzz_findings
+from composer.rustapp.findings import RustSynthesis, rust_findings
 from composer.rustapp.phases import PhaseModel
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupSpec
 from composer.rustapp.toolchain import project_toolchain, source_unit
@@ -93,7 +93,6 @@ from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceFields, WorkflowContext
 from composer.spec.key_family import KeyFamily
 from composer.spec.source.report.collect import Formalized, ReportComponentInput, Verdict
-from composer.spec.source.report.findings import FindingDraft, FindingsSynthesis
 from composer.spec.source.report.schema import RuleName
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import ComponentName, PropertyFormulation
@@ -435,10 +434,11 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     @override
     def findings_synthesis(
         self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]]
-    ) -> FindingsSynthesis[FuzzEvidence, FindingDraft]:
-        # Evidence is in the results themselves — a campaign reports per check, and there is no
-        # run-scoped store beside it holding what it saw.
-        return fuzz_findings(outcomes)
+    ) -> RustSynthesis | None:
+        # Evidence is in the results themselves — a wheel reports per check, and there is no
+        # run-scoped store beside it holding what it saw. What that evidence *means* is the wheel's
+        # declaration, and a wheel that made none produces no findings.
+        return rust_findings(outcomes, self._descriptor.findings)
 
     @override
     async def finalize(

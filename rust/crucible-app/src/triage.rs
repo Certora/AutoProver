@@ -311,7 +311,14 @@ pub(crate) fn attribute_findings(
         .map(String::as_str)
         .collect();
     if !unplaceable.is_empty() {
-        return target.all(Outcome::Bad, Some(unplaceable.join("\n\n")));
+        // One finding, not one per check: these verdicts are the *same* conclusion fanned out
+        // because nothing said which check it belongs to. Stamped as such so the report writes it
+        // up once — a component's whole property set is dozens of rows, and dozens of write-ups of
+        // one crash, each guessing a different check, is worse than saying it cannot be placed.
+        // The target names it: there is at most one such fan-out per campaign.
+        let detail = unplaceable.join("\n\n");
+        return target
+            .verdicts(|_| Verdict::detailed(Outcome::Bad, &detail).of_finding(&target.name));
     }
 
     target.verdicts(|c| {
@@ -336,7 +343,9 @@ mod attribution {
     //! campaign covers a component's whole property set, and the fixture's assertions carry titles
     //! from components that campaign never asked about.
     use super::*;
-    use crate::testkit::{iterating_target, owned, prop, target_over, verdicts_of};
+    use crate::testkit::{
+        findings_of, iterating_target, owned, prop, target_over, verdicts_of,
+    };
 
     #[test]
     fn one_invariant_per_property_is_the_only_shape_this_backend_can_attribute() {
@@ -385,7 +394,8 @@ mod attribution {
     fn a_finding_naming_this_targets_own_property_refutes_only_that_one() {
         let (run, target) = lamport_target();
         let detail = "crash abc: [deposit_overflow_prevented] total=2 exceeds cap=1";
-        let got = verdicts_of(&attribute_findings(&target, &run, &found(&[detail])));
+        let outcome = attribute_findings(&target, &run, &found(&[detail]));
+        let got = verdicts_of(&outcome);
 
         assert_eq!(got[0].0, "c_no_overflow");
         assert_eq!(got[0].1, Outcome::Bad);
@@ -393,6 +403,8 @@ mod attribution {
         // …and the rest held, which here is a real claim: the campaign ran to budget, so it went on
         // exploring this one after recording the crash above.
         assert_eq!(got[1].1, Outcome::Good);
+        // A crash placed on the property it names is that row's own finding, so nothing is grouped.
+        assert!(findings_of(&outcome).iter().all(Option::is_none));
     }
 
     #[test]
@@ -477,9 +489,17 @@ mod attribution {
         // and silently passing it is the one failure this must never have.
         let (run, target) = lamport_target();
         let detail = "crash 999: assertion failed at fixture.rs:42";
-        let got = verdicts_of(&attribute_findings(&target, &run, &found(&[detail])));
+        let outcome = attribute_findings(&target, &run, &found(&[detail]));
+        let got = verdicts_of(&outcome);
 
         assert!(got.iter().all(|(_, o, d)| *o == Outcome::Bad && d == detail), "{got:?}");
+        // …and they are one finding, not one each. Fanning a conclusion out over the whole target
+        // is the only honest reading of an unplaceable crash, but the rows are indistinguishable
+        // from several checks that failed the same way unless the fan-out says so — and the report
+        // writes a finding per group, so unsaid means one write-up per row guessing a check.
+        let keys = findings_of(&outcome);
+        assert_eq!(keys.iter().filter(|k| k.is_some()).count(), keys.len(), "{keys:?}");
+        assert_eq!(keys.iter().collect::<std::collections::BTreeSet<_>>().len(), 1, "{keys:?}");
     }
 
     #[test]

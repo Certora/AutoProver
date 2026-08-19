@@ -151,3 +151,25 @@ def test_validate_reports_a_parse_error_as_the_error_envelope():
     assert json.loads(raw)["kind"] == "error"
     with pytest.raises(CalloutFailed, match="AuthorInput"):
         parse_validate(raw)
+
+
+def test_the_wheel_declares_what_its_findings_rest_on():
+    """A findings write-up is prose about what the evidence means, and only the wheel knows.
+
+    Crucible declares both halves. Severity is fixed at ``informational`` because nothing in this
+    pipeline assesses exploitability: a campaign shows a tagged assertion can be made to fail
+    against a fixture the author wrote, and a crash on a broken precondition looks exactly like one
+    on a real path. And the system prompt has to teach the reader's model what that evidence is —
+    above all `SUSPECT HARNESS BUG`, where the likely defect is the harness rather than the program.
+    """
+    from composer.rustapp.descriptor import AppDescriptor, FixedSeverity
+
+    desc = AppDescriptor.model_validate_json(crucible_app.descriptor())
+    policy = desc.findings
+    assert policy is not None, "a wheel with no policy writes no findings at all"
+    assert isinstance(policy.severity, FixedSeverity)
+    assert policy.severity.tier == "informational"
+    assert "SUSPECT HARNESS BUG" in policy.system
+    # The declaration/reproduction split is the one distinction this evidence cannot make on the
+    # outcome alone, so the prompt has to make it.
+    assert "DECLARED" in policy.system

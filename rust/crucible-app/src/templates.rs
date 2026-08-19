@@ -44,6 +44,14 @@ pub(crate) struct TestCheatSheet;
 #[template(path = "judge_system.j2", escape = "none")]
 pub(crate) struct JudgeSystem;
 
+/// What a Crucible verdict's evidence is, for the report's findings write-up — the domain half of
+/// that system prompt (`FindingsPolicy::system`). Says what a crash is and is not, what
+/// `SUSPECT HARNESS BUG` means, and how a declared invariant differs from one the campaign tripped
+/// over. The host appends the output contract, so nothing here restates the sections asked for.
+#[derive(Template)]
+#[template(path = "findings_system.j2", escape = "none")]
+pub(crate) struct FindingsSystem;
+
 /// How a crate root declares its targets — the `#[cfg]`/`#[invariant_test]` mechanism every entry
 /// below it uses. Emitted **once** per root: it explains the layout, not any one target, and one
 /// copy per feature was the same paragraph N+1 times in a file a user reads.

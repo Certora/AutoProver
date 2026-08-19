@@ -186,6 +186,7 @@ One struct, serialized at load time, that drives everything non-backend.
 | `component_noun` | the human noun for one formalized component in the console/TUI ("instruction"); `None` → "component", read through `unit_noun()` |
 | `check_noun` | what this backend calls one check **to the model** ("rule", "harness function"); `None` → "check", read through `check_label()` |
 | `evidence_kinds` | the closed set an author may cite when rebutting the judge (§5) |
+| `findings` | how a violated check is written up as an audit finding: the domain half of the system prompt, and how severity is reached (§4.5). `None` → this wheel produces no findings |
 
 **Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host resolves these once into a
 `PhaseModel` ([`build_phase_model`](../composer/rustapp/host.py)): the synthesized
@@ -403,36 +404,44 @@ checks ran under — and returns `{relpath: contents}` the host writes under the
 path-confined.
 
 `findings_synthesis` answers a different question from `fetch_verdicts`: *what did this run find*.
-The write-up loop is shared ([formalization-abstraction.md §4.6](./formalization-abstraction.md));
-what a Rust backend supplies is in [findings.py](../composer/rustapp/findings.py).
+The write-up loop is shared ([formalization-abstraction.md §4.6](./formalization-abstraction.md)) and
+so is the host half in [findings.py](../composer/rustapp/findings.py) — which knows only wire fields.
+What a *particular* backend's evidence means is the wheel's, declared as `AppDescriptor.findings`.
 
-**Evidence is a `FuzzEvidence` per check**, keyed by `(file, name)` exactly as the report keys its
-rows — which for Crucible means the section file, since one crate holds every component's checks and
-two authors given the same property title write the same check name. Each carries the campaign's
-own text, the wheel's *own* outcome (`ran`), and the author's `expect_check_failure` reason. The last
-two are the split that matters: a declared check reports `BAD` either way, so only `ran` and
-`declared` together say whether a reader is looking at a crash the fuzzer found or a claim the author
-made. A `RuleEvidence` has nowhere to put either.
+**Evidence is a `CheckObservation` per check**, keyed by `(file, name)` exactly as the report keys
+its rows — which for Crucible means the section file, since one crate holds every component's checks
+and two authors given the same property title write the same check name. Each carries the run's own
+text, the wheel's *own* outcome (`ran`), and the author's `expect_check_failure` reason. The last two
+are the split that matters: a declared check reports `BAD` either way, so only `ran` and `declared`
+together say whether a reader is looking at something the run found or a claim the author made.
 
-**The prompt says what the evidence is.** A fuzzer drove a harness the author wrote from a state that
-harness set up; it did not refute a rule symbolically. So the campaign's `SUSPECT HARNESS BUG` marker
-is something the write-up must lead with, an unreproduced declaration must not be given a
-counterexample it does not have, and the harness caveats belong in
-`assumptions_and_uncertainties`.
+**`FindingsPolicy.system` says what the evidence is**, and it is the wheel's prose because it is the
+wheel's claim. Crucible's says a fuzzer drove a harness the author wrote from a state that harness
+set up, and did not refute anything symbolically — so `SUSPECT HARNESS BUG` is something the write-up
+must lead with, an unreproduced declaration must not be given a counterexample it does not have, and
+the harness caveats belong in `assumptions_and_uncertainties`. The host appends the output contract
+(which sections, and the grounding rules) so no wheel restates it. **A wheel that declares no policy
+produces no findings**: a write-up asserts what its evidence is, and a host that guessed would be
+publishing prose nothing stands behind.
 
-**A crash the campaign could not place is one finding, not one per row.** `attribute_findings`
-condemns every check a campaign covered when a crash names a property no component in the run
-claims — right for the verdict table, since the counterexample is real and hiding it would be worse.
-The synthesis collapses those rows onto the counterexample, so the run is written up once and the
-write-up is told which other checks it answers for, rather than picking one and pinning the crash on
-it. Rows with no counterexample fall back to their own identity: two declared findings the run did
-not reproduce are two claims the author made, however alike the rest of their evidence looks.
+**`FindingsPolicy.severity` says what the evidence can support.** Crucible fixes it at
+`informational`, with `impact` and `likelihood` left empty and the model never asked for them: a
+campaign establishes that an assertion can be made to fail, not that anyone can profit from it — a
+crash on a failed precondition looks exactly like a crash on a real one. Asking for a rating anyway
+buys a fabricated one. `provenance.risk_reasoning` instead carries the author's declaration where
+there is one, so a documented finding is distinguishable from one the run tripped over without
+reading the evidence. A backend whose evidence *can* carry the judgement declares `assessed` and gets
+the axes plus the severity matrix.
 
-**Severity is always `informational`**, with `impact` and `likelihood` left empty. A campaign
-establishes that an assertion can be made to fail, not that anyone can profit from it — a crash on a
-failed precondition looks exactly like a crash on a real one. `provenance.risk_reasoning` instead
-carries the author's declaration where there is one, so a documented finding is distinguishable from
-one the run tripped over without reading the evidence.
+**A conclusion the wheel could not attribute to one check is one finding, not one per row.**
+`attribute_findings` condemns every check a campaign covered when a crash names a property no
+component in the run claims — right for the verdict table, since the counterexample is real and
+hiding it would be worse — and stamps that fan-out with one `Verdict.finding` key. The host groups on
+the key, so the run is written up once and told which other checks it answers for, rather than
+picking one and pinning the crash on it. Nothing here infers the relation from the evidence: fanned-
+out rows are otherwise indistinguishable from several checks that failed identically, and those are
+two different facts about the program. An unstamped row stands on its own — two declared findings the
+run did not reproduce are two claims the author made, however alike the rest of their evidence looks.
 
 **Evidence about the program and evidence about the run are separate fields.** `Verdict.accounting`
 carries what the campaign spent and covered (and, from `tally::gate`, whether the check's assertion

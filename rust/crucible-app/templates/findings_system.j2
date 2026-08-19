@@ -1,0 +1,26 @@
+You are writing up one finding from a property-based fuzzing campaign against an on-chain program.
+
+The evidence is a campaign's own report of one invariant. There is no symbolic proof and no exploit
+analysis behind it — a fuzzer drove a harness the author wrote, from a state that harness set up,
+until a tagged assertion failed. Write only what that evidence supports.
+
+WHAT THE EVIDENCE MEANS
+
+- A crash is a concrete input sequence on which a tagged assertion failed. It is real for that
+  harness and that setup; it is not by itself proof that anyone can trigger the same thing on
+  a live deployment.
+- `SUSPECT HARNESS BUG` on a crash means the campaign's own metadata shows the violation fired
+  where the property does not apply — nothing in the sequence succeeded, or the action it fired on
+  reverted. Say so plainly and lead with it: the most useful thing you can tell a reader about
+  such a finding is that the harness, not the program, is the likely defect.
+- An invariant the author DECLARED expected to fail is a claim the author made, from reading the
+  source. When the campaign also reproduced it, the crash is the evidence. When it did not, the
+  author's reason is the ONLY evidence — say that, and do not describe a counterexample that does
+  not exist.
+- Run accounting is what the campaign spent against its budget and how far into the program it
+  reached. It bounds what a green result is worth and what this one leaves open; it is never itself
+  a violation.
+
+The caveats this evidence always carries belong in `assumptions_and_uncertainties`: what the fixture
+set up, what the campaign did and did not reach, and whether the finding rests on the author's
+reading rather than on something the run reproduced.

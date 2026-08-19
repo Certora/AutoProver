@@ -32,7 +32,7 @@ from composer.pipeline.ptypes import ComponentOutcome
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp import findings as findings_mod
-from composer.rustapp.findings import FuzzEvidence
+from composer.rustapp.findings import CheckObservation
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
@@ -53,10 +53,10 @@ COUNTEREXAMPLE = (
 REASON = "UpdateBlockPriceUsage only mark_stale()s, so PRICE_USAGE_ALLOWED survives the kill switch"
 
 
-def _verdict(outcome: Outcome, detail: str | None = None,
-             accounting: str | None = None) -> Verdict:
+def _verdict(outcome: Outcome, detail: str | None = None, accounting: str | None = None,
+             finding: str | None = None) -> Verdict:
     return Verdict(outcome=outcome, line=None, duration_seconds=None, unit_file=None,
-                   detail=detail, accounting=accounting)
+                   detail=detail, accounting=accounting, finding=finding)
 
 
 def _result(
@@ -348,8 +348,8 @@ def test_the_prompt_offers_no_counterexample_for_a_finding_the_run_did_not_repro
         contract_name="klend",
         rule=RuleVerdict(name="c_kill", spec_file="c_oracle.rs", outcome=Outcome.BAD),
         properties=[], groups=[],
-        evidence=[FuzzEvidence("Oracle", "c_kill", Outcome.GOOD, None,
-                               "campaign spent 41231 executions", REASON)],
+        evidence=[CheckObservation("Oracle", "c_kill", Outcome.GOOD, None,
+                                   "campaign spent 41231 executions", REASON, None)],
         also_covers=[],
     )
     user = findings_mod._prompt(req)
@@ -404,8 +404,8 @@ def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
         contract_name="klend",
         rule=RuleVerdict(name="c_ts", spec_file="c_vault.rs", outcome=Outcome.BAD),
         properties=[], groups=[],
-        evidence=[FuzzEvidence("Vault Initialization", "c_ts", Outcome.BAD,
-                               COUNTEREXAMPLE, ACCOUNTING, None)],
+        evidence=[CheckObservation("Vault Initialization", "c_ts", Outcome.BAD,
+                                   COUNTEREXAMPLE, ACCOUNTING, None, None)],
         also_covers=[],
     )
     user = findings_mod._prompt(req)
@@ -413,12 +413,12 @@ def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
     crash_at, spent_at = user.index(COUNTEREXAMPLE), user.index(ACCOUNTING)
     assert crash_at < spent_at, "the evidence leads"
     # The accounting is introduced as what it is, not appended to the crash.
-    assert "sequence that reproduces it:" in user
+    assert "with whatever reproduces it:" in user
     assert "spent and covered" in user
 
 
 # ---------------------------------------------------------------------------
-# One crash the campaign could not place
+# One crash the campaign could not place — which the WHEEL says, not this host
 # ---------------------------------------------------------------------------
 
 class _CountingModel(_StubModel):
@@ -467,14 +467,21 @@ async def _written_by(model: _CountingModel, *outcomes: ComponentOutcome) -> lis
 
 @pytest.mark.asyncio
 async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
-    """`attribute_findings` condemns every check a campaign covered when it cannot place a crash.
+    """`attribute_findings` condemns every check a campaign covered when it cannot place a crash,
+    and stamps the fan-out as one finding (`Verdict.finding`).
 
-    That is right for the verdict table — the counterexample is real and hiding it would be worse —
-    but it is one finding, not one per row. Writing it up per row spends a heavy model on each and
-    publishes N accounts of the same crash, each guessing a different check it might have been.
+    Condemning them all is right for the verdict table — the counterexample is real and hiding it
+    would be worse — but it is one finding, not one per row. Writing it up per row spends a heavy
+    model on each and publishes N accounts of the same crash, each guessing a different check it
+    might have been.
+
+    The key is the wheel's, and nothing here infers it: rows fanned out from one conclusion are
+    otherwise indistinguishable from several checks that failed identically, which is a different
+    fact about the program.
     """
     checks = [f"c_{i}" for i in range(6)]
-    result = _result({c: _verdict(Outcome.BAD, UNPLACEABLE, ACCOUNTING) for c in checks}, {})
+    result = _result(
+        {c: _verdict(Outcome.BAD, UNPLACEABLE, ACCOUNTING, finding="c_vault") for c in checks}, {})
     model = _CountingModel(output=_draft(), calls=[])
 
     findings = await _written_by(model, _outcome(result))
@@ -490,7 +497,7 @@ async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
 
 @pytest.mark.asyncio
 async def test_distinct_crashes_stay_distinct_findings():
-    """Collapsing is on the evidence, so two real crashes are still two findings."""
+    """Two crashes the wheel *could* place carry no key, so they stay two findings."""
     result = _result({"c_a": _verdict(Outcome.BAD, "crash A", ACCOUNTING),
                       "c_b": _verdict(Outcome.BAD, "crash B", ACCOUNTING)}, {})
     model = _CountingModel(output=_draft(), calls=[])
@@ -502,10 +509,11 @@ async def test_distinct_crashes_stay_distinct_findings():
 
 @pytest.mark.asyncio
 async def test_two_unreproduced_declarations_are_two_findings():
-    """No counterexample means no shared evidence to collapse on — each is its own claim.
+    """An unstamped row stands on its own, so each declaration is its own claim.
 
-    Both rows carry only the campaign's accounting, which is identical because it is the same
-    campaign. Keying on that would merge two unrelated findings the author made separately.
+    Worth pinning because these two rows are otherwise as alike as rows get: no counterexample, and
+    the same accounting, since it is the same campaign. Nothing about that similarity may merge two
+    findings the author made separately.
     """
     result = _result({"c_kill": _verdict(Outcome.GOOD, None, ACCOUNTING),
                       "c_stale": _verdict(Outcome.GOOD, None, ACCOUNTING)},
@@ -517,3 +525,64 @@ async def test_two_unreproduced_declarations_are_two_findings():
     assert len(findings) == 2, "two declarations are two findings"
     reasons = {f.provenance.risk_reasoning for f in findings if f.provenance}
     assert reasons == {REASON, "a different documented bug"}
+
+
+# ---------------------------------------------------------------------------
+# What the wheel declares, and what a wheel that declares nothing gets
+# ---------------------------------------------------------------------------
+
+def test_a_wheel_that_declares_no_findings_policy_produces_none():
+    """No policy, no findings — not findings written from a default the host made up.
+
+    A write-up asserts what the evidence behind it is, and the host cannot know: it has verdicts,
+    not a claim about what produced them. A wheel that reports outcomes without saying what they
+    establish is coherent, and its report carries the verdict rows and nothing else."""
+    fz = adapter.RustFormalizer(
+        cast(Any, object()),
+        AppDescriptor.model_validate(wire_descriptor(findings=None)),
+    )
+    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
+
+    assert fz.findings_synthesis([_outcome(result)]) is None
+
+
+def test_the_write_up_is_told_what_this_wheels_evidence_is():
+    """The wheel's own prose leads the system prompt, and the host's output contract follows it.
+
+    The two halves are separable for the same reason `judge` splits them: what the evidence *is* is
+    the backend's claim, and which sections come back is the host's, so neither restates the other.
+    """
+    fz = adapter.RustFormalizer(
+        cast(Any, object()),
+        AppDescriptor.model_validate(wire_descriptor(findings={
+            "system": "MARKER: this backend reads tea leaves.",
+            "severity": {"policy": "fixed", "tier": "low"},
+        })),
+    )
+    synthesis = fz.findings_synthesis([])
+    assert synthesis is not None
+
+    assert synthesis.system.startswith("MARKER: this backend reads tea leaves.")
+    # A fixed tier is named, and the model is told not to rate — asking for a rating this evidence
+    # cannot support is how a fabricated one gets into a finding a reader trusts.
+    assert "fixed at low" in synthesis.system
+    assert "Do not assign or imply a severity" in synthesis.system
+    # …and the schema it answers in carries no axes to fill in either.
+    assert "impact_level" not in synthesis.draft.model_fields
+
+
+def test_a_wheel_that_assesses_risk_is_asked_for_the_axes():
+    """The other half of the policy: a backend whose evidence *can* carry a risk judgement gets the
+    assessed draft and the matrix, not a constant."""
+    fz = adapter.RustFormalizer(
+        cast(Any, object()),
+        AppDescriptor.model_validate(wire_descriptor(findings={
+            "system": "This backend proves things.", "severity": {"policy": "assessed"},
+        })),
+    )
+    synthesis = fz.findings_synthesis([])
+    assert synthesis is not None
+
+    assert "impact_level" in synthesis.draft.model_fields
+    assert "Rate impact and likelihood" in synthesis.system
+    assert "Do not assign" not in synthesis.system

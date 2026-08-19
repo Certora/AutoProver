@@ -55,10 +55,8 @@ from composer.spec.source.report.collect import (
 from composer.spec.source.report.schema import (
     AppliedEditRecord, ComponentName, RuleName, RuleRef, SourceEditRecord,
 )
-from composer.spec.source.report.findings import FindingsSynthesis
-from composer.spec.source.prover_findings import (
-    ProverFindingDraft, RuleEvidence, prover_findings,
-)
+from composer.spec.source.report.findings import AssessedFindingDraft, FindingsSynthesis
+from composer.spec.source.prover_findings import RuleEvidence, prover_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 
@@ -172,7 +170,7 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
     @override
     def findings_synthesis(
         self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]]
-    ) -> FindingsSynthesis[RuleEvidence, ProverFindingDraft]:
+    ) -> FindingsSynthesis[RuleEvidence, AssessedFindingDraft]:
         # Evidence is the run-scoped CEX capture, not the outcomes.
         return prover_findings(self._evidence)
 
