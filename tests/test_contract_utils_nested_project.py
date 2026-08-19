@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import certora_autosetup.utils.contract_utils as cu
-from certora_autosetup.utils.contract_utils import auto_detect_contracts, resolve_contract_handles, with_main_contract
+from certora_autosetup.utils.contract_utils import auto_detect_contracts, resolve_contract_handles, with_contract_handle
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -92,7 +92,7 @@ def test_main_contract_added_when_auto_detection_missed_it() -> None:
     detected = [ContractHandle("Widget", "src/Widget.sol")]
     main = ContractHandle("Gadget", "src/Gadget_1234/dependencies/pkg-1.0.0/src/Gadget.sol")
 
-    handles = with_main_contract(detected, main)
+    handles = with_contract_handle(detected, main)
 
     assert main in handles
     assert detected[0] in handles
@@ -104,7 +104,7 @@ def test_main_contract_displaces_a_same_named_handle_from_another_file() -> None
     detected = [ContractHandle("Widget", "src/Widget.sol")]
     main = ContractHandle("Widget", "src/vendor/bundle/src/Widget.sol")
 
-    handles = with_main_contract(detected, main)
+    handles = with_contract_handle(detected, main)
 
     assert handles == [main]
 
@@ -112,4 +112,4 @@ def test_main_contract_displaces_a_same_named_handle_from_another_file() -> None
 def test_already_detected_main_contract_is_left_alone() -> None:
     detected = [ContractHandle("Widget", "src/Widget.sol"), ContractHandle("Gear", "src/Gear.sol")]
 
-    assert with_main_contract(detected, detected[0]) == detected
+    assert with_contract_handle(detected, detected[0]) == detected
