@@ -18,6 +18,13 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION, SolcConvention
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
+from certora_autosetup.utils.import_diagnostics import (
+    UnresolvedImport,
+    classify_unresolved_import,
+    describe_unresolved_imports,
+    parse_unresolved_imports,
+    path_from_source_location_line,
+)
 from certora_autosetup.utils.library_harness import (
     LibrarySpec,
     build_consumer_harness_source,
@@ -77,17 +84,38 @@ def _path_from_compiling_line(line: str) -> Optional[str]:
     return line.removeprefix(prefix).removesuffix(suffix)
 
 
-# A solc source-location line, e.g. ``   --> contracts/Foo.sol:120:9:``. It names the
-# offending file in a whole-project (non-autofinder) solc error, where there is no
-# ``Compiling <path>...`` progress line to recover it from.
-_SOURCE_LOCATION_RE = re.compile(r"^\s*-->\s+(?P<path>.+?):\d+:\d+:?\s*$")
+# The remediation hint solc attaches to a diagnostic whose fix is "compile this with the
+# IR pipeline", whatever the diagnostic itself is called: the flag spelling (``--via-ir``),
+# the Standard-JSON key (``viaIR: true``), or a mention of the pipeline by name ("via-ir
+# pipeline", "IR pipeline"). Keying on the hint rather than on one diagnostic's wording
+# covers the whole family.
+#
+# Written against whitespace-normalized text (see ``_normalize_ws``); ``-\s?`` absorbs a
+# solc hard-wrap inside a hyphenated token (``--via-\nir`` normalizes to ``--via- ir``).
+# The conf key ``solc_via_ir`` is outside the family — it appears in the "unsupported solc
+# version for solc_via_ir" error, which calls for the opposite fix — so every alternative
+# demands either the ``--`` flag spelling, the JSON key with its colon, or the word
+# "pipeline". ``\bIR`` keeps prose like "through their pipeline" out.
+_VIA_IR_HINT_RE = re.compile(
+    r"--\s?via-\s?ir\b|viaIR:\s?true|(?:\bvia-\s?ir|\bIR)\s+pipeline",
+    re.IGNORECASE,
+)
 
+# Diagnostics that carry the same hint while via-ir is only ONE of the remedies solc
+# offers ("... while enabling the optimizer. Otherwise, try removing local variables"),
+# so the hint does not mean via-ir is required. Their escalation ladder — optimizer,
+# solc's default Yul steps, then relaxing the autofinder assertion — belongs to
+# stack_too_deep_via_ir and the yul_exception_* workarounds.
+_MULTI_REMEDY_DIAGNOSTIC_RE = re.compile(
+    r"YulException|Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack",
+    re.IGNORECASE,
+)
 
-def _path_from_source_location_line(line: str) -> Optional[str]:
-    """Return ``<path>`` from a solc ``  --> <path>:<line>:<col>:`` source-location
-    line, or None if ``line`` isn't one."""
-    match = _SOURCE_LOCATION_RE.match(line)
-    return match.group("path") if match else None
+# The label opening a solc diagnostic ("Warning: ...", "TypeError: ...",
+# "UnimplementedFeatureError: ...", "YulException: ..."). It delimits one diagnostic from
+# the next, so a hint is read together with the diagnostic that owns it — and only with
+# that diagnostic's own source locations.
+_DIAGNOSTIC_START_RE = re.compile(r"^\s*(?:[A-Za-z]*Error|Warning|Info|Note|YulException)\b")
 
 
 def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
@@ -149,6 +177,11 @@ class CompilationWorkaroundManager:
         self.build_config_dir = build_config_dir or project_root
         self.solc_convention = solc_convention
         self.verbose = verbose
+        # Classification of the compilation output the loop returned on, empty when that output
+        # had no source-not-found error at all (see `_record_import_diagnostics`). Read by
+        # callers to name the failure class in the terminal error text instead of only the phase
+        # that failed, so it must describe *that* failure and never an earlier pass's.
+        self.last_import_diagnostics: List[UnresolvedImport] = []
         self._remappings_workaround_applied = False
         # (consumer, lib) pairs already covered by a generated harness in this run.
         # Used as a loop guard — if the prover still reports the same pair after we
@@ -389,12 +422,7 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="source_not_found_packages",
-                detect_fn=lambda output: (
-                    "detected"
-                    if self._has_source_not_found(output)
-                    and not self._remappings_workaround_applied
-                    else None
-                ),
+                detect_fn=lambda output: self._detect_source_not_found(output, compilation_config),
                 apply_fn=self._apply_source_not_found_packages_workaround,
                 enabled=True,
             ),
@@ -550,6 +578,7 @@ class CompilationWorkaroundManager:
             output = result.stdout + result.stderr
 
             if result.returncode == 0:
+                self._record_import_diagnostics(output, compilation_config, log_summary=False)
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return True, output, updated_config_dict
 
@@ -565,6 +594,7 @@ class CompilationWorkaroundManager:
             # otherwise fire first and delay this).
             abstract_main_contract = self._detect_abstract_main_contract(output, compilation_config)
             if abstract_main_contract is not None:
+                self._record_import_diagnostics(output, compilation_config, log_summary=False)
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 raise AbstractMainContractError(
                     f"Main contract '{abstract_main_contract}' compiled to no bytecode: it is abstract "
@@ -639,15 +669,23 @@ class CompilationWorkaroundManager:
                     self.log(output, "WARNING")
                 else:
                     self.log("Compilation failed with no applicable workaround", "ERROR")
+                self._record_import_diagnostics(output, compilation_config)
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return False, output, updated_config_dict
 
             # If the whole pass changed nothing, recompiling would reproduce the
             # identical failure — stop here instead of burning another certoraRun.
             if self._retry_state(cmd, compilation_config, updated_config_dict) == state_before:
+                # Classifying this pass's output turns "nothing changed" into the reason nothing
+                # could change (e.g. the package is installed and the file inside it is the one
+                # missing). It is logged as part of the ERROR below, not separately.
+                diagnosis = describe_unresolved_imports(
+                    self._record_import_diagnostics(output, compilation_config, log_summary=False)
+                )
                 self.log(
                     f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf "
-                    f"and command are unchanged — retrying would fail identically, giving up",
+                    f"and command are unchanged — retrying would fail identically, giving up"
+                    + (f"\n{diagnosis}" if diagnosis else ""),
                     "ERROR",
                 )
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
@@ -666,6 +704,7 @@ class CompilationWorkaroundManager:
         self.log(f"Max retries ({max_retries}) exceeded for workarounds", "ERROR")
         self.log("Final compilation output:", "ERROR")
         self.log(output, "ERROR")
+        self._record_import_diagnostics(output, compilation_config)
         self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
         return False, output, updated_config_dict
 
@@ -745,7 +784,7 @@ class CompilationWorkaroundManager:
             if not line.startswith("CompilerError: Stack too deep"):
                 continue
             for j in range(i + 1, min(i + 6, len(lines))):
-                src_path = _path_from_source_location_line(lines[j])
+                src_path = path_from_source_location_line(lines[j])
                 if src_path is None:
                     continue
                 contract_name = self._get_contract_name_from_path(src_path, contracts)
@@ -816,21 +855,45 @@ class CompilationWorkaroundManager:
         the affected contract name.
 
         Contracts start on plain settings and gain via-ir strictly out of
-        necessity; this is the necessity signal for non-stack reasons, e.g.
-        "UnimplementedFeatureError: Require with a custom error is only
-        available using the via-ir pipeline." Matching is whitespace-normalized
-        per compiled unit, since solc hard-wraps the phrase.
+        necessity. solc spells this necessity several ways ("Require with a
+        custom error is only available using the via-ir pipeline.", "Copying of
+        type ... to storage is not supported in legacy (only supported by the
+        IR pipeline)."), so the detector keys on the remediation hint they share
+        (``_VIA_IR_HINT_RE``) rather than on one diagnostic's wording.
+
+        The hint alone is not the signal: solc appends it to stack-too-deep and
+        YulException diagnostics too, where via-ir is one remedy among several
+        and the optimizer/Yul ladder must be climbed first. A hint therefore
+        counts only inside a diagnostic that offers no other remedy
+        (``_MULTI_REMEDY_DIAGNOSTIC_RE``). Matching is whitespace-normalized per
+        diagnostic, since solc hard-wraps the text.
         """
-        marker = "only available using the via-ir pipeline"
+        lines = output.split("\n")
+
+        def diagnostic_blocks(unit_lines: List[str]) -> List[List[str]]:
+            """Split solc output into one group of lines per diagnostic, so a hint,
+            the diagnostic offering it and its source locations stay together and a
+            neighbouring diagnostic's ``-->`` lines stay out."""
+            blocks: List[List[str]] = [[]]
+            for line in unit_lines:
+                if _DIAGNOSTIC_START_RE.match(line) or _path_from_compiling_line(line) is not None:
+                    blocks.append([])
+                blocks[-1].append(line)
+            return blocks
+
+        def requires_via_ir(block: List[str]) -> bool:
+            normalized = _normalize_ws("\n".join(block))
+            return bool(_VIA_IR_HINT_RE.search(normalized)) and not _MULTI_REMEDY_DIAGNOSTIC_RE.search(normalized)
+
         current_path: Optional[str] = None
         segment: List[str] = []
 
         def segment_hit() -> Optional[str]:
-            if current_path and marker in _normalize_ws("\n".join(segment)):
+            if current_path and any(requires_via_ir(b) for b in diagnostic_blocks(segment)):
                 return self._get_contract_name_from_path(current_path, contracts)
             return None
 
-        for line in output.split("\n"):
+        for line in lines:
             path = _path_from_compiling_line(line)
             if path is not None and "to expose internal function information" not in line:
                 hit = segment_hit()
@@ -844,7 +907,27 @@ class CompilationWorkaroundManager:
         hit = segment_hit()
         if hit:
             self.log(f"Detected via-ir-only feature for {hit} (path: {current_path})")
-        return hit
+            return hit
+
+        # Whole-project compile: certoraRun prints no per-file "Compiling <path>..."
+        # progress line, so no segment carries a path and the offending file is named
+        # only in the `-->` source-location lines of the diagnostic itself. Runs last so
+        # a per-unit hit takes precedence.
+        for block in diagnostic_blocks(lines):
+            if not requires_via_ir(block):
+                continue
+            for line in block:
+                src_path = path_from_source_location_line(line)
+                if src_path is None:
+                    continue
+                contract_name = self._get_contract_name_from_path(src_path, contracts)
+                if contract_name:
+                    self.log(f"Detected via-ir-only feature for {contract_name} (path: {src_path})")
+                    return contract_name
+                self.log(f"Warning: Could not map path '{src_path}' to contract name", "WARNING")
+                break
+
+        return None
 
     def _detect_yul_exception_stack_too_deep(self, output: str) -> bool:
         """Detect YulException with stack too deep error.
@@ -964,6 +1047,60 @@ class CompilationWorkaroundManager:
                         return contract_name
                 return None
         return None
+
+    def _detect_source_not_found(self, output: str, compilation_config: Dict) -> Optional[str]:
+        """Fire the packages rebuild on a source-not-found output, classifying it on the way.
+
+        The classification is recorded and logged, not used as a gate: the loop's no-progress
+        check already stops cleanly when a rebuild produces the identical packages list, and
+        gating here would mean a misread output silently skips a workaround that works.
+        """
+        if not self._has_source_not_found(output) or self._remappings_workaround_applied:
+            return None
+        self._classify_unresolved_imports(output, compilation_config)
+        return "detected"
+
+    def _record_import_diagnostics(
+        self, output: str, compilation_config: Dict, log_summary: bool = True
+    ) -> List[UnresolvedImport]:
+        """Refresh ``last_import_diagnostics`` from ``output`` on the way out of the loop.
+
+        Only an output carrying a source-not-found error can be classified, so every other
+        outcome must *clear* the field rather than leave it alone: callers append it to their
+        terminal error text (``setup_prover.run_compilation_analysis``), and a verdict from an
+        earlier pass — whose import problem this pass may well have fixed — would blame a missing
+        dependency for a failure that has nothing to do with imports.
+        """
+        if not self._has_source_not_found(output):
+            self.last_import_diagnostics = []
+            return []
+        return self._classify_unresolved_imports(output, compilation_config, log_summary)
+
+    def _classify_unresolved_imports(
+        self, output: str, compilation_config: Dict, log_summary: bool = True
+    ) -> List[UnresolvedImport]:
+        """Classify every source-not-found error in ``output`` against the conf's packages,
+        store the result on the manager, and log the summary (unless the caller prints the
+        classification itself).
+
+        Purely diagnostic: it changes no conf and gates no workaround, so a change in solc's
+        output format degrades to today's (less precise) messages rather than aborting the
+        workaround loop.
+        """
+        try:
+            packages = compilation_config.get("packages", []) or []
+            failures = [
+                classify_unresolved_import(source_unit, packages, self.project_root, importer)
+                for source_unit, importer in parse_unresolved_imports(output)
+            ]
+        except Exception as e:
+            self.log(f"Could not classify unresolved imports: {e}", "WARNING")
+            return []
+
+        self.last_import_diagnostics = failures
+        if failures and log_summary:
+            self.log(f"Unresolved imports:\n{describe_unresolved_imports(failures)}", "WARNING")
+        return failures
 
     def _has_remappings_conflict(self, output: str) -> bool:
         return "package.json and remappings.txt include duplicated keys in" in output
