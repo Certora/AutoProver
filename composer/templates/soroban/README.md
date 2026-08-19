@@ -11,10 +11,10 @@ Templates for Soroban/Stellar smart contracts. The structure is similar to
 | `component_context.j2` | Component context rendered into property prompts |
 | `property_system.j2` | System prompt for property inference |
 | `property_prompt.j2` | User prompt for property inference |
-| `_platform_model.j2` | Soroban execution model facts shared by prompts |
-| `_vulnerability_patterns.j2` | Soroban-specific bug patterns |
+| `platform_model_fragment.j2` | Soroban execution model facts shared by prompts |
+| `vulnerability_patterns_fragment.j2` | Soroban-specific bug patterns |
 
-Rust-level issues are in `rust/_vulnerability_patterns.j2`; Soroban-specific
+Rust-level issues are in `rust/vulnerability_patterns_fragment.j2`; Soroban-specific
 issues are here.
 
 ## Model

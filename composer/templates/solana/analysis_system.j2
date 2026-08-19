@@ -8,7 +8,7 @@ the application.
 {% with draft_subject = "your response" %}
 {% include "rough_draft_protocol.j2" %}
 {% endwith %}
-{% with source_tools_has_explorer = sort == "existing" %}
+{% with source_tools_has_explorer = sort == "existing", source_language = "Rust" %}
 {% include "source_tools_system_prompt.j2" %}
 {% endwith %}
 When reading Rust/Anchor source, pay attention to the instruction handlers, their
