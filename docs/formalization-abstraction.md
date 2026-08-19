@@ -498,6 +498,13 @@ five things, all of which differ between a symbolic prover and a fuzzer:
 | `system` / `prompt` | The prompt is a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's |
 | `assess` | The severity, and the record of how it was reached. The prover's is the impact × likelihood matrix; a backend whose evidence does not establish exploitability returns a constant instead of a rating nothing produced |
 | `proof` | The finding's `proof_of_concept` from its evidence, or None where the evidence is not one |
+| `collapse` | Identity of the *finding* behind a row. Rows sharing a key are written up once, against the first of them, with the rest on `FindingRequest.also_covers`. A backend whose rows map one-to-one onto findings returns `rule.ref` and nothing ever collapses |
+
+`collapse` is what keeps the cost proportional to what was *found* rather than to how many rows it
+took down. A fuzz campaign covers a component's whole property set, and a crash it cannot place
+condemns every check in it — on a klend-sized component that is 26 BAD rows of one crash. Written up
+per row it would be 26 heavy-model calls publishing 26 accounts of the same finding, each guessing a
+different check it might have been.
 
 Returning `None` is how a backend opts out; the report then builds no findings for it and never
 starts the heavy model. `outcomes` is passed because a backend whose evidence is in its own results

@@ -6,6 +6,7 @@ The shared loop is `composer.spec.source.report.findings`. What is here is what 
 fuzzer found a crash rather than that a prover refuted a rule, and a severity that stays
 ``informational`` because nothing in this pipeline has established that any of it is exploitable.
 """
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TypedDict
 
@@ -16,7 +17,7 @@ from composer.spec.source.report.findings import (
     Assessment, FindingDraft, FindingRequest, FindingsSynthesis,
 )
 from composer.spec.source.report.schema import (
-    FormalizedProperty, Outcome, PropertyGroup, RuleRef,
+    FormalizedProperty, Outcome, PropertyGroup, RuleRef, RuleVerdict,
 )
 from composer.spec.system_model import FeatureUnit
 from composer.spec.types import CheckName
@@ -65,6 +66,9 @@ class FuzzFindingsPromptParams(TypedDict):
     properties: list[FormalizedProperty]
     groups: list[PropertyGroup]
     observations: list[FuzzEvidence]
+    #: Other checks this same crash was reported against — empty unless the campaign could not
+    #: place it, in which case naming them is most of what the finding has to say.
+    also_covers: list[str]
 
 
 _FUZZ_SYSTEM = TypedTemplate[FuzzFindingsSystemParams]("autoprove_report_findings_fuzz_system.j2")
@@ -105,6 +109,7 @@ def _prompt(req: FindingRequest[FuzzEvidence]) -> str:
         "properties": req.properties,
         "groups": req.groups,
         "observations": req.evidence,
+        "also_covers": list(req.also_covers),
     }).render_to(load_jinja_template)
 
 
@@ -135,6 +140,24 @@ def _proof(evidence: list[FuzzEvidence]) -> str | None:
     return "\n\n".join(crashes) if crashes else None
 
 
+def _same_crash(rule: RuleVerdict, evidence: list[FuzzEvidence]) -> Hashable:
+    """The counterexample, so rows a campaign condemned on one crash are written up once.
+
+    A campaign covers a component's whole property set, and `attribute_findings` places a crash by
+    the property title in its assertion message. Two ways that lands on several rows, and one
+    write-up is the honest answer to both: a crash naming two properties genuinely refutes both, and
+    a crash naming a property nobody in the run claims cannot be placed at all, so every check the
+    campaign covered is reported BAD. On a klend-sized component the second is 26 rows of one
+    finding — 26 write-ups of the same crash, each guessing a different check it might have been.
+
+    Falls back to the row's own identity where there is no counterexample: a declared finding the run
+    did not reproduce is the author's claim about that one check, and two of them are two findings
+    however alike the rest of the evidence looks."""
+    crash = next((e.counterexample for e in evidence if e.ran is Outcome.BAD and e.counterexample),
+                 None)
+    return crash if crash is not None else rule.ref
+
+
 def fuzz_findings(outcomes: RustOutcomes) -> FindingsSynthesis[FuzzEvidence, FindingDraft]:
     """This run's synthesis, around the campaign observations its own results carry."""
     observed = observations(outcomes)
@@ -150,4 +173,5 @@ def fuzz_findings(outcomes: RustOutcomes) -> FindingsSynthesis[FuzzEvidence, Fin
         prompt=_prompt,
         assess=_assess,
         proof=_proof,
+        collapse=_same_crash,
     )

@@ -350,6 +350,7 @@ def test_the_prompt_offers_no_counterexample_for_a_finding_the_run_did_not_repro
         properties=[], groups=[],
         evidence=[FuzzEvidence("Oracle", "c_kill", Outcome.GOOD, None,
                                "campaign spent 41231 executions", REASON)],
+        also_covers=[],
     )
     user = findings_mod._prompt(req)
 
@@ -405,6 +406,7 @@ def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
         properties=[], groups=[],
         evidence=[FuzzEvidence("Vault Initialization", "c_ts", Outcome.BAD,
                                COUNTEREXAMPLE, ACCOUNTING, None)],
+        also_covers=[],
     )
     user = findings_mod._prompt(req)
 
@@ -413,3 +415,105 @@ def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
     # The accounting is introduced as what it is, not appended to the crash.
     assert "sequence that reproduces it:" in user
     assert "spent and covered" in user
+
+
+# ---------------------------------------------------------------------------
+# One crash the campaign could not place
+# ---------------------------------------------------------------------------
+
+class _CountingModel(_StubModel):
+    """Counts the write-ups actually asked for, and keeps the prompt of each."""
+    calls: list[str] = []
+
+    def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
+        out, calls = self.output, self.calls
+
+        def _invoke(messages):
+            calls.append(messages[-1].content)
+            return out
+        return RunnableLambda(_invoke)
+
+
+UNPLACEABLE = (
+    "crash crash_7f2a: [ledger_total_conserved] sum drifted by 3\n"
+    "reproducing sequence (iteration 88, 1 action(s)):\n  1. sweep_fees -> OK"
+)
+
+
+async def _written_by(model: _CountingModel, *outcomes: ComponentOutcome) -> list[Finding]:
+    fz = adapter.RustFormalizer(
+        cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
+    )
+    _, rules, *_ = await collect(
+        [
+            ReportComponentInput(
+                name=cast(Any, o.feat.display_name),
+                props=[
+                    PropertyFormulation(title=t, sort="invariant", description="d")
+                    for t, _ in cast(Delivered, o.result).result.checks
+                ],
+                formalized=cast(Any, _Formalized(cast(Delivered, o.result).result,
+                                                 cast(Delivered, o.result).deliverable.name)),
+            )
+            for o in outcomes
+        ],
+        fetch_verdicts=fz.fetch_verdicts,
+    )
+    return await build_findings(
+        contract_name="klend", rules=rules, properties=[], groups=[],
+        synthesis=fz.findings_synthesis(list(outcomes)), llm=model,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
+    """`attribute_findings` condemns every check a campaign covered when it cannot place a crash.
+
+    That is right for the verdict table — the counterexample is real and hiding it would be worse —
+    but it is one finding, not one per row. Writing it up per row spends a heavy model on each and
+    publishes N accounts of the same crash, each guessing a different check it might have been.
+    """
+    checks = [f"c_{i}" for i in range(6)]
+    result = _result({c: _verdict(Outcome.BAD, UNPLACEABLE, ACCOUNTING) for c in checks}, {})
+    model = _CountingModel(output=_draft(), calls=[])
+
+    findings = await _written_by(model, _outcome(result))
+
+    assert len(model.calls) == 1, f"one crash, one write-up; asked for {len(model.calls)}"
+    assert len(findings) == 1
+    # The write-up is told it covers the others, so it cannot pick one and pin the crash on it.
+    prompt = model.calls[0]
+    assert "COULD NOT BE ATTRIBUTED" in prompt
+    for c in checks[1:]:
+        assert c in prompt, f"{c} is one of the rows this finding answers for"
+
+
+@pytest.mark.asyncio
+async def test_distinct_crashes_stay_distinct_findings():
+    """Collapsing is on the evidence, so two real crashes are still two findings."""
+    result = _result({"c_a": _verdict(Outcome.BAD, "crash A", ACCOUNTING),
+                      "c_b": _verdict(Outcome.BAD, "crash B", ACCOUNTING)}, {})
+    model = _CountingModel(output=_draft(), calls=[])
+
+    findings = await _written_by(model, _outcome(result))
+
+    assert len(model.calls) == 2 and len(findings) == 2
+
+
+@pytest.mark.asyncio
+async def test_two_unreproduced_declarations_are_two_findings():
+    """No counterexample means no shared evidence to collapse on — each is its own claim.
+
+    Both rows carry only the campaign's accounting, which is identical because it is the same
+    campaign. Keying on that would merge two unrelated findings the author made separately.
+    """
+    result = _result({"c_kill": _verdict(Outcome.GOOD, None, ACCOUNTING),
+                      "c_stale": _verdict(Outcome.GOOD, None, ACCOUNTING)},
+                     {"c_kill": REASON, "c_stale": "a different documented bug"})
+    model = _CountingModel(output=_draft(), calls=[])
+
+    findings = await _written_by(model, _outcome(result))
+
+    assert len(findings) == 2, "two declarations are two findings"
+    reasons = {f.provenance.risk_reasoning for f in findings if f.provenance}
+    assert reasons == {REASON, "a different documented bug"}

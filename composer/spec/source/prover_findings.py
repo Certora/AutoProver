@@ -15,7 +15,7 @@ from composer.spec.source.report.findings import (
     Assessment, FindingDraft, FindingRequest, FindingsSynthesis, EvidenceFetcher, severity_for,
 )
 from composer.spec.source.report.schema import (
-    FormalizedProperty, ImpactLevel, LikelihoodLevel, PropertyGroup,
+    FormalizedProperty, ImpactLevel, LikelihoodLevel, PropertyGroup, RuleRef, RuleVerdict,
 )
 from composer.templates.loader import load_jinja_template
 
@@ -100,6 +100,12 @@ def _proof_of_concept(instances: list[RuleEvidence]) -> str | None:
     return "\n\n".join(f"# {label or 'counterexample'}\n{cex}" for label, cex in traces)
 
 
+def _own_row(rule: RuleVerdict, _evidence: list[RuleEvidence]) -> RuleRef:
+    """One row, one finding. A rule's evidence is its own instantiations — nothing here places a
+    counterexample against a rule it was not captured for, so no two rows ever collapse."""
+    return rule.ref
+
+
 def prover_findings(
     fetch_evidence: EvidenceFetcher[RuleEvidence],
 ) -> FindingsSynthesis[RuleEvidence, ProverFindingDraft]:
@@ -111,4 +117,5 @@ def prover_findings(
         prompt=_prompt,
         assess=_assess,
         proof=_proof_of_concept,
+        collapse=_own_row,
     )

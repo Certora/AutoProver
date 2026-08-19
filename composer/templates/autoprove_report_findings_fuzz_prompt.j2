@@ -1,7 +1,17 @@
 Program: {{ contract_name }}
 
 Failing check: {{ check_name }}
+{% if also_covers %}
+THIS CRASH COULD NOT BE ATTRIBUTED TO ONE CHECK. It was reported against {{ also_covers | length + 1 }}
+checks that ran in the same campaign, because the property its assertion named is one no component
+in this run claims — so any of them could be the one it broke:
+{% for c in also_covers %}
+  - {{ c }}
+{%- endfor %}
 
+That is the finding. Say plainly that the campaign found a real violation it cannot place, name what
+it did name, and do not pick one of these checks and write it up as though the crash were its.
+{% endif %}
 {% if properties -%}
 Properties this check verifies (the violation breaks at least one of them — determine which):
 {% for p in properties %}

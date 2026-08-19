@@ -420,6 +420,14 @@ is something the write-up must lead with, an unreproduced declaration must not b
 counterexample it does not have, and the harness caveats belong in
 `assumptions_and_uncertainties`.
 
+**A crash the campaign could not place is one finding, not one per row.** `attribute_findings`
+condemns every check a campaign covered when a crash names a property no component in the run
+claims — right for the verdict table, since the counterexample is real and hiding it would be worse.
+The synthesis collapses those rows onto the counterexample, so the run is written up once and the
+write-up is told which other checks it answers for, rather than picking one and pinning the crash on
+it. Rows with no counterexample fall back to their own identity: two declared findings the run did
+not reproduce are two claims the author made, however alike the rest of their evidence looks.
+
 **Severity is always `informational`**, with `impact` and `likelihood` left empty. A campaign
 establishes that an assertion can be made to fail, not that anyone can profit from it — a crash on a
 failed precondition looks exactly like a crash on a real one. `provenance.risk_reasoning` instead

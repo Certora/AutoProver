@@ -11,7 +11,7 @@ A backend that produces no findings returns no `FindingsSynthesis` and never rea
 """
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -20,7 +20,8 @@ from pydantic import Field
 
 from composer.spec.source.report.schema import (
     AuthoredContent, Finding, FindingProvenance, FormalizedProperty, ImpactLevel, IssueContent,
-    LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleRef, RuleVerdict, SeverityTier,
+    LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleName, RuleRef, RuleVerdict,
+    SeverityTier,
 )
 
 _log = logging.getLogger(__name__)
@@ -85,6 +86,11 @@ class FindingRequest[E]:
     properties: list[FormalizedProperty]
     groups: list[PropertyGroup]
     evidence: list[E]
+    #: The other BAD rows this one write-up answers for — rows the backend could not tell apart
+    #: from ``rule`` on the evidence it has. Empty in the ordinary case. Non-empty is itself
+    #: something the write-up should say: the run found one thing and cannot name which check it
+    #: broke.
+    also_covers: list[RuleName]
 
 
 #: Every captured failing instance of a violated rule, or ``[]`` when the backend has none for it.
@@ -119,6 +125,14 @@ class FindingsSynthesis[E, D: FindingDraft]:
     assess: Callable[[D, list[E]], Assessment]
     #: The finding's ``proof_of_concept`` from its evidence, or None when the evidence is not one.
     proof: Callable[[list[E]], str | None]
+    #: Identity of the *finding* behind a row. Rows sharing a key are written up once, against the
+    #: first of them, with the rest on `FindingRequest.also_covers`.
+    #:
+    #: A backend whose rows are one-to-one with findings returns ``rule.ref`` and nothing ever
+    #: collapses. One whose attribution can condemn several rows on one piece of evidence — a fuzz
+    #: campaign covering a whole property set with a crash it cannot place — returns that evidence,
+    #: so the run is written up once rather than once per row it took down.
+    collapse: Callable[[RuleVerdict, list[E]], Hashable]
 
 
 async def build_findings[E, D: FindingDraft](
@@ -130,7 +144,10 @@ async def build_findings[E, D: FindingDraft](
     synthesis: FindingsSynthesis[E, D],
     llm: BaseChatModel,
 ) -> list[Finding]:
-    """One `Finding` per violated rule (concurrent, best-effort); ``[]`` when nothing is violated."""
+    """One `Finding` per violated rule (concurrent, best-effort); ``[]`` when nothing is violated.
+
+    Fewer than one per rule where the backend's ``collapse`` says several rows are the same finding
+    — see `FindingsSynthesis.collapse`."""
     bad = [r for r in rules if r.outcome == Outcome.BAD]
     if not bad:
         return []
@@ -146,15 +163,40 @@ async def build_findings[E, D: FindingDraft](
 
     bound = llm.with_structured_output(synthesis.draft)
 
-    async def _one(rule: RuleVerdict) -> Finding | None:
+    async def _evidence(rule: RuleVerdict) -> list[E] | None:
+        """This rule's evidence, or None when fetching it failed — which drops the rule rather than
+        writing it up against nothing."""
         try:
-            evidence = await synthesis.fetch_evidence(rule.ref)
+            return await synthesis.fetch_evidence(rule.ref)
+        except Exception:  # noqa: BLE001 — one rule failing must never fail the report
+            _log.warning("report: evidence fetch failed for rule %r; skipping", rule.name,
+                         exc_info=True)
+            return None
+
+    # Every BAD row's evidence first, so rows whose write-up would be the same write-up collapse
+    # before any of them is paid for. The alternative is a model call per row: one crash a campaign
+    # cannot attribute condemns every check that campaign covered, which for a Crucible component is
+    # its whole property set.
+    fetched = await asyncio.gather(*[_evidence(r) for r in bad])
+    collapsed: dict[Hashable, tuple[RuleVerdict, list[E]]] = {}
+    also: dict[Hashable, list[RuleName]] = {}
+    for rule, evidence in zip(bad, fetched):
+        if evidence is None:
+            continue
+        key = synthesis.collapse(rule, evidence)
+        if key in collapsed:
+            also[key].append(rule.name)
+        else:
+            collapsed[key], also[key] = (rule, evidence), []
+
+    async def _one(rule: RuleVerdict, evidence: list[E], covers: list[RuleName]) -> Finding | None:
+        try:
             props = props_by_ref.get(rule.ref, [])
             # A rule's properties may share a group (some may be in none); dedupe by slug, first-seen order.
             rule_groups = list({g.slug: g for p in props if (g := group_by_key.get(p.key)) is not None}.values())
             user = synthesis.prompt(FindingRequest(
                 contract_name=contract_name, rule=rule, properties=props,
-                groups=rule_groups, evidence=evidence,
+                groups=rule_groups, evidence=evidence, also_covers=covers,
             ))
             draft = await bound.ainvoke([SystemMessage(synthesis.system), HumanMessage(user)])
             assert isinstance(draft, synthesis.draft)
@@ -165,11 +207,12 @@ async def build_findings[E, D: FindingDraft](
 
     sem = asyncio.Semaphore(_MAX_CONCURRENT_FINDING_CALLS)
 
-    async def _bounded(rule: RuleVerdict) -> Finding | None:
+    async def _bounded(key: Hashable) -> Finding | None:
         async with sem:
-            return await _one(rule)
+            rule, evidence = collapsed[key]
+            return await _one(rule, evidence, also[key])
 
-    findings = await asyncio.gather(*[_bounded(r) for r in bad])
+    findings = await asyncio.gather(*[_bounded(k) for k in collapsed])
     return [f for f in findings if f is not None]
 
 
