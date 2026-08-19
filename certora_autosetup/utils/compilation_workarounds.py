@@ -32,6 +32,15 @@ from certora_autosetup.utils.solc_version_resolver import (
 )
 from certora_autosetup.utils.types import ContractHandle
 
+# Solc's legacy-codegen stack-too-deep, as opposed to the YulException the via-ir pipeline
+# raises. Matched against whitespace-normalized output, since solc hard-wraps diagnostics.
+_STACK_TOO_DEEP_RE = re.compile(r"CompilerError:\s*Stack too deep", re.IGNORECASE)
+
+# How many contracts may be given via-ir one at a time before the rest of the scene is
+# switched with them. Each individual escalation costs one full compile of the scene to
+# discover, so this bounds the walk; below it, contracts keep their summaries.
+VIA_IR_SCENE_THRESHOLD = 10
+
 
 class AbstractMainContractError(Exception):
     """Raised when the main (verify-target) contract compiled to no bytecode — it is
@@ -141,6 +150,7 @@ class CompilationWorkaroundManager:
         verbose: int = 0,
         solc_convention: SolcConvention = SolcConvention.CERTORA,
         build_config_dir: Optional[Path] = None,
+        declared_via_ir: bool = False,
     ):
         self.project_root = project_root
         # Where foundry.toml / remappings.txt / package.json are read from. Distinct from
@@ -163,6 +173,13 @@ class CompilationWorkaroundManager:
         # to the scalar on finalize — an unseeded partial map (e.g. a single cancun
         # entry) must never be promoted to a global scalar.
         self._evm_version_seeded = False
+        # Contracts given via-ir one at a time, for the scene-wide threshold in
+        # _apply_via_ir_workaround.
+        self._via_ir_contracts: Set[str] = set()
+        # What the project's own build config asks for. The value is never inherited into
+        # the conf (build_systems/base.py drops it deliberately), but it does say where a
+        # via-ir escalation is going to end up, so the walk can be skipped.
+        self.declared_via_ir = declared_via_ir
         # Convert default version to the detected convention
         if solc_convention == SolcConvention.SOLC_SELECT and solc_default_version.startswith("solc") \
                 and not solc_default_version.startswith("solc-"):
@@ -409,9 +426,52 @@ class CompilationWorkaroundManager:
                 # contract's entry from its pragma is always safe.
                 enabled=True,
             ),
+            # solc's own advice on a legacy stack-too-deep is to compile via-ir "while
+            # enabling the optimizer" — the optimizer is what reclaims stack slots, and it
+            # does so under legacy codegen too. Enabling it alone keeps legacy codegen,
+            # which via-ir would replace: via-ir inlines internal functions and with them
+            # the internal summaries CVL applies, so it is the more expensive answer.
+            CompilationWorkaround(
+                name="stack_too_deep_optimizer",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._detect_stack_too_deep_errors(output, contracts) is not None
+                    and self._yul_optimizer_pending(compilation_config, contracts)
+                    else None
+                ),
+                apply_fn=self._apply_optimizer,
+                enabled=not global_via_ir_enabled,
+            ),
+            # The optimizer can clear the contract compile and still leave the
+            # autofinder-instrumented one over the stack limit, since instrumentation adds
+            # slots of its own. Accepting the fallback costs local-variable finders in the
+            # files that fall back; via-ir would cost internal summaries in every file it is
+            # enabled for, so this comes first. Only fires on output produced after the
+            # optimizer was tried, not in the pass that just enabled it.
+            CompilationWorkaround(
+                name="stack_too_deep_autofinder",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._autofinder_relaxation_pending(output, compilation_config)
+                    and not self._yul_optimizer_pending(compilation_config, contracts)
+                    and "stack_too_deep_optimizer" not in applied_this_pass
+                    else None
+                ),
+                apply_fn=self._apply_yul_exception_workaround,
+                enabled=not global_via_ir_enabled,
+            ),
+            # Last of the legacy rungs: only once the optimizer is on and the autofinder
+            # assertion is no longer what is failing the run.
             CompilationWorkaround(
                 name="stack_too_deep_via_ir",
-                detect_fn=lambda output: self._detect_stack_too_deep_errors(output, contracts),
+                detect_fn=lambda output: (
+                    self._detect_stack_too_deep_errors(output, contracts)
+                    if not self._yul_optimizer_pending(compilation_config, contracts)
+                    and not self._autofinder_relaxation_pending(output, compilation_config)
+                    and "stack_too_deep_optimizer" not in applied_this_pass
+                    and "stack_too_deep_autofinder" not in applied_this_pass
+                    else None
+                ),
                 apply_fn=self._apply_via_ir_workaround_to_config,
                 enabled=not global_via_ir_enabled,
             ),
@@ -460,7 +520,7 @@ class CompilationWorkaroundManager:
                     and self._yul_optimizer_pending(compilation_config, contracts)
                     else None
                 ),
-                apply_fn=self._apply_optimizer_for_via_ir,
+                apply_fn=self._apply_optimizer,
                 enabled=True,
             ),
             # Escalation after yul_exception_add_optimizer: with optimizer +
@@ -688,6 +748,24 @@ class CompilationWorkaroundManager:
     # =========================================================================
     # Detection methods
     # =========================================================================
+
+    def _autofinder_relaxation_pending(self, output: str, compilation_config: Dict) -> bool:
+        """True when the run is failing on the autofinder-instrumented compile and the
+        assertion that turns that into a failure is still on.
+
+        certoraRun compiles each file twice: once as written, once instrumented to expose
+        internal functions and local variables. The instrumented copy carries extra stack
+        slots, so it can be the only one over the limit — the contracts themselves compile.
+        Relaxing the assertion accepts a finder-less fallback for those files while leaving
+        codegen alone.
+        """
+        if not compilation_config.get("assert_autofinder_success", False):
+            return False
+        normalized = re.sub(r"\s+", " ", output)
+        return (
+            "Encountered an exception generating autofinder" in normalized
+            and bool(_STACK_TOO_DEEP_RE.search(normalized))
+        )
 
     def _detect_stack_too_deep_errors(
         self, output: str, contracts: List[ContractHandle]
@@ -1191,7 +1269,7 @@ class CompilationWorkaroundManager:
             self._optimizer_off(optimize_map.get(c.contract_name)) for c in contracts
         )
 
-    def _apply_optimizer_for_via_ir(
+    def _apply_optimizer(
         self,
         _detect_result: str,
         updated_config_dict: Dict,
@@ -1199,7 +1277,10 @@ class CompilationWorkaroundManager:
         config_file: Path,
         contracts: List[ContractHandle],
     ) -> Dict:
-        """Apply optimizer alongside via-ir to resolve YulException stack-too-deep.
+        """Enable the optimizer to resolve a stack-too-deep, under either codegen pipeline.
+
+        Reached from the legacy rung (CompilerError: Stack too deep) and from the Yul rung
+        (YulException), because the optimizer's stack-limit evader is what relieves both.
 
         With a per-contract solc_optimize_map (foundry compilation_restrictions)
         only the entries whose optimizer is off are enabled — explicit project
@@ -1216,13 +1297,13 @@ class CompilationWorkaroundManager:
                 optimize_map[name] = "200"
             updated_config_dict["solc_optimize_map"] = optimize_map
             self.log(
-                "Detected YulException stack-too-deep with via-ir — enabling the "
-                f"optimizer (200 runs) in solc_optimize_map for {enabled}",
+                "Stack-too-deep — enabling the optimizer (200 runs) in "
+                f"solc_optimize_map for {enabled}",
                 "WARNING",
             )
         else:
             self.log(
-                "Detected YulException stack-too-deep with via-ir — adding solc_optimize 200",
+                "Stack-too-deep — adding solc_optimize 200",
                 "WARNING",
             )
             compilation_config["solc_optimize"] = "200"
@@ -1620,11 +1701,37 @@ class CompilationWorkaroundManager:
         return True
 
     def _apply_via_ir_workaround(self, contract_needing_via_ir: str, config_dict: Dict) -> Dict:
-        """Add solc_via_ir_map entry for contract that needs via-ir compilation."""
-        # solc_via_ir_map is seeded up front by _seed_compile_maps; just set the
-        # contract that needs via-ir to True.
+        """Enable via-ir for the contract that needs it — or, past the point where naming
+        them one at a time pays off, for the whole scene.
+
+        Per contract is the better answer while the count is small: every contract left on
+        legacy codegen keeps the internal-function summaries via-ir would inline away. But
+        each one costs a full compile of the scene to discover, so a project that needs it
+        widely spends dozens of compiles walking there. Past VIA_IR_SCENE_THRESHOLD the
+        finder loss is already broad and the rest of the scene is likely to follow, so the
+        remaining contracts are switched in one step. A project whose build config declares
+        via-ir skips the walk entirely — it has told us where this ends.
+        """
+        # solc_via_ir_map is seeded up front by _seed_compile_maps.
+        self._via_ir_contracts.add(contract_needing_via_ir)
         config_dict["solc_via_ir_map"][contract_needing_via_ir] = True
-        self.log(f"Adding via-ir workaround for contract: {contract_needing_via_ir}")
+
+        scene_wide = self.declared_via_ir or len(self._via_ir_contracts) >= VIA_IR_SCENE_THRESHOLD
+        if scene_wide and not all(config_dict["solc_via_ir_map"].values()):
+            for name in config_dict["solc_via_ir_map"]:
+                config_dict["solc_via_ir_map"][name] = True
+            reason = (
+                "the build config declares via-ir"
+                if self.declared_via_ir
+                else f"{len(self._via_ir_contracts)} contracts have needed it individually"
+            )
+            self.log(
+                f"Enabling via-ir for the whole scene ({reason}); the remaining contracts "
+                f"lose their internal-function summaries too",
+                "WARNING",
+            )
+        else:
+            self.log(f"Adding via-ir workaround for contract: {contract_needing_via_ir}")
 
         return config_dict
 
