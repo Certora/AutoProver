@@ -61,7 +61,8 @@ from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
-from composer.rustapp.findings import RustSynthesis, rust_findings
+from composer.rustapp.findings import rust_findings
+from composer.spec.source.report.findings import FindingsSynthesis
 from composer.rustapp.phases import PhaseModel
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupSpec
 from composer.rustapp.toolchain import project_toolchain, source_unit
@@ -434,7 +435,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     @override
     def findings_synthesis(
         self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]]
-    ) -> RustSynthesis | None:
+    ) -> FindingsSynthesis | None:
         # Evidence is in the results themselves — a wheel reports per check, and there is no
         # run-scoped store beside it holding what it saw. What that evidence *means* is the wheel's
         # declaration, and a wheel that made none produces no findings.

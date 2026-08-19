@@ -17,21 +17,13 @@ from composer.rustapp.descriptor import AssessedSeverity, FindingsPolicy, FixedS
 from composer.rustapp.result import RustFormalResult
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.source.report.findings import (
-    AssessedFindingDraft, Assessment, FindingDraft, FindingRequest, FindingsSynthesis, RuleEvidence,
-    assessed,
+    Assessed, FindingsPromptParams, FindingsSynthesis, Fixed, RuleEvidence, SeverityFrom,
 )
-from composer.spec.source.report.schema import (
-    FormalizedProperty, PropertyGroup, RuleRef, SeverityTier,
-)
+from composer.spec.source.report.schema import RuleRef, SeverityTier
 from composer.spec.system_model import FeatureUnit
 from composer.templates.loader import load_jinja_template
 
 type RustOutcomes = list[ComponentOutcome[RustFormalResult, FeatureUnit]]
-
-#: What a wheel's synthesis looks like once its declared severity policy has picked the draft the
-#: model answers in. A union rather than one type parameterized by `FindingDraft`: `assessed` reads
-#: axes only an `AssessedFindingDraft` has, so the two branches are not interchangeable.
-type RustSynthesis = FindingsSynthesis[FindingDraft] | FindingsSynthesis[AssessedFindingDraft]
 
 
 class RustFindingsSystemParams(TypedDict):
@@ -43,20 +35,8 @@ class RustFindingsSystemParams(TypedDict):
     fixed_severity: SeverityTier | None
 
 
-class RustFindingsPromptParams(TypedDict):
-    """The full, typed context of ``autoprove_report_findings_rust_prompt.j2``."""
-    contract_name: str
-    check_name: str
-    properties: list[FormalizedProperty]
-    groups: list[PropertyGroup]
-    observations: list[RuleEvidence]
-    #: Other checks this same evidence was reported against — empty unless the wheel could not place
-    #: it, in which case naming them is most of what the finding has to say.
-    also_covers: list[str]
-
-
 _RUST_SYSTEM = TypedTemplate[RustFindingsSystemParams]("autoprove_report_findings_rust_system.j2")
-_RUST_PROMPT = TypedTemplate[RustFindingsPromptParams]("autoprove_report_findings_rust_prompt.j2")
+_RUST_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_rust_prompt.j2")
 
 
 def observations(outcomes: RustOutcomes) -> dict[RuleRef, RuleEvidence]:
@@ -89,34 +69,13 @@ def observations(outcomes: RustOutcomes) -> dict[RuleRef, RuleEvidence]:
     return observed
 
 
-def _prompt(req: FindingRequest) -> str:
-    return _RUST_PROMPT.bind({
-        "contract_name": req.contract_name,
-        "check_name": req.rule.name,
-        "properties": req.properties,
-        "groups": req.groups,
-        "observations": req.evidence,
-        "also_covers": list(req.also_covers),
-    }).render_to(load_jinja_template)
+def _severity(declared: AssessedSeverity | FixedSeverity) -> SeverityFrom:
+    """The wheel's declared policy as the host's. Both sides model it as one choice rather than a
+    schema and a rating rule that could disagree; this is only the wire crossing."""
+    return Assessed() if isinstance(declared, AssessedSeverity) else Fixed(tier=declared.tier)
 
 
-def _fixed(tier: SeverityTier):
-    """Every finding gets ``tier``, with no impact or likelihood recorded — for a wheel that
-    declared nothing in its pipeline assesses exploitability.
-
-    The axes stay blank rather than defaulted: they are provenance, and a rating nothing produced is
-    worse than none on a finding a reader trusts. The reasoning is the author's declaration where
-    there is one, so a reader can tell a finding the author documented from one the run tripped over
-    without reading the evidence."""
-    def assess(_draft: FindingDraft, evidence: list[RuleEvidence]) -> Assessment:
-        return Assessment(
-            severity=tier,
-            reasoning=next((e.declared for e in evidence if e.declared), None),
-        )
-    return assess
-
-
-def rust_findings(outcomes: RustOutcomes, policy: FindingsPolicy | None) -> RustSynthesis | None:
+def rust_findings(outcomes: RustOutcomes, policy: FindingsPolicy | None) -> FindingsSynthesis | None:
     """This run's synthesis, around the observations its own results carry — or ``None`` for a wheel
     that declared no findings policy, which produces no findings at all."""
     if policy is None:
@@ -127,18 +86,13 @@ def rust_findings(outcomes: RustOutcomes, policy: FindingsPolicy | None) -> Rust
         found = observed.get(ref)
         return [found] if found is not None else []
 
-    severity = policy.severity
-    system = _RUST_SYSTEM.bind({
-        "domain": policy.system,
-        "fixed_severity": severity.tier if isinstance(severity, FixedSeverity) else None,
-    }).render_to(load_jinja_template)
-
-    if isinstance(severity, AssessedSeverity):
-        return FindingsSynthesis(
-            draft=AssessedFindingDraft, fetch_evidence=fetch, system=system, prompt=_prompt,
-            assess=assessed,
-        )
+    severity = _severity(policy.severity)
     return FindingsSynthesis(
-        draft=FindingDraft, fetch_evidence=fetch, system=system, prompt=_prompt,
-        assess=_fixed(severity.tier),
+        fetch_evidence=fetch,
+        system=_RUST_SYSTEM.bind({
+            "domain": policy.system,
+            "fixed_severity": severity.tier if isinstance(severity, Fixed) else None,
+        }).render_to(load_jinja_template),
+        prompt=_RUST_PROMPT,
+        severity=severity,
     )

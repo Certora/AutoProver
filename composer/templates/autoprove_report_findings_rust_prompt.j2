@@ -1,6 +1,6 @@
 Program: {{ contract_name }}
 
-Failing check: {{ check_name }}
+Failing check: {{ rule_name }}
 {% if also_covers %}
 THIS EVIDENCE COULD NOT BE ATTRIBUTED TO ONE CHECK. The run reported it against {{ also_covers | length + 1 }}
 checks it covered, because nothing it reported says which of them was actually broken:
@@ -23,8 +23,8 @@ Audit-level claim(s) it belongs to:
   - {{ g.title }}: {{ g.description }}
 {%- endfor %}
 {% endif %}
-{% if observations -%}
-{% for o in observations %}
+{% if evidence -%}
+{% for o in evidence %}
 --- What the run observed: {{ o.label }} ---
 {# No separate run outcome means the evidence is a refutation and nothing else — the same rule
    `proof_of_concept` filters on. #}

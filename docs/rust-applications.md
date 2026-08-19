@@ -434,8 +434,8 @@ campaign establishes that an assertion can be made to fail, not that anyone can 
 crash on a failed precondition looks exactly like a crash on a real one. Asking for a rating anyway
 buys a fabricated one. `provenance.risk_reasoning` instead carries the author's declaration where
 there is one, so a documented finding is distinguishable from one the run tripped over without
-reading the evidence. A backend whose evidence *can* carry the judgement declares `assessed` and gets
-the axes plus the severity matrix.
+reading the evidence. A wheel whose evidence *can* carry the judgement declares `assessed`, and the
+host turns that into `Assessed` — which brings the axes and the severity matrix with it.
 
 **A conclusion the wheel could not attribute to one check is one finding, not one per row.**
 `attribute_findings` condemns every check a campaign covered when a crash names a property no

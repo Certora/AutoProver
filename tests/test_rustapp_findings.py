@@ -31,15 +31,13 @@ from composer.pipeline.core import CorePipelineResult, Delivered
 from composer.pipeline.ptypes import ComponentOutcome
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
-from composer.rustapp import findings as findings_mod
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
 from composer.spec.source.report.collect import ReportComponentInput, collect
-from composer.spec.source.report.findings import (
-    FindingDraft, FindingRequest, RuleEvidence, build_findings,
-)
-from composer.spec.source.report.schema import Finding, Outcome, RuleVerdict
+from composer.spec.source.report.findings import FindingDraft, RuleEvidence, build_findings
+from composer.templates.loader import load_jinja_template
+from composer.spec.source.report.schema import Finding, Outcome
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor
 
@@ -345,15 +343,12 @@ async def test_a_finding_on_a_collapsed_row_reads_the_run_that_row_came_from():
 
 def test_the_prompt_offers_no_counterexample_for_a_finding_the_run_did_not_reproduce():
     """The prompt is where a model could be led to invent one, so the distinction lives there too."""
-    req = FindingRequest(
-        contract_name="klend",
-        rule=RuleVerdict(name="c_kill", spec_file="c_oracle.rs", outcome=Outcome.BAD),
-        properties=[], groups=[],
+    user = load_jinja_template(
+        "autoprove_report_findings_rust_prompt.j2",
+        contract_name="klend", rule_name="c_kill", properties=[], groups=[], also_covers=[],
         evidence=[RuleEvidence(label="Oracle", ran=Outcome.GOOD,
                                accounting="campaign spent 41231 executions", declared=REASON)],
-        also_covers=[],
     )
-    user = findings_mod._prompt(req)
 
     assert "did NOT reproduce" in user and REASON in user
     assert "Do not describe a counterexample" in user
@@ -401,15 +396,12 @@ async def test_a_green_row_still_says_what_the_campaign_cost():
 
 def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
     """The model is shown both, told which is which, and told what each is for."""
-    req = FindingRequest(
-        contract_name="klend",
-        rule=RuleVerdict(name="c_ts", spec_file="c_vault.rs", outcome=Outcome.BAD),
-        properties=[], groups=[],
+    user = load_jinja_template(
+        "autoprove_report_findings_rust_prompt.j2",
+        contract_name="klend", rule_name="c_ts", properties=[], groups=[], also_covers=[],
         evidence=[RuleEvidence(label="Vault Initialization", ran=Outcome.BAD,
                                counterexample=COUNTEREXAMPLE, accounting=ACCOUNTING)],
-        also_covers=[],
     )
-    user = findings_mod._prompt(req)
 
     crash_at, spent_at = user.index(COUNTEREXAMPLE), user.index(ACCOUNTING)
     assert crash_at < spent_at, "the evidence leads"
@@ -497,6 +489,21 @@ async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
 
 
 @pytest.mark.asyncio
+async def test_the_loop_binds_this_runs_evidence_into_the_write_up_prompt():
+    """The host binds the prompt now, not the backend, so nothing backend-side would catch it
+    binding the wrong thing — and a write-up rendered against absent evidence still produces a
+    plausible finding rather than an error."""
+    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE, ACCOUNTING)}, {})
+    model = _CountingModel(output=_draft(), calls=[])
+
+    await _written_by(model, _outcome(result))
+
+    prompt = model.calls[0]
+    assert COUNTEREXAMPLE in prompt, "the run's own evidence has to reach the model"
+    assert "c_ts" in prompt and "Vault Initialization" in prompt
+
+
+@pytest.mark.asyncio
 async def test_distinct_crashes_stay_distinct_findings():
     """Two crashes the wheel *could* place carry no key, so they stay two findings."""
     result = _result({"c_a": _verdict(Outcome.BAD, "crash A", ACCOUNTING),
@@ -569,7 +576,7 @@ def test_the_write_up_is_told_what_this_wheels_evidence_is():
     assert "fixed at low" in synthesis.system
     assert "Do not assign or imply a severity" in synthesis.system
     # …and the schema it answers in carries no axes to fill in either.
-    assert "impact_level" not in synthesis.draft.model_fields
+    assert "impact_level" not in synthesis.severity.draft.model_fields
 
 
 def test_a_wheel_that_assesses_risk_is_asked_for_the_axes():
@@ -584,6 +591,6 @@ def test_a_wheel_that_assesses_risk_is_asked_for_the_axes():
     synthesis = fz.findings_synthesis([])
     assert synthesis is not None
 
-    assert "impact_level" in synthesis.draft.model_fields
+    assert "impact_level" in synthesis.severity.draft.model_fields
     assert "Rate impact and likelihood" in synthesis.system
     assert "Do not assign" not in synthesis.system

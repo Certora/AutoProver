@@ -49,7 +49,7 @@ async def build_report[R: ReportableResult](
     source_edits: list[SourceEditRecord] | None = None,
     verification_artifacts: list[VerificationArtifactRecord] | None = None,
     findings_llm: BaseChatModel | None = None,
-    findings: FindingsSynthesis[Any] | None = None,
+    findings: FindingsSynthesis | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 

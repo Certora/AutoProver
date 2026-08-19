@@ -509,20 +509,24 @@ nothing of that kind", so the fields mean the same thing whoever produced them a
 what is missing instead of guessing. An earlier design made this a type parameter; it bought nothing,
 because the only code that ever reads a field is the backend's own prompt.
 
-What a backend supplies is a `FindingsSynthesis` — four things:
+What a backend supplies is a `FindingsSynthesis` — four things, only one of which is a function:
 
 | Field | Why it is the backend's |
 | --- | --- |
-| `fetch_evidence` | Keyed by `RuleRef` — `(file, name)`, how the report identifies a row. A name alone does not: one deliverable can hold several components' checks, and two authors given the same property write the same name |
-| `draft` | The structured-output schema. Subclass `FindingDraft` to ask for more, so a model is only ever asked for what this backend's evidence can support. A backend that rates risk asks for `AssessedFindingDraft`, whose axes `assessed` maps through the matrix |
-| `system` / `prompt` | The prompt is a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's |
-| `assess` | The severity, and the record of how it was reached. The prover's is the impact × likelihood matrix (`assessed`); a backend whose evidence does not establish exploitability returns a constant instead of a rating nothing produced |
+| `fetch_evidence` | Keyed by `RuleRef` — `(file, name)`, how the report identifies a row. A name alone does not: one deliverable can hold several components' checks, and two authors given the same property write the same name. The only hook, because it is the only one that does I/O |
+| `system` | The prompt is a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's |
+| `prompt` | A `TypedTemplate[FindingsPromptParams]`, not a callable. Both backends' prompts take the same fields — rule, properties, groups, evidence, `also_covers` — so the backend owns the prose and `build_findings` owns the binding |
+| `severity` | `Assessed` or `Fixed(tier)`. Each variant carries the `draft` schema it implies, so a backend cannot ask the model for axes it then ignores, nor assign a constant while the model still rates |
 
-`draft` and `assess` are not independent — the schema decides what the model can be asked, and
-`assess` can only read what came back. Everything else the loop used to take as a hook turned out to
-be derivable from the evidence itself, and is now shared: `proof_of_concept` joins the reproducers
-from instances the run actually refuted (labelled once there is more than one), and `finding_key`
-reads the key the backend stamped.
+`severity` is one choice rather than a schema plus a rating rule because the schema is what decides
+what the model can be *asked*: a backend whose evidence does not establish who could profit or how
+must not be handed a draft with `impact_level` on it, since a schema invites a rating whatever the
+instructions say. `Fixed` records the author's declared reason as the finding's `risk_reasoning` and
+leaves the axes empty, so their absence says nothing assessed them.
+
+Everything else the loop used to take as a hook turned out to be derivable from the evidence itself,
+and is now shared: `proof_of_concept` joins the reproducers from instances the run actually refuted
+(labelled once there is more than one), and `finding_key` reads the key the backend stamped.
 
 That key is what keeps the cost proportional to what was *found* rather than to how many rows it took
 down. A fuzz campaign covers a component's whole property set, and a crash it cannot place condemns

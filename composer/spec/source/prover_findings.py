@@ -9,9 +9,8 @@ from typing import TypedDict
 
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.source.report.findings import (
-    AssessedFindingDraft, EvidenceFetcher, FindingRequest, FindingsSynthesis, RuleEvidence, assessed,
+    Assessed, EvidenceFetcher, FindingsPromptParams, FindingsSynthesis,
 )
-from composer.spec.source.report.schema import FormalizedProperty, PropertyGroup
 from composer.templates.loader import load_jinja_template
 
 
@@ -21,40 +20,18 @@ class FindingsSystemParams(TypedDict):
     test: adding a ``{{ ... }}`` without declaring it here then fails."""
 
 
-class FindingsPromptParams(TypedDict):
-    """The full, typed context of ``autoprove_report_findings_prompt.j2``. Every key is required."""
-    contract_name: str
-    rule_name: str
-    properties: list[FormalizedProperty]
-    groups: list[PropertyGroup]
-    instances: list[RuleEvidence]
-
-
 _FINDINGS_SYSTEM = TypedTemplate[FindingsSystemParams]("autoprove_report_findings_system.j2")
 _FINDINGS_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_prompt.j2")
 
 
-def _prompt(req: FindingRequest) -> str:
-    return _FINDINGS_PROMPT.bind({
-        "contract_name": req.contract_name,
-        "rule_name": req.rule.name,
-        "properties": req.properties,
-        "groups": req.groups,
-        "instances": req.evidence,
-    }).render_to(load_jinja_template)
-
-
-def prover_findings(
-    fetch_evidence: EvidenceFetcher,
-) -> FindingsSynthesis[AssessedFindingDraft]:
+def prover_findings(fetch_evidence: EvidenceFetcher) -> FindingsSynthesis:
     """The Prover's synthesis, around the run-scoped capture that holds its evidence.
 
-    Severity is `assessed`: a counterexample is a concrete reachable state of the program itself, so
+    Severity is `Assessed`: a counterexample is a concrete reachable state of the program itself, so
     the axes are a judgement the evidence can carry."""
     return FindingsSynthesis(
-        draft=AssessedFindingDraft,
         fetch_evidence=fetch_evidence,
         system=_FINDINGS_SYSTEM.bind({}).render_to(load_jinja_template),
-        prompt=_prompt,
-        assess=assessed,
+        prompt=_FINDINGS_PROMPT,
+        severity=Assessed(),
     )
