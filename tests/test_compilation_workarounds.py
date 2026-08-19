@@ -373,6 +373,151 @@ def test_via_ir_added_out_of_necessity(manager, monkeypatch, tmp_path) -> None:
     assert updated["solc_via_ir"] is True
 
 
+# A second solc phrasing for the same condition — legacy codegen cannot do this copy,
+# the IR pipeline can — reported by a whole-project compile: no "Compiling <path>..."
+# progress line, so the file is named only in the `-->` source-location line. solc
+# hard-wraps both the "IR pipeline" phrase and the `--via-ir` flag token itself.
+BULK_VIA_IR_LEGACY_COPY = (
+    "solc8.28 had an error:\n"
+    "UnimplementedFeatureError: Copying of type struct Vault.RateTier memory[] memory \n"
+    "to storage is not supported in legacy (only supported by the IR \n"
+    "pipeline). Hint: try compiling with `--via-\n"
+    "ir` (CLI) or the equivalent `viaIR: true` (Standard JSON)\n"
+    "   --> contracts/Vault.sol:120:9:\n"
+)
+
+# The error calling for the OPPOSITE fix (turn via-ir OFF for an old compiler). It
+# names the conf key solc_via_ir, which must stay outside the via-ir-required family.
+UNSUPPORTED_SOLC_VIA_IR_OUTPUT = (
+    "Compiling contracts/Foo.sol...\n"
+    "Unsupported solc version 0.7.6 for solc_via_ir, please use 0.8.13 or later\n"
+)
+
+# A per-unit error: the "Compiling <path>..." line names Foo while the `-->` names an
+# unrelated inlined file.
+COMPILING_LINE_VIA_IR_REQUIRED = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: Require with a custom error is only available using \n"
+    "the via-ir pipeline.\n"
+    "   --> lib/somewhere/Inlined.sol:10:5:\n"
+)
+
+
+# Whole-project compile where an unrelated Warning with its own source location follows
+# the via-ir diagnostic, which names no file of its own.
+BULK_VIA_IR_FOLLOWED_BY_FOREIGN_WARNING = (
+    "solc8.28 had an error:\n"
+    "UnimplementedFeatureError: Copying of type struct Vault.RateTier memory[] memory \n"
+    "to storage is not supported in legacy (only supported by the IR pipeline).\n"
+    "Warning: Unused function parameter. Remove or comment out the variable name.\n"
+    "   --> lib/oz/ERC20.sol:80:5:\n"
+)
+
+# Each of the three hint spellings on its own, so no single fixture can cover for a
+# broken alternative. The diagnostic wording is the same in all three and mentions
+# neither the pipeline nor the flag.
+VIA_IR_HINT_FLAG_ONLY = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: This feature is not supported by the legacy code \n"
+    "generator. Hint: try compiling with `--via-ir` (CLI).\n"
+)
+
+# The flag token itself split by solc's hard wrap.
+VIA_IR_HINT_FLAG_WRAPPED = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: This feature is not supported by the legacy code \n"
+    "generator. Hint: try compiling with `--via-\n"
+    "ir` (CLI).\n"
+)
+
+VIA_IR_HINT_JSON_KEY_ONLY = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    "UnimplementedFeatureError: This feature is not supported by the legacy code \n"
+    "generator. Hint: set `viaIR: true` (Standard JSON).\n"
+)
+
+# A diagnostic whose quoted source line happens to talk about a pipeline: prose in the
+# user's code, not a solc remediation hint.
+TYPE_ERROR_WITH_PIPELINE_PROSE = (
+    "Compiling contracts/Foo.sol...\n"
+    "solc8.26 had an error:\n"
+    'TypeError: Member "route" not found or not visible after argument-dependent lookup.\n'
+    "   --> contracts/Foo.sol:42:9:\n"
+    "    |\n"
+    " 42 |         router.route(amount); // route through their pipeline\n"
+)
+
+
+def test_detects_bulk_via_ir_required_via_source_location(manager) -> None:
+    # Whole-project compile: the affected file comes from `--> <path>:line:col`, and the
+    # wrapped `--via-\nir` hint must still be recognized.
+    contracts = [ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol")]
+    assert manager._detect_via_ir_required(BULK_VIA_IR_LEGACY_COPY, contracts) == "Vault"
+
+
+def test_unsupported_solc_via_ir_is_not_via_ir_required(manager) -> None:
+    # Enabling via-ir here would fight the workaround that must disable it.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_via_ir_required(UNSUPPORTED_SOLC_VIA_IR_OUTPUT, contracts) is None
+
+
+def test_via_ir_compiling_line_takes_precedence_over_source_location(manager) -> None:
+    # The compiled unit is what needs via-ir; the inlined file in the `-->` line is a
+    # scene contract too, so only precedence decides the answer.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Inlined", source_file="lib/somewhere/Inlined.sol"),
+    ]
+    assert manager._detect_via_ir_required(COMPILING_LINE_VIA_IR_REQUIRED, contracts) == "Foo"
+
+
+def test_via_ir_fallback_ignores_another_diagnostics_source_location(manager) -> None:
+    # The `-->` belongs to the Warning below, not to the via-ir diagnostic — enabling
+    # via-ir for that file would fix nothing and change an unrelated contract's build.
+    contracts = [ContractHandle(contract_name="ERC20", source_file="lib/oz/ERC20.sol")]
+    assert (
+        manager._detect_via_ir_required(BULK_VIA_IR_FOLLOWED_BY_FOREIGN_WARNING, contracts) is None
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [VIA_IR_HINT_FLAG_ONLY, VIA_IR_HINT_FLAG_WRAPPED, VIA_IR_HINT_JSON_KEY_ONLY],
+    ids=["flag", "flag-wrapped", "json-key"],
+)
+def test_each_hint_spelling_detected_on_its_own(manager, output: str) -> None:
+    # One spelling per fixture: a broken alternative cannot hide behind another one
+    # matching first.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_via_ir_required(output, contracts) == "Foo"
+
+
+def test_pipeline_prose_in_source_line_is_not_a_hint(manager) -> None:
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    assert manager._detect_via_ir_required(TYPE_ERROR_WITH_PIPELINE_PROSE, contracts) is None
+
+
+def test_stack_too_deep_hint_is_not_via_ir_required(manager) -> None:
+    # solc appends the same via-ir hint to every stack-too-deep / YulException
+    # diagnostic, where via-ir is one remedy among several. Those must stay with
+    # stack_too_deep_via_ir and the yul rungs, which climb the optimizer ladder first.
+    foo = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    harness = [
+        ContractHandle(
+            contract_name="LMPStrategyInstance1",
+            source_file="certora/harnesses/LMPStrategyInstance1.sol",
+        )
+    ]
+    assert manager._detect_via_ir_required(WRAPPED_YUL_STACK_TOO_DEEP, harness) is None
+    assert manager._detect_via_ir_required(SINGLE_LINE_YUL_STACK_TOO_DEEP, foo) is None
+    assert manager._detect_via_ir_required(PERSISTENT_STACK_TOO_DEEP_OUTPUT, foo) is None
+    assert manager._detect_via_ir_required(BULK_STACK_TOO_DEEP, foo) is None
+
+
 def test_yul_last_resort_keeps_compile_settings(manager, monkeypatch, tmp_path) -> None:
     # Pass 1 carries a plain stack-too-deep for Foo AND a YulException with the
     # optimizer already present (e.g. supplied by the project's foundry config):
@@ -1220,6 +1365,171 @@ def test_unseeded_cancun_map_not_promoted_to_scalar(manager, monkeypatch, tmp_pa
     assert success is True
     assert compilation_config["solc_evm_version_map"] == {"Foo": "cancun"}
     assert "solc_evm_version" not in compilation_config
+
+
+# =============================================================================
+# Unresolved-import classification around the source-not-found workaround
+# =============================================================================
+#
+# The classification never gates the workaround: it explains what the rebuild is reacting to,
+# and turns the loop's generic "conf and command are unchanged" giving-up message into one that
+# names why nothing could change.
+
+
+class _SequencedRunWithoutForge(_SequencedRun):
+    """Queued compilation outputs, plus `forge remappings` failing the way it does in CI.
+
+    The packages rebuild shells out to forge through the same subprocess module the loop's fake
+    is installed on, so one fake has to answer both kinds of call.
+    """
+
+    def __call__(self, cmd, **kwargs):
+        if cmd and cmd[0] == "forge":
+            raise FileNotFoundError("forge")
+        return super().__call__(cmd, **kwargs)
+
+
+def _run_loop_with_packages(manager, monkeypatch, tmp_path, outputs, contracts, packages):
+    """Like _run_loop, but the conf already carries a packages list (in both dicts), which is
+    what a real run looks like once the build system contributed one."""
+    fake_run = _SequencedRunWithoutForge(outputs)
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run
+    )
+    compilation_config = {
+        "files": [f"{c.source_file}:{c.contract_name}" for c in contracts],
+        "packages": list(packages),
+    }
+    success, _, updated = manager.run_compilation_with_workarounds(
+        cmd=["certoraRun", "test.conf"],
+        config_file=tmp_path / "test.conf",
+        compilation_config=compilation_config,
+        contracts=contracts,
+        updated_config_dict={"packages": list(packages)},
+    )
+    return success, updated, fake_run
+
+
+def _source_not_found(source_unit: str) -> str:
+    return f'ParserError: Source "{source_unit}" not found: File not found.\n'
+
+
+def test_file_missing_in_installed_package_is_named_when_giving_up(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The package IS installed, so the rebuilt list is identical and the loop stops — the
+    # message must say that rebuilding cannot help rather than only "nothing changed".
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (tmp_path / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, _, fake_run = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{tmp_path / 'node_modules/@vault/core/IVault.sol'}")] * 10,
+        contracts,
+        packages,
+    )
+
+    assert success is False
+    # One certoraRun: the rebuild reproduces the identical list, so there is nothing to retry.
+    assert fake_run.calls == 1
+    assert [f.kind.value for f in manager.last_import_diagnostics] == ["file_missing_in_package"]
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert any("rebuilding the packages list cannot help" in msg for msg in errors)
+
+
+def test_missing_package_target_is_retried_once_the_rebuild_finds_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The dependency is hoisted to the run root, so the rebuild produces a different list and
+    # the loop has something new to try.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, updated, fake_run = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{project / 'node_modules/@vault/core/IVault.sol'}")],
+        contracts,
+        packages,
+    )
+
+    assert any("package_target_missing" in msg for msg, _ in logged)
+    # The retry compiled, so the run has no unresolved imports left to report.
+    assert manager.last_import_diagnostics == []
+    assert success is True
+    assert fake_run.calls == 2
+    assert updated["packages"] == [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+
+
+def test_import_diagnostics_do_not_survive_into_an_unrelated_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The import problem IS fixed by the rebuild and the run then dies of something else. The
+    # classification of the first output must not be reported for that terminal failure —
+    # callers paste it into the compilation error, where it would blame a missing dependency.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+    unrelated = "Error: something entirely different, no workaround applies\n"
+
+    success, _, _ = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{project / 'node_modules/@vault/core/IVault.sol'}")] + [unrelated] * 12,
+        contracts,
+        packages,
+    )
+
+    assert success is False
+    assert manager.last_import_diagnostics == []
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert errors and not any("package_target_missing" in msg for msg in errors)
+
+
+def test_unparseable_source_not_found_leaves_the_loop_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A garbled diagnostic still trips the detector; classification simply finds nothing and the
+    # workaround runs exactly as it did before.
+    garbled = 'ParserError: Source " not found: File not found.\n'
+    manager = CompilationWorkaroundManager(project_root=tmp_path)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, _, fake_run = _run_loop_with_packages(
+        manager, monkeypatch, tmp_path, [garbled] * 10, contracts, []
+    )
+
+    assert success is False
+    assert manager.last_import_diagnostics == []
+    # Empty project, so the rebuild reproduces the empty list and the loop gives up after the
+    # one certoraRun — with no diagnosis appended, exactly as before the classifier existed.
+    assert fake_run.calls == 1
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert errors and errors[-1].endswith("giving up")
 
 
 # A contract that inherits functions it never implements. solc hard-wraps the
