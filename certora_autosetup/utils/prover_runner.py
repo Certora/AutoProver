@@ -529,7 +529,19 @@ class ProverRunner(ABC):
 
         try:
             all_checks = self.prover_api.get_all_checks(job_identifier)
+        except Exception as e:
+            self.log(
+                f"Failed to fetch checks for job {job_identifier}: {e}", "WARNING"
+            )
+            return []
+        return self._checks_to_rule_results(all_checks, job_identifier)
 
+    def _checks_to_rule_results(self, all_checks, job_identifier: str = "") -> List[RuleResult]:
+        """Convert already-fetched prover checks into RuleResult objects. Split out from
+        parse_rule_results_from_job so a caller that ALREADY holds checks (e.g. partial checks captured
+        while polling a still-running job for stop-on-first-violation) can reuse the same conversion
+        without a second network fetch. Never raises — a malformed check is skipped, not fatal."""
+        try:
             # Convert checks to RuleResult objects
             rule_results = []
             sanity_rule_count = 0

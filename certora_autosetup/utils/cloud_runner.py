@@ -58,6 +58,7 @@ class CloudProverRunner(ProverRunner):
         cloud_server: str | None = None,
         disable_cache: bool = False,
         cancel_jobs_on_cleanup: bool = True,
+        stop_on_first_violation: bool = False,
     ):
         """
         Initialize cloud job manager.
@@ -88,6 +89,10 @@ class CloudProverRunner(ProverRunner):
         )
         self.disable_cache = disable_cache
         self.cancel_jobs_on_cleanup = cancel_jobs_on_cleanup
+        # When True, poll a still-running job's PARTIAL rule results each cycle and cancel the
+        # job as soon as any rule is VIOLATED, instead of waiting for every rule to finish. The
+        # partial results (with the violation) are still parsed and returned. Off by default.
+        self.stop_on_first_violation = stop_on_first_violation
         self.job_wait_timeout = self.JOB_TIMEOUT_SECONDS
 
         # Progress tracking counters (read from spinner thread, written under asyncio lock)
@@ -821,7 +826,7 @@ class CloudProverRunner(ProverRunner):
 
             # Wait for job completion with configurable timeout
             job_wait_timeout = self.job_wait_timeout
-            success, prover_start_time, prover_finish_time = await self._wait_for_job_completion_with_api(
+            success, prover_start_time, prover_finish_time, early_stop_checks = await self._wait_for_job_completion_with_api(
                 prover_api, job_url, job_wait_timeout
             )
 
@@ -836,6 +841,37 @@ class CloudProverRunner(ProverRunner):
                 self._record_prover_runtime_seconds(prover_api.get_job_info(job_url).runtime)
             except Exception as e:
                 self.log(f"Could not record prover runtime for usage ledger: {e}", "DEBUG")
+
+            if early_stop_checks is not None:
+                # stop_on_first_violation fired: the job was cancelled right after a rule VIOLATED.
+                # Reuse the partial checks captured at detection (robust to a gappy post-cancel refetch)
+                # and return a non-success result carrying the violation for the caller to act on.
+                job_handle.status = JobStatus.CANCELLED
+                rule_results = self._checks_to_rule_results(early_stop_checks, job_url)
+                log_with_contract(
+                    self.component,
+                    "info",
+                    job_spec.contract_name,
+                    f"Stopped on first violation after {duration:.1f}s "
+                    f"({len(rule_results)} partial rule result(s))",
+                )
+                return ProverResult(
+                    job_handle=job_handle,
+                    success=False,
+                    report_path=None,
+                    output_data={
+                        "job_url": job_url,
+                        "rule_count": len(rule_results),
+                        "stopped_on_first_violation": True,
+                        "prover_start_time": prover_start_time,
+                        "prover_finish_time": prover_finish_time,
+                    },
+                    job_spec=job_spec,
+                    rule_results=rule_results,
+                    alerts=[],
+                    duration=duration,
+                    transformed_result=None,
+                )
 
             if success:
                 # Job completed successfully, parse results
@@ -947,14 +983,33 @@ class CloudProverRunner(ProverRunner):
                 transformed_result=None,
             )
 
+    def _partial_violated_checks(self, prover_api, job_url: str):
+        """Best-effort: fetch a (possibly still-running) job's partial checks and return the VIOLATED
+        ones. Returns (all_checks, violated_checks). Never raises — a fetch failure on an in-flight or
+        just-cancelled job (missing/partial files) yields ([], []) so polling simply continues."""
+        try:
+            all_checks = list(prover_api.get_all_checks(job_url) or [])
+        except Exception as e:
+            self.log(f"partial-check fetch failed for {job_url}: {e}", "DEBUG")
+            return [], []
+        def _status(c):
+            st = getattr(c, "status", None)
+            val = getattr(st, "value", None)
+            return val if val is not None else str(st)
+        violated = [c for c in all_checks if _status(c) == "VIOLATED"]
+        return all_checks, violated
+
     async def _wait_for_job_completion_with_api(
         self, prover_api: ProverOutputAPI, job_url: str, timeout_seconds: int
-    ) -> tuple[bool, Optional[float], Optional[float]]:
+    ) -> tuple[bool, Optional[float], Optional[float], Optional[list]]:
         """Wait for job completion using ProverOutputAPI.
 
         Returns:
-            Tuple of (success, prover_start_time, prover_finish_time).
-            Times may be None if unavailable.
+            Tuple of (success, prover_start_time, prover_finish_time, early_stop_checks).
+            Times may be None if unavailable. early_stop_checks is None on a normal
+            completion/failure; when stop_on_first_violation fired it holds the partial
+            checks captured just before the job was cancelled (so the caller can report
+            the violation). success is False in that case.
         """
         import asyncio
 
@@ -996,10 +1051,10 @@ class CloudProverRunner(ProverRunner):
                         # Note: HALTED jobs are treated as successful in PreAudit because they often contain
                         # partial results for some rules that can still be analyzed
                         self.log(f"Job completed successfully: {job_url}")
-                        return True, prover_start, prover_finish
+                        return True, prover_start, prover_finish, None
                     elif job_info.status in [ProverJobStatus.FAILED, ProverJobStatus.CANCELED, ProverJobStatus.SERVICE_UNAVAILABLE, ProverJobStatus.UPLOAD_FAILED]:
                         self.log(f"Job failed with status {job_info.status}: {job_url}")
-                        return False, prover_start, prover_finish
+                        return False, prover_start, prover_finish, None
                     # Check if job has completed but with an unrecognized status
                     elif hasattr(job_info, "is_completed") and job_info.is_completed:
                         self.log(
@@ -1007,8 +1062,21 @@ class CloudProverRunner(ProverRunner):
                             f"treating as failed: {job_url}",
                             "WARNING"
                         )
-                        return False, prover_start, prover_finish
-                    # If status is 'RUNNING', 'QUEUED', etc., continue waiting
+                        return False, prover_start, prover_finish, None
+                    # Status is 'RUNNING'/'QUEUED'/etc. Optionally short-circuit: if any rule has already
+                    # VIOLATED, cancel the job now instead of waiting for the remaining rules. The partial
+                    # checks captured here are returned so the caller reports the violation even if a
+                    # post-cancel refetch comes back gappy.
+                    if self.stop_on_first_violation:
+                        all_checks, violated = self._partial_violated_checks(prover_api, job_url)
+                        if violated:
+                            names = ", ".join(sorted({c.rule_name for c in violated})[:3])
+                            self.log(
+                                f"stop_on_first_violation: {len(violated)} check(s) VIOLATED ({names}) — "
+                                f"cancelling {job_url}"
+                            )
+                            await self._cancel_cloud_job(job_url)
+                            return False, prover_start, prover_finish, all_checks
                 else:
                     self.log(f"No job info returned for {job_url}")
 
@@ -1022,12 +1090,12 @@ class CloudProverRunner(ProverRunner):
                     self.log(
                         f"Authentication issue detected, assuming job completed: {job_url}"
                     )
-                    return True, None, None
+                    return True, None, None, None
                 await asyncio.sleep(poll_interval)
 
         # Timeout reached
         self.log(f"Job completion timeout after {timeout_seconds}s", "WARNING")
-        return False, None, None
+        return False, None, None, None
 
     def _create_failed_result(
         self, job_spec: ProverJobSpec, cache_key: str, error_msg: str
