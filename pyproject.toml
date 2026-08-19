@@ -174,10 +174,6 @@ explicit = true
 markers = [
     "expensive: hits the real prover / network — deselect with -m 'not expensive'",
     "fuzz: fuzz tests",
-    # Kept out of `fuzz` because of what they need, not what they do: these build
-    # `wire-echo` with cargo at test time, so a job that selects them has to install
-    # the pinned Rust toolchain first (rustup's on-demand install races itself under
-    # xdist). A Rust-free job can select plain `fuzz` and stay Rust-free.
     "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time"
 ]
 # optional but recommended once you're registering marks:

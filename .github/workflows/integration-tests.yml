@@ -41,11 +41,9 @@ jobs:
           java-version: "21"
 
       - name: sync-deps
-        # --no-dev skips the `dev` group and the `apps` group it includes, so this
-        # job never builds the `rust/` wheels and never installs the pinned
-        # toolchain. Anything here that shelled out to cargo would make rustup
-        # fetch that toolchain mid-test — the fuzz step below is scoped to avoid
-        # exactly that. Every `uv run` below needs the flag too: a bare `uv run`
+        # --no-dev skips the `dev` group (and the `apps` group it includes), so this
+        # job doesn't compile the Rust crates — nothing under `expensive` or `fuzz`
+        # touches them. Every `uv run` below needs the flag too: a bare `uv run`
         # re-syncs with the default groups and would pull `apps` back in.
         run: |
           uv sync --group test --extra prover --no-dev
@@ -82,10 +80,6 @@ jobs:
           uv run --no-dev pytest -n 3 -m 'expensive' tests
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
-      # `fuzz` deliberately excludes the wire round trips, which are marked `wire`:
-      # they build a cargo binary at test time and this job has no Rust toolchain.
-      # pytest.yml runs them, on every push to master, with the toolchain installed
-      # and rust/target cached.
       - name: run template fuzz tests
         run: |
           uv run --no-dev pytest -n 2 -m 'fuzz' tests
