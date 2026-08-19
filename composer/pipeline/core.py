@@ -57,7 +57,7 @@ from composer.llm.types import CacheLevel
 from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import Formalized, ReportComponentInput, Verdict
-from composer.spec.source.report.findings import FindingsSynthesis
+from composer.spec.source.report.findings import FindingsPolicy
 from composer.spec.source.report.schema import (
     AutoProverReport, RuleName, ReportBackend, SourceEditRecord, VerificationArtifactRecord,
 )
@@ -205,9 +205,9 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         Never called for gave-up or budget-curtailed components."""
         ...
 
-    def findings_synthesis(
+    def findings_policy(
         self, outcomes: list[ComponentOutcome[FormT, U]]
-    ) -> FindingsSynthesis | None:
+    ) -> FindingsPolicy | None:
         """How this backend writes its violated rules up as findings, or None if it produces none.
 
         Returning None is how a backend opts out — the report then builds no findings for it, with
@@ -702,7 +702,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         for o in outcomes
         for pa in o.artifacts
     ]
-    findings = formalizer.findings_synthesis(outcomes)
+    findings = formalizer.findings_policy(outcomes)
     try:
         async def _report() -> AutoProverReport:
             return await build_report(
@@ -710,7 +710,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
                 source_edits=await formalizer.source_edits(outcomes, run),
                 verification_artifacts=artifact_records,
-                # Findings only when the backend has a synthesis — skip the heavy model otherwise.
+                # Findings only when the backend declared a policy — skip the heavy model otherwise.
                 findings_llm=run.env.llm_heavy() if findings else None,
                 findings=findings,
             )

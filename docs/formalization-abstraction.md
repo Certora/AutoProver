@@ -152,7 +152,7 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         return []                     # synthetic report rows; default none
 
-    def findings_synthesis(self, outcomes) -> FindingsSynthesis | None:
+    def findings_policy(self, outcomes) -> FindingsPolicy | None:
         return None                   # how to write violated rules up; default none
 
     async def finalize(self, outcomes, run) -> None:
@@ -476,10 +476,10 @@ to one entry, and uses `Verdict.merge` (priority `BAD > ERROR > TIMEOUT > UNKNOW
 roll up multiple results for one rule. Foundry's fetcher instead reads pass/fail straight off
 the result with no run service — same protocol, different source.
 
-### 4.6 `findings_synthesis` — writing a violation up
+### 4.6 `findings_policy` — writing a violation up
 
 ```python
-def findings_synthesis(self, outcomes) -> FindingsSynthesis | None:
+def findings_policy(self, outcomes) -> FindingsPolicy | None:
     return prover_findings(self._evidence)      # None to produce no findings
 ```
 
@@ -509,7 +509,10 @@ nothing of that kind", so the fields mean the same thing whoever produced them a
 what is missing instead of guessing. An earlier design made this a type parameter; it bought nothing,
 because the only code that ever reads a field is the backend's own prompt.
 
-What a backend supplies is a `FindingsSynthesis` — four things, only one of which is a function:
+What a backend supplies is a `FindingsPolicy` — four things, only one of which is a function. It is
+a record rather than a table of hooks, which is why the name says *policy*: a Rust wheel ships two
+of its fields across the FFI boundary as JSON (`FindingsDeclaration`), and anything that survives
+serialization was never behaviour.
 
 | Field | Why it is the backend's |
 | --- | --- |
@@ -720,7 +723,7 @@ system analysis, property extraction, caching, and the report, and contributes o
 | shared artifact (`StagedFormalizer`) | none — `invariants.spec` is built from the model, in `prepare_formalization` | none |
 | `formalize` | authoring session, gated by `verify_spec` | authoring session, gated by `forge_test` |
 | `fetch_verdicts` | query prover output off-thread | read ran/expected tests off the result |
-| `findings_synthesis` | LLM write-up per violated rule, from the captured CEX analysis | none (default `None`) |
+| `findings_policy` | LLM write-up per violated rule, from the captured CEX analysis | none (default `None`) |
 
 | `extra_report_inputs` | synthetic "Structural Invariants" | none |
 | `finalize` | `components_to_prover_runs.json` | none |

@@ -114,7 +114,7 @@ class FixedSeverity(WireModel):
 SeverityPolicy = Annotated[AssessedSeverity | FixedSeverity, Field(discriminator="policy")]
 
 
-class FindingsPolicy(WireModel):
+class FindingsDeclaration(WireModel):
     """How a violated check of this backend becomes a written audit finding.
 
     Declared by the wheel because a write-up rests on claims only the wheel can make: what its
@@ -251,7 +251,7 @@ class AppDescriptor(WireModel):
     #: How this backend's violated checks are written up as audit findings — ``None`` produces none,
     #: and the report carries only the verdict rows. Declining is the default because a write-up has
     #: to say what the evidence behind it is, and only the wheel knows.
-    findings: FindingsPolicy | None
+    findings: FindingsDeclaration | None
 
     def unit_noun(self, *, plural: bool = False) -> str:
         """The noun for a formalized unit, with the generic default applied — so no frontend

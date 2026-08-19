@@ -6,18 +6,18 @@ here is the part that reads a *wheel's* results into it — every field it works
 (`Verdict.detail`, `Verdict.accounting`, `Verdict.finding`, the result's declared failures), so
 nothing in this module knows what any particular backend checks or what its evidence means.
 
-Those are the wheel's to say, and it says them in `FindingsPolicy`: the domain half of the system
-prompt (what its evidence *is*), and how severity is reached. A wheel that declares no policy
+Those are the wheel's to say, and it says them in `FindingsDeclaration`: the domain half of the
+system prompt (what its evidence *is*), and how severity is reached. A wheel that declares nothing
 produces no findings — see `AppDescriptor.findings`.
 """
 from typing import TypedDict
 
 from composer.pipeline.ptypes import ComponentOutcome, Delivered
-from composer.rustapp.descriptor import AssessedSeverity, FindingsPolicy, FixedSeverity
+from composer.rustapp.descriptor import AssessedSeverity, FindingsDeclaration, FixedSeverity
 from composer.rustapp.result import RustFormalResult
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.source.report.findings import (
-    Assessed, FindingsPromptParams, FindingsSynthesis, Fixed, RuleEvidence, SeverityFrom,
+    Assessed, FindingsPolicy, FindingsPromptParams, Fixed, RuleEvidence, SeverityFrom,
 )
 from composer.spec.source.report.schema import RuleRef, SeverityTier
 from composer.spec.system_model import FeatureUnit
@@ -75,10 +75,12 @@ def _severity(declared: AssessedSeverity | FixedSeverity) -> SeverityFrom:
     return Assessed() if isinstance(declared, AssessedSeverity) else Fixed(tier=declared.tier)
 
 
-def rust_findings(outcomes: RustOutcomes, policy: FindingsPolicy | None) -> FindingsSynthesis | None:
-    """This run's synthesis, around the observations its own results carry — or ``None`` for a wheel
-    that declared no findings policy, which produces no findings at all."""
-    if policy is None:
+def rust_findings(
+    outcomes: RustOutcomes, declared: FindingsDeclaration | None,
+) -> FindingsPolicy | None:
+    """This run's findings policy, around the observations its own results carry — or ``None`` for a
+    wheel that declared none, which produces no findings at all."""
+    if declared is None:
         return None
     observed = observations(outcomes)
 
@@ -86,11 +88,11 @@ def rust_findings(outcomes: RustOutcomes, policy: FindingsPolicy | None) -> Find
         found = observed.get(ref)
         return [found] if found is not None else []
 
-    severity = _severity(policy.severity)
-    return FindingsSynthesis(
+    severity = _severity(declared.severity)
+    return FindingsPolicy(
         fetch_evidence=fetch,
         system=_RUST_SYSTEM.bind({
-            "domain": policy.system,
+            "domain": declared.system,
             "fixed_severity": severity.tier if isinstance(severity, Fixed) else None,
         }).render_to(load_jinja_template),
         prompt=_RUST_PROMPT,

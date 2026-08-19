@@ -5,8 +5,8 @@
 use askama::Template;
 
 use autoprover_sdk::descriptor::{
-    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind, FindingsPolicy,
-    PhaseRole, PhaseSpec, SeverityPolicy, SeverityTier,
+    AppDescriptor, ArgDefault, ArgSpec, ArtifactLayout, DeliverableMode, EventKind,
+    FindingsDeclaration, PhaseRole, PhaseSpec, SeverityPolicy, SeverityTier,
 };
 
 use crate::layout::{CRATE_ROOT, HARNESS_ROOT, REPORT_ROOT};
@@ -115,7 +115,7 @@ pub(crate) fn descriptor() -> AppDescriptor {
         // author wrote, and a crash on a broken precondition looks exactly like one on a real path
         // (which is what `SUSPECT HARNESS BUG` exists to flag). Asking the write-up model to rate
         // impact and likelihood off that would buy a number with nothing behind it.
-        findings: Some(FindingsPolicy {
+        findings: Some(FindingsDeclaration {
             system: FindingsSystem.render().expect("render findings_system"),
             severity: SeverityPolicy::Fixed { tier: SeverityTier::Informational },
         }),

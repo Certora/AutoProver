@@ -8,14 +8,14 @@ root-cause analysis and a counterexample trace, a fuzzing wheel has a crashing i
 of what its run covered — but "instance, explanation, reproducer, and what the run itself did" is not
 a claim about any one of them. What is genuinely per-backend is where that evidence is *fetched*
 from, what the model is told it means, and whether the evidence can carry a risk judgement at all; a
-`FindingsSynthesis` carries those — as values, not hooks, save the fetcher.
+`FindingsPolicy` carries those — as values, not hooks, save the fetcher.
 
 The rest is shared outright: walking the BAD rules, resolving each one's properties and the audit
 groups they sit in, collapsing rows that are one finding, binding the prompt, building the proof of
 concept, bounding the concurrency, keeping one failed write-up from costing the rest, and composing
 the `Finding` the report persists.
 
-A backend that produces no findings returns no `FindingsSynthesis` and never reaches here.
+A backend that produces no findings returns no `FindingsPolicy` and never reaches here.
 """
 import asyncio
 import logging
@@ -67,7 +67,7 @@ class FindingDraft(AuthoredContent):
     """The least a findings model must return: the authored sections, plus a title.
 
     A backend subclasses this to ask for more — the prover adds the impact and likelihood axes its
-    severity is computed from — and names the subclass in its `FindingsSynthesis`, so the model is
+    severity is computed from — and names the subclass in its `FindingsPolicy`, so the model is
     only ever asked for what that backend's evidence can support."""
     title: str = Field(description="A one-line title naming the specific broken guarantee.")
 
@@ -263,7 +263,7 @@ def finding_key(rule: RuleVerdict, evidence: list[RuleEvidence]) -> Hashable:
 
 
 @dataclass(frozen=True)
-class FindingsSynthesis:
+class FindingsPolicy:
     """What one backend's findings rest on: where its evidence comes from, what the model is told
     that evidence is, and what it can be asked to conclude from it.
 
@@ -287,7 +287,7 @@ async def build_findings(
     rules: list[RuleVerdict],
     properties: list[FormalizedProperty],
     groups: list[PropertyGroup],
-    synthesis: FindingsSynthesis,
+    policy: FindingsPolicy,
     llm: BaseChatModel,
 ) -> list[Finding]:
     """One `Finding` per violated rule (concurrent, best-effort); ``[]`` when nothing is violated.
@@ -307,13 +307,13 @@ async def build_findings(
             props_by_ref.setdefault(ref, []).append(p)
     group_by_key: dict[PropertyKey, PropertyGroup] = {k: g for g in groups for k in g.members}
 
-    bound = llm.with_structured_output(synthesis.severity.draft)
+    bound = llm.with_structured_output(policy.severity.draft)
 
     async def _evidence(rule: RuleVerdict) -> list[RuleEvidence] | None:
         """This rule's evidence, or None when fetching it failed — which drops the rule rather than
         writing it up against nothing."""
         try:
-            return await synthesis.fetch_evidence(rule.ref)
+            return await policy.fetch_evidence(rule.ref)
         except Exception:  # noqa: BLE001 — one rule failing must never fail the report
             _log.warning("report: evidence fetch failed for rule %r; skipping", rule.name,
                          exc_info=True)
@@ -342,13 +342,13 @@ async def build_findings(
             props = props_by_ref.get(rule.ref, [])
             # A rule's properties may share a group (some may be in none); dedupe by slug, first-seen order.
             rule_groups = list({g.slug: g for p in props if (g := group_by_key.get(p.key)) is not None}.values())
-            user = synthesis.prompt.bind({
+            user = policy.prompt.bind({
                 "contract_name": contract_name, "rule_name": rule.name, "properties": props,
                 "groups": rule_groups, "evidence": evidence, "also_covers": covers,
             }).render_to(load_jinja_template)
-            draft = await bound.ainvoke([SystemMessage(synthesis.system), HumanMessage(user)])
-            assert isinstance(draft, synthesis.severity.draft)
-            return _compose(rule, draft, synthesis, evidence, rule_groups)
+            draft = await bound.ainvoke([SystemMessage(policy.system), HumanMessage(user)])
+            assert isinstance(draft, policy.severity.draft)
+            return _compose(rule, draft, policy, evidence, rule_groups)
         except Exception:  # noqa: BLE001 — one finding failing must never fail the report
             _log.warning("report: finding synthesis failed for rule %r; skipping", rule.name, exc_info=True)
             return None
@@ -367,11 +367,11 @@ async def build_findings(
 def _compose(
     rule: RuleVerdict,
     draft: FindingDraft,
-    synthesis: FindingsSynthesis,
+    policy: FindingsPolicy,
     evidence: list[RuleEvidence],
     groups: list[PropertyGroup],
 ) -> Finding:
-    risk = synthesis.severity.assess(draft, evidence)
+    risk = policy.severity.assess(draft, evidence)
     return Finding(
         title=draft.title,
         severity=risk.severity,

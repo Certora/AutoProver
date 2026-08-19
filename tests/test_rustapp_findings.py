@@ -264,7 +264,7 @@ async def _written(*outcomes: ComponentOutcome) -> list[Finding]:
     )
     return await build_findings(
         contract_name="klend", rules=rules, properties=[], groups=[],
-        synthesis=fz.findings_synthesis(list(outcomes)), llm=_StubModel(output=_draft()),
+        policy=fz.findings_policy(list(outcomes)), llm=_StubModel(output=_draft()),
     )
 
 
@@ -454,7 +454,7 @@ async def _written_by(model: _CountingModel, *outcomes: ComponentOutcome) -> lis
     )
     return await build_findings(
         contract_name="klend", rules=rules, properties=[], groups=[],
-        synthesis=fz.findings_synthesis(list(outcomes)), llm=model,
+        policy=fz.findings_policy(list(outcomes)), llm=model,
     )
 
 
@@ -551,7 +551,7 @@ def test_a_wheel_that_declares_no_findings_policy_produces_none():
     )
     result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
 
-    assert fz.findings_synthesis([_outcome(result)]) is None
+    assert fz.findings_policy([_outcome(result)]) is None
 
 
 def test_the_write_up_is_told_what_this_wheels_evidence_is():
@@ -567,16 +567,16 @@ def test_the_write_up_is_told_what_this_wheels_evidence_is():
             "severity": {"policy": "fixed", "tier": "low"},
         })),
     )
-    synthesis = fz.findings_synthesis([])
-    assert synthesis is not None
+    policy = fz.findings_policy([])
+    assert policy is not None
 
-    assert synthesis.system.startswith("MARKER: this backend reads tea leaves.")
+    assert policy.system.startswith("MARKER: this backend reads tea leaves.")
     # A fixed tier is named, and the model is told not to rate — asking for a rating this evidence
     # cannot support is how a fabricated one gets into a finding a reader trusts.
-    assert "fixed at low" in synthesis.system
-    assert "Do not assign or imply a severity" in synthesis.system
+    assert "fixed at low" in policy.system
+    assert "Do not assign or imply a severity" in policy.system
     # …and the schema it answers in carries no axes to fill in either.
-    assert "impact_level" not in synthesis.severity.draft.model_fields
+    assert "impact_level" not in policy.severity.draft.model_fields
 
 
 def test_a_wheel_that_assesses_risk_is_asked_for_the_axes():
@@ -588,9 +588,9 @@ def test_a_wheel_that_assesses_risk_is_asked_for_the_axes():
             "system": "This backend proves things.", "severity": {"policy": "assessed"},
         })),
     )
-    synthesis = fz.findings_synthesis([])
-    assert synthesis is not None
+    policy = fz.findings_policy([])
+    assert policy is not None
 
-    assert "impact_level" in synthesis.severity.draft.model_fields
-    assert "Rate impact and likelihood" in synthesis.system
-    assert "Do not assign" not in synthesis.system
+    assert "impact_level" in policy.severity.draft.model_fields
+    assert "Rate impact and likelihood" in policy.system
+    assert "Do not assign" not in policy.system

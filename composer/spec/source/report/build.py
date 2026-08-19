@@ -18,7 +18,7 @@ from composer.spec.source.report.collect import (
     ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
 from composer.spec.source.report.coverage import ValidationError, validate
-from composer.spec.source.report.findings import FindingsSynthesis, build_findings
+from composer.spec.source.report.findings import FindingsPolicy, build_findings
 from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
@@ -49,11 +49,11 @@ async def build_report[R: ReportableResult](
     source_edits: list[SourceEditRecord] | None = None,
     verification_artifacts: list[VerificationArtifactRecord] | None = None,
     findings_llm: BaseChatModel | None = None,
-    findings: FindingsSynthesis | None = None,
+    findings: FindingsPolicy | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
-    When the backend supplies a ``findings`` synthesis, violated rules are additionally written up
+    When the backend supplies a ``findings`` policy, violated rules are additionally written up
     as audit-issue `Finding`s (best-effort; a synthesis failure yields no findings rather than
     failing the report)."""
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
@@ -121,7 +121,7 @@ async def build_report[R: ReportableResult](
         try:
             written = await build_findings(
                 contract_name=contract_name, rules=rules, properties=properties, groups=groups,
-                synthesis=findings, llm=findings_llm,
+                policy=findings, llm=findings_llm,
             )
         except Exception as e:  # noqa: BLE001
             if RERAISE_REPORT_FAILURES:

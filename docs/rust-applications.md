@@ -403,10 +403,11 @@ setup spec, and per component its `artifact_text`, `property_checks` and the `ta
 checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
 
-`findings_synthesis` answers a different question from `fetch_verdicts`: *what did this run find*.
+`findings_policy` answers a different question from `fetch_verdicts`: *what did this run find*.
 The write-up loop is shared ([formalization-abstraction.md §4.6](./formalization-abstraction.md)) and
 so is the host half in [findings.py](../composer/rustapp/findings.py) — which knows only wire fields.
-What a *particular* backend's evidence means is the wheel's, declared as `AppDescriptor.findings`.
+What a *particular* backend's evidence means is the wheel's, declared as `AppDescriptor.findings` —
+a `FindingsDeclaration`, which the host folds into the `FindingsPolicy` the shared loop runs on.
 
 **Evidence is one shared `RuleEvidence` per check**, keyed by `(file, name)` exactly as the report
 keys its rows — which for Crucible means the section file, since one crate holds every component's
@@ -419,8 +420,8 @@ whether a reader is looking at something the run found or a claim the author mad
 `analysis` stays empty. A wheel reports what its run found, not a reading of why the check broke, and
 the prompt has to be able to tell a reader which of the two it is holding.
 
-**`FindingsPolicy.system` says what the evidence is**, and it is the wheel's prose because it is the
-wheel's claim. Crucible's says a fuzzer drove a harness the author wrote from a state that harness
+**`FindingsDeclaration.system` says what the evidence is**, and it is the wheel's prose because it
+is the wheel's claim. Crucible's says a fuzzer drove a harness the author wrote from a state that harness
 set up, and did not refute anything symbolically — so `SUSPECT HARNESS BUG` is something the write-up
 must lead with, an unreproduced declaration must not be given a counterexample it does not have, and
 the harness caveats belong in `assumptions_and_uncertainties`. The host appends the output contract
@@ -428,7 +429,7 @@ the harness caveats belong in `assumptions_and_uncertainties`. The host appends 
 produces no findings**: a write-up asserts what its evidence is, and a host that guessed would be
 publishing prose nothing stands behind.
 
-**`FindingsPolicy.severity` says what the evidence can support.** Crucible fixes it at
+**`FindingsDeclaration.severity` says what the evidence can support.** Crucible fixes it at
 `informational`, with `impact` and `likelihood` left empty and the model never asked for them: a
 campaign establishes that an assertion can be made to fail, not that anyone can profit from it — a
 crash on a failed precondition looks exactly like a crash on a real one. Asking for a rating anyway

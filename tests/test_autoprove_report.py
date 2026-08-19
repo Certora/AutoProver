@@ -720,8 +720,8 @@ def _draft(impact_level: ImpactLevel = "high",
     )
 
 
-def _synthesis(by_rule: dict[str, list[RuleEvidence]]):
-    """The prover's synthesis over a canned evidence store, keyed as the report keys rows."""
+def _policy(by_rule: dict[str, list[RuleEvidence]]):
+    """The prover's findings policy over a canned evidence store, keyed as the report keys rows."""
     async def fetch(ref):
         return by_rule.get(ref[1], [])
     return prover_findings(fetch)
@@ -739,7 +739,7 @@ async def test_build_report_synthesizes_one_finding_per_violation():
     ]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="gd", members=[("C", "p_good"), ("C", "p_bad")])]))
-    synthesis = _synthesis({"r_bad": [RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
+    synthesis = _policy({"r_bad": [RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
 
     report = await build.build_report(
         contract_name="Vault", backend="prover",

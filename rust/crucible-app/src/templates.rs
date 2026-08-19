@@ -45,7 +45,7 @@ pub(crate) struct TestCheatSheet;
 pub(crate) struct JudgeSystem;
 
 /// What a Crucible verdict's evidence is, for the report's findings write-up — the domain half of
-/// that system prompt (`FindingsPolicy::system`). Says what a crash is and is not, what
+/// that system prompt (`FindingsDeclaration::system`). Says what a crash is and is not, what
 /// `SUSPECT HARNESS BUG` means, and how a declared invariant differs from one the campaign tripped
 /// over. The host appends the output contract, so nothing here restates the sections asked for.
 #[derive(Template)]

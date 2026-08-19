@@ -59,7 +59,7 @@ def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLe
     )
 
 
-def _synthesis(by_rule: dict[str, list[RuleEvidence]]):
+def _policy(by_rule: dict[str, list[RuleEvidence]]):
     async def fetch(ref):
         return by_rule.get(ref[1], [])
     return prover_findings(fetch)
@@ -89,7 +89,7 @@ async def test_one_finding_per_violation():
 
     findings = await build_findings(
         contract_name="Vault", rules=rules, properties=props, groups=groups,
-        synthesis=_synthesis({"r_bad": [RuleEvidence(analysis="root cause X",
+        policy=_policy({"r_bad": [RuleEvidence(analysis="root cause X",
                                                          counterexample="<cex/>")]}),
         llm=_StructuredStubModel(output=_draft()),
     )
@@ -115,7 +115,7 @@ async def test_degrades_without_analysis():
         contract_name="Vault", rules=[_rv("c.spec", "r_bad", Outcome.BAD)],
         properties=[_fp("C", "p_bad", [("c.spec", "r_bad")], desc="balances stay solvent")],
         groups=[_pg("g", [("C", "p_bad")], status=GroupStatus.BAD)],
-        synthesis=_synthesis({}),  # synthesis present, but no evidence recorded for r_bad
+        policy=_policy({}),  # policy present, but no evidence recorded for r_bad
         llm=_StructuredStubModel(output=_draft(impact_level="medium", likelihood_level="medium")),
     )
     assert len(findings) == 1
@@ -140,7 +140,7 @@ async def test_a_failed_synthesis_drops_only_that_finding():
     props = [_fp("C", "p_boom", [("c.spec", "r_boom")]), _fp("C", "p_bad", [("c.spec", "r_bad")])]
     findings = await build_findings(
         contract_name="Vault", rules=rules, properties=props, groups=[],
-        synthesis=_synthesis({}), llm=_HalfBroken(output=_draft()),
+        policy=_policy({}), llm=_HalfBroken(output=_draft()),
     )
     assert [f.provenance.rule_name for f in findings if f.provenance] == ["r_bad"]
 
