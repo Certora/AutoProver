@@ -426,10 +426,13 @@ failed precondition looks exactly like a crash on a real one. `provenance.risk_r
 carries the author's declaration where there is one, so a documented finding is distinguishable from
 one the run tripped over without reading the evidence.
 
-One thing the evidence still cannot separate: `Verdict.detail` is the counterexample with the
-campaign accounting appended, and nothing host-side can tell where one ends. The accounting is
-therefore inside the proof of concept. Splitting them is a wire change — `Verdict` carrying the
-accounting on its own field, with `fetch_verdicts` recomposing the row message — not a parse.
+**Evidence about the program and evidence about the run are separate fields.** `Verdict.accounting`
+carries what the campaign spent and covered (and, from `tally::gate`, whether the check's assertion
+was evaluated at all); `Verdict.detail` carries only the counterexample or the error. They are
+separate claims, and a proof of concept padded with run accounting leaves a reader unable to see
+where the evidence ends. `fetch_verdicts` rejoins them into the report row's one `message` —
+evidence first, because a `BAD` row's first line is what a reader is looking for — so a green row
+still says what it cost.
 
 ---
 
@@ -478,10 +481,13 @@ examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 
 **Every verdict says what the run behind it cost.** A `GOOD` from a campaign that explored to a
 ten-minute budget is a real claim and one from a twelve-second campaign is nearly none, and a report
-row carries only its check, its outcome and its `message`. So Crucible's `validate` ends every
-verdict — green ones included — with the component it came from and what its campaign spent against
-what it was allowed (`crucible-app/src/campaign.rs`). The note goes *last*: a `BAD`'s first line is
-the only one the live console shows, so accounting must never displace a counterexample.
+row carries only its check, its outcome and its `message`. So Crucible's `validate` gives every
+verdict — green ones included — the component it came from and what its campaign spent against what
+it was allowed (`crucible-app/src/campaign.rs`), on `Verdict.accounting`. Not on `detail`: that
+field is the campaign's evidence about the *program*, and it must stay exactly what the campaign
+reported. The live console shows a detail's first line, and a findings write-up is handed the whole
+of it — so accounting mixed in costs an author the line that tells them what broke, and costs the
+write-up its proof of concept.
 
 The marking is the *author's*, and the verdict is the *wheel's*; they meet on `RustFormalResult`,
 whose `reported_verdicts()` is what both the report and the console rollup read. A declared check

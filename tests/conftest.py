@@ -444,7 +444,7 @@ def wire_verdict(outcome: str, **overrides: Any) -> dict[str, Any]:
     """One ``Verdict`` — every diagnostic field null unless ``overrides`` says otherwise."""
     return {
         "outcome": outcome, "line": None, "duration_seconds": None,
-        "unit_file": None, "detail": None, **overrides,
+        "unit_file": None, "detail": None, "accounting": None, **overrides,
     }
 
 

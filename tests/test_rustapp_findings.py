@@ -53,8 +53,10 @@ COUNTEREXAMPLE = (
 REASON = "UpdateBlockPriceUsage only mark_stale()s, so PRICE_USAGE_ALLOWED survives the kill switch"
 
 
-def _verdict(outcome: Outcome, detail: str | None = None) -> Verdict:
-    return Verdict(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=detail)
+def _verdict(outcome: Outcome, detail: str | None = None,
+             accounting: str | None = None) -> Verdict:
+    return Verdict(outcome=outcome, line=None, duration_seconds=None, unit_file=None,
+                   detail=detail, accounting=accounting)
 
 
 def _result(
@@ -346,9 +348,68 @@ def test_the_prompt_offers_no_counterexample_for_a_finding_the_run_did_not_repro
         contract_name="klend",
         rule=RuleVerdict(name="c_kill", spec_file="c_oracle.rs", outcome=Outcome.BAD),
         properties=[], groups=[],
-        evidence=[FuzzEvidence("Oracle", "c_kill", Outcome.GOOD, "campaign spent 41231", REASON)],
+        evidence=[FuzzEvidence("Oracle", "c_kill", Outcome.GOOD, None,
+                               "campaign spent 41231 executions", REASON)],
     )
     user = findings_mod._prompt(req)
 
     assert "did NOT reproduce" in user and REASON in user
     assert "Do not describe a counterexample" in user
+
+
+# ---------------------------------------------------------------------------
+# Evidence about the program vs evidence about the run
+# ---------------------------------------------------------------------------
+
+#: What `campaign.rs` puts on every verdict, green ones included.
+ACCOUNTING = (
+    "[Vault Initialization] campaign spent 67798 executions in 597s of a 600s budget; reached "
+    "6.1% of edges and 10.7% of branches, and got 44/92 of the harness's actions to succeed"
+)
+
+
+@pytest.mark.asyncio
+async def test_a_proof_of_concept_is_the_crash_and_not_what_the_campaign_spent():
+    """Run accounting inside a proof of concept leaves a reader unable to see where evidence ends."""
+    result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE, ACCOUNTING)}, {})
+    f = (await _written(_outcome(result)))[0]
+
+    assert f.content.proof_of_concept == COUNTEREXAMPLE
+    assert "campaign spent" not in (f.content.proof_of_concept or "")
+
+
+@pytest.mark.asyncio
+async def test_a_green_row_still_says_what_the_campaign_cost():
+    """The split must not cost the report what `campaign.rs` exists to put on a passing row.
+
+    The report has one ``message`` per row, so `fetch_verdicts` rejoins the halves — evidence
+    first, because a BAD row's first line is what a reader is looking for.
+    """
+    result = _result({"c_ok": _verdict(Outcome.GOOD, None, ACCOUNTING),
+                      "c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE, ACCOUNTING)}, {})
+    fz = adapter.RustFormalizer(
+        cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
+    )
+    rows = await fz.fetch_verdicts(cast(Any, _Formalized(result)))
+
+    assert rows["c_ok"].message == ACCOUNTING, "a green row's whole worth is its accounting"
+    bad = rows["c_ts"].message or ""
+    assert bad.startswith(COUNTEREXAMPLE) and bad.endswith(ACCOUNTING)
+
+
+def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
+    """The model is shown both, told which is which, and told what each is for."""
+    req = FindingRequest(
+        contract_name="klend",
+        rule=RuleVerdict(name="c_ts", spec_file="c_vault.rs", outcome=Outcome.BAD),
+        properties=[], groups=[],
+        evidence=[FuzzEvidence("Vault Initialization", "c_ts", Outcome.BAD,
+                               COUNTEREXAMPLE, ACCOUNTING, None)],
+    )
+    user = findings_mod._prompt(req)
+
+    crash_at, spent_at = user.index(COUNTEREXAMPLE), user.index(ACCOUNTING)
+    assert crash_at < spent_at, "the evidence leads"
+    # The accounting is introduced as what it is, not appended to the crash.
+    assert "sequence that reproduces it:" in user
+    assert "spent and covered" in user

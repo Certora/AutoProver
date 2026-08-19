@@ -417,14 +417,17 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     async def fetch_verdicts(
         self, formalized: Formalized[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
-        # Fold in expect_check_failure so a declared check cannot show as a pass.
+        # Fold in expect_check_failure so a declared check cannot show as a pass, and rejoin the
+        # wheel's two halves: the report has one ``message`` per row, and a green row's whole worth
+        # is the accounting — but the evidence leads, because a BAD row's first line is what a
+        # reader is looking for.
         return {
             name: Verdict(
                 outcome=v.outcome,
                 line=v.line,
                 duration_seconds=v.duration_seconds,
                 unit_file=v.unit_file or formalized.unit_file,
-                message=v.detail,
+                message="\n\n".join(part for part in (v.detail, v.accounting) if part) or None,
             )
             for name, v in formalized.result.reported_verdicts().items()
         }

@@ -88,11 +88,7 @@ pub(crate) fn gate(
             "its {} assertion was evaluated at least {evaluated} times",
             c.properties.iter().map(|t| format!("`[{t}]`")).collect::<Vec<_>>().join("/"),
         );
-        v.detail = Some(match v.detail {
-            Some(d) => format!("{d}\n\n{vouched}"),
-            None => vouched,
-        });
-        v
+        v.noting(vouched)
     })
 }
 
@@ -102,7 +98,7 @@ mod tests {
     //! 2026-08-12 vault run's guarded invariants made concrete (a fixture whose init is rejected
     //! evaluates nothing and exits 0; docs/crucible.md §8).
     use super::*;
-    use crate::testkit::{prop, target_over, verdicts_of};
+    use crate::testkit::{accounting_of, prop, target_over, verdicts_of};
     use crate::triage::attribute_findings;
 
     /// The output shape a campaign with the interposed wrappers prints: pulses interleaved with
@@ -162,10 +158,14 @@ mod tests {
         // only one tag was ever evaluated.
         let t = two_checks();
         let evals = evaluations("[FUZZ_TALLY] site: s.rs:1, evaluated: 512, tag: lamports_conserved\n");
-        let got = verdicts_of(&gate(&t, &evals, t.all(Outcome::Good, None)));
+        let gated = gate(&t, &evals, t.all(Outcome::Good, None));
+        let got = verdicts_of(&gated);
 
         assert_eq!(got[0].1, Outcome::Good);
-        assert!(got[0].2.contains("evaluated at least 512 times"), "{}", got[0].2);
+        // The vouch is run accounting, not evidence about the program, so it rides `accounting`.
+        assert!(accounting_of(&gated)[0].contains("evaluated at least 512 times"),
+                "{:?}", accounting_of(&gated));
+        assert!(got[0].2.is_empty(), "a clean check has nothing to say about the program");
         assert_eq!(got[1].1, Outcome::Unknown);
         assert!(got[1].2.contains("`[fees_capped]`"), "{}", got[1].2);
         assert!(got[1].2.contains("was not exercised"), "{}", got[1].2);

@@ -39,13 +39,14 @@ class FuzzEvidence:
     #: The wheel's own outcome, before the author's declaration is folded in: ``BAD`` here means
     #: this campaign produced a counterexample.
     ran: Outcome
-    #: The campaign's text for this check — its counterexample with the reproducing sequence and any
-    #: ``SUSPECT HARNESS BUG`` marker when it found one, and what the campaign spent either way.
-    #:
-    #: One string because the wheel sends one: ``Verdict.detail`` is the counterexample with the
-    #: campaign accounting appended, and nothing on this side can tell where one ends. Splitting
-    #: them is a wire change (`Verdict` would carry the accounting separately), not a parse.
-    detail: str | None
+    #: The campaign's evidence about the *program*: its counterexample with the reproducing
+    #: sequence and any ``SUSPECT HARNESS BUG`` marker, or the error text behind a run that reached
+    #: no verdict. Absent for a check nothing was found against.
+    counterexample: str | None
+    #: The campaign's evidence about the *run*: what it spent against its budget, how far into the
+    #: program it reached, and whether this check's assertion was evaluated at all. What makes a
+    #: green row worth anything, and what a proof of concept must not be padded with.
+    accounting: str | None
     #: Why the author declared a failure here to be the finding, when they did. Present means the
     #: row is a claim the author made, not only something the run tripped over.
     declared: str | None
@@ -90,7 +91,8 @@ def observations(outcomes: RustOutcomes) -> dict[RuleRef, FuzzEvidence]:
                 component=o.feat.display_name,
                 check=check,
                 ran=verdict.outcome,
-                detail=verdict.detail,
+                counterexample=verdict.detail,
+                accounting=verdict.accounting,
                 declared=res.expected_failures.get(check),
             ))
     return observed
@@ -123,11 +125,13 @@ def _assess(_draft: FindingDraft, evidence: list[FuzzEvidence]) -> Assessment:
 
 
 def _proof(evidence: list[FuzzEvidence]) -> str | None:
-    """The campaign's own text, and only where this run actually produced a violation.
+    """The counterexample alone, and only where this run actually produced a violation.
 
-    A declared check the run did not reproduce has no proof of concept — its ground is the author's
-    reading, which rides ``provenance.risk_reasoning`` instead."""
-    crashes = [e.detail for e in evidence if e.ran is Outcome.BAD and e.detail]
+    Not the accounting: what the campaign spent is a claim about the run, and padding a proof of
+    concept with it leaves a reader unable to see where the evidence ends. A declared check the run
+    did not reproduce has no proof of concept at all — its ground is the author's reading, which
+    rides ``provenance.risk_reasoning`` instead."""
+    crashes = [e.counterexample for e in evidence if e.ran is Outcome.BAD and e.counterexample]
     return "\n\n".join(crashes) if crashes else None
 
 

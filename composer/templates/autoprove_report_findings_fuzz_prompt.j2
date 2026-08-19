@@ -28,11 +28,16 @@ only evidence there is. Do not describe a counterexample; say what the claim res
 {%- endif %}
 {% endif -%}
 {% if o.ran.value == "BAD" %}
-The campaign's crash, with the sequence that reproduces it and what the campaign spent:
-{{ o.detail }}
-{%- elif not o.declared %}
+The campaign's crash, with the sequence that reproduces it:
+{{ o.counterexample }}
+{%- elif not o.declared and o.counterexample %}
 The campaign reported {{ o.ran.value }} for this check. What it said:
-{{ o.detail }}
+{{ o.counterexample }}
+{%- endif %}
+{% if o.accounting %}
+What the campaign behind this spent and covered — how much weight its result carries, and what to
+say in `assumptions_and_uncertainties` about what was and was not reached:
+{{ o.accounting }}
 {%- endif %}
 {%- endfor %}
 {%- else -%}

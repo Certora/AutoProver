@@ -215,6 +215,16 @@ pub struct Verdict {
     /// to the report so a verdict is self-explaining (otherwise a bare `BAD` gives no clue why).
     #[serde(deserialize_with = "crate::required::present")]
     pub detail: Option<String>,
+    /// What the run behind this verdict cost and covered — its budget, its coverage, how far it
+    /// got. Present on a `GOOD` too, and mostly *only* there: a passing check's strength is
+    /// otherwise invisible, while a failure explains itself through `detail`.
+    ///
+    /// Separate from `detail` because they are separate claims. `detail` is evidence about the
+    /// program; this is evidence about how hard the run looked, and a reader asking for a
+    /// counterexample should not be handed run accounting inside one. The host composes both into
+    /// the report row's message and takes `detail` alone where the counterexample is what is wanted.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub accounting: Option<String>,
 }
 
 impl Verdict {
@@ -226,6 +236,7 @@ impl Verdict {
             duration_seconds: None,
             unit_file: None,
             detail: None,
+            accounting: None,
         }
     }
 
@@ -239,5 +250,17 @@ impl Verdict {
     /// tool output gives it, rather than one deciding between two constructors.
     pub fn with_detail(self, detail: Option<String>) -> Self {
         Verdict { detail, ..self }
+    }
+
+    /// This verdict with `note` added to its run accounting. Appends rather than sets: several
+    /// steps of one `validate` have something to say about what the run covered, and each should
+    /// add to the record instead of overwriting whatever the last one established.
+    pub fn noting(self, note: impl Into<String>) -> Self {
+        let note = note.into();
+        let accounting = Some(match self.accounting {
+            Some(prior) => format!("{prior}\n\n{note}"),
+            None => note,
+        });
+        Verdict { accounting, ..self }
     }
 }

@@ -147,6 +147,13 @@ pub(crate) fn verdicts_of(v: &ValidateOutcome) -> Vec<(String, Outcome, String)>
         .collect()
 }
 
+/// The same rows' `accounting` — what the run behind each verdict cost and covered, which is a
+/// separate field from the `detail` [`verdicts_of`] reads.
+pub(crate) fn accounting_of(v: &ValidateOutcome) -> Vec<String> {
+    let ValidateOutcome::Verdicts { verdicts } = v else { panic!("not a verdict set: {v:?}") };
+    verdicts.iter().map(|(_, ver)| ver.accounting.clone().unwrap_or_default()).collect()
+}
+
 /// The outcome set as the host sends it, parsed. Written as JSON rather than built as a struct
 /// so these tests also pin the payload shape `finalize` is handed.
 pub(crate) fn outcomes(v: serde_json::Value) -> FinalizeInput {

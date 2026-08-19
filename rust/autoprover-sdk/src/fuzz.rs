@@ -117,6 +117,7 @@ impl<'a> Arbitrary<'a> for Verdict {
             duration_seconds: seconds,
             unit_file: Option::arbitrary(u)?,
             detail: Option::arbitrary(u)?,
+            accounting: Option::arbitrary(u)?,
         })
     }
 }

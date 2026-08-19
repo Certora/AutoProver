@@ -144,10 +144,10 @@ impl Campaign {
 
     /// `outcome` with this campaign's note on every verdict, and the wall clock it took.
     ///
-    /// The note goes **last**. A `BAD` verdict's first line is the deciding signal — it is the only
-    /// line the live console shows (`composer.rustapp.session._emit_verdict`) — so putting run
-    /// accounting above a counterexample would cost the author the one line that matters while they
-    /// are authoring.
+    /// The note rides `Verdict::accounting`, not `detail`. What the campaign spent is a claim about
+    /// the run; a counterexample is a claim about the program, and a reader — or a findings
+    /// write-up — asking for one should not be handed the other inside it. The host composes the
+    /// two into the report row's message, so a green row still says what it cost.
     ///
     /// Rebuilt through [`Target::verdicts`] rather than edited in place: the verdict set's payload
     /// is deliberately private, so a backend cannot name a check the target does not cover or leave
@@ -161,12 +161,8 @@ impl Campaign {
         target.verdicts(|c| {
             let ran = by_name.iter().find(|(n, _)| *n == c.name).map(|(_, v)| (*v).clone());
             let mut v = ran.unwrap_or_else(|| Verdict::with_outcome(Outcome::Unknown));
-            v.detail = Some(match v.detail {
-                Some(d) => format!("{d}\n\n{note}"),
-                None => note.clone(),
-            });
             v.duration_seconds = Some(seconds);
-            v
+            v.noting(note.clone())
         })
     }
 }
@@ -176,7 +172,7 @@ mod tests {
     //! What a green row has to say for itself. The klend report of 2026-08-10 carried 375 of them
     //! and not one said how hard anything had looked.
     use super::*;
-    use crate::testkit::{prop, target_over, verdicts_of};
+    use crate::testkit::{accounting_of, prop, target_over, verdicts_of};
 
     /// The real tail of a clean *stateful* campaign, chatter included.
     const FINAL_STATS: &str = "[FUZZ] 4000 execs/s\n\
@@ -194,11 +190,13 @@ mod tests {
         target_over("c_oracle", &[prop("refresh_is_value_neutral", "neutral")])
     }
 
+    /// The first row's outcome and its **accounting** — what these tests are about. Its `detail`
+    /// is the campaign's evidence, which this never touches.
     fn annotated(out: &str, outcome: ValidateOutcome) -> (Outcome, String) {
         let t = one_check();
         let c = Campaign::of("Oracle-Driven Refresh", 600, Duration::from_secs(597), out);
-        let got = verdicts_of(&c.annotate(&t, outcome));
-        (got[0].1, got[0].2.clone())
+        let annotated = c.annotate(&t, outcome);
+        (verdicts_of(&annotated)[0].1, accounting_of(&annotated)[0].clone())
     }
 
     #[test]
@@ -278,16 +276,21 @@ mod tests {
     }
 
     #[test]
-    fn a_counterexample_keeps_the_first_line_it_had() {
-        // The live console shows only the first line of a detail, so accounting must never displace
-        // the finding — an author watching a run would lose the one line that tells them what broke.
+    fn a_counterexample_is_left_exactly_as_the_campaign_reported_it() {
+        // Accounting must never end up inside the evidence. The live console shows the first line
+        // of a detail and a findings write-up is handed the whole of it, so a counterexample with
+        // run accounting glued to it costs the author the line that matters and the write-up its
+        // proof of concept.
         let t = one_check();
         let crash = "crash abc: [refresh_is_value_neutral] value moved by 3\nsequence: …";
-        let (outcome, said) = annotated(FINAL_STATS, t.all(Outcome::Bad, Some(crash.into())));
+        let annotated =
+            Campaign::of("Oracle-Driven Refresh", 600, Duration::from_secs(597), FINAL_STATS)
+                .annotate(&t, t.all(Outcome::Bad, Some(crash.into())));
+        let got = verdicts_of(&annotated);
 
-        assert_eq!(outcome, Outcome::Bad);
-        assert!(said.starts_with("crash abc:"), "{said}");
-        assert!(said.ends_with("of a 600s budget"), "{said}");
+        assert_eq!(got[0].1, Outcome::Bad);
+        assert_eq!(got[0].2, crash, "the evidence is untouched");
+        assert!(accounting_of(&annotated)[0].ends_with("of a 600s budget"));
     }
 
     #[test]
