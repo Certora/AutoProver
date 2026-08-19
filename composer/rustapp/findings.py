@@ -26,7 +26,7 @@ from composer.templates.loader import load_jinja_template
 type RustOutcomes = list[ComponentOutcome[RustFormalResult, FeatureUnit]]
 
 
-_RUST_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_rust_prompt.j2")
+_WRITE_UP_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_rust_prompt.j2")
 
 
 def observations(outcomes: RustOutcomes) -> dict[RuleRef, RuleEvidence]:
@@ -75,5 +75,5 @@ def rust_findings(
     return FindingsPolicy(
         fetch_evidence=fetch,
         domain=declared.domain,
-        prompt=_RUST_PROMPT,
+        prompt=_WRITE_UP_PROMPT,
     )

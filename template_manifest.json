@@ -101,9 +101,9 @@
     "template_name": "code_explorer/soroban.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.rustapp.findings:_RUST_PROMPT": {
+  "composer.rustapp.findings:_WRITE_UP_PROMPT": {
     "module": "composer.rustapp.findings",
-    "qualname": "_RUST_PROMPT",
+    "qualname": "_WRITE_UP_PROMPT",
     "template_name": "autoprove_report_findings_rust_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
@@ -185,9 +185,9 @@
     "template_name": "autoprove_report_findings_prover_domain.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.prover_findings:_FINDINGS_PROMPT": {
+  "composer.spec.source.prover_findings:_WRITE_UP_PROMPT": {
     "module": "composer.spec.source.prover_findings",
-    "qualname": "_FINDINGS_PROMPT",
+    "qualname": "_WRITE_UP_PROMPT",
     "template_name": "autoprove_report_findings_prompt.j2",
     "ty_sort": "TypedTemplate"
   },

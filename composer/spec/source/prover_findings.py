@@ -21,7 +21,7 @@ class ProverDomainParams(TypedDict):
 
 
 _PROVER_DOMAIN = TypedTemplate[ProverDomainParams]("autoprove_report_findings_prover_domain.j2")
-_FINDINGS_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_prompt.j2")
+_WRITE_UP_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_prompt.j2")
 
 
 def prover_findings(fetch_evidence: EvidenceFetcher) -> FindingsPolicy:
@@ -29,5 +29,5 @@ def prover_findings(fetch_evidence: EvidenceFetcher) -> FindingsPolicy:
     return FindingsPolicy(
         fetch_evidence=fetch_evidence,
         domain=_PROVER_DOMAIN.bind({}).render_to(load_jinja_template),
-        prompt=_FINDINGS_PROMPT,
+        prompt=_WRITE_UP_PROMPT,
     )
