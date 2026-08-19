@@ -45,6 +45,20 @@ class AbstractMainContractError(Exception):
     abstract (or lacks a constructor) and therefore cannot be verified."""
 
 
+class UnimplementedContractError(Exception):
+    """Raised when a contract in the compilation input leaves a function it inherits
+    unimplemented, which Solidity accepts only on an ``abstract`` contract."""
+
+
+# The contract name is quoted by solc, so it survives the hard wrap that
+# ``_normalize_ws`` folds away; the source location that follows is optional
+# because only the diagnostic itself is guaranteed to be in the output.
+_UNIMPLEMENTED_CONTRACT_RE = re.compile(
+    r'Contract "(?P<name>[^"]+)" should be marked as abstract\.'
+    r"(?: --> (?P<path>[^\s:]+):\d+:\d+)?"
+)
+
+
 def _normalize_ws(text: str) -> str:
     """Collapse every run of whitespace (including solc's hard-wrap newlines) to a
     single space, so multi-substring detectors survive line wrapping.
@@ -68,6 +82,40 @@ def _path_from_compiling_line(line: str) -> Optional[str]:
     if not (line.startswith(prefix) and line.endswith(suffix)):
         return None
     return line.removeprefix(prefix).removesuffix(suffix)
+
+
+# The remediation hint solc attaches to a diagnostic whose fix is "compile this with the
+# IR pipeline", whatever the diagnostic itself is called: the flag spelling (``--via-ir``),
+# the Standard-JSON key (``viaIR: true``), or a mention of the pipeline by name ("via-ir
+# pipeline", "IR pipeline"). Keying on the hint rather than on one diagnostic's wording
+# covers the whole family.
+#
+# Written against whitespace-normalized text (see ``_normalize_ws``); ``-\s?`` absorbs a
+# solc hard-wrap inside a hyphenated token (``--via-\nir`` normalizes to ``--via- ir``).
+# The conf key ``solc_via_ir`` is outside the family — it appears in the "unsupported solc
+# version for solc_via_ir" error, which calls for the opposite fix — so every alternative
+# demands either the ``--`` flag spelling, the JSON key with its colon, or the word
+# "pipeline". ``\bIR`` keeps prose like "through their pipeline" out.
+_VIA_IR_HINT_RE = re.compile(
+    r"--\s?via-\s?ir\b|viaIR:\s?true|(?:\bvia-\s?ir|\bIR)\s+pipeline",
+    re.IGNORECASE,
+)
+
+# Diagnostics that carry the same hint while via-ir is only ONE of the remedies solc
+# offers ("... while enabling the optimizer. Otherwise, try removing local variables"),
+# so the hint does not mean via-ir is required. Their escalation ladder — optimizer,
+# solc's default Yul steps, then relaxing the autofinder assertion — belongs to
+# stack_too_deep_via_ir and the yul_exception_* workarounds.
+_MULTI_REMEDY_DIAGNOSTIC_RE = re.compile(
+    r"YulException|Stack\s+too\s+deep|too\s+deep\s+in(?:side)?\s+the\s+stack",
+    re.IGNORECASE,
+)
+
+# The label opening a solc diagnostic ("Warning: ...", "TypeError: ...",
+# "UnimplementedFeatureError: ...", "YulException: ..."). It delimits one diagnostic from
+# the next, so a hint is read together with the diagnostic that owns it — and only with
+# that diagnostic's own source locations.
+_DIAGNOSTIC_START_RE = re.compile(r"^\s*(?:[A-Za-z]*Error|Warning|Info|Note|YulException)\b")
 
 
 def _find_compiling_path_before(lines: List[str], idx: int, max_lookback: Optional[int] = None) -> Optional[str]:
@@ -262,6 +310,19 @@ class CompilationWorkaroundManager:
             return None
         no_bytecode = {m.group(1) for m in re.finditer(r"Contract (\S+) has no bytecode", output)}
         return main_contract if main_contract in no_bytecode else None
+
+    def _detect_unimplemented_contract(self, output: str) -> Optional[Tuple[str, Optional[str]]]:
+        """Return the (contract name, declaring file) a contract in the input was
+        rejected for: it inherits functions it does not implement, and is not declared
+        ``abstract``.
+
+        The file is None when the diagnostic carries no source location. This is a
+        source-level defect, so the compilation settings have no bearing on it.
+        """
+        match = _UNIMPLEMENTED_CONTRACT_RE.search(_normalize_ws(output))
+        if match is None:
+            return None
+        return match.group("name"), match.group("path")
 
     # =========================================================================
     # Main entry point for running compilation with workarounds
@@ -541,6 +602,22 @@ class CompilationWorkaroundManager:
                     f"verified. Re-run with a concrete implementation as the main contract."
                 )
 
+            # Also terminal: a contract in the input inherits functions it never
+            # implements, so solc refuses to compile it at all. Only editing that
+            # contract fixes it; without this the catch-all workaround fires and spends
+            # further compilations reaching the same error.
+            unimplemented = self._detect_unimplemented_contract(output)
+            if unimplemented is not None:
+                contract_name, declared_in = unimplemented
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                location = f" ({declared_in})" if declared_in else ""
+                raise UnimplementedContractError(
+                    f"Contract '{contract_name}'{location} does not implement every function it "
+                    f"inherits, so Solidity requires it to be marked abstract and refuses to "
+                    f"compile it as written. See the 'Missing implementation' notes in the "
+                    f"compiler output for the functions it still owes."
+                )
+
             # One pass over the failed output: apply EVERY applicable workaround
             # before recompiling — one full certoraRun per pass is expensive, so
             # a pass fixes as much of this output as it can. detect_fns run
@@ -778,21 +855,45 @@ class CompilationWorkaroundManager:
         the affected contract name.
 
         Contracts start on plain settings and gain via-ir strictly out of
-        necessity; this is the necessity signal for non-stack reasons, e.g.
-        "UnimplementedFeatureError: Require with a custom error is only
-        available using the via-ir pipeline." Matching is whitespace-normalized
-        per compiled unit, since solc hard-wraps the phrase.
+        necessity. solc spells this necessity several ways ("Require with a
+        custom error is only available using the via-ir pipeline.", "Copying of
+        type ... to storage is not supported in legacy (only supported by the
+        IR pipeline)."), so the detector keys on the remediation hint they share
+        (``_VIA_IR_HINT_RE``) rather than on one diagnostic's wording.
+
+        The hint alone is not the signal: solc appends it to stack-too-deep and
+        YulException diagnostics too, where via-ir is one remedy among several
+        and the optimizer/Yul ladder must be climbed first. A hint therefore
+        counts only inside a diagnostic that offers no other remedy
+        (``_MULTI_REMEDY_DIAGNOSTIC_RE``). Matching is whitespace-normalized per
+        diagnostic, since solc hard-wraps the text.
         """
-        marker = "only available using the via-ir pipeline"
+        lines = output.split("\n")
+
+        def diagnostic_blocks(unit_lines: List[str]) -> List[List[str]]:
+            """Split solc output into one group of lines per diagnostic, so a hint,
+            the diagnostic offering it and its source locations stay together and a
+            neighbouring diagnostic's ``-->`` lines stay out."""
+            blocks: List[List[str]] = [[]]
+            for line in unit_lines:
+                if _DIAGNOSTIC_START_RE.match(line) or _path_from_compiling_line(line) is not None:
+                    blocks.append([])
+                blocks[-1].append(line)
+            return blocks
+
+        def requires_via_ir(block: List[str]) -> bool:
+            normalized = _normalize_ws("\n".join(block))
+            return bool(_VIA_IR_HINT_RE.search(normalized)) and not _MULTI_REMEDY_DIAGNOSTIC_RE.search(normalized)
+
         current_path: Optional[str] = None
         segment: List[str] = []
 
         def segment_hit() -> Optional[str]:
-            if current_path and marker in _normalize_ws("\n".join(segment)):
+            if current_path and any(requires_via_ir(b) for b in diagnostic_blocks(segment)):
                 return self._get_contract_name_from_path(current_path, contracts)
             return None
 
-        for line in output.split("\n"):
+        for line in lines:
             path = _path_from_compiling_line(line)
             if path is not None and "to expose internal function information" not in line:
                 hit = segment_hit()
@@ -806,7 +907,27 @@ class CompilationWorkaroundManager:
         hit = segment_hit()
         if hit:
             self.log(f"Detected via-ir-only feature for {hit} (path: {current_path})")
-        return hit
+            return hit
+
+        # Whole-project compile: certoraRun prints no per-file "Compiling <path>..."
+        # progress line, so no segment carries a path and the offending file is named
+        # only in the `-->` source-location lines of the diagnostic itself. Runs last so
+        # a per-unit hit takes precedence.
+        for block in diagnostic_blocks(lines):
+            if not requires_via_ir(block):
+                continue
+            for line in block:
+                src_path = path_from_source_location_line(line)
+                if src_path is None:
+                    continue
+                contract_name = self._get_contract_name_from_path(src_path, contracts)
+                if contract_name:
+                    self.log(f"Detected via-ir-only feature for {contract_name} (path: {src_path})")
+                    return contract_name
+                self.log(f"Warning: Could not map path '{src_path}' to contract name", "WARNING")
+                break
+
+        return None
 
     def _detect_yul_exception_stack_too_deep(self, output: str) -> bool:
         """Detect YulException with stack too deep error.

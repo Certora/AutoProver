@@ -64,10 +64,12 @@ class RuleResult:
     If status == ERROR, error_msg is non-none
     """
     path: RulePath
-    cex_dump: Optional[str]
+    cex_dump: str | None
     status: StatusCodes
 
     error_messages: list[str] = field(default_factory=list)
+
+    live_check_info : str | None = field(default=None)
 
     @property
     def name(self) -> str:
