@@ -941,12 +941,26 @@ async def run_session[K: (RustFormalResult, RustSetupSpec)](
     return SessionResult(
         commentary=state["result"],
         spec=spec,
-        skipped=state["skipped"],
-        property_checks=[(m.property_title, m.checks) for m in state["property_checks"]],
-        verdicts=state["verdicts"],
-        ran=state["ran"],
+        skipped=_revive(SkippedProperty, state["skipped"]),
+        property_checks=[
+            (m.property_title, m.checks)
+            for m in _revive(PropertyCheckMapping, state["property_checks"])
+        ],
+        verdicts={k: _revive_one(WireVerdict, v) for k, v in state["verdicts"].items()},
+        ran=_revive(Target, state["ran"]),
         expected_failures=state["expected_failures"],
     )
+
+
+def _revive_one[M: BaseModel](ty: type[M], item: M | dict[str, Any]) -> M:
+    """A checkpoint round-trip may hand back a raw dict where the state declares a model
+    (the serializer's fallback when it cannot reconstruct the class); revalidate so the
+    readback is typed either way."""
+    return ty.model_validate(item) if isinstance(item, dict) else item
+
+
+def _revive[M: BaseModel](ty: type[M], items: "Sequence[M | dict[str, Any]]") -> list[M]:
+    return [_revive_one(ty, i) for i in items]
 
 
 def _validate_tool(deps: GateDeps, vocab: CheckVocab) -> BaseTool:
