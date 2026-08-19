@@ -53,10 +53,12 @@ from composer.spec.source.report.collect import (
     Formalized, ReportComponentInput, Verdict, VerdictFetcher,
 )
 from composer.spec.source.report.schema import (
-    AppliedEditRecord, ComponentName, Finding, FormalizedProperty, PropertyGroup, RuleName,
-    RuleVerdict, SourceEditRecord,
+    AppliedEditRecord, ComponentName, RuleName, RuleRef, SourceEditRecord,
 )
-from composer.spec.source.report.collect import EvidenceFetcher, RuleEvidence
+from composer.spec.source.report.findings import FindingsSynthesis
+from composer.spec.source.prover_findings import (
+    ProverFindingDraft, RuleEvidence, prover_findings,
+)
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 
@@ -168,15 +170,22 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         return records
 
     @override
-    def findings_evidence(self) -> EvidenceFetcher:
-        return self._evidence
+    def findings_synthesis(
+        self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]]
+    ) -> FindingsSynthesis[RuleEvidence, ProverFindingDraft]:
+        # Evidence is the run-scoped CEX capture, not the outcomes.
+        return prover_findings(self._evidence)
 
-    async def _evidence(self, rule_name: str) -> list[RuleEvidence]:
+    async def _evidence(self, ref: RuleRef) -> list[RuleEvidence]:
         # Every instantiation the run analyzed, not just one: a parametric rule can fail differently
         # per binding while the report shows a single row for the whole rule.
+        #
+        # The ref's file half is dropped: `CexAnalysisStore` is keyed by rule name (a `RulePath` has
+        # no spec file to key on), so two components whose specs name the same rule share evidence
+        # here. Closing that needs the capture to carry the file, not this call.
         return [
             RuleEvidence(label=r.label, analysis=r.analysis, counterexample=r.counterexample)
-            for r in await self._deps.analysis_store.for_rule(rule_name)
+            for r in await self._deps.analysis_store.for_rule(ref[1])
         ]
 
     @override

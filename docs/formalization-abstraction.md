@@ -152,12 +152,15 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         return []                     # synthetic report rows; default none
 
+    def findings_synthesis(self, outcomes) -> FindingsSynthesis | None:
+        return None                   # how to write violated rules up; default none
+
     async def finalize(self, outcomes, run) -> None:
         return None                   # run-level artifacts from the full outcome set; default none
 ```
 
 The contract is deliberately small — one required producer (`formalize`), one required
-reader (`fetch_verdicts`), and two optional hooks. The second type parameter `U` is the
+reader (`fetch_verdicts`), and three optional hooks. The second type parameter `U` is the
 *formalized unit* the backend consumes (EVM's `ContractComponentInstance`, a Rust backend's
 `FeatureUnit`): the backend reads its concrete unit's members without casts while the driver stays
 unit-agnostic. Crucially, a `Formalizer` is **immutable and fully constructed** by whatever produced
@@ -473,7 +476,36 @@ to one entry, and uses `Verdict.merge` (priority `BAD > ERROR > TIMEOUT > UNKNOW
 roll up multiple results for one rule. Foundry's fetcher instead reads pass/fail straight off
 the result with no run service — same protocol, different source.
 
-### 4.6 `finalize` — run-level artifact
+### 4.6 `findings_synthesis` — writing a violation up
+
+```python
+def findings_synthesis(self, outcomes) -> FindingsSynthesis | None:
+    return prover_findings(self._evidence)      # None to produce no findings
+```
+
+`fetch_verdicts` answers "did each rule hold". Findings answer "what did this run find", which is
+the report's first section. Both read the same BAD rows; they differ in what they say about one.
+
+The write-up loop is shared ([report/findings.py](../composer/spec/source/report/findings.py)):
+walk the BAD rules, resolve each one's properties and the audit groups they sit in, ask a model,
+bound the concurrency, compose the `Finding`. What a backend supplies is a `FindingsSynthesis` —
+five things, all of which differ between a symbolic prover and a fuzzer:
+
+| Field | Why it is the backend's |
+| --- | --- |
+| `fetch_evidence` | Keyed by `RuleRef` — `(file, name)`, how the report identifies a row. A name alone does not: one deliverable can hold several components' checks, and two authors given the same property write the same name |
+| `draft` | The structured-output schema. Subclass `FindingDraft` to ask for more, so a model is only ever asked for what this backend's evidence can support |
+| `system` / `prompt` | The prompt is a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's |
+| `assess` | The severity, and the record of how it was reached. The prover's is the impact × likelihood matrix; a backend whose evidence does not establish exploitability returns a constant instead of a rating nothing produced |
+| `proof` | The finding's `proof_of_concept` from its evidence, or None where the evidence is not one |
+
+Returning `None` is how a backend opts out; the report then builds no findings for it and never
+starts the heavy model. `outcomes` is passed because a backend whose evidence is in its own results
+has nowhere else to read it from — the prover's is a run-scoped store and ignores them.
+
+A failure here costs the findings, never the report.
+
+### 4.7 `finalize` — run-level artifact
 
 ```python
 async def finalize(self, outcomes, run) -> None:
@@ -648,6 +680,7 @@ system analysis, property extraction, caching, and the report, and contributes o
 | shared artifact (`StagedFormalizer`) | none — `invariants.spec` is built from the model, in `prepare_formalization` | none |
 | `formalize` | authoring session, gated by `verify_spec` | authoring session, gated by `forge_test` |
 | `fetch_verdicts` | query prover output off-thread | read ran/expected tests off the result |
+| `findings_synthesis` | LLM write-up per violated rule, from the captured CEX analysis | none (default `None`) |
 | `extra_report_inputs` | synthetic "Structural Invariants" | none |
 | `finalize` | `components_to_prover_runs.json` | none |
 | artifact bundle | `.spec` + `.conf` | `.t.sol` + metadata |

@@ -11,8 +11,9 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
 from composer.spec.types import PropertyType
-from composer.spec.source.report.findings import (
-    FindingDraft, RuleEvidence, build_findings, severity_for,
+from composer.spec.source.report.findings import build_findings, severity_for
+from composer.spec.source.prover_findings import (
+    ProverFindingDraft, RuleEvidence, prover_findings,
 )
 from composer.spec.source.report.schema import (
     FormalizedProperty, GroupStatus, ImpactLevel, LikelihoodLevel, Outcome, PropertyGroup,
@@ -50,18 +51,18 @@ class _StructuredStubModel(BaseChatModel):
 
 
 def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLevel = "medium",
-           title: str = "Reentrancy drains vault") -> FindingDraft:
-    return FindingDraft(
+           title: str = "Reentrancy drains vault") -> ProverFindingDraft:
+    return ProverFindingDraft(
         title=title, impact_level=impact_level, likelihood_level=likelihood_level,
         risk_reasoning="High impact (fund loss); medium likelihood (needs a specific state).",
         summary="s", description="d", impact="funds at risk", attack_path="1..2..3",
     )
 
 
-def _evidence(by_rule: dict[str, list[RuleEvidence]]):
-    async def fetch(rule_name):
-        return by_rule.get(rule_name, [])
-    return fetch
+def _synthesis(by_rule: dict[str, list[RuleEvidence]]):
+    async def fetch(ref):
+        return by_rule.get(ref[1], [])
+    return prover_findings(fetch)
 
 
 def test_severity_for_matrix():
@@ -88,7 +89,7 @@ async def test_one_finding_per_violation():
 
     findings = await build_findings(
         contract_name="Vault", rules=rules, properties=props, groups=groups,
-        fetch_evidence=_evidence({"r_bad": [RuleEvidence(analysis="root cause X",
+        synthesis=_synthesis({"r_bad": [RuleEvidence(analysis="root cause X",
                                                          counterexample="<cex/>")]}),
         llm=_StructuredStubModel(output=_draft()),
     )
@@ -114,7 +115,7 @@ async def test_degrades_without_analysis():
         contract_name="Vault", rules=[_rv("c.spec", "r_bad", Outcome.BAD)],
         properties=[_fp("C", "p_bad", [("c.spec", "r_bad")], desc="balances stay solvent")],
         groups=[_pg("g", [("C", "p_bad")], status=GroupStatus.BAD)],
-        fetch_evidence=_evidence({}),  # fetcher present, but no evidence recorded for r_bad
+        synthesis=_synthesis({}),  # synthesis present, but no evidence recorded for r_bad
         llm=_StructuredStubModel(output=_draft(impact_level="medium", likelihood_level="medium")),
     )
     assert len(findings) == 1
@@ -139,7 +140,7 @@ async def test_a_failed_synthesis_drops_only_that_finding():
     props = [_fp("C", "p_boom", [("c.spec", "r_boom")]), _fp("C", "p_bad", [("c.spec", "r_bad")])]
     findings = await build_findings(
         contract_name="Vault", rules=rules, properties=props, groups=[],
-        fetch_evidence=_evidence({}), llm=_HalfBroken(output=_draft()),
+        synthesis=_synthesis({}), llm=_HalfBroken(output=_draft()),
     )
     assert [f.provenance.rule_name for f in findings if f.provenance] == ["r_bad"]
 

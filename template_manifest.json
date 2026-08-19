@@ -161,14 +161,14 @@
     "template_name": "design_doc_finder_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.report.findings:_FINDINGS_SYSTEM": {
-    "module": "composer.spec.source.report.findings",
+  "composer.spec.source.prover_findings:_FINDINGS_SYSTEM": {
+    "module": "composer.spec.source.prover_findings",
     "qualname": "_FINDINGS_SYSTEM",
     "template_name": "autoprove_report_findings_system.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.report.findings:_FINDINGS_PROMPT": {
-    "module": "composer.spec.source.report.findings",
+  "composer.spec.source.prover_findings:_FINDINGS_PROMPT": {
+    "module": "composer.spec.source.prover_findings",
     "qualname": "_FINDINGS_PROMPT",
     "template_name": "autoprove_report_findings_prompt.j2",
     "ty_sort": "TypedTemplate"

@@ -28,11 +28,11 @@ from composer.pipeline.core import Curtailed, Delivered
 
 from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.source.report import build
-from composer.spec.source.report.collect import (
-    ReportComponentInput, RuleEvidence, collect,
-)
+from composer.spec.source.report.collect import ReportComponentInput, collect
 from composer.spec.source.report.coverage import ValidationError, validate
-from composer.spec.source.report.findings import FindingDraft
+from composer.spec.source.prover_findings import (
+    ProverFindingDraft, RuleEvidence, prover_findings,
+)
 from composer.spec.source.report.grouping import (
     FALLBACK_SLUG, GroupingResult, PropertyGroupDraft, aggregate_status,
     build_fallback_grouping, build_groups,
@@ -712,8 +712,8 @@ def _finding(severity: SeverityTier = "high") -> Finding:
 
 
 def _draft(impact_level: ImpactLevel = "high",
-           likelihood_level: LikelihoodLevel = "medium") -> FindingDraft:
-    return FindingDraft(
+           likelihood_level: LikelihoodLevel = "medium") -> ProverFindingDraft:
+    return ProverFindingDraft(
         title="Reentrancy drains vault",
         impact_level=impact_level, likelihood_level=likelihood_level,
         risk_reasoning="High impact; medium likelihood.",
@@ -721,10 +721,11 @@ def _draft(impact_level: ImpactLevel = "high",
     )
 
 
-def _evidence(by_rule: dict[str, list[RuleEvidence]]):
-    async def fetch(rule_name):
-        return by_rule.get(rule_name, [])
-    return fetch
+def _synthesis(by_rule: dict[str, list[RuleEvidence]]):
+    """The prover's synthesis over a canned evidence store, keyed as the report keys rows."""
+    async def fetch(ref):
+        return by_rule.get(ref[1], [])
+    return prover_findings(fetch)
 
 
 @pytest.mark.asyncio
@@ -739,14 +740,14 @@ async def test_build_report_synthesizes_one_finding_per_violation():
     ]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="gd", members=[("C", "p_good"), ("C", "p_bad")])]))
-    evidence = _evidence({"r_bad": [RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
+    synthesis = _synthesis({"r_bad": [RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
 
     report = await build.build_report(
         contract_name="Vault", backend="prover",
         components=[_input("C", "autospec_C.spec",
                            [_prop("p_good", "d"), _prop("p_bad", "d")], gen)],
         llm=grouping, fetch_verdicts=fetch,
-        findings_llm=_StructuredStubModel(output=_draft()), fetch_evidence=evidence,
+        findings_llm=_StructuredStubModel(output=_draft()), findings=synthesis,
     )
 
     assert len(report.findings) == 1
@@ -784,14 +785,14 @@ async def test_a_failing_findings_pass_still_yields_a_report():
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="d", members=[("C", "p_bad")])]))
 
-    async def _boom(_rule_name):
+    async def _boom(_ref):
         raise RuntimeError("evidence store exploded")
 
     report = await build.build_report(
         contract_name="C", backend="prover",
         components=[_input("C", "autospec_C.spec", [_prop("p_bad", "d")], gen)],
         llm=grouping, fetch_verdicts=fetch,
-        findings_llm=_StructuredStubModel(output=_draft()), fetch_evidence=_boom,
+        findings_llm=_StructuredStubModel(output=_draft()), findings=prover_findings(_boom),
     )
     assert report.findings == []
     assert report.rules  # the rest of the report is intact
