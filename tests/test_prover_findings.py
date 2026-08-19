@@ -11,10 +11,10 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
 from composer.spec.types import PropertyType
-from composer.spec.source.report.findings import AssessedFindingDraft, build_findings, severity_for
-from composer.spec.source.prover_findings import (
-    RuleEvidence, prover_findings,
+from composer.spec.source.report.findings import (
+    AssessedFindingDraft, RuleEvidence, build_findings, severity_for,
 )
+from composer.spec.source.prover_findings import prover_findings
 from composer.spec.source.report.schema import (
     FormalizedProperty, GroupStatus, ImpactLevel, LikelihoodLevel, Outcome, PropertyGroup,
     RuleVerdict,

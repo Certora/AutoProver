@@ -32,12 +32,13 @@ from composer.pipeline.ptypes import ComponentOutcome
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp import findings as findings_mod
-from composer.rustapp.findings import CheckObservation
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
 from composer.spec.source.report.collect import ReportComponentInput, collect
-from composer.spec.source.report.findings import FindingDraft, FindingRequest, build_findings
+from composer.spec.source.report.findings import (
+    FindingDraft, FindingRequest, RuleEvidence, build_findings,
+)
 from composer.spec.source.report.schema import Finding, Outcome, RuleVerdict
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor
@@ -348,8 +349,8 @@ def test_the_prompt_offers_no_counterexample_for_a_finding_the_run_did_not_repro
         contract_name="klend",
         rule=RuleVerdict(name="c_kill", spec_file="c_oracle.rs", outcome=Outcome.BAD),
         properties=[], groups=[],
-        evidence=[CheckObservation("Oracle", "c_kill", Outcome.GOOD, None,
-                                   "campaign spent 41231 executions", REASON, None)],
+        evidence=[RuleEvidence(label="Oracle", ran=Outcome.GOOD,
+                               accounting="campaign spent 41231 executions", declared=REASON)],
         also_covers=[],
     )
     user = findings_mod._prompt(req)
@@ -404,8 +405,8 @@ def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
         contract_name="klend",
         rule=RuleVerdict(name="c_ts", spec_file="c_vault.rs", outcome=Outcome.BAD),
         properties=[], groups=[],
-        evidence=[CheckObservation("Vault Initialization", "c_ts", Outcome.BAD,
-                                   COUNTEREXAMPLE, ACCOUNTING, None, None)],
+        evidence=[RuleEvidence(label="Vault Initialization", ran=Outcome.BAD,
+                               counterexample=COUNTEREXAMPLE, accounting=ACCOUNTING)],
         also_covers=[],
     )
     user = findings_mod._prompt(req)

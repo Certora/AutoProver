@@ -207,7 +207,7 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
 
     def findings_synthesis(
         self, outcomes: list[ComponentOutcome[FormT, U]]
-    ) -> FindingsSynthesis[Any, Any] | None:
+    ) -> FindingsSynthesis[Any] | None:
         """How this backend writes its violated rules up as findings, or None if it produces none.
 
         Returning None is how a backend opts out — the report then builds no findings for it, with

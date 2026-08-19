@@ -487,10 +487,29 @@ def findings_synthesis(self, outcomes) -> FindingsSynthesis | None:
 the report's first section. Both read the same BAD rows; they differ in what they say about one.
 
 The write-up loop is shared ([report/findings.py](../composer/spec/source/report/findings.py)):
-walk the BAD rules, resolve each one's properties and the audit groups they sit in, ask a model,
-bound the concurrency, group the rows that share one finding, compose the `Finding`. What a backend
-supplies is a `FindingsSynthesis` — six things, all of which differ between a symbolic prover and a
-fuzzer:
+walk the BAD rules, resolve each one's properties and the audit groups they sit in, group the rows
+that share one finding, ask a model, build the proof of concept, bound the concurrency, compose the
+`Finding`.
+
+Evidence is shared too. Every backend hands back `RuleEvidence`:
+
+| Field | |
+| --- | --- |
+| `label` | Which instance, where a rule can fail more than once — a parametric binding for the prover, the component for a per-component backend |
+| `analysis` | The backend's account of *why* the check failed, where it produces one |
+| `counterexample` | What reproduces it: a counterexample trace, a crashing input, an assertion message |
+| `ran` | The run's own outcome, before any authored declaration is folded into the one the report shows |
+| `accounting` | What the run spent and how far it reached — what makes a result weigh something |
+| `declared` | Why the author declared this failure expected, when they did |
+| `finding` | Which finding this belongs to, when one piece of evidence condemns several checks |
+
+Backends differ in what they can *fill*, not in the shape: a prover has an `analysis` and a trace, a
+fuzzing wheel has a crashing input and an `accounting`. Absence always means "this run recorded
+nothing of that kind", so the fields mean the same thing whoever produced them and a prompt can say
+what is missing instead of guessing. An earlier design made this a type parameter; it bought nothing,
+because the only code that ever reads a field is the backend's own prompt.
+
+What a backend supplies is a `FindingsSynthesis` — four things:
 
 | Field | Why it is the backend's |
 | --- | --- |
@@ -498,19 +517,23 @@ fuzzer:
 | `draft` | The structured-output schema. Subclass `FindingDraft` to ask for more, so a model is only ever asked for what this backend's evidence can support. A backend that rates risk asks for `AssessedFindingDraft`, whose axes `assessed` maps through the matrix |
 | `system` / `prompt` | The prompt is a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's |
 | `assess` | The severity, and the record of how it was reached. The prover's is the impact × likelihood matrix (`assessed`); a backend whose evidence does not establish exploitability returns a constant instead of a rating nothing produced |
-| `proof` | The finding's `proof_of_concept` from its evidence, or None where the evidence is not one |
-| `collapse` | Identity of the *finding* behind a row. Rows sharing a key are written up once, against the first of them, with the rest on `FindingRequest.also_covers`. A backend whose rows map one-to-one onto findings returns `rule.ref` and nothing ever collapses |
 
-`collapse` is what keeps the cost proportional to what was *found* rather than to how many rows it
-took down. A fuzz campaign covers a component's whole property set, and a crash it cannot place
-condemns every check in it — on a klend-sized component that is 26 BAD rows of one crash. Written up
-per row it would be 26 heavy-model calls publishing 26 accounts of the same finding, each guessing a
+`draft` and `assess` are not independent — the schema decides what the model can be asked, and
+`assess` can only read what came back. Everything else the loop used to take as a hook turned out to
+be derivable from the evidence itself, and is now shared: `proof_of_concept` joins the reproducers
+from instances the run actually refuted (labelled once there is more than one), and `finding_key`
+reads the key the backend stamped.
+
+That key is what keeps the cost proportional to what was *found* rather than to how many rows it took
+down. A fuzz campaign covers a component's whole property set, and a crash it cannot place condemns
+every check in it — on a klend-sized component that is 26 BAD rows of one crash. Written up per row
+it would be 26 heavy-model calls publishing 26 accounts of the same finding, each guessing a
 different check it might have been.
 
-It is deliberately the *backend's* answer and not something this layer infers from matching
-evidence: rows fanned out from one conclusion look exactly like several checks that failed the same
-way, and those are two different facts about the program. Only whatever produced the verdicts knows
-which it is — a Rust wheel says so on `Verdict.finding`.
+The relation is deliberately *stamped* and never inferred from matching evidence: rows fanned out
+from one conclusion look exactly like several checks that failed the same way, and those are two
+different facts about the program. Only whatever produced the verdicts knows which it is — a Rust
+wheel says so on `Verdict.finding`, and it stamps it at the point it decides to fan out.
 
 Returning `None` is how a backend opts out; the report then builds no findings for it and never
 starts the heavy model. `outcomes` is passed because a backend whose evidence is in its own results

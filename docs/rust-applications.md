@@ -408,12 +408,16 @@ The write-up loop is shared ([formalization-abstraction.md §4.6](./formalizatio
 so is the host half in [findings.py](../composer/rustapp/findings.py) — which knows only wire fields.
 What a *particular* backend's evidence means is the wheel's, declared as `AppDescriptor.findings`.
 
-**Evidence is a `CheckObservation` per check**, keyed by `(file, name)` exactly as the report keys
-its rows — which for Crucible means the section file, since one crate holds every component's checks
-and two authors given the same property title write the same check name. Each carries the run's own
-text, the wheel's *own* outcome (`ran`), and the author's `expect_check_failure` reason. The last two
-are the split that matters: a declared check reports `BAD` either way, so only `ran` and `declared`
-together say whether a reader is looking at something the run found or a claim the author made.
+**Evidence is one shared `RuleEvidence` per check**, keyed by `(file, name)` exactly as the report
+keys its rows — which for Crucible means the section file, since one crate holds every component's
+checks and two authors given the same property title write the same check name. A wheel fills
+`label` (the component), `counterexample` (`Verdict.detail`), `accounting`, `ran` — the wheel's *own*
+outcome — and `declared`, the author's `expect_check_failure` reason. Those last two are the split
+that matters: a declared check reports `BAD` either way, so only `ran` and `declared` together say
+whether a reader is looking at something the run found or a claim the author made.
+
+`analysis` stays empty. A wheel reports what its run found, not a reading of why the check broke, and
+the prompt has to be able to tell a reader which of the two it is holding.
 
 **`FindingsPolicy.system` says what the evidence is**, and it is the wheel's prose because it is the
 wheel's claim. Crucible's says a fuzzer drove a harness the author wrote from a state that harness

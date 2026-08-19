@@ -25,18 +25,21 @@ Audit-level claim(s) it belongs to:
 {% endif %}
 {% if observations -%}
 {% for o in observations %}
---- What the run observed: {{ o.component }} ---
+--- What the run observed: {{ o.label }} ---
+{# No separate run outcome means the evidence is a refutation and nothing else — the same rule
+   `proof_of_concept` filters on. #}
+{% set reproduced = o.ran is none or o.ran.value == "BAD" -%}
 {% if o.declared -%}
 DECLARED BY THE AUTHOR as expected to fail. Their reason:
 {{ o.declared }}
-{% if o.ran.value == "BAD" -%}
+{% if reproduced -%}
 The run also reproduced it, so the evidence below stands behind that claim.
 {%- else -%}
 The run did NOT reproduce it — it reported {{ o.ran.value }}. The author's reason above is the only
 evidence there is. Do not describe a counterexample; say what the claim rests on.
 {%- endif %}
 {% endif -%}
-{% if o.ran.value == "BAD" %}
+{% if reproduced %}
 What the run found, with whatever reproduces it:
 {{ o.counterexample }}
 {%- elif not o.declared and o.counterexample %}
