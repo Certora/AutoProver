@@ -40,7 +40,7 @@ class FoundryContractExtractor(ContractExtractor):
         excludes libraries/deps/tests.
         """
         artifacts_dir = self.resolve_artifacts_dir()
-        if artifacts_dir is None:
+        if not artifacts_dir.is_dir():
             return {}
 
         library_files = find_all_library_files_and_names()

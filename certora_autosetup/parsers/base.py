@@ -80,20 +80,34 @@ class ContractExtractor(ABC):
         """
         pass
 
-    def resolve_artifacts_dir(self) -> Optional[Path]:
-        """Return the directory holding this project's build artifacts, or None if there is none.
+    def resolve_artifacts_dir(self) -> Path:
+        """Return the directory this project's build artifacts belong in.
+
+        The directory is not promised to exist: an unbuilt project has artifacts nowhere,
+        and naming the directory its build *would* write to is what lets the caller say
+        which build to run. Callers test the path before reading it.
 
         The default directory name is only a guess. A project can configure its output
         elsewhere (Foundry's ``out``, Hardhat's ``paths.artifacts``) and still have a
         directory by the default name, for example as the *parent* of the configured one:
         ``out = "out/foundry"`` leaves a bare ``out/`` that exists and holds nothing the
         extractor can read. So the default only counts while it actually holds artifacts,
-        and the config decides otherwise. The config is the second question because it is
-        the expensive one — Hardhat and Truffle answer it by running node.
+        and the config decides otherwise.
 
-        A default directory that exists but holds no artifacts is still the right answer
-        when the config offers nothing better: it means the build produced nothing, which
-        is what the caller should report on.
+        The default is asked first for two reasons. It is the cheap question — reading the
+        config runs ``forge remappings`` for Foundry and loads the project's config through
+        node for Hardhat and Truffle, none of it memoized. And for a Hardhat project picked
+        over a Foundry config sitting beside it, the default directory is the evidence that
+        decided the pick: ``BuildSystemDetector`` ranks the Hardhat side by ``artifacts/``
+        without ever reading a Hardhat config. Preferring a configured directory here could
+        send the extractor somewhere the detector never looked, while the populated directory
+        that decided the pick goes unread.
+
+        A default directory that exists but holds no artifacts is still the right answer when
+        the config offers nothing better: it means the build produced nothing, which is what
+        the caller should report on. With nothing on disk either way there is no artifact to
+        read, so the answer is the directory this project writes to — the configured one when
+        the config named one.
         """
         default_artifact_dir = self.project_root / self.manager.get_default_artifact_dir()
         if self.manager.holds_artifacts(default_artifact_dir):
@@ -103,21 +117,20 @@ class ContractExtractor(ABC):
         if configured_dir is not None and configured_dir.is_dir():
             return configured_dir
 
-        return default_artifact_dir if default_artifact_dir.is_dir() else None
+        if default_artifact_dir.is_dir():
+            return default_artifact_dir
+
+        return configured_dir if configured_dir is not None else default_artifact_dir
 
     def extract_logic_contracts(self) -> List[ContractHandle]:
-        """Extract logic contracts from build artifacts with config fallback."""
+        """Extract logic contracts from build artifacts, or name the build that has to run."""
         artifacts_dir = self.resolve_artifacts_dir()
-        if artifacts_dir is None:
-            # Name the directory the caller should go look at — the one the config declares
-            # when it declares one — and say which way it is unusable, since a path that is
-            # there but is a file needs a different remedy than one that is absent.
-            missing = self._try_read_artifact_dir_from_config()
-            if missing is None:
-                missing = self.project_root / self.manager.get_default_artifact_dir()
-            state = "is not a directory" if missing.exists() else "does not exist"
+        if not artifacts_dir.is_dir():
+            # Say which way the directory is unusable: a path that is there but is a file
+            # needs a different remedy than one that is absent.
+            state = "is not a directory" if artifacts_dir.exists() else "does not exist"
             raise Exception(
-                f"{self.manager.component} artifacts directory '{missing}' {state}. "
+                f"{self.manager.component} artifacts directory '{artifacts_dir}' {state}. "
                 f"Please run '{self.manager.get_build_command(profile=self.profile)}' first."
             )
 

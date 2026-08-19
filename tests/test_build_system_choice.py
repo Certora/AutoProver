@@ -169,12 +169,60 @@ def test_a_configured_out_nested_under_the_default_name_is_read(project: Path) -
 
 
 def test_a_populated_default_out_wins_over_the_configured_one(project: Path) -> None:
-    # Foundry itself reads the profile's `out`, so the two agreeing is the normal case;
-    # when they disagree the artifacts that are actually there are the useful ones.
+    # Foundry itself reads the profile's `out`, so the two agreeing is the normal case. When
+    # they disagree, the default is the one that costs nothing to look at, so it is what gets
+    # read; asking the config first would run `forge remappings`, or node for the other two
+    # build systems, on every extraction.
+    (project / "src" / "Gadget.sol").write_text("contract Gadget {}")
     _foundry_config(project, out="artifacts-forge")
     _foundry_artifacts(project / "out")
+    _foundry_artifacts(project / "artifacts-forge", contract="Gadget", source="src/Gadget.sol")
 
     assert _extracted(project) == ["Widget"]
+
+
+def test_the_configured_out_is_read_when_the_default_out_is_empty(project: Path) -> None:
+    # The default directory is left behind by a build that no longer runs, so it holds
+    # nothing to rank it by and the config gets to name the directory instead.
+    _foundry_config(project, out="artifacts-forge")
+    (project / "out").mkdir()
+    _foundry_artifacts(project / "artifacts-forge")
+
+    assert _extracted(project) == ["Widget"]
+
+
+def test_an_empty_default_out_is_read_rather_than_reported_as_missing(project: Path) -> None:
+    # Nothing built anywhere, and the only directory on disk is the default one. A directory
+    # that is there ends the search: it is read, finds nothing, and the caller reports on that
+    # itself. Raising instead would name a directory nobody has to create by hand.
+    _foundry_config(project, out="artifacts-forge")
+    (project / "out").mkdir()
+
+    assert _extracted(project) == []
+
+
+def test_the_error_names_the_default_when_the_config_cannot_be_read(project: Path) -> None:
+    # No foundry.toml to read, so the default name is the only directory we can point at.
+    with pytest.raises(Exception, match=r"out' does not exist"):
+        _extracted(project)
+
+
+def test_a_file_where_the_artifacts_directory_belongs_is_reported_as_such(project: Path) -> None:
+    # A path that is there but is a file needs a different remedy from one that is absent, so
+    # the two are reported apart.
+    _foundry_config(project)
+    (project / "out").write_text("")
+
+    with pytest.raises(Exception, match=r"out' is not a directory"):
+        _extracted(project)
+
+
+def test_the_source_path_map_is_empty_for_an_unbuilt_project(project: Path) -> None:
+    # The map is built by walking the artifacts directory, so an unbuilt project has to be
+    # answered before the walk rather than by it.
+    _foundry_config(project)
+
+    assert FoundryContractExtractor(project).build_source_path_to_contracts_map() == {}
 
 
 def test_an_unbuilt_project_names_the_build_command(project: Path) -> None:
