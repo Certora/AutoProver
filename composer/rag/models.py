@@ -1,3 +1,4 @@
+import os
 from typing import TYPE_CHECKING, override
 
 from langchain_core.embeddings import Embeddings
@@ -12,7 +13,14 @@ else:
         from sentence_transformers import SentenceTransformer #type: ignore
 
         def get_model() -> SentenceTransformer:
-            return SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)
+            # COMPOSER_EMBED_DEVICE overrides the auto-picked device. torch's MPS shader
+            # cache is not thread-safe under concurrent encodes (SIGSEGV on Apple
+            # Silicon), so mac hosts should set it to "cpu".
+            return SentenceTransformer(
+                'nomic-ai/nomic-embed-text-v1.5',
+                trust_remote_code=True,
+                device=os.environ.get("COMPOSER_EMBED_DEVICE"),
+            )
     except ImportError:
         # for tests (no ST dependency)
         def get_model() -> "SentenceTransformer":
