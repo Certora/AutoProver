@@ -5,13 +5,15 @@ use soroban_sdk::Env;
 
 {% for pkg in packages %}// package {{ pkg.name }}
 
-{% for c in pkg.contracts %}use crate::{{ c.name }};
+{% for c in pkg.contracts %}use {{ c.use }};
 {% for t in c.impl_blocks %}{% if t.trait %}use {{ t.trait_fqn }};
 {%endif %}{% for f in t.functions %}// {% if t.trait %}trait {{ t.trait }}{% else %}contract {{ c.name }}{% endif %}
+#[allow(unused)]
 #[rule]
-pub fn {{ f.name }}_sanity(e: Env) { {% for p in f.params %}{% if not loop.first %}
+pub fn {{ f.name }}_sanity(env: Env) { {% for p in f.params %}{% if not loop.first %}
     {% set type = p.type.rsplit('<', 1)[0] %}let {{ p.name }} = nondet_{{ type|lower }}(); {% endif %}{% endfor %}
-
+    {% if f.params and f.params[0].name == "e" %}let e = env.clone();{% endif %}
+    
     {{ c.name }}::{{ f.name }}({% for a in f.params %}{% if loop.first %}{% if t.trait %}&{% endif %}{% else %}, {% endif %}{{ a.name }}{% endfor %});   
 
     cvlr_satisfy!(true);
