@@ -1,13 +1,15 @@
-"""Regression: prune_reachable keeps a candidate invariant only when EVERY prover check for it passed.
+"""Regression: prune_reachable claims an invariant proved ONLY when its top-level (ROOT) node is
+VERIFIED.
 
-An invariant expands into many checks (base case + one preservation per method) sharing the invariant's
-rule name. If a passing sibling check could mask a VIOLATED/TIMEOUT one, the tool would keep a refuted
-invariant and the conformance would assume a false predicate (unsound). This pins the fix.
+An invariant expands into many prover checks (base case + one preservation per method + sub-checks); POU
+aggregates them into a single ROOT node whose status is the authoritative verdict. Reading the verdict
+from the ROOT — not from leaf aggregation — is what keeps prune sound on any partially-finished run
+(our own stop-on-first-violation cancel, a prover-side timeout, a halt): an absent/RUNNING leaf is not a
+passing one. The leaf verdicts remain available (for the agent to see WHICH assert violated) but never
+decide the proof verdict.
 """
 import asyncio
 from dataclasses import dataclass, field
-
-import pytest
 
 import smtool.verify as V
 from smtool.verify import RuleVerdict, VerifyResult
@@ -27,6 +29,14 @@ class _FakeProject:
         self.dropped.extend(sorted(names))
 
 
+def _root(rule, status):
+    return RuleVerdict(rule, status, status in ("VERIFIED", "SUCCESS"), node_type="ROOT")
+
+
+def _leaf(rule, status, node_type="INVARIANT_SUBCHECK"):
+    return RuleVerdict(rule, status, status in ("VERIFIED", "SUCCESS"), node_type=node_type)
+
+
 def _res(rules):
     return VerifyResult(conf="r.conf", success=False, job_url=None, rules=rules)
 
@@ -38,11 +48,12 @@ def _prune(project, canned, monkeypatch):
     return asyncio.run(V.prune_reachable(project, "reachable.conf"))
 
 
-def test_mixed_pass_fail_invariant_is_dropped(monkeypatch):
-    # balanceLeqSupply: some instances pass, one preservation instance VIOLATED -> NOT proven.
-    rules = [RuleVerdict("balanceLeqSupply", "VERIFIED", True) for _ in range(49)]
-    rules += [RuleVerdict("balanceLeqSupply", "VIOLATED", False) for _ in range(56)]
-    rules += [RuleVerdict("balanceLeqSupply", "TIMEOUT", False) for _ in range(2)]
+def test_violated_root_drops_invariant(monkeypatch):
+    # balanceLeqSupply: many leaves pass, but the ROOT verdict is VIOLATED -> NOT proven. The passing
+    # leaves must NOT mask it (the original masking bug: 49 verified / 56 violated leaves, kept).
+    rules = [_leaf("balanceLeqSupply", "VERIFIED") for _ in range(49)]
+    rules += [_leaf("balanceLeqSupply", "VIOLATED", "VIOLATED_ASSERT") for _ in range(56)]
+    rules += [_root("balanceLeqSupply", "VIOLATED")]
     proj = _FakeProject(candidates=["balanceLeqSupply"])
     kept, dropped, _ = _prune(proj, _res(rules), monkeypatch)
     assert kept == []
@@ -50,8 +61,8 @@ def test_mixed_pass_fail_invariant_is_dropped(monkeypatch):
     assert "balanceLeqSupply" not in proj.verified_invariants
 
 
-def test_fully_passing_invariant_is_kept(monkeypatch):
-    rules = [RuleVerdict("solventInv", "VERIFIED", True) for _ in range(20)]
+def test_verified_root_keeps_invariant(monkeypatch):
+    rules = [_leaf("solventInv", "VERIFIED") for _ in range(20)] + [_root("solventInv", "VERIFIED")]
     proj = _FakeProject(candidates=["solventInv"])
     kept, dropped, _ = _prune(proj, _res(rules), monkeypatch)
     assert kept == ["solventInv"]
@@ -59,8 +70,25 @@ def test_fully_passing_invariant_is_kept(monkeypatch):
     assert "solventInv" in proj.verified_invariants
 
 
-def test_one_timeout_instance_drops_invariant(monkeypatch):
-    rules = [RuleVerdict("inv", "VERIFIED", True) for _ in range(5)] + [RuleVerdict("inv", "TIMEOUT", False)]
+def test_passing_leaves_without_verified_root_not_kept(monkeypatch):
+    # Partial/halted run: every leaf seen so far passed, but the ROOT never reached VERIFIED (still
+    # RUNNING). Absence of a failing leaf is NOT a proof -> must NOT be kept.
+    rules = [_leaf("inv", "VERIFIED") for _ in range(5)] + [_root("inv", "RUNNING")]
+    proj = _FakeProject(candidates=["inv"])
+    kept, dropped, _ = _prune(proj, _res(rules), monkeypatch)
+    assert kept == [] and dropped == ["inv"]
+
+
+def test_no_root_node_not_kept(monkeypatch):
+    # Job died before the ROOT node was emitted: only leaves present, all passing. Still not proven.
+    rules = [_leaf("inv", "VERIFIED") for _ in range(3)]
+    proj = _FakeProject(candidates=["inv"])
+    kept, dropped, _ = _prune(proj, _res(rules), monkeypatch)
+    assert kept == [] and dropped == ["inv"]
+
+
+def test_timeout_root_drops_invariant(monkeypatch):
+    rules = [_leaf("inv", "VERIFIED") for _ in range(5)] + [_root("inv", "TIMEOUT")]
     proj = _FakeProject(candidates=["inv"])
     kept, dropped, _ = _prune(proj, _res(rules), monkeypatch)
     assert kept == [] and dropped == ["inv"]

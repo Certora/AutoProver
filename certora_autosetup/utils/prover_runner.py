@@ -581,6 +581,9 @@ class ProverRunner(ABC):
                     notifications=notifications,
                     duration=duration,
                     assert_type=assert_type,
+                    node_type=check_result.node_type.value
+                    if hasattr(check_result.node_type, "value")
+                    else str(check_result.node_type),
                 )
                 rule_results.append(rule_result)
 

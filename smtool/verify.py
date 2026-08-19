@@ -27,11 +27,16 @@ class RuleVerdict:
     passed: bool
     method: str | None = None
     assert_message: str | None = None
+    node_type: str | None = None   # POU NodeType; "ROOT" is the per-rule top-level verdict node
+
+    @property
+    def is_root(self) -> bool:
+        return self.node_type == "ROOT"
 
     @classmethod
     def of(cls, r: RuleResult) -> "RuleVerdict":
         return cls(rule=r.rule_name, status=r.status, passed=r.passed,
-                   method=r.method, assert_message=r.assert_message)
+                   method=r.method, assert_message=r.assert_message, node_type=r.node_type)
 
 
 @dataclass
@@ -66,19 +71,25 @@ def _cut_of(conf_path: Path) -> str:
     return json.loads(conf_path.read_text())["verify"].split(":", 1)[0]
 
 
-def _runner(root: Path, cm: ConfigManager, certora_run_path: str, local: bool, disable_cache: bool):
+def _runner(root: Path, cm: ConfigManager, certora_run_path: str, local: bool, disable_cache: bool,
+            stop_on_first_violation: bool = False):
     kw = dict(project_root=root, config_manager=cm, certora_run_path=certora_run_path,
               disable_cache=disable_cache)
-    return LocalProverRunner(**kw) if local else CloudProverRunner(**kw)
+    if local:
+        return LocalProverRunner(**kw)
+    return CloudProverRunner(**kw, stop_on_first_violation=stop_on_first_violation)
 
 
 async def verify(conf_path: str | Path, *, sources_root: str | Path | None = None,
                  certora_run_path: str = "certoraRun", local: bool = False,
-                 disable_cache: bool = False, msg: str | None = None) -> VerifyResult:
-    """Run ONE conformance conf; return its per-rule verdicts. Async; content-hash cached."""
+                 disable_cache: bool = False, msg: str | None = None,
+                 stop_on_first_violation: bool = False) -> VerifyResult:
+    """Run ONE conf; return its per-rule verdicts. Async; content-hash cached. stop_on_first_violation
+    cancels the job on the first violated rule (partial results are still returned)."""
     conf_path = Path(conf_path).resolve()
     root = _project_root(conf_path, sources_root)
-    runner = _runner(root, ConfigManager(root), certora_run_path, local, disable_cache)
+    runner = _runner(root, ConfigManager(root), certora_run_path, local, disable_cache,
+                     stop_on_first_violation)
     job = ProverJobSpec(contract_name=_cut_of(conf_path), phase="conformance",
                         config_file=FileContent.from_file(conf_path),
                         msg=msg or f"smtool conformance: {conf_path.name}")
@@ -94,13 +105,18 @@ async def prune_reachable(project, reachable_conf_path: str | Path, *,
     as `requireInvariant`s. Returns (kept, dropped, VerifyResult); RE-WRITE the project afterwards to
     emit the pruned artifacts. Prove-incrementally: add more invariants + call this again.
     TODO(discovery): source the candidate invariants from composer's generate->prove->cex pass."""
+    # Early-stop is sound here: a candidate is kept ONLY if its ROOT node is VERIFIED, so an invariant
+    # whose job is cancelled on the first violation (ROOT not VERIFIED / absent) is correctly dropped.
     res = await verify(reachable_conf_path, sources_root=sources_root, certora_run_path=certora_run_path,
-                       local=local, disable_cache=disable_cache, msg="smtool reachable invariants")
-    # An invariant explodes into many checks (base case + one preservation per method) that all share
-    # its rule name; it holds only if EVERY check passed. Subtract any name with a failing instance so a
-    # passing sibling can't mask a VIOLATED/TIMEOUT one — an invariant survives only when fully proven.
-    failed = {v.rule for v in res.rules if not v.passed}
-    verified = {v.rule for v in res.rules if v.passed} - failed
+                       local=local, disable_cache=disable_cache, msg="smtool reachable invariants",
+                       stop_on_first_violation=True)
+    # An invariant's proof verdict is its TOP-LEVEL (ROOT) node — POU aggregates the base case + every
+    # preservation sub-check into it. Read the verdict there, NOT from the leaf checks: leaf aggregation
+    # (e.g. "no leaf failed") is unsound on any partially-finished run (our own cancel, a prover-side
+    # timeout, a halt) because an absent leaf is not a passing one. An invariant survives ONLY if its
+    # ROOT node is VERIFIED; RUNNING/PENDING/TIMEOUT/VIOLATED/absent all mean "not proven". The leaf
+    # verdicts stay in res.rules for the agent to see WHICH method/assert violated.
+    verified = {v.rule for v in res.rules if v.is_root and v.passed}
     candidates = set(project.reachable_invariant_names())
     kept = candidates & verified
     project.drop_invariants(candidates - verified)
@@ -136,7 +152,10 @@ async def verify_all_early(conf_paths, *, sources_root: str | Path | None = None
     if not paths:
         return {}
     root = _project_root(paths[0], sources_root)
-    runner = _runner(root, ConfigManager(root), certora_run_path, local, disable_cache)
+    # Conformance only needs the FIRST violation to trigger a refine, so cancel each job as soon as one
+    # of its rules violates (partial results carry the violation for the agent).
+    runner = _runner(root, ConfigManager(root), certora_run_path, local, disable_cache,
+                     stop_on_first_violation=True)
     specs = [ProverJobSpec(contract_name=_cut_of(c), phase="conformance",
                            config_file=FileContent.from_file(c),
                            msg=msg or f"smtool conformance: {c.name}") for c in paths]
