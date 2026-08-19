@@ -992,11 +992,7 @@ class CloudProverRunner(ProverRunner):
         except Exception as e:
             self.log(f"partial-check fetch failed for {job_url}: {e}", "DEBUG")
             return [], []
-        def _status(c):
-            st = getattr(c, "status", None)
-            val = getattr(st, "value", None)
-            return val if val is not None else str(st)
-        violated = [c for c in all_checks if _status(c) == "VIOLATED"]
+        violated = [c for c in all_checks if c.is_violated]
         return all_checks, violated
 
     async def _wait_for_job_completion_with_api(

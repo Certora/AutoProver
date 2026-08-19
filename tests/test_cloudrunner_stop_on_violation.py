@@ -10,8 +10,9 @@ from certora_autosetup.utils.cloud_runner import CloudProverRunner
 from certora_autosetup.utils.prover_runner import ProverRunner
 
 
-def _check(rule, status):
-    return SimpleNamespace(status=SimpleNamespace(value=status), rule_name=rule)
+def _check(rule, violated):
+    # mirrors prover_output_utility.models.CheckResult: the helper reads the `is_violated` property.
+    return SimpleNamespace(rule_name=rule, is_violated=violated)
 
 
 def _stub(**attrs):
@@ -24,7 +25,7 @@ def _stub(**attrs):
 
 def test_partial_violated_checks_filters_violated():
     api = SimpleNamespace(get_all_checks=lambda url: [
-        _check("a", "VERIFIED"), _check("b", "VIOLATED"), _check("c", "RUNNING"), _check("b", "VIOLATED"),
+        _check("a", False), _check("b", True), _check("c", False), _check("b", True),
     ])
     stub = _stub()
     allc, viol = CloudProverRunner._partial_violated_checks(stub, api, "u")
@@ -58,7 +59,7 @@ def test_wait_cancels_and_returns_partial_on_first_violation():
     async def fake_cancel(url):
         cancelled["called"] = True
         return True
-    checks = [_check("ok", "VERIFIED"), _check("bad", "VIOLATED")]
+    checks = [_check("ok", False), _check("bad", True)]
     api = SimpleNamespace(
         get_job_info=lambda url: SimpleNamespace(status=ProverJobStatus.RUNNING, start_time=1.0, finish_time=None),
         get_all_checks=lambda url: checks,
@@ -82,7 +83,7 @@ def test_wait_ignores_violation_when_flag_off():
     async def fake_cancel(url):
         cancelled["called"] = True
         return True
-    api = SimpleNamespace(get_job_info=get_job_info, get_all_checks=lambda url: [_check("bad", "VIOLATED")])
+    api = SimpleNamespace(get_job_info=get_job_info, get_all_checks=lambda url: [_check("bad", True)])
     stub = _stub(stop_on_first_violation=False, _cancel_cloud_job=fake_cancel)
     stub._partial_violated_checks = CloudProverRunner._partial_violated_checks.__get__(stub)
     # poll_interval is 10s; shrink the wait by making the 2nd poll SUCCEED. asyncio.sleep(10) would stall
