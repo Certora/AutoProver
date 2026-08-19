@@ -50,12 +50,12 @@ from composer.spec.source.author import batch_cvl_generation, EditingTools, Sour
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import (
-    Formalized, ReportComponentInput, Verdict, VerdictFetcher,
+    Formalized, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
 )
 from composer.spec.source.report.schema import (
     AppliedEditRecord, ComponentName, RuleName, RuleRef, SourceEditRecord,
 )
-from composer.spec.source.report.findings import FindingsPolicy, RuleEvidence
+from composer.spec.source.report.findings import FindingsPolicy
 from composer.spec.source.prover_findings import prover_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.munge.vfs_diff import diff_against_baseline

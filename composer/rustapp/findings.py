@@ -16,9 +16,8 @@ from composer.pipeline.ptypes import ComponentOutcome, Delivered
 from composer.rustapp.descriptor import FindingsDeclaration
 from composer.rustapp.result import RustFormalResult
 from composer.spec.gen_types import TypedTemplate
-from composer.spec.source.report.findings import (
-    FindingsPolicy, FindingsPromptParams, RuleEvidence,
-)
+from composer.spec.source.report.collect import RuleEvidence
+from composer.spec.source.report.findings import FindingsPolicy, FindingsPromptParams
 from composer.spec.source.report.schema import RuleRef
 from composer.spec.system_model import FeatureUnit
 from composer.templates.loader import load_jinja_template

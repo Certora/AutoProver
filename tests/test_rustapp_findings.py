@@ -34,8 +34,8 @@ from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustFormalResult
 from composer.rustapp.results import summarize_verdicts
 from composer.rustapp.wire import Verdict
-from composer.spec.source.report.collect import ReportComponentInput, collect
-from composer.spec.source.report.findings import FindingDraft, RuleEvidence, build_findings
+from composer.spec.source.report.collect import ReportComponentInput, RuleEvidence, collect
+from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
     Finding, ImpactLevel, LikelihoodLevel, Outcome,

@@ -12,6 +12,7 @@ already in memory.
 """
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -151,6 +152,49 @@ def _curtailed_component[R: ReportableResult](
         skipped=skipped,
         unattempted=unattempted,
     )
+
+@dataclass(frozen=True)
+class RuleEvidence:
+    """One failing instance of a violated rule: what a run observed about it, split by where each
+    part came from.
+
+    A backend fills the parts it has and leaves the rest ``None``. Absence always means "this run
+    recorded nothing of that kind" — never that it recorded something empty — so the fields mean the
+    same thing whichever backend produced them, and a prompt can say what is missing rather than
+    guessing."""
+
+    #: Which instance this is, where a rule can fail more than once: a parametric binding
+    #: (``rule r(method f)``) for the prover, the component for a per-component backend. ``""``
+    #: when the rule fails only once.
+    label: str = ""
+    #: The backend's own account of *why* the check failed, where it produces one — a root-cause
+    #: explanation rather than the raw failure.
+    analysis: str | None = None
+    #: What reproduces the failure: a counterexample trace, a crashing input, an assertion message.
+    counterexample: str | None = None
+    #: The run's own outcome for this check, before any authored declaration is folded into the
+    #: outcome the report shows. ``None`` for a backend that captures evidence only for failures,
+    #: where it would add nothing; where a check can be reported BAD on the author's say-so, this is
+    #: the only thing that says whether the run actually reproduced it.
+    ran: Outcome | None = None
+    #: The run's evidence about *itself*: what it spent against its budget, how far it reached, and
+    #: whether this check was exercised at all. What makes a result weigh something — and what a
+    #: proof of concept must not be padded with.
+    accounting: str | None = None
+    #: Why the author declared a failure here to be expected, when they did. Present means the row
+    #: is a claim the author made, not only something the run tripped over.
+    declared: str | None = None
+    #: Which *finding* this belongs to, when one piece of evidence condemns several checks at once.
+    #: Opaque — only ever compared, never read into. ``None`` is evidence standing on its own.
+    finding: str | None = None
+
+
+#: Every captured failing instance of a violated rule, or ``[]`` when the backend has none for it.
+#: Keyed by `RuleRef` — ``(file, name)``, how the report identifies a row — because a name alone
+#: does not: one deliverable can hold several components' checks, and two authors given the same
+#: property write the same name.
+type EvidenceFetcher = Callable[[RuleRef], Awaitable[list[RuleEvidence]]]
+
 
 async def collect[R: ReportableResult](
     inputs: list[ReportComponentInput[R]],

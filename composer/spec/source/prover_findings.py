@@ -8,9 +8,8 @@ and the root-cause analysis captured during the run to ground it in.
 from typing import TypedDict
 
 from composer.spec.gen_types import TypedTemplate
-from composer.spec.source.report.findings import (
-    EvidenceFetcher, FindingsPolicy, FindingsPromptParams,
-)
+from composer.spec.source.report.collect import EvidenceFetcher
+from composer.spec.source.report.findings import FindingsPolicy, FindingsPromptParams
 from composer.templates.loader import load_jinja_template
 
 
