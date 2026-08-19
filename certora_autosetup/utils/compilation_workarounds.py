@@ -427,10 +427,12 @@ class CompilationWorkaroundManager:
                 enabled=True,
             ),
             # solc's own advice on a legacy stack-too-deep is to compile via-ir "while
-            # enabling the optimizer" — the optimizer is what reclaims stack slots, and it
-            # does so under legacy codegen too. Enabling it alone keeps legacy codegen,
-            # which via-ir would replace: via-ir inlines internal functions and with them
-            # the internal summaries CVL applies, so it is the more expensive answer.
+            # enabling the optimizer". The optimizer is what reclaims stack slots, and it
+            # does so under legacy codegen too. Enabling it alone leaves codegen as it is,
+            # where via-ir replaces it: via-ir inlines internal functions, which can leave
+            # the internal summaries CVL applies with nothing to attach to. It does not
+            # always cost them, but it is a risk worth not taking when the optimizer alone
+            # may do.
             CompilationWorkaround(
                 name="stack_too_deep_optimizer",
                 detect_fn=lambda output: (
@@ -444,10 +446,12 @@ class CompilationWorkaroundManager:
             ),
             # The optimizer can clear the contract compile and still leave the
             # autofinder-instrumented one over the stack limit, since instrumentation adds
-            # slots of its own. Accepting the fallback costs local-variable finders in the
-            # files that fall back; via-ir would cost internal summaries in every file it is
-            # enabled for, so this comes first. Only fires on output produced after the
-            # optimizer was tried, not in the pass that just enabled it.
+            # slots of its own. Falling back puts the local-variable finders for those files
+            # at risk; via-ir puts the internal summaries at risk in every file it is enabled
+            # for. Neither loss is certain — a file can fall back and still give useful
+            # finders, and an inlined contract can still be summarized — but the second
+            # exposure is the wider one, so this rung comes first. Only fires on output
+            # produced after the optimizer was tried, not in the pass that just enabled it.
             CompilationWorkaround(
                 name="stack_too_deep_autofinder",
                 detect_fn=lambda output: (
@@ -1705,10 +1709,10 @@ class CompilationWorkaroundManager:
         them one at a time pays off, for the whole scene.
 
         Per contract is the better answer while the count is small: every contract left on
-        legacy codegen keeps the internal-function summaries via-ir would inline away. But
+        legacy codegen keeps the internal-function summaries via-ir might inline away. But
         each one costs a full compile of the scene to discover, so a project that needs it
         widely spends dozens of compiles walking there. Past VIA_IR_SCENE_THRESHOLD the
-        finder loss is already broad and the rest of the scene is likely to follow, so the
+        exposure is already broad and the rest of the scene is likely to follow, so the
         remaining contracts are switched in one step. A project whose build config declares
         via-ir skips the walk entirely — it has told us where this ends.
         """
