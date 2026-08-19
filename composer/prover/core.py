@@ -447,6 +447,15 @@ async def declared_rules_list(
     folder: Path,
     args: list[str]
 ) -> list[str]:
+    """
+    This is a temporary hack to work around `certoraRun` not providing a "native"
+    way to list rules. Instead we use certoraRun to build the project, hijack `msg` to find
+    the generated build dir, and then manually invoke the typechecker with `-listRules`
+    ourselves against that build dir.
+
+    Not great, obviously, but lets us work on this AP feature while waiting for support for this to 
+    land upstream in certora-cli and the pip distribution channels.
+    """
     if any(m == "--msg" for m in args):
         raise ValueError("This unholy black magic only works if you don't pass msg")
     tc_key = uuid.uuid4().hex

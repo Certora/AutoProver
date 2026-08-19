@@ -208,12 +208,13 @@ def _iterate_history(
     curr_digest: str,
     curr_status: list[tuple[RulePath, StatusCodes]],
 ) -> Iterable[list[tuple[RulePath, StatusCodes]]]:
+    """Newest-first walk of the prover results produced against the current authoring
+    state: the current run's results, then each prior run whose ``state_digest`` matches,
+    stopping at the first run recorded against a different state (nag markers are
+    transparent)."""
     yield curr_status
-    it = len(l) - 1
-    while it >= 0:
-        elem = l[it]
+    for elem in reversed(l):
         if elem["sort"] != "run":
-            it -= 1
             continue
         if elem["state_digest"] != curr_digest:
             return
@@ -226,15 +227,20 @@ def _is_completion_history(
     curr_status: list[tuple[RulePath, StatusCodes]],
     all_rules: list[str]
 ) -> bool:
+    """Whether the runs against the current authoring state collectively verify every
+    declared rule (rules expected to fail are forgiven their failures but still count
+    as covered)."""
     remaining_rules = set(all_rules)
     for history in _iterate_history(
         l, curr_digest, curr_status
     ):
-        
         for (k, stat) in history:
             if stat != "VERIFIED" and k.rule not in expected_to_fail:
                 return False
-            remaining_rules.remove(k.rule)
+            # discard, not remove: results can name rules outside the declared list
+            # (envfreeFuncsStaticCheck, parametric instantiations sharing one rule),
+            # and overlapping run selections re-verify already-covered rules.
+            remaining_rules.discard(k.rule)
         if not remaining_rules:
             return True
     return False
@@ -652,11 +658,14 @@ def get_prover_tool(
                 nag_channel.setdefault("reminders_channel", []).append(
                     "You have successfully verified over your prior prover run(s) that all rules verify. This task is completed."
                 )
-            if rules is None and all_verified:
+                # Completing the coverage stamps, however the completing run was scoped:
+                # every declared rule was verified against exactly this authoring state
+                # (the state_digest match), so a piecemeal completion is as good as a
+                # full-run one.
                 return tool_state_update(
                     tool_call_id=tool_call_id, content=result.result_str,
                     prover_link=result.link, validations=stamper(state, state["version_history"]),
-                    prover_history=prover_update
+                    prover_history=prover_update, **nag_channel
                 )
             return tool_state_update(
                 tool_call_id=tool_call_id, content=result.result_str, prover_link=result.link,

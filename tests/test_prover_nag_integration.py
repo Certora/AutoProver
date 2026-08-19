@@ -31,8 +31,6 @@ testcontainer Postgres and the real local CVL toolchain (``put_cvl_raw``'s
 Typechecker gate), which puts it well outside the routine fast pass. Run with
 ``-m expensive``.
 """
-import json
-import re
 from pathlib import Path
 from typing import Any, override
 
@@ -55,7 +53,9 @@ from composer.testing.ui_harness_autoprove_Counter import (
 )
 from composer.ui.autoprove_console import AutoProveConsoleHandler
 
-from tests.conftest import needs_postgres
+from tests.conftest import (
+    SPEC_DECL_RE, conf_of_prover_call, needs_postgres, spec_of_prover_conf,
+)
 from tests.test_autoprove_integration import _install_mocks, _make_args
 
 pytestmark = [pytest.mark.expensive, needs_postgres, pytest.mark.asyncio]
@@ -65,8 +65,6 @@ _SCENARIO_NAME = "autoprove_counter"
 # Stable prefix of the reminder verify_spec queues when the stuck-rule
 # detector fires (the "3" is spelled by the message itself, so match short of it).
 _NAG_SNIPPET = "identical failures on the last"
-
-_DECL_RE = re.compile(r"^\s*(?:rule|invariant)\s+([A-Za-z_]\w*)", re.MULTILINE)
 
 
 async def _fake_run_prover(
@@ -79,23 +77,24 @@ async def _fake_run_prover(
     and reports every declared rule/invariant VERIFIED except the permanently
     stuck ``NAG_STUCK_RULE`` → SANITY_FAILED. Content-derived, so both
     authoring lanes are served without ordering assumptions."""
-    conf_path = Path(args[0])
-    if not conf_path.is_absolute():
-        conf_path = folder / conf_path
-    conf = json.loads(conf_path.read_text())
-    spec_path = Path(conf["verify"].split(":", 1)[1])
-    if not spec_path.is_absolute():
-        spec_path = folder / spec_path
+    conf = conf_of_prover_call(folder, args)
+    spec_text = spec_of_prover_conf(folder, conf)
     statuses: dict[RulePath, StatusCodes] = {
         RulePath(rule=name): ("SANITY_FAILED" if name == NAG_STUCK_RULE else "VERIFIED")
-        for name in _DECL_RE.findall(spec_path.read_text())
+        for name in SPEC_DECL_RE.findall(spec_text)
     }
-    assert statuses, f"fake prover: no rule/invariant declarations in {spec_path}"
+    assert statuses, f"fake prover: no rule/invariant declarations in {conf['verify']}"
     return ProverReport(
         raw_rule_status=statuses,
         result_str="\n".join(f"{p.rule}: {s}" for p, s in statuses.items()),
         link="https://prover.example/fake-run",
     )
+
+
+async def _fake_declared_rules(folder: Path, args: list[str]) -> list[str]:
+    """Stand-in for ``declared_rules_list`` — the same content-derived ground
+    truth, without the certoraRun build + typechecker ``-listRules`` subprocesses."""
+    return SPEC_DECL_RE.findall(spec_of_prover_conf(folder, conf_of_prover_call(folder, args)))
 
 
 class _ReminderSniffingLLM(HarnessFakeLLM):
@@ -125,8 +124,10 @@ async def test_prover_nag_fires_and_run_survives(scenario_provider, langgraph_db
         monkeypatch, scenario_dir, tape_installer=lambda: install_nag_tape(fake=fake)
     )
     # This test is about verify_spec's monitoring behavior, not proving — swap
-    # the prover core for the canned status reports.
+    # the prover core for the canned status reports, and the rule-listing
+    # pre-pass for the same spec-derived ground truth.
     monkeypatch.setattr("composer.spec.source.prover.run_prover", _fake_run_prover)
+    monkeypatch.setattr("composer.spec.source.prover.declared_rules_list", _fake_declared_rules)
 
     # Run the whole pipeline. The first requirement is simply that the nag
     # path doesn't kill (or corrupt) the run: this raises if any phase dies.

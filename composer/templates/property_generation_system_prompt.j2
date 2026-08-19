@@ -7,6 +7,22 @@
 
 {% include "cvl_edit_guidance.j2" %}
 
+## Running the Prover
+
+The `verify_spec` tool runs the Certora prover on the current version of your spec against the
+source under verification, and reports a verdict (`VERIFIED`, `VIOLATED` with counterexample
+analysis, `TIMEOUT`, etc.) for each rule and invariant it ran.
+
+Its two optional arguments select which of the spec's declared rules/invariants the run executes;
+they are mutually exclusive:
+
+- **`rules`** — run only the named rules/invariants.
+- **`exclude_rules`** — run every declared rule/invariant *except* the named ones.
+
+With neither argument, the run executes every rule and invariant declared in the spec. Names in
+either list refer to the declarations in the current spec. `verify_spec` must be the only tool
+call in its turn.
+
 {% if source_editing %}
 ## Editing the Source Under Verification
 

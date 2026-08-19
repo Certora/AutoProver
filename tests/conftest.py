@@ -3,8 +3,11 @@ Shared fixtures for composer tool infrastructure tests.
 """
 
 
+import json
 import os
+import re
 import uuid
+from pathlib import Path
 
 # certora_autosetup.setup.setup_summaries hard-exits at IMPORT time when
 # ANTHROPIC_API_KEY is absent, which would crash test collection for any test
@@ -337,7 +340,55 @@ async def pg_database(pg_database_opt: PGAsyncPool | None) -> AsyncIterator[PGAs
     yield pg_database_opt
 
 type ProverToolResponse = ProverReport | str
-type ProverMock = Callable[[Iterable[ProverToolResponse]], BaseTool]
+
+#: rule/invariant declarations of a CVL spec — the ground truth the mocked
+#: ``declared_rules_list`` derives from the spec text instead of running
+#: certoraRun + the typechecker's ``-listRules``.
+SPEC_DECL_RE = re.compile(r"^\s*(?:rule|invariant)\s+([A-Za-z_]\w*)", re.MULTILINE)
+
+
+def conf_of_prover_call(folder: Path, args: list[str]) -> dict:
+    """The conf json a prover entry point was invoked with: ``args[0]``, which
+    verify_spec passes project-root-relative."""
+    conf_path = Path(args[0])
+    if not conf_path.is_absolute():
+        conf_path = folder / conf_path
+    return json.loads(conf_path.read_text())
+
+
+def spec_of_prover_conf(folder: Path, conf: dict) -> str:
+    """The text of the spec a prover conf verifies (its ``verify`` target)."""
+    spec_path = Path(conf["verify"].split(":", 1)[1])
+    if not spec_path.is_absolute():
+        spec_path = folder / spec_path
+    return spec_path.read_text()
+
+
+@dataclass
+class ProverCall:
+    """One mocked ``run_prover`` invocation: where it ran, its argv, and the conf
+    verify_spec wrote for it (snapshotted at call time — the file is unlinked when
+    the run context exits)."""
+    folder: Path
+    args: list[str]
+    conf: dict
+
+
+class ProverMock:
+    """Binder over the mocked prover seams: call it with the ``run_prover`` response
+    script to get the verify_spec tool; ``calls`` records every mocked run."""
+
+    def __init__(
+        self,
+        bind: Callable[[Iterable[ProverToolResponse]], BaseTool],
+        calls: list[ProverCall],
+    ) -> None:
+        self._bind = bind
+        self.calls = calls
+
+    def __call__(self, l: Iterable[ProverToolResponse]) -> BaseTool:
+        return self._bind(l)
+
 
 @pytest.fixture
 def fake_llm():
@@ -351,18 +402,24 @@ def certora_prover(
 ) -> ProverMock:
     response_script : list[ProverToolResponse] | None = None
     response_ptr = 0
+    calls: list[ProverCall] = []
+
+    async def mock_declared_rules(folder: Path, args: list[str]) -> list[str]:
+        return SPEC_DECL_RE.findall(spec_of_prover_conf(folder, conf_of_prover_call(folder, args)))
 
     async def mock_prover(
-        *args, **kwargs
+        folder: Path, args: list[str], *rest, **kwargs
     ) -> ProverToolResponse:
         assert response_script is not None
         nonlocal response_ptr
         assert response_ptr < len(response_script)
+        calls.append(ProverCall(folder=folder, args=list(args), conf=conf_of_prover_call(folder, args)))
         to_ret = response_script[response_ptr]
         response_ptr += 1
         return to_ret
-    
+
     monkeypatch.setattr("composer.spec.source.prover.run_prover", mock_prover)
+    monkeypatch.setattr("composer.spec.source.prover.declared_rules_list", mock_declared_rules)
     monkeypatch.setattr("composer.spec.source.prover.get_stream_writer", lambda: (
         lambda _: None
     ))
@@ -379,7 +436,7 @@ def certora_prover(
         response_script = list(l)
         return the_tool
 
-    return bind_tool
+    return ProverMock(bind_tool, calls)
 
 
 # ---------------------------------------------------------------------------
