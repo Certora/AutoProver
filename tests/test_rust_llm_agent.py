@@ -169,6 +169,16 @@ def test_the_expected_failure_tools_and_the_publish_mapping_follow():
     assert "harness function" in _tool_text(publish) or "mapping" in _tool_text(publish)
 
 
+def test_the_nested_mapping_schema_arrives_rendered_and_plainly_named():
+    # `map_checks` takes a family parameter, so the schema the model sees for it is a class built
+    # at runtime. It has to arrive rendered — a surviving `{checks}` is prose the model reads — and
+    # under the declared name, because a schema title is prompt text too.
+    schema = _map_tool(_crucible()).tool_call_schema.model_json_schema()
+    assert schema["$defs"].keys() == {"PropertyCheckMapping"}
+    assert schema["$defs"]["PropertyCheckMapping"]["title"] == "PropertyCheckMapping"
+    assert "{check" not in json.dumps(schema)
+
+
 def test_a_wheel_that_declares_no_noun_gets_the_generic_one():
     # `check_noun` is optional; a wheel with no better word gets the framework's.
     assert CheckVocab.of(_descriptor(check_noun=None)).one == "check"
