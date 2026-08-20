@@ -8,6 +8,7 @@ import asyncio
 from functools import cache
 
 import anthropic
+import httpx
 
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
@@ -225,8 +226,14 @@ class AnthropicService(ProviderServiceBase):
         and every 5xx, which covers 529 overloaded) plus connection-level
         failures (``APITimeoutError`` subclasses ``APIConnectionError``).
         400-class request errors are deterministic — an over-long prompt fails
-        identically on every attempt — and are deliberately excluded."""
-        if isinstance(exc, anthropic.APIConnectionError):
+        identically on every attempt — and are deliberately excluded.
+
+        ``httpx.TimeoutException`` is here because we stream: the SDK's own retries and its
+        exception wrapping both cover the *request*, and once it has handed the response stream to
+        the caller a stall surfaces raw from the transport, as ``httpx.ReadTimeout``. It means the
+        same thing as an ``APITimeoutError`` — the provider went quiet — and nothing has been
+        produced that a retry would duplicate."""
+        if isinstance(exc, (anthropic.APIConnectionError, httpx.TimeoutException)):
             return True
         if isinstance(exc, anthropic.APIStatusError):
             return exc.status_code in (408, 409, 429) or exc.status_code >= 500

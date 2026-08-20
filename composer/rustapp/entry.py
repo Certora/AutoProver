@@ -36,6 +36,7 @@ from langgraph.store.base import BaseStore
 from composer.core.user import user_data_ns
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.io.context import DefaultRetryPolicy, install_retry_policy
 from composer.input.parsing import add_protocol_args
 from composer.input.types import (
     DEFAULT_RECURSION_LIMIT,
@@ -280,6 +281,11 @@ async def rust_entry_point(
 
     # argparse Namespace duck-types the protocol: the model flags come from ExtendedModelOptions.
     tiered = get_provider_for(tiered=cast(TieredModelOptions, args))
+    # Run-wide retry floor, as ``cli_pipeline`` installs for the CVL backends: a transient provider
+    # failure resumes that graph from its last checkpoint instead of killing the component. Without
+    # it every graph runs with ``attempts = 1``, so a single 500 mid-run discards however long the
+    # session had been authoring — on klend, two components at ~2h each.
+    install_retry_policy(DefaultRetryPolicy(tiered.provider_service.should_retry))
     discovery_phase = _discovery_phase(app)
 
     async with (
