@@ -109,35 +109,28 @@ class ReportTerms(TypedDict):
     unit_plural: str     # "CVL rules" / "tests" — subtitle + footer
     unit_cap: str        # "Rule" / "Test" — the verdict-table column header
     outcomes_label: str  # "Rule outcomes" / "Test outcomes" — the header chip label
-    #: What the backend calls the named thing a finding's evidence came from — "rule" / "test" /
-    #: "check". Separate from ``unit_*`` because the two coincide only for some backends: a prover
-    #: rule is both the unit and the artifact, while Crucible's unit is a *property* and the thing
-    #: that carries it is a ``c_``-prefixed *check*, many-to-many with properties. Named for the
-    #: neutral internal term, as ``CheckVocab`` is on the authoring side — the wire calls a check a
-    #: check whatever a backend calls it in prose.
-    check_singular: str
 
 
 _TERMS: dict[ReportBackend, ReportTerms] = {
     "prover": ReportTerms(
         title="Formal verification report", unit_singular="rule", unit_plural="CVL rules",
         unit_cap="Rule", outcomes_label="Rule outcomes",
-        check_singular="rule",
     ),
     "foundry": ReportTerms(
         title="Foundry test report", unit_singular="test", unit_plural="tests",
         unit_cap="Test", outcomes_label="Test outcomes",
-        check_singular="test",
     ),
     "crucible": ReportTerms(
-        title="Crucible fuzzing report", unit_singular="property", unit_plural="properties",
-        unit_cap="Property", outcomes_label="Property outcomes",
-        check_singular="check",
+        # The unit is the *check*, not the property: a check is a `c_`-prefixed harness fn, and it
+        # is what the rules table rows and every `total_rules` count are. Saying "property" here
+        # both misnamed them and collided with the real property count beside it — the subtitle
+        # read "235 properties · 235 properties".
+        title="Crucible fuzzing report", unit_singular="check", unit_plural="checks",
+        unit_cap="Check", outcomes_label="Check outcomes",
     ),
     "none": ReportTerms(
         title="Property report", unit_singular="property", unit_plural="properties",
         unit_cap="Property", outcomes_label="Property outcomes",
-        check_singular="check",
     ),
 }
 

@@ -327,7 +327,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
   <div class="subtitle">
     {{ coverage.total_properties }} properties &middot;
     {{ coverage.total_rules }} {{ terms.unit_plural }} &middot;
-    {{ coverage.total_groups }} high-level properties
+    {{ coverage.total_groups }} high-level propert{{ "y" if coverage.total_groups == 1 else "ies" }}
   </div>
   <dl class="meta-grid">
     <dt>Contract</dt><dd>{{ contract_name }}</dd>
@@ -371,7 +371,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 <section class="finding">
   <h3><span class="badge badge-{{ f.severity_kind }}">{{ f.severity }}</span> {{ f.title }}</h3>
   <div class="finding-meta">
-    {%- if f.check_name %}<span>{{ terms.check_singular }} <code>{{ f.check_name }}</code>{% if f.spec_file %} in <code>{{ f.spec_file }}</code>{% endif %}</span>{% endif %}
+    {%- if f.check_name %}<span>{{ terms.unit_singular }} <code>{{ f.check_name }}</code>{% if f.spec_file %} in <code>{{ f.spec_file }}</code>{% endif %}</span>{% endif %}
     {%- if f.link.href %}<a href="{{ f.link.href }}" target="_blank" rel="noopener">{{ f.link.label }}</a>{% endif %}
   </div>
   <p class="finding-summary">{{ f.summary }}</p>
@@ -509,7 +509,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 {%- endif %}
 
 <footer class="report-foot">
-  Coverage: {{ coverage.total_rules }} {{ terms.unit_plural }} across {{ coverage.total_groups }} high-level properties
+  Coverage: {{ coverage.total_rules }} {{ terms.unit_plural }} across {{ coverage.total_groups }} high-level propert{{ "y" if coverage.total_groups == 1 else "ies" }}
   ({{ coverage.properties_per_group_min }}–{{ coverage.properties_per_group_max }} properties each).
   Coverage complete: <strong>{{ "Yes" if coverage.property_coverage_complete else "No" }}</strong>.
   {%- if coverage.dropped_orphan_rules %}
