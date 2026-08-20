@@ -371,7 +371,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 <section class="finding">
   <h3><span class="badge badge-{{ f.severity_kind }}">{{ f.severity }}</span> {{ f.title }}</h3>
   <div class="finding-meta">
-    {%- if f.rule_name %}<span>rule <code>{{ f.rule_name }}</code>{% if f.spec_file %} in <code>{{ f.spec_file }}</code>{% endif %}</span>{% endif %}
+    {%- if f.check_name %}<span>{{ terms.check_singular }} <code>{{ f.check_name }}</code>{% if f.spec_file %} in <code>{{ f.spec_file }}</code>{% endif %}</span>{% endif %}
     {%- if f.link.href %}<a href="{{ f.link.href }}" target="_blank" rel="noopener">{{ f.link.label }}</a>{% endif %}
   </div>
   <p class="finding-summary">{{ f.summary }}</p>

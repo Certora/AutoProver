@@ -109,24 +109,35 @@ class ReportTerms(TypedDict):
     unit_plural: str     # "CVL rules" / "tests" — subtitle + footer
     unit_cap: str        # "Rule" / "Test" — the verdict-table column header
     outcomes_label: str  # "Rule outcomes" / "Test outcomes" — the header chip label
+    #: What the backend calls the named thing a finding's evidence came from — "rule" / "test" /
+    #: "check". Separate from ``unit_*`` because the two coincide only for some backends: a prover
+    #: rule is both the unit and the artifact, while Crucible's unit is a *property* and the thing
+    #: that carries it is a ``c_``-prefixed *check*, many-to-many with properties. Named for the
+    #: neutral internal term, as ``CheckVocab`` is on the authoring side — the wire calls a check a
+    #: check whatever a backend calls it in prose.
+    check_singular: str
 
 
 _TERMS: dict[ReportBackend, ReportTerms] = {
     "prover": ReportTerms(
         title="Formal verification report", unit_singular="rule", unit_plural="CVL rules",
         unit_cap="Rule", outcomes_label="Rule outcomes",
+        check_singular="rule",
     ),
     "foundry": ReportTerms(
         title="Foundry test report", unit_singular="test", unit_plural="tests",
         unit_cap="Test", outcomes_label="Test outcomes",
+        check_singular="test",
     ),
     "crucible": ReportTerms(
         title="Crucible fuzzing report", unit_singular="property", unit_plural="properties",
         unit_cap="Property", outcomes_label="Property outcomes",
+        check_singular="check",
     ),
     "none": ReportTerms(
         title="Property report", unit_singular="property", unit_plural="properties",
         unit_cap="Property", outcomes_label="Property outcomes",
+        check_singular="check",
     ),
 }
 
@@ -192,7 +203,10 @@ class FindingView(TypedDict):
     attack_path: str | None
     assumptions_and_uncertainties: str | None
     link: LinkView
-    rule_name: str | None
+    #: The named artifact the evidence came from, as the backend's own prose calls it
+    #: (``terms.check_singular``): a prover rule, a Crucible check. Not the unit — for Crucible the
+    #: unit is the property this check carries, and one check may carry several.
+    check_name: str | None
     spec_file: str | None
 
 
@@ -364,7 +378,7 @@ def _finding_view(f: Finding) -> FindingView:
         "attack_path": f.content.attack_path,
         "assumptions_and_uncertainties": f.content.assumptions_and_uncertainties,
         "link": _link_view(prov.prover_link if prov else None),
-        "rule_name": prov.rule_name if prov else None,
+        "check_name": prov.rule_name if prov else None,
         "spec_file": prov.spec_file if prov else None,
     }
 
