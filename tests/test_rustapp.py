@@ -136,7 +136,9 @@ def test_result_round_trips_through_cache_serialization():
         skipped=[SkippedProperty(property_title="q", reason="n/a")],
         output_link="local://x",
         verdicts={"rule_p": Verdict(outcome=Outcome.BAD, line=7, detail="counterexample",
-                                    duration_seconds=None, unit_file=None)},
+                                    duration_seconds=None, unit_file=None,
+                                    accounting="campaign spent 41231 executions",
+                                    finding=None)},
     )
     reloaded = RustFormalResult.model_validate_json(res.model_dump_json())
     assert reloaded.property_checks() == [("p", ["rule_p"])]
@@ -333,3 +335,40 @@ def test_a_descriptor_missing_a_field_is_refused():
     del raw["ecosystem"]
     with pytest.raises(ValidationError):
         AppDescriptor.model_validate(raw)
+
+
+def test_the_generated_dirs_a_run_fills_are_withheld_from_the_source_tools():
+    """Whatever a backend accumulates under `.certora_internal/` is unreadable by the file tools.
+
+    The rule is the *directory*, not a list of its subdirectories, because the two halves are
+    written in different languages: the wheel picks where its fuzzer corpus goes, the host decides
+    what the model may read, and nothing in the type system connects them. A klend run put 48k
+    files in a corpus/crashes pair at the project root — outside the rule as it was then spelled —
+    and lost 7 of 15 components to prompts of 1.6–4.7M tokens against a 1M limit.
+    """
+    import re
+
+    from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ
+    from composer.spec.gen_types import INTERNAL_DIR
+    from composer.spec.util import fs_forbidden_read
+    from pathlib import PurePath
+
+    withheld = re.compile(RUST_FORBIDDEN_READ)
+    root = INTERNAL_DIR.as_posix()
+    # The wheel's own two (crucible-app's CORPUS_DIR / CRASHES_DIR), the sandbox scratch, the run
+    # logs, and a subdirectory nobody has invented yet — the point of naming the root is that the
+    # last one is covered in advance.
+    for rel in (
+        f"{root}/crucible/corpus/0031a4b8e31d73c7",
+        f"{root}/crucible/crashes/crash_433be5443d852c0f.meta.json",
+        f"{root}/sandbox/cargo/registry/src/index.crates.io/anchor-lang-0.29.0/src/lib.rs",
+        f"{root}/autoProve/2026-08-12_17-22-14.events.jsonl",
+        f"{root}/some_future_backend/whatever_it_accumulates",
+    ):
+        assert withheld.match(rel), f"readable by the Rust source tools: {rel}"
+        # Solidity reaches the same verdict by a different route; they must not drift apart.
+        assert fs_forbidden_read(PurePath(rel)), f"readable by the Solidity source tools: {rel}"
+
+    # Still a source surface: the deliverable the same run writes is emphatically readable.
+    assert not withheld.match("certora/crucible/fuzz/klend/src/main.rs")
+    assert not withheld.match("programs/klend/src/lib.rs")

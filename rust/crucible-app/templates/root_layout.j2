@@ -1,0 +1,42 @@
+// The program's compiled `.so`, as the fixture loads it into LiteSVM. Relative because `crucible
+// run` executes the harness with this crate as its working directory — so the path depends on where
+// the crate sits, which is the backend's choice and not the fixture author's. Declared here for
+// that reason: authored code names this constant instead of spelling a path it cannot check.
+const PROGRAM_SO: &str = "{{ program_so }}";
+
+// ─── How this crate root declares its targets ────────────────────────────────────────────────
+//
+// Each target below is one CHECK: a Cargo feature, and a generated `#[invariant_test]` entry that
+// delegates into the authored fn of the same name, in its component's `#[cfg]`-gated `mod`. Exactly
+// one feature is ever enabled, because each `#[invariant_test]` expands its own `fn main()` +
+// `#[global_allocator]` and two of those cannot coexist.
+//
+// A check rather than a component, so each is measured on its own evidence: a campaign covering
+// several stops each input at its first violation and drops that input from its corpus, so
+// whichever check it refutes first shapes the exploration the rest would then be reported `GOOD` on
+// (docs/per-check-targets.md). A component is therefore a module, not a build target — its `mod` is
+// gated on the union of its checks' features.
+//
+// The targets are named from the run's *properties*, which are known before anything is authored —
+// that is what lets this root declare a target per check while checks are declared later. A property
+// the author declined has a feature here and no fn behind it: nothing selects it, and a user who
+// does gets `E0425` naming the fn that was never written. That is also what catches a check whose
+// fn the author misnamed.
+//
+// The `#[cfg]` — not the module — is what isolates a section: an inherent `impl Fixture` contributes
+// its methods to the type GLOBALLY (rustc E0592 fires on a duplicate method name even when the two
+// `impl` blocks sit in different modules), so a module alone would not stop two components' helpers
+// from colliding. Gating means only ONE section's items ever exist in a build, and components can
+// therefore define same-named helpers forever without interfering.
+//
+// The module is the single item the `#[cfg]` hangs on, which is why a section is not gated
+// item-by-item: doing that would mean parsing item boundaries out of authored source. A
+// `#[cfg]`-disabled `mod` is stripped before rustc resolves its file, so a build selecting one
+// feature needs only that component's file on disk — which is also what lets this root declare
+// components whose files do not exist yet.
+//
+// The entry fn is OURS, generated: `#[invariant_test]` expands `fn main()` as a SIBLING of the fn it
+// annotates, so it has to be applied at crate root — an authored fn cannot carry it from inside its
+// module. The macro INLINES the annotated body into its per-action loop, so delegating from here
+// runs the authored fn once after each fuzzed action, which is the semantics we want. We do not
+// reimplement `main` — that is ~100 lines of libafl wiring we would then own across Crucible bumps.

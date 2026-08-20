@@ -1,0 +1,100 @@
+// ─── Evaluation tallies ──────────────────────────────────────────────────────────────────────
+//
+// A fuzz campaign reports VIOLATIONS — `fuzz_assert*` is silent on success — so its output cannot
+// say whether an assertion was ever reached: a guard that never opens leaves its property untested
+// while the campaign exits clean. These wrappers close that gap. Every assertion site counts its
+// own evaluations (each expansion mints its own `static`) and prints a `[FUZZ_TALLY]` line at each
+// power-of-two count — a bounded log whose last line is within 2× of the true count. The run's
+// verdicts read those lines back and refuse GOOD for a property whose tag was never evaluated.
+//
+// They interpose by NAME: the `pub(crate) use … as fuzz_assert…` re-exports shadow the macros the
+// fixture's `use crucible_fuzzer::*;` glob-imports, so each section's `use super::*;` resolves a
+// bare `fuzz_assert*!` call here. (A `macro_rules!` under the original name would instead be
+// ambiguous beside that glob — E0659.) Each wrapper delegates, path-qualified, to the macro it
+// shadows, so the originals' behaviour is untouched: operands are evaluated once, and the message
+// still formats only on failure.
+//
+// The `#[allow]`s cover the preflight and setup builds, which compile this root with no section —
+// nothing invokes the wrappers there.
+
+#[allow(unused_macros)]
+macro_rules! __fuzz_tally {
+    // The tag is sliced from the assertion's own `[<tag>] …` message inside the print branch, so
+    // no evaluation pays a `format!`. A message with no bracketed tag tallies as `?`, a tag no
+    // property claims. The tag is the line's LAST field because titles are free text.
+    ($fmt:expr) => {
+        {
+            static __EVALS: ::std::sync::atomic::AtomicU64 = ::std::sync::atomic::AtomicU64::new(0);
+            let __n = __EVALS.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed) + 1;
+            if __n.is_power_of_two() {
+                let __fmt: &str = $fmt;
+                let __tag = __fmt
+                    .split_once('[')
+                    .and_then(|(_, rest)| rest.split_once(']'))
+                    .map(|(tag, _)| tag)
+                    .unwrap_or("?");
+                ::std::println!(
+                    "[FUZZ_TALLY] site: {}:{}, evaluated: {}, tag: {}",
+                    ::std::file!(),
+                    ::std::line!(),
+                    __n,
+                    __tag
+                );
+            }
+        }
+    };
+    () => {
+        crate::__fuzz_tally!("")
+    };
+}
+#[allow(unused_imports)]
+pub(crate) use __fuzz_tally;
+
+#[allow(unused_macros)]
+macro_rules! __tallied_fuzz_assert {
+    ($cond:expr $(,)?) => {
+        {
+            crate::__fuzz_tally!();
+            ::crucible_fuzzer::fuzz_assert!($cond);
+        }
+    };
+    ($cond:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {
+        {
+            crate::__fuzz_tally!($fmt);
+            ::crucible_fuzzer::fuzz_assert!($cond, $fmt $(, $arg)*);
+        }
+    };
+    ($cond:expr, $($arg:tt)+) => {
+        {
+            crate::__fuzz_tally!();
+            ::crucible_fuzzer::fuzz_assert!($cond, $($arg)+);
+        }
+    };
+}
+#[allow(unused_imports)]
+pub(crate) use __tallied_fuzz_assert as fuzz_assert;
+{% for op in ops %}
+#[allow(unused_macros)]
+macro_rules! __tallied_fuzz_assert_{{ op }} {
+    ($left:expr, $right:expr $(,)?) => {
+        {
+            crate::__fuzz_tally!();
+            ::crucible_fuzzer::fuzz_assert_{{ op }}!($left, $right);
+        }
+    };
+    ($left:expr, $right:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {
+        {
+            crate::__fuzz_tally!($fmt);
+            ::crucible_fuzzer::fuzz_assert_{{ op }}!($left, $right, $fmt $(, $arg)*);
+        }
+    };
+    ($left:expr, $right:expr, $($arg:tt)+) => {
+        {
+            crate::__fuzz_tally!();
+            ::crucible_fuzzer::fuzz_assert_{{ op }}!($left, $right, $($arg)+);
+        }
+    };
+}
+#[allow(unused_imports)]
+pub(crate) use __tallied_fuzz_assert_{{ op }} as fuzz_assert_{{ op }};
+{% endfor %}

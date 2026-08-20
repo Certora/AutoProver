@@ -9,8 +9,9 @@ registered — its connection in ``composer.rag.db.KNOWLEDGE_BASES`` and its sea
 * an **unavailable corpus** (DB down, embedding model missing) is an environment condition — the
   run continues with no RAG surface, because a search aid must never fail a run.
 
-No corpus is registered on this branch, so the tests that need one register a stub. That stub is
-also the executable spec for adding a real one: two entries, in two maps.
+Tests that need a corpus register a stub rather than leaning on the real one, so they pin the seam
+and not ``crucible_kb``'s particulars. That stub is also the executable spec for adding a real
+corpus: two entries, in two maps.
 """
 
 import pytest
@@ -37,12 +38,20 @@ def test_an_unregistered_tag_raises_and_says_where_to_register_it():
     assert "KNOWLEDGE_BASES" in msg and "rag_env" in msg
 
 
-def test_the_message_says_so_when_nothing_is_registered_at_all():
-    # An empty registry is the intended resting state, and "known: []" would read as a lookup
-    # failure against a populated one.
+def test_the_message_says_so_when_nothing_is_registered_at_all(monkeypatch: pytest.MonkeyPatch):
+    # With an empty registry the "known: []" wording would read as a lookup failure, so the message
+    # switches. Emptied explicitly — this used to be the branch's resting state.
+    monkeypatch.setattr(rag_env, "_FACTORIES", {})
+    monkeypatch.setattr(rag_db, "KNOWLEDGE_BASES", {})
     assert "none is registered yet" in str(
         pytest.raises(ValueError, rag_env.validate_rag_db, "no_such_kb").value
     )
+
+
+def test_the_crucible_corpus_is_registered_in_both_halves():
+    # The wheel declares `rag_db_default='crucible_kb'`; both halves must be present or
+    # `build_application` refuses to load the descriptor at all.
+    assert rag_env.validate_rag_db("crucible_kb") is None
 
 
 def test_half_a_registration_is_not_a_corpus(monkeypatch: pytest.MonkeyPatch):

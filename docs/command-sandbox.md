@@ -84,7 +84,14 @@ Common surface, resolved once at sandbox-config time and expressed as Landlock r
   (the `cargo` / `cargo-*` shims on `PATH`). The home **root is not granted**, so
   `credentials.toml` / private-registry tokens stay unreadable. Offline registry contents live in
   the private per-run `CARGO_HOME` under the workdir (§11 item 5), warmed *outside* (§5).
-- **Solana platform-tools** — cargo-build-sbf's sBPF rust toolchain — read+exec.
+- **Solana platform-tools** — cargo-build-sbf's sBPF rust toolchain — read+exec. Granted at all
+  three places they can live: `~/.cache/solana`, `~/.local/share/solana`, and the **install tree of
+  the `cargo-build-sbf` on `PATH`** (a tarball install keeps them in a sibling `sdk/`, and that
+  binary must itself be executable here — `execvp` silently falls through to the next `PATH` match on
+  `EACCES`, so an ungranted toolchain doesn't fail, it gets *substituted*).
+- **The global git config** (`~/.gitconfig`, `~/.config/git/config`) — read-only, for a program with
+  git dependencies: libgit2 opens it before touching any repo, even offline against a warm checkout.
+  The credential stores (`~/.git-credentials`, a helper's) stay ungranted.
 - **The `crucible` binary** and libs it dlopens — read+exec.
 - **The crucible checkout** (`$CRUCIBLE_REPO/crates/…`) — the path deps — read-only.
 - **System runtime** — `/usr`, `/bin`, `/lib`, `/lib64` — read+exec (needed for the toolchain's own
@@ -94,15 +101,21 @@ Common surface, resolved once at sandbox-config time and expressed as Landlock r
   rules can target individual files, so we grant these specific nodes rather than the whole `/dev`
   tree; either way `mknod` stays blocked (no capability), so no new devices can be created.
 - **Workdir** — the crate tree + `target/` + corpus/output — the primary read-write grant.
-- **A private temp dir** — `<workdir>/.sandbox_tmp`, with `TMPDIR`/`TMP`/`TEMP` pointed at it. The
-  **linker** writes scratch files to `$TMPDIR` (default `/tmp`) during `cargo build`; we do *not*
-  grant the shared `/tmp` (it may hold host/other-run secrets and would defeat the escape test), so a
-  per-run temp under the already-writable workdir is redirected in. (A fresh harness build fails at
-  the link step — "Cannot create temporary file in /tmp/" — without this; found via the e2e gate.)
-- **A private cargo home** — `<workdir>/.sandbox_cargo`, with `CARGO_HOME` pointed at it (§11 item 5).
-  The offline `cargo build` writes there (source extraction, locks); keeping it per-run means
-  untrusted build code can't poison a *shared* `~/.cargo` (which stays read-only, for the `cargo`
-  binary). The warm step (§5) fetches into this same home.
+- **A private temp dir** — `<workdir>/.certora_internal/sandbox/tmp`, with `TMPDIR`/`TMP`/`TEMP`
+  pointed at it. The **linker** writes scratch files to `$TMPDIR` (default `/tmp`) during `cargo
+  build`; we do *not* grant the shared `/tmp` (it may hold host/other-run secrets and would defeat
+  the escape test), so a per-run temp under the already-writable workdir is redirected in. (A fresh
+  harness build fails at the link step — "Cannot create temporary file in /tmp/" — without this;
+  found via the e2e gate.)
+- **A private cargo home** — `<workdir>/.certora_internal/sandbox/cargo`, with `CARGO_HOME` pointed
+  at it (§11 item 5). The offline `cargo build` writes there (source extraction, locks); keeping it
+  per-run means untrusted build code can't poison a *shared* `~/.cargo` (which stays read-only, for
+  the `cargo` binary). The warm step (§5) fetches into this same home.
+
+All three per-run scratch dirs (the private `RUSTUP_HOME` is the third) sit under the workdir's
+`.certora_internal/sandbox/`, alongside every other generated non-source output — so a project that
+already ignores `.certora_internal` ignores this scratch too, and the source tools that withhold that
+directory withhold the hundreds of MB it holds.
 
 Everything else — the rest of the bind-mounted project, `/etc`, `/proc/<other-pids>`, `$HOME`, the
 process environment — is **not granted**, therefore inaccessible. Confinement is default-deny.
@@ -123,7 +136,7 @@ Command execution funnels through one of two launch paths, and **both consume th
 
 - [`run_local_command`](../composer/sandbox/command.py) — the Python runner, used by trusted Python
   build steps (the Solana sBPF build / IDL step, now behind the
-  [`WorkspaceToolchain`](../composer/rustapp/toolchain.py) seam). It lives in the backend-agnostic
+  [`ProjectToolchain`](../composer/rustapp/toolchain.py) seam). It lives in the backend-agnostic
   [`composer/sandbox`](../composer/sandbox/) package — outside `rustapp` — so Python-based backends
   can run confined commands too.
 - A **Rust wheel's own `compile`/`validate`**, which spawn the launcher directly via
@@ -196,8 +209,9 @@ through each tool ([recipes.py](../composer/sandbox/recipes.py), `offline=True` 
 must be exactly `true`: cargo parses it as a config boolean and rejects anything else, so a truthy
 `1` aborts the build *and* leaves it online. "Fetch outside" is a `cargo fetch` run *unsandboxed*
 (no provider → network on) before the confined build.
-Both halves of that prep are now **declared, not called**: a wheel's `workspace_prep` names the dirs
-to warm and the program to build, and the chain's registered `WorkspaceToolchain` performs them —
+Both halves of that prep are now **declared, not called**: a wheel's `workspace_prep` carries a
+chain-shaped request naming the dirs to warm and the program to build (Solana:
+`autoprover_solana::SolanaPrep`), and the chain's registered `ProjectToolchain` performs them —
 fetch unconfined, build confined + offline (see
 [rust-applications.md §7](./rust-applications.md)). That keeps the network posture Python-owned while
 the wheel supplies no command line. All of it is inert until a sandbox is enabled.
@@ -449,7 +463,7 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
 4. **Offline prep (§5)** — *done*: a `cargo fetch` run outside the sandbox (network on) warms the
    registry, and the policy sets `CARGO_NET_OFFLINE=true` so the confined build — and any nested cargo a
    checker spawns — run offline. Both are now declared by the wheel's `workspace_prep` and performed
-   by the chain's `WorkspaceToolchain` (§5). `CARGO_HOME` is granted rw (pointed at the private
+   by the chain's `ProjectToolchain` (§5). `CARGO_HOME` is granted rw (pointed at the private
    per-run home, §11 item 5) so cargo can extract crate sources offline.
 5. **The escape suite (§10 A)** — *done*, and a wheel that declares `confine_by_default` gets the
    `launcher` provider by default (override with `COMPOSER_SANDBOX_PROVIDER=none`). Validated:
@@ -472,8 +486,9 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    **Root cause found via that gate:** every fresh harness build initially failed at the *link* step —
    `Cannot create temporary file in /tmp/: Permission denied` (the linker's `$TMPDIR` scratch, which
    the policy didn't grant). A link failure reads as "could not compile", so the LLM kept rewriting a
-   fine fixture. Fixed by redirecting `TMPDIR` to a private `<workdir>/.sandbox_tmp` (§3) rather than
-   granting the shared `/tmp`. Logging the failing command's output is what surfaced it.
+   fine fixture. Fixed by redirecting `TMPDIR` to a private `.certora_internal/sandbox/tmp` under the
+   workdir (§3) rather than granting the shared `/tmp`. Logging the failing command's output is what
+   surfaced it.
 
 Each step is behind the seam, so every earlier gate kept passing. **Prerequisite of running
 confined:** `run-confined` must be resolvable — `$RUN_CONFINED_BIN`, then PATH (a development
@@ -556,10 +571,10 @@ Only when both halves are green may a backend run on untrusted input (§1's defi
    sources, takes locks), and that build runs untrusted `build.rs`/proc-macro code — so a writable
    *shared* `~/.cargo` was a cross-run poisoning surface (overwrite an extracted `registry/src` to
    hit a later run). Fixed: `rust_build_policy` points `CARGO_HOME` at a **private per-run dir under
-   the workdir** (`sandbox_cargo_home` → `<workdir>/.sandbox_cargo`), the warm step (a `cargo fetch`,
-   unsandboxed) fetches *into that same home*, and the shared cargo home is granted **read-only on
-   `bin/` only** (`shared_cargo_ro_paths`) — never the home root, so `credentials.toml` cannot be
-   read by untrusted code. Untrusted writes touch only the run's throwaway cache. Validated: a fresh
+   the workdir** (`sandbox_cargo_home` → `<workdir>/.certora_internal/sandbox/cargo`), the warm step
+   (a `cargo fetch`, unsandboxed) fetches *into that same home*, and the shared cargo home is granted
+   **read-only on `bin/` only** (`shared_cargo_ro_paths`) — never the home root, so
+   `credentials.toml` cannot be read by untrusted code. Untrusted writes touch only the run's throwaway cache. Validated: a fresh
    fetch into an empty private home + a confined offline build succeed. **Remaining cost:** deps are
    re-fetched per run (no shared writable cache); a shared *read-only* index/cache to avoid the
    re-download is the deferred optimization (add specific cache subtrees to `shared_cargo_ro_paths`,

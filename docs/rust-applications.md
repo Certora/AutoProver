@@ -9,7 +9,8 @@ Reference for the seam as built. The driver it plugs into is
 [formalization-abstraction.md](./formalization-abstraction.md) (`PipelineBackend` →
 `PreparedSystem` → `Formalizer`); the confinement it runs its toolchain under is
 [command-sandbox.md](./command-sandbox.md); the RAG corpus a wheel can declare is
-[rag-import-format.md](./rag-import-format.md).
+[rag-import-format.md](./rag-import-format.md). The first real application on this
+seam is [crucible.md](./crucible.md).
 
 ---
 
@@ -63,6 +64,7 @@ impl.
 | `compile(input_json, spec \| None, workdir, sandbox_json) -> str` | **blocking** | build the whole spec once — how setup and preflight build; `None` is the preflight, which has no spec |
 | `validate(input_json, spec, target_json, workdir, sandbox_json) -> str` | **blocking** | build + check one target — which arrives with the rows it covers — returning a verdict per row (§6) |
 | `workspace_prep(input_json) -> str` | pure | a *plan* the host executes (§7) |
+| `crate_root(input_json) -> str \| None` | pure | the run's build scaffolding, rendered once from the whole unit set (§9) |
 | `sandbox_grants(args_json) -> str` | pure | extra grants to union into the host's policy (§8) |
 | `finalize(outcomes_json) -> str \| None` | pure | run-level artifact files, `{relpath: contents}` (§9) |
 
@@ -184,6 +186,7 @@ One struct, serialized at load time, that drives everything non-backend.
 | `component_noun` | the human noun for one formalized component in the console/TUI ("instruction"); `None` → "component", read through `unit_noun()` |
 | `check_noun` | what this backend calls one check **to the model** ("rule", "harness function"); `None` → "check", read through `check_label()` |
 | `evidence_kinds` | the closed set an author may cite when rebutting the judge (§5) |
+| `findings` | how a violated check is written up as an audit finding: the domain half of the system prompt, saying what this wheel's evidence is — the host supplies the rest (§4.5). `None` → this wheel produces no findings |
 
 **Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host resolves these once into a
 `PhaseModel` ([`build_phase_model`](../composer/rustapp/host.py)): the synthesized
@@ -337,13 +340,11 @@ units' same-titled properties are two different properties: both reach the artif
 tell them apart, and each is tied to the surface it has to be checkable against. On a component turn
 the field is that turn's own unit; the setup turn is the one that sees more than one.
 
-A setup turn also carries the run's **unit set** (`Authored::Setup::units`). `begin` has it in hand at
-this point, and it is the only callout that sees the set whole — a component turn holds one, a
-preflight runs before any exists. Scaffolding for a multi-unit build is a function of the set rather
-than of any one unit (a manifest's feature list, a crate root's module declarations), so a wheel whose
-setup gate builds that scaffolding can build the real thing rather than a provisional shape something
-later has to complete. It is passed for the gate's benefit, not the author's: nothing in the prompt
-depends on it.
+A setup turn also carries the run's **unit set** (`Authored::Setup::units`, the same values
+`CrateRootInput.units` holds). `begin` has it in hand at this point, so a wheel whose setup gate
+builds the crate can build the *real* one — scaffolding for every unit included — rather than a
+provisional shape something later has to complete. It is passed for the gate's benefit, not the
+author's: nothing in the prompt depends on it.
 
 The artifact is **cached** like a formalization result (`RustSetupSpec`), keyed by
 [`_setup_identity`](../composer/rustapp/adapter.py): the program and its crate, the analyzed model,
@@ -392,13 +393,70 @@ sees it — there is nothing to build — so the next prompt is told exactly tha
 
 ### 4.5 Report and finalize
 
-`fetch_verdicts` maps the wire verdicts `validate` baked into the result onto the report's own
+`fetch_verdicts` maps the verdicts `validate` baked into the result onto the report's own
 `Verdict` (its `message` is the wire `detail`), filling `unit_file` from the component when the
-wheel didn't name one. The store writes the per-component artifacts and metadata (§9), and
+wheel didn't name one. It reads `RustFormalResult.reported_verdicts()`, not the raw ones: the
+wheel reports what its run observed, and the author's `expect_check_failure` declarations are
+folded in on top (§6). The store writes the per-component artifacts and metadata (§9), and
 `finalize` receives the whole outcome set as `FinalizeInput` — program, crate, IDL path, the shared
 setup spec, and per component its `artifact_text`, `property_checks` and the `targets` its
 checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
+
+`findings_policy` answers a different question from `fetch_verdicts`: *what did this run find*.
+The write-up loop is shared ([formalization-abstraction.md §4.6](./formalization-abstraction.md)) and
+so is the host half in [findings.py](../composer/rustapp/findings.py) — which knows only wire fields.
+What a *particular* backend's evidence means is the wheel's, declared as `AppDescriptor.findings` —
+a `FindingsDeclaration`, which the host folds into the `FindingsPolicy` the shared loop runs on.
+
+**Evidence is one shared `RuleEvidence` per check**, keyed by `(file, name)` exactly as the report
+keys its rows — which for Crucible means the section file, since one crate holds every component's
+checks and two authors given the same property title write the same check name. A wheel fills
+`label` (the component), `counterexample` (`Verdict.detail`), `accounting`, `ran` — the wheel's *own*
+outcome — and `declared`, the author's `expect_check_failure` reason. Those last two are the split
+that matters: a declared check reports `BAD` either way, so only `ran` and `declared` together say
+whether a reader is looking at something the run found or a claim the author made.
+
+`analysis` stays empty. A wheel reports what its run found, not a reading of why the check broke, and
+the prompt has to be able to tell a reader which of the two it is holding.
+
+**`FindingsDeclaration.domain` says what the evidence is**, and it is the wheel's prose because it
+is the wheel's claim. Crucible's says a fuzzer drove a harness the author wrote from a state that
+harness set up, and did not refute anything symbolically — so `SUSPECT HARNESS BUG` is something the
+write-up must lead with, an unreproduced declaration must not be given a counterexample it does not
+have, and the harness caveats belong in `assumptions_and_uncertainties`.
+
+It is only the *domain* half. The host wraps it in the contract — how severity is reached, which
+sections come back — using the same `autoprove_report_findings_system.j2` the CVL backend gets, whose
+own domain half is a template beside it. A wheel restates none of that. **A wheel that declares
+nothing produces no findings**: a write-up asserts what its evidence is, and a host that guessed
+would be publishing prose nothing stands behind.
+
+**Severity is the host's, and it is the same for every backend**: the write-up model rates impact
+and likelihood, and `severity_for` maps the pair through a fixed matrix. A wheel does not get to
+opt out — which puts the whole weight on `system`, because a campaign establishes that an assertion
+can be made to fail, not that anyone can profit from it, and a crash on a failed precondition looks
+exactly like a crash on a real one. Crucible's prose says so, and says what `SUSPECT HARNESS BUG`
+means, so the rating is made against what the evidence actually shows. `provenance` keeps the axes
+and the model's reasoning, so a reader can re-derive the tier rather than take it on trust.
+
+**A conclusion the wheel could not attribute to one check is one finding, not one per row.**
+`attribute_findings` condemns every check a campaign covered when a crash names a property no
+component in the run claims — right for the verdict table, since the counterexample is real and
+hiding it would be worse — and stamps that fan-out with one `Verdict.finding` key. The host groups on
+the key, so the run is written up once and told which other checks it answers for, rather than
+picking one and pinning the crash on it. Nothing here infers the relation from the evidence: fanned-
+out rows are otherwise indistinguishable from several checks that failed identically, and those are
+two different facts about the program. An unstamped row stands on its own — two declared findings the
+run did not reproduce are two claims the author made, however alike the rest of their evidence looks.
+
+**Evidence about the program and evidence about the run are separate fields.** `Verdict.accounting`
+carries what the campaign spent and covered (and, from `tally::gate`, whether the check's assertion
+was evaluated at all); `Verdict.detail` carries only the counterexample or the error. They are
+separate claims, and a proof of concept padded with run accounting leaves a reader unable to see
+where the evidence ends. `fetch_verdicts` rejoins them into the report row's one `message` —
+evidence first, because a `BAD` row's first line is what a reader is looking for — so a green row
+still says what it cost.
 
 ---
 
@@ -444,6 +502,27 @@ unstamped, unless the author marked it with `expect_check_failure(check, reason)
 counterexample reaches the report *as a finding with a justification* rather than as a row nobody
 examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 `expect_test_failure`.
+
+**Every verdict says what the run behind it cost.** A `GOOD` from a campaign that explored to a
+ten-minute budget is a real claim and one from a twelve-second campaign is nearly none, and a report
+row carries only its check, its outcome and its `message`. So Crucible's `validate` gives every
+verdict — green ones included — the component it came from and what its campaign spent against what
+it was allowed (`crucible-app/src/campaign.rs`), on `Verdict.accounting`. Not on `detail`: that
+field is the campaign's evidence about the *program*, and it must stay exactly what the campaign
+reported. The live console shows a detail's first line, and a findings write-up is handed the whole
+of it — so accounting mixed in costs an author the line that tells them what broke, and costs the
+write-up its proof of concept.
+
+The marking is the *author's*, and the verdict is the *wheel's*; they meet on `RustFormalResult`,
+whose `reported_verdicts()` is what both the report and the console rollup read. A declared check
+reports `BAD` whatever its run said, because the alternative is the failure this exists to prevent:
+the gate accepts a declared check without ever asking the run to reproduce it, so a documented
+finding whose campaign did not happen to hit it would otherwise reach `report.html` as a clean row.
+The two cases are distinguished in the detail rather than in the outcome — a reproduced finding
+carries its counterexample, an unreproduced one says `NOT REPRODUCED` and names what the run did
+say — because an unreproduced finding rests on the author's reading alone and a reader has to be
+able to tell. `verdicts` itself stays verbatim: attribution remains the wheel's, and the declaration
+is applied on the way out.
 
 **The judge is structured.** When `judge` names a reviewer for an input, the session binds
 `feedback_tool`; a wheel with no judge gets no review machinery and no feedback stamp among its
@@ -528,6 +607,15 @@ or the same check twice raises `ValidateCoverageError`. The unanswered case is t
 machinery — a missing verdict is not a failing verdict, so it gives the publish gate nothing to
 object to, and a wheel that answered for nothing would stamp a component nothing had checked.
 
+A check the author marked with `expect_check_failure` is the one place the wheel's attribution is
+not the last word. The declaration is the author's — "the failure here IS the finding" — and the
+publish gate accepts such a check as clean without ever requiring the run to reproduce it, so
+nothing else stands between a documented finding and a green row. `reported_verdicts()` folds the
+two together on the host side: a declared check reports `BAD` whatever the run said, and the detail
+says which case it is — a reproduced finding carries its counterexample, an unreproduced one says
+`NOT REPRODUCED` and names the outcome the run did reach. Both the report and the console rollup
+read the fold, so they cannot disagree about whether the run found something.
+
 A stamping run records what it covered as `ran` — the targets, each with its checks — and that is
 what the publish gate validates the declared mapping against, in both directions: every claimed name
 must have run, and every name that ran must be claimed. Ground truth is the stamping run rather than
@@ -550,10 +638,11 @@ that looks merely inconclusive. `Verdict.detail` carries the counterexample or e
 `BAD` is never unexplained.
 
 [`results.py`](../composer/rustapp/results.py) rolls these up for the console/TUI: one row per
-*check*, with the tally in the report's own display order and wording. A row is named by the property
-title when the check verifies exactly one, and otherwise by the check's own name — the only thing
-that names it unambiguously once one check can carry several properties. A delivered component that
-bakes no verdicts contributes one `UNKNOWN` row so the listing accounts for every component.
+*check*, with the tally in the report's own display order and wording. A row is named by
+`RustFormalResult.display_name` — the property title when the check verifies exactly one, and
+otherwise the check's own name, the only thing that names it unambiguously once one check can carry
+several properties. A delivered component that bakes no verdicts contributes one
+`UNKNOWN` row so the listing accounts for every component.
 
 ---
 
@@ -573,10 +662,10 @@ would make the next ecosystem an edit to [wire.py](../composer/rustapp/wire.py).
 carried without a schema — `source_unit`, `prep_facts` and `WorkspacePrep.toolchain_request` (Rust:
 `autoprover_sdk::chain::ChainData`, a JSON object and nothing more). They are typed at both *ends* and
 nowhere in between: the chain's registered implementation and the wheels targeting that chain share
-those types through the chain's own support crate — where that chain's Cargo/Anchor vocabulary and
-its layout conventions live. Which type is inside follows from the wheel's declared `ecosystem`, not
-from inspecting keys. It is the same treatment `AuthorInput`'s `model` and `unit` already get, for
-the same reason.
+those types through the chain's own support crate ([autoprover-solana](../rust/autoprover-solana),
+which is where `{dir, package, lib, anchor}` and the `programs/<program>` fallback live). Which type is
+inside follows from the wheel's declared `ecosystem`, not from inspecting keys. It is the same
+treatment `AuthorInput`'s `model` and `unit` already get, for the same reason.
 
 **`workspace_prep` is a pure plan the host executes.** The wheel returns
 `WorkspacePrep { files, toolchain_request }` — file *contents* and declarative intent, never a command
@@ -672,10 +761,31 @@ the choice of how the *source* deliverable lands:
   `property_checks` and `targets` plus the shared setup spec, and can therefore assemble one
   artifact (a single crate with a section per property) as the single source of truth for its layout.
 
-The tradeoff of `callout` mode is that the deliverable lands on disk only at finalize, not
-incrementally: the assembled artifact is only *runnable* once complete, and `validate` already
-materializes a transient copy per run via the `files` map. Streaming partial deliverables would be a
-deliberate follow-up.
+**`crate_root` is what keeps a callout deliverable from being assembled twice.** Scaffolding for a
+multi-unit build — a manifest's feature list, a crate root's module declarations — is a function of
+the *whole unit set*, which no per-unit callout can see. Without the hook a wheel must re-render it
+on every gated build from the one unit it happens to hold, and the real artifact is only ever
+assembled at the end, where nothing has built it ([crucible.md](./crucible.md) §4 is what that
+cost). The host calls `crate_root` once, in `StagedFormalizer.begin` — the first point both the
+shared setup spec and the unit set exist — writes the result, and never rewrites it. A wheel that
+implements it should emit only per-unit files from `compile`/`validate`, so a gated build *is* the
+deliverable with one target selected.
+
+A wheel that declares a `setup` phase is sent the unit set on that turn too (§4.3), so its setup gate
+can render the same scaffolding and build against it. The hook still runs, and still matters: the
+host serves a cached setup spec **without** calling `compile`, so on that path the gate never runs and
+this is the only thing that puts the crate on disk. Render both from the same inputs and the second
+write is byte-identical — one assembly, repeated, rather than two shapes to keep in agreement.
+
+Because the scaffolding is written before any outcome exists, it necessarily declares a target for
+every unit — including ones formalization later gives up on. `ComponentOutcome::GaveUp` therefore
+carries the unit and the author's reason, so `finalize` can put something honest behind such a
+target rather than leaving it dangling.
+
+The remaining tradeoff of `callout` mode is that the *sections* land on disk only at finalize: the
+assembled artifact is only fully runnable once complete, and `validate` already materializes a
+transient copy per run via the `files` map. Streaming partial deliverables would be a deliberate
+follow-up.
 
 ---
 
@@ -724,7 +834,7 @@ for cp312+.
    [example-app/Cargo.toml](../rust/example-app/Cargo.toml).
 2. **Implement `Backend`** — `descriptor` + `author_prompt` + `compile` + `validate` are
    required; `validate_preconditions`, `judge`, `judge_instruction`, `workspace_prep`,
-   `sandbox_grants` and `finalize` have defaults. Every callout is directly unit-testable in Rust with no Python.
+   `sandbox_grants`, `crate_root` and `finalize` have defaults. Every callout is directly unit-testable in Rust with no Python.
 3. **Export it** — `autoprover_sdk::export_app!(my_app, MyApp::new());`
 4. **Wire the build** — a maturin `pyproject.toml` (`module-name = "my_app"`) with a `[tool.uv]
    cache-keys` block over its `.rs` sources, then one line each in the root `pyproject.toml`'s
@@ -753,8 +863,8 @@ Facts about the seam as it stands, not open design questions:
   with `asyncio.gather` is a Python-side change with no API impact — but a wheel sharing one crate
   hits binary-name collisions, which is what `serialize_toolchain` exists for. Real parallelism
   needs the wheel to separate build from run first.
-- **No registered chain implementations.** `SOURCE_CRATES` and `WORKSPACE_TOOLCHAINS` are both
-  empty here (§7): a files-only prep plan works, a plan asking for a warm/build/IDL raises.
+- **One registered chain implementation.** `PROJECT_TOOLCHAINS` holds Solana's (§7); for any other
+  chain a files-only prep plan works and a plan asking for more raises.
 - **Self-contained backends only.** This shape fits a checker that is a **local tool**. A backend
   whose "validate" is a remote/Python service cannot spawn it under `run-confined`; there is no
   `run_prover`-style host effect, so such a backend would need one added (or stays a Python
@@ -783,6 +893,7 @@ Facts about the seam as it stands, not open design questions:
 | Declarative ABI mirror | [composer/rustapp/descriptor.py](../composer/rustapp/descriptor.py) |
 | Runtime ABI mirror + parsers | [composer/rustapp/wire.py](../composer/rustapp/wire.py) |
 | The backend, preflight, prep, report | [composer/rustapp/adapter.py](../composer/rustapp/adapter.py) |
+| Campaign observations → written findings | [composer/rustapp/findings.py](../composer/rustapp/findings.py) |
 | The authoring session (buffer, gate, review, publish) | [composer/rustapp/session.py](../composer/rustapp/session.py) |
 | The shared authoring workflow | [composer/authoring/](../composer/authoring/) |
 | Application assembly (enum, phases, store, backend) | [composer/rustapp/host.py](../composer/rustapp/host.py) |
@@ -797,6 +908,7 @@ Tests: `tests/test_rustapp.py` (the wheel round-trip, end to end through the hos
 Hypothesis, against the real serde types), `test_rustapp_preflight.py`, `test_rustapp_workspace_prep.py`,
 `test_rustapp_setup_cache.py`, `test_rustapp_verdicts.py`, `test_rustapp_toolchain_sem.py`,
 `test_rustapp_gate.py`, `test_rustapp_validate_target.py`, `test_rustapp_discovery_phase.py`,
+`test_rustapp_findings.py` (the declaration fold and the findings written from it),
 `test_rust_llm_agent.py`,
 `test_rust_frontend.py`, plus `test_sandbox_run_confined.py` / `test_sandbox_escape.py` for the
 launcher contract.

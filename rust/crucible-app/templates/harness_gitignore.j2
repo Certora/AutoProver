@@ -1,0 +1,10 @@
+# The harness crate is a deliverable and belongs in version control; what a run leaves *inside* it
+# does not. `crucible run` builds and executes with this directory as its working directory, so
+# cargo's output lands here — hundreds of MB of it, and `find_fuzz_binary` pins
+# `target/<profile>/invariant_test`, so CARGO_TARGET_DIR cannot be pointed elsewhere. `crashes/`
+# is the per-test crash dir `tmin`/`show` read (the fuzzer's `./corpus` and `./output` resolve
+# against the PROJECT root instead, so they are not ours to ignore from here).
+target/
+crashes/
+.fuzz-cache/
+Cargo.lock

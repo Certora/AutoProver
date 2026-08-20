@@ -14,12 +14,14 @@ the same way).
 **What crosses the seam is chain-shaped and opaque to everything here.** Both methods speak
 ``dict[str, Any]`` (Rust: ``autoprover_sdk::chain::ChainData``), typed at each end and nowhere in
 between: the implementation registered here and the wheels targeting that chain share those types
-through the chain's own support crate, while the host only transports them. Which type is inside
-follows from the wheel's declared ``ecosystem``, not from inspecting keys.
+through the chain's own support crate (``rust/autoprover-solana``), while the host only transports
+them. Which type is inside follows from the wheel's declared ``ecosystem``, not from inspecting keys.
 That is what makes a new ecosystem a registration rather than an edit to
 :mod:`composer.rustapp.wire`.
 
-**No chain has an entry yet.** The two methods are therefore reached in deliberately different ways:
+**Solana is registered** (:class:`composer.spec.solana.project.SolanaToolchain` — a Cargo manifest
+walk; ``cargo-build-sbf`` + ``anchor idl`` with the ``Anchor.toml`` program-id resolution an IDL
+needs). For a chain with no entry, the two methods behave in deliberately different ways:
 
 * :func:`source_unit` **degrades**. An empty answer is already a documented state — it is what a
   language with no such unit yields, and what an unreadable layout yields — and the wheel fills the
@@ -109,10 +111,37 @@ class ProjectToolchain(Protocol):
         ...
 
 
+class _Solana:
+    """Lazy binding for Solana's implementation, so the generic host stays ecosystem-agnostic at
+    import time: the Solana modules are imported only once something actually asks this chain a
+    question. Holds no state of its own — the implementation does."""
+
+    def source_unit(self, source: SourceFields) -> dict[str, Any]:
+        from composer.spec.solana.project import SolanaToolchain
+
+        return SolanaToolchain().source_unit(source)
+
+    async def prepare(
+        self,
+        plan: WorkspacePrep,
+        input: AuthorInput,
+        *,
+        source: SourceFields,
+        sandbox: SandboxConfig | None,
+        timeout_s: int,
+    ) -> dict[str, Any]:
+        from composer.spec.solana.project import SolanaToolchain
+
+        return await SolanaToolchain().prepare(
+            plan, input, source=source, sandbox=sandbox, timeout_s=timeout_s
+        )
+
+
 #: Registered implementations, by chain. An entry is added together with the module it binds — a tag
 #: whose implementation doesn't exist would pass every check here and then fail at the first plan that
-#: needs it. Empty is a working state: see the module docstring for what each method does then.
-PROJECT_TOOLCHAINS: dict[ChainTag, ProjectToolchain] = {}
+#: needs it. A chain without one is a working state: see the module docstring for what each method
+#: does then.
+PROJECT_TOOLCHAINS: dict[ChainTag, ProjectToolchain] = {"solana": _Solana()}
 
 
 def source_unit(chain: ChainTag, source: SourceFields) -> dict[str, Any]:

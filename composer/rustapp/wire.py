@@ -36,7 +36,8 @@ treatment ``model`` and ``unit`` already get, and for the same reason.
 
 import json
 from collections import Counter
-from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Protocol, Self
+from enum import Enum
+from typing import TYPE_CHECKING, Annotated, Any, Callable, ClassVar, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -124,6 +125,15 @@ class _AuthorInputBase(WireModel):
     source_unit: dict[str, Any] = Field(default_factory=dict)
     #: The properties this artifact must make checkable.
     props: list[Property] = Field(default_factory=list)
+    #: **Every** property the run extracted, across all units, each naming the unit that owns it —
+    #: run-level context like :attr:`prep_facts`, not something this artifact is answerable for.
+    #: A shared setup spec is built into every unit's target, so a failure it reports can name a
+    #: property belonging to a *different* unit; without the run's set a wheel cannot tell that from
+    #: a title it has never seen, and the safe reading of an unplaceable failure — refute everything
+    #: the target covers — is exactly wrong for the first case. Empty wherever the host does not hold
+    #: the whole set at once: a preflight, and any wheel declaring no
+    #: :class:`~composer.rustapp.descriptor.SetupSpec`.
+    run_props: list[Property] = Field(default_factory=list)
     #: The compiled shared setup spec, for a wheel that declared a
     #: :class:`~composer.rustapp.descriptor.SetupSpec`.
     setup: str | None = None
@@ -139,8 +149,11 @@ class _AuthorInputBase(WireModel):
 
     def with_props(self, props: list[Property]) -> Self:
         """This input with ``props`` replaced — the setup spec's base input plus the properties
-        it has to make checkable, which only exist after extraction."""
-        return self.model_copy(update={"props": props})
+        it has to make checkable, which only exist after extraction.
+
+        Sets :attr:`run_props` to the same list: the setup spec is authored from *every* unit's
+        properties, so on that turn the two coincide."""
+        return self.model_copy(update={"props": props, "run_props": props})
 
     def with_prep_facts(self, prep_facts: dict[str, Any]) -> Self:
         """This input with what the workspace prep just established (the preflight gate re-renders
@@ -162,12 +175,11 @@ class SetupInput(_AuthorInputBase):
     kind: Literal["setup"] = "setup"
     #: The analyzed system model. Opaque to the host seam — its shape is the ecosystem's.
     model: dict[str, Any] = Field(default_factory=dict)
-    #: Every unit the run is about to formalize (``FeatureUnit.feature_json()``). This is the only
-    #: callout that sees the set whole — a component turn holds one, a preflight runs before any
-    #: exists — so a wheel whose setup gate builds scaffolding the whole set implies (a manifest's
-    #: feature list, a crate root's module declarations) builds the real thing there. Deliberately
-    #: **not** part of the setup cache identity (:func:`composer.rustapp.adapter._setup_identity`):
-    #: it decides scaffolding, not what gets authored.
+    #: Every unit the run is about to formalize (``FeatureUnit.feature_json()``), as
+    #: :attr:`CrateRootInput.units` carries them. The host holds the set at this point in the run, so
+    #: a wheel whose setup gate builds the whole crate's scaffolding renders it here rather than a
+    #: provisional form the crate-root hook would then complete. Not part of the setup cache identity
+    #: (:func:`composer.rustapp.adapter._setup_identity`) — it does not change what gets authored.
     units: list[dict[str, Any]] = Field(default_factory=list)
 
     def with_units(self, units: list[dict[str, Any]]) -> Self:
@@ -217,14 +229,50 @@ class Delivered(WireModel):
 
 
 class ComponentGaveUp(WireModel):
-    """Formalization gave up on this component; it contributes nothing to the deliverable."""
+    """Formalization gave up on this component: the author reached the point where anything it could
+    publish would only *look* checked, and said so instead. Mirrors the Rust ``GaveUp``.
+
+    It produced no spec and ran no build, so unlike :class:`Delivered` it has no ``targets`` — which
+    is why it carries its ``unit``. A wheel whose deliverable declares a build target per unit needs
+    to name the one behind this component, and re-deriving that name by re-slugifying ``name`` would
+    put the host's slug rule in a second language."""
 
     status: Literal["gave_up"] = "gave_up"
+    #: The unit being formalized, as its component callouts received it (``FeatureUnit.feature_json``).
+    unit: dict[str, Any] = Field(default_factory=dict)
+    #: The author's own account of why it stopped, from the give-up tool. Surfaced to the user, so it
+    #: must not be reshaped into something that reads like a finding.
+    reason: str = ""
 
 
 #: A component's outcome — tagged on ``status`` (Rust ``ComponentOutcome``). A variant rather than a
-#: ``delivered`` flag beside always-present fields: there is nothing to read on one that gave up.
+#: ``delivered`` flag beside always-present fields: the two share no data.
 ComponentOutcome = Annotated[Delivered | ComponentGaveUp, Field(discriminator="status")]
+
+
+class CrateRootInput(WireModel):
+    """What a wheel needs to render its build's scaffolding once, at the one point both halves are
+    known: after the shared setup spec is authored, and before the units fan out (Rust
+    ``CrateRootInput``).
+
+    Scaffolding for a multi-unit build depends on the **whole unit set** — a Cargo manifest's feature
+    list, a crate root's module declarations — which no per-unit callout can see. The host writes
+    what comes back and does not write it again, so the wheel's per-unit callouts can emit only that
+    unit's own files."""
+
+    program: str
+    source_unit: dict[str, Any] = Field(default_factory=dict)
+    prep_facts: dict[str, Any] = Field(default_factory=dict)
+    setup: str | None = None
+    #: Every unit about to be formalized, in fan-out order — each the same object a component
+    #: callout receives. The field the hook exists for.
+    units: list[dict[str, Any]] = Field(default_factory=list)
+    #: Every property the run extracted, each naming the unit that owns it — the same set the setup
+    #: gate is sent. Here because a wheel whose scaffolding names something per *property* cannot
+    #: render it from the unit set alone, and this hook must re-emit byte-identically what that gate
+    #: produced (Crucible declares one build target per check, and a check is named after the
+    #: property it carries).
+    props: list[Property] = Field(default_factory=list)
 
 
 class FinalizeComponent(WireModel):
@@ -315,6 +363,25 @@ class Check(WireModel):
         return self.target or TargetName(self.name)
 
 
+class Stakes(str, Enum):
+    """What rides on one invocation's answer. Mirrors the Rust ``Stakes``.
+
+    Only a full ``validate_spec`` run stamps the publish gate, so the host knows which kind it is
+    asking for and says, rather than leaving the wheel to infer it from the shape of the check set.
+    What a backend *does* about it is its own — spend less of a fuzzing budget and stop at the first
+    crash, pass ``--fail-fast``, pick a cheaper solver configuration — as is what its unrefuted
+    checks then report.
+
+    Named for the caller's intent rather than for a search strategy: a symbolic prover does not
+    explore and has no budget in the fuzzing sense, but it does know the difference between a
+    throwaway answer and one that will be published."""
+
+    #: The author is iterating; these verdicts will not be reported.
+    FEEDBACK = "feedback"
+    #: These verdicts stamp the publish gate.
+    OF_RECORD = "of_record"
+
+
 class Target(WireModel):
     """One invocation of the checker — one build + one run — and the checks it covers, which is what
     ``validate`` must return a verdict for. Mirrors the Rust ``Target``.
@@ -332,6 +399,9 @@ class Target(WireModel):
     name: TargetName
     #: Usually one; several when a backend checks a whole property set in one run.
     checks: list[Check] = Field(default_factory=list)
+    #: What rides on this invocation's answer — set from what the host will do with it, not from
+    #: anything about the checks themselves.
+    stakes: Stakes = Stakes.OF_RECORD
 
 
 class Verdict(WireModel):
@@ -345,13 +415,49 @@ class Verdict(WireModel):
     #: Human-readable explanation of a non-GOOD outcome — the counterexample / assertion message for
     #: a BAD, the error text for an ERROR.
     detail: str | None
+    #: What the run behind this verdict cost and covered — its budget, its coverage, how far it got.
+    #: Present on a GOOD too, and mostly only there: a passing check's strength is otherwise
+    #: invisible, while a failure explains itself through :attr:`detail`. Kept apart from it because
+    #: they are separate claims — one is evidence about the program, the other about the run — and a
+    #: reader asking for a counterexample should not be handed run accounting inside one.
+    accounting: str | None
+    #: Which *finding* this verdict belongs to, when one piece of evidence condemns several checks
+    #: at once — an opaque key produced by the wheel and only ever compared, never read into. Rows
+    #: sharing one are written up once; ``None`` is a verdict standing on its own evidence.
+    finding: str | None
+
+    #: How much of :attr:`detail` a *prompt* may carry, in characters. A checker reports one piece
+    #: of evidence per violating input, and a check that is easy to violate produces one per input
+    #: it ever tried: a klend refresh-staleness check yielded 7,166 crash reproductions, 5 MB of
+    #: them, which exceeded the model's context window outright and cost the whole component. Past
+    #: the first few the reproductions restate each other, so a bound loses no distinct evidence.
+    PROMPT_DETAIL_BUDGET: ClassVar[int] = 4000
 
     @classmethod
     def with_outcome(cls, outcome: Outcome) -> "Verdict":
         """A bare verdict: the outcome, no diagnostics. Mirrors the Rust ``Verdict::with_outcome``,
         and exists for the same reason — every field being required is right for the wire and no
-        reason for a caller that has only an outcome to spell four nulls to say so."""
-        return cls(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=None)
+        reason for a caller that has only an outcome to spell six nulls to say so."""
+        return cls(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=None,
+                   accounting=None, finding=None)
+
+    def prompt_detail(self) -> str | None:
+        """:attr:`detail` as a prompt can carry it: the head, which is where the wheel puts the
+        deciding evidence, and a note naming what was left out.
+
+        Only the model-facing seams go through this — the validation tool result and the findings
+        write-up. The report renders :attr:`detail` whole, so nothing here loses evidence a reader
+        can reach. Cut at a line boundary: the omitted part is a list, and half a line of it reads
+        as truncated output rather than as a bound."""
+        if self.detail is None or len(self.detail) <= self.PROMPT_DETAIL_BUDGET:
+            return self.detail
+        head = self.detail[:self.PROMPT_DETAIL_BUDGET]
+        kept = head[:cut] if (cut := head.rfind("\n")) > 0 else head
+        rest = self.detail[len(kept):]
+        return (
+            f"{kept}\n… {rest.count(chr(10)):,} further lines of evidence omitted "
+            f"({len(rest):,} characters). The report carries all of it."
+        )
 
 
 class ValidateBuildFailed(WireModel):
@@ -504,6 +610,10 @@ class RustAppModule(Protocol):
     workspace_prep: Callable[[str], str]
     #: ``(args_json) -> SandboxGrants`` JSON.
     sandbox_grants: Callable[[str], str]
+    #: ``(input_json) -> {relpath: contents} | None`` JSON, from a :class:`CrateRootInput`. Pure.
+    #: Called once per run, between the setup step and fan-out; the host writes the result and does
+    #: not rewrite it, so a wheel that implements this emits only per-unit files from its gates.
+    crate_root: Callable[[str], str | None]
     #: ``(outcomes_json) -> {relpath: contents} | None`` JSON.
     finalize: Callable[[str], str | None]
 

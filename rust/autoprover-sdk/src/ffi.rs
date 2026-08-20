@@ -8,6 +8,7 @@
 use crate::args::AppArgs;
 use crate::authoring::AuthorInput;
 use crate::backend::Backend;
+use crate::prep::CrateRootInput;
 use crate::sandbox::Workspace;
 use serde::{Deserialize, Serialize};
 
@@ -182,6 +183,17 @@ pub fn workspace_prep(b: &dyn Backend, input_json: &str) -> String {
     encode(parse_input(input_json).map(|input| b.workspace_prep(&input)))
 }
 
+/// `crate_root(input_json) -> str | None` (JSON `{relpath: contents}`, or None). Pure.
+pub fn crate_root(b: &dyn Backend, input_json: &str) -> Option<String> {
+    let input: CrateRootInput = parse(input_json, "CrateRootInput").ok()?;
+    let files = b.crate_root(&input);
+    if files.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&files).ok()
+    }
+}
+
 /// `finalize(outcomes_json) -> str | None` (JSON `{relpath: contents}`, or None).
 pub fn finalize(b: &dyn Backend, outcomes_json: &str) -> Option<String> {
     encode_opt(parse(outcomes_json, "FinalizeInput").map(|outcomes| {
@@ -221,7 +233,7 @@ mod tests {
         format!(
             r#"{{"kind":"component","program":"vault","unit":{{"slug":"farms"}},
                 "source_unit":{source_unit},"prep_facts":{prep_facts},
-                "props":[],"setup":null,"args":{{}}}}"#
+                "props":[],"run_props":[],"setup":null,"args":{{}}}}"#
         )
     }
 
@@ -330,7 +342,7 @@ mod tests {
         let comp: AuthorInput = serde_json::from_str(
             r#"{"kind":"component","program":"vault","unit":{"slug":"farms"},
                 "source_unit":{},"prep_facts":{"idl":"fuzz/vault/idls/vault.json"},
-                "props":[],"setup":"struct Fixture {}","args":{"fuzz_timeout":900}}"#,
+                "props":[],"run_props":[],"setup":"struct Fixture {}","args":{"fuzz_timeout":900}}"#,
         )
         .expect("parse");
         assert_eq!(
@@ -348,7 +360,8 @@ mod tests {
         let setup: AuthorInput = serde_json::from_str(
             r#"{"kind":"setup","program":"vault","model":{"components":[]},
                 "units":[{"slug":"farms"},{"slug":"vaults"}],
-                "source_unit":{},"prep_facts":{},"props":[],"setup":null,"args":{}}"#,
+                "source_unit":{},"prep_facts":{},"props":[],"run_props":[],"setup":null,
+                "args":{}}"#,
         )
         .expect("parse");
         assert!(setup.model().is_some() && setup.unit().is_none());
@@ -366,7 +379,7 @@ mod tests {
 
         let pre: AuthorInput = serde_json::from_str(
             r#"{"kind":"preflight","program":"vault","source_unit":{},"prep_facts":{},
-                "props":[],"setup":null,"args":{}}"#,
+                "props":[],"run_props":[],"setup":null,"args":{}}"#,
         )
         .expect("parse");
         assert!(pre.unit().is_none() && pre.model().is_none() && pre.props.is_empty());
@@ -397,7 +410,7 @@ mod tests {
             "AuthorInput",
         );
         assert_error(&compile(&spy, &input, None, "/tmp", "not json"), "Sandbox");
-        let target = r#"{"name":"t","checks":[]}"#;
+        let target = r#"{"name":"t","checks":[],"stakes":"of_record"}"#;
         assert_error(
             &validate(&spy, "not json", "", target, "/tmp", "{}"),
             "AuthorInput",
@@ -458,7 +471,8 @@ mod tests {
                   {"name":"Farms","outcome":{"status":"delivered","artifact_text":"fn c_farms(){}",
                    "targets":["c_farms"],"property_checks":[["fifo",["c_fifo"]]],
                    "skipped":[],"unit_file":null,"run_link":null}},
-                  {"name":"Referrals","outcome":{"status":"gave_up"}}]}"#,
+                  {"name":"Referrals","outcome":{"status":"gave_up",
+                   "unit":{"slug":"referrals"},"reason":"no action mints referral fees"}}]}"#,
         )
         .expect("parse");
         // What ships is rendered from the same facts the gated builds used.
@@ -472,12 +486,14 @@ mod tests {
         );
         assert!(input.prep_facts.is_empty());
         assert_eq!(input.setup.as_deref(), Some("struct Fixture {}"));
-        // A component that gave up carries nothing to read, and `delivered` skips it.
+        // The two outcomes partition the set, and each iterator reads only its own variant.
         let delivered: Vec<&str> = input.delivered().map(|(name, _)| name).collect();
         assert_eq!(delivered, vec!["Farms"]);
-        assert!(matches!(
-            input.components[1].outcome,
-            ComponentOutcome::GaveUp
-        ));
+        let gave_up: Vec<(&str, &str)> =
+            input.gave_up().map(|(name, g)| (name, g.reason.as_str())).collect();
+        assert_eq!(gave_up, vec![("Referrals", "no action mints referral fees")]);
+        // Its unit travels with it: a deliverable declaring a target per unit needs to name this one,
+        // and it has no `targets` of its own because it ran no build.
+        assert!(matches!(input.components[1].outcome, ComponentOutcome::GaveUp(_)));
     }
 }

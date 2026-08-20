@@ -35,9 +35,10 @@ import asyncio
 import enum
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, override, Sequence
+from typing import Any, Awaitable, Callable, override
 
 
 from langgraph.config import get_stream_writer
@@ -60,6 +61,8 @@ from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
+from composer.rustapp.findings import rust_findings
+from composer.spec.source.report.findings import FindingsPolicy
 from composer.rustapp.phases import PhaseModel
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupSpec
 from composer.rustapp.toolchain import project_toolchain, source_unit
@@ -71,6 +74,7 @@ from composer.rustapp.wire import (
     CompileOk,
     ComponentGaveUp,
     ComponentInput,
+    CrateRootInput,
     FinalizeComponent,
     FinalizeInput,
     PreflightInput,
@@ -168,6 +172,18 @@ def confined_target(root: Path, rel: str) -> Path:
     return root / p
 
 
+def write_wheel_files(root: Path, files: Mapping[str, str]) -> None:
+    """Write a wheel's ``{relpath: contents}`` under ``root``, path-confined.
+
+    Every set of files a wheel hands back — the workspace prep's, the crate root's, the
+    deliverable's — lands the same way, so they share one writer rather than three loops that could
+    drift on confinement or on parent-directory creation."""
+    for rel, contents in files.items():
+        target = confined_target(root, rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(contents)
+
+
 def source_unit_of(
     ecosystem: Ecosystem[Any, Any, Any], source: SourceFields
 ) -> dict[str, Any]:
@@ -239,10 +255,7 @@ async def run_workspace_prep(
     program id), which is knowledge the framework would otherwise have to hold a shape for."""
     workdir = Path(source.project_root)
     plan = parse_workspace_prep(module.workspace_prep(input.model_dump_json()))
-    for rel, contents in plan.files.items():
-        target = confined_target(workdir, rel)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(contents)
+    write_wheel_files(workdir, plan.files)
 
     if not plan.needs_toolchain:
         return {}
@@ -315,6 +328,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         command_sem: asyncio.Semaphore | None = None,
         declared_args: dict[str, Any] | None = None,
         setup_result: str | None = None,
+        run_props: list[Property] | None = None,
         project: "ProjectFacts | None" = None,
     ):
         super().__init__(RustFormalResult, descriptor.backend_tag)
@@ -330,6 +344,11 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         # declares a ``setup`` step reaches here only through :class:`RustStagedFormalizer`, which
         # authors the artifact before constructing this.
         self._setup_result = setup_result
+        # Every unit's properties, on every component's input — what lets a wheel tell a failure
+        # naming *another* unit's property from one it cannot place at all (see
+        # :attr:`_AuthorInputBase.run_props`). Known only once the whole unit set is in hand, which
+        # is why it arrives with the setup spec; empty for a wheel that declares no setup step.
+        self._run_props = run_props or []
         # What the preflight established about the project (see :class:`ProjectFacts`), carried on
         # every ``AuthorInput`` and mirrored into ``finalize`` — what ships must name the same
         # dependency the gated builds did.
@@ -358,6 +377,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             source_unit=self._project.source_unit,
             unit=feat.feature_json(),
             props=_properties([UnitProperty(feat.display_name, p) for p in props]),
+            run_props=self._run_props,
             setup=self._setup_result,
             prep_facts=self._project.prep_facts,
             args=self._declared_args,
@@ -385,6 +405,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             checks=outcome.property_checks,
             skipped=outcome.skipped,
             verdicts=outcome.verdicts,
+            expected_failures=outcome.expected_failures,
             # What the stamping run actually covered, in the order the host ran it — each target
             # with its checks. A callout-mode wheel keys its deliverable sections on the names, and
             # carrying the checks alongside is what makes "which properties are these results
@@ -396,23 +417,46 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     async def fetch_verdicts(
         self, formalized: Formalized[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
+        # Fold in expect_check_failure so a declared check cannot show as a pass, and rejoin the
+        # wheel's two halves: the report has one ``message`` per row, and a green row's whole worth
+        # is the accounting — but the evidence leads, because a BAD row's first line is what a
+        # reader is looking for.
         return {
             name: Verdict(
                 outcome=v.outcome,
                 line=v.line,
                 duration_seconds=v.duration_seconds,
                 unit_file=v.unit_file or formalized.unit_file,
-                message=v.detail,
+                message="\n\n".join(part for part in (v.detail, v.accounting) if part) or None,
             )
-            for name, v in formalized.result.verdicts.items()
+            for name, v in formalized.result.reported_verdicts().items()
         }
+
+    @override
+    def findings_policy(
+        self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]]
+    ) -> FindingsPolicy | None:
+        # Evidence is in the results themselves — a wheel reports per check, and there is no
+        # run-scoped store beside it holding what it saw. What that evidence *means* is the wheel's
+        # declaration, and a wheel that made none produces no findings.
+        return rust_findings(outcomes, self._descriptor.findings)
 
     @override
     async def finalize(
         self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]], run: PipelineRun
     ) -> None:
         components = [
-            FinalizeComponent(name=o.feat.display_name, outcome=ComponentGaveUp())
+            FinalizeComponent(
+                name=o.feat.display_name,
+                # It ran no build, so it has no targets to key on — the wheel names its build target
+                # from the unit, by the same rule the gated builds' selectors came from. The reason
+                # travels with it: a wheel whose deliverable declares a target per unit has to put
+                # something behind this one, and what it puts there should say why.
+                outcome=ComponentGaveUp(
+                    unit=o.feat.feature_json(),
+                    reason=o.result.reason if isinstance(o.result, GaveUp) else str(o.result),
+                ),
+            )
             if not isinstance(o.result, Delivered)
             # A callout-mode wheel renders the whole deliverable from these (Crucible: folds each
             # section into the shared crate, keyed by its property_checks feature) — including the
@@ -443,12 +487,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         raw = await asyncio.to_thread(self._module.finalize, payload.model_dump_json())
         if not raw:
             return
-        files = parse_files(raw)
-        root = Path(run.source.project_root)
-        for rel, contents in files.items():
-            target = confined_target(root, rel)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(contents)
+        write_wheel_files(Path(run.source.project_root), parse_files(raw))
 
 
 @dataclass(frozen=True)
@@ -476,41 +515,65 @@ class ProjectFacts:
 # :class:`RustPreparedSystem` and called from :meth:`RustStagedFormalizer.begin` — see there for why
 # it runs between extraction and the per-unit fan-out rather than during prep or on first use.
 type SetupAuthor = Callable[
-    [list[UnitProperty], Sequence[FeatureUnit], PipelineRun], Awaitable[str]
+    [list[Property], Sequence[FeatureUnit], PipelineRun], Awaitable[str]
 ]
+
+# Writes the wheel's build scaffolding for the run, given the authored setup spec and every unit
+# about to be formalized. Same seam as :data:`SetupAuthor`, one step later — and it takes no
+# ``PipelineRun``, because unlike authoring it runs no LLM turn and needs no cache.
+type CrateRootWriter = Callable[[str | None, Sequence[FeatureUnit], Sequence[Property]], Awaitable[None]]
 
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
     """The formalizer for a wheel that declares a ``setup`` step, before its shared spec exists.
 
     ``author`` writes and compiles the artifact from the properties it must make checkable;
-    ``build`` turns that artifact into the :class:`RustFormalizer` (see
-    :meth:`RustPreparedSystem.prepare_formalization`, which closes over everything else the
-    formalizer needs). Splitting it this way means the artifact is never assigned onto a live
-    formalizer — the only formalizer that exists already has it."""
+    ``scaffold`` writes the build scaffolding that spec and the unit set imply; ``build`` turns the
+    artifact into the :class:`RustFormalizer` (see :meth:`RustPreparedSystem.prepare_formalization`,
+    which closes over everything else the formalizer needs). Splitting it this way means the artifact
+    is never assigned onto a live formalizer — the only formalizer that exists already has it."""
 
-    def __init__(self, author: SetupAuthor, build: Callable[[str], RustFormalizer]):
+    def __init__(
+        self,
+        author: SetupAuthor,
+        scaffold: CrateRootWriter,
+        build: Callable[[str, list[Property]], RustFormalizer],
+    ):
         self._author = author
+        self._scaffold = scaffold
         self._build = build
 
     @override
     async def begin(
         self, jobs: Sequence[BackendJob[FeatureUnit]], run: PipelineRun
     ) -> RustFormalizer:
-        """Author the shared setup spec from **every** unit's properties, and hand back the
-        formalizer built around it.
+        """Author the shared setup spec from **every** unit's properties, write the build scaffolding
+        both of those imply, and hand back the formalizer built around the spec.
 
         Two constraints fix this point in the run. It cannot happen in ``prepare_formalization``
         (which overlaps property extraction, so no properties exist yet), and it cannot happen
         lazily on first ``formalize`` (whichever unit won the race would decide the artifact the
         rest are then told to work within — see :class:`StagedFormalizer` and
-        docs/crucible-component-units.md (PR3) §8.2). The driver calls this exactly between the two.
+        docs/crucible.md §7). The driver calls this exactly between the two.
 
-        It is also the only moment the whole **unit set** is known, so that goes to the author too:
-        scaffolding for a multi-unit build is a function of the set rather than of any one unit, and
-        a wheel whose setup gate builds it needs the set to build the real thing."""
-        union = [UnitProperty(job.feat.display_name, prop) for job in jobs for prop in job.props]
-        return self._build(await self._author(union, [job.feat for job in jobs], run))
+        This is also the first moment the whole unit set is known, and scaffolding for a multi-unit
+        build (a manifest's feature list, a crate root's module declarations) is a function of the set
+        rather than of any one unit. Both callouts below get it: the author's gate builds the crate,
+        so it can build the real one rather than a provisional root to be completed later, and the
+        scaffolding write re-emits the same files for the case that gate never ran (a cached spec).
+        Writing them here is what lets the per-unit gates emit only their own files.
+
+        The run's property set is the other thing only this moment holds, and it goes to the
+        formalizer for the same reason it goes to the setup spec: the artifact authored from every
+        unit's properties can fail naming any of them, so every unit's gate has to be able to
+        recognize a title that is not its own."""
+        run_props = _properties(
+            [UnitProperty(job.feat.display_name, prop) for job in jobs for prop in job.props]
+        )
+        units = [job.feat for job in jobs]
+        setup = await self._author(run_props, units, run)
+        await self._scaffold(setup, units, run_props)
+        return self._build(setup, run_props)
 
 
 @dataclass
@@ -546,14 +609,18 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         analyzed_json = self.analyzed.model_dump(mode="json") if self.analyzed is not None else {}
         project = self.preflight
 
-        def build(setup_result: str | None) -> RustFormalizer:
+        def build(
+            setup_result: str | None, run_props: list[Property] | None = None
+        ) -> RustFormalizer:
             """The formalizer, around a shared setup spec that is either already authored or
-            not called for."""
+            not called for. The run's property set arrives with the spec, from the one step that
+            holds every unit at once; a wheel with no setup step has no such step, and its gates
+            see only their own properties."""
             return RustFormalizer(
                 b.module, b.descriptor, sandbox=b.sandbox,
                 command_timeout_s=b.command_timeout_s,
                 command_sem=command_sem, declared_args=b.declared_args,
-                setup_result=setup_result, project=project,
+                setup_result=setup_result, run_props=run_props, project=project,
             )
 
         setup = descriptor.step(PhaseRole.SETUP)
@@ -566,11 +633,11 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
         )
 
         async def author_setup(
-            props: list[UnitProperty], units: Sequence[FeatureUnit], run: PipelineRun
+            props: list[Property], units: Sequence[FeatureUnit], run: PipelineRun
         ) -> str:
             # The properties are what the artifact must make checkable, so they are part of both
             # the prompt and the cache identity
-            setup_input = prep_input.with_props(_properties(props))
+            setup_input = prep_input.with_props(props)
             # Cached like a formalization result (and skipped entirely on a hit): authoring +
             # compiling this is a full LLM loop, and on a large program the longest single step
             # of a run — so a re-run after a failure downstream must not pay for it twice. Keyed
@@ -580,9 +647,9 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             setup_ctx = run.ctx.child(RUST_SETUP_KEY(descriptor.name, setup_input))
             if (hit := await setup_ctx.cache_get(RustSetupSpec)) is not None:
                 return hit.source
-            # Attached *after* the identity, deliberately: the unit set is what a wheel's gate builds
-            # the crate's scaffolding from, not something the artifact is authored from, so a changed
-            # slug must not throw away an artifact that is still correct.
+            # Attached *after* the identity, deliberately: the unit set is what the wheel's gate
+            # builds the crate's scaffolding from, not something the fixture is authored from, so a
+            # changed slug must not throw away a fixture that is still correct.
             setup_input = setup_input.with_units([u.feature_json() for u in units])
             sandbox_dict = await b.sandbox_spec(workdir)
             fixture = await run.runner(
@@ -591,7 +658,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
                     module=b.module,
                     input=setup_input,
                     kind="setup",
-                    titles=[o.prop.title for o in props],
+                    titles=[p.title for p in props],
                     env=run.env,
                     ctx=setup_ctx,
                     run=run,
@@ -608,7 +675,29 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             await setup_ctx.cache_put(RustSetupSpec(source=fixture.spec))
             return fixture.spec
 
-        return RustStagedFormalizer(author_setup, build)
+        async def write_crate_root(
+            setup_result: str | None, units: Sequence[FeatureUnit], props: Sequence[Property]
+        ) -> None:
+            """Ask the wheel for the run's build scaffolding and write it.
+
+            Not cached alongside the setup spec: this is a few small files rendered from values the
+            host already holds, and it must land on disk even when the expensive half above was a
+            cache hit — the per-unit gates compile against it. A wheel whose setup gate already built
+            the whole scaffolding (it is sent the same unit set) re-emits it here identically, so this
+            is a no-op write rather than a second, different assembly."""
+            payload = CrateRootInput(
+                program=program,
+                source_unit=project.source_unit,
+                prep_facts=project.prep_facts,
+                setup=setup_result,
+                units=[u.feature_json() for u in units],
+                props=list(props),
+            )
+            raw = await asyncio.to_thread(b.module.crate_root, payload.model_dump_json())
+            if raw:
+                write_wheel_files(workdir, parse_files(raw))
+
+        return RustStagedFormalizer(author_setup, write_crate_root, build)
 
 
 @dataclass
@@ -632,8 +721,8 @@ class RustBackend:
     command_timeout_s: int = DEFAULT_TIMEOUT_S
     # How to confine every toolchain run (docs/command-sandbox.md). None → unsandboxed.
     sandbox: SandboxConfig | None = None
-    # Parsed values of the descriptor's declared CLI args, put on every component's
-    # ``AuthorInput.args`` (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
+    # Parsed values of the descriptor's declared CLI args, put on every ``AuthorInput.args``
+    # (e.g. Crucible's ``fuzz_timeout``). Set by the entry point.
     declared_args: dict[str, Any] = field(default_factory=dict)
 
     @property

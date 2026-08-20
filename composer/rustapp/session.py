@@ -49,7 +49,7 @@ from composer.pipeline.core import GaveUp, PipelineRun
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustFormalResult, RustSetupSpec
 from composer.rustapp.wire import (
-    AuthorInput, CompileOk, Prompt, RustAppModule, Target, Check, ValidateBuildFailed,
+    AuthorInput, CompileOk, Prompt, RustAppModule, Stakes, Target, Check, ValidateBuildFailed,
     expect_payload, expect_text, parse_compile, parse_judge, parse_prompt, parse_validate,
 )
 from composer.rustapp.wire import Verdict as WireVerdict
@@ -295,6 +295,10 @@ class ValidateSpec(
     clean — where a {check} you marked with `expect_check_failure` counts as clean. Naming
     `checks` runs only those, which is for iterating on one problem; it never stamps. Any edit
     after a stamping run invalidates the stamp.
+
+    A full run explores every {check} to the whole budget and reports everything it finds, so it
+    is slower and can come back with several failures at once. Naming `checks` stops at the first
+    failure — quicker feedback while you fix one thing, and not evidence that anything else holds.
     """
     checks: list[CheckName] | None = Field(
         default=None,
@@ -308,6 +312,10 @@ class ValidateSpec(
         if spec is None:
             return "No spec written yet — use `put_spec` first."
         mapping = self.state["property_checks"]
+        # A partial run exists so the author can iterate on one problem, and it never stamps — so it
+        # may stop at the first finding. A full run's verdicts are the ones that reach the report,
+        # and a check it stopped short of exploring has not held.
+        partial = self.checks is not None
         with self.tool_deps() as deps:
             vocab = deps.vocab
             wanted = declared_checks(deps.module, deps.input_json, mapping)
@@ -326,7 +334,10 @@ class ValidateSpec(
                         f"{vocab.many} are: {', '.join(c.name for c in wanted)}."
                     )
                 wanted = [c for c in wanted if c.name in asked]
-            covered = targets_of(wanted)
+            covered = targets_of(
+                wanted,
+                Stakes.FEEDBACK if partial else Stakes.OF_RECORD,
+            )
             verdicts: dict[CheckName, WireVerdict] = {}
             for target in covered:
                 res = parse_validate(
@@ -349,7 +360,6 @@ class ValidateSpec(
                     _emit_verdict(deps, check, verdict)
 
         report = _verdict_report(verdicts, self.state["expected_failures"])
-        partial = self.checks is not None
         unexplained = _unexplained(verdicts, self.state["expected_failures"])
         if partial:
             return f"{report}\n\nThis was a partial run, so it does not satisfy the publish gate."
@@ -372,17 +382,24 @@ class ValidateSpec(
         )
 
 
-def targets_of(checks: Sequence[Check]) -> list[Target]:
+def targets_of(
+    checks: Sequence[Check], stakes: Stakes = Stakes.OF_RECORD
+) -> list[Target]:
     """``checks`` partitioned into the checker invocations that cover them — one :class:`Target` per
     distinct target name, in first-seen order, each carrying its own checks.
 
     This is the whole of the run-vs-report split: several checks sharing a target means one build
     and one run for all of them, while each still gets its own verdict. The host owns the grouping —
     it decides what runs and in what order — so it hands the answer to the wheel rather than leaving
-    it to re-derive one."""
+    it to re-derive one. ``stakes`` travels the same way and for the same reason: what rides on a
+    run's answer follows from what the host will do with it, which the wheel cannot see."""
     names = list(dict.fromkeys(c.target_or_name() for c in checks))
     return [
-        Target(name=name, checks=[c for c in checks if c.target_or_name() == name])
+        Target(
+            name=name,
+            checks=[c for c in checks if c.target_or_name() == name],
+            stakes=stakes,
+        )
         for name in names
     ]
 
@@ -392,12 +409,17 @@ def _emit_verdict(deps: GateDeps, check: Check, verdict: WireVerdict) -> None:
     # so this needs nothing else. Several titles when one check discharges several properties.
     name = ", ".join(check.properties) or check.name
     line = f"{name}: {verdict.outcome.value}"
+    # First line only: a backend may put follow-on diagnostics (e.g. Crucible's reproducing action
+    # sequence) on later lines, and those belong in the report, not smeared across the live
+    # one-line-per-verdict view. The backend puts the deciding signal first — see `crucible_app`'s
+    # `finding_detail`. The full ``detail`` still reaches the report verbatim.
+    head = _first_line(verdict.detail) if verdict.detail else ""
     deps.emit(
         "verdict",
         {
             "outcome": verdict.outcome.value,
             "name": name,
-            "line": f"{line} — {verdict.detail}" if verdict.detail else line,
+            "line": f"{line} — {head}" if head else line,
         },
     )
 
@@ -419,7 +441,9 @@ def _verdict_report(
     lines = []
     for name, v in verdicts.items():
         mark = " (expected to fail)" if name in expected_failures else ""
-        detail = f" — {v.detail}" if v.detail else ""
+        # Bounded, not whole: this string is a tool result the author reads, and one check's
+        # evidence can be megabytes of repeated reproductions.
+        detail = f" — {shown}" if (shown := v.prompt_detail()) else ""
         lines.append(f"  {name}: {v.outcome.value}{mark}{detail}")
     return "Validation results:\n" + "\n".join(lines)
 
@@ -967,10 +991,8 @@ def _expect_tools(vocab: CheckVocab) -> list[BaseTool]:
 
 
 def _map_tool(vocab: CheckVocab) -> BaseTool:
-    # Formatting is not transitive: MapChecks.with_template rewrites this class's own text, but
-    # the nested PropertyCheckMapping would still show ``{checks}``. Template the element first,
-    # then splice it in. Display is applied after the splice so ``as_tool`` closes over the
-    # spliced schema, not the unspliced templated base.
+    # The nested `PropertyCheckMapping` is rendered along with this class: it is a family
+    # parameter, and `with_template` renders the families a field's annotation names.
     return MapChecks.with_template(check=vocab.one, checks=vocab.many).as_tool("map_checks")
 
 

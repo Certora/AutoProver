@@ -69,6 +69,10 @@ _OUTCOME_LABELS: dict[ReportBackend, dict[Outcome, str]] = {
         Outcome.GOOD: "Successful test", Outcome.BAD: "Failing test", Outcome.ERROR: "Error",
         Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
     },
+    "crucible": {
+        Outcome.GOOD: "No counterexample", Outcome.BAD: "Counterexample", Outcome.ERROR: "Error",
+        Outcome.TIMEOUT: "Timeout", Outcome.UNKNOWN: "Unknown",
+    },
     # The analysis-only backend never produces a verdict, so UNKNOWN is the label that matters:
     # "Unverified" states why the row is empty, where "Unknown" would read as a failed attempt.
     # The rest are neutral words, present because the table has to be total.
@@ -84,6 +88,10 @@ _GROUP_LABELS: dict[ReportBackend, dict[GroupStatus, str]] = {
     },
     "foundry": {
         GroupStatus.GOOD: "All tests passing", GroupStatus.BAD: "Has failing test",
+        GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
+    },
+    "crucible": {
+        GroupStatus.GOOD: "No counterexamples", GroupStatus.BAD: "Has counterexample",
         GroupStatus.PARTIAL: "Partial", GroupStatus.UNKNOWN: "No results",
     },
     "none": {
@@ -111,6 +119,14 @@ _TERMS: dict[ReportBackend, ReportTerms] = {
     "foundry": ReportTerms(
         title="Foundry test report", unit_singular="test", unit_plural="tests",
         unit_cap="Test", outcomes_label="Test outcomes",
+    ),
+    "crucible": ReportTerms(
+        # The unit is the *check*, not the property: a check is a `c_`-prefixed harness fn, and it
+        # is what the rules table rows and every `total_rules` count are. Saying "property" here
+        # both misnamed them and collided with the real property count beside it — the subtitle
+        # read "235 properties · 235 properties".
+        title="Crucible fuzzing report", unit_singular="check", unit_plural="checks",
+        unit_cap="Check", outcomes_label="Check outcomes",
     ),
     "none": ReportTerms(
         title="Property report", unit_singular="property", unit_plural="properties",
@@ -180,7 +196,10 @@ class FindingView(TypedDict):
     attack_path: str | None
     assumptions_and_uncertainties: str | None
     link: LinkView
-    rule_name: str | None
+    #: The named artifact the evidence came from, as the backend's own prose calls it
+    #: (``terms.check_singular``): a prover rule, a Crucible check. Not the unit — for Crucible the
+    #: unit is the property this check carries, and one check may carry several.
+    check_name: str | None
     spec_file: str | None
 
 
@@ -228,8 +247,8 @@ _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2
 
 
 def outcome_label(backend: ReportBackend, outcome: Outcome) -> str:
-    """The human word an auditor reads for an ``Outcome`` under a backend (e.g. a ``prover``
-    ``GOOD`` → "Verified", a ``foundry`` ``GOOD`` → "Successful test").
+    """The human word an auditor reads for an ``Outcome`` under a backend (e.g. a
+    ``crucible`` ``GOOD`` → "No counterexample", a ``prover`` ``GOOD`` → "Verified").
 
     The report's HTML render is the primary consumer, but the console/TUI verdict
     rollups reuse this so the same run reads with one vocabulary everywhere — this is
@@ -352,7 +371,7 @@ def _finding_view(f: Finding) -> FindingView:
         "attack_path": f.content.attack_path,
         "assumptions_and_uncertainties": f.content.assumptions_and_uncertainties,
         "link": _link_view(prov.prover_link if prov else None),
-        "rule_name": prov.rule_name if prov else None,
+        "check_name": prov.rule_name if prov else None,
         "spec_file": prov.spec_file if prov else None,
     }
 

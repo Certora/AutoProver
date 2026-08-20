@@ -1,0 +1,8 @@
+//! Authored invariants for the `{{ module }}` component — one `pub fn` per check.
+//!
+//! Each is reached from the crate root's generated `#[invariant_test] fn <check>` of the same name,
+//! which is called once after every fuzzed action of the campaign that selects it.
+
+use super::*;
+
+{{ body }}

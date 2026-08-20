@@ -1,0 +1,21 @@
+# Pipeline-generated deliverables/diagnostics (written by a run; not source). The
+# latter also holds the command sandbox's ephemeral per-run scratch — a private
+# CARGO_HOME/RUSTUP_HOME + linker TMPDIR under sandbox/ (docs/command-sandbox.md §3).
+/certora/
+/.certora_internal/
+
+# Build outputs (cargo-build-sbf / crucible).
+/target/
+crashes/
+# `Cargo.lock` is COMMITTED here, unlike the other scenarios, so this program resolves the same way
+# on every machine and on any day. `cargo-build-sbf` runs the Solana platform-tools cargo (1.79),
+# which parses neither an `edition2024` manifest nor a `rust-version` above its own, and a free
+# resolution now picks several; the lock holds the transitive set below both boundaries.
+#
+# The pipeline itself survives without it — `warm_cargo_cache` fetches with a modern cargo first —
+# so what the lock protects is a *direct* `cargo-build-sbf` (what anyone debugging the scenario
+# reaches for) and reproducibility against registry drift, not the gate.
+# Fuzzing artifacts (crucible run: corpus + explore-mode ./corpus, ./output).
+/corpus/
+/output/
+

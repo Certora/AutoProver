@@ -1,0 +1,10 @@
+// ═══ {{ module }} ════════════════════════════════════════════════════════════════════════════
+#[cfg(any({% for c in checks %}feature = "{{ c }}"{% if !loop.last %}, {% endif %}{% endfor %}))]
+mod {{ module }};
+{% for c in checks %}
+#[cfg(feature = "{{ c }}")]
+#[invariant_test]
+fn {{ c }}(fixture: &mut Fixture) {
+    {{ module }}::{{ c }}(fixture)
+}
+{% endfor %}

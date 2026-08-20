@@ -17,15 +17,16 @@ from typing import Any, cast
 
 import pytest
 from langchain_core.messages import ToolMessage
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from composer.authoring.state import SkippedProperty, spec_digest
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.session import (
     VALIDATE_KEY, CheckVocab, GateDeps, PropertyCheckMapping, RustSessionState, SessionResult,
-    _validate_tool,
+    _map_tool, _validate_tool,
 )
-from composer.rustapp.wire import Target, Check, ValidateCoverageError
+from composer.rustapp.wire import Target, Check, Stakes, ValidateCoverageError, Verdict
 from composer.spec.source.report.schema import Outcome
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor, wire_verdict
@@ -162,6 +163,25 @@ async def test_a_partial_run_only_runs_the_targets_it_was_asked_for(tmp_path):
     wheel = _Wheel()
     await _validate(wheel, tmp_path, checks=["c_fees"])
     assert [t.name for t in wheel.targets] == ["c_fees"]
+
+
+@pytest.mark.asyncio
+async def test_a_full_run_asks_for_every_check_to_be_explored_to_budget(tmp_path):
+    # A full run's verdicts are the ones that stamp and get reported, so a checker that could stop
+    # at the first problem must not: the checks it would abandon still answer for themselves, and
+    # what they would say is that they held.
+    wheel = _Wheel()
+    await _validate(wheel, tmp_path)
+    assert [t.stakes for t in wheel.targets] == [Stakes.OF_RECORD] * 2
+
+
+@pytest.mark.asyncio
+async def test_a_partial_run_lets_the_checker_stop_at_the_first_finding(tmp_path):
+    # The other half of the trade: a partial run exists so the author can iterate on one problem
+    # and never stamps, so buying speed with the other checks' verdicts costs nothing.
+    wheel = _Wheel()
+    await _validate(wheel, tmp_path, checks=["c_fees"])
+    assert [t.stakes for t in wheel.targets] == [Stakes.FEEDBACK]
 
 
 @pytest.mark.asyncio
@@ -303,3 +323,75 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
     assert [c.name for c in result.targets[0].checks] == ["c_stake", "c_dbl"]
     assert [s.property_title for s in result.skipped] == ["fees capped"]
     assert dict(result.checks) == {"stake matches": ["c_stake"], "no double stake": ["c_dbl"]}
+
+
+@pytest.mark.asyncio
+async def test_the_result_carries_the_authors_expected_failure_declarations(monkeypatch, tmp_path):
+    # The wheel reports what its run observed; that a failure IS the finding is the author's, and
+    # the session is the only place that knows it. Dropping it here is what let a documented klend
+    # finding reach report.html as "No counterexample" (tests/test_rustapp_findings.py).
+    async def fake_session(**_kw):
+        return SessionResult(
+            commentary="done", spec=SPEC, skipped=[],
+            property_checks=[("stake matches", ["c_stake"])],
+            verdicts={"c_stake": Verdict.with_outcome(Outcome.GOOD)},
+            ran=[Target(name="c_farms", checks=[
+                Check(name="c_stake", properties=["stake matches"], target="c_farms"),
+            ])],
+            expected_failures={"c_stake": "klend makes no such guarantee"},
+        )
+
+    monkeypatch.setattr(adapter, "run_session", fake_session)
+    formalizer = adapter.RustFormalizer(
+        cast(Any, _Wheel()), AppDescriptor.model_validate(wire_descriptor())
+    )
+    result = await formalizer.formalize(
+        "Farms", cast(Any, _Feat()),
+        [PropertyFormulation(title="stake matches", sort="invariant", description="d")],
+        cast(Any, _Ctx()), cast(Any, _Run(_Source(str(tmp_path)), _Ctx())), cast(Any, None),
+    )
+
+    assert isinstance(result, adapter.RustFormalResult)
+    assert result.expected_failures == {"c_stake": "klend makes no such guarantee"}
+    # The wheel's own answer is kept verbatim beside it — the declaration is applied on the way out
+    # (``reported_verdicts``), not folded into the record of what ran.
+    assert result.verdicts["c_stake"].outcome is Outcome.GOOD
+    assert result.reported_verdicts()["c_stake"].outcome is Outcome.BAD
+
+
+@pytest.mark.asyncio
+async def test_what_map_checks_writes_is_accepted_as_state_by_the_next_tool(tmp_path):
+    # The mapping travels from one tool to the next through the session state, so what `map_checks`
+    # writes has to satisfy the state annotation every later tool validates its injected `state`
+    # against. Constructing a `PropertyCheckMapping` here would not test that: the tool builds the
+    # *templated* subclass instead, and only that class's instances go through the wire the model
+    # drives. When the two diverged, every state-taking tool failed with an error langgraph strips
+    # as injected — the model saw an empty string and retried until the session gave up.
+    map_tool = _map_tool(CheckVocab("check", "checks"))
+    written = await map_tool.ainvoke({
+        "name": "map_checks",
+        "type": "tool_call",
+        "id": "t1",
+        "args": {
+            "state": _state(property_checks=[]),
+            "tool_call_id": "t1",
+            "property_checks": [{"property_title": "stake matches", "checks": ["c_stake"]}],
+        },
+    })
+    mapping = written.update["property_checks"]
+    assert all(isinstance(m, PropertyCheckMapping) for m in mapping), (
+        f"map_checks wrote {[type(m).__mro__ for m in mapping]}, which the state annotation "
+        "does not accept"
+    )
+
+    # And it has to survive a checkpoint: the serializer restores a model by importing its class,
+    # so anything built at runtime comes back as a bare dict and every later read of the mapping
+    # fails on the attribute it no longer has.
+    serde = JsonPlusSerializer()
+    restored = serde.loads_typed(serde.dumps_typed(mapping))
+    assert [(m.property_title, m.checks) for m in restored] == [("stake matches", ["c_stake"])]
+
+    wheel = _Wheel()
+    out = await _validate(wheel, tmp_path, state=_state(property_checks=mapping))
+    assert not isinstance(out, str), f"the gate tool rejected the mapping map_checks wrote: {out}"
+    assert [c.name for t in wheel.targets for c in t.checks] == ["c_stake"]

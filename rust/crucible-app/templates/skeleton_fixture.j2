@@ -1,0 +1,37 @@
+// PREFLIGHT harness — authored by the backend, not the model. The smallest fixture that still
+// exercises everything an authored one depends on: the pinned crucible / libafl / anchor / solana
+// dependency graph, the program's types (a path dep on its crate, or `declare_fuzz_program!`
+// codegen from its IDL), and loading the built `.so` into LiteSVM. It deliberately sends no
+// instructions — nothing here knows the program's API; that is the fixture author's job.
+//
+// This file is the whole crate the preflight builds, and it runs before anything is authored. From
+// the setup gate on, `Cargo.toml` points `[[bin]]` at `src/main.rs` and this stays behind as the
+// record of what the preflight proved — not a build target, and not reached by any `mod`.
+use crucible_fuzzer::*;
+use solana_pubkey::Pubkey;
+use {{ crate_id }}::*;
+
+#[derive(Clone)]
+struct Fixture {
+    ctx: TestContext,
+    program_id: Pubkey,
+}
+
+#[fuzz_fixture]
+impl Fixture {
+    pub fn setup() -> Self {
+        let mut ctx = TestContext::new();
+        let program_id = Pubkey::new_from_array(ID.to_bytes());
+        ctx.add_program(&program_id, PROGRAM_SO).unwrap();
+        Self { ctx, program_id }
+    }
+
+    // `#[fuzz_fixture]` refuses to expand an impl block with no `action_*` method, and the preflight
+    // has no instruction to offer — so this stands in for one. It touches both fields so the build
+    // is warning-clean: `dead_code` noise in a preflight log would compete with the real diagnostics
+    // this gate exists to surface.
+    pub fn action_noop(&mut self) -> bool {
+        let _ = (&self.ctx, &self.program_id);
+        true
+    }
+}

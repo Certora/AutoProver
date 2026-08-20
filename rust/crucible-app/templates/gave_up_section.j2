@@ -1,0 +1,7 @@
+//! No invariants were authored for the `{{ unit }}` component.
+//!
+//! The author stopped rather than publish a suite that would only look checked. Selecting any of
+//! this component's checks therefore fails the build, on purpose — there is nothing behind them to
+//! fuzz, and a harness that reported anything here would be reporting something nobody verified.
+
+compile_error!("{{ module }}: no invariants were authored for the {{ unit }} component — {{ reason }}");

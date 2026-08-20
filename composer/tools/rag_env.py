@@ -9,12 +9,11 @@ application fork (the tool classes live in ``composer/tools/<corpus>_rag.py``, s
 ``composer.rag.db.KNOWLEDGE_BASES``, the same map the corpus importer
 (:mod:`composer.scripts.rag_import`) targets, so a corpus is imported and searched under one name.
 
-**No corpus is registered yet.** Both halves of the first one — a ``composer/tools/<corpus>_rag.py``
-and its ``KNOWLEDGE_BASES`` connection — land with the application that declares it, so until then
-every tag is unregistered and any wheel naming one fails at descriptor load. That is the intended
-resting state, not a gap: a half-registration (a tag whose tools module doesn't exist) would pass
-:func:`validate_rag_db` and then be swallowed by the degrade path below, which is exactly the
-confusion the two failure modes are separated to avoid.
+Both halves of a corpus — a ``composer/tools/<corpus>_rag.py`` and its ``KNOWLEDGE_BASES``
+connection — land together with the application that declares it. Never register one half alone: a
+tag whose tools module doesn't exist would pass :func:`validate_rag_db` and then be swallowed by the
+degrade path below, which is exactly the confusion the two failure modes are separated to avoid.
+``crucible_kb`` (the Crucible harness-authoring docs) is the one registered corpus.
 
 Two failure modes, deliberately opposite:
 
@@ -43,10 +42,18 @@ _log = logging.getLogger(__name__)
 type _ToolsFactory = Callable[["ComposerRAGDB"], "Iterable[BaseTool]"]
 
 
+def _crucible_tools(db: "ComposerRAGDB") -> "Iterable[BaseTool]":
+    """Search tools over the Crucible harness-authoring docs. Imported here, not at module scope, so
+    the langchain/pydantic tool classes load only when a descriptor selects this corpus."""
+    from composer.tools.crucible_rag import get_tools
+
+    return get_tools(db)
+
+
 #: Registered corpora, by tag. An entry is added together with the ``composer/tools/<corpus>_rag.py``
 #: it imports and the ``KNOWLEDGE_BASES`` connection it needs — all three at once, or the tag
 #: validates and then silently produces no tools.
-_FACTORIES: dict[str, _ToolsFactory] = {}
+_FACTORIES: dict[str, _ToolsFactory] = {"crucible_kb": _crucible_tools}
 
 
 def validate_rag_db(rag_db: str | None) -> None:

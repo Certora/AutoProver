@@ -233,11 +233,12 @@ class VerificationArtifactRecord(BaseModel):
     path: str
 
 
-type ReportBackend = Literal["prover", "foundry", "none"]
+type ReportBackend = Literal["prover", "foundry", "none", "crucible"]
 """Which pipeline produced this report. Provenance only — every backend fills the same fields;
-this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test"
-vs "Unverified") for a report.json it reads cold. The producers are the CVL prover (``"prover"``),
-Foundry (``"foundry"``), and ``"none"`` — a pipeline that records properties without verifying them
+this tag just lets the renderer pick the right outcome labels ("Verified" vs "Successful test" vs
+"No counterexample") for a report.json it reads cold. The producers are the CVL prover
+(``"prover"``), Foundry (``"foundry"``), the Rust/Crucible fuzzer (``"crucible"``, hosted by
+``composer.rustapp``), and ``"none"`` — a pipeline that records properties without verifying them
 (the analysis-only null backend, ``composer.spec.solana.null_backend``), whose reports are all
 UNKNOWN and say so. The set is closed: every backend lives in this repo, so a verification backend
 adds its own literal here, plus its wording in ``report/render.py``."""
@@ -246,10 +247,9 @@ adds its own literal here, plus its wording in ``report/render.py``."""
 # ---------------------------------------------------------------------------
 # Findings — violated rules surfaced as audit issues.
 #
-# A `Finding` records a violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) as an audit
-# issue: a ``title``, a ``severity``, and the ``content`` write-up, synthesized from the rule's
-# counterexample analysis and the properties/groups it breaks (see ``report/findings.py``). The field
-# set follows the "Submit Issue" body of the Sherlock Audit Engine API — schema at
+# A `Finding` is a title, a severity, and a write-up. The backend produces them
+# (``Formalizer.findings``); the report only carries them. The field set follows
+# the "Submit Issue" body of the Sherlock Audit Engine API — schema at
 # https://api-audit-engine.sherlock.xyz/v1/docs/public — so a finding maps cleanly onto a submission,
 # but the source ``locations`` a submission needs
 # (``{owner}/{repo}`` / file / line) are NOT produced here: a run knows only local paths and CVL-spec
@@ -328,7 +328,6 @@ class AutoProverReport(BaseModel):
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
     coverage: CoverageReport
-    #: Violated rules surfaced as audit issues (one per BAD rule; empty
-    #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose
-    #: is synthesized at report time — see ``report/findings.py``.
+    #: Audit issues for violated rules (one per BAD rule). Empty when nothing is
+    #: violated or the backend submits none. Written by ``Formalizer.findings``.
     findings: list[Finding] = Field(default_factory=list)

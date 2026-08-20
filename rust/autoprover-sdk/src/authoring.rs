@@ -77,14 +77,10 @@ pub enum Authored {
     Setup {
         /// The analyzed system model, opaque to the SDK — its shape is the ecosystem's.
         model: serde_json::Value,
-        /// Every unit the run is about to formalize, each the same [chain-shaped](ChainData) value a
-        /// component turn gets as [`Authored::Component::unit`].
-        ///
-        /// This is the only callout that sees the set whole: a per-unit turn holds one, and a
-        /// preflight runs before any exists. A wheel whose setup gate builds scaffolding the *whole*
-        /// set implies — a manifest's feature list, a crate root's module declarations — can
-        /// therefore build the real thing here rather than a provisional form something later has to
-        /// complete.
+        /// Every unit the run is about to formalize, as [`CrateRootInput::units`](crate::prep::CrateRootInput::units)
+        /// carries them. The host holds the set at this point in the run, so a wheel whose setup gate
+        /// builds the whole crate's scaffolding can render it here instead of a provisional form the
+        /// crate-root hook would then have to complete.
         units: Vec<ChainData>,
     },
     /// One unit's spec.
@@ -123,6 +119,20 @@ pub struct AuthorInput {
     /// The properties this spec must make checkable. Empty for a preflight; for a setup, every
     /// unit's.
     pub props: Vec<Property>,
+    /// **Every** property the run extracted, across all units, each naming the unit that owns it
+    /// (`Property::component`) — run-level context, like [`AuthorInput::prep_facts`], rather than
+    /// anything this spec is answerable for.
+    ///
+    /// What it is for: a shared setup spec is built into every unit's target, so a failure it
+    /// reports can name a property belonging to a *different* unit. Without the run's set a backend
+    /// cannot tell that from a title it has never seen, and the safe reading of an unplaceable
+    /// failure — refute everything the target covers — is exactly wrong for the first case.
+    ///
+    /// Empty wherever the host does not hold the whole set at once: a preflight (nothing is
+    /// analyzed yet), and any wheel that declares no
+    /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase, whose units are formalized
+    /// without the host ever gathering them. On a setup turn it is exactly [`AuthorInput::props`].
+    pub run_props: Vec<Property>,
     /// The compiled shared setup spec, for a wheel that declared a
     /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase — the fixture a component's
     /// spec builds on.
@@ -158,9 +168,9 @@ impl AuthorInput {
         }
     }
 
-    /// Every unit the run is about to formalize, on a setup turn. Empty on the turns that hold no
-    /// set: a preflight (nothing is analyzed yet), and a component turn, which holds its own
-    /// [`unit`](Self::unit) instead.
+    /// Every unit the run is about to formalize, on a setup turn — the same set
+    /// [`CrateRootInput::units`](crate::prep::CrateRootInput::units) carries. Empty on the turns that
+    /// hold no set: a preflight, and a component turn (which holds its own [`unit`](Self::unit)).
     pub fn units(&self) -> &[ChainData] {
         match &self.authored {
             Authored::Setup { units, .. } => units,

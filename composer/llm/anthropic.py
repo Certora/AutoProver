@@ -8,6 +8,7 @@ import asyncio
 from functools import cache
 
 import anthropic
+import httpx
 
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
@@ -225,8 +226,14 @@ class AnthropicService(ProviderServiceBase):
         and every 5xx, which covers 529 overloaded) plus connection-level
         failures (``APITimeoutError`` subclasses ``APIConnectionError``).
         400-class request errors are deterministic — an over-long prompt fails
-        identically on every attempt — and are deliberately excluded."""
-        if isinstance(exc, anthropic.APIConnectionError):
+        identically on every attempt — and are deliberately excluded.
+
+        ``httpx.TimeoutException`` is here because we stream: the SDK's own retries and its
+        exception wrapping both cover the *request*, and once it has handed the response stream to
+        the caller a stall surfaces raw from the transport, as ``httpx.ReadTimeout``. It means the
+        same thing as an ``APITimeoutError`` — the provider went quiet — and nothing has been
+        produced that a retry would duplicate."""
+        if isinstance(exc, (anthropic.APIConnectionError, httpx.TimeoutException)):
             return True
         if isinstance(exc, anthropic.APIStatusError):
             return exc.status_code in (408, 409, 429) or exc.status_code >= 500
@@ -293,7 +300,16 @@ class AnthropicModelProvider:
         return ChatAnthropic(
             model_name=self.model_name,
             max_tokens_to_sample=opts.tokens,
-            timeout=None,
+            # An explicit None DISABLES the SDK's timeouts (None != not-given), so a
+            # socket that dies silently mid-stream hangs the session forever. A float
+            # is a per-phase httpx timeout — for a streamed response, the max silence
+            # between chunks, not a cap on the whole turn.
+            timeout=300.0,
+            # Stream every request: a long authoring turn (Opus + thinking on a large
+            # prompt) can exceed the SDK's 600s non-streaming ceiling, and a silent
+            # 10-minute wait is long enough for NAT/idle killers to drop the socket
+            # (surfaces as APIConnectionError mid-run). Streaming keeps bytes flowing.
+            streaming=True,
             max_retries=8,
             stop=None,
             betas=betas,

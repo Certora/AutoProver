@@ -1,0 +1,63 @@
+
+Write ONE invariant function PER PROPERTY (no fixture — it already exists as `Fixture`):
+
+- `pub fn c_<property>(fixture: &mut Fixture) { ... }` — named EXACTLY as the property says, and `pub` —
+  runs AFTER EACH fuzzed action of its own campaign. One property = one fn = one build = one fuzz
+  run, so each property is measured on its own evidence instead of sharing a budget with its
+  neighbours. The fuzzer drives the WHOLE program, so the sequence interleaves other components'
+  actions too.
+- The name is not yours to choose or derive: each property states it, and it is the same name you
+  will pass to `map_checks`. A fn no property names is never built; a property whose fn is missing
+  or misspelled fails the build naming it.
+- Write the ITEMS ONLY — no file scaffolding. Your code is placed inside a module file the host
+  writes, which already opens with that module's `//!` docs and `use super::*;`. Do not write either
+  yourself: a `//!` below them is `error[E0753]: expected outer doc comment`, and a second
+  `use super::*;` is redundant. Use `//` for any comments of your own.
+- Do NOT write `#[invariant_test]` yourself. The host generates the `#[invariant_test]` entry point
+  that calls your fn (the macro expands `fn main()` next to itself, so it has to sit at the crate
+  root, outside your module).
+  Helper items are welcome — `impl Fixture { ... }` blocks, free fns, consts — and because the
+  module is gated, a name you choose can never clash with another component's.
+- Assert against ON-CHAIN state, not local mirrors:
+    let acct = fixture.ctx.read_anchor_account::<SomeState>(&fixture.some_pda).unwrap();
+    fuzz_assert_le!(acct.balance, cap, "message");   // fuzz_assert_{eq,ne,lt,le,gt,ge}
+- Read RAW lamports / data / owner (bypassing Anchor deserialization) via
+  `read_account` / `get_account`, which return `Result<Account>` — unwrap/`?` FIRST,
+  THEN the field (there is NO `get_account_lamports`, and `Result` has no `.lamports`):
+    let lamports = fixture.ctx.read_account(&fixture.some_pda).unwrap().lamports;
+  Existence check: `fixture.ctx.account_exists(&fixture.some_pda)` (returns bool).
+- TRANSACTION FEE — do NOT assert an EXACT lamport delta on a signer. The fee payer (the
+  FIRST signer of the `action_*`'s `.send()`, e.g. the `depositor`/`authority`) is debited the
+  tx fee (~5000 lamports/signature) ON TOP OF whatever lamports the instruction moves, so
+  `depositor_before - amount == depositor_after` is WRONG (off by the fee). Assert exact deltas
+  on NON-signer accounts (e.g. the vault PDA, which only receives the transfer); for a signer,
+  subtract the fee or assert a bound (`<=`) instead of `==`.
+- Drive state via the fixture's existing `action_*` methods; do not re-`send()`
+  instructions yourself unless necessary.
+- A "must be rejected" property is checked HERE, not in the fixture. The fixture's negative actions
+  attempt the thing and record the outcome in a field (`self.accepted.<attempt> |= …`); they
+  deliberately do not assert, because the fixture is built into every component's fuzz target and an
+  assertion there fires in campaigns that never asked about your property. Read the recorded field
+  and assert on it, tagged like any other:
+      fuzz_assert!(!fixture.accepted.init_without_signer,
+          "[authority_must_sign_initialization] init without the authority signing was accepted");
+  A recorded flag is the one assertion with no operands to interpolate (see the next bullet) — name
+  the attempt that was wrongly accepted instead. If one of your properties is about a rejection and
+  the fixture records nothing for it, that is a fixture gap: say so in a `// UNCOVERABLE:` comment
+  rather than asserting something vacuous.
+- EVERY assertion message MUST do two things: (a) START with its property title in brackets
+  (`"[<title>] ..."`) so a counterexample names which property it refutes, and (b) INTERPOLATE THE
+  OPERAND VALUES via format args. Passing a custom message makes `fuzz_assert*` use that message
+  VERBATIM — the macro's built-in `(left != right)` operand dump is DISCARDED — so a message
+  without the values leaves the counterexample untriageable:
+      // BAD — says nothing about what the values were, so nobody can tell a real bug from a
+      // fixture-modelling mistake without rebuilding and re-running the harness:
+      fuzz_assert!(total <= limit, "[deposit_limit_not_exceeded] total supply exceeds limit");
+      // GOOD — the message carries the numbers that refute the property:
+      fuzz_assert_le!(total, limit,
+          "[deposit_limit_not_exceeded] total_supply={} exceeds deposit_limit={}", total, limit);
+  Prefer the comparison macros (`fuzz_assert_{eq,ne,lt,le,gt,ge}`) over a bare `fuzz_assert!` so
+  the operands are explicit, and when the check LOOPS over accounts include the account key too —
+  otherwise the message cannot say which one failed.
+- Return ONLY the `pub fn c_<property title>` fns, plus any read helpers they share.
+

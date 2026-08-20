@@ -96,3 +96,32 @@ async def test_ensure_available_fails_closed():
     assert ei.value.provider == "landlock-missing"
     assert "Landlock" in ei.value.reason
     assert "unavailable" in str(ei.value)
+
+
+def test_sandbox_package_does_not_import_pydantic():
+    """The 6.1 escape suite collects composer.sandbox without pydantic.
+
+    ``composer.spec.gen_types`` imports pydantic at module top. A sandbox
+    module that imports it (or anything under ``composer.spec``) dies at
+    collection in the guest, before a single kernel assertion runs.
+    """
+    import ast
+
+    sandbox = Path(__file__).resolve().parents[1] / "composer" / "sandbox"
+    forbidden = ("composer.spec", "pydantic")
+    offenders: list[str] = []
+    for path in sorted(sandbox.rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                names = [node.module]
+            for name in names:
+                if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden):
+                    offenders.append(f"{path.name}: {name}")
+    assert not offenders, (
+        "composer.sandbox must stay importable in the escape-suite guest "
+        f"(pytest + annotated-types only): {offenders}"
+    )

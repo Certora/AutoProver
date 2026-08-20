@@ -1,0 +1,13 @@
+// ═══ {{ feature }} ═══════════════════════════════════════════════════════════════════════════
+// The build gate. It drives no state and asserts nothing about the program, so what it proves is
+// that the fixture COMPILES and that its program loads under LiteSVM. Every gate in the run selects
+// this feature, and it ships as a target of the delivered crate so a user can re-run that check:
+//
+//     crucible run {{ program }} {{ feature }} --release --dry-run
+//
+// Its body is inline because there is no authored section to delegate to.
+#[cfg(feature = "{{ feature }}")]
+#[invariant_test]
+fn {{ feature }}(fixture: &mut Fixture) {
+    let _ = fixture;
+}

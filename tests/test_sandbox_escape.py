@@ -16,8 +16,8 @@ Vectors covered:
 
 Runnable without the full Crucible stack (std-only program, no crates, no network
 needed to compile). Skipped unless `rustc` and a working launcher are present. The
-*legitimate* half (a real program build+fuzz under the launcher) is the expensive
-Part B, which ships with the Crucible backend.
+*legitimate* half (a real `solana_vault` build+fuzz under the launcher) is the
+expensive Part B in `tests/test_crucible_sandbox_gate.py`.
 """
 
 import asyncio

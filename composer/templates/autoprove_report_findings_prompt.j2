@@ -14,12 +14,12 @@ Audit-level claim(s) it belongs to:
   - {{ g.title }}: {{ g.description }}
 {%- endfor %}
 {% endif %}
-{% if instances -%}
-{% if instances | length > 1 -%}
-This rule failed for {{ instances | length }} separate instantiations. They may share one root cause or
+{% if evidence -%}
+{% if evidence | length > 1 -%}
+This rule failed for {{ evidence | length }} separate instantiations. They may share one root cause or
 be genuinely different problems — read them all and say which is the case.
 {% endif -%}
-{% for i in instances %}
+{% for i in evidence %}
 --- Failing instantiation{% if i.label %}: {{ i.label }}{% endif %} ---
 {% if i.analysis -%}
 Prover's counterexample analysis (root cause + suggested fix), produced during the run:

@@ -5,6 +5,8 @@ from typing import Literal, Mapping, Any, Protocol, final, TypedDict
 
 from pydantic import BaseModel, Field
 
+from composer.layout import CERTORA_DIR, INTERNAL_DIR
+
 
 # ---------------------------------------------------------------------------
 # Canonical certora/ layout
@@ -15,8 +17,10 @@ from pydantic import BaseModel, Field
 # entry verbatim (the prover reads it relative to the project root), and CVL ``import``
 # statements are derived with :func:`import_statement_for` (the prover reads
 # those relative to the importing spec's own directory).
+#
+# The two roots — CERTORA_DIR (keep) and INTERNAL_DIR (ignore) — are defined in
+# composer.layout and re-exported here.
 # ---------------------------------------------------------------------------
-CERTORA_DIR = Path("certora")
 #: Generated specs (the "importers") are written here.
 SPECS_DIR = CERTORA_DIR / "specs"
 #: Per-component property dumps (`<stem>.properties.json` / `.property_rules.json`)
@@ -35,7 +39,7 @@ AP_REPORT_DIR = CERTORA_DIR / "ap_report"
 #: Internal autoProve run artifacts (rotating logs, events.jsonl, run-link
 #: dumps). NOT part of the certora/ deliverable layout above — these are
 #: diagnostics/scratch outputs under the project root.
-AUTOPROVE_INTERNAL_DIR = Path(".certora_internal") / "autoProve"
+AUTOPROVE_INTERNAL_DIR = INTERNAL_DIR / "autoProve"
 
 #: The foundry pipeline's deliverable metadata (per-component properties,
 #: property->test maps, commentary, statuses, run report). A subdir of certora/
@@ -46,7 +50,7 @@ AUTOPROVE_INTERNAL_DIR = Path(".certora_internal") / "autoProve"
 FOUNDRY_DELIVERABLE_DIR = CERTORA_DIR / "foundry"
 #: Foundry counterpart to AUTOPROVE_INTERNAL_DIR — diagnostics (token usage)
 #: under a foundry-specific subdir so a co-located autoprove run doesn't collide.
-FOUNDRY_INTERNAL_DIR = Path(".certora_internal") / "foundry"
+FOUNDRY_INTERNAL_DIR = INTERNAL_DIR / "foundry"
 
 
 def under_project(project_root: "str | Path", rel: "str | Path") -> Path:

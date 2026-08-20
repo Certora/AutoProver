@@ -1,0 +1,34 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "crucible_app"
+version = "0.1.0"
+description = "AutoProver Solana verification application (Crucible fuzzing backend)."
+requires-python = ">=3.12"
+classifiers = ["Programming Language :: Rust"]
+
+[tool.maturin]
+# The compiled module is imported as `crucible_app` (matches `export_app!(crucible_app, …)`).
+module-name = "crucible_app"
+# abi3 wheel — one artifact for cp312+.
+features = ["pyo3/extension-module"]
+
+[tool.uv]
+# uv revalidates this path dep on every `uv run` / `uv sync`, but by default only
+# watches `pyproject.toml` — which never changes when you edit Rust. These keys
+# make a source change invalidate the built wheel, so `uv run pytest` recompiles
+# on its own and no manual `maturin develop` step exists. The `templates/` entry
+# is here and not on the other crates because askama compiles them *into* the
+# binary, so editing a `.j2` changes the wheel exactly as editing a `.rs` does.
+cache-keys = [
+    { file = "src/**/*.rs" },
+    { file = "templates/**/*.j2" },
+    { file = "askama.toml" },
+    { file = "Cargo.toml" },
+    { file = "../autoprover-sdk/src/**/*.rs" },
+    { file = "../autoprover-sdk/Cargo.toml" },
+    { file = "../Cargo.toml" },
+    { file = "../Cargo.lock" },
+]

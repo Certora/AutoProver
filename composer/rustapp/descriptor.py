@@ -84,14 +84,28 @@ class Callout(WireModel):
     #: but every delivered component still records one path — its basename becomes the component's
     #: ``unit_file``, the report's rule-identity fallback, echoed to ``finalize`` — and the store
     #: can't guess where in that tree the components' checks land. A path (project-relative,
-    #: ``{program}``-templated — Crucible: ``fuzz/{program}/src/main.rs``) names that file;
-    #: ``None`` declares that no one file represents the deliverable, and components anchor to the
-    #: layout's ``deliverable_dir`` instead. On the variant because it means nothing per-component.
+    #: ``{program}``-templated — Crucible: ``certora/crucible/fuzz/{program}/src/main.rs``) names
+    #: that file; ``None`` declares that no one file represents the deliverable, and components
+    #: anchor to the layout's ``deliverable_dir`` instead. On the variant because it means nothing
+    #: per-component.
     deliverable_path: str | None
 
 
 #: How the source deliverable is written — tagged on ``mode`` (Rust ``DeliverableMode``).
 DeliverableMode = Annotated[PerComponent | Callout, Field(discriminator="mode")]
+
+
+class FindingsDeclaration(WireModel):
+    """How a violated check of this backend becomes a written audit finding.
+
+    Declared by the wheel because a write-up rests on claims only the wheel can make: what its
+    evidence *is*, what that evidence establishes, and how to read its own markers. The host owns
+    everything around that — which rows, their properties and groups, the concurrency, grouping the
+    rows that share one finding, composing the record — and none of the prose."""
+
+    #: The *domain* half of the write-up system prompt. The host wraps it in the contract (how
+    #: severity is reached, which sections come back), so no wheel restates that.
+    domain: str
 
 
 class PhaseSpec(WireModel):
@@ -214,6 +228,10 @@ class AppDescriptor(WireModel):
     #: rebuttal tool's ``evidence_type`` is built from. Declared per wheel because the evidence a
     #: backend can produce is a property of that backend.
     evidence_kinds: list[str]
+    #: How this backend's violated checks are written up as audit findings — ``None`` produces none,
+    #: and the report carries only the verdict rows. Declining is the default because a write-up has
+    #: to say what the evidence behind it is, and only the wheel knows.
+    findings: FindingsDeclaration | None
 
     def unit_noun(self, *, plural: bool = False) -> str:
         """The noun for a formalized unit, with the generic default applied — so no frontend

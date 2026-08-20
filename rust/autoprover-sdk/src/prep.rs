@@ -40,6 +40,49 @@ pub struct WorkspacePrep {
     pub toolchain_request: ChainData,
 }
 
+/// What a wheel needs to render its build's *scaffolding* once, at the one moment both halves of it
+/// are known: after the shared setup spec is authored, and before the units fan out.
+///
+/// This exists because scaffolding for a multi-unit build depends on the **whole unit set** — a
+/// Cargo manifest's feature list, a crate root's module declarations — which no per-unit callout can
+/// see. Without it a wheel must re-render the scaffolding on every gated build, from the one unit it
+/// happens to be holding, which means the artifact the run produces is only ever assembled for real
+/// at the end (`docs/crucible.md` §4 is what that cost).
+///
+/// The host writes the returned files under the workdir and does not write them again, so a wheel
+/// that implements [`Backend::crate_root`](crate::Backend::crate_root) can have its per-unit
+/// callouts emit only that unit's own files.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct CrateRootInput {
+    /// As every authoring callout receives it
+    /// (see [`AuthorInput::program`](crate::authoring::AuthorInput::program)).
+    pub program: String,
+    /// As every authoring callout receives it.
+    pub source_unit: ChainData,
+    /// As every authoring callout receives it.
+    pub prep_facts: ChainData,
+    /// The compiled shared setup spec, for a wheel that declared a
+    /// [`PhaseRole::Setup`](crate::descriptor::PhaseRole::Setup) phase.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub setup: Option<String>,
+    /// Every unit the run is about to formalize, in the order the host will fan them out — each the
+    /// same [chain-shaped](ChainData) value a component callout gets as
+    /// [`Authored::Component::unit`](crate::authoring::Authored::Component). This is the field the
+    /// hook exists for: it is the only place a wheel sees the unit set whole.
+    pub units: Vec<ChainData>,
+    /// Every property the run extracted, each naming the unit that owns it — the same set the setup
+    /// gate is sent as [`AuthorInput::props`](crate::authoring::AuthorInput::props).
+    ///
+    /// Here because a wheel whose scaffolding names something per *property* cannot render it from
+    /// the unit set alone, and this hook must re-emit byte-identically what that gate produced.
+    /// Crucible declares one build target per check, and a check is named after the property it
+    /// carries.
+    #[serde(default)]
+    pub props: Vec<crate::authoring::Property>,
+}
+
 /// Extra sandbox grants a wheel needs unioned into the host-authored policy (Crucible: the
 /// crucible checkout + the `crucible` binary dir as read-only). Pure data — the wheel declares
 /// grants, Python decides the policy; the wheel never invents confinement.

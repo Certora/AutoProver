@@ -36,6 +36,7 @@ from langgraph.store.base import BaseStore
 from composer.core.user import user_data_ns
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.io.context import DefaultRetryPolicy, install_retry_policy
 from composer.input.parsing import add_protocol_args
 from composer.input.types import (
     DEFAULT_RECURSION_LIMIT,
@@ -115,7 +116,7 @@ def build_default_env(
     ).bind_source_tools(full)
 
 
-def _build_confinement(app: RustApplication, args: AppArgs) -> SandboxConfig:
+def build_confinement(app: RustApplication, args: AppArgs) -> SandboxConfig:
     """The default command-sandbox config for a wheel that sets ``confine_by_default`` — the
     fail-closed ``launcher`` provider (overridable by ``COMPOSER_SANDBOX_PROVIDER``), with the
     wheel's ``sandbox_grants`` (extra read-only paths / env names) unioned in. Python owns the
@@ -153,7 +154,7 @@ def _arg_dest(spec: ArgSpec) -> str:
 
 def _declared_args(args: argparse.Namespace, specs: list[ArgSpec]) -> dict[str, Any]:
     """The parsed values of the descriptor's declared flags, keyed by dest — what the host threads
-    into ``validate_preconditions`` and every component's ``AuthorInput.context``."""
+    into ``validate_preconditions`` and every ``AuthorInput.args``."""
     return {d: getattr(args, d) for d in (_arg_dest(s) for s in specs)}
 
 
@@ -280,6 +281,11 @@ async def rust_entry_point(
 
     # argparse Namespace duck-types the protocol: the model flags come from ExtendedModelOptions.
     tiered = get_provider_for(tiered=cast(TieredModelOptions, args))
+    # Run-wide retry floor, as ``cli_pipeline`` installs for the CVL backends: a transient provider
+    # failure resumes that graph from its last checkpoint instead of killing the component. Without
+    # it every graph runs with ``attempts = 1``, so a single 500 mid-run discards however long the
+    # session had been authoring — on klend, two components at ~2h each.
+    install_retry_policy(DefaultRetryPolicy(tiered.provider_service.should_retry))
     discovery_phase = _discovery_phase(app)
 
     async with (
@@ -391,7 +397,7 @@ async def rust_entry_point(
             # declared sandbox grants. Both are inert for a wheel that declares neither.
             app.options.declared_args = declared_args
             if app.options.sandbox is None and app.descriptor.confine_by_default:
-                app.options.sandbox = _build_confinement(app, app_args)
+                app.options.sandbox = build_confinement(app, app_args)
 
             return await run_application(
                 app,

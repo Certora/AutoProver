@@ -1,0 +1,63 @@
+Author ONE Crucible invariant function PER PROPERTY for the **{{ unit }}** component of the `{{ program }}`
+program — {{ n }} of them. Each property below states the fn name to use, named EXACTLY that (the first is
+`{{ first_fn }}`). Read on-chain state and assert that one property in its own fn.
+
+Each fn is its own build target and its own fuzz campaign, so every property gets a whole budget rather than a share
+of one. That is also why the names are fixed: the host generates an entry point per property that calls the fn by that
+name, and a name you did not write fails the build naming it.
+
+**The fuzzer drives the WHOLE program, not just this component.** Your invariant is evaluated after every action in a
+random sequence that interleaves every `action_*` the fixture exposes — including instructions belonging to the
+program's other components. So each assertion must hold no matter what else ran first; do not assume the rest of the
+program is idle, and do not assume this component's actions run in any particular order or at all.
+
+Properties to check (assert each; PREFIX every assertion message with its property title in brackets, e.g.
+`"[{{ first }}] ..."`, so a counterexample names the property it refutes):
+{{ listed }}
+
+Then declare with `map_checks` what verifies what — the same {{ n }} names you just wrote as fns, one per property,
+and map each property to its own alone. Never map several properties onto one invariant: a counterexample is placed by its tag, so that would fail
+every one of them on evidence about a single property, and the gate refuses it. An invariant whose property title
+never appears in a tagged assertion has nothing behind it.
+
+This component (its instructions are the ones the properties are about; drive them via the fixture's `action_*`
+methods, and see the fixture source below for the full set of actions the fuzzer can take):
+{{ component }}
+
+{{ cheat }}
+
+The shared fixture below is already defined — `Fixture`, its `#[fuzz_fixture] impl` and its `action_*` methods. You may
+ADD to it: put extra `impl Fixture { ... }` blocks (plain, NOT `#[fuzz_fixture]`) after your test fns for read helpers —
+typed account reads, PDA derivations, fixed-point → integer conversions. Prefer that to parsing raw account bytes at
+hand-computed offsets, which is unreadable and silently wrong when a struct's layout differs from your guess.
+
+Two things you may NOT do, both of which break the campaign rather than the build:
+- Do not add `action_*` methods or a second `#[fuzz_fixture]` block — only the fixture's own impl is fuzz-driven, and
+  the macro takes exactly one.
+- Do not send instructions from the test. The invariant runs after every action and must be OBSERVATIONAL: a test that
+  calls the program mutates the state being explored, which produces counterexamples that don't reproduce.
+
+**If a property cannot be checked with the actions the fixture provides, do not fake it.** An assertion that holds
+whatever the program does (re-reading a field nothing can change, `x >= 0` on a `u64`, a limit set so high nothing
+reaches it) is worse than nothing: it reports a property as covered when it is not. Write the honest thing instead — a
+`// UNCOVERABLE: <property title> — needs <the action or actor the fixture lacks>` comment, and check what you *can*.
+
+**A defect you can see in the source but cannot observe from state is a FINDING, not a gap.** Sometimes you read the
+program and the bug is plainly there — the permission check that exists on the sibling handler is absent here, a
+caller-supplied account is passed where the handler should have pinned its own — and yet no sequence of actions leaves
+a trace an assertion could read, because the operation *succeeds* and the damage is that it was allowed. Do not
+`record_skip` that: a skip is filed where a reader looks for coverage gaps, and this is the opposite of a gap. Publish
+it instead:
+
+- declare its check as usual, and put a `// FINDING: <property title> — <what the source shows>; not observable
+  from post-action state because <why>` comment in that property's fn in place of the assertion you cannot write;
+- mark it `expect_check_failure`, and make the reason name the **source evidence** — the file, the function, the call
+  that is missing or the argument that is unpinned — and say outright that the fuzzer cannot reproduce it.
+
+The report then carries it as a finding resting on your reading, which is exactly what it is. Two rules keep this
+honest, and it is worthless without them: never use it for a suspicion you have not confirmed in the source, and never
+use it for a property you simply found hard to check — that is `// UNCOVERABLE:`, or a skip.
+Fixture source for reference:
+```rust
+{{ fixture }}
+```

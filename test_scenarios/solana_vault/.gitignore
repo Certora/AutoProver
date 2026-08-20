@@ -1,0 +1,14 @@
+# Pipeline-generated deliverables/diagnostics (written by a run; not source). The
+# latter also holds the command sandbox's ephemeral per-run scratch — a private
+# CARGO_HOME/RUSTUP_HOME + linker TMPDIR under sandbox/ (docs/command-sandbox.md §3).
+/certora/
+/.certora_internal/
+
+# Build outputs (cargo-build-sbf / crucible).
+/target/
+Cargo.lock
+crashes/
+# Fuzzing artifacts (crucible run: corpus + explore-mode ./corpus, ./output).
+/corpus/
+/output/
+

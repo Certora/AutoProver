@@ -1,0 +1,8 @@
+PROGRAM API FACTS (use these EXACT names — do not guess):
+  crate id (for `use <id>::*`): {{ crate_id }}
+{% if let Some(aid) = analysis_id %}  (note: `#[program] pub mod {{ aid }}` is the module name — it does NOT change the crate-root paths `{{ crate_id }}::instruction::*` / `{{ crate_id }}::accounts::*`)
+{% endif %}  declare_id / program id: {{ program_id }}
+{% if !account_types.is_empty() %}  state/account types: {{ account_types|join("; ") }}
+{% endif %}  instructions (snake handler → Anchor Pascal structs):
+{% for ix in instructions %}    - {{ ix.name }} → instruction::{{ ix.pascal }}, accounts::{{ ix.pascal }}; args: [{{ ix.args|join(", ") }}]; accounts: [{{ ix.accounts|join(", ") }}]
+{% endfor %}
