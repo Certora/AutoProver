@@ -7,6 +7,7 @@ import pytest
 
 import certora_autosetup.utils.remappings as remappings_mod
 from certora_autosetup.utils.compilation_workarounds import (
+    VIA_IR_SCENE_THRESHOLD,
     CompilationWorkaroundManager,
     UnimplementedContractError,
     UnsatisfiableSolcPinError,
@@ -68,6 +69,12 @@ UNRELATED_OUTPUT = (
 @pytest.fixture
 def manager(tmp_path: Path) -> CompilationWorkaroundManager:
     return CompilationWorkaroundManager(project_root=tmp_path)
+
+
+@pytest.fixture
+def manager_declaring_via_ir(tmp_path: Path) -> CompilationWorkaroundManager:
+    """A manager for a project whose own build config declares via_ir."""
+    return CompilationWorkaroundManager(project_root=tmp_path, declared_via_ir=True)
 
 
 def test_detects_wrapped_yul_stack_too_deep(manager: CompilationWorkaroundManager) -> None:
@@ -191,20 +198,21 @@ def test_unnamed_return_warning_fires_once(manager, monkeypatch, tmp_path) -> No
 
 
 def test_noop_pass_exits_without_recompile(manager, monkeypatch, tmp_path) -> None:
-    # Run 1: via-ir applies for Foo. Run 2: the identical stack-too-deep hit
-    # fires again, re-applying is a no-op; the catch-all is suppressed because
-    # a specific workaround applied this pass, and the pass changed nothing ->
-    # exit without recompiling.
+    # Run 1: the optimizer goes on, legacy codegen kept. Run 2: the same stack-too-deep
+    # survives it, so via-ir applies for Foo. Run 3: the identical hit fires again,
+    # re-applying is a no-op; the catch-all is suppressed because a specific workaround
+    # applied this pass, and the pass changed nothing -> exit without recompiling.
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, updated, _, fake_run = _run_loop_with_output(
         manager, monkeypatch, tmp_path, PERSISTENT_STACK_TOO_DEEP_OUTPUT, contracts
     )
     assert success is False
+    assert updated["solc_optimize"] == "200"
     # The first application is preserved (uniform one-contract map collapses
     # back to the scalar on exit).
     assert updated["solc_via_ir"] is True
     assert "use_relpaths_for_solc_json" not in updated
-    assert fake_run.calls == 2
+    assert fake_run.calls == 3
 
 
 def test_different_detect_results_keep_workaround_enabled(manager, monkeypatch, tmp_path) -> None:
@@ -219,11 +227,12 @@ def test_different_detect_results_keep_workaround_enabled(manager, monkeypatch, 
         manager,
         monkeypatch,
         tmp_path,
-        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, STACK_TOO_DEEP_BAR_OUTPUT],
+        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, PERSISTENT_STACK_TOO_DEEP_OUTPUT, STACK_TOO_DEEP_BAR_OUTPUT],
         contracts,
     )
     assert success is True
-    assert fake_run.calls == 3
+    # Pass 1 spends the optimizer rung; Foo and Bar then need one via-ir application each.
+    assert fake_run.calls == 4
     # Both contracts got via-ir, so the uniform map collapsed to the scalar on
     # exit. A guard that disabled the workaround after its first application
     # would leave Bar's entry False and the map uncollapsed.
@@ -263,7 +272,9 @@ def test_multiple_workarounds_apply_in_one_pass(manager, monkeypatch, tmp_path) 
     )
     assert success is True
     assert fake_run.calls == 2
-    assert updated["solc_via_ir"] is True
+    # The stack-too-deep half is answered by the optimizer first — via-ir is a later rung.
+    assert updated["solc_optimize"] == "200"
+    assert "solc_via_ir" not in updated
     assert updated["ignore_solidity_warnings"] is True
     assert "use_relpaths_for_solc_json" not in updated
 
@@ -1589,3 +1600,103 @@ def test_unimplemented_contract_is_terminal(manager, monkeypatch, tmp_path) -> N
     assert "TokenInstance1" in str(excinfo.value)
     assert "certora/harnesses/TokenInstance1.sol" in str(excinfo.value)
     assert fake_run.calls == 1
+
+
+# --- the legacy stack-too-deep ladder: optimizer, then autofinder, then via-ir ----------
+
+AUTOFINDER_STACK_TOO_DEEP_OUTPUT = (
+    "Compiling contracts/Foo.sol to expose internal function information and local variables...\n"
+    "Encountered an exception generating autofinder contracts/Foo.sol (solc8.21 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with `--via-ir` (cli) or the equivalent\n"
+    "`viaIR: true` (standard JSON) while enabling the optimizer.\n"
+)
+
+
+def test_legacy_stack_too_deep_enables_the_optimizer_before_via_ir(manager, monkeypatch, tmp_path) -> None:
+    # solc's advice on this error names both the pipeline and the optimizer. The optimizer
+    # alone keeps legacy codegen, so it is what the first pass must try.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, config, fake_run = _run_loop(
+        manager, monkeypatch, tmp_path, [PERSISTENT_STACK_TOO_DEEP_OUTPUT], contracts
+    )
+    assert success is True
+    assert fake_run.calls == 2
+    assert updated["solc_optimize"] == "200"
+    assert "solc_via_ir" not in updated and "solc_via_ir_map" not in updated
+
+
+def test_via_ir_follows_when_the_optimizer_did_not_clear_it(manager, monkeypatch, tmp_path) -> None:
+    # Still failing with the optimizer on: via-ir is the next rung, and it stays scoped to
+    # the contract that failed.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, updated, _, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, PERSISTENT_STACK_TOO_DEEP_OUTPUT],
+        contracts,
+    )
+    assert success is True
+    assert fake_run.calls == 3
+    assert updated["solc_optimize"] == "200"
+    assert updated["solc_via_ir_map"] == {"Foo": True, "Bar": False}
+
+
+def test_autofinder_stack_too_deep_relaxes_the_assertion_before_via_ir(manager, monkeypatch, tmp_path) -> None:
+    # The contracts compile; only the instrumented copies are over the limit. Accepting the
+    # finder fallback for those files keeps legacy codegen for every contract.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [AUTOFINDER_STACK_TOO_DEEP_OUTPUT, AUTOFINDER_STACK_TOO_DEEP_OUTPUT],
+        contracts,
+        extra_config={"assert_autofinder_success": True},
+    )
+    assert success is True
+    assert fake_run.calls == 3
+    assert config["assert_autofinder_success"] is False
+    assert "solc_via_ir" not in updated and "solc_via_ir_map" not in updated
+
+
+def test_via_ir_goes_scene_wide_past_the_threshold(manager, monkeypatch, tmp_path) -> None:
+    # Naming contracts one at a time costs a compile each; past the threshold the rest of
+    # the scene is switched in one step.
+    names = [f"C{i}" for i in range(VIA_IR_SCENE_THRESHOLD + 4)]
+    contracts = [ContractHandle(contract_name=n, source_file=f"contracts/{n}.sol") for n in names]
+    outputs = [
+        f"Compiling contracts/{n}.sol...\nsolc8.21 had an error:\nCompilerError: Stack too deep.\n"
+        for n in names[:VIA_IR_SCENE_THRESHOLD]
+    ]
+    # One extra leading failure for the optimizer rung to consume.
+    success, updated, _, _ = _run_loop(manager, monkeypatch, tmp_path, [outputs[0]] + outputs, contracts)
+
+    assert success is True
+    # Uniform True map collapses to the scalar on exit — every contract is on via-ir.
+    assert updated["solc_via_ir"] is True
+    assert "solc_via_ir_map" not in updated
+
+
+def test_declared_via_ir_skips_the_per_contract_walk(manager_declaring_via_ir, monkeypatch, tmp_path) -> None:
+    # The project's build config already says where this ends; walking there one contract
+    # per compile only costs compiles. The declared value is still not inherited — the
+    # optimizer value emitted is ours.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, updated, _, fake_run = _run_loop(
+        manager_declaring_via_ir,
+        monkeypatch,
+        tmp_path,
+        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, PERSISTENT_STACK_TOO_DEEP_OUTPUT],
+        contracts,
+    )
+    assert success is True
+    assert updated["solc_via_ir"] is True
+    assert "solc_via_ir_map" not in updated
+    assert updated["solc_optimize"] == "200"
