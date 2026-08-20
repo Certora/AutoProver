@@ -81,7 +81,22 @@ class ClosureContract(ClosureContractBase):
     """
     A contract in the transitive closure.
     """
-    num_instances : int | None = Field(description="The number of instances of this contract needed to model a non-trivial state (None if N/A)")
+    num_instances : int | None = Field(description="The number of instances (> 1) of this contract needed to model a non-trivial state; None if a single instance is sufficient")
+
+class HarnessingDetermination(BaseModel):
+    """
+    A determination that a multiple harness instances are required for this contract
+    """
+    n : int = Field(description="The number of harnesses needed for a non-trivial state; must be > 1", gt=1)
+
+class TaggedClosureContract(ClosureContractBase):
+    __doc__ = ClosureContract.__doc__
+    
+    harness_determination : HarnessingDetermination | None = Field(description="The harnessing determination for this contract")
+
+    @property
+    def num_instances(self) -> int | None:
+        return None if self.harness_determination is None else self.harness_determination.n
 
 class HarnessDef(BaseModel):
     harness_of: SolidityIdentifier
@@ -109,7 +124,7 @@ class SystemDescriptionBase[T: ClosureContractBase](BaseModel):
     external_interfaces: list[ExternalInterface] = Field(description="A list of the external contract actors interacted with by the closure")
 
 
-class AgentSystemDescription(SystemDescriptionBase[ClosureContract]):
+class AgentSystemDescription(SystemDescriptionBase[TaggedClosureContract]):
     """
     The result of your analysis
     """

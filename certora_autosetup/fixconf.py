@@ -24,7 +24,10 @@ from certora_autosetup.fixconf_prechecks import (
 )
 from certora_autosetup.parsers.build_system_detector import BuildSystem, BuildSystemDetector
 from certora_autosetup.setup.solidity_import_patch import apply_patch, create_patch, revert_patch
-from certora_autosetup.utils.compilation_workarounds import CompilationWorkaroundManager
+from certora_autosetup.utils.compilation_workarounds import (
+    CompilationWorkaroundManager,
+    UnsatisfiableSolcPinError,
+)
 from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION
 from certora_autosetup.utils.contract_utils import parse_contract_files
 from certora_autosetup.utils.logger import logger
@@ -172,9 +175,16 @@ def fix_conf(
     workaround_mgr = CompilationWorkaroundManager(
         project_root, DEFAULT_SOLC_VERSION, verbose, solc_convention=solc_convention
     )
-    success, output, updated_config_dict = workaround_mgr.run_compilation_with_workarounds(
-        cmd, working_conf, working_conf_dict, contracts, updated_config_dict
-    )
+    try:
+        success, output, updated_config_dict = workaround_mgr.run_compilation_with_workarounds(
+            cmd, working_conf, working_conf_dict, contracts, updated_config_dict
+        )
+    except UnsatisfiableSolcPinError as e:
+        # The conf pins a compiler this machine cannot provide. Report it and keep
+        # going: the fixes already written to the working conf are still worth
+        # handing back.
+        logger.log(str(e), "ERROR", "fixconf")
+        success, output = False, str(e)
 
     # Import patcher fallback
     import_patcher_applied = False

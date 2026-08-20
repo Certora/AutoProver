@@ -108,5 +108,19 @@ class PropertyFormulation(UntitledPropertyFormulation):
     A property or invariant that must hold for the component
     """
     title: PropertyTitle = Field(description="A short, descriptive snake_case identifier for the property (e.g. 'total_supply_preserved'). Must be unique within the batch of properties.")
-    
+
+
+class VerificationArtifact(BaseModel):
+    """A verification-supporting file produced by a plugin's contributed tool — a
+    Lean proof discharging instrumented lemmas, an auxiliary certificate, etc.
+    Registered with its *content*, not a path: the artifact store owns the
+    deliverable layout and decides where it lands on disk."""
+    #: File basename (the store sanitizes to a basename and namespaces by
+    #: unit and plugin, so collisions across tools are impossible).
+    name: str
+    #: Open vocabulary tag, e.g. "lean-proof".
+    kind: str
+    #: One-or-two-line blurb for the report deliverable.
+    description: str
+    content: str
 

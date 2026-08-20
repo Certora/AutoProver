@@ -32,7 +32,6 @@ from typing import Any, AsyncIterator, Awaitable, Callable, cast
 from langchain_core.tools import BaseTool
 from langgraph.store.base import BaseStore
 
-from graphcore.tools.vfs import GlobalExcludeArg
 
 from composer.core.user import user_data_ns
 from composer.diagnostics.logging_setup import setup_autoprove_logging
@@ -47,6 +46,7 @@ from composer.io.multi_job import HandlerFactory, TaskInfo, run_task
 from composer.io.thread_logging import default_logging_ns, thread_logger
 from composer.pipeline.cli import root_cache_key
 from composer.pipeline.core import CorePipelineResult, DEFAULT_MAX_CPU_TASKS
+from composer.pipeline.ecosystem import Ecosystem
 from composer.rag.models import DefaultEmbedder, get_model
 from composer.rustapp.adapter import source_unit_of
 from composer.rustapp.descriptor import ArgSpec, BoolDefault, IntDefault, PhaseRole, StrDefault
@@ -67,7 +67,6 @@ from composer.spec.source.source_env import (
     build_source_tools,
 )
 from composer.spec.types import SourceIdentifier
-from composer.spec.util import fs_forbidden_read
 from composer.tools.rag_env import build_rag_tools
 from composer.ui.tool_display import async_tool_context
 from composer.workflow.services import standard_connections
@@ -89,7 +88,7 @@ def build_default_env(
     store: BaseStore,
     source_question_ns: tuple[str, ...],
     recursion_limit: int,
-    forbidden_read: GlobalExcludeArg = fs_forbidden_read,
+    ecosystem: Ecosystem[Any, Any, Any],
     rag_db: str | None = None,
 ) -> ServiceHost:
     """The env for a wheel that supplies no ``env_builder``: the same ``code_explorer`` + fs tools
@@ -97,11 +96,18 @@ def build_default_env(
     ``rag_db_default`` and it is passed here as ``rag_db`` — that corpus's RAG search tools.
     No ``rag_db`` means no RAG surface.
 
-    ``forbidden_read`` is the ecosystem's fs-exclusion default (Cargo layout for Rust, Foundry
-    for EVM)."""
-    basic = build_basic_source_tools(root=project_root, forbidden_read=forbidden_read)
+    ``ecosystem`` supplies both the fs-exclusion default (Cargo layout for Rust, Foundry for EVM)
+    and the code_explorer's prompt."""
+    basic = build_basic_source_tools(
+        root=project_root, forbidden_read=ecosystem.language.default_forbidden_read
+    )
     full = build_source_tools(
-        basic, model_provider, store, source_question_ns, recursion_limit=recursion_limit
+        basic,
+        model_provider,
+        store,
+        source_question_ns,
+        recursion_limit=recursion_limit,
+        ecosystem=ecosystem,
     )
     rag_tools: tuple[BaseTool, ...] = build_rag_tools(rag_db) if rag_db else ()
     return PureServiceHost(
@@ -369,7 +375,7 @@ async def rust_entry_point(
                 store=conns.indexed_store,
                 source_question_ns=source_question_ns,
                 recursion_limit=args.recursion_limit,
-                forbidden_read=forbidden_read,
+                ecosystem=app.ecosystem,
             )
             ctx = WorkflowContext.create(
                 services=conns.memory,

@@ -15,7 +15,7 @@ import enum
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import override, Sequence, Any
 
 from pydantic import BaseModel, Field
 
@@ -26,6 +26,7 @@ from composer.pipeline.core import (
     PipelineRun,
     PreparedSystem,
     SystemAnalysisSpec,
+    ToolBinder,
 )
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import WorkflowContext
@@ -119,6 +120,7 @@ class NullSolanaFormalizer(Formalizer[NullResult, SolanaComponentInstance]):
         props: list[PropertyFormulation],
         ctx: WorkflowContext[NullResult],
         run: PipelineRun,
+        extra_tools: ToolBinder[SolanaComponentInstance]
     ) -> NullResult | GaveUp:
         return NullResult(
             commentary=f"Null formalization of instruction {feat.display_name} "

@@ -555,6 +555,13 @@ def get_prover_tool(
         lock = spec_locks.setdefault(spec_stem, asyncio.Lock()) if spec_stem is not None else nullcontext()
         prover_msg = f"{component} iteration number {iteration}"
 
+        summary = get_run_summary()
+
+        component = (spec_stem or main_contract).removeprefix("autospec_")
+        iteration = len(state["prover_history"]) + 1
+        prover_msg = f"{component} iteration number {iteration}"
+
+
         async def run_in(run_root: str) -> str | Command:
             with setup_prover_config_in(
                 working_dir=run_root,

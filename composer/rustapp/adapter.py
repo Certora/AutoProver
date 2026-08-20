@@ -35,10 +35,9 @@ import asyncio
 import enum
 import json
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, override
+from typing import Any, Awaitable, Callable, override, Sequence
 
 
 from langgraph.config import get_stream_writer
@@ -55,6 +54,7 @@ from composer.pipeline.core import (
     PreparedSystem,
     StagedFormalizer,
     SystemAnalysisSpec,
+    ToolBinder
 )
 from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
@@ -350,6 +350,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
         props: list[PropertyFormulation],
         ctx: WorkflowContext[RustFormalResult],
         run: PipelineRun,
+        extra_tools: ToolBinder[Any]
     ) -> RustFormalResult | GaveUp:
         workdir = Path(run.source.project_root)
         input = ComponentInput(

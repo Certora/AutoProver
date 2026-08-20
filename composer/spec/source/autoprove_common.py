@@ -137,7 +137,6 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 thread_id=thread_id,
                 task_handler=handler,
                 at_exit=exit_logger,
-
                 workflow="autoprove"
             ) as (staged, cont),
             PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag_db
@@ -154,6 +153,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 source_question_ns=source_data_ns,
                 recursion_limit=args.recursion_limit,
                 cvl_index_config=agent_index_config_from_env(DEFAULT_CVL_AGENT_INDEX_NS),
+                ecosystem=EVM,
             )
             # Source-editing kit: the edit snapshot store, the live (vfs-aware)
             # tool suite with its versioned explorer, and the migration oracle
@@ -176,6 +176,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                     source_key=staged.root_key,
                     oracle=mk_oracle(edit_store, staged.source),
                     recursion_limit=args.recursion_limit,
+                    ecosystem=EVM,
                 ),
                 store=edit_store,
             )

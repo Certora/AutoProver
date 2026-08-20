@@ -295,7 +295,7 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
     ]
     result = await formalizer.formalize(
         "Farms", cast(Any, _Feat()), props, cast(Any, _Ctx()),
-        cast(Any, _Run(_Source(str(tmp_path)), _Ctx())),
+        cast(Any, _Run(_Source(str(tmp_path)), _Ctx())), cast(Any, None)
     )
 
     assert isinstance(result, adapter.RustFormalResult)

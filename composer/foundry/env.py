@@ -25,6 +25,7 @@ from langgraph.types import Checkpointer
 
 
 from composer.rag.db import ComposerRAGDB
+from composer.pipeline.ecosystem import EVM
 from composer.spec.source.source_env import (
     build_basic_source_tools, build_source_tools,
 )
@@ -64,6 +65,7 @@ def build_foundry_env(
         store,
         source_question_ns,
         recursion_limit=recursion_limit,
+        ecosystem=EVM,
     )
 
     rag = tuple(foundry_cheatcode_tools(rag_db))

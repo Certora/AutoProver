@@ -88,6 +88,7 @@ async def _fake_run_prover(
         raw_rule_status=statuses,
         result_str="\n".join(f"{p.rule}: {s}" for p, s in statuses.items()),
         link="https://prover.example/fake-run",
+        certora_run_stdout=""
     )
 
 

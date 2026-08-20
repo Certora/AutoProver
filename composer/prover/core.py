@@ -118,11 +118,17 @@ class ProverReport:
     them through the return value.
 
     ``link`` is the prover run's URL (cloud) or local results directory.
+
+    ``certora_run_stdout`` is the captured stdout of the ``certoraRun``
+    invocation. It carries diagnostic signal that never reaches the rule
+    results — e.g. internal function summarization silently failing on
+    stack-too-deep — so it rides along even on successful runs.
     """
     raw_rule_status: dict[RulePath, StatusCodes]
 
     result_str: str
     link: str
+    certora_run_stdout: str
 
     @property
     def rule_status(self) -> dict[str, bool]:
@@ -630,4 +636,5 @@ async def run_prover(
         raw_rule_status=raw_rule_results,
         result_str=result_str,
         link=run_result["link"],
+        certora_run_stdout=stdout,
     )

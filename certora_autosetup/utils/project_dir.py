@@ -27,35 +27,62 @@ BUILD_CONFIG_FILENAMES = (
     "truffle.js",
 )
 
-# Truffle writes artifacts here unless the config sets `contracts_build_directory`. Reading
-# that override means running node against the config, which is more than this needs: it
-# only has to recognise a built project, and the manager resolves the real path later.
+# Hardhat writes artifacts here unless the config sets `paths.artifacts`, and Truffle
+# unless it sets `contracts_build_directory`. Reading either override means running node
+# against the project's own config (see `HardhatManager._extract_config_via_node`), which
+# is more than these helpers need: they only have to recognise a built project, and the
+# managers resolve the real path later. Foundry's `out` is the one override read here,
+# because a TOML parse is easy.
+HARDHAT_DEFAULT_ARTIFACT_DIR = Path("artifacts")
 TRUFFLE_DEFAULT_BUILD_DIR = Path("build") / "contracts"
+
+
+def foundry_artifact_dir(config_dir: Path) -> Optional[Path]:
+    """Where a Foundry project at *config_dir* writes artifacts, or None if it has no config.
+
+    Honors the ``out`` setting of the default profile. The directory is not required to
+    exist — the caller tests that.
+    """
+    foundry_toml = config_dir / "foundry.toml"
+    if not foundry_toml.exists():
+        return None
+    out = "out"
+    try:
+        with foundry_toml.open("rb") as f:
+            data = tomllib.load(f)
+        profiles = data.get("profile", {})
+        out = profiles.get("default", {}).get("out") or data.get("out") or "out"
+    except (tomllib.TOMLDecodeError, OSError):
+        pass
+    return config_dir / out
+
+
+def hardhat_artifact_dir(config_dir: Path) -> Optional[Path]:
+    """Where a Hardhat project at *config_dir* writes artifacts, or None if it has no config."""
+    if (config_dir / "hardhat.config.js").exists() or (config_dir / "hardhat.config.ts").exists():
+        return config_dir / HARDHAT_DEFAULT_ARTIFACT_DIR
+    return None
+
+
+def truffle_artifact_dir(config_dir: Path) -> Optional[Path]:
+    """Where a Truffle project at *config_dir* writes artifacts, or None if it has no config."""
+    if (config_dir / "truffle-config.js").exists() or (config_dir / "truffle.js").exists():
+        return config_dir / TRUFFLE_DEFAULT_BUILD_DIR
+    return None
 
 
 def _artifact_dir_of(config_dir: Path) -> Optional[Path]:
     """Where *config_dir*'s build system would put artifacts, or None if it holds no config.
 
-    Foundry's ``out`` is configurable, so read it when present; Hardhat's ``artifacts`` and
-    Truffle's ``build/contracts`` are taken as defaults. The directory is not required to
-    exist — the caller tests that.
+    A directory holding several configs answers for the first of them, in the same order
+    ``BuildSystemDetector`` ranks them: any of the three is enough to recognise the
+    directory as a project that got built, which is all the caller asks.
     """
-    foundry_toml = config_dir / "foundry.toml"
-    if foundry_toml.exists():
-        out = "out"
-        try:
-            with foundry_toml.open("rb") as f:
-                data = tomllib.load(f)
-            profiles = data.get("profile", {})
-            out = profiles.get("default", {}).get("out") or data.get("out") or "out"
-        except (tomllib.TOMLDecodeError, OSError):
-            pass
-        return config_dir / out
-    if (config_dir / "hardhat.config.js").exists() or (config_dir / "hardhat.config.ts").exists():
-        return config_dir / "artifacts"
-    if (config_dir / "truffle-config.js").exists() or (config_dir / "truffle.js").exists():
-        return config_dir / TRUFFLE_DEFAULT_BUILD_DIR
-    return None
+    return (
+        foundry_artifact_dir(config_dir)
+        or hardhat_artifact_dir(config_dir)
+        or truffle_artifact_dir(config_dir)
+    )
 
 
 def find_build_config_dir(contract_path: Path, root: Path) -> Path:

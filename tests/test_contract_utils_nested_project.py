@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import certora_autosetup.utils.contract_utils as cu
-from certora_autosetup.utils.contract_utils import auto_detect_contracts, resolve_contract_handles
+from certora_autosetup.utils.contract_utils import auto_detect_contracts, resolve_contract_handles, with_contract_handle
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -83,3 +83,33 @@ def test_resolve_rebases_the_artifact_lookup(nested_project, monkeypatch) -> Non
     assert resolved[0].contract_name == "TheRealName"
     # The returned path stays in the caller's frame of reference.
     assert resolved[0].source_file == "sub/src/Widget.sol"
+
+
+def test_main_contract_added_when_auto_detection_missed_it() -> None:
+    # Auto-detection skips anything under a dependency directory, which is where per-address
+    # verification bundles keep the deployed code. Without this the main contract never reaches
+    # the compilation conf and the run dies at "not among the compiled contracts".
+    detected = [ContractHandle("Widget", "src/Widget.sol")]
+    main = ContractHandle("Gadget", "src/Gadget_1234/dependencies/pkg-1.0.0/src/Gadget.sol")
+
+    handles = with_contract_handle(detected, main)
+
+    assert main in handles
+    assert detected[0] in handles
+
+
+def test_main_contract_displaces_a_same_named_handle_from_another_file() -> None:
+    # Dedup keeps the shortest path per contract name, which can pick a different file than the
+    # one the caller named. The caller's file wins, and only one handle carries the name.
+    detected = [ContractHandle("Widget", "src/Widget.sol")]
+    main = ContractHandle("Widget", "src/vendor/bundle/src/Widget.sol")
+
+    handles = with_contract_handle(detected, main)
+
+    assert handles == [main]
+
+
+def test_already_detected_main_contract_is_left_alone() -> None:
+    detected = [ContractHandle("Widget", "src/Widget.sol"), ContractHandle("Gear", "src/Gear.sol")]
+
+    assert with_contract_handle(detected, detected[0]) == detected

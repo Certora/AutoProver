@@ -12,7 +12,7 @@ display, because those are not schema nouns.
 
 from dataclasses import dataclass
 from typing import Callable, Literal, overload, override
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, ReadOnly
 
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
@@ -41,7 +41,7 @@ READ_KEY = "did_read"
 
 
 class SpecBuffer(TypedDict):
-    curr_spec: str | None
+    curr_spec: ReadOnly[str | None]
 
 
 class SpecBufferSet(TypedDict):
