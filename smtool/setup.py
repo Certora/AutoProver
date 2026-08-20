@@ -23,6 +23,7 @@ class SetupInfo:
     cut: str              # CUT contract name (== currentContract in the conformance spec)
     setup_spec: Path      # the setup spec (conf.verify target) — the spec we import
     setup_spec_import: str  # what the conformance spec writes in `import "..."` (co-located, basename)
+    loop_iter: int = 1      # the run's loop_iter (arrays bounded to this length); default 1 if unset
 
 
 def consume_setup(conf_path: str | Path, sources_root: str | Path | None = None) -> SetupInfo:
@@ -36,4 +37,5 @@ def consume_setup(conf_path: str | Path, sources_root: str | Path | None = None)
     return SetupInfo(
         conf_path=conf_path, sources_root=root, conf=conf, cut=cut,
         setup_spec=setup_spec, setup_spec_import=setup_spec.name,
+        loop_iter=int(conf.get("loop_iter", 1)),
     )

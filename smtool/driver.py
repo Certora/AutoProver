@@ -204,22 +204,64 @@ def build_summary_spec(inp: ToolInput, cls: ModelLayout) -> S.CVLFile:
     return x.spec_file(imports=[inp.model_spec], contracts=(), blocks=[x.methods_block(entries)])
 
 
-def _reachable_key(cls: ModelLayout) -> tuple[str, str]:
-    """The (type, name) `assumeReachable` is keyed by — the ADDRESS the state-effect FRAMES over (a fresh
-    free var). A reachable invariant is universal (holds for every account), so assuming it for the
-    ARBITRARY compared account covers MULTI-ACCOUNT methods (e.g. `transferFrom` credits `to`, whose
-    balance can overflow, not the leading param `from`). Falls back to the leading model-method param
-    when no state-effect address frame var exists (e.g. a return-only method)."""
-    for b in cls.bindings:
+def _reachable_keys(cls: ModelLayout) -> list[tuple[str, str]]:
+    """The ORDERED, DISTINCT key slots `assumeReachable` exposes — one per key TYPE the model's reachable
+    invariants may range over, so an invariant keyed by ANY of them (not only the address) can be
+    requireInvariant'd. Slot 1 (when present) is the state-effect ADDRESS frame var: a reachable
+    invariant is universal over accounts, so assuming it for the ARBITRARY compared account covers a
+    multi-account method (e.g. `transferFrom` credits `to`). The remaining slots are the DISTINCT
+    non-address observable key types (e.g. `uint256 id`), named after the getter's key param so the
+    agent can pass them by name. Each conformance rule fills the address slot from its framed/fresh
+    account and the other slots from the METHOD's matching param — so a per-key invariant is assumed
+    for the key actually under test (a per-key bound the model needs to discharge cast-safety, which
+    a SINGLE address key could not express). Falls back to the leading model-method param when there are
+    no observables (a return-only method with no getters)."""
+    slots: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for b in cls.bindings:                        # address slot: the state-effect frame var (old single key)
         if not b.state_effect:
             continue
         for fa in b.frame_arg_names:
             if fa.startswith(FREE_PREFIX):
                 _, ty, var = fa.split(":", 2)
                 if ty == "address":
-                    return (ty, var)
-    p = cls.model[0].params[0]
-    return (p.type, p.name)
+                    slots.append((ty, var)); seen.add(ty); break
+        if seen:
+            break
+    for b in cls.bindings:                        # one slot per remaining DISTINCT observable key type
+        for i, kt in enumerate(b.key_types):
+            if kt not in seen:
+                seen.add(kt)
+                nm = b.getter.params[i].name if i < len(b.getter.params) else kt
+                slots.append((kt, nm))
+    if not slots:
+        p = cls.model[0].params[0]
+        slots.append((p.type, p.name))
+    return slots
+
+
+def _reachable_call_cmds(cls: ModelLayout, m: FunctionSpec, keys: list[tuple[str, str]],
+                         framed_names: set[str]) -> tuple[list, object]:
+    """`([decls], assumeReachable(args))` for a conformance rule. Each key slot is filled by: a framed
+    var of that name when the rule already declares one (state-effect framing); else — for a NON-address
+    key — the METHOD's param of that type (same-name preferred, e.g. `id`), so a per-key invariant
+    is assumed for the key under test; else a FRESHLY declared var (the address slot in a rule with no
+    framing — universal over accounts). A method's own address param (e.g. a transfer `to`) is never
+    used for the address slot; that slot stays the framed/fresh universal account."""
+    decls: list = []
+    args: list = []
+    for ty, name in keys:
+        if name in framed_names:
+            args.append(x.ident(name)); continue
+        chosen = None
+        if ty != "address":
+            chosen = next((p.name for p in m.params if p.name == name and p.type == ty), None) \
+                or next((p.name for p in m.params if p.type == ty), None)
+        if chosen is not None:
+            args.append(x.ident(chosen))
+        else:
+            decls.append(x.declare(ty, name)); args.append(x.ident(name))
+    return decls, x.apply(x.call(ASSUME, args))
 
 
 def build_reachable_spec(inp: ToolInput, cls: ModelLayout) -> S.CVLFile:
@@ -229,13 +271,25 @@ def build_reachable_spec(inp: ToolInput, cls: ModelLayout) -> S.CVLFile:
     proof/prune runs against <CUT>Reachable.conf, separate from the conformance runs).
     TODO(reuse): populate/refine these invariants via composer's generate->prove->cex pass
     (see composer/spec/source/struct_invariant.py) instead of hand-supplied ones."""
-    support = [g for g in cls.getters
-               if not g.observable and g.effective_envfree and g.declare_in_methods]
+    # Declare EVERY effective-envfree getter here (observable AND non-observable support), deduped by
+    # (name, arity). Invariants live in this shared spec and reference REAL getters — including
+    # observable ones (e.g. a per-key balance bound) — so those getters must be declared HERE, or the
+    # standalone reachable PROOF conf resolves them against the scene's real (non-envfree) signature and
+    # fails ("missing environment parameter"). Conformance specs import this spec and therefore do NOT
+    # re-declare these getters (build_conformance_spec skips them), so there is no duplicate.
+    seen: set = set()
+    decl_getters = []
+    for g in cls.getters:
+        if not (g.effective_envfree and g.declare_in_methods):
+            continue
+        key = (g.name, len(g.params))
+        if key not in seen:
+            seen.add(key); decl_getters.append(g)
     blocks: list = []
-    if support:
+    if decl_getters:
         blocks.append(x.methods_block([x.m_envfree(inp.cut, g.name, [p.type for p in g.params], g.returns)
-                                       for g in support]))
-    blocks.append(x.func(ASSUME, [_reachable_key(cls)], [], []))   # empty; filled by add_requireInvariant
+                                       for g in decl_getters]))
+    blocks.append(x.func(ASSUME, _reachable_keys(cls), [], []))   # empty; filled by add_requireInvariant
     return x.spec_file(imports=(), blocks=blocks)
 
 
@@ -344,11 +398,6 @@ def _glue_apply(inp: ToolInput, cls: ModelLayout, m: FunctionSpec, bind_to: str 
     return x.apply(call)
 
 
-def _assume_reachable(m: FunctionSpec) -> S.ApplyCmd:
-    """`assumeReachable(<key>);` — assume the CUT's proven invariants (shared fn, after the glue)."""
-    return x.apply(x.call(ASSUME, [x.ident(m.params[0].name)]))
-
-
 def _revert_conf(inp: ToolInput):
     """The revert-conformance assert. DEFAULT (`precise_reverts=False`) = OVER-APPROXIMATION: real
     success => model success — the model may be MORE permissive (revert LESS), a sound coarsening that
@@ -362,7 +411,8 @@ def _revert_conf(inp: ToolInput):
                      "real success must imply model success (over-approximation)")
 
 
-def build_return_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -> S.RuleBlock | None:
+def build_return_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec,
+                      reachable_keys: list[tuple[str, str]] | None = None) -> S.RuleBlock | None:
     """`conformance_<f>_return`: glue + assumeReachable, then call real and model `@withrevert` and
     assert return agreement WHEN BOTH SUCCEED. The revert conformance (`realRev == modelRev`) is asserted
     in the state-effect rule for a state changer (de-dup), or HERE for a return-only method. Single vs
@@ -374,7 +424,15 @@ def build_return_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -> S.Ru
     params = [(p.type, p.name) for p in m.params]
     cmds: list = [x.declare("env", "e"), _glue_apply(inp, cls, m)]
     cmds += _field_pins(inp, cls, m, [])   # conservative typed model==real pins (no frame vars here)
-    cmds.append(_assume_reachable(m))
+    # assumeReachable over the SHARED key slots (`reachable_keys`, from the whole-model layout). The
+    # return rule has no framing, so the address slot is declared FRESH; the per-key slot reuses the
+    # method's own `id` param (in scope as a rule param). The keys MUST be the shared ones — the
+    # per-method `_reachable_keys(cls)` can differ (e.g. a preview with no address observable), which
+    # would mismatch the shared `assumeReachable(...)` declaration — a typecheck conflict the agent
+    # cannot fix (it reads as "overload assumeReachable / cast address<->uint256").
+    keys = reachable_keys or _reachable_keys(cls)
+    rdecls, rassume = _reachable_call_cmds(cls, m, keys, framed_names=set())
+    cmds += [*rdecls, rassume]
     # HOLE-P: previewBefore capture + A assertion go here when the return is accrue-sensitive.
     single = len(m.returns) == 1
     # Revert conformance (realRev == modelRev) is asserted by the STATE-EFFECT rule for a state changer;
@@ -451,13 +509,17 @@ def _is_udvt(ty: str) -> bool:
     return True
 
 
-def _key_matches(var_ty: str, key_ty: str) -> bool:
+def _key_matches(var_ty: str, key_ty: str, coercible: frozenset[str] = frozenset()) -> bool:
     """May an in-scope var of `var_ty` fill a mapping key of `key_ty`? Exact match, or — for a numeric
-    key — any numeric or UDVT var (the coercion the reader call already relies on)."""
+    key — a numeric var, or a var of a KNOWN coercible (UDVT) type. `coercible` is the model's own
+    non-primitive KEY types: a UDVT `type Id is uint256` legitimately coerces into a numeric key, but a
+    non-primitive is only trusted to coerce when the model actually uses it AS a key. A struct method
+    param (e.g. a `Lib.Info`) is never a mapping key, so it is NOT coercible — without this it was pinned
+    as a `uint256` key (`readerCVL(info)`), an uncatchable-by-agent typecheck error."""
     if var_ty == key_ty:
         return True
     if _numeric_ty(key_ty):
-        return _numeric_ty(var_ty) or _is_udvt(var_ty)
+        return _numeric_ty(var_ty) or var_ty in coercible
     return False
 
 
@@ -495,8 +557,17 @@ def _field_pins(inp: ToolInput, cls: ModelLayout, m: FunctionSpec, frame_vars: l
         else:
             scope.append((p.type, x.ident(p.name)))
     scope.append(("address", _resolve_arg(inp, CALLER_ARG)))
+    # A non-primitive type is trusted to coerce into a numeric key only when the model uses it as a
+    # scalar INDEX: either a declared observable KEY type, or an ARRAY-ELEMENT type (arr[i] indexing an
+    # observable). Both are UDVTs (`type Id is uint256`) by construction. A bare non-primitive SCALAR
+    # method param (e.g. a struct `Lib.Info`) is NOT an index — excluding it stops it
+    # being pinned as a `uint256` key, an uncatchable-by-agent typecheck error. (Residual: an array of
+    # STRUCTS would still be trusted; not a shape the models use — the model keys are always scalars.)
+    coercible = frozenset(
+        [kt for b in cls.bindings for kt in b.key_types if _is_udvt(kt)]
+        + [p.type[:-2] for p in m.params if p.type.endswith("[]") and _is_udvt(p.type[:-2])])
     def vars_of(kt: str) -> list:
-        return [e for (ty, e) in scope if _key_matches(ty, kt)]
+        return [e for (ty, e) in scope if _key_matches(ty, kt, coercible)]
     cmds: list = []
     seen: set = set()
     for b in cls.bindings:
@@ -529,7 +600,8 @@ def _frame_free_vars(cls: ModelLayout) -> list:
     return out
 
 
-def build_state_effect_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -> S.RuleBlock:
+def build_state_effect_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec,
+                            reachable_keys: list[tuple[str, str]] | None = None) -> S.RuleBlock:
     """After the call, EVERY observable's post-state must agree model==real — the WHOLE pi, by default
     (safety-by-default: an effect the model gets wrong is caught). Each observable is framed (free vars
     for the keys it ranges over), pinned pre (model == real) and asserted post. Observables opt OUT via
@@ -562,9 +634,16 @@ def build_state_effect_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -
     # conservative typed pinning: model==real for every field at the cross product of in-scope vars
     # per key type (subsumes the single frame pre-pin; pins the keys the model reads, e.g. a credit `to`).
     cmds += _field_pins(inp, cls, m, _frame_free_vars(cls))
-    # assume the CUT reachable invariants over the FRAMED account (now declared) — covers the
-    # arbitrary compared account, incl. a multi-account method's credit target.
-    cmds.append(x.apply(x.call(ASSUME, [x.ident(_reachable_key(cls)[1])])))
+    # assume the CUT reachable invariants over the SHARED key slots (matches the `assumeReachable(...)`
+    # declaration). The address slot reuses the FRAMED account (covers the arbitrary compared account,
+    # incl. a multi-account method's credit target); the per-key slot uses the method's own `id`
+    # (so a per-key bound is assumed for the key under test). Any slot not already framed is declared
+    # fresh (sound: an invariant is universal, so assuming it for an arbitrary extra key is harmless).
+    keys = reachable_keys or _reachable_keys(cls)
+    framed_names = {fa.split(":", 2)[2] for b in cls.bindings if b.state_effect
+                    for fa in b.frame_arg_names if fa.startswith(FREE_PREFIX)}
+    rdecls, rassume = _reachable_call_cmds(cls, m, keys, framed_names)
+    cmds += [*rdecls, rassume]
     cmds += [x.apply(_call_real(inp, m)), x.declare("bool", "realRev", x.ident("lastReverted")),
              x.apply(_call_model(inp, m)), x.declare("bool", "modelRev", x.ident("lastReverted")),
              _revert_conf(inp)]
@@ -580,7 +659,8 @@ def build_state_effect_rule(inp: ToolInput, cls: ModelLayout, m: FunctionSpec) -
 
 def build_conformance_spec(inp: ToolInput, cls: ModelLayout, m: FunctionSpec,
                            setup_spec_import: str | None = None, declared=None,
-                           reachable_spec_import: str | None = None) -> S.CVLFile:
+                           reachable_spec_import: str | None = None,
+                           reachable_keys: list[tuple[str, str]] | None = None) -> S.CVLFile:
     """Assemble one method's conformance spec: imports [setup, reachable, model] + a methods{} block
     (envfree decls for the observable getters, minus what the setup already summarizes) + the glue +
     the return rule + the state-effect rule."""
@@ -597,6 +677,11 @@ def build_conformance_spec(inp: ToolInput, cls: ModelLayout, m: FunctionSpec,
     # smtool.resolved_ast.summarized_methods; keyed by (name, arity)). Plain-decl clashes the resolved
     # AST can't show are left to the reactive typecheck fallback (TODO).
     declared = set(declared or ())
+    # When the reachable spec is imported it already declares every effective-envfree getter (so its
+    # invariants resolve) — skip them here to avoid a duplicate declaration across the import.
+    if reachable_spec_import:
+        declared |= {(g.name, len(g.params)) for g in cls.getters
+                     if g.effective_envfree and g.declare_in_methods}
     entries = []
     for g in cls.getters:
         if not (g.observable and g.effective_envfree and g.declare_in_methods):
@@ -610,13 +695,13 @@ def build_conformance_spec(inp: ToolInput, cls: ModelLayout, m: FunctionSpec,
     if entries:
         blocks.append(x.methods_block(entries))
     blocks.append(build_glue(inp, cls, m))
-    return_rule = build_return_rule(inp, cls, m)   # None for a void method (see build_return_rule)
+    return_rule = build_return_rule(inp, cls, m, reachable_keys)   # None for a void method (see build_return_rule)
     if return_rule is not None:
         blocks.append(return_rule)
     # A computed VIEW model method (model=True on a view) has no state effect — only a return rule.
     # Its inputs' storage is kept real by the state-effect rules of the methods that WRITE them.
     if m.is_state_changing:
-        blocks.append(build_state_effect_rule(inp, cls, m))
+        blocks.append(build_state_effect_rule(inp, cls, m, reachable_keys))
     return x.spec_file(imports=imports, contracts=(), blocks=blocks)
 
 

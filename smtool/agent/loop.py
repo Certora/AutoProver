@@ -162,7 +162,20 @@ A lemma or NONDET is a GUESS — judge each PER RULE from the report:
 ## 5. CVL IS NOT SOLIDITY
 When unsure how to write something, or a call is REJECTED with a parse/typecheck error you don't
 understand, call `cvl_manual_search` with a focused question and follow the manual. Don't guess CVL rules
-from Solidity intuition.
+from Solidity intuition. These are the mistakes that waste the most turns — internalize them, do NOT
+re-ask the manual once you've been told:
+- NO FUNCTION OVERLOADING. Two `function` declarations may not share a name, even with different
+  parameter or return types. If you need two variants, give them DISTINCT names (`fooUint`, `fooInt`).
+- NO `max_int256` / `min_int256` builtins (only the `max_uint*` family exists). Write the literal:
+  `2^255 - 1` for max int256, `-(2^255)` for min int256. `max_uint256` etc. DO exist.
+- SSA / SINGLE-ASSIGNMENT: you may NOT reassign a CVL variable after it has been read. Do not port
+  Solidity's `c = f(c)`. Use a fresh variable (`c2 = f(c)`) or a conditional expression
+  (`mathint c2 = cond ? a : b;`). Declaring `mathint x;` then assigning once in each branch of an
+  if/else is fine; reading-then-reassigning is not.
+- MATHINT vs sized ints: arithmetic promotes to `mathint`; to STORE a `mathint` into a `uint256`/return
+  it, cast explicitly with `assert_uint256(...)` (reverts the rule if out of range) or
+  `require_uint256(...)` (assumes in range). `address` is NOT implicitly convertible to `uint256` — do
+  not pass one where the other is expected.
 
 ## 6. WORKFLOW
 Fill with the tools (add_model_constant, add_model_function, set_model_method_body, add_require_invariant,

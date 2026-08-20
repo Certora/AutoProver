@@ -120,12 +120,17 @@ class Project:
         model_cls = classify(union)
         model = driver.build_model_spec(model_input, model_cls)
         reachable = driver.build_reachable_spec(model_input, model_cls)   # ONE shared reachable spec
+        # the reachable key SLOTS are a property of the WHOLE model (their declaration lives in the shared
+        # reachable spec) — thread them so every per-method conformance rule calls assumeReachable with
+        # the declared slots, even for methods whose own layout would pick different keys.
+        reachable_keys = driver._reachable_keys(model_cls)
         conformance: dict[str, S.CVLFile] = {}
         for spec in method_specs:
             c = classify(spec.functions)          # per-method classification (per-method getter roles)
             m = c.model[0]
             conformance[m.name] = driver.build_conformance_spec(
-                spec, c, m, setup_spec_import, declared, reachable_spec_import=model_input.reachable_spec)
+                spec, c, m, setup_spec_import, declared, reachable_spec_import=model_input.reachable_spec,
+                reachable_keys=reachable_keys)
         return cls(inp=model_input, cls=model_cls, model_spec=model, conformance=conformance,
                    confs={}, reachable=reachable, setup_spec_import=setup_spec_import)
 

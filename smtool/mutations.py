@@ -139,6 +139,16 @@ def add_requireInvariant(project: Project, *, inv_name: str,
     fn = work.find_func(reach, driver.ASSUME)
     if fn is None:
         return Result(False, f"no {driver.ASSUME} function in the reachable spec")
+    # require_args go into the `requireInvariant inv(...)` call inside assumeReachable, so each must name
+    # one of assumeReachable's own key params (the reachable key SLOTS). An arg that isn't a slot (e.g.
+    # `e`, or a key type the model has no slot for) would be an undeclared identifier at typecheck — a
+    # failure the agent can't localize. Reject it here with the available slots instead.
+    slots = [p.id for p in fn.params]
+    bad = [a for a in require_args if a not in slots]
+    if bad:
+        return Result(False, f"requireInvariant args {bad} are not reachable-key slots. assumeReachable "
+                             f"exposes only {slots} — the invariant must be keyed by those. A fact over "
+                             f"another key needs a matching key slot.")
     ri = x.require_invariant(inv_name, [x.ident(a) for a in require_args])
     if not any(c.model_dump() == ri.model_dump() for c in fn.block.commands):   # idempotent
         fn.block.commands.append(ri)

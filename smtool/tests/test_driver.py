@@ -15,10 +15,15 @@ def test_render_model_and_conformance(project, spec):
 
 
 def test_view_getter_declared_envfree(project, spec):
+    from composer.cvl.pretty_print import pretty_print
     pr = project(spec("f", [("uint256", "x")], ["uint256"], "nonpayable"),
                  spec("getX", [("uint256", "x")], ["uint256"], "view", envfree=True))
+    # the envfree getter is declared ONCE, in the SHARED reachable spec (so invariants over it resolve in
+    # the standalone reachable proof conf); conformance imports it and does NOT re-declare (no duplicate).
+    r = pretty_print(pr.reachable)
     c = pr.render_conformance("f")
-    assert "function C.getX(uint256) external returns (uint256) envfree" in c
+    assert "function C.getX(uint256) external returns (uint256) envfree" in r
+    assert "function C.getX(" not in c
 
 
 def test_void_method_has_no_return_rule(project, spec):
@@ -41,10 +46,13 @@ def test_multireturn_getter_is_coalesced(project, spec):
         spec("getPair", [("uint256", "x")], ["uint256", "uint256"], "view",
              envfree=True, bind_component=1, ghost_name="gB", reader_name="rB"),
     )
+    from composer.cvl.pretty_print import pretty_print
     c = pr.render_conformance("f")
     # glue body + state-rule pre + state-rule post = 3 loads (would be 6 without coalescing)
     assert c.count("= getPair(") == 3
-    # single methods{} declaration (would be 2 without the dedup)
-    assert c.count("function C.getPair(") == 1
+    # single methods{} declaration (would be 2 without the dedup) — now in the shared reachable spec,
+    # not re-declared in conformance (which imports it)
+    assert pretty_print(pr.reachable).count("function C.getPair(") == 1
+    assert c.count("function C.getPair(") == 0
     # both components still pinned/asserted (rA against c0, rB against c1)
     assert "rA(" in c and "rB(" in c

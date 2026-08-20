@@ -99,6 +99,11 @@ class CloudProverRunner(ProverRunner):
         self._active_jobs = 0
         self._total_completed = 0
 
+        # id(job_spec) -> job_url for jobs currently submitted-and-waiting. Lets batch early
+        # termination cancel the REMOTE cloud jobs of the still-pending tasks (cancelling the local
+        # asyncio task alone leaves the submitted job running on the prover — orphaned/duplicate runs).
+        self._inflight_job_urls: dict[int, str] = {}
+
     @property
     def active_jobs_count(self) -> int:
         """Number of jobs currently being processed."""
@@ -374,14 +379,24 @@ class CloudProverRunner(ProverRunner):
                     f"Early termination triggered. Cancelling {len(pending_tasks)} remaining jobs."
                 )
 
-                # Cancel all remaining tasks and create cancelled results
+                # Cancel all remaining tasks and create cancelled results. Cancel the REMOTE cloud job
+                # FIRST (while its url is still in the in-flight registry) — cancelling only the local
+                # asyncio task leaves the submitted job running on the prover (orphaned/duplicate runs
+                # that later hit a wasteful server-side timeout). Read urls before .cancel() so the
+                # task's finally hasn't yet popped them.
                 for pending_task in list(pending_tasks):
-                    pending_task.cancel()
                     pending_job_spec = task_to_job_spec[pending_task]
+                    job_url = self._inflight_job_urls.get(id(pending_job_spec), "")
+                    if job_url:
+                        try:
+                            await self._cancel_cloud_job(job_url)
+                        except Exception as e:
+                            self.log(f"Failed to cancel remote job {job_url}: {e}", "WARNING")
+                    pending_task.cancel()
 
                     # Create cancelled result
                     cancelled_result = await self._create_cancelled_result(
-                        pending_job_spec, job_url=""
+                        pending_job_spec, job_url=job_url
                     )
                     completed_results.append(cancelled_result)
 
@@ -428,8 +443,13 @@ class CloudProverRunner(ProverRunner):
             f"✓ Successfully submitted {job_spec.contract_name} for {job_spec.phase} - job_url: {job_url}"
         )
 
-        # Wait for the job to complete
-        result = await self.wait_for_completion(job_url, job_spec, completion_callback)
+        # Track the live job so batch early-termination can cancel the REMOTE job (not just our task).
+        self._inflight_job_urls[id(job_spec)] = job_url
+        try:
+            # Wait for the job to complete
+            result = await self.wait_for_completion(job_url, job_spec, completion_callback)
+        finally:
+            self._inflight_job_urls.pop(id(job_spec), None)
 
         # Apply result transformer if provided
         if result_transformer:

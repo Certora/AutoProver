@@ -41,16 +41,25 @@ def binding_for(getter: FunctionSpec) -> Binding:
     say which component the ghost tracks."""
     if len(getter.returns) == 1:
         val_type = getter.returns[0]
+        base = getter.name
     else:
         if getter.bind_component is None:
             raise ValueError(
                 f"getter {getter.name} has {len(getter.returns)} returns; set "
                 f"bind_component to say which one the ghost tracks.")
         val_type = getter.returns[getter.bind_component]
+        # Multi-return: each component gets its OWN ghost + reader, so their default names MUST
+        # disambiguate by component — else both bindings collapse onto `<getter>CVL` and the model
+        # spec redeclares the ghost / overloads the reader (a typecheck error the agent can't fix).
+        # Prefer the caller's component_names label; fall back to the component index.
+        cn = getter.component_names
+        comp = getter.bind_component
+        suffix = cn[comp] if (cn and comp < len(cn)) else str(comp)
+        base = f"{getter.name}_{suffix}"
     return Binding(
         getter=getter,
-        ghost_name=getter.ghost_name or default_ghost_name(getter.name),
-        reader_name=getter.reader_name or default_reader_name(getter.name),
+        ghost_name=getter.ghost_name or default_ghost_name(base),
+        reader_name=getter.reader_name or default_reader_name(base),
         key_types=[p.type for p in getter.params],
         val_type=val_type,
     )
