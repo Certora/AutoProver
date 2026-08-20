@@ -19,6 +19,7 @@ from certora_autosetup.parsers.base import ContractExtractor
 from certora_autosetup.parsers.foundry import FoundryContractExtractor
 from certora_autosetup.parsers.hardhat import HardhatContractExtractor
 from certora_autosetup.parsers.truffle import TruffleContractExtractor
+from certora_autosetup.utils.project_dir import foundry_artifact_dir, hardhat_artifact_dir
 
 
 
@@ -41,12 +42,12 @@ class BuildSystemDetector:
         Auto-detect build system from project structure.
 
         Detection logic (in order of precedence):
-        1. Check for foundry.toml → FOUNDRY
-        2. Check for hardhat.config.js or hardhat.config.ts → HARDHAT
-        3. Check for truffle-config.js or truffle.js → TRUFFLE
-        4. Check for package.json with a hardhat/truffle dependency → HARDHAT / TRUFFLE
-        5. Check for artifact directory structures → FOUNDRY, HARDHAT or TRUFFLE
-        6. Return UNKNOWN if none found
+        1. Check for foundry.toml → FOUNDRY, or hardhat.config.js/.ts → HARDHAT. With both
+           present the artifacts on disk break the tie (see _pick_foundry_or_hardhat)
+        2. Check for truffle-config.js or truffle.js → TRUFFLE
+        3. Check for package.json with a hardhat/truffle dependency → HARDHAT / TRUFFLE
+        4. Check for artifact directory structures → FOUNDRY, HARDHAT or TRUFFLE
+        5. Return UNKNOWN if none found
 
         Truffle ranks below the other two throughout: a repo migrating off Truffle keeps its
         stale truffle-config.js next to the foundry.toml/hardhat.config that now drives it.
@@ -71,17 +72,7 @@ class BuildSystemDetector:
 
         # Handle case where both are present
         if foundry_present and hardhat_present:
-            logger.log(
-                "Both Foundry and Hardhat detected, defaulting to Foundry",
-                "WARNING",
-                "BuildSystemDetector"
-            )
-            logger.log(
-                "Use --build-system hardhat to override",
-                "INFO",
-                "BuildSystemDetector"
-            )
-            return BuildSystem.FOUNDRY
+            return BuildSystemDetector._pick_foundry_or_hardhat(project_root)
 
         if foundry_present:
             return BuildSystem.FOUNDRY
@@ -126,30 +117,23 @@ class BuildSystemDetector:
         out_dir = project_root / "out"
         artifacts_dir = project_root / "artifacts"
 
-        # Check for Foundry structure
-        if out_dir.exists() and out_dir.is_dir():
-            # Look for typical Foundry structure: out/*.sol/*.json
-            sol_dirs = [d for d in out_dir.iterdir() if d.is_dir() and d.name.endswith(".sol")]
-            if sol_dirs:
-                logger.log(
-                    "Detected Foundry from out/ directory structure",
-                    "INFO",
-                    "BuildSystemDetector"
-                )
-                return BuildSystem.FOUNDRY
+        # Check for Foundry structure: out/*.sol/*.json
+        if FoundryManager.holds_artifacts(out_dir):
+            logger.log(
+                "Detected Foundry from out/ directory structure",
+                "INFO",
+                "BuildSystemDetector"
+            )
+            return BuildSystem.FOUNDRY
 
         # Check for Hardhat structure
-        if artifacts_dir.exists() and artifacts_dir.is_dir():
-            # Look for Hardhat-specific structure
-            contracts_dir = artifacts_dir / "contracts"
-            build_info_dir = artifacts_dir / "build-info"
-            if contracts_dir.exists() or build_info_dir.exists():
-                logger.log(
-                    "Detected Hardhat from artifacts/ directory structure",
-                    "INFO",
-                    "BuildSystemDetector"
-                )
-                return BuildSystem.HARDHAT
+        if HardhatManager.holds_artifacts(artifacts_dir):
+            logger.log(
+                "Detected Hardhat from artifacts/ directory structure",
+                "INFO",
+                "BuildSystemDetector"
+            )
+            return BuildSystem.HARDHAT
 
         # Check for Truffle structure: build/contracts/<ContractName>.json
         truffle_build_dir = project_root / "build" / "contracts"
@@ -164,13 +148,67 @@ class BuildSystemDetector:
         return BuildSystem.UNKNOWN
 
     @staticmethod
+    def _pick_foundry_or_hardhat(project_root: Path) -> BuildSystem:
+        """
+        Choose between a Foundry and a Hardhat config sitting side by side, on artifacts.
+
+        Both configs in one directory says nothing about which one built the tree: a Hardhat
+        project may keep a foundry.toml that only builds its forge tests, a Foundry project
+        may keep a Hardhat config for deployment scripts, and a half-finished migration
+        leaves both behind. Whichever one's artifact directory holds output is the one that
+        ran, so that is the one whose artifacts the extractor can read.
+
+        Foundry keeps the tie whenever it has artifacts of its own, and when neither side
+        has any — an unbuilt tree offers no evidence to rank them by.
+
+        Two limits worth knowing. The Foundry side is read from `[profile.default].out`, so a
+        tree built under a non-default `FOUNDRY_PROFILE` whose `out` differs reads as having no
+        artifacts. And a Hardhat project whose foundry.toml governs a forge *test* harness looks
+        like Foundry as soon as that harness is compiled, since the harness fills `out/` too.
+
+        Args:
+            project_root: Directory holding both config files
+
+        Returns:
+            BuildSystem.HARDHAT if only Hardhat's artifacts are on disk, else FOUNDRY
+        """
+        # Import logger here to avoid circular dependency
+        from certora_autosetup.utils.logger import logger
+
+        foundry_out = foundry_artifact_dir(project_root)
+        hardhat_out = hardhat_artifact_dir(project_root)
+        foundry_built = foundry_out is not None and FoundryManager.holds_artifacts(foundry_out)
+        hardhat_built = hardhat_out is not None and HardhatManager.holds_artifacts(hardhat_out)
+
+        if hardhat_built and not foundry_built:
+            logger.log(
+                "Both Foundry and Hardhat detected; only Hardhat has build artifacts, using Hardhat",
+                "INFO",
+                "BuildSystemDetector"
+            )
+            return BuildSystem.HARDHAT
+
+        logger.log(
+            "Both Foundry and Hardhat detected, defaulting to Foundry",
+            "WARNING",
+            "BuildSystemDetector"
+        )
+        logger.log(
+            "Use --build-system hardhat to override",
+            "INFO",
+            "BuildSystemDetector"
+        )
+        return BuildSystem.FOUNDRY
+
+    @staticmethod
     def resolve(project_root: Path, requested: Optional[str]) -> BuildSystem:
         """
         Return the explicit build system if the user supplied one, otherwise auto-detect.
 
         Centralizes the "explicit override or auto-detect" logic so call sites cannot
         accidentally drop the user's --build-system choice and fall back to detection
-        (which warns and defaults to Foundry when both build systems are present).
+        (which, when both build systems are present, picks the one whose artifacts are on
+        disk — see `_pick_foundry_or_hardhat`).
         """
         if requested is None or requested == "auto":
             return BuildSystemDetector.detect(project_root)
