@@ -320,6 +320,7 @@ def _report(**rule_status: bool) -> ProverReport:
             RulePath(rule=k): "VERIFIED" if v else "VIOLATED"
             for (k, v) in rule_status.items()
         },
+        certora_run_stdout=""
     )
 
 
