@@ -49,7 +49,7 @@ def observations(outcomes: RustOutcomes) -> dict[RuleRef, RuleEvidence]:
             ref = (verdict.unit_file or o.result.unit_file, check)
             observed.setdefault(ref, RuleEvidence(
                 label=o.feat.display_name,
-                counterexample=verdict.detail,
+                counterexample=verdict.prompt_detail(),
                 ran=verdict.outcome,
                 accounting=verdict.accounting,
                 declared=res.expected_failures.get(check),

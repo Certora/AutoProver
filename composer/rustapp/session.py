@@ -464,7 +464,9 @@ def _verdict_report(
     lines = []
     for name, v in verdicts.items():
         mark = " (expected to fail)" if name in expected_failures else ""
-        detail = f" — {v.detail}" if v.detail else ""
+        # Bounded, not whole: this string is a tool result the author reads, and one check's
+        # evidence can be megabytes of repeated reproductions.
+        detail = f" — {shown}" if (shown := v.prompt_detail()) else ""
         lines.append(f"  {name}: {v.outcome.value}{mark}{detail}")
     return "Validation results:\n" + "\n".join(lines)
 

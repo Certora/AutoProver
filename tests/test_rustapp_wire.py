@@ -23,6 +23,7 @@ from pydantic import TypeAdapter, ValidationError
 from composer.rustapp.host import load_module
 from composer.rustapp.wire import (
     CALLOUTS,
+    Verdict,
     AuthorInput,
     CompileFailed,
     CompileOk,
@@ -268,3 +269,38 @@ def test_a_complete_module_loads():
         assert load_module("a_wheel") is stub
     finally:
         del sys.modules["a_wheel"]
+
+
+def _verdict_with_detail(detail: str | None) -> Verdict:
+    return Verdict.model_validate(wire_verdict(Outcome.BAD.value, detail=detail))
+
+
+def test_evidence_a_prompt_can_carry_is_bounded_but_leads_with_the_deciding_lines():
+    # A checker reports one piece of evidence per violating input, so an easily-violated check
+    # produces one per input it tried: the klend run that motivated this bound emitted 7,166 crash
+    # reproductions on a single check. Spliced whole into a tool result, that exceeded the model's
+    # context window and cost the whole component — which is why the *prompt* view is bounded while
+    # the report still renders `detail` entire.
+    detail = "crash crash_0: the deciding one\n" + "".join(
+        f"crash crash_{i}: another input violating the same check\n" for i in range(1, 200_000)
+    )
+    shown = _verdict_with_detail(detail).prompt_detail()
+
+    assert shown is not None
+    assert len(shown) < len(detail) / 1000
+    assert shown.startswith("crash crash_0: the deciding one")
+    # What was dropped is named, so the author can tell a bound from a checker that went quiet.
+    assert "further lines of evidence omitted" in shown
+    # Cut at a line boundary — half a line reads as truncated output rather than as a bound.
+    assert "\n… " in shown
+    assert all(
+        line.startswith("crash crash_") for line in shown.split("\n… ")[0].splitlines()
+    )
+
+
+def test_evidence_that_already_fits_is_passed_through_untouched():
+    assert _verdict_with_detail("crash crash_0: the only one").prompt_detail() == (
+        "crash crash_0: the only one"
+    )
+    # A GOOD verdict explains itself through `accounting`, and has no detail at all.
+    assert Verdict.with_outcome(Outcome.GOOD).prompt_detail() is None

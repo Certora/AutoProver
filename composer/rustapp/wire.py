@@ -37,7 +37,7 @@ treatment ``model`` and ``unit`` already get, and for the same reason.
 import json
 from collections import Counter
 from enum import Enum
-from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Annotated, Any, Callable, ClassVar, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -416,6 +416,13 @@ class Verdict(WireModel):
     #: sharing one are written up once; ``None`` is a verdict standing on its own evidence.
     finding: str | None
 
+    #: How much of :attr:`detail` a *prompt* may carry, in characters. A checker reports one piece
+    #: of evidence per violating input, and a check that is easy to violate produces one per input
+    #: it ever tried: a klend refresh-staleness check yielded 7,166 crash reproductions, 5 MB of
+    #: them, which exceeded the model's context window outright and cost the whole component. Past
+    #: the first few the reproductions restate each other, so a bound loses no distinct evidence.
+    PROMPT_DETAIL_BUDGET: ClassVar[int] = 4000
+
     @classmethod
     def with_outcome(cls, outcome: Outcome) -> "Verdict":
         """A bare verdict: the outcome, no diagnostics. Mirrors the Rust ``Verdict::with_outcome``,
@@ -423,6 +430,24 @@ class Verdict(WireModel):
         reason for a caller that has only an outcome to spell six nulls to say so."""
         return cls(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=None,
                    accounting=None, finding=None)
+
+    def prompt_detail(self) -> str | None:
+        """:attr:`detail` as a prompt can carry it: the head, which is where the wheel puts the
+        deciding evidence, and a note naming what was left out.
+
+        Only the model-facing seams go through this — the validation tool result and the findings
+        write-up. The report renders :attr:`detail` whole, so nothing here loses evidence a reader
+        can reach. Cut at a line boundary: the omitted part is a list, and half a line of it reads
+        as truncated output rather than as a bound."""
+        if self.detail is None or len(self.detail) <= self.PROMPT_DETAIL_BUDGET:
+            return self.detail
+        head = self.detail[:self.PROMPT_DETAIL_BUDGET]
+        kept = head[:cut] if (cut := head.rfind("\n")) > 0 else head
+        rest = self.detail[len(kept):]
+        return (
+            f"{kept}\n… {rest.count(chr(10)):,} further lines of evidence omitted "
+            f"({len(rest):,} characters). The report carries all of it."
+        )
 
 
 class ValidateBuildFailed(WireModel):
