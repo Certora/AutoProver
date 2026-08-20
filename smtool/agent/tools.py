@@ -16,6 +16,7 @@ Build the tool list with `smtool_tools(deps)`; run them in an agent loop via smt
 from __future__ import annotations
 
 import asyncio
+import difflib
 from dataclasses import dataclass
 from typing import override, Callable, Awaitable
 
@@ -47,6 +48,41 @@ def _res(r: Result) -> str:
     if r.ok:
         return f"ok: {r.message}"
     return f"REJECTED: {r.message}" + (f" | {'; '.join(r.violations)}" if r.violations else "")
+
+
+# How many compressed re-renders of one target before we return the FULL spec again — bounds how far the
+# agent must look back to reconstruct, and re-syncs it after a history summarization drops earlier renders.
+_RENDER_FULL_EVERY = 4
+
+
+def _render_dedup(project: Project, target: str, current: str, force_full: bool = False) -> str:
+    """Compress a repeat render. The agent re-renders its own specs constantly (measured ~1/4 of all
+    turns), re-dumping the whole spec into history each time — pure redundancy. We remember the last text
+    returned per target and, on a repeat, return only what CHANGED: `UNCHANGED` when identical, else a
+    unified diff. This is purely an OBSERVATION compression — the model is untouched, and the agent's
+    history already holds the last full text it was shown. The agent can force the whole spec any time
+    with `force_full`; failing that, every `_RENDER_FULL_EVERY` compressed replies we return it anyway
+    (bounds look-back; re-syncs after a context summarization the agent may not notice)."""
+    cache = getattr(project, "_render_cache", None)
+    if cache is None:
+        cache = {}
+        project._render_cache = cache      # scratch, survives _commit (not a copied model field)
+    prev, n = cache.get(target, (None, 0))
+    if force_full or prev is None or n >= _RENDER_FULL_EVERY:
+        cache[target] = (current, 0)
+        return current
+    if prev == current:
+        cache[target] = (current, n + 1)
+        return f"[{target}: UNCHANGED since your last render ({current.count(chr(10)) + 1} lines) — " \
+               f"your last-seen text still holds. Re-render only after a mutation changes it.]"
+    diff = "\n".join(difflib.unified_diff(prev.splitlines(), current.splitlines(),
+                                          fromfile="last", tofile="now", lineterm=""))
+    if not diff or len(diff) >= len(current):
+        cache[target] = (current, 0)       # a near-total rewrite: full text is smaller / clearer
+        return current
+    cache[target] = (current, n + 1)
+    return f"[{target}: CHANGED since your last render — unified diff (last -> now) below; " \
+           f"mutate then re-render if you need the whole spec again.]\n{diff}"
 
 
 class _Tool(WithAsyncDependencies[str, SmtoolDeps]):
@@ -323,22 +359,31 @@ class Verify(_Tool):
 
 
 class RenderModel(_Tool):
-    """Return the current shared model spec as CVL text — inspect the ghosts/readers/<f>CVL bodies."""
+    """Return the current shared model spec as CVL text — inspect the ghosts/readers/<f>CVL bodies.
+    A re-render with no change since your last one comes back as UNCHANGED (or a diff), to save context;
+    it is not lost. Set `full=true` to force the complete spec when you need the whole picture again."""
+    full: bool = Field(default=False,
+                       description="force the COMPLETE spec instead of a diff/UNCHANGED (e.g. to re-read it in full)")
 
     @override
     async def run(self) -> str:
         with self.tool_deps() as d:
-            return d.project.render_model()
+            return _render_dedup(d.project, "model", d.project.render_model(), force_full=self.full)
 
 
 class RenderConformance(_Tool):
-    """Return a method's current conformance spec as CVL text — inspect its glue + rules."""
+    """Return a method's current conformance spec as CVL text — inspect its glue + rules. A re-render with
+    no change since your last one comes back as UNCHANGED (or a diff), to save context; it is not lost.
+    Set `full=true` to force the complete spec when you need the whole picture again."""
     method: str = Field(description="the method whose conformance spec to render")
+    full: bool = Field(default=False,
+                       description="force the COMPLETE spec instead of a diff/UNCHANGED (e.g. to re-read it in full)")
 
     @override
     async def run(self) -> str:
         with self.tool_deps() as d:
-            return d.project.render_conformance(self.method)
+            return _render_dedup(d.project, f"conformance:{self.method}",
+                                 d.project.render_conformance(self.method), force_full=self.full)
 
 
 # ---------------------------------------------------------------- assembly
