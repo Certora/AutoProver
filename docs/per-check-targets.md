@@ -1,12 +1,12 @@
 # Proposal: per-check fuzz targets
 
 **Status:** proposal. **Affects:** `rust/crucible-app` (targets, generation, authoring contract),
-`composer/rustapp` (one new wire field, one call site). **Supersedes** the grouping rule in
-[crucible.md §8](./crucible.md).
+`rust/autoprover-sdk` (one enum renamed), `composer/rustapp` (that rename, one call site).
+**Supersedes** the grouping rule in [crucible.md §8](./crucible.md).
 
 A Crucible component today is one campaign covering all of its checks. This proposes making the
-*check* the unit a campaign runs, with the granularity chosen by the host — the same way
-`Exploration` is already chosen by the host.
+*check* the unit a campaign runs — always, with no second grouping — and, while the seam is open,
+replacing `Exploration` with the one bit the host actually knows.
 
 ---
 
@@ -23,12 +23,12 @@ The rest do not stay `GOOD` on their own evidence. They stay `GOOD` because noth
 a campaign whose exploration was shaped by a *different* check. Three mechanisms, none of which the
 tally detects:
 
-1. **An input stops at its first violation.** The harness runs the remaining actions not at all —
+1. **An input stops at its first violation.** The remaining actions do not run —
    `2 executed, 4 skipped ... (stopped on violation)`. Any state reachable only *after* the
    violating action is unreachable for every check in the target.
-2. **The refuting input leaves the corpus.** It becomes an objective, so the prefix that reached
-   the interesting state stops being mutated on behalf of anything else.
-3. **`record_violation` is first-wins.** Within one invariant pass, only the source-order-first
+2. **The refuting input leaves the corpus.** It becomes an objective, so the prefix that reached the
+   interesting state stops being mutated on behalf of anything else.
+3. **`record_violation` is first-wins.** Within one invariant pass only the source-order-first
    violated check is recorded; simultaneous violations of later checks are dropped silently.
 
 The tally does not catch this because it counts *evaluations*, not evaluations *in states where the
@@ -37,7 +37,7 @@ genuinely exercised.
 
 ### Evidence (klend, 2026-08-20, cache namespace `klend-0819`)
 
-235 checks across 13 components — 13 campaigns. I re-ran one component's target with 10× the time
+235 checks across 13 components — 13 campaigns. Re-running one component's target with 10× the time
 on 4 cores:
 
 | | executions | crashes | distinct checks refuted |
@@ -66,17 +66,25 @@ reading with no counterexample**, and 18 of those are checks carrying no asserti
 target yields one refutation regardless of budget, an author who can see three more defects in the
 source has no way to report them except by declaring them.
 
+### Foundry does not have this problem
+
+`invariant_*` is structurally identical — a stateful fuzzer generating call sequences and checking
+an assertion after every step — but `forge test` runs each test function as its own isolated test
+with its own campaign and returns a status per function, which is exactly what the backend consumes
+(`test_results: dict[str, _ForgeTestEntry]`). Its unit of execution *is* its unit of reporting.
+Crucible's unit of execution is a Cargo feature (a whole component) while its unit of reporting is a
+tagged assertion; the two differ by ~18×. This proposal closes that gap. Per-check campaigns are not
+an exotic tax — they are what the comparable tool does by default.
+
 ---
 
 ## 2. What changes
 
-Five parts. (1) and (2) are the substance; the rest follow.
-
 ### 2.1 Checks become individually addressable
 
 Today a section is one authored fn holding every check as inline `fuzz_assert!` calls. The only
-handle on an individual check is the `[tag]` string inside its assertion message — which is also
-how verdicts are attributed. There is no way to build a target containing a subset.
+handle on an individual check is the `[tag]` string inside its assertion message — which is also how
+verdicts are attributed. There is no way to build a target containing a subset.
 
 The authored section gains one `pub fn` per check, named for the check:
 
@@ -99,59 +107,70 @@ This is the change that makes everything else mechanical, and it has a payoff of
 attribution stops depending on parsing a tag out of a message string. A per-check target has exactly
 one check, so its verdict needs no attribution at all.
 
-### 2.2 Granularity joins Exploration on the wire
+### 2.2 Every check is its own target
 
-`Exploration` exists because how far a run must explore "follows from what the host will do with its
-answer, which the wheel cannot see". Granularity is the same decision on a second axis, and belongs
-in the same place:
-
-```python
-class Granularity(str, Enum):
-    """How finely one invocation of the checker may be split — set from what the host will do with
-    the answer, as `Exploration` is.
-
-    A campaign covering many checks is cheaper while the author iterates and wrong once the verdicts
-    are reported: the checks share one corpus, and the exploration that a refuted check shapes is
-    not exploration on behalf of the rest."""
-
-    #: One invocation per unit — the backend's natural grouping. What the author iterates against.
-    GROUPED = "grouped"
-    #: One invocation per check. Each check gets the whole budget and its own corpus.
-    PER_CHECK = "per_check"
-```
-
-It travels the way `Exploration` does — chosen by the host, carried on `Target`, and passed to
-`target_for`, whose signature already takes the check name:
+`Check.target = None` already means "its own target", and `targets_of()` already partitions on it.
+The wheel stops collapsing:
 
 ```rust
-fn target_for(&self, input: &AuthorInput, check: &str, grain: Granularity) -> Option<String> {
+fn target_for(&self, input: &AuthorInput, _check: &str) -> Option<String> {
     let Authored::Component { .. } = input.authored else { return None };
-    match grain {
-        Granularity::Grouped => Some(harness_fn(input)),
-        Granularity::PerCheck => None,   // None already means "its own target"
-    }
+    None   // every check is its own target
 }
 ```
 
-`Check.target = None` already means the check is its own target, and `targets_of()` already
-partitions on that. **The host needs no other change** — one new field, threaded through the single
-`target_for` call site in `declared_checks`.
+**The host needs no change at all** for this part — it already runs each distinct target once.
 
-### 2.3 Who asks for what
+There is deliberately no second granularity. An earlier draft kept a coarse mode for the authoring
+loop; §7 records why that was wrong.
 
-| caller | Granularity | Exploration | why |
-|---|---|---|---|
-| `validate_spec` while authoring | `GROUPED` | `UNTIL_FIRST_FINDING` | fast feedback; the author is iterating |
-| the stamping run that publishes verdicts | `PER_CHECK` | `TO_BUDGET` | a published `GOOD` must be the check's own evidence |
+### 2.3 `Exploration` becomes `Stakes`, and the budget goes back behind the wheel's own arg
 
-This keeps the authoring loop at today's cost. Only the run whose verdicts reach the report pays for
-isolation — which is exactly the split `Exploration` already draws, and for the same reason.
+The host's decision is one bit, and it already computes it under that name:
+
+```python
+partial = self.checks is not None                    # the author asked for a subset; never stamps
+covered = targets_of(wanted, Exploration.UNTIL_FIRST_FINDING if partial else Exploration.TO_BUDGET)
+```
+
+It then translates that bit into a fuzzer verb before putting it on the wire. `Exploration`'s two
+values are Crucible's two CLI modes (`--stop-on-crash` or not), it has exactly one consumer, and its
+job — telling the reader how to interpret a *negative* result — is already done by the `Outcome`
+vocabulary for any checker that can distinguish "proved" from "not refuted within budget". A
+symbolic prover has nothing coherent to do with "explore every covered check to the full budget": it
+does not explore, its budget is a per-rule solver timeout, and an unrefuted rule is a positive claim
+rather than a budget-relative absence. Where its negatives *are* budget-relative it returns
+`TIMEOUT`, which is its own `Outcome`.
+
+So the seam should carry the bit the host has, named for what it means:
+
+```rust
+/// What rides on this invocation's answer — set from what the host will do with it, never inferred
+/// from the shape of the check set.
+pub enum Stakes {
+    /// The author is iterating; these verdicts will not be reported. A backend may answer as
+    /// cheaply as it can, and what its unrefuted checks then say is its own to decide.
+    Feedback,
+    /// These verdicts stamp the publish gate. The default, because a run that quietly stops short is
+    /// the failure mode worth defaulting away from.
+    #[default]
+    OfRecord,
+}
+```
+
+Each backend maps it: Crucible to `--stop-on-crash` plus a short budget, Foundry to `--fail-fast`, a
+prover to a cheaper solver configuration. The existing `triage.rs` logic is unchanged — it switches
+on the same one bit, under a name that survives a second backend.
+
+**The budget does not cross the seam.** `fuzz_timeout` is already the Crucible wheel's own declared
+arg (`--fuzz-timeout`), so the wheel derives its per-target budget from that arg plus `Stakes`. An
+earlier draft had the host set a per-target budget; that would have put a fuzzer quantity in a
+shared type for the second time in the same document.
 
 ### 2.4 Generation
 
-Both shapes are generated; only one feature is ever enabled per build, as now. `Cargo.toml` gains a
-feature per check alongside the per-component ones, and the root emits a per-check entry that shares
-the component module:
+`Cargo.toml` gains a feature per check, and the root emits a per-check entry that shares the
+component module. Only one feature is ever enabled per build, as now:
 
 ```rust
 #[cfg(any(feature = "c_component", feature = "c_check_x", feature = "c_check_y"))]
@@ -162,79 +181,96 @@ mod c_component;
 fn c_check_x(f: &mut Fixture) { c_component::c_check_x(f) }
 ```
 
-Templates touched: `cargo_toml.j2`, `root_layout.j2`, `section_entry.j2`, `section_file.j2`.
+The component-wide feature stays, with a narrower job: it is no longer a target, only the warm-up
+campaign of §2.5. Templates touched: `cargo_toml.j2`, `root_layout.j2`, `section_entry.j2`,
+`section_file.j2`.
 
 ### 2.5 Corpus seeding recovers what isolation costs
 
-Per-check targets lose something real: a deep state that one check's mutations discovered is no
-longer available to its siblings. Recover it by running the component's `GROUPED` campaign first as
-a warm-up and seeding every per-check campaign from its corpus:
+Per-check targets lose something real: a deep state one check's mutations discovered is no longer
+available to its siblings. Recover it by running the component-wide campaign first as a warm-up and
+seeding every per-check campaign from its corpus:
 
 ```
-crucible run <program> c_component   --corpus-out <ns>/corpus/c_component --timeout <warmup>
-crucible run <program> c_check_x     --corpus-in  <ns>/corpus/c_component --corpus-out <ns>/corpus/c_check_x ...
+crucible run <program> c_component  --corpus-out <ns>/corpus/c_component --timeout <warmup>
+crucible run <program> c_check_x    --corpus-in  <ns>/corpus/c_component --corpus-out <ns>/corpus/c_check_x ...
 ```
 
 `crucible run` already has `--corpus-in` / `--corpus-out`, and §8 already routes a shared corpus
 through `.certora_internal/crucible/corpus`. Each per-check campaign starts from states the fixture
-is known to reach instead of from scratch — and unlike today, it then explores *on behalf of its own
-check*.
+is known to reach — and then explores *on behalf of its own check*.
 
 ---
 
 ## 3. Cost
 
-Per-check campaigns at klend's scale (235 checks, 13 components, 60s budget):
+Measured shape of a klend run: **18.1 checks per component** (max 24), and **2–11 `validate_spec`
+calls per component** (mean ~5.8).
 
-| | builds | fuzz time (serial) | at 8-way |
+| | builds | campaigns | wall |
 |---|---|---|---|
-| today | 13 | ~13 min | — |
-| per-check | 235 | ~4 h | ~30 min |
+| authoring, full validate — today | 1 | 1 × 60s | ~1 min |
+| authoring, full validate — proposed (`Feedback`, 10s budget) | ~18 | 18 × ≤10s | ~4 min |
+| authoring, focused validate (1–2 checks) | 1–2 | 1–2 × ≤10s | **~20s** |
+| gate, per component (`OfRecord`) | ~18 | 18 × 60s | ~18 min |
+| gate, whole run (235 checks) | 235 | 235 × 60s | ~4 h serial, ~30 min at 8-way |
 
-Incremental rebuild of the root with deps cached is ~4s, so the build cost is ~20 min and
-parallelises. The authoring loop is unaffected (it stays `GROUPED`).
+Two things keep the authoring loop affordable, and neither weakens a verdict:
 
-This is 10–20× today's *gate* cost, and it buys the thing the contract already promises. If that
-proves too expensive, the tunable is the per-check budget, not the granularity — a check with 20s of
-its own attention is still measured; a check sharing a campaign is not.
+- **`Feedback` buys a short budget**, not a contaminated one. Eighteen checks at 10s each still gives
+  every check its own attention — strictly more than today's one 60s campaign where one check gets
+  the attention and seventeen ride along.
+- **A focused validate finally means something.** `validate_spec(checks=[...])` today filters what is
+  *reported* while still running the whole component campaign. With per-check targets it filters what
+  is *run*, so the common case — the author revising one or two checks — gets cheaper than today. No
+  new mechanism; the existing argument just starts doing what it says.
 
-An alternative that avoids the cost is discussed in §6.
+The irreducible cost is builds: ~18 cargo invocations for a full authoring validate, ~4s each
+incremental, and shortening the fuzz budget does not touch it. Only focused validates do.
+
+The gate is 10–20× today's gate cost, and it buys the thing the contract already promises. If that
+proves too expensive the tunable is `--fuzz-timeout`, not the granularity: a check with 20s of its
+own attention is measured; a check sharing a campaign is not.
 
 ---
 
 ## 4. What it changes downstream
 
 - **`GOOD` becomes meaningful.** Today it can mean "not refuted in a campaign steered by another
-  check". After, it means "this check had a full budget and its own corpus and was not refuted".
-- **Declared findings should fall.** The prediction is testable: several of klend's 22
-  source-reading declarations should either become real counterexamples or become honest
-  `UNKNOWN`s. Either outcome is better than a finding with no evidence.
-- **Attribution simplifies.** The §8 table's first row collapses: a `PER_CHECK` target has one
-  check, so "the rest" does not exist. The cross-component and unknown-title rows stay as they are.
+  check". After, it means "this check had its own budget and its own corpus and was not refuted".
+- **Declared findings should fall.** Testable: several of klend's 22 source-reading declarations
+  should become either real counterexamples or honest `UNKNOWN`s. Either beats a finding with no
+  evidence.
+- **Attribution simplifies.** The §8 table's first row collapses — a target has one check, so "the
+  rest" does not exist. The cross-component and unknown-title rows stay.
 - **Coverage debt gets visible.** A check whose own campaign never evaluated its assertion is
-  unambiguously not-exercised, with nothing to blame it on.
+  unambiguously not-exercised, with nothing else to blame.
 
 ---
 
 ## 5. Migration
 
 - **Cached specs go stale.** The authoring contract changes, so the author prompt changes, so cache
-  keys change and old entries miss. No invalidation logic needed; state it in the changelog so a
-  rerun against a warm namespace is expected to re-author.
+  keys change and old entries miss. No invalidation logic needed; note it so a rerun against a warm
+  namespace is expected to re-author.
+- **The `Stakes` rename** touches `autoprover-sdk` (`outcome.rs`), `crucible-app` (`app.rs`,
+  `triage.rs`, `testkit.rs`) and `composer/rustapp` (`wire.py`, the one `session.py` call site). One
+  consumer today, which is why it is cheap now and expensive after a second backend builds on the
+  word.
 - **Prompts and guidance**: `harness_cheat_sheet.j2`, `test_cheat_sheet.j2`, `author_component.j2`,
   `judge_guidance.j2` all describe the one-fn-per-section shape.
-- **`check_syntax`** must accept (and ideally require) the per-check fn shape — it is the gate that
-  can enforce the contract mechanically, before a campaign is spent.
+- **`check_syntax`** should require the per-check fn shape — it is the gate that can enforce the
+  contract mechanically, before a campaign is spent.
 - **Tests**: `layout.rs:238` pins the component grouping (`target_for(&unit, "c_fifo") ==
-  Some("c_withdraw_queue")`) and becomes a `Granularity::Grouped` case, with a `PerCheck` sibling.
+  Some("c_withdraw_queue")`) and inverts.
 - **§8 of crucible.md** is rewritten around this; this document folds into it once shipped.
 
 ---
 
 ## 6. Acceptance
 
-Re-run klend's `c_obligation_ownership_transfer` component per-check against the delivered harness
-in `klend-0819`. Two checks have a known-suspicious status — both reported `GOOD`, both declared as
+Re-run klend's `c_obligation_ownership_transfer` per-check against the delivered harness in
+`klend-0819`. Two checks have a known-suspicious status — both reported `GOOD`, both declared
 findings by the author on source reading:
 
 - `borrow_order_can_be_armed_while_transfer_in_progress` — the author states the refuting sequence is
@@ -242,43 +278,51 @@ findings by the author on source reading:
 - `referrer_binding_transplanted_to_the_new_owner_by_ownership_transfer` — needs a completed
   three-step transfer.
 
-Each must come back either **refuted with a witness** (the current `GOOD` was a false negative, and
-the declared finding is confirmed) or **evaluated to budget and not refuted** (the declaration is
-wrong and should be withdrawn). Today neither question can be answered, which is the defect.
+Each must come back either **refuted with a witness** (the `GOOD` was a false negative and the
+declared finding is confirmed) or **evaluated to budget and not refuted** (the declaration is wrong
+and should be withdrawn). Today neither question can be answered, which is the defect.
 
-Run-level metric: per-component refutation count should exceed 1 where the source supports it, and
-the ratio of declared-without-counterexample findings should fall from 22/26.
+Run-level: per-component refutation count should exceed 1 where the source supports it, and the
+ratio of declared-without-counterexample findings should fall from 22/26.
 
 ---
 
 ## 7. Alternatives considered
 
+**A second, coarser granularity for the authoring loop** (`Granularity::{Grouped, PerCheck}` chosen
+by the host beside `Stakes`). Drafted, then rejected. Two grains mean two truths: the author would
+iterate against grouped verdicts — the contaminated ones this proposal exists to remove — and only
+the stamping run would be per-check, so checks green throughout authoring could flip to refuted at
+the gate, discovered at the most expensive moment. That is the hazard the seam already warns about,
+re-introduced on a second axis. It also saves less than it appears: the component feature has to
+exist anyway for the §2.5 warm-up, so dropping the granularity removes a host-facing choice, not a
+generated artifact. The authoring cost it was meant to solve is better handled by `Feedback`'s
+budget and by focused validates (§3).
+
 **Continue past a violation and collect a witness per check.** Make `record_violation` a map, keep
 executing the remaining actions, suppress a tag once witnessed. Cheaper than this proposal and fixes
-all three mechanisms at once. **Rejected**: it changes what a Crucible test *is* — a test that runs
-until something is wrong — and that semantics is Crucible's, not ours to redefine from the harness
-we generate.
+all three mechanisms of §1 at once. Rejected: it changes what a Crucible test *is* — a test that runs
+until something is wrong — and that semantics is Crucible's, not ours to redefine from the harness we
+generate.
 
-**Report-only fix**: stop reporting `GOOD` for a check that shares a target with a refuted sibling;
-report "not independently measured". Correct as far as it goes and available immediately, but it
-converts a false negative into an absence of information for every sibling of every finding.
-**Rejected as an end state** — it describes the limitation instead of removing it. Worth doing only
-if this proposal is deferred.
-
-**One target per check, always** (no `GROUPED`). Simpler — one code path, no granularity field. But
-it makes every authoring `validate_spec` N campaigns, and the author calls it repeatedly per
-component. The authoring loop is where wall-clock is already the binding constraint.
+**Report-only**: stop reporting `GOOD` for a check that shares a target with a refuted sibling;
+report "not independently measured" instead. Correct as far as it goes and available immediately, but
+it converts a false negative into an absence of information for every sibling of every finding.
+Rejected as an end state; worth doing only if this proposal is deferred.
 
 ---
 
 ## 8. Open questions
 
-- **Budget policy at scale.** 235 checks × full budget is a real bill. Should the host scale the
-  per-check budget by check count, cap the total, or spend more on checks whose tally shows shallow
-  evaluation? The last is the most principled and the most work.
-- **Warm-up length.** How long the `GROUPED` seeding campaign should run before the per-check fan-out
-  — long enough to reach deep states, short enough not to dominate. Measure on klend.
-- **Does `GROUPED` regress the authoring loop?** One fn per check means N passes over the same state
-  per action instead of one. Expected to be lost in the noise — a LiteSVM transaction dominates a
-  pass over a handful of accounts by orders of magnitude (klend ran 273 exec/s at 7.1 actions/exec)
-  — but it should be measured, not assumed.
+- **Warm-up length.** How long the component-wide seeding campaign should run before the per-check
+  fan-out — long enough to reach deep states, short enough not to dominate. Measure on klend.
+- **`Feedback` budget.** 10s per check is a guess. It should be low enough that a full authoring
+  validate stays in the low minutes and high enough that a green answer is worth anything.
+- **Should the gate spend unevenly?** A check whose tally shows shallow evaluation may deserve more
+  than one with millions of evaluations. The most principled option and the most work; not proposed
+  here.
+- **Does one fn per check cost anything at runtime?** Under per-check builds only one is compiled in,
+  so there is no per-action multiplication — but the warm-up campaign compiles the component feature
+  and does make N passes over the same state. Expected to be lost in the noise (a LiteSVM transaction
+  dominates a pass over a handful of accounts; klend ran 273 exec/s at 7.1 actions/exec), but it
+  should be measured.
