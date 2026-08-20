@@ -14,6 +14,7 @@ from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold
 )
+from composer.llm.pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
@@ -218,6 +219,19 @@ class AnthropicService(ProviderServiceBase):
         }
         return to_ret
 
+    @override
+    def should_retry(self, exc: Exception) -> bool:
+        """Mirrors the SDK's own ``_should_retry`` status roster (408/409/429
+        and every 5xx, which covers 529 overloaded) plus connection-level
+        failures (``APITimeoutError`` subclasses ``APIConnectionError``).
+        400-class request errors are deterministic — an over-long prompt fails
+        identically on every attempt — and are deliberately excluded."""
+        if isinstance(exc, anthropic.APIConnectionError):
+            return True
+        if isinstance(exc, anthropic.APIStatusError):
+            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+        return False
+
 @dataclass
 class AnthropicModelProvider:
     """``ModelProvider`` for Anthropic. Probes ``model_name`` once at
@@ -227,8 +241,10 @@ class AnthropicModelProvider:
     model_name: str
     options: ModelConfiguration
     features: ModelFeatures
+    price_provider: PriceProvider
 
     provider: AnthropicService = field(default_factory=_get_service)
+
 
     @staticmethod
     def create(model_name: str, options: ModelConfiguration) -> "AnthropicModelProvider":
@@ -236,6 +252,7 @@ class AnthropicModelProvider:
             model_name,
             options,
             _model_parser(model_name),
+            price_provider_for(model_name)
         )
 
     @property
@@ -247,6 +264,7 @@ class AnthropicModelProvider:
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
         from composer.diagnostics.usage_callback import UsageCallback
+        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -281,7 +299,12 @@ class AnthropicModelProvider:
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=[UsageCallback()],
+            callbacks=[
+                UsageCallback(),
+                CostAccumulator(
+                    self.price_provider, long_cache=cache_level == CacheLevel.LONG
+                ),
+            ],
         )
 
 ANTHROPIC_SPEC = ProviderSpec(

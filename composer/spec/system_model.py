@@ -17,7 +17,7 @@ class FeatureUnit(Protocol):
     keys, task ids, labels, and context tags ecosystem-agnostic."""
 
     @property
-    def display_name(self) -> str:
+    def display_name(self) -> ComponentName:
         """Human label for tasks / report rows."""
         ...
 
@@ -279,7 +279,7 @@ class ContractComponentInstance:
 
     # -- FeatureUnit protocol (the ecosystem-agnostic view the driver consumes) ---------
     @property
-    def display_name(self) -> str:
+    def display_name(self) -> ComponentName:
         return self.component.name
 
     @property

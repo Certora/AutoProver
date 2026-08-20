@@ -1,7 +1,22 @@
 import argparse
 from typing import TypeVar, Protocol, cast, Annotated, get_type_hints, get_origin, Any, get_args, Union
-from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions, UploadPaths, InputData
-from composer.input.files import FileUploader
+from composer.input.types import CommandLineArgs, ResumeArgs, Arg, OptionalArg, RAGDBOptions, ModelOptions, LanggraphOptions, UploadPaths, InputData, SpecInput
+from composer.input.files import DOCUMENT_SUFFIXES, FileUploader
+
+
+def add_extra_context_args(parser: argparse.ArgumentParser) -> None:
+    """Register ``--extra-context``. Shared so the entry points cannot drift:
+    ``cache-autoprove inputs`` rebuilds a run's bug-analysis key from this same
+    attribute."""
+    parser.add_argument(
+        "--extra-context", type=str, action="append", default=None, metavar="PATH",
+        help="Path to a document (text or pdf) of any extra information about the "
+             "application — protocol notes, deployment assumptions, audit scope — to hand "
+             "to the property extraction process as background. A directory is swept for "
+             f"every {'/'.join(sorted(DOCUMENT_SUFFIXES))} directly in it (not recursive, "
+             "hidden files skipped). Repeat the flag for several; they reach the prompt in "
+             "the order given.",
+    )
 
 ArgNS = TypeVar("ArgNS", covariant=True)
 
@@ -148,7 +163,13 @@ async def upload_input(uploader: FileUploader, args: UploadPaths) -> InputData:
     system_doc = await uploader.get_document(args.system_doc)
     if system_doc is None:
         raise FileNotFoundError(f"System document not found or not a file: {args.system_doc}")
-    return InputData(spec=spec, system_doc=system_doc, intf=intf)
+    # The legacy CLI triad is single-spec; map it to a one-element specs list at
+    # the conventional codegen path. The pipeline is plumbed for N specs.
+    return InputData(
+        specs=[SpecInput(file=spec, vfs_path="rules.spec")],
+        system_doc=system_doc,
+        intf=intf,
+    )
 
 
 def _common_resume_args(parser: argparse.ArgumentParser) -> None:

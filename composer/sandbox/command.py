@@ -1,4 +1,4 @@
-"""The local-command runner behind the ``RunCommand`` effect.
+"""The local-command runner for trusted Python-side command execution.
 
 A single choke point: materialize a set of files into a workdir, run a command
 over them (as a child process, **never** a shell), and capture the result. The
@@ -6,8 +6,8 @@ trusted Python build steps (the Solana sBPF build / IDL step) route through here
 
 (A Rust backend's own ``compile``/``validate`` toolchain runs no longer go through
 this: they spawn the ``run-confined`` launcher directly from the wheel via
-``autoprover_sdk::run_confined`` — see ``docs/rust-backend-api.md``. This runner and the
-launcher share the same :mod:`composer.sandbox.policy` seam, which is why it lives in
+``autoprover_sdk::sandbox::Workspace::run`` — see ``docs/rust-applications.md`` §8. This runner
+and the launcher share the same :mod:`composer.sandbox.policy` seam, which is why it lives in
 :mod:`composer.sandbox` rather than under ``rustapp``.)
 
 Optional confinement is applied via a :class:`~composer.sandbox.policy.SandboxProvider`
@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import signal
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
@@ -143,6 +144,7 @@ async def run_local_command(
                 env=child_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
         except FileNotFoundError:
             return CommandResult(NOT_FOUND_EXIT, "", f"{spec.argv[0]}: not found on PATH")
@@ -151,7 +153,12 @@ async def run_local_command(
                 proc.communicate(), timeout=timeout_s
             )
         except asyncio.TimeoutError:
-            proc.kill()
+            # Process group (pgid == pid via start_new_session) so descendants
+            # die with the leader. killpg before wait: do not reap then reuse a pid.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             await proc.wait()
             return CommandResult(-1, "", f"command timed out after {timeout_s}s")
         rc = proc.returncode if proc.returncode is not None else -1
