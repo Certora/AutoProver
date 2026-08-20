@@ -108,6 +108,10 @@ would cover all rules. Further, any rule/invariant not marked as "expected to fa
 be reported as `VERIFIED` in these most recent runs. NB That expected to fail rules must
 are not exempt from this coverage requirement.
 
+A single, final prover run that covers all rules should be your default mode.
+Splitting rules across multiple runs should only be used if one or more rule is particularly expensive in
+terms of solving time making it infeasible to verify alongside others in the spec file within the time limit of the prover.
+
 *Important*: If you change your state (via the skip declarations, spec edits, etc.) any validation results from your
 prover runs are *invalidated*.
 
