@@ -1,0 +1,9 @@
+{% for elt in enums %}
+impl Nondet for {{ elt.name }} {
+    fn nondet() -> Self { {% for v in elt.variants %}
+        {% if not loop.first %}} else {% endif %}{% if not loop.last %}if bool::nondet() {% endif %}{
+            {{ elt.name }}::{{ v.name }}{% if v.args %}({% for a in v.args %}nondet(){% if not loop.first %}, {% endif %}{% endfor %}){% endif %}{% endfor %}
+	}
+    }
+}
+{% endfor %}
