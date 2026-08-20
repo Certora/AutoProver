@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import pytest
 from langchain_core.messages import ToolMessage
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from composer.authoring.state import SkippedProperty, spec_digest
 from composer.rustapp import adapter
@@ -382,6 +383,13 @@ async def test_what_map_checks_writes_is_accepted_as_state_by_the_next_tool(tmp_
         f"map_checks wrote {[type(m).__mro__ for m in mapping]}, which the state annotation "
         "does not accept"
     )
+
+    # And it has to survive a checkpoint: the serializer restores a model by importing its class,
+    # so anything built at runtime comes back as a bare dict and every later read of the mapping
+    # fails on the attribute it no longer has.
+    serde = JsonPlusSerializer()
+    restored = serde.loads_typed(serde.dumps_typed(mapping))
+    assert [(m.property_title, m.checks) for m in restored] == [("stake matches", ["c_stake"])]
 
     wheel = _Wheel()
     out = await _validate(wheel, tmp_path, state=_state(property_checks=mapping))

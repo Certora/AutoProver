@@ -713,7 +713,14 @@ class MapChecks(
             f"Recorded: {len(self.property_checks)} propert"
             f"{'y' if len(self.property_checks) == 1 else 'ies'} mapped onto "
             f"{', '.join(names)}. `validate_spec` now runs only these names.",
-            property_checks=self.property_checks,
+            # State takes the declared type, not the templated subclass these arrive as: the
+            # checkpoint serializer restores a model by importing its class, and templating builds
+            # that class at runtime, so a templated instance comes back from a checkpoint as a bare
+            # dict. Same reason `record_skip` builds its own `SkippedProperty`.
+            property_checks=[
+                PropertyCheckMapping(property_title=m.property_title, checks=m.checks)
+                for m in self.property_checks
+            ],
         )
 
 
