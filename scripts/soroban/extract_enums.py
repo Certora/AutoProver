@@ -21,10 +21,10 @@ If repo_root is omitted the current directory is used.
 import sys
 import re
 import json
-from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Tuple
- 
+
+from util import * 
  
 # ─────────────────────────── data model ───────────────────────────────────────
  
@@ -42,6 +42,7 @@ class Variant:
 @dataclass
 class EnumDef:
     name: str
+    use: str
     attributes: List[str]            # e.g. ["contracttype", "derive(Clone)"]
     variants: List[Variant]
     file: str                        # repo-relative path
@@ -237,7 +238,7 @@ def parse_variant(token: str) -> Optional[Variant]:
  
  
 # ───────────────────── enum-block finder ──────────────────────────────────────
- 
+
 # Matches: (pub|pub(crate)|pub(super))? enum Name<...>? (where ...)? {
 _ENUM_RE = re.compile(
     r"""
@@ -316,6 +317,7 @@ def extract_enums(path: Path, repo_root: Path) -> List[EnumDef]:
  
         results.append(EnumDef(
             name       = m.group("name"),
+            use        = src_path_to_module(rel_path),
             attributes = attrs,
             variants   = variants,
             file       = rel_path,

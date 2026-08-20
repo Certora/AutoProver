@@ -1,4 +1,6 @@
 {% for elt in enums %}
+use {{ elt.use }}::{{ elt.name }};
+
 impl Nondet for {{ elt.name }} {
     fn nondet() -> Self { {% for v in elt.variants %}
         {% if not loop.first %}} else {% endif %}{% if not loop.last %}if bool::nondet() {% endif %}{
