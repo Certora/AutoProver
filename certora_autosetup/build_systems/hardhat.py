@@ -76,15 +76,18 @@ class HardhatManager(BuildSystemManager):
     Parallel to FoundryManager but adapted for Hardhat's JavaScript/TypeScript ecosystem.
     """
 
-    def __init__(self, project_root: Path, scope):
+    def __init__(self, project_root: Path, scope, run_root: Optional[Path] = None):
         """
         Initialize Hardhat manager.
 
         Args:
-            project_root: Root directory of the project
+            project_root: Directory the hardhat config is anchored on
             scope: Centralized scope for consistent filtering
+            run_root: Directory certoraRun is invoked from (defaults to project_root).
+                Accepted for interface parity — autosetup constructs every manager class
+                through the same call.
         """
-        super().__init__(project_root, scope, "HardhatManager")
+        super().__init__(project_root, scope, "HardhatManager", run_root=run_root)
 
     def get_config_filenames(self) -> List[str]:
         """Return list of config filenames to search for."""
@@ -380,6 +383,16 @@ class HardhatManager(BuildSystemManager):
     def get_build_command(self, profile: Optional[str] = None) -> str:
         """Return Hardhat build command."""
         return "npx hardhat compile"
+
+    @staticmethod
+    def holds_artifacts(artifacts_dir: Path) -> bool:
+        """Hardhat mirrors the sources tree under the artifacts dir and writes `build-info/`
+        beside it; the mirror is named after `paths.sources`, so `build-info/` is the part
+        that is there whatever the project calls its sources."""
+        if not artifacts_dir.is_dir():
+            return False
+        return (any((artifacts_dir / "contracts").rglob("*.json"))
+                or any((artifacts_dir / "build-info").glob("*.json")))
 
     def filter_artifacts(self, artifacts_dir: Path) -> List[Path]:
         """

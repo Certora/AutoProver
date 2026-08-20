@@ -1,8 +1,8 @@
 """
 Tests for CVL generation skip/completion machinery wired through a ReAct graph.
 
-Uses a minimal test tool to exercise the _merge_skips reducer and
-check_completion / _compute_digest validation logic end-to-end.
+Uses a minimal test tool to exercise the merge_skips reducer and
+check_completion / spec_digest validation logic end-to-end.
 """
 import pytest
 
@@ -16,10 +16,10 @@ from langgraph.types import Command
 from langgraph.graph import MessagesState
 
 
+from composer.authoring.state import SkippedProperty, check_completion
+from composer.spec.types import PropertyTitle
 from composer.spec.cvl_generation import (
     CVLGenerationExtra,
-    SkippedProperty,
-    check_completion,
     property_tools,
     FEEDBACK_VALIDATION_KEY,
     FeedbackServices,
@@ -156,7 +156,7 @@ def scenario(
 ):
     services = FeedbackServices(
         feedback_thunk=feedback_impl,
-        titles=[f"p{i}" for i in range(num_props)],
+        titles=[PropertyTitle(f"p{i}") for i in range(num_props)],
     )
     return Scenario(CVLTestState, *property_tools(services), *_STATIC_TOOLS).init(
         curr_spec=curr_spec,
@@ -168,7 +168,7 @@ def scenario(
 
 
 # =========================================================================
-# _merge_skips reducer via graph
+# merge_skips reducer via graph
 # =========================================================================
 
 

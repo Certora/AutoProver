@@ -2,7 +2,7 @@
 
 The ``wrap`` tests are pure argv construction (no binary, no subprocess) and pin
 the exact flag mapping. The ``available`` / ``--probe`` tests exercise the real
-binary when it has been built (``cargo build -p run-confined --release``) and skip
+binary when it has been built (``uv sync`` installs it into ``.venv/bin``) and skip
 otherwise, so the suite stays green on a machine without the Rust build.
 """
 

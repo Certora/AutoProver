@@ -40,10 +40,27 @@ The rest of this document covers the **host `uv` flow** for development.
 You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.md):
 
 - Python 3.12+, `uv`, Docker with compose
+- `rustup` — a default `uv sync` builds the `rust/` crates (see below)
 - `ANTHROPIC_API_KEY` in your environment
 - PostgreSQL databases running (see below)
 - RAG database populated
 - Solidity compiler(s) on `$PATH` (naming convention `solcX.Y`, e.g. `solc8.29`)
+
+### Rust toolchain
+
+A `uv sync`, or any `uv run`, which revalidates path dependencies, builds the maturin crates under `rust/`. Without a
+toolchain the sync fails outright rather than skipping. Install [rustup](https://rustup.rs) (a distro `cargo` package is
+not enough: `rust-toolchain.toml` pins the toolchain and rustup is what reads it), then once, from the repo root:
+
+```bash
+rustup toolchain install --no-self-update
+```
+
+Re-run that after any bump to `rust-toolchain.toml`'s `channel` — rustup would otherwise install the new toolchain from
+inside the build, where the concurrent cargo calls a sync makes race each other and one dies mid-download.
+
+Not working on the Rust side? `uv sync --no-dev` skips the crates entirely — the Rust tests then skip themselves instead
+of failing, and the CI pyright job runs this way.
 
 ### Certora Prover
 

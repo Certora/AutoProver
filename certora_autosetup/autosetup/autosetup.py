@@ -418,7 +418,12 @@ class Autosetup:
 
             # Get appropriate manager class and create instance
             ManagerClass = BuildSystemDetector.get_manager_class(detected)
-            manager: BuildSystemManager = ManagerClass(self.build_config_dir, scope)  # type: ignore
+            # The manager is anchored on the build config dir, but remapping contexts and the
+            # hoisted-package walk belong to the directory certoraRun runs from — the two differ
+            # exactly when the build config lives in a monorepo sub-project.
+            manager: BuildSystemManager = ManagerClass(  # type: ignore
+                self.build_config_dir, scope, run_root=run_root
+            )
 
             # Auto-detect and parse config (polymorphic - returns FoundryConfig or HardhatConfig)
             self.log(f"Auto-detecting {detected.value} configuration...")
