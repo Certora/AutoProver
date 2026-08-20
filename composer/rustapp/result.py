@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from composer.rustapp.wire import Target, Verdict
 from composer.authoring.state import SkippedProperty
+from composer.spec.source.report.schema import Outcome
 from composer.spec.types import CheckName, PropertyTitle
 
 
@@ -32,6 +33,20 @@ class RustSetupSpec(BaseModel):
     source: str
 
 
+def _declared_finding(ran: Verdict, reason: str) -> Verdict:
+    """Mark ``ran`` as a declared finding, keeping the run's own ``detail``."""
+    if ran.outcome is Outcome.BAD:
+        lead = f"DECLARED EXPECTED TO FAIL — the violation below is the finding: {reason}"
+    else:
+        lead = (
+            f"DECLARED EXPECTED TO FAIL — a violation here is the finding: {reason}\n"
+            f"NOT REPRODUCED: this run reported {ran.outcome.value}, so the finding rests on the "
+            f"author's reading rather than on a counterexample from this run."
+        )
+    body = f"{lead}\n\n{ran.detail}" if ran.detail else lead
+    return ran.model_copy(update={"outcome": Outcome.BAD, "detail": body})
+
+
 class RustFormalResult(BaseModel):
     """A successful Rust formalization. ``checks`` holds the property→check-names
     map as JSON-friendly lists; ``property_checks()`` re-tuples it for the
@@ -43,10 +58,11 @@ class RustFormalResult(BaseModel):
     checks: list[tuple[PropertyTitle, list[CheckName]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
     output_link: str | None = None
-    # Per-check verdicts baked in at formalize time by a self-contained backend (check name -> the
-    # wheel's :class:`~composer.rustapp.wire.Verdict`, validated at the seam). Empty for
-    # run-service-backed backends (they use fetch_verdicts).
+    # Per-check verdicts from the wheel (what the run observed). Empty for run-service-backed
+    # backends (they use fetch_verdicts). Use ``reported_verdicts`` for what to report.
     verdicts: dict[CheckName, Verdict] = Field(default_factory=dict)
+    # Checks the author marked expected-to-fail, name -> why. The wheel never sees these.
+    expected_failures: dict[CheckName, str] = Field(default_factory=dict)
     # What the stamping gate run covered: each validation *target* — one invocation of the checker —
     # with the checks it covered, in the order they ran. Several checks may share one target
     # (Crucible puts a component's whole property set in one fuzz target), so this is neither
@@ -61,6 +77,27 @@ class RustFormalResult(BaseModel):
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
         return [(title, list(names)) for title, names in self.checks]
+
+    def reported_verdicts(self) -> dict[CheckName, Verdict]:
+        """Verdicts as the report and console should show them.
+
+        A declared check reports BAD even if this run did not reproduce it, so a
+        documented finding cannot show as a pass. The detail says which case it is:
+        a reproduced finding keeps the counterexample; an unreproduced one says
+        ``NOT REPRODUCED``."""
+        return {
+            name: (
+                _declared_finding(verdict, self.expected_failures[name])
+                if name in self.expected_failures
+                else verdict
+            )
+            for name, verdict in self.verdicts.items()
+        }
+
+    def display_name(self, check: CheckName) -> str:
+        """Row name for one check: the property title when it verifies exactly one, else the check name."""
+        titles = self.check_properties().get(check, [])
+        return titles[0] if len(titles) == 1 else check
 
     def check_properties(self) -> dict[CheckName, list[PropertyTitle]]:
         """``checks`` inverted: check name -> the property titles it verifies. For display, where

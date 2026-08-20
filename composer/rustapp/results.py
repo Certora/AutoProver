@@ -3,9 +3,8 @@
 The canonical results artifact is ``report.json`` (the shared report phase). But — as with the
 CVL and Foundry backends — the console/TUI otherwise surface only a counts block, so a completed
 run reads as "success" with no visible verdicts. This turns the per-check verdicts baked into the
-pipeline result (:attr:`RustFormalResult.verdicts`, published by ``validate``) into a compact
-tally + per-check listing, using the report's own outcome labels so the wording matches the HTML
-report.
+pipeline result (:meth:`RustFormalResult.reported_verdicts`) into a compact tally + listing,
+using the report's own outcome labels so a declared finding reads the same here as in the HTML.
 
 Backend-agnostic: the outcome wording is parametrized by the descriptor's ``backend_tag``, so any
 Rust app whose results carry verdicts gets the same summary.
@@ -19,13 +18,12 @@ from composer.pipeline.core import CorePipelineResult, Delivered
 from composer.rustapp.result import RustFormalResult
 from composer.spec.source.report.render import outcome_glyph, outcome_label
 from composer.spec.source.report.schema import Outcome, ReportBackend
-from composer.spec.types import CheckName, PropertyTitle
 
 # ``RowName``: what a verdict row is called in the console/TUI listing. Phantom-typed like
 # ``CheckName`` / ``PropertyTitle`` / ``ComponentName`` so it is a sibling of all three — the
-# row is whatever :func:`_row_name` (or a component's display name) chose to show, and is never
-# looked up as one of them. Defined here because the row is a display concept of this rollup,
-# not an identity field of the analyzed system.
+# row is whatever :meth:`RustFormalResult.display_name` (or a component's display name) chose
+# to show, and is never looked up as one of them. Defined here because the row is a display
+# concept of this rollup, not an identity field of the analyzed system.
 if TYPE_CHECKING:
     class RowName(str): ...
 else:
@@ -40,9 +38,9 @@ _ORDER = [Outcome.GOOD, Outcome.BAD, Outcome.TIMEOUT, Outcome.ERROR, Outcome.UNK
 class CheckVerdict:
     """One check's outcome: its display name and the neutral ``Outcome``."""
 
-    #: Whatever :func:`_row_name` chose to call the row — a property's title, a check's name,
-    #: or a component's display name. A :class:`RowName` so it belongs to none of those
-    #: namespaces and is never looked up as one of them.
+    #: Whatever :meth:`RustFormalResult.display_name` chose to call the row — a property's
+    #: title, a check's name, or a component's display name. A :class:`RowName` so it belongs
+    #: to none of those namespaces and is never looked up as one of them.
     name: RowName
     outcome: Outcome
 
@@ -68,13 +66,6 @@ class VerdictSummary:
         )
 
 
-def _row_name(check: CheckName, properties: list[PropertyTitle]) -> RowName:
-    """What to call one check's row: the property's own words when it verifies exactly one, and
-    otherwise the check's own name — the only thing that names the row unambiguously when one check
-    discharges several properties (or the author mapped none to it)."""
-    return RowName(properties[0] if len(properties) == 1 else check)
-
-
 def summarize_verdicts(
     result: CorePipelineResult[RustFormalResult], backend_tag: ReportBackend
 ) -> VerdictSummary:
@@ -82,7 +73,7 @@ def summarize_verdicts(
 
     One row per *check*, not per component: a component's gate run bakes a verdict per check it
     covered, and all of them are rows (reading only the first would report one check where five
-    ran). Rows are named by :func:`_row_name`.
+    ran). Rows are named by :meth:`RustFormalResult.display_name`.
 
     Only *delivered* components carry verdicts; give-ups / exceptions are already surfaced in
     ``result.failures`` and skipped here. A delivered component that bakes none at all (a
@@ -96,10 +87,9 @@ def summarize_verdicts(
         if not formalized.verdicts:
             verdicts.append(CheckVerdict(RowName(o.feat.display_name), Outcome.UNKNOWN))
             continue
-        titles = formalized.check_properties()
         verdicts.extend(
-            CheckVerdict(_row_name(name, titles.get(name, [])), baked.outcome)
-            for name, baked in formalized.verdicts.items()
+            CheckVerdict(RowName(formalized.display_name(name)), reported.outcome)
+            for name, reported in formalized.reported_verdicts().items()
         )
     return VerdictSummary(verdicts, backend_tag)
 

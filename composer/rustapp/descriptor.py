@@ -94,6 +94,19 @@ class Callout(WireModel):
 DeliverableMode = Annotated[PerComponent | Callout, Field(discriminator="mode")]
 
 
+class FindingsDeclaration(WireModel):
+    """How a violated check of this backend becomes a written audit finding.
+
+    Declared by the wheel because a write-up rests on claims only the wheel can make: what its
+    evidence *is*, what that evidence establishes, and how to read its own markers. The host owns
+    everything around that — which rows, their properties and groups, the concurrency, grouping the
+    rows that share one finding, composing the record — and none of the prose."""
+
+    #: The *domain* half of the write-up system prompt. The host wraps it in the contract (how
+    #: severity is reached, which sections come back), so no wheel restates that.
+    domain: str
+
+
 class PhaseSpec(WireModel):
     """One task-grouping phase; ``key`` becomes the synthesized enum member name.
 
@@ -214,6 +227,10 @@ class AppDescriptor(WireModel):
     #: rebuttal tool's ``evidence_type`` is built from. Declared per wheel because the evidence a
     #: backend can produce is a property of that backend.
     evidence_kinds: list[str]
+    #: How this backend's violated checks are written up as audit findings — ``None`` produces none,
+    #: and the report carries only the verdict rows. Declining is the default because a write-up has
+    #: to say what the evidence behind it is, and only the wheel knows.
+    findings: FindingsDeclaration | None
 
     def unit_noun(self, *, plural: bool = False) -> str:
         """The noun for a formalized unit, with the generic default applied — so no frontend

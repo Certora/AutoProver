@@ -203,6 +203,24 @@ pub enum DeliverableMode {
     },
 }
 
+/// How a violated check of this backend becomes a written audit finding.
+///
+/// Declared by the wheel because a write-up rests on claims only the wheel can make: what its
+/// evidence *is* — a symbolic refutation, or a fuzzer's crash against a harness the author wrote —
+/// what that evidence establishes, and how to read its own markers. The host owns everything
+/// around that: which rows, each row's properties and the audit groups they sit in, the
+/// concurrency, grouping the rows that share one finding, and composing the record. It owns none
+/// of the prose.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct FindingsDeclaration {
+    /// The *domain* half of the write-up system prompt — what this backend's evidence is, what it
+    /// does and does not establish, and what its markers mean. The host wraps it in the contract
+    /// (how severity is reached, which sections come back), so no wheel restates that.
+    pub domain: String,
+}
+
 /// The complete declaration the Python host reads once at load time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -253,6 +271,14 @@ pub struct AppDescriptor {
     /// backend: a fuzzing wheel can show a counterexample, a typechecking one an error from a
     /// checker that never runs code. See [`EVIDENCE_KINDS`] for the default set.
     pub evidence_kinds: Vec<String>,
+    /// How this backend's violated checks are written up as audit findings (see
+    /// [`FindingsDeclaration`]) — `None` produces none, and the report carries only the verdict rows.
+    ///
+    /// Declining is the default because a write-up has to say what the evidence behind it is, and
+    /// only the wheel knows. A run that reports verdicts without claiming to know what they
+    /// establish is a coherent wheel; one whose findings are prose the host guessed is not.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub findings: Option<FindingsDeclaration>,
 }
 
 /// The evidence an author can usually offer, for a wheel with no reason to name its own: the build

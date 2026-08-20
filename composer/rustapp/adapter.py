@@ -60,6 +60,8 @@ from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
+from composer.rustapp.findings import rust_findings
+from composer.spec.source.report.findings import FindingsPolicy
 from composer.rustapp.phases import PhaseModel
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupSpec
 from composer.rustapp.toolchain import project_toolchain, source_unit
@@ -385,6 +387,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             checks=outcome.property_checks,
             skipped=outcome.skipped,
             verdicts=outcome.verdicts,
+            expected_failures=outcome.expected_failures,
             # What the stamping run actually covered, in the order the host ran it — each target
             # with its checks. A callout-mode wheel keys its deliverable sections on the names, and
             # carrying the checks alongside is what makes "which properties are these results
@@ -396,16 +399,29 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     async def fetch_verdicts(
         self, formalized: Formalized[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
+        # Fold in expect_check_failure so a declared check cannot show as a pass, and rejoin the
+        # wheel's two halves: the report has one ``message`` per row, and a green row's whole worth
+        # is the accounting — but the evidence leads, because a BAD row's first line is what a
+        # reader is looking for.
         return {
             name: Verdict(
                 outcome=v.outcome,
                 line=v.line,
                 duration_seconds=v.duration_seconds,
                 unit_file=v.unit_file or formalized.unit_file,
-                message=v.detail,
+                message="\n\n".join(part for part in (v.detail, v.accounting) if part) or None,
             )
-            for name, v in formalized.result.verdicts.items()
+            for name, v in formalized.result.reported_verdicts().items()
         }
+
+    @override
+    def findings_policy(
+        self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]]
+    ) -> FindingsPolicy | None:
+        # Evidence is in the results themselves — a wheel reports per check, and there is no
+        # run-scoped store beside it holding what it saw. What that evidence *means* is the wheel's
+        # declaration, and a wheel that made none produces no findings.
+        return rust_findings(outcomes, self._descriptor.findings)
 
     @override
     async def finalize(
