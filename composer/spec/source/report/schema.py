@@ -246,9 +246,9 @@ adds its own literal here, plus its wording in ``report/render.py``."""
 # ---------------------------------------------------------------------------
 # Findings — violated rules surfaced as audit issues.
 #
-# A `Finding` records a violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) as an audit
-# issue: a ``title``, a ``severity``, and the ``content`` write-up, synthesized from the rule's
-# counterexample analysis and the properties/groups it breaks (see ``report/findings.py``). The field
+# A `Finding` is a title, a severity, and a write-up, composed by the shared loop in
+# ``report/findings.py`` from the evidence the backend hands back for a violated rule and the
+# properties/groups that rule breaks. The field
 # set follows the "Submit Issue" body of the Sherlock Audit Engine API — schema at
 # https://api-audit-engine.sherlock.xyz/v1/docs/public — so a finding maps cleanly onto a submission,
 # but the source ``locations`` a submission needs
@@ -328,7 +328,6 @@ class AutoProverReport(BaseModel):
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
     coverage: CoverageReport
-    #: Violated rules surfaced as audit issues (one per BAD rule; empty
-    #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose
-    #: is synthesized at report time — see ``report/findings.py``.
+    #: Audit issues for violated rules (one per BAD rule). Empty when nothing is violated or the
+    #: backend declares no findings policy — see ``Formalizer.findings_policy``.
     findings: list[Finding] = Field(default_factory=list)

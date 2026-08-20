@@ -9,15 +9,16 @@ producing no high-level section; the caller additionally treats the whole phase 
 """
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from composer.spec.types import Curtailed
 from composer.spec.source.report.collect import (
-    EvidenceFetcher, ReportableResult, ReportComponentInput, VerdictFetcher, collect,
+    ReportableResult, ReportComponentInput, VerdictFetcher, collect,
 )
 from composer.spec.source.report.coverage import ValidationError, validate
-from composer.spec.source.report.findings import build_findings
+from composer.spec.source.report.findings import FindingsPolicy, build_findings
 from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
@@ -48,14 +49,13 @@ async def build_report[R: ReportableResult](
     source_edits: list[SourceEditRecord] | None = None,
     verification_artifacts: list[VerificationArtifactRecord] | None = None,
     findings_llm: BaseChatModel | None = None,
-    fetch_evidence: EvidenceFetcher | None = None,
+    findings: FindingsPolicy | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
-    When ``findings_llm`` is supplied, violated rules are additionally synthesized into
-    audit-issue `Finding`s (best-effort; a synthesis failure yields no findings
-    rather than failing the report). ``fetch_evidence`` supplies each violation's captured
-    counterexample analysis; it is optional."""
+    When the backend supplies a ``findings`` policy, violated rules are additionally written up
+    as audit-issue `Finding`s (best-effort; a synthesis failure yields no findings rather than
+    failing the report)."""
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         components, fetch_verdicts=fetch_verdicts
     )
@@ -116,12 +116,12 @@ async def build_report[R: ReportableResult](
     # Violated rules -> findings. Its own guard: findings synthesis must never fail the report
     # (the whole phase is also best-effort in the caller, but this keeps a working report even when
     # only findings break).
-    findings: list[Finding] = []
-    if findings_llm is not None:
+    written: list[Finding] = []
+    if findings is not None and findings_llm is not None:
         try:
-            findings = await build_findings(
+            written = await build_findings(
                 contract_name=contract_name, rules=rules, properties=properties, groups=groups,
-                fetch_evidence=fetch_evidence, llm=findings_llm,
+                policy=findings, llm=findings_llm,
             )
         except Exception as e:  # noqa: BLE001
             if RERAISE_REPORT_FAILURES:
@@ -142,6 +142,6 @@ async def build_report[R: ReportableResult](
         source_edits=source_edits or [],
         verification_artifacts=verification_artifacts or [],
         coverage=coverage,
-        findings=findings,
+        findings=written,
     )
     return report

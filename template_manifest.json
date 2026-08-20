@@ -173,16 +173,22 @@
     "template_name": "harness_generation_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.report.findings:_FINDINGS_SYSTEM": {
-    "module": "composer.spec.source.report.findings",
-    "qualname": "_FINDINGS_SYSTEM",
-    "template_name": "autoprove_report_findings_system.j2",
+  "composer.spec.source.prover_findings:_PROVER_DOMAIN": {
+    "module": "composer.spec.source.prover_findings",
+    "qualname": "_PROVER_DOMAIN",
+    "template_name": "autoprove_report_findings_prover_domain.j2",
     "ty_sort": "TypedTemplate"
   },
-  "composer.spec.source.report.findings:_FINDINGS_PROMPT": {
-    "module": "composer.spec.source.report.findings",
-    "qualname": "_FINDINGS_PROMPT",
+  "composer.spec.source.prover_findings:_WRITE_UP_PROMPT": {
+    "module": "composer.spec.source.prover_findings",
+    "qualname": "_WRITE_UP_PROMPT",
     "template_name": "autoprove_report_findings_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.source.report.findings:_SYSTEM": {
+    "module": "composer.spec.source.report.findings",
+    "qualname": "_SYSTEM",
+    "template_name": "autoprove_report_findings_system.j2",
     "ty_sort": "TypedTemplate"
   },
   "composer.spec.source.report.render:_REPORT_TEMPLATE": {
