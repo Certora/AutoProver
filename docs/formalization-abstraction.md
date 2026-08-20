@@ -152,12 +152,15 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     def extra_report_inputs(self) -> list[ReportComponentInput[FormT]]:
         return []                     # synthetic report rows; default none
 
+    def findings_policy(self, outcomes) -> FindingsPolicy | None:
+        return None                   # how to write violated rules up; default none
+
     async def finalize(self, outcomes, run) -> None:
         return None                   # run-level artifacts from the full outcome set; default none
 ```
 
 The contract is deliberately small — one required producer (`formalize`), one required
-reader (`fetch_verdicts`), and two optional hooks. The second type parameter `U` is the
+reader (`fetch_verdicts`), and three optional hooks. The second type parameter `U` is the
 *formalized unit* the backend consumes (EVM's `ContractComponentInstance`, a Rust backend's
 `FeatureUnit`): the backend reads its concrete unit's members without casts while the driver stays
 unit-agnostic. Crucially, a `Formalizer` is **immutable and fully constructed** by whatever produced
@@ -473,7 +476,78 @@ to one entry, and uses `Verdict.merge` (priority `BAD > ERROR > TIMEOUT > UNKNOW
 roll up multiple results for one rule. Foundry's fetcher instead reads pass/fail straight off
 the result with no run service — same protocol, different source.
 
-### 4.6 `finalize` — run-level artifact
+### 4.6 `findings_policy` — writing a violation up
+
+```python
+def findings_policy(self, outcomes) -> FindingsPolicy | None:
+    return prover_findings(self._evidence)      # None to produce no findings
+```
+
+`fetch_verdicts` answers "did each rule hold". Findings answer "what did this run find", which is
+the report's first section. Both read the same BAD rows; they differ in what they say about one.
+
+The write-up loop is shared ([report/findings.py](../composer/spec/source/report/findings.py)):
+walk the BAD rules, resolve each one's properties and the audit groups they sit in, group the rows
+that share one finding, ask a model, build the proof of concept, bound the concurrency, compose the
+`Finding`.
+
+Evidence is shared too. Every backend hands back `RuleEvidence`:
+
+| Field | |
+| --- | --- |
+| `label` | Which instance, where a rule can fail more than once — a parametric binding for the prover, the component for a per-component backend |
+| `analysis` | The backend's account of *why* the check failed, where it produces one |
+| `counterexample` | What reproduces it: a counterexample trace, a crashing input, an assertion message |
+| `ran` | The run's own outcome, before any authored declaration is folded into the one the report shows |
+| `accounting` | What the run spent and how far it reached — what makes a result weigh something |
+| `declared` | Why the author declared this failure expected, when they did |
+| `finding` | Which finding this belongs to, when one piece of evidence condemns several checks |
+
+Backends differ in what they can *fill*, not in the shape: a prover has an `analysis` and a trace, a
+fuzzing wheel has a crashing input and an `accounting`. Absence always means "this run recorded
+nothing of that kind", so the fields mean the same thing whoever produced them and a prompt can say
+what is missing instead of guessing. An earlier design made this a type parameter; it bought nothing,
+because the only code that ever reads a field is the backend's own prompt.
+
+What a backend supplies is a `FindingsPolicy` — three things, only one of which is a function. It
+is a record rather than a table of hooks, which is why the name says *policy*: a Rust wheel ships
+one of its fields across the FFI boundary as JSON (`FindingsDeclaration`), and anything that
+survives serialization was never behaviour.
+
+| Field | Why it is the backend's |
+| --- | --- |
+| `fetch_evidence` | Keyed by `RuleRef` — `(file, name)`, how the report identifies a row. A name alone does not: one deliverable can hold several components' checks, and two authors given the same property write the same name. The only hook, because it is the only one that does I/O |
+| `domain` | The *domain* half of the system message — a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's. The host wraps it in the shared contract (how severity is reached, which sections come back), so a backend restates none of that |
+| `prompt` | A `TypedTemplate[FindingsPromptParams]`, not a callable. Both backends' prompts take the same fields — rule, properties, groups, evidence, `also_covers` — so the backend owns the prose and `build_findings` owns the binding |
+
+Severity is not among them. Every backend's findings are rated the same way: the model assesses
+impact and likelihood on the one `FindingDraft`, and `severity_for` maps the pair through a fixed
+matrix — the model never picks a tier, so the severity a reader sees is re-derivable from what the
+write-up said. What differs between backends is what a violation *is*, and that is the prompt's job
+to say.
+
+Everything else the loop used to take as a hook turned out to be derivable from the evidence itself,
+and is now shared: `proof_of_concept` joins the reproducers from instances the run actually refuted
+(labelled once there is more than one), and `finding_key` reads the key the backend stamped.
+
+That key is what keeps the cost proportional to what was *found* rather than to how many rows it took
+down. A fuzz campaign covers a component's whole property set, and a crash it cannot place condemns
+every check in it — on a klend-sized component that is 26 BAD rows of one crash. Written up per row
+it would be 26 heavy-model calls publishing 26 accounts of the same finding, each guessing a
+different check it might have been.
+
+The relation is deliberately *stamped* and never inferred from matching evidence: rows fanned out
+from one conclusion look exactly like several checks that failed the same way, and those are two
+different facts about the program. Only whatever produced the verdicts knows which it is — a Rust
+wheel says so on `Verdict.finding`, and it stamps it at the point it decides to fan out.
+
+Returning `None` is how a backend opts out; the report then builds no findings for it and never
+starts the heavy model. `outcomes` is passed because a backend whose evidence is in its own results
+has nowhere else to read it from — the prover's is a run-scoped store and ignores them.
+
+A failure here costs the findings, never the report.
+
+### 4.7 `finalize` — run-level artifact
 
 ```python
 async def finalize(self, outcomes, run) -> None:
@@ -648,6 +722,7 @@ system analysis, property extraction, caching, and the report, and contributes o
 | shared artifact (`StagedFormalizer`) | none — `invariants.spec` is built from the model, in `prepare_formalization` | none |
 | `formalize` | authoring session, gated by `verify_spec` | authoring session, gated by `forge_test` |
 | `fetch_verdicts` | query prover output off-thread | read ran/expected tests off the result |
+| `findings_policy` | LLM write-up per violated rule, from the captured CEX analysis | none (default `None`) |
 | `extra_report_inputs` | synthetic "Structural Invariants" | none |
 | `finalize` | `components_to_prover_runs.json` | none |
 | artifact bundle | `.spec` + `.conf` | `.t.sol` + metadata |
