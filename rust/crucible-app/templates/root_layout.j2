@@ -6,10 +6,22 @@ const PROGRAM_SO: &str = "{{ program_so }}";
 
 // ─── How this crate root declares its targets ────────────────────────────────────────────────
 //
-// Each target below is one Cargo feature: a `#[cfg]`-gated `mod` holding that component's authored
-// tests, and a generated `#[invariant_test]` entry that delegates into it. Exactly one feature is
-// ever enabled, because each `#[invariant_test]` expands its own `fn main()` + `#[global_allocator]`
-// and two of those cannot coexist.
+// Each target below is one CHECK: a Cargo feature, and a generated `#[invariant_test]` entry that
+// delegates into the authored fn of the same name, in its component's `#[cfg]`-gated `mod`. Exactly
+// one feature is ever enabled, because each `#[invariant_test]` expands its own `fn main()` +
+// `#[global_allocator]` and two of those cannot coexist.
+//
+// A check rather than a component, so each is measured on its own evidence: a campaign covering
+// several stops each input at its first violation and drops that input from its corpus, so
+// whichever check it refutes first shapes the exploration the rest would then be reported `GOOD` on
+// (docs/per-check-targets.md). A component is therefore a module, not a build target — its `mod` is
+// gated on the union of its checks' features.
+//
+// The targets are named from the run's *properties*, which are known before anything is authored —
+// that is what lets this root declare a target per check while checks are declared later. A property
+// the author declined has a feature here and no fn behind it: nothing selects it, and a user who
+// does gets `E0425` naming the fn that was never written. That is also what catches a check whose
+// fn the author misnamed.
 //
 // The `#[cfg]` — not the module — is what isolates a section: an inherent `impl Fixture` contributes
 // its methods to the type GLOBALLY (rustc E0592 fires on a duplicate method name even when the two

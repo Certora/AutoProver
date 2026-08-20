@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use askama::Template;
 use autoprover_sdk::finalize::FinalizeInput;
 
-use crate::layout::{DEFAULT_HARNESS_FN, SECTION_FN};
+use crate::layout::{CHECK_PREFIX, DEFAULT_HARNESS_FN};
 use crate::templates::{GaveUpSection, SectionEntry, SectionFile};
 
 /// The two places one component's section occupies in the crate — rendered independently, because
@@ -18,38 +18,37 @@ use crate::templates::{GaveUpSection, SectionEntry, SectionFile};
 pub(crate) struct Section;
 
 impl Section {
-    /// The crate root's lines for Cargo feature `feature`: the gated `mod`, and the generated
-    /// `#[invariant_test]` entry delegating into it. Depends only on the name, which is why the root
-    /// can be written before any component has authored anything.
-    pub(crate) fn entry(feature: &str) -> String {
-        SectionEntry { feature, section_fn: SECTION_FN }.render().expect("render section_entry")
+    /// The crate root's lines for one component: the `mod`, gated on the union of its checks'
+    /// features, and one `#[invariant_test]` entry per check delegating into it.
+    ///
+    /// Depends only on names — the component's module and its checks', both derived from host slugs
+    /// — which is why the root can still be written before any component has authored anything. A
+    /// check is named for the property it carries, and the run's properties are known then, so
+    /// declaring a target per check needs nothing the author has not yet written.
+    pub(crate) fn entry(module: &str, checks: &[String]) -> String {
+        SectionEntry { module, checks }.render().expect("render section_entry")
     }
 
-    /// The module file for `feature`, holding the authored `body`.
+    /// The module file for component `module`, holding the authored `body`.
     ///
-    /// Two normalizations are applied to the authored source first, both anchored on the known fn
-    /// name rather than by parsing Rust, because the entry cannot reach the body without them:
+    /// Two normalizations are applied to the authored source first, because the entries cannot
+    /// reach the body without them:
     ///
-    /// * **Any `#[invariant_test]` on the authored fn is dropped.** The prompt asks for a bare
-    ///   `pub fn`, but a model that adds the attribute anyway would expand `fn main()` *inside* the
+    /// * **Any `#[invariant_test]` on an authored fn is dropped.** The prompt asks for bare
+    ///   `pub fn`s, but a model that adds the attribute anyway would expand `fn main()` *inside* the
     ///   module, where it is not a binary entry point — a confusing link error rather than a
     ///   compile error the revise loop could act on.
-    /// * **The authored fn is made `pub`.** It is called from the crate root, so a private fn is
-    ///   `E0603`. Cheaper to fix here than to spend a revise round on it.
+    /// * **Every authored check fn is made `pub`.** They are called from the crate root, so a
+    ///   private one is `E0603`. Cheaper to fix here than to spend a revise round on it.
     ///
-    /// Both are constant string surgery, not name-derived, because [`SECTION_FN`] is the same in
-    /// every component.
-    pub(crate) fn file(feature: &str, body: &str) -> String {
+    /// The second is anchored on [`CHECK_PREFIX`] rather than on one known name, since the author
+    /// now writes one fn per check. It rewrites only `fn c_…` at the start of a line: a private
+    /// helper the author named otherwise stays private, which is what a helper should be.
+    pub(crate) fn file(module: &str, body: &str) -> String {
         let body = body.replace("#[invariant_test]\n", "").replace("#[invariant_test]", "");
-        let body = if body.contains(&format!("pub fn {SECTION_FN}")) {
-            body
-        } else {
-            body.replace(&format!("fn {SECTION_FN}"), &format!("pub fn {SECTION_FN}"))
-        };
+        let body = publicize_checks(&body);
         let body = as_module_body(&body);
-        SectionFile { feature, section_fn: SECTION_FN, body: body.trim() }
-            .render()
-            .expect("render section_file")
+        SectionFile { module, body: body.trim() }.render().expect("render section_file")
     }
 
     /// The module file for a component formalization gave up on: no tests, and a `compile_error!`
@@ -61,8 +60,8 @@ impl Section {
     /// test that fails: `validate` reads a fuzz finding as a refuted property, so a failing test here
     /// would be indistinguishable from a real counterexample against the user's program. The gate is
     /// `#[cfg]`, so this never affects a build of any other feature.
-    pub(crate) fn gave_up(feature: &str, unit: &str, reason: &str) -> String {
-        GaveUpSection { feature, unit, reason: &reason.replace('"', "'") }
+    pub(crate) fn gave_up(module: &str, unit: &str, reason: &str) -> String {
+        GaveUpSection { module, unit, reason: &reason.replace('"', "'") }
             .render()
             .expect("render gave_up_section")
     }
@@ -83,6 +82,21 @@ impl Section {
 /// * **A repeated `use super::*;` is dropped.** Legal — glob imports may repeat — but noise in a
 ///   file a user reads, and it is what the revise loop left behind when it fixed the doc comments.
 ///
+/// Every authored check fn made `pub`, so the crate root's entries can reach it.
+///
+/// Anchored at line starts and on [`CHECK_PREFIX`]: an fn the author named anything else is a
+/// helper and stays private, and `fn c_…` appearing inside a string or a comment is not at column
+/// zero. Idempotent — an fn the author already made `pub` is left alone.
+fn publicize_checks(body: &str) -> String {
+    body.lines()
+        .map(|line| match line.strip_prefix(&format!("fn {CHECK_PREFIX}")) {
+            Some(rest) => format!("pub fn {CHECK_PREFIX}{rest}"),
+            None => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Anchored at line starts, so a `//!` inside a string literal is left alone.
 fn as_module_body(body: &str) -> String {
     body.lines()
@@ -135,13 +149,13 @@ mod tests {
     use crate::testkit::{at, code_only, delivered_component, delivered_files, gated, scaffold};
 
     /// Two components' sections, each with its own same-named private helper — verbatim the shape
-    /// that collided (`E0592 duplicate definitions with name read_token_balance`). Both name the
-    /// authored fn [`SECTION_FN`], which is what the prompt now asks for in every component.
+    /// that collided (`E0592 duplicate definitions with name read_token_balance`). Each names its
+    /// check fn after the property it carries, which is what the prompt asks for.
     const SEC_A: &str =
-        "pub fn invariants(fixture: &mut Fixture) { let _ = fixture.read_token_balance(); }\n\
+        "pub fn c_a_holds(fixture: &mut Fixture) { let _ = fixture.read_token_balance(); }\n\
          impl Fixture { fn read_token_balance(&self) -> u64 { 1 } }";
     const SEC_B: &str =
-        "pub fn invariants(fixture: &mut Fixture) { let _ = fixture.read_token_balance(); }\n\
+        "pub fn c_b_holds(fixture: &mut Fixture) { let _ = fixture.read_token_balance(); }\n\
          impl Fixture { fn read_token_balance(&self) -> u64 { 2 } }";
 
     /// A path inside the `lending` harness crate, as the host receives it (workdir-relative).
@@ -151,16 +165,19 @@ mod tests {
 
     #[test]
     fn a_section_is_gated_and_its_entry_point_delegates_into_it() {
+        // One target per CHECK: the module is gated on the union of its checks' features, and each
+        // check gets its own entry (docs/per-check-targets.md). The component is not a feature.
         let main_rs = &scaffold(&["a"])[&at_lending("src/main.rs")];
-        assert!(main_rs.contains("#[cfg(feature = \"c_a\")]\nmod c_a;"), "{main_rs}");
-        // The entry is ours, at crate root, gated on the same feature, delegating in.
+        assert!(main_rs.contains("#[cfg(any(feature = \"c_a_holds\"))]\nmod c_a;"), "{main_rs}");
+        // The entry is ours, at crate root, gated on that check's feature, delegating in.
         assert!(
             main_rs.contains(
-                "#[cfg(feature = \"c_a\")]\n#[invariant_test]\nfn c_a(fixture: &mut Fixture) {\n    \
-                 c_a::invariants(fixture)\n}"
+                "#[cfg(feature = \"c_a_holds\")]\n#[invariant_test]\nfn c_a_holds(fixture: &mut Fixture) {\n    \
+                 c_a::c_a_holds(fixture)\n}"
             ),
             "{main_rs}"
         );
+        assert!(!main_rs.contains("feature = \"c_a\""), "the component is still a feature:\n{main_rs}");
         // The body lives in the file that `mod c_a;` resolves to, not in the crate root.
         let section = &gated("c_a", SEC_A)[&at_lending("src/c_a.rs")];
         assert!(section.contains("use super::*;"), "{section}");
@@ -214,16 +231,18 @@ mod tests {
     #[test]
     fn the_authored_fn_is_made_visible_to_the_generated_entry() {
         // Called from the crate root, so a private fn is E0603. Cheaper than a revise round.
-        let files = gated("c_a", "fn invariants(fixture: &mut Fixture) {}");
+        let files = gated("c_a", "fn c_a_holds(fixture: &mut Fixture) {}\nfn helper() {}");
         let section = files.get(&at_lending("src/c_a.rs")).expect("section file");
-        assert!(section.contains("pub fn invariants(fixture: &mut Fixture)"), "{section}");
+        assert!(section.contains("pub fn c_a_holds(fixture: &mut Fixture)"), "{section}");
+        // A helper the author named anything else is not a check, and stays private.
+        assert!(section.contains("\nfn helper()"), "{section}");
     }
 
     #[test]
     fn an_already_public_fn_is_left_alone() {
         let files = gated("c_a", SEC_A);
         let section = files.get(&at_lending("src/c_a.rs")).expect("section file");
-        assert_eq!(section.matches("pub fn invariants").count(), 1, "no double-pub:\n{section}");
+        assert_eq!(section.matches("pub fn c_a_holds").count(), 1, "no double-pub:\n{section}");
         assert!(!section.contains("pub pub"), "{section}");
     }
 
@@ -241,10 +260,10 @@ mod tests {
         // …and the `#[cfg]`, not the file split, is what guarantees it: an inherent `impl Fixture`
         // contributes its methods GLOBALLY, so separate modules alone would still be E0592.
         let code = code_only(&scaffold(&["a", "b"])[&at_lending("src/main.rs")]);
-        assert!(code.contains("#[cfg(feature = \"c_a\")]\nmod c_a;"), "{code}");
-        assert!(code.contains("#[cfg(feature = \"c_b\")]\nmod c_b;"), "{code}");
-        // One gated entry per feature — the two units plus the preflight — so exactly one `fn main()`
-        // exists in any build.
+        assert!(code.contains("#[cfg(any(feature = \"c_a_holds\"))]\nmod c_a;"), "{code}");
+        assert!(code.contains("#[cfg(any(feature = \"c_b_holds\"))]\nmod c_b;"), "{code}");
+        // One gated entry per feature — one check each here, plus the preflight — so exactly one
+        // `fn main()` exists in any build.
         assert_eq!(code.matches("#[invariant_test]").count(), 3, "{code}");
     }
 
@@ -282,9 +301,9 @@ mod tests {
         assert!(section.contains("no action mints referral fees"), "{section}");
         // Nothing that could be mistaken for a check, or run at all.
         assert!(!section.contains("fuzz_assert"), "{section}");
-        assert!(!section.contains(&format!("fn {SECTION_FN}")), "{section}");
+        assert!(!section.contains(&format!("fn {CHECK_PREFIX}")), "{section}");
         // The delivered component beside it is untouched by any of this.
-        assert!(files[&at_lending("src/c_a.rs")].contains("pub fn invariants"), "{files:?}");
+        assert!(files[&at_lending("src/c_a.rs")].contains("pub fn c_a_holds"), "{files:?}");
     }
 
     #[test]

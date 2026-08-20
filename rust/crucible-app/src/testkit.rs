@@ -10,7 +10,7 @@ use autoprover_sdk::args::DeclaredArgs;
 use autoprover_sdk::authoring::{AuthorInput, Authored, Property, PropertyKind};
 use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::finalize::FinalizeInput;
-use autoprover_sdk::outcome::{Check, Exploration, Outcome, Target, ValidateOutcome};
+use autoprover_sdk::outcome::{Check, Outcome, Stakes, Target, ValidateOutcome};
 use autoprover_sdk::prep::WorkspacePrep;
 use autoprover_sdk::Backend;
 use autoprover_solana::{SolanaPrep, SolanaSourceUnit};
@@ -128,14 +128,14 @@ pub(crate) fn target_over(feature: &str, props: &[Property]) -> Target {
                 target: Some(feature.into()),
             })
             .collect(),
-        exploration: Exploration::ToBudget,
+        stakes: Stakes::OfRecord,
     }
 }
 
 /// [`target_over`], for the partial run an author iterates against — which the host lets stop at
 /// the first finding, so the checks it did not refute were never explored.
 pub(crate) fn iterating_target(feature: &str, props: &[Property]) -> Target {
-    Target { exploration: Exploration::UntilFirstFinding, ..target_over(feature, props) }
+    Target { stakes: Stakes::Feedback, ..target_over(feature, props) }
 }
 
 /// One verdict set as `(check name, outcome, detail)` rows, in the order the target lists them.
@@ -200,9 +200,25 @@ pub(crate) fn delivered_files(components: serde_json::Value) -> BTreeMap<String,
     })))
 }
 
-/// The crate root the run writes once, for units with these slugs — what `crate_root` produces
-/// from the whole unit set, before any component has authored anything.
+/// The crate root the run writes once, for units with these slugs — what `crate_root` produces from
+/// the whole unit set, before any component has authored anything. Each unit is given one property
+/// named `<slug>_holds`, so it has a check to declare a target for.
 pub(crate) fn scaffold(slugs: &[&str]) -> BTreeMap<String, String> {
+    scaffold_over(&slugs.iter().map(|s| (*s, vec![format!("{s}_holds")])).collect::<Vec<_>>())
+}
+
+/// [`scaffold`] with each unit's property titles spelled out — for the cases that turn on which
+/// checks a unit has (a unit with none declares no target at all).
+pub(crate) fn scaffold_over(units: &[(&str, Vec<String>)]) -> BTreeMap<String, String> {
+    let props: Vec<serde_json::Value> = units
+        .iter()
+        .flat_map(|(slug, titles)| {
+            titles.iter().map(move |t| {
+                serde_json::json!({ "component": slug, "title": t, "sort": "invariant",
+                                    "description": "", "slug": t })
+            })
+        })
+        .collect();
     CrucibleApp.crate_root(
         &serde_json::from_value(serde_json::json!({
             "program": "lending",
@@ -210,7 +226,11 @@ pub(crate) fn scaffold(slugs: &[&str]) -> BTreeMap<String, String> {
             "source_unit": { "dir": "p", "lib": "lending_program",
                              "package": "lending_program", "anchor": "" },
             "prep_facts": {},
-            "units": slugs.iter().map(|s| serde_json::json!({ "slug": s })).collect::<Vec<_>>(),
+            // The unit's `name` is what a property names it by, and its `slug` is what its module is
+            // called; the tests use the same string for both.
+            "units": units.iter().map(|(s, _)| serde_json::json!({ "slug": s, "name": s }))
+                .collect::<Vec<_>>(),
+            "props": props,
         }))
         .expect("crate root input"),
     )

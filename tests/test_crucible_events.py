@@ -65,13 +65,13 @@ def test_descriptor_declares_design_doc_discovery_phase():
     assert _discovery_phase(app) is app.phases.member("discover_design_doc")
 
 
-def test_every_check_of_a_component_shares_one_fuzz_target():
-    # Collapse (docs/crucible.md §8): whatever the author named its checks, they
-    # all share ONE fuzz `target` (`c_invariants`), so the host runs a single build + fuzz and the
-    # wheel attributes the outcome per property.
+def test_every_check_is_its_own_fuzz_target():
+    # No collapse (docs/per-check-targets.md): a campaign covering several checks stops each input
+    # at its first violation, so whichever check is refuted first shapes the exploration the rest
+    # are then reported GOOD on. `None` is how the seam spells "its own target".
     component = _component_input("solvency", "conservation")
-    for name in ("c_solvency", "whatever_the_author_called_it"):
-        assert crucible_app.target_for(component, name) == "c_vault"
+    for name in ("c_solvency", "c_conservation", "whatever_the_author_called_it"):
+        assert crucible_app.target_for(component, name) is None
 
 
 def test_setup_groups_no_checks():
@@ -79,13 +79,16 @@ def test_setup_groups_no_checks():
     assert crucible_app.target_for(_setup_input(), "c_solvency") is None
 
 
-def test_component_author_prompt_asks_for_one_invariant_fn_covering_all_props():
+def test_component_author_prompt_asks_for_one_invariant_fn_per_prop():
     prompt = json.loads(crucible_app.author_prompt(_component_input("solvency", "conservation")))
     ins = prompt["instruction"]
-    # One `invariants` fn asserting ALL listed properties. The name is constant across components —
-    # the per-component `c_<slug>` belongs to the wheel-generated entry and never reaches the model.
-    assert "named EXACTLY `invariants`" in ins
-    assert "c_invariants" not in ins
+    # One fn per property, each named for the property it carries — the same name the author then
+    # declares to `map_checks`, and the name the wheel-generated entry calls. The name is GIVEN
+    # per property (from the host's slug), not derived by the model from a free-text title.
+    assert "write `pub fn c_solvency(fixture: &mut Fixture)`" in ins
+    assert "write `pub fn c_conservation(fixture: &mut Fixture)`" in ins
+    # The component's module name is the wheel's and still never reaches the model.
+    assert "c_vault" not in ins
     assert "p solvency" in ins and "p conservation" in ins
 
 
@@ -145,7 +148,7 @@ def test_validate_reports_a_parse_error_as_the_error_envelope():
     target = json.dumps(
         {"name": "c_invariants",
          "checks": [{"name": "c_invariants", "properties": ["p"], "target": None}],
-         "exploration": "to_budget"}
+         "stakes": "of_record"}
     )
     raw = crucible_app.validate("not json", "spec", target, "/tmp", "{}")
     assert json.loads(raw)["kind"] == "error"

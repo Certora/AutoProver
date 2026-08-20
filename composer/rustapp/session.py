@@ -49,7 +49,7 @@ from composer.pipeline.core import GaveUp, PipelineRun
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.result import RustFormalResult, RustSetupSpec
 from composer.rustapp.wire import (
-    AuthorInput, CompileOk, Exploration, Prompt, RustAppModule, Target, Check, ValidateBuildFailed,
+    AuthorInput, CompileOk, Prompt, RustAppModule, Stakes, Target, Check, ValidateBuildFailed,
     expect_payload, expect_text, parse_compile, parse_judge, parse_prompt, parse_validate,
 )
 from composer.rustapp.wire import Verdict as WireVerdict
@@ -359,7 +359,7 @@ class ValidateSpec(
                 wanted = [c for c in wanted if c.name in asked]
             covered = targets_of(
                 wanted,
-                Exploration.UNTIL_FIRST_FINDING if partial else Exploration.TO_BUDGET,
+                Stakes.FEEDBACK if partial else Stakes.OF_RECORD,
             )
             verdicts: dict[CheckName, WireVerdict] = {}
             for target in covered:
@@ -406,7 +406,7 @@ class ValidateSpec(
 
 
 def targets_of(
-    checks: Sequence[Check], exploration: Exploration = Exploration.TO_BUDGET
+    checks: Sequence[Check], stakes: Stakes = Stakes.OF_RECORD
 ) -> list[Target]:
     """``checks`` partitioned into the checker invocations that cover them — one :class:`Target` per
     distinct target name, in first-seen order, each carrying its own checks.
@@ -414,14 +414,14 @@ def targets_of(
     This is the whole of the run-vs-report split: several checks sharing a target means one build
     and one run for all of them, while each still gets its own verdict. The host owns the grouping —
     it decides what runs and in what order — so it hands the answer to the wheel rather than leaving
-    it to re-derive one. ``exploration`` travels the same way and for the same reason: how far a run
-    must go follows from what the host will do with its answer, which the wheel cannot see."""
+    it to re-derive one. ``stakes`` travels the same way and for the same reason: what rides on a
+    run's answer follows from what the host will do with it, which the wheel cannot see."""
     names = list(dict.fromkeys(c.target_or_name() for c in checks))
     return [
         Target(
             name=name,
             checks=[c for c in checks if c.target_or_name() == name],
-            exploration=exploration,
+            stakes=stakes,
         )
         for name in names
     ]

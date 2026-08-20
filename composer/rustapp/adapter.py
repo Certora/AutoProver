@@ -521,7 +521,7 @@ type SetupAuthor = Callable[
 # Writes the wheel's build scaffolding for the run, given the authored setup spec and every unit
 # about to be formalized. Same seam as :data:`SetupAuthor`, one step later — and it takes no
 # ``PipelineRun``, because unlike authoring it runs no LLM turn and needs no cache.
-type CrateRootWriter = Callable[[str | None, Sequence[FeatureUnit]], Awaitable[None]]
+type CrateRootWriter = Callable[[str | None, Sequence[FeatureUnit], Sequence[Property]], Awaitable[None]]
 
 
 class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
@@ -572,7 +572,7 @@ class RustStagedFormalizer(StagedFormalizer[RustFormalResult, FeatureUnit]):
         )
         units = [job.feat for job in jobs]
         setup = await self._author(run_props, units, run)
-        await self._scaffold(setup, units)
+        await self._scaffold(setup, units, run_props)
         return self._build(setup, run_props)
 
 
@@ -676,7 +676,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
             return fixture.spec
 
         async def write_crate_root(
-            setup_result: str | None, units: Sequence[FeatureUnit]
+            setup_result: str | None, units: Sequence[FeatureUnit], props: Sequence[Property]
         ) -> None:
             """Ask the wheel for the run's build scaffolding and write it.
 
@@ -691,6 +691,7 @@ class RustPreparedSystem(PreparedSystem[RustFormalResult, FeatureUnit, Any]):
                 prep_facts=project.prep_facts,
                 setup=setup_result,
                 units=[u.feature_json() for u in units],
+                props=list(props),
             )
             raw = await asyncio.to_thread(b.module.crate_root, payload.model_dump_json())
             if raw:

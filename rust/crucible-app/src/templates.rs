@@ -32,9 +32,8 @@ pub(crate) struct HarnessCheatSheet<'a> {
 #[template(path = "example_fixture.j2", escape = "none")]
 pub(crate) struct ExampleFixture;
 
-/// Cheat-sheet for authoring the one fn holding a component's properties. Carries nothing: the fn
-/// is [`SECTION_FN`](crate::layout::SECTION_FN) in every component, so there is no longer a
-/// per-component name for this and the instruction to disagree about.
+/// Cheat-sheet for authoring a component's check fns. Carries nothing: the shape is the same in
+/// every component, and the names come from the properties the author was already given.
 #[derive(Template)]
 #[template(path = "test_cheat_sheet.j2", escape = "none")]
 pub(crate) struct TestCheatSheet;
@@ -58,9 +57,8 @@ pub(crate) struct FindingsSystem;
 ///
 /// It also declares `PROGRAM_SO`, the `.so` the fixture loads. That path is relative to the harness
 /// crate ([`to_project_root`](crate::layout::to_project_root)) and so is the wheel's to spell, not
-/// the author's: the fixture prompt names the constant and never counts `../`. Same division as
-/// [`SECTION_FN`](crate::layout::SECTION_FN) — the model writes a constant, the wheel owns what
-/// varies.
+/// the author's: the fixture prompt names the constant and never counts `../`. Same division
+/// throughout — the model writes what it is given, the wheel owns every path and gate.
 #[derive(Template)]
 #[template(path = "root_layout.j2", escape = "none")]
 pub(crate) struct RootLayout<'a> {
@@ -95,18 +93,18 @@ pub(crate) struct PreflightEntry<'a> {
 #[derive(Template)]
 #[template(path = "section_entry.j2", escape = "none")]
 pub(crate) struct SectionEntry<'a> {
-    /// The component's Cargo feature (`c_<slug>`), which is also the crate-root entry fn, the
-    /// module, and the module file's stem — one name for the whole concept.
-    pub(crate) feature: &'a str,
-    pub(crate) section_fn: &'a str,
+    /// The component's module (`c_<unit slug>`), which is also its section file's stem.
+    pub(crate) module: &'a str,
+    /// This component's checks (`c_<property slug>`), each a Cargo feature, a crate-root entry fn,
+    /// and the authored fn that entry calls — one name for the whole concept.
+    pub(crate) checks: &'a [String],
 }
 
 /// The module file holding one component's authored tests.
 #[derive(Template)]
 #[template(path = "section_file.j2", escape = "none")]
 pub(crate) struct SectionFile<'a> {
-    pub(crate) feature: &'a str,
-    pub(crate) section_fn: &'a str,
+    pub(crate) module: &'a str,
     pub(crate) body: &'a str,
 }
 
@@ -115,7 +113,7 @@ pub(crate) struct SectionFile<'a> {
 #[derive(Template)]
 #[template(path = "gave_up_section.j2", escape = "none")]
 pub(crate) struct GaveUpSection<'a> {
-    pub(crate) feature: &'a str,
+    pub(crate) module: &'a str,
     pub(crate) unit: &'a str,
     pub(crate) reason: &'a str,
 }
@@ -204,7 +202,11 @@ pub(crate) struct AuthorComponent<'a> {
     pub(crate) unit: &'a str,
     pub(crate) program: &'a str,
     pub(crate) n: usize,
+    /// The first property's *title* — what its assertions are tagged with.
     pub(crate) first: &'a str,
+    /// The first property's *fn name* — what the author must write and the crate root already
+    /// calls. Distinct from the title: the title is free text, the name comes from the host's slug.
+    pub(crate) first_fn: &'a str,
     pub(crate) listed: &'a str,
     pub(crate) component: &'a str,
     pub(crate) cheat: &'a str,

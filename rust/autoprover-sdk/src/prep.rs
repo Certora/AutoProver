@@ -72,6 +72,15 @@ pub struct CrateRootInput {
     /// [`Authored::Component::unit`](crate::authoring::Authored::Component). This is the field the
     /// hook exists for: it is the only place a wheel sees the unit set whole.
     pub units: Vec<ChainData>,
+    /// Every property the run extracted, each naming the unit that owns it — the same set the setup
+    /// gate is sent as [`AuthorInput::props`](crate::authoring::AuthorInput::props).
+    ///
+    /// Here because a wheel whose scaffolding names something per *property* cannot render it from
+    /// the unit set alone, and this hook must re-emit byte-identically what that gate produced.
+    /// Crucible declares one build target per check, and a check is named after the property it
+    /// carries.
+    #[serde(default)]
+    pub props: Vec<crate::authoring::Property>,
 }
 
 /// Extra sandbox grants a wheel needs unioned into the host-authored policy (Crucible: the

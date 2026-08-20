@@ -12,7 +12,7 @@ use autoprover_sdk::authoring::AuthorInput;
 use autoprover_solana::{anchor_compat_key, SolanaPrepFacts, SolanaSourceUnit};
 
 use crate::layout::{
-    harness_dir, to_project_root, CRATE_ROOT, PREFLIGHT_FEATURE, PREFLIGHT_ROOT,
+    harness_dir, to_project_root, UnitTargets, CRATE_ROOT, PREFLIGHT_FEATURE, PREFLIGHT_ROOT,
 };
 use crate::section::Section;
 use crate::templates::{
@@ -236,13 +236,21 @@ impl HarnessSpec {
 
     /// Every Cargo feature a crate covering `units` declares: the wheel's own preflight first — the
     /// one target that exists before any unit does — then one per component.
-    pub(crate) fn features(units: &[String]) -> Vec<String> {
-        std::iter::once(PREFLIGHT_FEATURE.to_string()).chain(units.iter().cloned()).collect()
+    /// Every Cargo feature the crate declares: the preflight, and one per **check**.
+    ///
+    /// A component is not a feature — its module is gated on the union of its checks' — because a
+    /// campaign is a check (docs/per-check-targets.md). The preflight stays: it drives the real
+    /// fixture with no assertions, so it is both the build gate and the run that fills the shared
+    /// corpus every per-check campaign then seeds from.
+    pub(crate) fn features(units: &[UnitTargets]) -> Vec<String> {
+        std::iter::once(PREFLIGHT_FEATURE.to_string())
+            .chain(units.iter().flat_map(|u| u.checks.iter().cloned()))
+            .collect()
     }
 
     /// The **deliverable** crate for `units`: the manifest, the toolchain pin, and a [`CRATE_ROOT`]
-    /// holding the fixture, the preflight entry, and one gated `mod` + `#[invariant_test]` entry per
-    /// component.
+    /// holding the fixture, the preflight entry, and per component a gated `mod` plus one
+    /// `#[invariant_test]` entry per check.
     ///
     /// Rendered by the **setup gate** — the first callout holding both halves, the authored fixture
     /// and the unit set — and re-rendered identically by `crate_root`, whose job is to land these
@@ -253,19 +261,19 @@ impl HarnessSpec {
     /// A `#[cfg]`-disabled `mod` is stripped before rustc resolves its file, so declaring every
     /// component here costs a build nothing — including the setup gate, which runs before a single
     /// section file exists: it compiles the one feature it selects and never looks for the others.
-    pub(crate) fn scaffold(&self, fixture: &str, units: &[String]) -> BTreeMap<String, String> {
+    pub(crate) fn scaffold(&self, fixture: &str, units: &[UnitTargets]) -> BTreeMap<String, String> {
         let mut files = self.manifest_files(CRATE_ROOT, &Self::features(units));
         files.insert(self.path(CRATE_ROOT), self.main_rs(&self.root_text(fixture, units)));
         files
     }
 
     /// A crate root: the fixture, the layout header, the tally wrappers, the preflight entry, then
-    /// one gated `mod` + `#[invariant_test]` entry per component feature.
+    /// per component one gated `mod` and one `#[invariant_test]` entry per check.
     ///
     /// The tally wrappers sit between the fixture and the section declarations, though neither
     /// order is load-bearing: their re-exports shadow the fixture's glob import by being explicit,
     /// not by coming later, and the sections reach them by path, not textual scope.
-    fn root_text(&self, fixture: &str, units: &[String]) -> String {
+    fn root_text(&self, fixture: &str, units: &[UnitTargets]) -> String {
         let program_so = format!("{}target/deploy/{}.so", to_project_root(), self.crate_id());
         let layout = RootLayout { program_so: &program_so }.render().expect("render root_layout");
         let tally = TallyMacros { ops: &TALLIED_OPS }.render().expect("render tally_macros");
@@ -273,7 +281,7 @@ impl HarnessSpec {
             .render()
             .expect("render preflight_entry");
         let decls = std::iter::once(preflight)
-            .chain(units.iter().map(|f| Section::entry(f)))
+            .chain(units.iter().map(|u| Section::entry(&u.module, &u.checks)))
             .collect::<Vec<_>>()
             .join("\n\n");
         format!("{}\n\n{layout}\n\n{}\n\n{decls}\n", fixture.trim_end(), tally.trim_end())
@@ -314,7 +322,7 @@ mod tests {
     //! delivers — no provisional shapes, no half-crates.
     use super::*;
     use crate::app::CrucibleApp;
-    use crate::layout::feature_of;
+    use crate::layout::{check_target, module_of};
     use crate::testkit::{
         at, code_only, distinct_crate, gated, lending_crate, prep_input, scaffold, skewed_crate,
         spec_of,
@@ -665,7 +673,13 @@ mod tests {
         // `crate_root` re-emits the same files for the run whose setup spec came from cache and so
         // never reached that gate — byte-identical, or `main.rs` would have two assembled shapes and
         // the §17 drift would be back.
-        let units = ["a", "b"].map(feature_of).to_vec();
+        let units: Vec<UnitTargets> = ["a", "b"]
+            .into_iter()
+            .map(|s| UnitTargets {
+                module: module_of(s),
+                checks: vec![check_target(&format!("{s}_holds"))],
+            })
+            .collect();
         let gate = HarnessSpec::new("lending", lending_crate(), String::new())
             .scaffold("struct Fixture {}", &units);
         assert_eq!(gate, scaffold(&["a", "b"]), "the setup gate and `crate_root` disagree");

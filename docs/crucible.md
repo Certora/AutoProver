@@ -14,7 +14,7 @@ units is [ecosystem-abstraction.md](./ecosystem-abstraction.md); how to run it i
 
 ```
 program ─analyze─▶ SolanaApplication ─extract─▶ properties ─formalize─▶ fuzz harness ─verdicts─▶ report
-         (solana ecosystem)                      (this wheel: one crate, one campaign per component)
+         (solana ecosystem)                      (this wheel: one crate, one campaign per check)
 ```
 
 A verdict is **refutation-oriented**, like Foundry: a crash *refutes* a property (`BAD`);
@@ -314,9 +314,15 @@ seam's many-to-one allowance.
 ### Declaration
 
 The author declares the property→check mapping (`map_checks`). The wheel answers only
-`target_for`: every check of a component runs in that component's one campaign
-(`c_<slug>`). A check that maps several properties is refused in `validate` *before*
-the campaign — those verdicts would be unattributable however long it ran.
+`target_for`, and it answers `None`: **every check is its own campaign**
+(`c_<property slug>`), because a campaign covering several would spend its budget shaped by
+whichever check it refuted first and report the rest as though nothing had been found against them
+([per-check-targets.md](./per-check-targets.md)). A component is a *module*, not a build target.
+
+Two shapes are refused in `validate` *before* a campaign is spent: a check that maps several
+properties (unattributable however long it ran), and a check named anything but what its property
+states (the crate has no feature for it, so `crucible run` would answer about a missing feature
+instead).
 
 A verdict names the section file its assertion was written into (`c_<slug>.rs`). The
 report keys a rule row by `(file, name)`; without the file, two components whose
@@ -334,10 +340,9 @@ crucible run <program> <feature> --release
 ```
 
 It does **not** pass `--mode explore`. That preset also turns on `--stop-on-crash`,
-which would end the campaign at the first finding and leave every other check
-unexplored while still answering for them. The host's `Target.exploration` decides
-that instead (`UntilFirstFinding` adds `--stop-on-crash`; a stamping run is
-`ToBudget`).
+which would end the campaign at the first finding. The host's `Target.stakes` decides
+that instead (`Feedback` adds `--stop-on-crash` and caps the budget at
+`FEEDBACK_BUDGET_S`; a stamping run is `OfRecord` and spends `--fuzz-timeout`).
 
 `--coverage` requires `--timeout`. Without a timeout Crucible treats `--coverage` as
 replay-only and fuzzes nothing. LCOV is preserved per component as the campaign
@@ -349,7 +354,7 @@ component's coverage.
 Every assertion is tagged `[<property title>]`. A finding is classified three ways
 against `AuthorInput.run_props` (every title the run extracted):
 
-| Finding's title | `ToBudget` | `UntilFirstFinding` |
+| Finding's title | `OfRecord` | `Feedback` |
 |---|---|---|
 | one of **this** target's checks | that check `BAD`; the rest stay `GOOD` (subject to the tally) | that check `BAD`; the rest `UNKNOWN` |
 | **another component's** | left alone — it cost one test case, not the campaign | `UNKNOWN`, detail naming the owner |

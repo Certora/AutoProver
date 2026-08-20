@@ -6,7 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use autoprover_sdk::authoring::Property;
-use autoprover_sdk::outcome::{Check, Exploration, Outcome, Target, ValidateOutcome, Verdict};
+use autoprover_sdk::outcome::{Check, Outcome, Stakes, Target, ValidateOutcome, Verdict};
+use crate::layout::check_target;
 
 use crate::layout::{harness_dir, CRASHES_DIR};
 
@@ -214,6 +215,40 @@ fn finding_detail(line: &str, workdir: &Path, program: &str, unit: &str) -> Opti
 /// `BAD` together on evidence about one. The seam permits many-to-one (a CVL rule can genuinely
 /// discharge three invariants) — Crucible cannot, because its unit of evidence is one tagged
 /// assertion, and this is where it says so rather than reporting a verdict it cannot stand behind.
+/// Why this backend cannot run a target whose name is not one of the run's checks — `None` when it
+/// is one, which is the only shape it can build.
+///
+/// A check's name is a Cargo feature and a crate-root entry fn, and the root declared one per
+/// *property* before any check was declared (docs/per-check-targets.md). So a name the author
+/// invented instead of using the one its property states selects a feature the crate does not have,
+/// and `crucible run` would answer with a build failure about a missing feature — a true statement
+/// about the wrong thing. Said here instead, before the build, naming the name that was expected.
+pub(crate) fn unbuildable(target: &Target, run_props: &[Property]) -> Option<String> {
+    let declared: Vec<String> = run_props.iter().map(|p| check_target(&p.slug)).collect();
+    if declared.iter().any(|d| *d == target.name) {
+        return None;
+    }
+    let expected = target
+        .checks
+        .first()
+        .and_then(|c| c.properties.first())
+        .and_then(|title| run_props.iter().find(|p| &p.title == title))
+        .map(|p| check_target(&p.slug));
+    Some(match expected {
+        Some(name) => format!(
+            "`{}` is not a build target of this harness: every check is named after the property it \
+             carries, and this one's property asks for `{name}`. Rename the invariant fn and its \
+             `map_checks` entry to `{name}`.",
+            target.name,
+        ),
+        None => format!(
+            "`{}` is not a build target of this harness: a check is named after the property it \
+             carries, and no property of this run maps to that name.",
+            target.name,
+        ),
+    })
+}
+
 pub(crate) fn undeclarable(target: &Target) -> Option<String> {
     let shared: Vec<String> = target
         .checks
@@ -280,12 +315,11 @@ fn unexplored(target: &Target, run_props: &[Property], stopper: &str) -> String 
 /// pass a real counterexample. This is the case [`AuthorInput::run_props`](autoprover_sdk::authoring::AuthorInput)
 /// exists to separate out from the one above; a wheel run without it degrades to exactly this.
 ///
-/// What a check no finding names gets is [`Target::exploration`]'s to say, and it is the whole point
-/// of that field. A campaign that ran [`ToBudget`](Exploration::ToBudget) explored every check it
-/// covers whatever it found on the way, so an unnamed check held and is `GOOD`. One the host let
-/// stop [`UntilFirstFinding`](Exploration::UntilFirstFinding) abandoned the rest wherever it
-/// happened to be, so `GOOD` there would be a claim about a space nothing searched — `UNKNOWN`, and
-/// the detail says which finding ended it.
+/// What a check no finding names gets is [`Target::stakes`]'s to say, and it is the whole point of
+/// that field. An [`OfRecord`](Stakes::OfRecord) campaign spent its whole budget whatever it found
+/// on the way, so an unnamed check held and is `GOOD`. A [`Feedback`](Stakes::Feedback) one stops at
+/// the first crash, abandoning the rest wherever they happened to be, so `GOOD` there would be a
+/// claim about a space nothing searched — `UNKNOWN`, and the detail says which finding ended it.
 ///
 /// "Explored every check it covers" presumes the check's assertion was *evaluated* at all — which
 /// this attribution cannot see, and a guarded assertion whose guard never opens makes false. That
@@ -324,10 +358,10 @@ pub(crate) fn attribute_findings(
     target.verdicts(|c| {
         let against: Vec<&str> =
             findings.iter().filter(|d| refutes(c, d)).map(String::as_str).collect();
-        match (against.is_empty(), target.exploration) {
+        match (against.is_empty(), target.stakes) {
             (false, _) => Verdict::detailed(Outcome::Bad, against.join("\n\n")),
-            (true, Exploration::ToBudget) => Verdict::with_outcome(Outcome::Good),
-            (true, Exploration::UntilFirstFinding) => match findings.first() {
+            (true, Stakes::OfRecord) => Verdict::with_outcome(Outcome::Good),
+            (true, Stakes::Feedback) => match findings.first() {
                 Some(stopper) => {
                     Verdict::detailed(Outcome::Unknown, unexplored(target, run_props, stopper))
                 }
@@ -367,6 +401,28 @@ mod attribution {
         assert!(why.contains("c_all") && why.contains("fifo") && why.contains("solvency"), "{why}");
         // Actionable: it says what to do instead, in the noun the prompt used.
         assert!(why.contains("one invariant per property"), "{why}");
+    }
+
+    #[test]
+    fn a_check_named_anything_but_its_property_is_refused_before_the_build() {
+        // A check's name IS a Cargo feature, declared per property before any check existed. An
+        // author who invents one instead of using the name its property states would select a
+        // feature the crate does not have, and `crucible run` would answer about a missing feature
+        // — true, and about the wrong thing. Refused here, naming the name that was expected.
+        let props = [prop("fifo order holds", "fifo_order")];
+        let run: Vec<Property> = vec![owned("Queue", "fifo order holds", "fifo_order")];
+
+        // The name the property states builds.
+        let ok = target_over("c_fifo_order", &props);
+        assert!(unbuildable(&ok, &run).is_none(), "the property's own name is buildable");
+
+        // Anything else does not — including `c_<title>`, the shape the old prompt implied, which
+        // differs from the slug whenever a title is not already an identifier.
+        let mut invented = target_over("c_fifo_order_holds", &props);
+        invented.name = "c_fifo_order_holds".into();
+        let why = unbuildable(&invented, &run).expect("refused");
+        assert!(why.contains("c_fifo_order_holds"), "{why}");
+        assert!(why.contains("c_fifo_order"), "says the name to use: {why}");
     }
 
     /// The whole run's properties: two components, and the fixture's negative actions tagged with

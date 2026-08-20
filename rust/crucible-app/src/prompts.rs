@@ -10,7 +10,7 @@ use autoprover_sdk::authoring::{AuthorInput, Authored, Prompt};
 
 use crate::facts::api_facts;
 use crate::harness::HarnessSpec;
-use crate::layout::unit_name;
+use crate::layout::{check_target, unit_name};
 use crate::templates::{
     AuthorComponent, AuthorSetup, ExampleFixture, HarnessCheatSheet, JudgeInstruction, JudgeSystem,
     TestCheatSheet,
@@ -23,6 +23,31 @@ fn listed_props(input: &AuthorInput) -> String {
         .props
         .iter()
         .map(|p| format!("- [{}] {}: {}", p.sort, p.title, p.description))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// [`listed_props`] with each property's required fn name and assertion tag spelled out.
+///
+/// The name is **given**, not derived: it comes from the host's slug for the property, the crate
+/// root already declares an entry calling it, and a model asked to derive it from the title would
+/// have to reproduce this crate's identifier rule (a title is free text — spaces, capitals,
+/// punctuation — and the slug is what the host guarantees is safe). The tag stays the *title*,
+/// which is what places a counterexample, so both are stated rather than one implying the other.
+fn listed_props_with_fns(input: &AuthorInput) -> String {
+    input
+        .props
+        .iter()
+        .map(|p| {
+            format!(
+                "- [{}] {}: {}\n    → write `pub fn {}(fixture: &mut Fixture)`, tag its assertions `[{}]`",
+                p.sort,
+                p.title,
+                p.description,
+                check_target(&p.slug),
+                p.title,
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -66,7 +91,7 @@ pub(crate) fn author_prompt(input: &AuthorInput) -> Prompt {
         }
         // Author ONE invariant fn holding all of THIS component's properties.
         Authored::Component { unit } => {
-            let listed = listed_props(input);
+            let listed = listed_props_with_fns(input);
             let component =
                 serde_json::to_string_pretty(unit).unwrap_or_else(|_| unit.to_string());
             let fixture = fixture_of(input);
@@ -76,6 +101,8 @@ pub(crate) fn author_prompt(input: &AuthorInput) -> Prompt {
                 program,
                 n: input.props.len(),
                 first: input.props.first().map(|p| p.title.as_str()).unwrap_or("property"),
+                first_fn: &input.props.first().map(|p| check_target(&p.slug))
+                    .unwrap_or_else(|| "c_<property>".to_string()),
                 listed: &listed,
                 component: &component,
                 cheat: &cheat,
@@ -121,7 +148,6 @@ mod tests {
     //! two harness defects the judge is there to catch.
     use super::*;
     use crate::app::CrucibleApp;
-    use crate::layout::SECTION_FN;
     use crate::testkit::{component_input, prep_input, prop};
     use autoprover_sdk::authoring::{Property, PropertyKind};
     use autoprover_sdk::Backend;
@@ -195,9 +221,11 @@ mod tests {
         };
         let p = app.author_prompt(&comp);
         assert_no_residue(&p.instruction);
-        // The unit carries no slug, so the *feature* falls back to `DEFAULT_HARNESS_FN` — but the
-        // prompt asks for the constant fn either way, the fallback being a wheel-side name now.
-        has(&p.instruction, &format!("named EXACTLY `{SECTION_FN}`"));
+        // The unit carries no slug, so its *module* falls back to `DEFAULT_HARNESS_FN` — but the
+        // prompt names fns after properties either way, so nothing unit-derived reaches it.
+        // The fn name is GIVEN per property, from the host's slug — not derived by the model from
+        // a free-text title. The crate root already declares an entry calling exactly this name.
+        has(&p.instruction, "write `pub fn c_no_overflow(fixture: &mut Fixture)`");
         has(&p.instruction, "`\"[no overflow] ...\"`");
         // What the component turn may add to the fixture, what it may not, and the honest way out
         // when the fixture can't reach a property (the alternative being a vacuous assertion).
@@ -224,45 +252,45 @@ mod tests {
     }
 
     #[test]
-    fn the_author_and_judge_prompts_ask_for_the_constant_fn_name() {
+    fn the_author_and_judge_prompts_ask_for_one_fn_per_property() {
         let app = CrucibleApp;
         let input = component_input("withdraw_queue", "Withdraw Queue", vec![prop("fifo", "fifo")]);
         let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
 
         let p = app.author_prompt(&input);
         assert_no_residue(&p.instruction);
-        assert!(norm(&p.instruction).contains(&format!("named EXACTLY `{SECTION_FN}`")));
-        // The declared unit is the tagged assertion, not the one fn that holds them all. Both
-        // authors of the 2026-08-11 vault run read an earlier wording ("which harness function
-        // verifies which property") as "map every property onto `invariants`", which made one
-        // counterexample fail all ten properties that check covered.
-        assert!(norm(&p.instruction).contains("one TAGGED ASSERTION, not the"), "{}", p.instruction);
+        assert!(norm(&p.instruction).contains("write `pub fn c_fifo(fixture: &mut Fixture)`"));
+        // One property per fn AND per declared check: the two are now the same name, which is what
+        // removed the old hazard. Both authors of the 2026-08-11 vault run read an earlier wording
+        // ("which harness function verifies which property") as "map every property onto
+        // `invariants`", which made one counterexample fail all ten properties that check covered.
+        assert!(norm(&p.instruction).contains("names you just wrote as fns"), "{}", p.instruction);
         assert!(
             norm(&p.instruction).contains("Never map several properties onto one invariant"),
             "{}", p.instruction,
         );
+        // The property's own name is what the author must write, so it MUST reach the prompt.
+        assert!(norm(&p.instruction).contains("c_fifo"), "{}", p.instruction);
         assert!(norm(&p.instruction).contains("**Withdraw Queue** component"));
         // The interleaving warning that replaces the whole-program framing.
         assert!(norm(&p.instruction).contains("drives the WHOLE program, not just this component"));
-        // The embedded cheat sheet names the same fn as the instruction — trivially now, because
-        // both name a constant. This used to be the live hazard: two places carrying a per-component
-        // name that could disagree, and a disagreement told the author to write an fn no build
-        // selects. The name a build selects is `c_<slug>`, and it belongs to the wheel-generated
-        // entry, so it must NOT reach the prompt at all.
+        // The embedded cheat sheet asks for the same shape as the instruction. Both name the fn
+        // after the *property*, which is the author's own vocabulary — so the two cannot disagree
+        // about a name neither of them invents.
         assert!(
-            norm(&p.instruction).contains(&format!("fn {SECTION_FN}(fixture: &mut Fixture)")),
-            "cheat sheet does not ask for the constant fn:\n{}", p.instruction,
+            norm(&p.instruction).contains("named EXACTLY as the property says"),
+            "cheat sheet does not ask for one fn per property:\n{}", p.instruction,
         );
+        // The *component's* module name is the wheel's, and still must not reach the prompt.
         assert!(
             !p.instruction.contains("c_withdraw_queue"),
-            "the generated entry's name leaked into the prompt:\n{}", p.instruction,
+            "the module name leaked into the prompt:\n{}", p.instruction,
         );
         assert!(!p.instruction.contains("c_invariants"), "stale fn name in:\n{}", p.instruction);
 
-        let ji = app.judge_instruction(&input, &format!("fn {SECTION_FN}() {{}}"));
+        let ji = app.judge_instruction(&input, "fn c_fifo() {}");
         assert_no_residue(&ji);
-        assert!(norm(&ji).contains(SECTION_FN));
-        assert!(!ji.contains("c_withdraw_queue"), "generated name leaked into the judge:\n{ji}");
+        assert!(!ji.contains("c_withdraw_queue"), "module name leaked into the judge:\n{ji}");
     }
 
     #[test]

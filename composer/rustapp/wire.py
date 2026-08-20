@@ -267,6 +267,12 @@ class CrateRootInput(WireModel):
     #: Every unit about to be formalized, in fan-out order — each the same object a component
     #: callout receives. The field the hook exists for.
     units: list[dict[str, Any]] = Field(default_factory=list)
+    #: Every property the run extracted, each naming the unit that owns it — the same set the setup
+    #: gate is sent. Here because a wheel whose scaffolding names something per *property* cannot
+    #: render it from the unit set alone, and this hook must re-emit byte-identically what that gate
+    #: produced (Crucible declares one build target per check, and a check is named after the
+    #: property it carries).
+    props: list[Property] = Field(default_factory=list)
 
 
 class FinalizeComponent(WireModel):
@@ -357,19 +363,23 @@ class Check(WireModel):
         return self.target or TargetName(self.name)
 
 
-class Exploration(str, Enum):
-    """How much of its budget one invocation must spend before it may conclude. Mirrors the Rust
-    ``Exploration``.
+class Stakes(str, Enum):
+    """What rides on one invocation's answer. Mirrors the Rust ``Stakes``.
 
-    A checker that can stop early is cheaper while the author iterates and wrong once the verdicts
-    are reported: a check the run abandoned before exploring is not a check that held. Only a full
-    ``validate_spec`` run stamps the publish gate, so the host knows which kind it is asking for and
-    says, rather than leaving the wheel to infer it from the shape of the check set."""
+    Only a full ``validate_spec`` run stamps the publish gate, so the host knows which kind it is
+    asking for and says, rather than leaving the wheel to infer it from the shape of the check set.
+    What a backend *does* about it is its own — spend less of a fuzzing budget and stop at the first
+    crash, pass ``--fail-fast``, pick a cheaper solver configuration — as is what its unrefuted
+    checks then report.
 
-    #: Stop at the first finding. The unrefuted checks say "not refuted yet" and nothing more.
-    UNTIL_FIRST_FINDING = "until_first_finding"
-    #: Explore every covered check to the full budget, whatever is found on the way.
-    TO_BUDGET = "to_budget"
+    Named for the caller's intent rather than for a search strategy: a symbolic prover does not
+    explore and has no budget in the fuzzing sense, but it does know the difference between a
+    throwaway answer and one that will be published."""
+
+    #: The author is iterating; these verdicts will not be reported.
+    FEEDBACK = "feedback"
+    #: These verdicts stamp the publish gate.
+    OF_RECORD = "of_record"
 
 
 class Target(WireModel):
@@ -389,9 +399,9 @@ class Target(WireModel):
     name: TargetName
     #: Usually one; several when a backend checks a whole property set in one run.
     checks: list[Check] = Field(default_factory=list)
-    #: How far this invocation must explore before concluding — set from what the host will do with
-    #: the answer, not from anything about the checks themselves.
-    exploration: Exploration = Exploration.TO_BUDGET
+    #: What rides on this invocation's answer — set from what the host will do with it, not from
+    #: anything about the checks themselves.
+    stakes: Stakes = Stakes.OF_RECORD
 
 
 class Verdict(WireModel):

@@ -1,12 +1,13 @@
 # Proposal: per-check fuzz targets
 
-**Status:** proposal. **Affects:** `rust/crucible-app` (targets, generation, authoring contract),
+**Status:** implemented (see §9 for what changed on the way). **Affects:** `rust/crucible-app` (targets, generation, authoring contract),
 `rust/autoprover-sdk` (one enum renamed), `composer/rustapp` (that rename, one call site).
 **Supersedes** the grouping rule in [crucible.md §8](./crucible.md).
 
-A Crucible component today is one campaign covering all of its checks. This proposes making the
-*check* the unit a campaign runs — always, with no second grouping — and, while the seam is open,
-replacing `Exploration` with the one bit the host actually knows.
+A Crucible component was one campaign covering all of its checks. This made the *check* the unit a
+campaign runs — always, with no second grouping — and, while the seam was open, replaced
+`Exploration` with the one bit the host actually knows. §9 records what the implementation changed
+about the plan below.
 
 ---
 
@@ -326,3 +327,46 @@ Rejected as an end state; worth doing only if this proposal is deferred.
   and does make N passes over the same state. Expected to be lost in the noise (a LiteSVM transaction
   dominates a pass over a handful of accounts; klend ran 273 exec/s at 7.1 actions/exec), but it
   should be measured.
+
+---
+
+## 9. What the implementation changed
+
+Five things the plan above had wrong or did not know.
+
+**The component feature is gone entirely**, not kept for the warm-up (§2.4 said it stays). Two
+reasons converged: the **preflight entry already drives the real fixture with no assertions**, so it
+*is* the exploration run — and an assertion-free campaign is strictly better at seeding, because
+nothing truncates its inputs. And a component feature would have needed its entry to call every one
+of its check fns, which breaks the moment the author declines a property and writes no fn for it. So
+a component is now a module and nothing else.
+
+**Corpus seeding was already there.** §2.5 proposed a warm-up feeding `--corpus-in`; in fact every
+campaign already passes `--corpus-in CORPUS_DIR --corpus-out CORPUS_DIR` against one shared
+directory, so per-check campaigns inherit whatever states earlier ones reached. The corpus entries
+are action sequences against the same `Fixture`, so they are interchangeable across features. No
+orchestration was needed and none was written.
+
+**Check names are given to the author, not derived by them.** The plan assumed the check name was
+`c_<property slug>`. It is not: the host takes check names verbatim from the author's `map_checks`,
+and the prompt asked for `c_<property title>` — which coincides with the slug only when a title is
+already an identifier. Under one campaign per component that mismatch was invisible; with a feature
+per check it would have been a build failure. So each property now states its own fn name in the
+prompt (from the slug, which the host guarantees is safe), and `triage::unbuildable` refuses a target
+whose name is not one of them *before* a build is spent, naming the name that was expected.
+
+**`CrateRootInput` gained `props`.** The crate root now names something per property, and that hook
+re-emits byte-identically what the setup gate produced — so it needs the same property set that gate
+was sent. One field, both sides.
+
+**Naming caught up.** `feature_of` → `module_of` (a component names a module, not a feature),
+`harness_fn` → `module_for`, and `SECTION_FN` — the single constant fn name the old contract turned
+on — is deleted in favour of `CHECK_PREFIX`. That constant existed so the author could never name an
+fn no build selects; what replaces it is the build itself, since the root generates an entry per
+property that calls the fn by name and `E0425` names any the author did not write.
+
+### Not done
+
+The §6 acceptance test has **not** been run. It needs an expensive run, and the authoring-contract
+change invalidates every cached spec, so `klend-0819` re-authors from the fixture down. Until it
+does, this is verified by unit tests and by inspection of the generated crate, not by a campaign.

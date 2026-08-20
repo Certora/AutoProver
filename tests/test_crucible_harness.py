@@ -51,15 +51,21 @@ _IDL_AT = f"{_HARNESS}/idls/example_lending.json"
 def _crate_root(*slugs: str, idl: str | None = None) -> dict[str, str]:
     """The run's build scaffolding, as the host asks for it once the unit set is known.
 
-    Only the unit *slugs* matter here: the crate root and manifest are a function of the unit set
-    and the shared fixture, which is exactly why this can be written before any unit has authored
-    anything — and therefore why the gated builds never have to rewrite it."""
+    The unit slugs and the run's properties are what matter: the crate root and manifest are a
+    function of those and the shared fixture, which is why this can be written before any unit has
+    authored anything — and therefore why the gated builds never have to rewrite it. Each unit here
+    is given one property, ``<slug>_holds``, so it has a check to declare a build target for."""
     payload = {
         "program": "vault",
         "source_unit": _CRATE,
         "prep_facts": {"idl": idl} if idl is not None else {},
         "setup": "// FIXTURE\nstruct Fixture {}",
-        "units": [{"slug": s} for s in slugs],
+        "units": [{"slug": s, "name": s} for s in slugs],
+        "props": [
+            {"component": s, "title": f"{s}_holds", "sort": "invariant",
+             "description": "d", "slug": f"{s}_holds"}
+            for s in slugs
+        ],
     }
     return json.loads(crucible_app.crate_root(json.dumps(payload)))
 
@@ -158,7 +164,7 @@ def test_workspace_prep_falls_back_to_the_programs_convention_without_a_crate():
     ) in cargo
 
 
-def test_crate_root_renders_the_fixture_plus_a_gated_entry_per_unit():
+def test_crate_root_renders_the_fixture_plus_a_gated_entry_per_check():
     # The same files the setup gate built, re-emitted for the run whose setup spec came from cache
     # and so never reached that gate. Either way this is the crate root every gated build compiles
     # against and the one the user receives.
@@ -166,15 +172,19 @@ def test_crate_root_renders_the_fixture_plus_a_gated_entry_per_unit():
     main_rs = files[f"{_HARNESS}/src/main.rs"]
     assert main_rs.startswith("// FIXTURE")
     assert "mod c_deposit;" in main_rs and "mod c_withdraw;" in main_rs
-    assert "c_deposit::invariants(fixture)" in main_rs
+    # One entry per CHECK, delegating into its component's module — a campaign is a check, so a
+    # component is a module and not a build target (docs/per-check-targets.md).
+    assert "c_deposit::c_deposit_holds(fixture)" in main_rs
+    assert 'fn c_deposit_holds(fixture: &mut Fixture)' in main_rs
     # Scaffolding only — no unit has authored anything at this point in a run.
     assert "f: &mut Fixture" not in main_rs
-    # The manifest declares one feature per unit — each gates its own `main()` — and the same path
+    # The manifest declares one feature per CHECK — each gates its own `main()` — and the same path
     # dep the gated builds use, so the delivered crate still compiles for the user. (A build selects
     # exactly one: each `#[invariant_test]` emits its own `main` and `#[global_allocator]`, so
     # enabling two at once cannot compile.)
     cargo = files[f"{_HARNESS}/Cargo.toml"]
-    assert "c_deposit = []" in cargo and "c_withdraw = []" in cargo
+    assert "c_deposit_holds = []" in cargo and "c_withdraw_holds = []" in cargo
+    assert "\nc_deposit = []" not in cargo, "a component is a module, not a build target"
     assert "c_invariants" not in cargo, "no fallback feature when the host supplies slugs"
     assert (
         f'example-lending = {{ path = "{_TO_ROOT}programs/lend", features = ["no-entrypoint"] }}'

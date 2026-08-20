@@ -1,7 +1,7 @@
-//! Authored invariants for the `{{ feature }}` component.
+//! Authored invariants for the `{{ module }}` component — one `pub fn` per check.
 //!
-//! Reached from the crate root's generated `#[invariant_test] fn {{ feature }}`, which this
-//! module's `{{ section_fn }}` is called from once after every fuzzed action.
+//! Each is reached from the crate root's generated `#[invariant_test] fn <check>` of the same name,
+//! which is called once after every fuzzed action of the campaign that selects it.
 
 use super::*;
 

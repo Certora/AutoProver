@@ -1,9 +1,10 @@
-// ═══ {{ feature }} ═══════════════════════════════════════════════════════════════════════════
-#[cfg(feature = "{{ feature }}")]
-mod {{ feature }};
-
-#[cfg(feature = "{{ feature }}")]
+// ═══ {{ module }} ════════════════════════════════════════════════════════════════════════════
+#[cfg(any({% for c in checks %}feature = "{{ c }}"{% if !loop.last %}, {% endif %}{% endfor %}))]
+mod {{ module }};
+{% for c in checks %}
+#[cfg(feature = "{{ c }}")]
 #[invariant_test]
-fn {{ feature }}(fixture: &mut Fixture) {
-    {{ feature }}::{{ section_fn }}(fixture)
+fn {{ c }}(fixture: &mut Fixture) {
+    {{ module }}::{{ c }}(fixture)
 }
+{% endfor %}

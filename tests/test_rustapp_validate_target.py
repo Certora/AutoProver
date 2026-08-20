@@ -26,7 +26,7 @@ from composer.rustapp.session import (
     VALIDATE_KEY, CheckVocab, GateDeps, PropertyCheckMapping, RustSessionState, SessionResult,
     _map_tool, _validate_tool,
 )
-from composer.rustapp.wire import Target, Check, Exploration, ValidateCoverageError, Verdict
+from composer.rustapp.wire import Target, Check, Stakes, ValidateCoverageError, Verdict
 from composer.spec.source.report.schema import Outcome
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor, wire_verdict
@@ -172,7 +172,7 @@ async def test_a_full_run_asks_for_every_check_to_be_explored_to_budget(tmp_path
     # what they would say is that they held.
     wheel = _Wheel()
     await _validate(wheel, tmp_path)
-    assert [t.exploration for t in wheel.targets] == [Exploration.TO_BUDGET] * 2
+    assert [t.stakes for t in wheel.targets] == [Stakes.OF_RECORD] * 2
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_a_partial_run_lets_the_checker_stop_at_the_first_finding(tmp_path
     # and never stamps, so buying speed with the other checks' verdicts costs nothing.
     wheel = _Wheel()
     await _validate(wheel, tmp_path, checks=["c_fees"])
-    assert [t.exploration for t in wheel.targets] == [Exploration.UNTIL_FIRST_FINDING]
+    assert [t.stakes for t in wheel.targets] == [Stakes.FEEDBACK]
 
 
 @pytest.mark.asyncio

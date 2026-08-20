@@ -14,11 +14,19 @@ use autoprover_sdk::chain::ChainData;
 use autoprover_sdk::descriptor::AppDescriptor;
 use autoprover_sdk::finalize::FinalizeInput;
 use autoprover_sdk::outcome::{
-    CompileResult, Exploration, Outcome, Target, ValidateOutcome, Verdict,
+    CompileResult, Outcome, Stakes, Target, ValidateOutcome, Verdict,
 };
 use autoprover_sdk::prep::{CrateRootInput, SandboxGrants, WorkspacePrep};
 use autoprover_sdk::sandbox::Workspace;
 use autoprover_sdk::Backend;
+
+/// The most a [`Stakes::Feedback`] campaign spends per check, in seconds.
+///
+/// A gate run spends `--fuzz-timeout` on every check; an iteration the author will not publish
+/// spends at most this, because there are as many campaigns as checks and the author is waiting on
+/// all of them. Low enough that revising a component stays interactive, and it still gives each
+/// check its own attention — which the one shared campaign this replaced never did.
+const FEEDBACK_BUDGET_S: u64 = 10;
 use autoprover_solana::{SolanaPrep, SolanaPrepFacts, SolanaSourceUnit};
 
 use crate::build_log::{build_errors, is_build_error, run_failure};
@@ -26,13 +34,13 @@ use crate::campaign::Campaign;
 use crate::coverage;
 use crate::harness::{crate_dep_usable, HarnessSpec};
 use crate::layout::{
-    feature_of_unit, harness_fn, unit_name, CORPUS_DIR, CRASHES_DIR, PREFLIGHT_FEATURE,
+    module_for, module_of_unit, unit_name, unit_targets, CORPUS_DIR, CRASHES_DIR, PREFLIGHT_FEATURE,
     PREFLIGHT_ROOT, REPORT_ROOT,
 };
 use crate::optional_accounts;
 use crate::section::{delivered_sections, Section};
 use crate::templates::SkeletonFixture;
-use crate::triage::{attribute_findings, findings, undeclarable};
+use crate::triage::{attribute_findings, findings, unbuildable, undeclarable};
 use crate::{declaration, prompts, tally, toolchain};
 
 /// Every verdict, told which file its assertion lives in — `<feature>.rs`, the section this
@@ -70,15 +78,21 @@ impl Backend for CrucibleApp {
         toolchain::preconditions(args)
     }
 
-    fn target_for(&self, input: &AuthorInput, _check: &str) -> Option<String> {
-        // Every check of a component runs in ONE fuzz campaign — the component's harness fn, which
-        // is also its Cargo feature and what a gated build selects
-        // (docs/crucible.md §4). So the grouping does not depend on the check:
-        // one build and one run for the whole property set, still a report row per property.
-        // Neither the preflight gate nor the shared fixture formalizes anything, so neither has a
-        // check to place.
-        let Authored::Component { .. } = input.authored else { return None };
-        Some(harness_fn(input))
+    fn target_for(&self, _input: &AuthorInput, _check: &str) -> Option<String> {
+        // Every check is its own campaign. `None` is how the seam spells that, so this says nothing
+        // per check — it only declines to *group* them (docs/per-check-targets.md).
+        //
+        // Grouping a component's whole property set into one campaign is what this used to do, and
+        // it cost the verdicts their independence: a campaign stops each input at its first
+        // violation and drops the refuting input from its corpus, so whichever check is refuted
+        // first shapes the exploration the rest are judged by — and they are then reported `GOOD`
+        // on it. Measured on klend: 35x the executions surfaced no additional check, and all 8
+        // crashes were the same one.
+        //
+        // Nothing here depends on `input`: a check of a component is its own target, and the
+        // preflight and the shared fixture formalize nothing, so neither has a check to place
+        // either way.
+        None
     }
 
     fn author_prompt(&self, input: &AuthorInput) -> Prompt {
@@ -114,7 +128,8 @@ impl Backend for CrucibleApp {
                 (hspec.preflight_files(&skeleton), PREFLIGHT_FEATURE.to_string())
             }
             Authored::Setup { .. } => {
-                let units: Vec<String> = input.units().iter().map(feature_of_unit).collect();
+                let units: Vec<_> =
+                    input.units().iter().map(|u| unit_targets(u, &input.props)).collect();
                 (hspec.scaffold(authored_spec, &units), PREFLIGHT_FEATURE.to_string())
             }
             Authored::Component { .. } => {
@@ -122,7 +137,7 @@ impl Backend for CrucibleApp {
                 // from the whole unit set by `crate_root` — so a gated build is the delivered crate
                 // with one feature selected, not a separately-assembled lookalike
                 // (docs/crucible.md §4).
-                let fname = harness_fn(input);
+                let fname = module_for(input);
                 (hspec.section_files(&fname, authored_spec), fname)
             }
         };
@@ -163,20 +178,36 @@ impl Backend for CrucibleApp {
         if let Some(why) = undeclarable(target) {
             return target.all(Outcome::Error, Some(why));
         }
+        // Also ahead of the build, and for the same reason: a target the crate has no feature for
+        // would spend one on `crucible run` answering about a missing feature instead.
+        if let Some(why) = unbuildable(target, &input.run_props) {
+            return target.all(Outcome::Error, Some(why));
+        }
         let program = &input.program;
-        let budget_s: u64 = input.args.get("fuzz_timeout").unwrap_or(30);
-        // The target's name is the harness fn, which is also the Cargo feature and the selector.
+        // What the author declared for this run, spent per *check* — one campaign covers one, so
+        // the budget is what that check gets rather than what it shares. `Feedback` is an iteration
+        // the author will not publish, so it is capped: the answer that matters is the one the gate
+        // takes, and a full budget per check while revising would put minutes between edits.
+        let declared: u64 = input.args.get("fuzz_timeout").unwrap_or(30);
+        let budget_s = match target.stakes {
+            Stakes::Feedback => declared.min(FEEDBACK_BUDGET_S),
+            Stakes::OfRecord => declared,
+        };
+        // The target's name is the check: its Cargo feature, its crate-root entry fn, and what
+        // `crucible run` selects.
         let fname = &target.name;
-        // Only this component's section, against the crate root `crate_root` already wrote — so what
-        // is fuzzed is, byte for byte, what ships.
+        // The section the spec belongs to is the *component's*, which is not the target — one file
+        // holds every check of a component, and each check's campaign selects its own entry into it.
+        // Written against the crate root `crate_root` already wrote, so what is fuzzed is, byte for
+        // byte, what ships.
         let hspec = HarnessSpec::of(input);
-        let files = hspec.section_files(fname, spec);
+        let files = hspec.section_files(&module_for(input), spec);
         let dir = hspec.dir_arg(&ws.dir);
         let timeout = budget_s.to_string();
         // `--mode explore` is NOT used, though these are its settings: it also turns on
         // `--stop-on-crash`, and a campaign that quits at the first crash leaves every other check
         // it covers unexplored while still answering for them. Spelling the settings out is what
-        // lets `Target::exploration` decide that, rather than the mode preset deciding it for every
+        // lets `Target::stakes` decide that, rather than the mode preset deciding it for every
         // run. The corpus/crashes paths resolve against the invoking cwd, which is where
         // `crash_meta_paths` looks for the metadata behind a finding — keep them in step. They are
         // `explore`'s own names moved under `.certora_internal/` ([`CORPUS_DIR`]): a campaign fills
@@ -193,7 +224,7 @@ impl Backend for CrucibleApp {
             "--corpus-in", CORPUS_DIR, "--corpus-out", CORPUS_DIR, "--crashes-out", CRASHES_DIR,
             "--timeout", &timeout, "--coverage",
         ];
-        if target.exploration == Exploration::UntilFirstFinding {
+        if target.stakes == Stakes::Feedback {
             args.push("--stop-on-crash");
         }
         let started = Instant::now();
@@ -212,7 +243,7 @@ impl Backend for CrucibleApp {
                 // (exit 0) fuzz run from being misread as a build failure.
                 let concluded = if !found.is_empty() {
                     // Each crash refutes ONE invariant — pin BAD to the property each finding names
-                    // (every assertion is tagged `[<title>]`), and let `exploration` say what the
+                    // (every assertion is tagged `[<title>]`), and let `stakes` say what the
                     // checks nothing named get. A title belonging to another component is left to
                     // the component that owns it; one nobody in the run owns marks all BAD (never
                     // hide it).
@@ -319,11 +350,13 @@ impl Backend for CrucibleApp {
             SolanaSourceUnit::of(&input.source_unit, program),
             SolanaPrepFacts::of(&input.prep_facts).idl.unwrap_or_default(),
         );
-        // Every unit gets a feature, including ones that will later give up: the declaration cannot
-        // wait for an outcome, and `finalize` puts an honest `compile_error!` behind the ones that
-        // produce nothing rather than leaving a `mod` with no file.
-        let features: Vec<String> = input.units.iter().map(feature_of_unit).collect();
-        spec.scaffold(input.setup.as_deref().unwrap_or_default(), &features)
+        // Every unit's checks get a feature, including those of a unit that will later give up:
+        // the declaration cannot wait for an outcome, and `finalize` puts an honest
+        // `compile_error!` behind the ones that produce nothing rather than leaving a `mod` with no
+        // file. Same two inputs the setup gate rendered from — the unit set and the run's
+        // properties — so this re-emits its bytes exactly.
+        let units: Vec<_> = input.units.iter().map(|u| unit_targets(u, &input.props)).collect();
+        spec.scaffold(input.setup.as_deref().unwrap_or_default(), &units)
     }
 
     fn finalize(&self, outcomes: &FinalizeInput) -> BTreeMap<String, String> {
@@ -353,7 +386,7 @@ impl Backend for CrucibleApp {
             files.insert(spec.section_path(&feature), Section::file(&feature, &text));
         }
         for (name, gave_up) in outcomes.gave_up() {
-            let feature = feature_of_unit(&gave_up.unit);
+            let feature = module_of_unit(&gave_up.unit);
             files.insert(
                 spec.section_path(&feature),
                 Section::gave_up(&feature, name, &gave_up.reason),
@@ -411,29 +444,27 @@ mod tests {
     }
 
     #[test]
-    fn every_check_of_a_component_shares_that_components_fuzz_target() {
-        // Whatever the author called its checks, they all run in the component's one campaign —
-        // one build and one run for the whole property set.
+    fn every_check_is_its_own_fuzz_target() {
+        // Grouping is what this backend must NOT do: a campaign covering several checks stops each
+        // input at its first violation and drops that input from its corpus, so whichever check is
+        // refuted first shapes the exploration the rest are then reported `GOOD` on
+        // (docs/per-check-targets.md). `None` is how the seam spells "its own target".
         let app = CrucibleApp;
         let input = component_input(
             "farms", "Farms Integration",
             vec![prop("stake matches position", "stake_matches"), prop("no double stake", "no_dbl")],
         );
-        for name in ["c_stake_matches", "whatever_the_author_called_it"] {
-            assert_eq!(app.target_for(&input, name).as_deref(), Some("c_farms"));
+        for name in ["c_stake_matches", "c_no_dbl", "whatever_the_author_called_it"] {
+            assert_eq!(app.target_for(&input, name), None, "{name} was grouped");
         }
-        // …and a different component gets a different target, so the host runs one campaign each.
-        let other = component_input("referrals", "Referrals", vec![prop("fees capped", "fees")]);
-        assert_eq!(app.target_for(&other, "c_fees").as_deref(), Some("c_referrals"));
     }
 
     #[test]
-    fn only_a_component_groups_its_checks() {
-        // The shared fixture formalizes nothing, and the gate runs before anything is analyzed, so
-        // neither has a check to place.
+    fn nothing_groups_its_checks() {
+        // Every turn answers the same way — a check is its own target — but the reason differs for
+        // the two that formalize nothing: they have no check to place at all.
         let app = CrucibleApp;
         let mut input = component_input("farms", "Farms", vec![prop("p", "p")]);
-        assert!(app.target_for(&input, "c_p").is_some());
         for authored in [
             Authored::Setup { model: serde_json::Value::Null, units: Vec::new() },
             Authored::Preflight,

@@ -59,28 +59,32 @@ impl Check {
     }
 }
 
-/// How much of its budget one invocation must spend before it may conclude — the difference between
-/// a run whose clean checks mean something and one that only got as far as the first problem.
+/// What rides on this invocation's answer — the difference between a run the author is iterating
+/// against and one whose verdicts are going to be reported.
 ///
-/// A checker that can stop early is cheaper when the author is iterating and wrong when the verdicts
-/// are going to be reported: a check that a run abandoned before exploring it is not a check that
-/// held. The host knows which kind of run it is asking for (only a full run stamps the publish gate),
-/// so it says, rather than leaving each backend to guess from the shape of its check set.
+/// The host knows which it is asking for (only a full run stamps the publish gate), so it says,
+/// rather than leaving each backend to guess from the shape of its check set. What a backend *does*
+/// about it is the backend's own: spend less of a fuzzing budget and stop at the first crash, pass
+/// `--fail-fast`, pick a cheaper solver configuration. So is what its unrefuted checks then report —
+/// a checker whose negative results are all budget-relative owes a weaker word for them than one
+/// that can distinguish "proved" from "not refuted in time".
 ///
-/// A backend with nothing to spend — a typechecker, a backend whose run is exhaustive by
-/// construction — answers the same either way and can ignore this.
+/// Named for the caller's intent rather than for a search strategy: a symbolic prover does not
+/// explore and has no budget in the fuzzing sense, but it does know the difference between a
+/// throwaway answer and one that will be published. A backend with nothing to vary — a typechecker,
+/// or one whose run is exhaustive by construction — answers the same either way and can ignore this.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
-pub enum Exploration {
-    /// Stop as soon as there is something to report. The checks the run did not refute were not
-    /// explored to budget, so their `GOOD` says "not refuted yet" and nothing more — fine for an
-    /// author iterating on one problem, and never enough to report.
-    UntilFirstFinding,
-    /// Explore every covered check to the full budget, whatever is found on the way. The default,
-    /// because a run that quietly stops short is the failure mode worth defaulting away from.
+pub enum Stakes {
+    /// The author is iterating and these verdicts will not be reported, so the answer may be as
+    /// cheap as the backend can make it. What its unrefuted checks say is correspondingly weaker —
+    /// for Crucible, "not refuted yet" and nothing more.
+    Feedback,
+    /// These verdicts stamp the publish gate. The default, because a run that quietly stops short is
+    /// the failure mode worth defaulting away from.
     #[default]
-    ToBudget,
+    OfRecord,
 }
 
 /// **One invocation of the checker** — one build + one run — and the checks that invocation covers,
@@ -107,10 +111,10 @@ pub struct Target {
     /// The checks this run must produce a verdict for. Usually one; several when a backend checks
     /// a whole property set in one run.
     pub checks: Vec<Check>,
-    /// How far this invocation must explore before concluding. Set by the host from what it will do
-    /// with the answer — a partial run it lets the author iterate against may stop early; the run
-    /// that stamps the publish gate may not.
-    pub exploration: Exploration,
+    /// What rides on this invocation's answer. Set by the host from what it will do with it — a
+    /// partial run it lets the author iterate against is [`Feedback`](Stakes::Feedback); the run that
+    /// stamps the publish gate is [`OfRecord`](Stakes::OfRecord).
+    pub stakes: Stakes,
 }
 
 impl Target {
