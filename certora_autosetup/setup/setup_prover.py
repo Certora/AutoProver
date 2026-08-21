@@ -26,6 +26,10 @@ from certora_autosetup.build_systems.base import BuildSystemConfig
 from certora_autosetup.parsers.build_system_detector import BuildSystem, BuildSystemDetector
 from certora_autosetup.parsers.foundry import FoundryContractExtractor
 from certora_autosetup.utils.contract_utils import parse_contract_files
+from certora_autosetup.utils.import_diagnostics import (
+    UnresolvedImport,
+    describe_unresolved_imports,
+)
 from certora_autosetup.setup.auto_munges import detect_and_apply_code_access_patches
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.setup.signature_types import ContractInfo
@@ -165,6 +169,9 @@ class SetupProver:
         # Directory holding the contract's build config; assigned by Autosetup alongside
         # build_system once detection has run.
         self.build_config_dir: Path = Path.cwd()
+        # Classification of the unresolved imports the last compilation run hit, carried over
+        # from the workaround manager so failure messages can name the class.
+        self.last_import_diagnostics: List[UnresolvedImport] = []
 
         # Track compilation configuration updates
         self.compilation_config_updates: Dict[str, Any] = {}
@@ -466,11 +473,13 @@ class SetupProver:
                         import_patcher_applied = False
                         raise CompilationAnalysisError(
                             "Compilation analysis failed even after import patch"
+                            + self._import_diagnostics_suffix()
                         )
                 else:
                     self.log("Import patch failed", "ERROR")
                     raise CompilationAnalysisError(
                         "Compilation analysis failed and import patch could not be applied"
+                        + self._import_diagnostics_suffix()
                     )
 
             self.log("✓ Compilation analysis completed successfully")
@@ -650,11 +659,21 @@ class SetupProver:
             solc_default_version=self.solc_default_version,
             verbose=self.verbose,
             build_config_dir=self.build_config_dir,
+            declared_via_ir=bool(getattr(self.build_system_config, "via_ir", False)),
         )
 
-        return workaround_manager.run_compilation_with_workarounds(
+        result = workaround_manager.run_compilation_with_workarounds(
             cmd, config_file, compilation_config, contracts, updated_config_dict
         )
+        # Keep the manager's classification of any unresolved imports: the terminal error text
+        # in run_compilation_analysis names the failure class, not just the phase that failed.
+        self.last_import_diagnostics = workaround_manager.last_import_diagnostics
+        return result
+
+    def _import_diagnostics_suffix(self) -> str:
+        """Trailing block naming the unresolved imports behind a compilation failure, or ""."""
+        described = describe_unresolved_imports(self.last_import_diagnostics)
+        return f"\n{described}" if described else ""
 
     def _byte_offset_to_line(self, file_path: str, source_bytes: dict) -> int:
         """Convert a byte offset in a source file to a 1-based line number."""

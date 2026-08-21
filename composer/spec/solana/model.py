@@ -280,7 +280,7 @@ class SolanaComponentInstance:
 
     # -- FeatureUnit protocol -----------------------------------------------------------
     @property
-    def display_name(self) -> str:
+    def display_name(self) -> ComponentName:
         return self.component.name
 
     @property

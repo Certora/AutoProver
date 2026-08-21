@@ -19,7 +19,7 @@ from pathlib import PurePath
 from typing import Any, Callable, Collection, Literal, Mapping, TypedDict
 
 from composer.spec.context import SourceCode
-from composer.spec.code_explorer import CODE_EXPLORER_SYS_PROMPT
+from composer.spec.code_explorer import CodeExplorerPromptParams
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.prop_inference import (
     InitialPromptRenderer,
@@ -99,17 +99,17 @@ class Language:
     """The language of the **code being analyzed** — a facet of the ecosystem, shared by every
     chain whose programs are written in it (e.g. the ``rust`` facet is shared by Solana and
     Soroban). It drives how the shared front half *reads* the target's source (fs-exclusion
-    rule, code-explorer prompt, failure modes)."""
+    rule, failure modes). The code-explorer system prompt lives on :class:`Ecosystem`: its
+    look-fors are chain-shaped (PDAs vs ``require_auth``), not language-shaped."""
 
     name: LanguageTag
     #: What the agent's source tools withhold: either a predicate over the project-root-relative
     #: path (Solidity's ``fs_forbidden_read``, whose carve-outs don't fit a regex) or a plain
     #: exclusion pattern where one suffices. Both shapes are what ``GlobalExcludeArg`` accepts.
     default_forbidden_read: str | Callable[[PurePath], bool]
-    code_explorer_prompt: str
-    # The j2 partial with this language's vulnerability patterns (overflow, panics, …). Reserved
+    # The j2 fragment with this language's vulnerability patterns (overflow, panics, …). Reserved
     # for the prompt-fragment split; unused while prompts are still monolithic.
-    vulnerability_patterns_partial: str | None = None
+    vulnerability_patterns_fragment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +150,10 @@ class Ecosystem[App: BaseApplication, Main, Unit: FeatureUnit]:
     unit_type: type[Unit]
     #: Domain-specific front-matter appended to the analysis input (was hardcoded in the driver).
     analysis_extra_input: Callable[[SourceCode], list[str | dict]]
+    #: System prompt for the code-explorer sub-agent. Composed of the shared explorer protocol
+    #: plus this chain's look-fors (``composer/templates/code_explorer/``). Rendered with
+    #: :class:`~composer.spec.code_explorer.CodeExplorerPromptParams`.
+    code_explorer_prompt: TypedTemplate[CodeExplorerPromptParams]
     #: Whether ``analysis_prompts``/``property_prompts`` have a ``sort == "greenfield"`` branch.
     #: Only EVM does (the natspec design-doc-to-Solidity path) — Solana's templates have no
     #: greenfield content, so ``run_pipeline`` asserts against this rather than silently rendering
@@ -205,9 +209,9 @@ def _evm_analysis_extra_input(source: SourceCode) -> list[str | dict]:
 
 # Adding Vyper support (a second EVM source language) would, at a very high level:
 #   1. Extend ``LanguageTag`` with ``"vyper"`` and add a ``VYPER`` ``Language`` facet here (its
-#      own ``forbidden_read``, code-explorer prompt, and — eventually — failure-modes partial).
-#   2. Bind it to a Vyper-flavored EVM ``Ecosystem`` (its own analysis/property prompts) and
-#      route to it by detecting the target's source language at the entry point.
+#      own ``forbidden_read`` and — eventually — failure-modes fragment).
+#   2. Bind it to a Vyper-flavored EVM ``Ecosystem`` (its own analysis/property/code-explorer
+#      prompts) and route to it by detecting the target's source language at the entry point.
 #   3. Loosen the analysis model's Solidity assumptions: contracts are keyed by
 #      ``SolidityIdentifier`` / ``solidity_identifier`` throughout (see ``system_model`` and
 #      ``main_instance``), which would need to widen to the language-neutral
@@ -218,8 +222,10 @@ def _evm_analysis_extra_input(source: SourceCode) -> list[str | dict]:
 SOLIDITY = Language(
     name="solidity",
     default_forbidden_read=fs_forbidden_read,
-    code_explorer_prompt=CODE_EXPLORER_SYS_PROMPT,
 )
+
+#: Bound at top level so ``composer.meta.templates``'s AST scan can see it.
+EVM_CODE_EXPLORER_TEMPLATE = TypedTemplate[CodeExplorerPromptParams]("code_explorer/solidity.j2")
 
 EVM: EvmEcosystem = Ecosystem(
     name="evm",
@@ -233,6 +239,7 @@ EVM: EvmEcosystem = Ecosystem(
     units=_evm_units,
     unit_type=ContractComponentInstance,
     analysis_extra_input=_evm_analysis_extra_input,
+    code_explorer_prompt=EVM_CODE_EXPLORER_TEMPLATE,
 )
 
 
@@ -245,27 +252,16 @@ EVM: EvmEcosystem = Ecosystem(
 #: ``fs_forbidden_read``, nothing needs carving back out of an excluded directory.
 RUST_FORBIDDEN_READ = r"(^target/.*)|(^\.git.*)|(^node_modules/.*)|(.*\.lock$)"
 # NOTE: the confined-build scratch dirs (``.sandbox_cargo`` / ``.sandbox_rustup`` /
-# ``.sandbox_tmp`` and nested ``target/``) are also excluded, but that extension lives with the
-# rust-framework layer that introduces confined Rust builds — no build runs in this front-half, so
-# those dirs never exist here.
-
-# Chain-neutral: the explorer reads the crate with file tools, so it meets each chain's idioms in
-# the source. If a chain's guidance ever needs to diverge, make this per-ecosystem — an override on
-# ``Ecosystem``, or a j2 template per chain — rather than growing a union here.
-RUST_CODE_EXPLORER_PROMPT = """\
-You are a code-exploration assistant analyzing the Rust source of an on-chain program. You have
-file tools (list_files, get_file, grep_files) to explore the project. Answer the question
-concretely, citing what you found: the entry points and the authorization each one performs (and
-which perform none); the state of the program and how it is addressed and stored; and the calls
-it makes into other programs, including where the callee's identity comes from. Quote the exact
-Rust snippets that establish or omit a check; do not speculate about code you have not read.
-"""
+# ``.sandbox_tmp`` and nested ``target/``) also have to be excluded — a build fills them with
+# hundreds of MB the source tools' file-listing would pull into the model's context — but that
+# extension lives with the *backend* that runs confined Rust builds inside the workdir. Nothing in
+# the front half, and nothing in the Rust application framework itself, creates them: a Rust
+# backend need not build a crate to validate the program, nor use the sandbox at all.
 
 RUST = Language(
     name="rust",
     default_forbidden_read=RUST_FORBIDDEN_READ,
-    code_explorer_prompt=RUST_CODE_EXPLORER_PROMPT,
-    vulnerability_patterns_partial="rust/_vulnerability_patterns.j2",
+    vulnerability_patterns_fragment="rust/vulnerability_patterns_fragment.j2",
 )
 
 
@@ -457,6 +453,7 @@ SOLANA_ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("solana/an
 SOLANA_ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("solana/analysis_prompt.j2")
 SOLANA_PROPERTY_SYSTEM_TEMPLATE = TypedTemplate[PropertySystemPromptParams]("solana/property_system.j2")
 SOLANA_PROPERTY_INITIAL_TEMPLATE = TypedTemplate[SolanaPropertyPromptParams]("solana/property_prompt.j2")
+SOLANA_CODE_EXPLORER_TEMPLATE = TypedTemplate[CodeExplorerPromptParams]("code_explorer/solana.j2")
 
 
 def _render_solana_property_prompt(
@@ -490,6 +487,7 @@ SOLANA: SolanaEcosystem = Ecosystem(
     units=_solana_units,
     unit_type=SolanaComponentInstance,
     analysis_extra_input=_solana_analysis_extra_input,
+    code_explorer_prompt=SOLANA_CODE_EXPLORER_TEMPLATE,
 )
 
 
@@ -638,6 +636,7 @@ SOROBAN_ANALYSIS_SYSTEM_TEMPLATE = TypedTemplate[AnalysisPromptParams]("soroban/
 SOROBAN_ANALYSIS_INITIAL_TEMPLATE = TypedTemplate[AnalysisPromptParams]("soroban/analysis_prompt.j2")
 SOROBAN_PROPERTY_SYSTEM_TEMPLATE = TypedTemplate[PropertySystemPromptParams]("soroban/property_system.j2")
 SOROBAN_PROPERTY_INITIAL_TEMPLATE = TypedTemplate[SorobanPropertyPromptParams]("soroban/property_prompt.j2")
+SOROBAN_CODE_EXPLORER_TEMPLATE = TypedTemplate[CodeExplorerPromptParams]("code_explorer/soroban.j2")
 
 
 def _render_soroban_property_prompt(
@@ -668,6 +667,7 @@ SOROBAN: SorobanEcosystem = Ecosystem(
     units=_soroban_units,
     unit_type=SorobanComponentInstance,
     analysis_extra_input=_soroban_analysis_extra_input,
+    code_explorer_prompt=SOROBAN_CODE_EXPLORER_TEMPLATE,
 )
 
 

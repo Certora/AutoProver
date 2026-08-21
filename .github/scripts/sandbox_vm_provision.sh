@@ -13,7 +13,8 @@
 # regardless (§11 item 2).
 #
 # Kept dependency-light on purpose: the escape suite imports only stdlib +
-# composer.sandbox.* (all stdlib) + pytest, so we install just pytest via uv and
+# composer.sandbox.*, whose sole third-party import is annotated_types (three
+# files, no dependencies of its own). So we install just pytest + that via uv and
 # put the repo on PYTHONPATH — no project build, no numpy/psycopg/langchain. We
 # pass --noconftest so tests/conftest.py (which imports those heavy deps) is not
 # collected; the suite's fixtures are all in-module.
@@ -75,8 +76,10 @@ section "Escape suite against kernel ${KREL}"
 export PYTHONPATH="${REPO}"
 # --no-project: don't build AutoProver; --with: ephemeral pytest env.
 # --noconftest: skip tests/conftest.py's heavy imports (fixtures here are in-module).
+# annotated-types is composer.sandbox.config's only non-stdlib import (it carries the
+# Ge(0) bound on the Rust-mirrored timeout_s), so importing the package needs it here.
 uv run --no-project --python 3.12 \
-  --with 'pytest>=9.0' --with 'pytest-asyncio>=1.3' \
+  --with 'pytest>=9.0' --with 'pytest-asyncio>=1.3' --with 'annotated-types>=0.7' \
   pytest --noconftest -v \
   --junitxml="${JUNIT}" \
   "${REPO}/tests/test_sandbox_escape.py"

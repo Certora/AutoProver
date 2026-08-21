@@ -1,7 +1,7 @@
 <background>
 You are reviewing a Soroban/Stellar smart contract.
 
-{% include "soroban/_platform_model.j2" %}
+{% include "soroban/platform_model_fragment.j2" %}
 </background>
 
 <inputs>
@@ -64,9 +64,9 @@ this contract. The properties that matter most are often the ones specific to wh
 application is trying to do. Make sure to look outside of these patterns, and beyond the three categories
 defined above.
 
-{% include "rust/_vulnerability_patterns.j2" %}
+{% include "rust/vulnerability_patterns_fragment.j2" %}
 
-{% include "soroban/_vulnerability_patterns.j2" %}
+{% include "soroban/vulnerability_patterns_fragment.j2" %}
 
 Write each property as **natural-language prose**: a sentence or two stating what must hold, in
 terms of this contract's functions, addresses, and storage keys. Do not write CVLR or CVLR-Soroban, any other Rust,
