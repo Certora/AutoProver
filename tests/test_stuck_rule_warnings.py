@@ -15,7 +15,7 @@ The loop this covers used to be inline in ``verify_spec`` and carried three defe
 
 from composer.prover.ptypes import RulePath
 from composer.spec.source.prover import (
-    NagMarker, ProverHistoryItem, ProverRunLog, STUCK_RULE_NAG_THRESHOLD,
+    NagMarker, ProverHistoryItem, ProverRunLog, RuleSelection, STUCK_RULE_NAG_THRESHOLD,
     stuck_rule_warnings,
 )
 
@@ -23,13 +23,20 @@ R1 = RulePath(rule="r1")
 R2 = RulePath(rule="r2")
 
 
-def _run(*results: tuple[RulePath, str], tc_id: str = "tc", rules: list[str] | None = None) -> ProverHistoryItem:
+def _run(
+    *results: tuple[RulePath, str],
+    tc_id: str = "tc",
+    rules: RuleSelection | None = None,
+    declared: tuple[str, ...] = ("r1", "r2"),
+) -> ProverHistoryItem:
     return ProverRunLog(
         tool_call_id=tc_id,
         prover_results=list(results),  # type: ignore[arg-type]
         rules=rules,
         spec_digest="d",
         sort="run",
+        declared_rules=list(declared),
+        state_digest="sd",
     )
 
 
@@ -83,7 +90,43 @@ def test_targeted_runs_are_transparent_to_untouched_rules() -> None:
     stuck = {R1: "TIMEOUT"}
     history = [
         _run((R1, "TIMEOUT")),
-        _run((R2, "ERROR"), rules=["r2"]),
+        _run((R2, "ERROR"), rules={"sort": "include", "selector": ["r2"]}),
+        _run((R1, "TIMEOUT")),
+    ]
+    assert _warn(stuck, history)[0] == {R1}
+
+
+def test_exclude_scoped_runs_are_transparent_to_excluded_rules() -> None:
+    # A run that excluded r1 never exercised it, so it neither extends nor breaks
+    # r1's streak — the identical failures on either side of it still add up.
+    stuck = {R1: "TIMEOUT"}
+    history = [
+        _run((R1, "TIMEOUT")),
+        _run((R2, "ERROR"), rules={"sort": "exclude", "selector": ["r1"]}),
+        _run((R1, "TIMEOUT")),
+    ]
+    assert _warn(stuck, history)[0] == {R1}
+
+
+def test_exclude_scoped_run_that_covers_the_rule_breaks_its_streak() -> None:
+    # An exclude-scoped run still executes every non-excluded declared rule, so r1
+    # passing in it ends the streak like any full run would.
+    stuck = {R1: "TIMEOUT"}
+    history = [
+        _run((R1, "TIMEOUT")),
+        _run((R1, "VERIFIED"), rules={"sort": "exclude", "selector": ["r2"]}),
+        _run((R1, "TIMEOUT")),
+    ]
+    assert _warn(stuck, history)[0] == set()
+
+
+def test_full_runs_scope_to_their_declared_rules() -> None:
+    # A full run from before r1 was declared is transparent to r1's streak: "all
+    # rules" means the rules that run declared, not today's.
+    stuck = {R1: "TIMEOUT"}
+    history = [
+        _run((R1, "TIMEOUT")),
+        _run((R2, "VERIFIED"), declared=("r2",)),
         _run((R1, "TIMEOUT")),
     ]
     assert _warn(stuck, history)[0] == {R1}

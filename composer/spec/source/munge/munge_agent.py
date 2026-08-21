@@ -10,7 +10,7 @@ from langgraph.types import Command
 from langchain_core.tools import BaseTool
 from langchain_core.messages import ToolMessage
 
-from .edit_store import EditStore
+from .edit_store import EditStore, MungeEditor
 from .vfs_diff import summarize_changes
 from composer.spec.source.conf_maps import (
     CompilerSettings, MapViolations, extend_compiler_maps, map_violation_message,
@@ -146,6 +146,7 @@ class EditMungeTool(WithAsyncDependencies[str, MungeToolDeps], WithInjectedId, W
                 res["vfs"],
                 executive_summary=d.executive_summary,
                 why_sound=d.why_sound,
+                attribution=MungeEditor(),
             )
             diff = summarize_changes(
                 res, deps.accessor, self.state["vfs"]

@@ -2,9 +2,9 @@ name: pytest-check
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
 
 jobs:
   pytest:
@@ -20,7 +20,29 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
           cache-suffix: pytest
-      
+
+      # `dev` is one of uv's default groups and includes `apps`, so the sync below
+      # builds the `rust/` wheels — tests/test_rustapp.py and the launcher suites
+      # skip themselves without them. uv builds those crates concurrently, and
+      # rustup's install path is not safe against concurrent invocations: whichever
+      # maturin -> cargo call wins clears $RUSTUP_HOME/downloads and the other one
+      # dies renaming its half-downloaded component. So install the toolchain
+      # serially, first. No argument — rustup takes the channel, profile and
+      # components from rust-toolchain.toml.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - name: Cache the Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: cargo-pytest-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: cargo-pytest-
+
       - name: sync-deps
         run: |
           uv sync --group test --extra prover

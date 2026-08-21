@@ -1,6 +1,9 @@
-from typing import Callable, NotRequired, Sequence, override, Literal, Annotated
+from typing import AsyncIterator, NotRequired, override, Literal, Annotated, Sequence, Protocol, Callable
+
 from typing_extensions import TypedDict
+from contextlib import asynccontextmanager
 import json
+import pathlib
 
 from dataclasses import dataclass
 
@@ -11,23 +14,29 @@ from graphcore.tools.schemas import (
     WithAsyncImplementation, WithImplementation, WithInjectedId, WithInjectedState,
     WithAsyncDependencies
 )
+from graphcore.graph import tool_state_update, RawPromptInput, CacheMarker, SummaryConfig
 from graphcore.tools.vfs import VFSAccessor, VFSState
-from graphcore.graph import tool_state_update
-from graphcore.summary import SummaryConfig
 
+from composer.authoring.judge import PropertyFeedbackProtocol
+from composer.authoring.state import SkippedProperty, check_completion
+from composer.authoring.tools import give_up_tool
 from composer.spec.cvl_generation import (
     static_tools, property_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
-    check_completion, validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
-    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase, SkippedProperty,
-    PropertyFeedbackProtocol,
+    validate_property_rules, CVL_JUDGE_KEY, run_cvl_generator,
+    GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
 )
+from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
+from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
-from composer.spec.types import PropertyFormulation
-from composer.pipeline.core import Curtailed, GaveUp
+from composer.spec.types import PropertyFormulation, PropertyTitle
+from composer.pipeline.core import GaveUp, ToolBinder, InjectingToolExtension, Curtailed
+from composer.pipeline.plugin_api import ProvidedTools
+from composer.spec.source.plugin import CertoraProverTools, CVLAuthorState
 from composer.spec.system_model import ContractComponentInstance, SolidityIdentifier, component_context
 from composer.spec.source.prover import (
     OVERLAY_OWNED_KEYS, ProverStateExtra, DELETE_SKIP, VALIDATION_KEY as PROVER_VALIDATION_KEY,
+    materializing_project,
 )
 from langgraph.graph import MessagesState
 from pathlib import Path
@@ -37,6 +46,8 @@ from composer.llm.provider import CacheLevel
 from composer.kb.kb_context import with_cvl_context
 
 from composer.pipeline.ptypes import GaveUp
+
+from composer.prover.core import ProverOptions
 
 from langgraph.types import Command
 from graphcore.graph import Builder
@@ -53,7 +64,7 @@ from .monitor import monitor
 from composer.spec.source.conf_maps import (
     CompilerSettings, MapViolations, extend_compiler_maps, map_violation_message,
 )
-from composer.spec.source.munge.edit_store import EditStore
+from composer.spec.source.munge.edit_store import EditStore, PluginEditor
 from composer.spec.source.munge.munge_agent import editor_tool
 from composer.spec.source.munge.tool_names import (
     COMMIT_EDIT, CONFIG_EDIT, EDIT_HISTORY_LOG, REVERT_TO_EDIT,
@@ -61,6 +72,9 @@ from composer.spec.source.munge.tool_names import (
 from composer.spec.source.munge.vfs_diff import summarize_changes
 
 from graphcore.graph import FlowInput, MonitorReturn
+
+from composer.io.task_host import TaskHost
+from composer.io.task_tools import RETRIEVE_TASK, TASK_LIST, RetrieveTask, TaskListTool
 
 class SourceAuthorExtra(TypedDict):
     failed: bool | None
@@ -125,7 +139,7 @@ class ExpectRulePassage(WithAsyncImplementation[Command], WithInjectedId):
     result=None,
 )
 class PublishResultTool(
-    WithAsyncDependencies[Command | str, list[str]],
+    WithAsyncDependencies[Command | str, list[PropertyTitle]],
     WithInjectedState[SourceCVLGenerationState],
     WithInjectedId,
 ):
@@ -156,27 +170,13 @@ class PublishResultTool(
         )
 
 
-@tool_display(
-    label=lambda p: f"Giving up on CVL generation: {p['reason']}",
-    result=None,
-)
-class GiveUpTool(WithImplementation[Command], WithInjectedId):
-    """
+_GIVE_UP_DESCRIPTION = """
     Call this tool to give up on the CVL generation for this task.
 
     This should only ever be called as a LAST RESORT when you have exhausted all other
     mechanisms to complete your task.
     """
-    reason: str = Field(description="The reason for giving up on your task")
 
-    @override
-    def run(self) -> Command:
-        return tool_state_update(
-            self.tool_call_id,
-            "Accepted",
-            failed=True,
-            result=self.reason,
-        )
 
 class ResourceView(TypedDict):
     """A CVLResource prepared for the prompt: ``import_path`` is the CVL import
@@ -540,6 +540,18 @@ class SourceEditing:
     store: EditStore
 
 
+@dataclass(frozen=True)
+class EditingTools:
+    """Source editing and plugin tool contribution, fused: a contributed tool's
+    staged :class:`CVLAuthorState` proposes edits into the editing kit's store
+    and materializes against its working copy, so a binder without an editing
+    kit is unusable. Fusing them makes "tools provided ⟺ editing enabled" a
+    fact of the type rather than an assert (the structural-invariant phase
+    passes None: neither)."""
+    editing: SourceEditing
+    tool_provider: ToolBinder[ContractComponentInstance]
+
+
 class _LastAttemptEdits(BaseModel):
     """Sibling of cvl_generation's last-attempt draft cache: the applied-edit
     history at snapshot time. The working copy itself is deliberately not
@@ -616,6 +628,59 @@ class EditorAwareFeedbackTool(
 
 _PropertyGenTemplate = TypedTemplate[PropertyGenParams]("property_generation_prompt.j2")
 
+class PropertyGenSystemParams(TypedDict):
+    source_editing: bool
+
+_PropertyGenSysTemplate = TypedTemplate[PropertyGenSystemParams]("property_generation_system_prompt.j2")
+
+#: The prover's tool extension: contributions come from plugins deriving
+#: ``CertoraProverTools``, dispatched via their ``certora_prover_tools`` hook.
+_PROVER_TOOLS = InjectingToolExtension(
+    provider=CertoraProverTools, project=lambda p: p.certora_prover_tools
+)
+
+@dataclass
+class ProverTool:
+    lg_tool: BaseTool
+    options: ProverOptions
+
+@dataclass
+class WrappedProverRunner:
+    config: dict
+    prover_options: ProverOptions
+    main_contract: str
+
+    async def run(
+        self,
+        *,
+        curr_spec: str,
+        working_dir: str,
+        cex_handler: CexHandler,
+        callbacks: ProverCallbacks,
+        tool_call_id: str,
+        rules: list[str] | None = None,
+        **config,
+    ) -> ProverReport | str:
+        # The spec/conf staging only has to outlive the run itself, so one call
+        # stages, runs, and cleans up (the CVLAuthorState.prover_runner contract).
+        with setup_prover_config_in(
+            working_dir=working_dir,
+            spec_stem="adhoc_run",
+            main_contract=self.main_contract,
+            spec_contents=curr_spec,
+            config=self.config,
+            rule=rules,
+            **config
+        ) as (conf_path, _):
+            return await run_prover(
+                pathlib.Path(working_dir),
+                [conf_path],
+                tool_call_id,
+                self.prover_options,
+                callbacks, cex_handler
+            )
+
+
 _BUDGET_WRAPUP_MESSAGE = """
 <system-alert>
 You have almost exceeded the {resource} budget for this task. Wrap up IMMEDIATELY;
@@ -657,19 +722,20 @@ async def batch_cvl_generation(
     props: list[PropertyFormulation],
     component: ContractComponentInstance | None,
     resources: list[CVLResource],
-    prover_tool: BaseTool,
+    prover_tool: ProverTool,
     env: ServiceHost,
     description: str,
     source: SourceCode,
     spec_dir: Path,
     spec_stem: str,
-    editing: SourceEditing | None,
+    editing_tools: EditingTools | None,
 ) -> BatchGeneratedCVLResult:
     # *spec_dir* (project-root-relative) is where the caller will persist the spec
     # authored here. The prover resolves the spec's CVL imports relative to its own
     # directory, so resource imports are expressed relative to *spec_dir*.
     # *spec_stem* is the basename it is persisted under; the prover materializes its
     # transient spec/conf under the same stem so on-disk names match the dump.
+    editing = editing_tools.editing if editing_tools is not None else None
     resource_views: list[ResourceView] = [
         {
             "description": r.description,
@@ -685,6 +751,73 @@ async def batch_cvl_generation(
         "contract_name": source.contract_name,
         "sort": "existing"
     })
+
+    sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
+        _PropertyGenSysTemplate.bind({"source_editing": editing is not None}).render_to
+    ]
+
+    added_tools : list[BaseTool] = []
+    if editing_tools is not None:
+        task_host = TaskHost()
+        kit = editing_tools.editing
+        # The same run-root strategy verify_spec uses (see ProjectDirectory): an
+        # empty working copy is read in-situ, a non-empty one against a temporary
+        # materialization whose lifetime is the contributed tool's invocation.
+        project_directory = materializing_project(source.project_root, kit.live.mat)
+
+        @asynccontextmanager
+        async def yield_state(
+            plugin_id: str,
+            st: SourceCVLGenerationState
+        ) -> AsyncIterator[CVLAuthorState]:
+            class _PluginStore:
+                async def propose(
+                    self, vfs: dict[str, str], *, executive_summary: str, why_sound: str
+                ) -> str:
+                    # Snapshot completion (the EditProposer contract): the
+                    # proposer's overlay is relative to the working copy this
+                    # read staged, but ApplyEditTool snapshots are wholesale —
+                    # so fold the author's own overlay back in, or applying
+                    # the proposal would silently revert prior edits.
+                    return await kit.store.commit(
+                        {**(st.get("vfs") or {}), **vfs},
+                        executive_summary=executive_summary,
+                        why_sound=why_sound,
+                        attribution=PluginEditor(plugin_id)
+                    )
+            async with project_directory(st.get("vfs") or {}) as run_root:
+                yield CVLAuthorState(
+                    working_dir=pathlib.Path(run_root),
+                    curr_spec=st["curr_spec"],
+                    prover_runner=WrappedProverRunner(
+                        st["config"],
+                        prover_tool.options,
+                        source.contract_name
+                    ).run,
+                    host=task_host,
+                    edit_store=_PluginStore()
+                )
+
+        tools = await editing_tools.tool_provider(
+            _PROVER_TOOLS, yield_state, SourceCVLGenerationState
+        )
+        if tools:
+            # The retrieval surface for whatever the contributed tools launch;
+            # dead prompt weight when no plugin contributed, so gated on a
+            # non-empty contribution.
+            added_tools.extend([
+                TaskListTool.bind(task_host).as_tool(TASK_LIST),
+                RetrieveTask.bind(task_host).as_tool(RETRIEVE_TASK),
+            ])
+    else:
+        tools = []
+
+    for inj in tools:
+        added_tools.extend(inj.tools)
+        if isinstance(inj.system_prompt_injection, list):
+            sys_prompt.extend(inj.system_prompt_injection)
+        else:
+            sys_prompt.append(inj.system_prompt_injection)
 
     titles = [p.title for p in props]
     judge_ctx = ctx.child(CVL_JUDGE_KEY)
@@ -728,10 +861,10 @@ async def batch_cvl_generation(
     ).with_tools(
         feedback_suite
     ).with_tools(
-        [prover_tool,
+        [prover_tool.lg_tool,
          ExpectRulePassage.as_tool("expect_rule_passage"),
          ExpectRuleFailure.as_tool("expect_rule_failure"),
-         GiveUpTool.as_tool("give_up"),
+         give_up_tool(name="give_up", description=_GIVE_UP_DESCRIPTION, label="CVL generation"),
          PublishResultTool.bind(titles).as_tool("result"),
          ctx.get_memory_tool()]
     ).with_state(
@@ -742,10 +875,12 @@ async def batch_cvl_generation(
         "result"
     ).with_input(
         SourceCVLGenerationInput
-    ).with_sys_prompt_template(
-        "property_generation_system_prompt.j2", source_editing=editing is not None
+    ).with_sys_prompt(
+        [*sys_prompt]
     ).with_initial_prompt(
         with_cvl_context(bound_template.render_to)
+    ).with_tools(
+        added_tools
     ).with_summary_config(
         PropertyGenerationConfig(source_editing=editing is not None)
     ).compile_async()
