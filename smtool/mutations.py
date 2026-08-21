@@ -9,7 +9,7 @@ The discipline-critical one is add_requireInvariant (a requireInvariant is ALWAY
 real-CUT invariant the prover must discharge — never a bare assumption). The model==real glue
 equalities are NOT a mutation: they're emitted correct-by-construction by the driver.
 """
-from __future__ import annotations
+import hashlib
 
 import composer.cvl.schema as S
 from composer.cvl.pretty_print import pretty_print
@@ -176,6 +176,10 @@ def add_glue_pin(project: Project, *, method: str, observable: str, key_exprs: l
     to real' — so it can neither hide a divergence nor make the rule vacuous, at ANY key. The tool
     hard-codes this shape, so the agent supplies only the KEYS and cannot introduce an unsound `require`.
 
+    MULTI-RETURN getters (e.g. `getAssetUnderlyingAndDecimals -> (address, uint8)`) cannot be compared
+    as a tuple in CVL. Pass the GETTER name: the tool loads it ONCE into fresh component locals and pins
+    each modeled component's reader to its component — mirroring the driver's `build_glue` destructure.
+
     Use it for a key the deterministic pins miss — typically a DERIVED address (a credit target obtained
     from another getter, e.g. a fee receiver) that the method reads/writes: without a pin that ghost cell
     is an unconstrained uint256 (-> cast-safety CEX); pinned, it inherits the real getter's field width."""
@@ -183,23 +187,38 @@ def add_glue_pin(project: Project, *, method: str, observable: str, key_exprs: l
     spec = work.conformance.get(method)
     if spec is None:
         return Result(False, f"no conformance spec for method {method!r}")
-    b = next((bd for bd in work.cls.bindings if bd.getter.name == observable), None)
-    if b is None:
+    bindings = [bd for bd in work.cls.bindings if bd.getter.name == observable]
+    if not bindings:
         return Result(False, f"{observable!r} is not a modeled observable getter — a glue pin binds an "
                              f"observable's ghost to its real getter")
     glue = work.find_func(spec, driver.GLUE)
     if glue is None:
         return Result(False, f"no {driver.GLUE} function in {method}'s conformance spec")
     keys = list(key_exprs)
-    reader = x.call(b.reader_name, keys)
-    getter = x.call(b.getter.name, ([x.ident("e")] if b.envful else []) + keys,
-                    host=driver._cut_host(work.inp, b.getter))
-    pin = x.require(x.binop("eq", reader, getter), f"glue pin (agent): model == real for {observable}")
-    if any(c.model_dump() == pin.model_dump() for c in glue.block.commands):
+    b0 = bindings[0]
+    getter = x.call(b0.getter.name, ([x.ident("e")] if b0.envful else []) + keys,
+                    host=driver._cut_host(work.inp, b0.getter))
+    msg = f"glue pin (agent): model == real for {observable}"
+    if b0.is_multi_return:
+        # load the tuple ONCE, pin each modeled component reader to its component local (never a tuple==).
+        # locals keyed by the key-signature so a repeat at the SAME keys reuses the names (idempotent) but
+        # a pin at DIFFERENT keys gets fresh names (no redeclaration collision).
+        sig = hashlib.md5(repr([k.model_dump() for k in keys]).encode()).hexdigest()[:6]
+        names = [f"_gp_{observable}_{sig}_{i}" for i in range(len(b0.getter.returns))]
+        setup = [x.declare(ct, cn) for cn, ct in zip(names, b0.getter.returns)]
+        setup.append(x.assign_multi(names, getter))
+        pins = [x.require(x.binop("eq", x.call(b.reader_name, keys), x.ident(names[b.component_index])), msg)
+                for b in bindings]
+    else:
+        setup = []
+        pins = [x.require(x.binop("eq", x.call(b0.reader_name, keys), getter), msg)]
+    present = [c.model_dump() for c in glue.block.commands]
+    if all(p.model_dump() in present for p in pins):
         return Result(True, f"glue pin for {observable} at those keys already present")
     idx = next((i for i, c in enumerate(glue.block.commands) if isinstance(c, S.ReturnCmd)),
                len(glue.block.commands))                 # before a trailing return, else append
-    glue.block.commands.insert(idx, pin)
+    for j, cmd in enumerate([*setup, *pins]):
+        glue.block.commands.insert(idx + j, cmd)
     return _commit(project, work)
 
 
