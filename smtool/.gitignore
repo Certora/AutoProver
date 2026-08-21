@@ -1,0 +1,4 @@
+generated/
+__pycache__/
+*.pyc
+.certora_internal/

@@ -46,6 +46,17 @@ class StorageType(BaseModel):
     """
     type: Literal["storage_type"]
 
+class SpecialType(BaseModel):
+    """
+    A CVL-only leaf type with no Solidity counterpart: the mathematical integer
+    `mathint`, the transaction environment `env`, an abstract `method`, and the
+    generic-argument placeholder `calldataarg`. These are legal as CVL variable,
+    parameter, and function return types but never cross the VM boundary.
+    """
+    type: Literal["special"]
+    type_name: Literal["mathint", "env", "method", "calldataarg"] = Field(
+        description="The CVL-only type, e.g. `mathint` or `env`")
+
 class PrimitiveType(BaseModel):
     """
     One of the built-in primitive types allowed by solidity. This includes all of the primitives
@@ -69,7 +80,7 @@ class PrimitiveType(BaseModel):
     ] = Field(description="The name of the type, e.g., `uint256` or `bool`")
 
 CVLType = Annotated[
-    MappingType | ArrayType | StaticArrayType | ContractType | StorageType | PrimitiveType,
+    MappingType | ArrayType | StaticArrayType | ContractType | StorageType | SpecialType | PrimitiveType,
     Discriminator("type")
 ]
 
@@ -509,7 +520,11 @@ class HookDef(BaseModel):
     block: CodeBlock = Field(description="The CVL code block to execute when the hook is triggered. Can access the identifiers bound in the pattern")
 
 class UseDirective(BaseModel):
-    pass
+    # `use invariant X;` / `use rule X;` / `use builtin rule X;` — include an imported invariant/rule
+    # in this spec's verification. (Needed to prove an invariant that is declared in an imported spec.)
+    type: Literal["use_directive"] = "use_directive"
+    use_kind: Literal["invariant", "rule", "builtin_rule"] = "invariant"
+    name: str
 
 class OverrideDirective(BaseModel):
     pass
@@ -652,7 +667,8 @@ class MethodsBlock(BaseModel):
     method_entries: list[MethodEntry] = Field(description="List of method declarations and summaries")
 
 BasicBlock = Annotated[
-    Invariant | FunctionDef | RuleBlock | SortDef | GhostDef | MacroDef | HookDef | MethodsBlock,
+    Invariant | FunctionDef | RuleBlock | SortDef | GhostDef | MacroDef | HookDef | MethodsBlock
+    | UseDirective,
     Discriminator("type")
 ]
 

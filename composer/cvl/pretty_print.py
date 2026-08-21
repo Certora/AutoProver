@@ -353,6 +353,8 @@ class CVLPrettyPrinter:
                 return f"{self._print_cvl_type(cvl_type.base_type)}[{cvl_type.n}]"
             case "primitive":
                 return cvl_type.type_name
+            case "special":
+                return cvl_type.type_name
             case "storage_type":
                 return "storage"
             case "contract_type":
@@ -453,7 +455,7 @@ class CVLPrettyPrinter:
         if cmd.message:
             return f"revert(\"{cmd.message}\");"
         else:
-            return "revert;"
+            return "revert();"
         
     def _print_elif(self, else_blk: ElseBlock, ident: LineBuilder):
         match else_blk.type:
@@ -527,6 +529,9 @@ class CVLPrettyPrinter:
                 self._print_hook_def(block, builder)
             case "methods_block":
                 self._print_methods_block(block, builder)
+            case "use_directive":
+                kw = "builtin rule" if block.use_kind == "builtin_rule" else block.use_kind
+                builder.line(f"use {kw} {block.name};")
         return "\n".join(builder.buffer)
     
     def _print_rule_block(self, rule: RuleBlock, ident: LineBuilder):
@@ -579,6 +584,7 @@ class CVLPrettyPrinter:
             if inv.proofs:
                 lb.append(" {")
             else:
+                lb.append(";")   # CVL 2: an invariant with no preserved block must end with `;`
                 return
         with ident.indent() as nested:
             for proof in inv.proofs:
@@ -824,7 +830,8 @@ class CVLPrettyPrinter:
             postfix=")"
         )
         res += f" {meth_sig.visibility}"
-        res += self.print_and_join(meth_sig.return_types, self._print_vm_param, prefix=" returns (", postfix=")")
+        if meth_sig.return_types:
+            res += self.print_and_join(meth_sig.return_types, self._print_vm_param, prefix=" returns (", postfix=")")
         if meth_sig.post_flags:
             res += " " + " ".join(meth_sig.post_flags)
         return res

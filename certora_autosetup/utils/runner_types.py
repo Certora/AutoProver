@@ -118,6 +118,7 @@ class RuleResult:
     is_sanity_rule: bool = False
     is_leaf: bool = True
     level: int = 0
+    node_type: Optional[str] = None  # POU NodeType, e.g. "ROOT" (per-rule top-level) vs sub-check leaves
     notifications: List[NotificationType] = field(default_factory=list)  # All rule notifications/warnings
     assert_type: Optional[AssertType] = None  # Type of assertion that was violated (for SAT results)
 
