@@ -3,12 +3,12 @@
 For each violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) this asks a model to write
 the issue up, grounded in the `RuleEvidence` the backend hands back for it.
 
-Evidence has one shape for every backend. Backends differ in what they can *fill* — the prover has a
-root-cause analysis and a counterexample trace, a fuzzing wheel has a crashing input and an account
-of what its run covered — but "instance, explanation, reproducer, and what the run itself did" is not
-a claim about any one of them. What is genuinely per-backend is where that evidence is *fetched*
-from and what the model is told it means; a `FindingsPolicy` carries those — as values, not hooks,
-save the fetcher.
+Evidence has one shape for every backend. Backends differ in what they can *fill* — one fills a
+root-cause analysis and a counterexample, another fills a reproducer and an account of what the
+run covered — but "instance, explanation, reproducer, and what the run itself did" is not a claim
+about any one of them. What is genuinely per-backend is where that evidence is *fetched* from and
+what the model is told it means; a `FindingsPolicy` carries those — as values, not hooks, save the
+fetcher.
 
 The rest is shared outright: walking the BAD rules, resolving each one's properties and the audit
 groups they sit in, collapsing rows that are one finding, binding the prompt, building the proof of
@@ -21,7 +21,7 @@ import asyncio
 import logging
 from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import ClassVar, TypedDict
+from typing import TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -55,10 +55,7 @@ _SEVERITY_MATRIX: dict[tuple[ImpactLevel, LikelihoodLevel], SeverityTier] = {
 
 
 def severity_for(impact: ImpactLevel, likelihood: LikelihoodLevel) -> SeverityTier:
-    """Map an assessed (impact, likelihood) pair to a severity. ``none`` impact -> informational.
-
-    For a backend whose evidence supports that judgement. One whose does not says so by assessing
-    a constant instead — see `Assessment`."""
+    """Map an assessed (impact, likelihood) pair to a severity. ``none`` impact -> informational."""
     if impact == "none":
         return "informational"
     return _SEVERITY_MATRIX[(impact, likelihood)]
@@ -116,8 +113,9 @@ class FindingsSystemParams(TypedDict):
     """The full, typed context of ``autoprove_report_findings_system.j2``.
 
     One template for every backend, because the two halves of a findings system prompt split the
-    same way everywhere: what this evidence *is* is the backend's claim, and how severity is reached
-    and what sections come back is the host's contract. Only the first varies."""
+    same way everywhere: what this evidence *is* and how far it goes is the backend's claim, and
+    how severity is reached and what sections come back is the host's contract. Only the first
+    varies."""
     #: The backend's own prose: what its evidence is, what it does and does not establish, and how to
     #: read its own markers. Leads the message; the contract follows it.
     domain: str
@@ -128,21 +126,19 @@ class FindingsPromptParams(TypedDict):
     known about it.
 
     One shape for all of them, because a backend's prompt differs in what it *says* about the
-    evidence, not in what it is given — "the Certora Prover found a concrete counterexample" is a
-    claim about the same fields a fuzzing wheel fills differently. The backend supplies the template;
-    `build_findings` binds it.
+    evidence, not in what it is given. The Prover supplies its own template; Rust-authored backends
+    share one host template. `build_findings` binds either.
 
-    ``properties`` is *every* property the rule formalizes, not a pre-picked one: a rule may jointly
-    formalize several and only the evidence says which actually broke, which is the model's job to
-    determine rather than this layer's to guess."""
+    ``properties`` is every property the covered rule(s) formalize — one rule may jointly
+    formalize several, and rows stamped as one finding contribute the union. This layer does
+    not pick which actually broke."""
     contract_name: str
     rule_name: RuleName
     properties: list[FormalizedProperty]
     groups: list[PropertyGroup]
     evidence: list[RuleEvidence]
-    #: The other BAD rows this one write-up answers for — rows the backend could not tell apart from
-    #: this one on the evidence it has. Empty in the ordinary case. Non-empty is itself something the
-    #: write-up should say: the run found one thing and cannot name which check it broke.
+    #: When several rows share one finding, the names of every covered check (including the
+    #: subject). Empty in the ordinary one-row case — the subject is ``rule_name`` alone.
     also_covers: list[RuleName]
 
 
@@ -174,9 +170,11 @@ def finding_key(rule: RuleVerdict, evidence: list[RuleEvidence]) -> Hashable:
 
     A backend whose rows are one-to-one with findings stamps nothing and nothing ever collapses. One
     whose run can conclude something it cannot attribute to a single check fans that conclusion out
-    over every check it covered and stamps them alike, so the run is written up once rather than once
-    per row it took down — for a component's whole property set, dozens of them, each guessing a
-    different check.
+    over every check it covered and stamps them alike, so those rows are written up once rather than
+    once per row.
+
+    The stamp is compared as a raw string across the whole report, with no file or component prefix:
+    the same key on two components merges them. Pick keys that are unique among this run's findings.
 
     The relation is never inferred from the evidence: rows fanned out from one conclusion look
     exactly like several checks that failed the same way, and those are two different facts about the
@@ -190,17 +188,17 @@ class FindingsPolicy:
     """What one backend's findings rest on: where its evidence comes from, what the model is told
     that evidence is, and what it can be asked to conclude from it.
 
-    Values, not hooks: the prose is a string and the prompt is a template — a Rust wheel ships the
-    first across the FFI boundary as JSON, which is the proof it was never behaviour. Only the
-    fetcher is a function, because only it does I/O."""
+    Values, not hooks: the prose is a string and the prompt is a template. A Rust-authored backend
+    ships the domain string across the FFI as JSON. Only the fetcher is a function, because only it
+    does I/O."""
 
     fetch_evidence: EvidenceFetcher
     #: The backend's half of the system message — see `FindingsSystemParams.domain`. Constant across
     #: this backend's rules; the per-rule context is `prompt`.
     domain: str
     #: The user message's template, bound by `build_findings` from `FindingsPromptParams`. The
-    #: backend owns the prose because the prompt is a claim about what its evidence *is*; it does not
-    #: own the binding, because the fields are the same for everyone.
+    #: Prover supplies its own; Rust-authored backends share one host template. Either way the
+    #: loop owns the binding, because the fields are the same for everyone.
     prompt: TypedTemplate[FindingsPromptParams]
 
 
@@ -243,36 +241,42 @@ async def build_findings(
                          exc_info=True)
             return None
 
-    # Every BAD row's evidence first, so rows whose write-up would be the same write-up collapse
-    # before any of them is paid for. The alternative is a model call per row: one crash a campaign
-    # cannot attribute condemns every check that campaign covered, which for a Crucible component is
-    # its whole property set.
+    # Every BAD row's evidence first, so rows the backend stamped as one finding collapse before
+    # any of them is paid for. Cost follows conclusions, not row count.
     fetched = await asyncio.gather(*[_evidence(r) for r in bad])
     collapsed: dict[Hashable, tuple[RuleVerdict, list[RuleEvidence]]] = {}
-    also: dict[Hashable, list[RuleName]] = {}
+    covered: dict[Hashable, list[RuleVerdict]] = {}
     for rule, evidence in zip(bad, fetched):
         if evidence is None:
             continue
         key = finding_key(rule, evidence)
         if key in collapsed:
-            also[key].append(rule.name)
+            covered[key].append(rule)
         else:
-            collapsed[key], also[key] = (rule, evidence), []
+            collapsed[key] = (rule, evidence)
+            covered[key] = [rule]
 
     async def _one(
-        rule: RuleVerdict, evidence: list[RuleEvidence], covers: list[RuleName],
+        rule: RuleVerdict, evidence: list[RuleEvidence], covered: list[RuleVerdict],
     ) -> Finding | None:
         try:
-            props = props_by_ref.get(rule.ref, [])
+            props: list[FormalizedProperty] = []
+            seen: set[PropertyKey] = set()
+            for r in covered:
+                for p in props_by_ref.get(r.ref, []):
+                    if p.key not in seen:
+                        seen.add(p.key)
+                        props.append(p)
             # A rule's properties may share a group (some may be in none); dedupe by slug, first-seen order.
             rule_groups = list({g.slug: g for p in props if (g := group_by_key.get(p.key)) is not None}.values())
+            also_covers = list(dict.fromkeys(r.name for r in covered)) if len(covered) > 1 else []
             user = policy.prompt.bind({
                 "contract_name": contract_name, "rule_name": rule.name, "properties": props,
-                "groups": rule_groups, "evidence": evidence, "also_covers": covers,
+                "groups": rule_groups, "evidence": evidence, "also_covers": also_covers,
             }).render_to(load_jinja_template)
             draft = await bound.ainvoke([SystemMessage(system), HumanMessage(user)])
             assert isinstance(draft, FindingDraft)
-            return _compose(rule, draft, evidence, rule_groups)
+            return _compose(rule, draft, evidence, rule_groups, covered)
         except Exception:  # noqa: BLE001 — one finding failing must never fail the report
             _log.warning("report: finding synthesis failed for rule %r; skipping", rule.name, exc_info=True)
             return None
@@ -282,7 +286,7 @@ async def build_findings(
     async def _bounded(key: Hashable) -> Finding | None:
         async with sem:
             rule, evidence = collapsed[key]
-            return await _one(rule, evidence, also[key])
+            return await _one(rule, evidence, covered[key])
 
     findings = await asyncio.gather(*[_bounded(k) for k in collapsed])
     return [f for f in findings if f is not None]
@@ -293,15 +297,17 @@ def _compose(
     draft: FindingDraft,
     evidence: list[RuleEvidence],
     groups: list[PropertyGroup],
+    covered: list[RuleVerdict],
 ) -> Finding:
     risk = assess(draft)
+    links = list(dict.fromkeys(r.prover_link for r in covered if r.prover_link))
     return Finding(
         title=draft.title,
         severity=risk.severity,
         content=IssueContent(
             **{f: getattr(draft, f) for f in AuthoredContent.model_fields},
             proof_of_concept=proof_of_concept(evidence),
-            references=[rule.prover_link] if rule.prover_link else None,
+            references=links or None,
         ),
         provenance=FindingProvenance(
             rule_name=rule.name,
@@ -312,5 +318,6 @@ def _compose(
             impact=risk.impact,
             likelihood=risk.likelihood,
             risk_reasoning=risk.reasoning,
+            covers=[r.ref for r in covered] if len(covered) > 1 else [],
         ),
     )

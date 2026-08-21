@@ -17,10 +17,6 @@ Likelihood — how reachable the break is in practice:
   - medium: needs a specific but reachable state, ordering, or non-trivial-yet-feasible setup.
   - low:    needs privileged access, an unusual configuration, or a narrow / costly window.
 
-Rate what the evidence you were given establishes, not the worst thing the code could conceivably do.
-Where that evidence does not establish that a real actor could reach the failure or profit from it,
-that belongs in the rating — say so in your reasoning rather than assuming the worst.
-
 WHAT TO PRODUCE
 
 - Ground every sentence in the evidence you are given. Do not invent an attack path, a victim, an
@@ -31,4 +27,4 @@ WHAT TO PRODUCE
 - `attack_path` is the reproducing sequence restated in the program's terms, and only when the
   evidence carries one. Leave it out for a finding nothing reproduced.
 - The title names the broken guarantee, not the check that caught it: "Initialization is accepted
-  without the authority's signature", not "c_authority_must_sign fails".
+  without the authority's signature", not the identifier of the failing check.

@@ -1,18 +1,24 @@
 Program: {{ contract_name }}
 
-Failing check: {{ rule_name }}
 {% if also_covers %}
-THIS EVIDENCE COULD NOT BE ATTRIBUTED TO ONE CHECK. The run reported it against {{ also_covers | length + 1 }}
+THIS EVIDENCE COULD NOT BE ATTRIBUTED TO ONE CHECK. The run reported it against {{ also_covers | length }}
 checks it covered, because nothing it reported says which of them was actually broken:
 {% for c in also_covers %}
   - {{ c }}
 {%- endfor %}
 
-That is the finding. Say plainly that the run found a real violation it cannot place, name what it
-did report, and do not pick one of these checks and write it up as though the violation were its.
+That is the finding. Say plainly that the run found a real violation it cannot place among these
+checks, name what it did report, and do not pick one of them and write it up as though the
+violation were its.
+{% else %}
+Failing check: {{ rule_name }}
 {% endif %}
 {% if properties -%}
+{% if also_covers %}
+Properties these checks verify:
+{% else %}
 Properties this check verifies (the violation breaks at least one of them — determine which):
+{% endif %}
 {% for p in properties %}
   - ({{ p.sort }}) {{ p.title }}: {{ p.description }}
 {%- endfor %}

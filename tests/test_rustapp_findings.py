@@ -1,15 +1,13 @@
 """The declaration fold: what a Rust backend reports for a check its author declared broken.
 
-A check marked ``expect_check_failure`` must report as a finding even if this run
-did not reproduce it. Reproduced and unreproduced findings must stay distinguishable.
+A check marked ``expect_check_failure`` must report BAD either way: reproduced findings carry
+their counterexample; unreproduced ones have no proof of concept and say so. Stamps on
+``Verdict.finding`` collapse those rows to one write-up. A wheel with ``findings=None`` produces
+no findings.
 
-``expect_check_failure`` is how an author says "the failure here IS the finding". The
-publish gate accepts such a check as clean and nothing downstream ever asked the run to
-reproduce it, so on the klend run of 2026-08-10 four declared findings reached
-``report.html``: one as a violation (its campaign happened to hit it first) and three as
-**"No counterexample"** — including ``block_price_usage_kill_switch_effective``, which the
-author had reproduced at iteration 11619 and whose commentary documents the reproducing
-sequence.
+``expect_check_failure`` is how an author says "the failure here IS the finding". The publish
+gate accepts such a check as clean without requiring the run to reproduce it, so the fold is
+what stands between a documented finding and a green report row.
 
 The declaration is the author's and the outcome is the wheel's; they meet on
 ``RustFormalResult``, and the first group below pins that meeting down for both consumers
@@ -19,7 +17,6 @@ run found something.
 
 import pathlib
 from dataclasses import dataclass
-from typing import Any, cast
 from typing import Any, cast
 
 import pytest
@@ -43,7 +40,7 @@ from composer.spec.source.report.schema import (
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor
 
-#: Crash text from a real Crucible hit, trimmed.
+#: Sample counterexample text a wheel might put on ``Verdict.detail``.
 COUNTEREXAMPLE = (
     "crash crash_93d45d29a130d36f: [stored_price_timestamp_not_in_future] reserve 8J5W stored "
     "market_price_last_updated_ts=2 which is ahead of the current unix timestamp 0\n"
@@ -251,7 +248,7 @@ async def _written(*outcomes: ComponentOutcome) -> list[Finding]:
     fz = adapter.RustFormalizer(
         cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
     )
-    _, rules, *_ = await collect(
+    properties, rules, *_ = await collect(
         [
             ReportComponentInput(
                 name=cast(Any, o.feat.display_name),
@@ -267,7 +264,7 @@ async def _written(*outcomes: ComponentOutcome) -> list[Finding]:
         fetch_verdicts=fz.fetch_verdicts,
     )
     return await build_findings(
-        contract_name="klend", rules=rules, properties=[], groups=[],
+        contract_name="klend", rules=rules, properties=properties, groups=[],
         policy=fz.findings_policy(list(outcomes)), llm=_StubModel(output=_draft()),
     )
 
@@ -279,7 +276,7 @@ async def test_a_reproduced_crash_is_the_proof_of_concept():
 
     assert len(findings) == 1
     assert findings[0].content.proof_of_concept == COUNTEREXAMPLE
-    # The model wrote the prose; the campaign text is evidence, not the description.
+    # The model wrote the prose; the run's text is evidence, not the description.
     assert findings[0].content.description == "d"
 
 
@@ -309,11 +306,9 @@ async def test_a_fuzz_finding_is_rated_like_any_other():
 
 @pytest.mark.asyncio
 async def test_two_sections_naming_one_check_keep_their_own_crash():
-    """Crucible delivers one crate, so `validate` files each verdict under its section's file.
-
-    Two authors given the same property title write the same check name, and the report keys a row
-    by ``(file, name)`` — the section file is the only thing keeping the two rows apart. The
-    evidence is keyed the same way, so a section's finding must carry that section's crash.
+    """Two authors given the same property title write the same check name, and the report keys a
+    row by ``(file, name)`` — the section file is the only thing keeping the two rows apart. The
+    evidence is keyed the same way, so a section's finding must carry that section's reproducer.
     """
     left = _result({"c_auth": _verdict(Outcome.BAD, "crash A")}, {})
     right = _result({"c_auth": _verdict(Outcome.BAD, "crash B")}, {})
@@ -362,7 +357,7 @@ def test_the_prompt_offers_no_counterexample_for_a_finding_the_run_did_not_repro
 # Evidence about the program vs evidence about the run
 # ---------------------------------------------------------------------------
 
-#: What `campaign.rs` puts on every verdict, green ones included.
+#: Sample run accounting a wheel might put on every verdict, green ones included.
 ACCOUNTING = (
     "[Vault Initialization] campaign spent 67798 executions in 597s of a 600s budget; reached "
     "6.1% of edges and 10.7% of branches, and got 44/92 of the harness's actions to succeed"
@@ -381,7 +376,7 @@ async def test_a_proof_of_concept_is_the_crash_and_not_what_the_campaign_spent()
 
 @pytest.mark.asyncio
 async def test_a_green_row_still_says_what_the_campaign_cost():
-    """The split must not cost the report what `campaign.rs` exists to put on a passing row.
+    """The split must not cost the report the accounting a passing row is supposed to carry.
 
     The report has one ``message`` per row, so `fetch_verdicts` rejoins the halves — evidence
     first, because a BAD row's first line is what a reader is looking for.
@@ -415,7 +410,7 @@ def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
 
 
 # ---------------------------------------------------------------------------
-# One crash the campaign could not place — which the WHEEL says, not this host
+# One conclusion the wheel could not attribute to one check — which the WHEEL says, not this host
 # ---------------------------------------------------------------------------
 
 class _CountingModel(_StubModel):
@@ -444,7 +439,7 @@ async def _written_by(model: _CountingModel, *outcomes: ComponentOutcome,
     fz = adapter.RustFormalizer(
         cast(Any, object()), AppDescriptor.model_validate(descriptor or wire_descriptor())
     )
-    _, rules, *_ = await collect(
+    properties, rules, *_ = await collect(
         [
             ReportComponentInput(
                 name=cast(Any, o.feat.display_name),
@@ -460,20 +455,33 @@ async def _written_by(model: _CountingModel, *outcomes: ComponentOutcome,
         fetch_verdicts=fz.fetch_verdicts,
     )
     return await build_findings(
-        contract_name="klend", rules=rules, properties=[], groups=[],
+        contract_name="klend", rules=rules, properties=properties, groups=[],
         policy=fz.findings_policy(list(outcomes)), llm=model,
     )
 
 
+def test_an_unattributed_write_up_lists_every_covered_check_and_none_as_the_subject():
+    """The first row is one of the set, not the failing check the others hang off."""
+    user = load_jinja_template(
+        "autoprove_report_findings_rust_prompt.j2",
+        contract_name="klend", rule_name="c_0", properties=[], groups=[],
+        also_covers=["c_0", "c_1", "c_2"],
+        evidence=[RuleEvidence(label="Vault", ran=Outcome.BAD, counterexample=UNPLACEABLE)],
+    )
+    assert "Failing check:" not in user
+    for c in ("c_0", "c_1", "c_2"):
+        assert f"- {c}" in user
+    assert "do not pick one of them" in user
+
+
 @pytest.mark.asyncio
 async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
-    """`attribute_findings` condemns every check a campaign covered when it cannot place a crash,
-    and stamps the fan-out as one finding (`Verdict.finding`).
+    """A wheel that cannot attribute one conclusion to one check stamps the fan-out as one
+    finding (`Verdict.finding`).
 
-    Condemning them all is right for the verdict table — the counterexample is real and hiding it
-    would be worse — but it is one finding, not one per row. Writing it up per row spends a heavy
-    model on each and publishes N accounts of the same crash, each guessing a different check it
-    might have been.
+    Condemning every covered check is right for the verdict table — hiding a real failure would
+    be worse — but it is one finding, not one per row. Writing it up per row spends a heavy
+    model on each and publishes N accounts of the same evidence, each guessing a different check.
 
     The key is the wheel's, and nothing here infers it: rows fanned out from one conclusion are
     otherwise indistinguishable from several checks that failed identically, which is a different
@@ -488,11 +496,14 @@ async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
 
     assert len(model.calls) == 1, f"one crash, one write-up; asked for {len(model.calls)}"
     assert len(findings) == 1
-    # The write-up is told it covers the others, so it cannot pick one and pin the crash on it.
     prompt = model.calls[0]
     assert "COULD NOT BE ATTRIBUTED" in prompt
-    for c in checks[1:]:
-        assert c in prompt, f"{c} is one of the rows this finding answers for"
+    assert "Failing check:" not in prompt
+    for c in checks:
+        assert f"- {c}" in prompt, f"{c} is one of the rows this finding answers for"
+    prov = findings[0].provenance
+    assert prov is not None
+    assert prov.covers == [("harness.rs", c) for c in checks]
 
 
 @pytest.mark.asyncio
@@ -507,7 +518,7 @@ async def test_the_loop_binds_this_runs_evidence_into_the_write_up_prompt():
 
     prompt = model.calls[0]
     assert COUNTEREXAMPLE in prompt, "the run's own evidence has to reach the model"
-    assert "c_ts" in prompt and "Vault Initialization" in prompt
+    assert "Failing check: c_ts" in prompt and "Vault Initialization" in prompt
 
 
 @pytest.mark.asyncio
@@ -527,8 +538,8 @@ async def test_two_unreproduced_declarations_are_two_findings():
     """An unstamped row stands on its own, so each declaration is its own claim.
 
     Worth pinning because these two rows are otherwise as alike as rows get: no counterexample, and
-    the same accounting, since it is the same campaign. Nothing about that similarity may merge two
-    findings the author made separately.
+    the same accounting. Nothing about that similarity may merge two findings the author made
+    separately.
     """
     result = _result({"c_kill": _verdict(Outcome.GOOD, None, ACCOUNTING),
                       "c_stale": _verdict(Outcome.GOOD, None, ACCOUNTING)},

@@ -500,25 +500,23 @@ Evidence is shared too. Every backend hands back `RuleEvidence`:
 | `counterexample` | What reproduces it: a counterexample trace, a crashing input, an assertion message |
 | `ran` | The run's own outcome, before any authored declaration is folded into the one the report shows |
 | `accounting` | What the run spent and how far it reached — what makes a result weigh something |
-| `declared` | Why the author declared this failure expected, when they did |
-| `finding` | Which finding this belongs to, when one piece of evidence condemns several checks |
+| `declared` | Why the author marked this check expected to fail (`expect_check_failure` / `expect_rule_failure`), when they did |
+| `finding` | Opaque key grouping several checks under one conclusion |
 
-Backends differ in what they can *fill*, not in the shape: a prover has an `analysis` and a trace, a
-fuzzing wheel has a crashing input and an `accounting`. Absence always means "this run recorded
-nothing of that kind", so the fields mean the same thing whoever produced them and a prompt can say
-what is missing instead of guessing. An earlier design made this a type parameter; it bought nothing,
-because the only code that ever reads a field is the backend's own prompt.
+Backends differ in what they can *fill*, not in the shape: one fills `analysis` and a counterexample,
+another fills `accounting` and a reproducer. Absence always means "this run recorded nothing of that
+kind", so the fields mean the same thing whoever produced them and a prompt can say what is missing
+instead of guessing.
 
-What a backend supplies is a `FindingsPolicy` — three things, only one of which is a function. It
-is a record rather than a table of hooks, which is why the name says *policy*: a Rust wheel ships
-one of its fields across the FFI boundary as JSON (`FindingsDeclaration`), and anything that
-survives serialization was never behaviour.
+What a backend supplies is a `FindingsPolicy` — three things, only one of which is a function. A
+Rust-authored backend ships its `domain` across the FFI as JSON (`FindingsDeclaration`); the host
+owns the write-up loop and binds the prompt.
 
 | Field | Why it is the backend's |
 | --- | --- |
 | `fetch_evidence` | Keyed by `RuleRef` — `(file, name)`, how the report identifies a row. A name alone does not: one deliverable can hold several components' checks, and two authors given the same property write the same name. The only hook, because it is the only one that does I/O |
 | `domain` | The *domain* half of the system message — a claim about what the evidence *is*. "The Certora Prover found a concrete counterexample" is true of one backend's and false of another's. The host wraps it in the shared contract (how severity is reached, which sections come back), so a backend restates none of that |
-| `prompt` | A `TypedTemplate[FindingsPromptParams]`, not a callable. Both backends' prompts take the same fields — rule, properties, groups, evidence, `also_covers` — so the backend owns the prose and `build_findings` owns the binding |
+| `prompt` | A `TypedTemplate[FindingsPromptParams]`. The Prover supplies its own; Rust-authored backends share one host template. The loop binds the same fields either way. |
 
 Severity is not among them. Every backend's findings are rated the same way: the model assesses
 impact and likelihood on the one `FindingDraft`, and `severity_for` maps the pair through a fixed
@@ -531,15 +529,17 @@ and is now shared: `proof_of_concept` joins the reproducers from instances the r
 (labelled once there is more than one), and `finding_key` reads the key the backend stamped.
 
 That key is what keeps the cost proportional to what was *found* rather than to how many rows it took
-down. A fuzz campaign covers a component's whole property set, and a crash it cannot place condemns
-every check in it — on a klend-sized component that is 26 BAD rows of one crash. Written up per row
-it would be 26 heavy-model calls publishing 26 accounts of the same finding, each guessing a
-different check it might have been.
+down. When a backend cannot attribute one conclusion to one check, it stamps the same key on every
+row that conclusion covers; the host writes those rows up once, against the union of their properties
+and groups. The persisted `Finding` records the covered refs on `provenance.covers`, so
+`report.json` names every row the write-up answers for. The key is compared across the whole report,
+so a per-component local id will merge independent conclusions.
 
 The relation is deliberately *stamped* and never inferred from matching evidence: rows fanned out
 from one conclusion look exactly like several checks that failed the same way, and those are two
-different facts about the program. Only whatever produced the verdicts knows which it is — a Rust
-wheel says so on `Verdict.finding`, and it stamps it at the point it decides to fan out.
+different facts about the program. Only whatever produced the verdicts knows which it is — a
+Rust-authored backend says so on `Verdict.finding`, and it stamps it at the point it decides to fan
+out.
 
 Returning `None` is how a backend opts out; the report then builds no findings for it and never
 starts the heavy model. `outcomes` is passed because a backend whose evidence is in its own results

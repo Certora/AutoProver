@@ -202,7 +202,8 @@ pub struct Verdict {
     ///
     /// A backend whose run can conclude something it cannot attribute to one check stamps the same
     /// key on every verdict it fans that conclusion out to. The host writes those rows up once,
-    /// against the set, instead of once per row each guessing which check it was. Nothing else
+    /// against the set, instead of once per row each guessing which check it was. The key is
+    /// compared across the whole run: the same string on two components merges them. Nothing else
     /// recovers the relation: fanned-out verdicts are otherwise indistinguishable from several
     /// checks that happened to fail the same way, which is a different fact about the program.
     ///
@@ -249,8 +250,11 @@ impl Verdict {
         Verdict { accounting, ..self }
     }
 
-    /// This verdict as one of several that share one finding — see [`Verdict::finding`]. The key
-    /// only has to separate this run's findings from each other; the host never reads into it.
+    /// This verdict as one of several that share one finding — see [`Verdict::finding`].
+    ///
+    /// The key is compared across the whole run, not within one component: the same string on two
+    /// components merges those rows into one finding. It only has to separate this run's findings
+    /// from each other; the host never reads into it.
     pub fn of_finding(self, finding: impl Into<String>) -> Self {
         Verdict { finding: Some(finding.into()), ..self }
     }

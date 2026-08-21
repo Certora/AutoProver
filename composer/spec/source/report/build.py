@@ -9,7 +9,6 @@ producing no high-level section; the caller additionally treats the whole phase 
 """
 import logging
 from datetime import datetime, timezone
-from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 

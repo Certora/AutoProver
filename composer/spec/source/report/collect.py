@@ -185,7 +185,8 @@ class RuleEvidence:
     #: is a claim the author made, not only something the run tripped over.
     declared: str | None = None
     #: Which *finding* this belongs to, when one piece of evidence condemns several checks at once.
-    #: Opaque — only ever compared, never read into. ``None`` is evidence standing on its own.
+    #: Opaque and compared across the whole report — the same string on two components merges them.
+    #: ``None`` is evidence standing on its own.
     finding: str | None = None
 
 

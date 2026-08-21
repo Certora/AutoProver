@@ -422,11 +422,9 @@ made.
 the prompt has to be able to tell a reader which of the two it is holding.
 
 **`FindingsDeclaration.domain` says what the evidence is**, and it is the wheel's prose because it is
-the wheel's claim. A fuzzing wheel's says that its checker drove a harness the author wrote from a
-state that harness set up and refuted nothing symbolically — so its own markers for a suspect harness
-are something the write-up must lead with, an unreproduced declaration must not be given a
-counterexample it does not have, and the harness caveats belong in
-`assumptions_and_uncertainties`.
+the wheel's claim: what this checker established, what it did not, and how to read this backend's
+own markers. An unreproduced expected-to-fail check must not be given a counterexample it does not
+have; caveats about what the checker cannot show belong in `assumptions_and_uncertainties`.
 
 It is only the *domain* half. The host wraps it in the contract — how severity is reached, which
 sections come back — using the same `autoprove_report_findings_system.j2` the CVL backend gets, whose
@@ -435,21 +433,20 @@ nothing produces no findings**: a write-up asserts what its evidence is, and a h
 would be publishing prose nothing stands behind.
 
 **Severity is the host's, and it is the same for every backend**: the write-up model rates impact
-and likelihood, and `severity_for` maps the pair through a fixed matrix. A wheel does not get to
-opt out — which puts the whole weight on `domain`, because a fuzzing campaign establishes that an
-assertion can be made to fail, not that anyone can profit from it, and a crash on a failed
-precondition looks exactly like a crash on a real one. That is what the wheel's prose has to say, so
-the rating is made against what the evidence actually shows. `provenance` keeps the axes and the
+and likelihood, and `severity_for` maps the pair through a fixed matrix. A wheel does not pick a
+tier. What a violation *is* — and how far this evidence goes — is `domain`'s job to say, so the
+rating is made against what the evidence actually shows. `provenance` keeps the axes and the
 model's reasoning, so a reader can re-derive the tier rather than take it on trust.
 
-**A conclusion the wheel could not attribute to one check is one finding, not one per row.** A wheel
-whose run condemns every check it covered — a campaign whose crash names a property no component in
-the run claims — stamps that fan-out with one `Verdict.finding` key. The host groups on the key, so
-the run is written up once and told which other checks it answers for, rather than picking one and
-pinning the crash on it. Nothing here infers the relation from the evidence: fanned-out rows are
-otherwise indistinguishable from several checks that failed identically, and those are two different
-facts about the program. An unstamped row stands on its own — two declared findings the run did not
-reproduce are two claims the author made, however alike the rest of their evidence looks.
+**A conclusion the wheel could not attribute to one check is one finding, not one per row.** When
+one conclusion covers several checks, the wheel stamps those verdicts with the same
+`Verdict.finding` key. The host groups on the key, so the run is written up once against the union
+of those rows' properties and groups, and `provenance.covers` names every row the write-up answers
+for. The key is compared across the whole run: the same string on two components merges them.
+Nothing here infers the relation from the evidence: fanned-out rows are otherwise indistinguishable
+from several checks that failed identically, and those are two different facts about the program.
+An unstamped row stands on its own — two expected-to-fail checks the run did not reproduce are two
+claims the author made, however alike the rest of their evidence looks.
 
 **Evidence about the program and evidence about the run are separate fields.** `Verdict.accounting`
 carries what the run spent and covered; `Verdict.detail` carries only the counterexample or the
@@ -503,14 +500,14 @@ counterexample reaches the report *as a finding with a justification* rather tha
 examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 `expect_test_failure`.
 
-**Every verdict says what the run behind it cost.** A `GOOD` from a campaign that explored to a
-ten-minute budget is a real claim and one from a twelve-second campaign is nearly none, and a report
-row carries only its check, its outcome and its `message`. So a wheel whose negative results are
-budget-relative gives every verdict — green ones included — what its run spent against what it was
-allowed, on `Verdict.accounting`. Not on `detail`: that field is the run's evidence about the
-*program*, and it must stay exactly what the run reported. The live console shows a detail's first
-line, and a findings write-up is handed the whole of it — so accounting mixed in costs an author the
-line that tells them what broke, and costs the write-up its proof of concept.
+**Every verdict says what the run behind it cost.** A `GOOD` from a long, thorough run is a real
+claim and one from a short run is nearly none, and a report row carries only its check, its outcome
+and its `message`. So a wheel whose negative results are budget-relative gives every verdict —
+green ones included — what its run spent against what it was allowed, on `Verdict.accounting`. Not
+on `detail`: that field is the run's evidence about the *program*, and it must stay exactly what the
+run reported. The live console shows a detail's first line, and a findings write-up is handed the
+whole of it — so accounting mixed in costs an author the line that tells them what broke, and costs
+the write-up its proof of concept.
 
 The marking is the *author's*, and the verdict is the *wheel's*; they meet on `RustFormalResult`,
 whose `reported_verdicts()` is what both the report and the console rollup read. A declared check

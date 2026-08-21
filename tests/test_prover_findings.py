@@ -102,6 +102,7 @@ async def test_one_finding_per_violation():
     assert prov.risk_reasoning                             # the axis justification is captured
     assert prov.rule_name == "r_bad" and prov.outcome == Outcome.BAD
     assert prov.group_slugs == ["g"] and prov.spec_file == "autospec_C.spec"
+    assert prov.covers == []
     assert not hasattr(f, "locations")  # locations are a submission-layer concern, not on the report
     assert f.content.proof_of_concept == "<cex/>"
     assert f.content.references == ["L1"]
@@ -144,15 +145,80 @@ async def test_a_failed_synthesis_drops_only_that_finding():
     assert [f.provenance.rule_name for f in findings if f.provenance] == ["r_bad"]
 
 
+@pytest.mark.asyncio
+async def test_stamped_rows_are_written_up_against_the_union():
+    """One finding key, one write-up: every covered row's properties and groups, recorded on the finding."""
+    class _Capture(_StructuredStubModel):
+        prompt: str = ""
+
+        def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
+            capture = self
+
+            def _run(messages):
+                capture.prompt = messages[-1].content
+                return _draft()
+            return RunnableLambda(_run)
+
+    rules = [
+        _rv("a.spec", "r_a", Outcome.BAD),
+        _rv("b.spec", "r_b", Outcome.BAD),
+        _rv("c.spec", "r_c", Outcome.BAD),
+    ]
+    props = [
+        _fp("A", "prop_a", [("a.spec", "r_a")], desc="a holds"),
+        _fp("B", "prop_b", [("b.spec", "r_b")], desc="b holds"),
+        _fp("C", "prop_c", [("c.spec", "r_c")], desc="c holds"),
+    ]
+    groups = [
+        _pg("g_a", [("A", "prop_a")], status=GroupStatus.BAD),
+        _pg("g_bc", [("B", "prop_b"), ("C", "prop_c")], status=GroupStatus.BAD),
+    ]
+    ev = [RuleEvidence(counterexample="<cex/>", finding="one")]
+    llm = _Capture(output=_draft())
+    findings = await build_findings(
+        contract_name="Vault", rules=rules, properties=props, groups=groups,
+        policy=_policy({"r_a": ev, "r_b": ev, "r_c": ev}), llm=llm,
+    )
+
+    assert len(findings) == 1
+    assert "a holds" in llm.prompt and "b holds" in llm.prompt and "c holds" in llm.prompt
+    prov = findings[0].provenance
+    assert prov is not None
+    assert prov.covers == [("a.spec", "r_a"), ("b.spec", "r_b"), ("c.spec", "r_c")]
+    assert prov.group_slugs == ["g_a", "g_bc"]
+    assert findings[0].content.proof_of_concept == "<cex/>"
+
+
+def test_how_far_this_evidence_goes_is_the_domains_not_the_hosts():
+    """Axes and sections are the host's; a counterexample being a confirmed break is the Prover's.
+
+    Domain is prepended, so a shared closer that said 'rate only what a real actor could reach'
+    would overwrite it."""
+    from composer.templates.loader import load_jinja_template
+
+    system = load_jinja_template(
+        "autoprove_report_findings_system.j2", domain=_policy({}).domain,
+    )
+    assert "do not rate a genuine break as impact" in system
+    assert system.index("do not rate a genuine break") < system.index("HOW SEVERITY IS REACHED")
+    assert "worst thing the code could conceivably do" not in system
+    assert "assuming the worst" not in system
+
+
 def test_prompt_lists_all_properties_a_rule_formalizes():
-    """The prompt lists every property a rule formalizes, not a pre-picked one."""
+    """The prompt lists every property a rule formalizes, not a pre-picked one, and the
+    evidence that rule produced."""
     from composer.templates.loader import load_jinja_template
     user = load_jinja_template(
         "autoprove_report_findings_prompt.j2",
         contract_name="Vault", rule_name="allowDeposits_revert_characteristic",
         properties=[_fp("C", "revert_on_non_admin", [], desc="reverts if caller is not an admin"),
                     _fp("C", "revert_on_zero_actor", [], desc="reverts if allowedActor is address(0)")],
-        groups=[], instances=[RuleEvidence(analysis="the admin check is skipped", counterexample="<cex/>")],
+        groups=[], also_covers=[],
+        evidence=[RuleEvidence(analysis="the admin check is skipped", counterexample="<cex/>")],
     )
     assert "reverts if caller is not an admin" in user
     assert "reverts if allowedActor is address(0)" in user
+    assert "the admin check is skipped" in user
+    assert "<cex/>" in user
+    assert "No counterexample evidence was captured" not in user

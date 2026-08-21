@@ -248,13 +248,14 @@ adds its own literal here, plus its wording in ``report/render.py``."""
 #
 # A `Finding` is a title, a severity, and a write-up, composed by the shared loop in
 # ``report/findings.py`` from the evidence the backend hands back for a violated rule and the
-# properties/groups that rule breaks. The field
+# properties/groups the covered rule(s) break. The field
 # set follows the "Submit Issue" body of the Sherlock Audit Engine API — schema at
 # https://api-audit-engine.sherlock.xyz/v1/docs/public — so a finding maps cleanly onto a submission,
 # but the source ``locations`` a submission needs
 # (``{owner}/{repo}`` / file / line) are NOT produced here: a run knows only local paths and CVL-spec
 # lines, so the submission layer reconstructs locations from the engagement scope + the counterexample.
-# The report-time locator is on ``provenance`` (rule name, spec file, prover-run link).
+# The report-time locator is on ``provenance`` (rule name, spec file, prover-run link, and
+# ``covers`` when several rows share one finding).
 # ---------------------------------------------------------------------------
 
 type SeverityTier = Literal["critical", "high", "medium", "low", "informational"]
@@ -268,9 +269,9 @@ class AuthoredContent(BaseModel):
     """The written sections of a finding. These are what the findings LLM produces, so the field
     descriptions double as its instructions."""
     summary: str = Field(description="A one to three sentence summary of the finding.")
-    description: str = Field(description="The full technical explanation of the vulnerability and how it manifests, grounded in the counterexample.")
+    description: str = Field(description="The full technical explanation of the vulnerability and how it manifests, grounded in the evidence you were given.")
     impact: str = Field(description="The concrete consequence if the issue is exploited — funds at risk, denial of service, data exposure, and so on.")
-    attack_path: str | None = Field(default=None, description="The step-by-step path from the counterexample that triggers the issue, when one applies.")
+    attack_path: str | None = Field(default=None, description="The step-by-step path that triggers the issue, only when the evidence carries a reproducing sequence. Omit this field when nothing reproduced.")
     assumptions_and_uncertainties: str | None = Field(default=None, description="Assumptions the finding relies on, and anything you are uncertain about.")
 
 
@@ -292,6 +293,10 @@ class FindingProvenance(BaseModel):
     likelihood: LikelihoodLevel | None = None
     #: The findings LLM's justification for the assessed impact and likelihood.
     risk_reasoning: str | None = None
+    #: Every violated rule this write-up answers for, when the backend stamped several rows as
+    #: one finding. Empty in the ordinary one-row case. Each entry is ``(spec_file, name)``;
+    #: ``rule_name`` / ``spec_file`` above are the first of them.
+    covers: list[RuleRef] = Field(default_factory=list)
 
 
 class Finding(BaseModel):
@@ -328,6 +333,7 @@ class AutoProverReport(BaseModel):
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
     coverage: CoverageReport
-    #: Audit issues for violated rules (one per BAD rule). Empty when nothing is violated or the
-    #: backend declares no findings policy — see ``Formalizer.findings_policy``.
+    #: Audit issues for violated rules. One per BAD rule, except that rows the backend stamped as
+    #: the same finding collapse to one. Empty when nothing is violated or the backend declares no
+    #: findings policy — see ``Formalizer.findings_policy``.
     findings: list[Finding] = Field(default_factory=list)

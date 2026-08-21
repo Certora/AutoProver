@@ -206,11 +206,10 @@ pub enum DeliverableMode {
 /// How a violated check of this backend becomes a written audit finding.
 ///
 /// Declared by the wheel because a write-up rests on claims only the wheel can make: what its
-/// evidence *is* — a symbolic refutation, or a fuzzer's crash against a harness the author wrote —
-/// what that evidence establishes, and how to read its own markers. The host owns everything
-/// around that: which rows, each row's properties and the audit groups they sit in, the
-/// concurrency, grouping the rows that share one finding, and composing the record. It owns none
-/// of the prose.
+/// evidence *is*, what that evidence does and does not establish, and how to read its own markers.
+/// The host owns everything around that: which rows, each row's properties and the audit groups
+/// they sit in, the concurrency, grouping the rows that share one finding, and composing the
+/// record. It owns none of the prose.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
 #[serde(deny_unknown_fields)]

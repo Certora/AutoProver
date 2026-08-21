@@ -7,11 +7,9 @@ here is the part that reads a *wheel's* results into it — every field it works
 nothing in this module knows what any particular backend checks or what its evidence means.
 
 Those are the wheel's to say, and it says them in `FindingsDeclaration`: the domain half of the
-system prompt (what its evidence *is*), and how severity is reached. A wheel that declares nothing
+system prompt (what its evidence *is*). Severity is the host's. A wheel that declares nothing
 produces no findings — see `AppDescriptor.findings`.
 """
-from typing import TypedDict
-
 from composer.pipeline.ptypes import ComponentOutcome, Delivered
 from composer.rustapp.descriptor import FindingsDeclaration
 from composer.rustapp.result import RustFormalResult
@@ -20,7 +18,6 @@ from composer.spec.source.report.collect import RuleEvidence
 from composer.spec.source.report.findings import FindingsPolicy, FindingsPromptParams
 from composer.spec.source.report.schema import RuleRef
 from composer.spec.system_model import FeatureUnit
-from composer.templates.loader import load_jinja_template
 
 type RustOutcomes = list[ComponentOutcome[RustFormalResult, FeatureUnit]]
 
