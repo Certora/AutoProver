@@ -42,7 +42,12 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ../composer/scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     ports:
-      - "5432:5432"
+      # Host-side port only. In-network clients (the autoprove service) still
+      # reach postgres on 5432, so nothing inside the container moves. Published
+      # off 5432 because a developer machine usually already has something there,
+      # and the collision leaves the container stuck in Created with no obvious
+      # explanation. Override for a different host mapping.
+      - "${COMPOSER_DB_HOST_PORT:-5454}:5432"
     deploy:
       resources:
         limits:
