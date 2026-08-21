@@ -45,6 +45,7 @@ from graphcore.utils import ainvoke
 from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
+from composer.prover.auth import ensure_prover_login
 from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import read_and_format_run_result
@@ -536,6 +537,12 @@ async def run_prover(
     # detects GITHUB_ACTION in the environment, which would deadlock against that polling — pin it off.
     if prover_opts.cloud and "--wait_for_results" not in effective_args:
         effective_args = effective_args + ["--wait_for_results", "none"]
+
+    # Results are fetched with the cloud session (step 7), which is separate from the
+    # CERTORAKEY certoraRun submits with. Refresh it before submitting: discovering it
+    # is dead only after the job has run wastes the prover time we just paid for.
+    if prover_opts.cloud:
+        ensure_prover_login()
 
     # 2. Notify callback
     await callbacks.on_prover_run(effective_args)

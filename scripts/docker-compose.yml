@@ -42,7 +42,12 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ../composer/scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     ports:
-      - "5432:5432"
+      # Host-side port only. In-network clients (the autoprove service) still
+      # reach postgres on 5432, so nothing inside the container moves. Published
+      # off 5432 because a developer machine usually already has something there,
+      # and the collision leaves the container stuck in Created with no obvious
+      # explanation. Override for a different host mapping.
+      - "${COMPOSER_DB_HOST_PORT:-5454}:5432"
     deploy:
       resources:
         limits:
@@ -89,12 +94,23 @@ services:
       CERTORA_TOKEN: ${CERTORA_TOKEN:-}
       CERTORA_REFRESH_TOKEN: ${CERTORA_REFRESH_TOKEN:-}
       CERTORA_LOGIN_NO_BROWSER: "true"
+      # NO_BROWSER only stops the flow from opening a browser; the callback server
+      # still waits out its deadline. NO_PKCE is what makes login refresh-only, so a
+      # stale session fails immediately instead of hanging. composer sets this for
+      # itself too — it is here so subprocesses (certoraRun, autosetup) inherit it.
+      CERTORA_LOGIN_NO_PKCE: "true"
       CERTORA_AI_COMPOSER_PGHOST: postgres
       CERTORA_AI_COMPOSER_PGPORT: "5432"
     volumes:
       # Host directory holding your Solidity project(s) + design docs -> /work.
       # Defaults to $PWD when compose was invoked.
       - ${HOST_WORK_DIR:-${PWD}}:/work
+      # The same directory mounted a second time, at the path it has on the host,
+      # so a host path copied off the command line resolves unchanged inside the
+      # container. Without it every argument has to be rewritten to /work/...,
+      # which is easy to get wrong and impossible to tab-complete. Bind mounts are
+      # views of one directory, not copies, so the two paths are the same files.
+      - ${HOST_WORK_DIR:-${PWD}}:${HOST_WORK_DIR:-${PWD}}
       # Certora cloud credentials from `certora-cloud login`. Mounted rw so the
       # token-refresh path can rewrite credentials.json. $HOME inside the
       # container is /opt/autoprove/home (see scripts/Dockerfile).

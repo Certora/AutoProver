@@ -20,6 +20,8 @@ import aiohttp
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import JobStatus, convert_job_status
 
+from composer.prover.auth import prover_output_api
+
 logger = logging.getLogger("composer.spec")
 
 
@@ -156,7 +158,7 @@ def _results_api() -> ProverOutputAPI:
     POU's cache would mkdir ``<cwd>/.certora_internal/api_cache`` in whatever
     directory composer was invoked from.
     """
-    return ProverOutputAPI(enable_cache=False)
+    return prover_output_api(enable_cache=False)
 
 
 @asynccontextmanager
