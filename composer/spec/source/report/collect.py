@@ -12,15 +12,17 @@ already in memory.
 """
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from composer.authoring.state import SkippedProperty
-from composer.spec.types import Curtailed, PropertyFormulation
+from composer.spec.types import Curtailed, FindingKey, PropertyFormulation
 from composer.spec.source.report.schema import (
-    ComponentName, CurtailedComponent, CurtailedSkip, DraftedProperty, FormalizedProperty,
-    GaveUpComponent, Outcome, PropertyTitle, RuleName, RuleRef, RuleVerdict, SkippedClaim,
+    ComponentName, CurtailedComponent, CurtailedSkip, ExpectedFailure, DraftedProperty,
+    FormalizedProperty, GaveUpComponent, Outcome, PropertyTitle, RuleName, RuleRef,
+    RuleVerdict, SkippedClaim,
 )
 
 _log = logging.getLogger(__name__)
@@ -81,10 +83,15 @@ class Verdict:
     #: a BAD, error text for an ERROR). Provenance/diagnostics only; ``None`` when the backend
     #: gives no detail (the prover/foundry fetchers don't).
     message: str | None = None
+    #: What the run spent and covered. ``None`` when the backend does not report it (prover,
+    #: foundry). Kept apart from ``message`` so render can show them separately.
+    accounting: str | None = None
+    #: Author-marked expected failure. ``None`` when the check was not marked.
+    expected_failure: ExpectedFailure | None = None
 
     def merge(self, other: "Verdict | None") -> "Verdict":
         """Combine two results for one unit within a run: higher-priority outcome wins,
-        line/duration/unit_file/message kept from whichever side has them."""
+        line/duration/unit_file/message/accounting/expected_failure kept from whichever side has them."""
         if other is None:
             return self
         hi, lo = (
@@ -98,6 +105,8 @@ class Verdict:
             hi.duration_seconds if hi.duration_seconds is not None else lo.duration_seconds,
             hi.unit_file or lo.unit_file,
             hi.message or lo.message,
+            hi.accounting or lo.accounting,
+            hi.expected_failure or lo.expected_failure,
         )
 
 
@@ -154,20 +163,35 @@ def _curtailed_component[R: ReportableResult](
 
 @dataclass(frozen=True)
 class RuleEvidence:
-    """One failing instance of a violated rule: the backend's root-cause explanation and a concrete
-    counterexample, either of which may be absent. A parametric rule (``rule r(method f)``) fails once
-    per binding, so a rule's evidence is a list of these; ``label`` names the instance ("" when the
-    rule is not parametric)."""
+    """One failing instance of a violated rule.
+
+    A backend fills the parts it has and leaves the rest ``None``. ``None`` means the run
+    recorded nothing of that kind, not that it recorded something empty.
+    """
+
+    #: Which instance this is when a rule can fail more than once: a parametric binding for
+    #: the prover, the component for a per-component backend. ``""`` when it fails only once.
     label: str = ""
+    #: Why the check failed, when the backend produces a root-cause account.
     analysis: str | None = None
+    #: What reproduces the failure: a counterexample trace, a crashing input, an assertion message.
     counterexample: str | None = None
+    #: The run's own outcome, before any expected-to-fail mark is folded in. ``None`` if the
+    #: backend only records evidence for failures. Distinguishes a reproduced finding from one
+    #: the author marked expected to fail but this run did not hit.
+    ran: Outcome | None = None
+    #: What the run spent and covered. Do not put this in a proof of concept.
+    accounting: str | None = None
+    #: Why the author marked this check expected to fail, when they did.
+    expected_failure_reason: str | None = None
+    #: Opaque key grouping several checks under one finding. Compared across the whole report:
+    #: the same string on two components merges them. ``None`` stands on its own.
+    finding_key: FindingKey | None = None
 
 
-class EvidenceFetcher(Protocol):
-    """Backend hook: every captured failing instance of a violated rule, or ``[]`` when the backend has
-    none for it. Prover reads the run-scoped CEX-analysis capture."""
-    async def __call__(self, rule_name: str, /) -> list[RuleEvidence]:
-        ...
+#: Evidence for one violated rule, or ``[]`` if the backend has none.
+#: Keyed by `RuleRef` — ``(file, name)`` — because a check name alone does not identify a row.
+type EvidenceFetcher = Callable[[RuleRef], Awaitable[list[RuleEvidence]]]
 
 
 async def collect[R: ReportableResult](
@@ -246,6 +270,7 @@ async def collect[R: ReportableResult](
                 rules_by_key[key] = RuleVerdict(
                     name=unit_name, spec_file=key[0], outcome=v.outcome, line=v.line,
                     duration_seconds=v.duration_seconds, prover_link=run_link, message=v.message,
+                    accounting=v.accounting, expected_failure=v.expected_failure,
                 )
 
     # A referenced unit with no verdict still needs an (UNKNOWN) entry to render.

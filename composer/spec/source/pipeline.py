@@ -50,11 +50,13 @@ from composer.spec.source.author import batch_cvl_generation, EditingTools, Sour
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec, InvariantSpec
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import (
-    Formalized, EvidenceFetcher, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
+    Formalized, ReportComponentInput, RuleEvidence, Verdict, VerdictFetcher,
 )
 from composer.spec.source.report.schema import (
-    AppliedEditRecord, ComponentName, RuleName, SourceEditRecord,
+    AppliedEditRecord, ComponentName, RuleName, RuleRef, SourceEditRecord,
 )
+from composer.spec.source.report.findings import FindingsPolicy
+from composer.spec.source.prover_findings import prover_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 
@@ -166,16 +168,21 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         return records
 
     @override
-    def findings_evidence(self) -> EvidenceFetcher | None:
-        # Prover runs capture per-rule counterexample analysis, so this backend opts into findings.
-        return self._fetch_evidence
+    def findings_policy(
+        self, outcomes: list[ComponentOutcome[GeneratedCVL, ContractComponentInstance]]
+    ) -> FindingsPolicy:
+        # Evidence is the run-scoped CEX capture, not the outcomes.
+        return prover_findings(self._evidence)
 
-    async def _fetch_evidence(self, rule_name: str) -> list[RuleEvidence]:
-        # Every instantiation the run analyzed, not just one: a parametric rule can fail differently
-        # per binding while the report shows a single row for the whole rule.
+    async def _evidence(self, ref: RuleRef) -> list[RuleEvidence]:
+        # Every instantiation the run analyzed: a parametric rule can fail differently per
+        # binding while the report shows one row.
+        #
+        # CexAnalysisStore is keyed by rule name only, so the file half of the ref is dropped.
+        # Two components whose specs share a rule name share evidence here.
         return [
             RuleEvidence(label=r.label, analysis=r.analysis, counterexample=r.counterexample)
-            for r in await self._deps.analysis_store.for_rule(rule_name)
+            for r in await self._deps.analysis_store.for_rule(ref[1])
         ]
 
     @override

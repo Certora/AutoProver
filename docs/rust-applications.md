@@ -184,6 +184,7 @@ One struct, serialized at load time, that drives everything non-backend.
 | `component_noun` | the human noun for one formalized component in the console/TUI ("instruction"); `None` → "component", read through `unit_noun()` |
 | `check_noun` | what this backend calls one check **to the model** ("rule", "harness function"); `None` → "check", read through `check_label()` |
 | `evidence_kinds` | the closed set an author may cite when rebutting the judge (§5) |
+| `findings` | how a violated check is written up as an audit finding: the domain half of the system prompt, saying what this wheel's evidence is — the host supplies the rest (§4.5). `None` → this wheel produces no findings |
 
 **Phases.** `phases: [PhaseSpec { key, label, order, role }]`. The host resolves these once into a
 `PhaseModel` ([`build_phase_model`](../composer/rustapp/host.py)): the synthesized
@@ -392,13 +393,67 @@ sees it — there is nothing to build — so the next prompt is told exactly tha
 
 ### 4.5 Report and finalize
 
-`fetch_verdicts` maps the wire verdicts `validate` baked into the result onto the report's own
-`Verdict` (its `message` is the wire `detail`), filling `unit_file` from the component when the
-wheel didn't name one. The store writes the per-component artifacts and metadata (§9), and
+`fetch_verdicts` maps the verdicts `validate` baked into the result onto the report's own
+`Verdict`, filling `unit_file` from the component when the wheel didn't name one. It reads
+`RustFormalResult.reported_verdicts()`, not the raw ones: the wheel reports what its run observed,
+and the author's `expect_check_failure` declarations are folded in on top (§6). The store writes the
+per-component artifacts and metadata (§9), and
 `finalize` receives the whole outcome set as `FinalizeInput` — program, crate, IDL path, the shared
 setup spec, and per component its `artifact_text`, `property_checks` and the `targets` its
 checks ran under — and returns `{relpath: contents}` the host writes under the project root,
 path-confined.
+
+`findings_policy` answers a different question from `fetch_verdicts`: *what did this run find*.
+The write-up loop is shared ([formalization-abstraction.md §4.6](./formalization-abstraction.md)) and
+so is the host half in [findings.py](../composer/rustapp/findings.py) — which knows only wire fields.
+What a *particular* backend's evidence means is the wheel's, declared as `AppDescriptor.findings` —
+a `FindingsDeclaration`, which the host folds into the `FindingsPolicy` the shared loop runs on.
+
+**Evidence is one shared `RuleEvidence` per check**, keyed by `(file, name)` exactly as the report
+keys its rows — a check name alone does not identify a row, because a callout-mode wheel's one crate
+holds every component's checks and two authors given the same property title write the same check
+name. A wheel fills `label` (the component), `counterexample` (`Verdict.detail`), `accounting`,
+`ran` — the wheel's *own* outcome — and `declared`, the author's `expect_check_failure` reason. Those
+last two are the split that matters: a declared check reports `BAD` either way, so only `ran` and
+`declared` together say whether a reader is looking at something the run found or a claim the author
+made.
+
+`analysis` stays empty. A wheel reports what its run found, not a reading of why the check broke, and
+the prompt has to be able to tell a reader which of the two it is holding.
+
+**`FindingsDeclaration.domain` says what the evidence is**, and it is the wheel's prose because it is
+the wheel's claim: what this checker established, what it did not, and how to read this backend's
+own markers. An unreproduced expected-to-fail check must not be given a counterexample it does not
+have; caveats about what the checker cannot show belong in `assumptions_and_uncertainties`.
+
+It is only the *domain* half. The host wraps it in the contract — how severity is reached, which
+sections come back — using the same `autoprove_report_findings_system.j2` the CVL backend gets, whose
+own domain half is a template beside it. A wheel restates none of that. **A wheel that declares
+nothing produces no findings**: a write-up asserts what its evidence is, and a host that guessed
+would be publishing prose nothing stands behind.
+
+**Severity is the host's, and it is the same for every backend**: the write-up model rates impact
+and likelihood, and `severity_for` maps the pair through a fixed matrix. A wheel does not pick a
+tier. What a violation *is* — and how far this evidence goes — is `domain`'s job to say, so the
+rating is made against what the evidence actually shows. `provenance` keeps the axes and the
+model's reasoning, so a reader can re-derive the tier rather than take it on trust.
+
+**A conclusion the wheel could not attribute to one check is one finding, not one per row.** When
+one conclusion covers several checks, the wheel stamps those verdicts with the same
+`Verdict.finding_key`. The host groups on the key, so the run is written up once against the union
+of those rows' properties and groups, and `provenance.covers` names every row the write-up answers
+for. The key is compared across the whole run: the same string on two components merges them.
+Nothing here infers the relation from the evidence: fanned-out rows are otherwise indistinguishable
+from several checks that failed identically, and those are two different facts about the program.
+An unstamped row stands on its own — two expected-to-fail checks the run did not reproduce are two
+claims the author made, however alike the rest of their evidence looks.
+
+**Evidence about the program and evidence about the run are separate fields.** `Verdict.accounting`
+carries what the run spent and covered; `Verdict.detail` carries only the counterexample or the
+error. They are separate claims, and a proof of concept padded with run accounting leaves a reader
+unable to see where the evidence ends. `fetch_verdicts` copies them onto the report row as
+`message` and `accounting`; HTML shows them as separate blocks, so a green row still says what
+it cost without padding a counterexample.
 
 ---
 
@@ -444,6 +499,26 @@ unstamped, unless the author marked it with `expect_check_failure(check, reason)
 counterexample reaches the report *as a finding with a justification* rather than as a row nobody
 examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 `expect_test_failure`.
+
+**Every verdict says what the run behind it cost.** A `GOOD` from a long, thorough run is a real
+claim and one from a short run is nearly none, and a report row carries its check, its outcome,
+its `message`, and optional `accounting`. So a wheel whose negative results are budget-relative
+gives every verdict — green ones included — what its run spent against what it was allowed, on
+`Verdict.accounting`. Not
+on `detail`: that field is the run's evidence about the *program*, and it must stay exactly what the
+run reported. The live console shows a detail's first line, and a findings write-up is handed the
+whole of it — so accounting mixed in costs an author the line that tells them what broke, and costs
+the write-up its proof of concept.
+
+The marking is the *author's*, and the verdict is the *wheel's*; they meet on `RustFormalResult`,
+whose `reported_verdicts()` is what both the report and the console rollup read. A declared check
+reports `BAD` whatever its run said, because the alternative is the failure this exists to prevent:
+the gate accepts a declared check without ever asking the run to reproduce it, so a documented
+finding whose run did not happen to hit it would otherwise reach `report.html` as a clean row.
+`detail` stays what the run reported. Whether this run reproduced the mark is
+`ExpectedFailure` on the report row — `reproduced` with the author's reason, or `unreproduced`
+with the reason and the outcome the run did reach. `verdicts` itself stays verbatim: attribution
+remains the wheel's, and the expected-failure mark is applied on the way out.
 
 **The judge is structured.** When `judge` names a reviewer for an input, the session binds
 `feedback_tool`; a wheel with no judge gets no review machinery and no feedback stamp among its
@@ -528,6 +603,14 @@ or the same check twice raises `ValidateCoverageError`. The unanswered case is t
 machinery — a missing verdict is not a failing verdict, so it gives the publish gate nothing to
 object to, and a wheel that answered for nothing would stamp a component nothing had checked.
 
+A check the author marked with `expect_check_failure` is the one place the wheel's attribution is
+not the last word. The declaration is the author's — "the failure here IS the finding" — and the
+publish gate accepts such a check as clean without ever requiring the run to reproduce it, so
+nothing else stands between a documented finding and a green row. `reported_verdicts()` folds the
+outcome to `BAD`; the report row's `expected_failure` field says whether this run reproduced it. Both the
+report and the console rollup read the fold, so they cannot disagree about whether the run found
+something.
+
 A stamping run records what it covered as `ran` — the targets, each with its checks — and that is
 what the publish gate validates the declared mapping against, in both directions: every claimed name
 must have run, and every name that ran must be claimed. Ground truth is the stamping run rather than
@@ -550,10 +633,11 @@ that looks merely inconclusive. `Verdict.detail` carries the counterexample or e
 `BAD` is never unexplained.
 
 [`results.py`](../composer/rustapp/results.py) rolls these up for the console/TUI: one row per
-*check*, with the tally in the report's own display order and wording. A row is named by the property
-title when the check verifies exactly one, and otherwise by the check's own name — the only thing
-that names it unambiguously once one check can carry several properties. A delivered component that
-bakes no verdicts contributes one `UNKNOWN` row so the listing accounts for every component.
+*check*, with the tally in the report's own display order and wording. A row is named by
+`RustFormalResult.display_name` — the property title when the check verifies exactly one, and
+otherwise the check's own name, the only thing that names it unambiguously once one check can carry
+several properties. A delivered component that bakes no verdicts contributes one
+`UNKNOWN` row so the listing accounts for every component.
 
 ---
 
@@ -783,6 +867,7 @@ Facts about the seam as it stands, not open design questions:
 | Declarative ABI mirror | [composer/rustapp/descriptor.py](../composer/rustapp/descriptor.py) |
 | Runtime ABI mirror + parsers | [composer/rustapp/wire.py](../composer/rustapp/wire.py) |
 | The backend, preflight, prep, report | [composer/rustapp/adapter.py](../composer/rustapp/adapter.py) |
+| Run observations → written findings | [composer/rustapp/findings.py](../composer/rustapp/findings.py) |
 | The authoring session (buffer, gate, review, publish) | [composer/rustapp/session.py](../composer/rustapp/session.py) |
 | The shared authoring workflow | [composer/authoring/](../composer/authoring/) |
 | Application assembly (enum, phases, store, backend) | [composer/rustapp/host.py](../composer/rustapp/host.py) |
@@ -797,6 +882,7 @@ Tests: `tests/test_rustapp.py` (the wheel round-trip, end to end through the hos
 Hypothesis, against the real serde types), `test_rustapp_preflight.py`, `test_rustapp_workspace_prep.py`,
 `test_rustapp_setup_cache.py`, `test_rustapp_verdicts.py`, `test_rustapp_toolchain_sem.py`,
 `test_rustapp_gate.py`, `test_rustapp_validate_target.py`, `test_rustapp_discovery_phase.py`,
+`test_rustapp_findings.py` (the declaration fold and the findings written from it),
 `test_rust_llm_agent.py`,
 `test_rust_frontend.py`, plus `test_sandbox_run_confined.py` / `test_sandbox_escape.py` for the
 launcher contract.

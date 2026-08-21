@@ -68,6 +68,9 @@ impl Backend for EchoApp {
             // The demo authors `rule_<slug>` checks, so that is what its prompts should call them.
             check_noun: Some("rule".into()),
             evidence_kinds: default_evidence_kinds(),
+            // This demo only reads the spec back, so a refuted rule is about the spec, not the
+            // program. None means no findings.
+            findings: None,
         }
     }
 

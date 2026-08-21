@@ -171,6 +171,10 @@ pub enum Outcome {
     Unknown,
 }
 
+/// Opaque grouping key for one finding that covers several checks. Compared as a string
+/// across the whole run; the host never reads into it.
+pub type FindingKey = String;
+
 /// One check's outcome (mirrors `composer…report.collect.Verdict`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,6 +191,17 @@ pub struct Verdict {
     /// to the report so a verdict is self-explaining (otherwise a bare `BAD` gives no clue why).
     #[serde(deserialize_with = "crate::required::present")]
     pub detail: Option<String>,
+    /// What the run spent and covered (budget, coverage, how far it got). Present on a `GOOD`
+    /// too. Kept apart from `detail`: that is evidence about the program; this is about the run.
+    /// The host copies them onto the report row as `message` and `accounting`.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub accounting: Option<String>,
+    /// Opaque key grouping several checks under one finding. The host compares it across the
+    /// whole run and never reads into it: the same string on two components merges them. Stamp
+    /// it when one conclusion covers several checks; do not infer it from matching evidence.
+    /// `None` means this verdict stands on its own.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub finding_key: Option<FindingKey>,
 }
 
 impl Verdict {
@@ -198,6 +213,8 @@ impl Verdict {
             duration_seconds: None,
             unit_file: None,
             detail: None,
+            accounting: None,
+            finding_key: None,
         }
     }
 
@@ -211,5 +228,23 @@ impl Verdict {
     /// tool output gives it, rather than one deciding between two constructors.
     pub fn with_detail(self, detail: Option<String>) -> Self {
         Verdict { detail, ..self }
+    }
+
+    /// Append `note` to this verdict's run accounting. Several steps of one `validate` may
+    /// each have something to add.
+    pub fn noting(self, note: impl Into<String>) -> Self {
+        let note = note.into();
+        let accounting = Some(match self.accounting {
+            Some(prior) => format!("{prior}\n\n{note}"),
+            None => note,
+        });
+        Verdict { accounting, ..self }
+    }
+
+    /// This verdict as one of several that share a finding — see [`Verdict::finding_key`].
+    ///
+    /// The key is compared across the whole run. The same string on two components merges them.
+    pub fn of_finding_key(self, finding_key: impl Into<FindingKey>) -> Self {
+        Verdict { finding_key: Some(finding_key.into()), ..self }
     }
 }

@@ -203,6 +203,20 @@ pub enum DeliverableMode {
     },
 }
 
+/// What this backend's evidence is, so the host can write a violated check up as a finding.
+///
+/// The wheel supplies that claim; the host owns the rest (which rows, properties, groups,
+/// grouping, composing).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzz", derive(arbitrary::Arbitrary))]
+#[serde(deny_unknown_fields)]
+pub struct FindingsDeclaration {
+    /// Domain half of the write-up system prompt: what this evidence is, what it does and does
+    /// not establish, and how to read its markers. The host adds how severity is reached and
+    /// which sections come back.
+    pub domain: String,
+}
+
 /// The complete declaration the Python host reads once at load time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -253,6 +267,11 @@ pub struct AppDescriptor {
     /// backend: a fuzzing wheel can show a counterexample, a typechecking one an error from a
     /// checker that never runs code. See [`EVIDENCE_KINDS`] for the default set.
     pub evidence_kinds: Vec<String>,
+    /// How violated checks are written up (see [`FindingsDeclaration`]). `None` (the default)
+    /// produces no findings, only verdict rows: a write-up has to say what the evidence is,
+    /// and only the wheel knows.
+    #[serde(deserialize_with = "crate::required::present")]
+    pub findings: Option<FindingsDeclaration>,
 }
 
 /// The evidence an author can usually offer, for a wheel with no reason to name its own: the build
