@@ -288,7 +288,7 @@ async def run_refine_loop(project: Project, fill_task: str, cfg: RefineConfig, *
     fill_task = _array_guidance(project) + fill_task
     ckpt = InMemorySaver()
     deps = SmtoolDeps(project, full_typecheck=_make_full_typecheck(project, cfg),
-                      verify=_make_verify(project, cfg))
+                      verify=_make_verify(project, cfg), sources_root=cfg.sources_root)
     graph = (build_smtool_graph(builder, deps, extra_tools=extra_tools)
              .with_initial_prompt(fill_task).compile_async(checkpointer=ckpt))
     try:

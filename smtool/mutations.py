@@ -114,7 +114,7 @@ def _idx_after_var(cmds: list, var: str) -> int:
 # ---------------------------------------------------------------- reachability (i): requireInvariant
 def add_requireInvariant(project: Project, *, inv_name: str,
                          inv_params: list[tuple[str, str]], inv_expr,
-                         require_args: list[str]) -> Result:
+                         require_args: list[str], env: bool = False, preserved=None) -> Result:
     """Create a real-CUT invariant AND requireInvariant it in the SHARED `assumeReachable`, atomically.
 
     The invariant is CUT-global (independent of which method we prove), so it lives once in the
@@ -122,6 +122,14 @@ def add_requireInvariant(project: Project, *, inv_name: str,
     the same invariant requested by several methods lands once. A requireInvariant is ONLY introduced
     together with the invariant it names; that invariant is a proof obligation, so a model assumption
     can never enter as a bare, unproven require.
+
+    ENV invariants: set `env=True` for a fact that must call a NON-envfree getter (a time-dependent
+    quantity — one that accrues to block.timestamp). The invariant then takes a leading `env e`, and its
+    requireInvariant passes `assumeReachable`'s env. Almost always pair it with `preserved` — a list of
+    CVL commands for a `preserved with (env e1) { ... }` block that RELATES the transition env to the
+    invariant env (e.g. `require e1.block.timestamp <= e.block.timestamp;`), the idiom that makes a
+    time-dependent invariant provable. An envfree fact (a raw fixed-width storage field) needs NO env.
+
     NB soundness: the invariant is a CANDIDATE here — it must be DISCHARGED by the reachable conf
     (verify.prune_reachable keeps only prover-VERIFIED ones; check_consistency flags any still-assumed
     unproven invariant). TODO: source/refine candidates via composer's generate->prove->cex pass."""
@@ -129,7 +137,11 @@ def add_requireInvariant(project: Project, *, inv_name: str,
     reach = work.reachable
     if reach is None:
         return Result(False, "no reachable spec to hold the invariant")
-    new_inv = x.invariant(inv_name, inv_params, inv_expr)
+    if env:                                    # env-taking invariant: leading `env e`, pass it + a preserved block
+        inv_params = [("env", "e"), *inv_params]
+        require_args = ["e", *require_args]
+    proofs = [x.preserved(preserved)] if preserved else ()
+    new_inv = x.invariant(inv_name, inv_params, inv_expr, proofs=proofs)
     existing = next((b for b in reach.blocks
                      if isinstance(b, S.Invariant) and b.name == inv_name), None)
     if existing is not None:
@@ -152,6 +164,42 @@ def add_requireInvariant(project: Project, *, inv_name: str,
     ri = x.require_invariant(inv_name, [x.ident(a) for a in require_args])
     if not any(c.model_dump() == ri.model_dump() for c in fn.block.commands):   # idempotent
         fn.block.commands.append(ri)
+    return _commit(project, work)
+
+
+def add_glue_pin(project: Project, *, method: str, observable: str, key_exprs: list) -> Result:
+    """Add a model==real GLUE PIN for `observable` at `key_exprs`, into `method`'s glue.
+
+    SOUND BY CONSTRUCTION: it emits ONLY `<observable>CVLReader(keys) == <observable>(keys)` — the ghost
+    pinned to its OWN real getter at those keys. A model==real pin constrains only the MODEL (never the
+    real contract), is always satisfiable (the ghost is free), and only STRENGTHENS 'model starts equal
+    to real' — so it can neither hide a divergence nor make the rule vacuous, at ANY key. The tool
+    hard-codes this shape, so the agent supplies only the KEYS and cannot introduce an unsound `require`.
+
+    Use it for a key the deterministic pins miss — typically a DERIVED address (a credit target obtained
+    from another getter, e.g. a fee receiver) that the method reads/writes: without a pin that ghost cell
+    is an unconstrained uint256 (-> cast-safety CEX); pinned, it inherits the real getter's field width."""
+    work = project.snapshot()
+    spec = work.conformance.get(method)
+    if spec is None:
+        return Result(False, f"no conformance spec for method {method!r}")
+    b = next((bd for bd in work.cls.bindings if bd.getter.name == observable), None)
+    if b is None:
+        return Result(False, f"{observable!r} is not a modeled observable getter — a glue pin binds an "
+                             f"observable's ghost to its real getter")
+    glue = work.find_func(spec, driver.GLUE)
+    if glue is None:
+        return Result(False, f"no {driver.GLUE} function in {method}'s conformance spec")
+    keys = list(key_exprs)
+    reader = x.call(b.reader_name, keys)
+    getter = x.call(b.getter.name, ([x.ident("e")] if b.envful else []) + keys,
+                    host=driver._cut_host(work.inp, b.getter))
+    pin = x.require(x.binop("eq", reader, getter), f"glue pin (agent): model == real for {observable}")
+    if any(c.model_dump() == pin.model_dump() for c in glue.block.commands):
+        return Result(True, f"glue pin for {observable} at those keys already present")
+    idx = next((i for i, c in enumerate(glue.block.commands) if isinstance(c, S.ReturnCmd)),
+               len(glue.block.commands))                 # before a trailing return, else append
+    glue.block.commands.insert(idx, pin)
     return _commit(project, work)
 
 

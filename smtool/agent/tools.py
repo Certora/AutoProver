@@ -41,6 +41,7 @@ class SmtoolDeps:
     project: Project
     full_typecheck: Callable[[], Awaitable[tuple[bool, str]] | tuple[bool, str]] | None = None
     verify: Callable[[], Awaitable[str]] | None = None   # run the prover; returns PASS / failures+CEX
+    sources_root: str | None = None                      # scene root, for the AST-backed get_function tool
 
 
 def _res(r: Result) -> str:
@@ -178,16 +179,26 @@ class AddRequireInvariant(_Tool):
     atomically (never a bare/unproven assumption). Idempotent across methods. The invariant is a
     candidate — it must be discharged by the reachable conf before conformance results are trusted."""
     inv_name: str = Field(description="invariant name")
-    inv_params: list[tuple[str, str]] = Field(description="invariant params as [type, name] pairs")
+    inv_params: list[tuple[str, str]] = Field(description="invariant params as [type, name] pairs (do NOT "
+                                              "include env here — set env=true instead)")
     inv_expr: str = Field(description="the invariant as a CVL boolean expression over REAL getters")
-    require_args: list[str] = Field(description="args to pass in the requireInvariant call")
+    require_args: list[str] = Field(description="args to pass in the requireInvariant call (do NOT include "
+                                    "'e' — it is added automatically when env=true)")
+    env: bool = Field(default=False, description="true if the fact must call a NON-envfree getter (a "
+                      "time-dependent quantity that accrues to block.timestamp) — the invariant then takes "
+                      "a leading `env e`. A raw fixed-width storage field is envfree; leave false.")
+    preserved: str = Field(default="", description="CVL statements for a `preserved with (env e1) { ... }` "
+                           "block relating the transition env to the invariant env — e.g. "
+                           "'require e1.block.timestamp <= e.block.timestamp;' — what makes a time-dependent "
+                           "(env) invariant provable. Reference both `e` and `e1`.")
 
     @override
     async def run(self) -> str:
         try:
             e = parse_expression(self.inv_expr)
+            pres = parse_commands(self.preserved) if self.preserved.strip() else None
         except CVLParseError as ex:
-            return f"REJECTED: CVL parse error in inv_expr: {ex}"
+            return f"REJECTED: CVL parse error: {ex}"
         if _is_trivial_invariant(e):
             return (f"REJECTED: `{self.inv_expr}` is trivially true (a bare literal or an X==X / X!=X "
                     f"tautology) — it constrains nothing. An invariant must state a REAL, non-trivial "
@@ -196,7 +207,30 @@ class AddRequireInvariant(_Tool):
         with self.tool_deps() as d:
             return _res(mut.add_requireInvariant(d.project, inv_name=self.inv_name,
                                                  inv_params=self.inv_params, inv_expr=e,
-                                                 require_args=self.require_args))
+                                                 require_args=self.require_args, env=self.env, preserved=pres))
+
+
+class AddGluePin(_Tool):
+    """Pin an observable's model ghost to its REAL getter at a specific key, in a method's glue. The
+    SOUND way to bound a ghost cell the deterministic pins miss — typically a DERIVED address (a credit
+    target the method writes, e.g. a fee receiver obtained from another getter). It emits ONLY
+    `<obs>CVLReader(keys) == <obs>(keys)` (model==real), so it can never be unsound at any key. Use on a
+    cast-safety CEX over a ghost read/write at an UNPINNED key: pinning it makes the ghost inherit the
+    real getter's field width — no invariant, no guard needed."""
+    method: str = Field(description="the method whose glue to add the pin to")
+    observable: str = Field(description="the real getter whose ghost to pin, e.g. 'getBalanceOf'")
+    key_exprs: list[str] = Field(description="the keys to pin at, as CVL expressions — e.g. "
+                                 "['id', 'getReceiver(id)'] for a key that is a derived address")
+
+    @override
+    async def run(self) -> str:
+        try:
+            keys = [parse_expression(k) for k in self.key_exprs]
+        except CVLParseError as ex:
+            return f"REJECTED: CVL parse error in key_exprs: {ex}"
+        with self.tool_deps() as d:
+            return _res(mut.add_glue_pin(d.project, method=self.method, observable=self.observable,
+                                         key_exprs=keys))
 
 
 class AddNondet(_Tool):
@@ -386,6 +420,28 @@ class RenderConformance(_Tool):
                                  d.project.render_conformance(self.method), force_full=self.full)
 
 
+class GetFunction(_Tool):
+    """Read a real Solidity function's exact BODY + the in-tree functions it calls, from the compiled
+    AST — PRECISE (overloads / inheritance / library calls resolve by node id, not a text guess) and
+    cheap. PREFER this over grep_files / get_file for reading a method you model or a helper it calls;
+    `get_function` a listed callee to expand the math one hop at a time. Returns a 'not found' note when
+    the AST has no such function (a non-function target, or no AST built) — then fall back to get_file."""
+    name: str = Field(description="the Solidity function name to read, e.g. a modeled method or a math helper it calls")
+
+    @override
+    async def run(self) -> str:
+        with self.tool_deps() as d:
+            if d.sources_root is None:
+                return "get_function unavailable here (no scene root) — use grep_files / get_file instead."
+            from .. import ast_source
+            try:
+                out = ast_source.function_source(d.sources_root, self.name)
+            except Exception as e:
+                return f"get_function failed ({type(e).__name__}: {e}) — fall back to grep_files / get_file."
+            return out or (f"no AST definition of '{self.name}' found — it may be a state variable, a name "
+                           f"the AST indexes differently, or absent. Fall back to grep_files / get_file.")
+
+
 # ---------------------------------------------------------------- assembly
 _TOOLS: list[tuple[type[_Tool], str]] = [
     (AddModelConstant, "add_model_constant"),
@@ -393,6 +449,7 @@ _TOOLS: list[tuple[type[_Tool], str]] = [
     (SetModelMethodBody, "set_model_method_body"),
     (AddModelGhostAxiom, "add_model_ghost_axiom"),
     (AddRequireInvariant, "add_require_invariant"),
+    (AddGluePin, "add_glue_pin"),
     (AddNondet, "add_nondet"),
     (AddHelperLemma, "add_helper_lemma"),
     (RemoveHelperLemma, "remove_helper_lemma"),
@@ -403,6 +460,7 @@ _TOOLS: list[tuple[type[_Tool], str]] = [
     (CheckConsistency, "check_consistency"),
     (RenderModel, "render_model"),
     (RenderConformance, "render_conformance"),
+    (GetFunction, "get_function"),
 ]
 
 

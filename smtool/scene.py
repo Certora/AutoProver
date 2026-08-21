@@ -118,7 +118,10 @@ def ensure_all_methods_json(sources_root, setup_conf, scene_path=None,
         return str(scene_dir)
     build = _newest_build_json(sources_root)
     if build is None:
-        subprocess.run([certora_run_path, str(setup_conf), "--compilation_steps_only"],
+        # --dump_asts co-produces `.asts.json` (the solc AST) in the build dir at no extra cost — the
+        # same compile that yields `.certora_build.json`. The AST-based source prefetch consumes it
+        # (smtool.ast_source); absent, prefetch falls back to a text slice. (autosetup passes both flags.)
+        subprocess.run([certora_run_path, str(setup_conf), "--compilation_steps_only", "--dump_asts"],
                        cwd=str(sources_root), check=True)
         build = _newest_build_json(sources_root)
     if build is None:

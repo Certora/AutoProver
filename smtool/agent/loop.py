@@ -47,11 +47,15 @@ smtool tools. The deterministic driver has already emitted the skeleton (model g
 differential conformance proof passes.
 
 ## 1. GROUND THE MODEL IN THE REAL SOURCE
-Do NOT guess behavior from prose — read the CUT's Solidity (grep_files / get_file / list_files):
-- grep_files the method (e.g. `function draw\\b`), get_file its body; mirror its EXACT revert conditions,
-  arithmetic, and the storage it reads/writes.
-- Follow its calls: read the library math (so a mirror is structurally exact) and the real STORAGE GETTERS.
-- get_file's `range` is `{"start_line": N, "end_line": M}` (end exclusive) — read just the function you need.
+Do NOT guess behavior from prose — read the CUT's Solidity; mirror each method's EXACT revert conditions,
+arithmetic, and the storage it reads/writes.
+- PREFER `get_function(name)` to read a method or a helper it calls: it returns the exact body + the
+  in-tree functions it calls, straight from the compiled AST (precise — overloads/inheritance/library
+  calls resolve correctly). Follow the listed callees by calling `get_function` on each — that is how you
+  read the library math so a mirror is structurally exact. Pull one function at a time, as you need it.
+- FALL BACK to grep_files / get_file only when get_function says a name is not found (a non-function
+  target, a state variable, or the AST is unavailable). get_file's `range` is
+  `{"start_line": N, "end_line": M}` (end exclusive).
 
 ## 2. DISCIPLINE (the tools REJECT a violation with a reason — read it and adjust)
 - The model is pure CVL: no real-contract calls; model functions may read/write model ghosts.
@@ -88,6 +92,32 @@ tells you WHICH kind of divergence it is; the main cases:
   function succeeds but your model REVERTS (or vice versa). Find the revert in `<f>CVL` that fires wrongly
   — an over-eager `if (cond) revert();`, or a bad ARITHMETIC cast (assert_uintN(...) overflow/underflow, division
   by zero, a narrowing cast) — and align its conditions to the real source at those input values.
+  (If the failing assert is a CAST-SAFETY check, see CAST-SAFETY below — the fix depends on WHERE the
+  value comes from; `assert_uintN` is just the mathint->uintN cast MECHANISM, keep it, but make sure the
+  value is bounded FIRST by a pin / guard / invariant so the assert can never fire.)
+- CAST-SAFETY (msg ~ "Cast_safety_of_<expr>_mathint_to_uintN"): your model produced a `mathint` that does
+  not fit the `uintN`, on an input where the REAL does NOT overflow. `assert_uintN` is the right cast — do
+  NOT swap it for `require_uintN` (that PRUNES the overflow path = unsound under-approximation). Instead
+  identify WHERE the value came from and BACK the assert:
+  (1) A GHOST cell the glue does not pin (msg names a `<obs>CVL[k1][k2]` at a key the pins miss — usually
+      a DERIVED address, e.g. a fee receiver / credit target from another getter). The cell is an
+      unconstrained uint256. FIX: add_glue_pin(method, observable=<obs>, key_exprs=[...that key...]) — e.g.
+      keys `["id", "getReceiver(id)"]` (a derived address from another getter). A glue pin is model==real (sound at any key); the
+      ghost then inherits the real getter's field width and the assert is safe. TRY THIS FIRST — it needs
+      no proof.
+  (2) A real getter's value at a SafeCast/`toUintN` site (the REAL reverts on overflow). FIX: mirror the
+      revert — `if (x > 2^N - 1) revert(); ... = assert_uintN(x);`. The guard makes overflow a matching
+      real-revert (assert never reached). Do NOT prove no-overflow (it IS reachable — the real reverts).
+  (3) A nonlinear INTERMEDIATE of storage-bounded factors, where the real does NOT revert (e.g. a product
+      of two uint120 fields, ≤ 2^240, fits uint256). The solver just doesn't know the factors are bounded.
+      FIX: add_require_invariant bounding EACH factor to its field width (`getFoo(k) <= 2^N - 1`); the
+      solver multiplies the bounds. ENVFREE vs ENV: a raw fixed-width getter -> plain invariant, no env.
+      An ACCRUING (non-envfree, time-dependent) factor -> set `env=true` AND a `preserved` block relating
+      the envs (`require e1.block.timestamp <= e.block.timestamp;`) — the timestamp relation is what makes
+      it provable. Do NOT use a revert guard here (the real never reverts -> spurious model-revert
+      violation) and NEVER a bare `require`.
+  (Do not reach for an invariant over an already-field-width-bounded getter to fix (1): it is trivially
+  true and does not bound the unpinned GHOST — pin the ghost (1) instead.)
 - RETURN value (msg ~ "returns must agree"): on a non-reverting input the model returns the wrong value.
   Trace the call trace to the line of `<f>CVL` that computes it and fix the arithmetic (mathint rounding,
   assert_uintN casts / an unmodeled wrap).
@@ -179,7 +209,7 @@ re-ask the manual once you've been told:
 
 ## 6. WORKFLOW
 Fill with the tools (add_model_constant, add_model_function, set_model_method_body, add_require_invariant,
-add_nondet, add_helper_lemma). To FIX a helper/constant/method body, just call add_model_function /
+add_glue_pin, add_nondet, add_helper_lemma). To FIX a helper/constant/method body, just call add_model_function /
 add_model_constant / set_model_method_body AGAIN with the corrected definition — a re-add with a different
 body REPLACES it. To fully RETRACT something you added: remove_model_constant (a constant/ghost) /
 remove_model_function (a helper) / remove_helper_lemma / remove_nondet / remove_model_ghost_axiom (an

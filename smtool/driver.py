@@ -261,7 +261,9 @@ def _reachable_call_cmds(cls: ModelLayout, m: FunctionSpec, keys: list[tuple[str
             args.append(x.ident(chosen))
         else:
             decls.append(x.declare(ty, name)); args.append(x.ident(name))
-    return decls, x.apply(x.call(ASSUME, args))
+    # the rule's env `e` (always in scope) leads the call — matches assumeReachable's `env e` slot, and
+    # supplies the env an env-taking invariant's requireInvariant needs.
+    return decls, x.apply(x.call(ASSUME, [x.ident("e"), *args]))
 
 
 def build_reachable_spec(inp: ToolInput, cls: ModelLayout) -> S.CVLFile:
@@ -289,7 +291,9 @@ def build_reachable_spec(inp: ToolInput, cls: ModelLayout) -> S.CVLFile:
     if decl_getters:
         blocks.append(x.methods_block([x.m_envfree(inp.cut, g.name, [p.type for p in g.params], g.returns)
                                        for g in decl_getters]))
-    blocks.append(x.func(ASSUME, _reachable_keys(cls), [], []))   # empty; filled by add_requireInvariant
+    # assumeReachable carries an `env e` FIRST — so an env-taking invariant (needed for a time-dependent
+    # bound; ~1/5 of real invariants) can be `requireInvariant inv(e, ...)`'d. Envfree invariants ignore it.
+    blocks.append(x.func(ASSUME, [("env", "e"), *_reachable_keys(cls)], [], []))   # body filled by add_requireInvariant
     return x.spec_file(imports=(), blocks=blocks)
 
 
@@ -557,6 +561,25 @@ def _field_pins(inp: ToolInput, cls: ModelLayout, m: FunctionSpec, frame_vars: l
         else:
             scope.append((p.type, x.ident(p.name)))
     scope.append(("address", _resolve_arg(inp, CALLER_ARG)))
+    # DERIVED-ADDRESS keys: an observable getter that RETURNS an address (e.g. a fee receiver) yields a
+    # key the method may read/write ANOTHER observable at — the credit target. params + caller miss it,
+    # so that ghost cell stays unpinned (an unconstrained uint256 -> cast-safety CEX). Capture each such
+    # getter's value (when its own keys are in-scope, non-free) and add it as an address key, so the
+    # cross-product pins the address-keyed observables there too. Sound (model==real) and cheap.
+    addr_decls: list = []
+    param_names = {p.name for p in m.params}
+    for i, b in enumerate(cls.bindings):
+        if b.is_multi_return or b.val_type != "address" or not b.getter.declare_in_methods:
+            continue
+        # capture only when every key of the address getter is concretely in THIS method's scope (a param,
+        # the caller, or the CUT) — skip free vars / glue-locals we cannot reference here.
+        if not all(a in (CUT_ARG, CALLER_ARG) or a in param_names for a in b.glue_arg_names):
+            continue
+        nm = f"_derivedAddr{i}"
+        kargs = [_resolve_arg(inp, a) for a in b.glue_arg_names]
+        call = x.call(b.getter.name, ([x.ident("e")] if b.envful else []) + kargs, host=_cut_host(inp, b.getter))
+        addr_decls.append(x.declare("address", nm, call))
+        scope.append(("address", x.ident(nm)))
     # A non-primitive type is trusted to coerce into a numeric key only when the model uses it as a
     # scalar INDEX: either a declared observable KEY type, or an ARRAY-ELEMENT type (arr[i] indexing an
     # observable). Both are UDVTs (`type Id is uint256`) by construction. A bare non-primitive SCALAR
@@ -568,7 +591,7 @@ def _field_pins(inp: ToolInput, cls: ModelLayout, m: FunctionSpec, frame_vars: l
         + [p.type[:-2] for p in m.params if p.type.endswith("[]") and _is_udvt(p.type[:-2])])
     def vars_of(kt: str) -> list:
         return [e for (ty, e) in scope if _key_matches(ty, kt, coercible)]
-    cmds: list = []
+    cmds: list = list(addr_decls)                     # capture the derived addresses before pinning at them
     seen: set = set()
     for b in cls.bindings:
         if b.is_multi_return:

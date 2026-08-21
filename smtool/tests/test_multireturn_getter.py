@@ -68,10 +68,11 @@ def test_assumeReachable_call_matches_declared_key_type():
     # the return rule must NOT call assumeReachable(id) (uint256); it declares+passes the key var
     ret = pretty_print(pr.conformance["act"])
     assert "assumeReachable(id)" not in ret, "return rule passes the wrong (uint256) key"
-    # the reachable key is the address frame var (here named `a`); the return rule declares + passes it
+    # the reachable key is the address frame var (here named `a`); the return rule declares + passes it,
+    # led by the rule's env `e` (assumeReachable's first slot, for env-taking invariants)
     assert "address a" in decl, "reachable key should be the address frame var"
-    assert "address a;" in ret and "assumeReachable(a" in ret, \
-        "return rule must declare + pass an address var matching the declaration"
+    assert "address a;" in ret and "assumeReachable(e, a" in ret, \
+        "return rule must declare + pass an address var, led by the env"
 
 
 # ---- MULTI-KEY reachable slots across the WHOLE-model union (third + fifth driver bugs) -------------
@@ -104,14 +105,14 @@ def test_union_reachable_exposes_a_slot_per_key_type():
     from composer.cvl.pretty_print import pretty_print
     pr = _union_project()
     decl = [l for l in pretty_print(pr.reachable).splitlines() if "function assumeReachable" in l][0]
-    # multi-key declaration: address slot first, then the uint256 id slot
-    assert "assumeReachable(address a, uint256 id)" in decl, decl
+    # multi-key declaration: env slot first, then address, then the uint256 id slot
+    assert "assumeReachable(env e, address a, uint256 id)" in decl, decl
     for name, spec in pr.conformance.items():
         t = pretty_print(spec)
         for s in (l.strip() for l in t.splitlines()):
             if "assumeReachable(" in s and not s.startswith("function"):
-                # the id slot is the method's own id; the address slot is a (framed or fresh)
-                assert s == "assumeReachable(a, id);", f"{name}: bad reachable call {s!r}"
+                # led by the rule's env, then the id slot (method's own id) + the address slot
+                assert s == "assumeReachable(e, a, id);", f"{name}: bad reachable call {s!r}"
 
 
 def test_perkey_invariant_can_be_added_via_requireInvariant():
@@ -134,7 +135,7 @@ def test_perkey_invariant_can_be_added_via_requireInvariant():
     bad = mutations.add_requireInvariant(
         pr, inv_name="bogus", inv_params=[("uint256", "id")],
         inv_expr=cx.binop("le", cx.call("getBal", [cx.ident("id")]), cx.num(1)),
-        require_args=["e"])
+        require_args=["notaslot"])
     assert not bad.ok and "not reachable-key slots" in bad.message, bad.message
 
 
@@ -157,3 +158,26 @@ def test_struct_param_not_pinned_as_scalar_key():
     assert not bad, f"struct param pinned as a scalar key (typecheck error): {bad}"
     # the legit uint256 id key is still pinned (the fix must not over-prune)
     assert "getIdxCVLReader(id)" in t, "valid uint256-key pin was lost"
+
+
+def test_env_invariant_with_preserved_block():
+    """An env-taking invariant (a time-dependent bound over a non-envfree getter) gets a leading `env e`,
+    its requireInvariant passes assumeReachable's env, and a `preserved with (env e1)` block relates the
+    two envs (the idiom that makes it provable). Mainstream in real FV specs (~1/5 of invariants); the
+    driver must express it, not just envfree ones."""
+    from smtool import mutations
+    from smtool.cvl_parse import parse_expression, parse_commands
+    from composer.cvl.pretty_print import pretty_print
+    pr = _union_project()
+    r = mutations.add_requireInvariant(
+        pr, inv_name="idxMonotone", inv_params=[("uint256", "id")],
+        inv_expr=parse_expression("getBal(id) <= 2^120 - 1"),
+        require_args=["id"], env=True,
+        preserved=parse_commands("require e1.block.timestamp <= e.block.timestamp;"))
+    assert r.ok, r.message
+    reach = pretty_print(pr.reachable)
+    assert "invariant idxMonotone(env e, uint256 id)" in reach            # leading env param
+    assert "preserved with (env e1)" in reach                             # the relating proof block
+    assert "e1.block.timestamp <= e.block.timestamp" in reach
+    assert "requireInvariant idxMonotone(e, id)" in reach                 # passes the env
+    assert "function assumeReachable(env e," in reach                     # env slot exists

@@ -266,6 +266,18 @@ def invariant(name: str, params, expr, *, filter=None, proofs=()) -> S.Invariant
     )
 
 
+def preserved(commands, *, with_env: str = "e1") -> S.ProofBlock:
+    """A generic `preserved with (env <with_env>) { <commands> }` proof block for an invariant — the
+    idiom that RELATES the transition's env to the invariant's env `e` (e.g.
+    `require <with_env>.block.timestamp <= e.block.timestamp`), which is what makes a time-dependent
+    invariant provable (see the FV corpus). `commands` reference both `e` and `<with_env>`."""
+    return S.ProofBlock(
+        target=S.GenericTarget(type="generic"),
+        block=S.CodeBlock(commands=list(commands)),
+        with_binding=S.WithBlock(id=with_env),
+    )
+
+
 def methods_block(entries) -> S.MethodsBlock:
     return S.MethodsBlock(type="methods_block", method_entries=list(entries))
 
