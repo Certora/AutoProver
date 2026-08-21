@@ -141,7 +141,9 @@ class ExtendedModelOptions(_ModelOptionsCommon, Protocol):
     )]
 
 class UploadPaths(Protocol):
-    spec_file: str
+    # One or more specs, all gating the same generated contract (argparse
+    # ``nargs="+"``), hence a list even for the single-spec invocation.
+    spec_file: list[str]
     interface_file: str
     system_doc: str
 
