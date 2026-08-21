@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, ClassVar, cast, Any, LiteralString, override, TYPE_CHECKING
+from typing import AsyncIterator, cast, Any, LiteralString, override, TYPE_CHECKING
 from dataclasses import dataclass
 import asyncio
 import logging
@@ -21,6 +21,7 @@ from numpy import ndarray
 
 from composer.rag.types import ManualRef, BlockChunk, ManualSectionHit
 from composer.rag.text import code_ref_tag
+from composer.rag.models import ENCODE_LOCK
 
 import sqlite3
 
@@ -97,17 +98,14 @@ class ComposerRAGDB(ABC):
         ...
 
     
-    # The model's remote code caches rotary/positional tensors per sequence length, so
-    # concurrent encodes race and die (shape mismatches on CPU, SIGSEGV in the MPS
-    # shader cache). One process-wide lock serializes every encode.
-    _ENCODE_LOCK: ClassVar[threading.Lock] = threading.Lock()
-
+    # Encodes race when concurrent (see ENCODE_LOCK in composer.rag.models — the lock
+    # is shared with the sync DefaultEmbedder so neither path can race the other).
     def _encode_query_locked(self, query: str) -> ndarray:
-        with self._ENCODE_LOCK:
+        with ENCODE_LOCK:
             return cast(ndarray, self.tr.encode_query(query, show_progress_bar=False))
 
     def _encode_docs_locked(self, docs: list[str]) -> list[ndarray]:
-        with self._ENCODE_LOCK:
+        with ENCODE_LOCK:
             return cast(list[ndarray], self.tr.encode_document(docs, show_progress_bar=False))
 
     async def embed_query(
