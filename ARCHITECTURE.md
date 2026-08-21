@@ -115,7 +115,7 @@ five steps and never inspects anything backend-specific:
 `run_pipeline` also takes an `ecosystem: Ecosystem[App, Main, Unit]`
 ([composer/pipeline/ecosystem.py](composer/pipeline/ecosystem.py)) — the *front-half* plug point,
 orthogonal to the backend. It pairs a **language** (how the target's source is read — fs-exclusion
-pattern, code-explorer prompt) with a **chain** and supplies the domain-specific pieces the shared
+pattern) with a **chain** (including the code-explorer prompt) and supplies the domain-specific pieces the shared
 steps need: the analyzed-model type (`App`), the analysis/property prompts, model validation, how
 to locate the target `Main`, and `units(main) -> list[Unit]` (the per-unit split the extraction and
 formalization phases iterate). `EVM` binds `(SourceApplication, ContractInstance,

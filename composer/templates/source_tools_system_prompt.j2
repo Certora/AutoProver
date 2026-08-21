@@ -2,9 +2,11 @@
   Shared guidance for the source-exploration tool family. Context variables (all optional):
     source_tools_has_explorer     — agent also has the `code_explorer` sub-agent tool (default: true)
     source_tools_artifact_warning — include the "don't read non-code artifacts" rule (default: true)
+    source_language               — language the explorer must not be asked about (default: "Solidity")
 -#}
 {%- set _explorer = source_tools_has_explorer | default(true) -%}
 {%- set _artifact_warning = source_tools_artifact_warning | default(true) -%}
+{%- set _source_language = source_language | default("Solidity") -%}
 * You have access to `list_files`, `get_file`, and `grep_files` tools for primitive access to the project source code
   * The pattern accepted by `grep_files` applies to the file *contents*, NOT the file names
   * The pattern is interpreted by the Python regex library. Escape (or not) special characters as appropriate
@@ -30,7 +32,7 @@
   Bad Example: "What is the implementation of PoolManager's `adjustRate` function?" (retrieval: grep, then `get_file`)
   Bad Example: "What does `settleEpoch` do?" (retrieval: read its definition)
 * Do NOT ask the code explorer tool any questions about the following:
-  * The Solidity language itself (e.g., "what is the behavior of expression E?")
+  * The {{ _source_language }} language itself (e.g., "what is the behavior of expression E?")
   * Your current task
   * The behavior of other tools available to you
   * CVL features

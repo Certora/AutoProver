@@ -8,6 +8,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from graphcore.graph import Builder
 from graphcore.tools.vfs import GlobalExcludeArg, fs_tools
 
+from composer.pipeline.ecosystem import Ecosystem
 from composer.spec.tool_env import BaseSourceTools
 from composer.spec.services import build_rag_tool_env, RAGInputs
 from composer.spec.service_host import ModelProvider, ServiceHost, Sort
@@ -35,6 +36,7 @@ def build_source_tools(
     store: BaseStore,
     cache_ns: tuple[str, ...],
     recursion_limit: int,
+    ecosystem: Ecosystem,
 ) -> tuple[BaseTool, ...]:
     """Wrap the base source tools with the indexed code_explorer sub-agent
     + the document-ref retrieval tool. Returns the full source tool tuple.
@@ -65,6 +67,7 @@ def build_source_tools(
             llm=models.llm_lite(),
         ),
         recursion_limit=recursion_limit,
+        explorer_prompt=ecosystem.code_explorer_prompt,
     )
     return s.base_source_tools + (
         explorer_tool,
@@ -81,6 +84,7 @@ class SourceParams(RAGInputs):
 def build_source_env(
     *,
     sort: Sort = "existing",
+    ecosystem: Ecosystem,
     **params: Unpack[SourceParams],
 ) -> ServiceHost:
     """Build a fully-bound ``ServiceHost`` with both RAG and source tool
@@ -97,6 +101,7 @@ def build_source_env(
         params["store"],
         params["source_question_ns"],
         recursion_limit=params["recursion_limit"],
+        ecosystem=ecosystem,
     )
     return ServiceHost(
         models=rag_env.models,

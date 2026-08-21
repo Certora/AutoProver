@@ -229,6 +229,16 @@ section.gaps h4 {
 }
 ul.claims { margin: 4px 0 0 18px; padding: 0; font-size: 13px; }
 ul.claims li { margin-bottom: 4px; }
+.finding {
+    margin-top: 6px;
+    padding: 4px 8px;
+    background: var(--bg-pre);
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
 section.gaps .desc { color: var(--muted-fg); margin: 6px 0 12px; font-size: 13px; }
 section.gaps p.note { margin: 4px 0 8px; font-size: 13px; }
 section.gaps details { margin: 8px 0 14px; }
@@ -392,6 +402,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
           <ul class="claims">{% for d in row.descriptions %}<li>{{ d }}</li>{% endfor %}</ul>
           {%- elif row.descriptions %}{{ row.descriptions[0] }}
           {%- else %}<span class="muted">(no inferred description)</span>{%- endif %}
+          {%- if row.message %}<div class="finding">{{ row.message }}</div>{%- endif %}
         </td>
         {%- if has_links %}
         <td class="col-link">

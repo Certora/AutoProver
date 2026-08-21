@@ -1,0 +1,16 @@
+# Toolchain for the `rust/` workspace (PyO3 app wheels + the run-confined launcher).
+#
+# rustup reads this by walking UP from the *current directory* — it ignores
+# `--manifest-path`. Since cargo gets invoked both from a crate dir (maturin
+# building `rust/example-app`) and from the repo root
+# (`cargo build -p run-confined --manifest-path rust/Cargo.toml`, as the sandbox
+# VM provisioner does), the file lives at the repo root so both resolve to it.
+#
+# rustup installs a missing toolchain automatically on the first cargo call, so a
+# contributor needs only rustup — no version to pick by hand. To bump, change
+# `channel` (patch releases resolve automatically: "1.96" -> 1.96.x).
+[toolchain]
+channel = "1.96"
+profile = "minimal"
+# minimal drops rustfmt/clippy; anyone editing these crates wants both.
+components = ["rustfmt", "clippy"]

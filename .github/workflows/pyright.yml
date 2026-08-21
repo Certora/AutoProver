@@ -2,9 +2,9 @@ name: pyright-check
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
 
 jobs:
   pyright:
@@ -22,10 +22,13 @@ jobs:
           cache-suffix: pyright
       
       - name: sync-deps
+        # --no-dev skips the `dev` group (and the `apps` group it includes), so this
+        # job doesn't compile the Rust crates — pyright can't see into a compiled
+        # extension module anyway.
         run: |
-          uv sync --group ci
+          uv sync --group ci --no-dev
           uv pip install sentence_transformers --no-deps
 
       - name: Run pyright
         run: |
-          uv run pyright composer/ analyzer sanity_analyzer certora_autosetup
+          uv run --no-dev pyright composer/ analyzer sanity_analyzer certora_autosetup
