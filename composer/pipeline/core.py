@@ -208,13 +208,13 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
     def findings_policy(
         self, outcomes: list[ComponentOutcome[FormT, U]]
     ) -> FindingsPolicy | None:
-        """How this backend writes its violated rules up as findings, or None if it produces none.
+        """How this backend writes violated rules up as findings, or None to produce none.
 
-        Returning None is how a backend opts out — the report then builds no findings for it, with
-        no backend-specific branching in the report layer. Default: None.
+        None is the opt-out: the report then builds no findings and never starts the heavy model.
+        Default: None.
 
-        Takes ``outcomes`` because a backend whose evidence is in its own results has nowhere else
-        to read it from; one whose evidence is a run-scoped store ignores them."""
+        ``outcomes`` is for backends whose evidence lives on the results. A backend that keeps
+        evidence in a run-scoped store can ignore them."""
         return None
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
@@ -710,7 +710,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 components=inputs, llm=run.env.llm_lite(), fetch_verdicts=formalizer.fetch_verdicts,
                 source_edits=await formalizer.source_edits(outcomes, run),
                 verification_artifacts=artifact_records,
-                # Findings only when the backend declared a policy — skip the heavy model otherwise.
+                # Findings only when the backend supplies evidence — skip the heavy model otherwise.
                 findings_llm=run.env.llm_heavy() if findings else None,
                 findings=findings,
             )

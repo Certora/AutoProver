@@ -175,12 +175,11 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         return prover_findings(self._evidence)
 
     async def _evidence(self, ref: RuleRef) -> list[RuleEvidence]:
-        # Every instantiation the run analyzed, not just one: a parametric rule can fail differently
-        # per binding while the report shows a single row for the whole rule.
+        # Every instantiation the run analyzed: a parametric rule can fail differently per
+        # binding while the report shows one row.
         #
-        # The ref's file half is dropped: `CexAnalysisStore` is keyed by rule name (a `RulePath` has
-        # no spec file to key on), so two components whose specs name the same rule share evidence
-        # here. Closing that needs the capture to carry the file, not this call.
+        # CexAnalysisStore is keyed by rule name only, so the file half of the ref is dropped.
+        # Two components whose specs share a rule name share evidence here.
         return [
             RuleEvidence(label=r.label, analysis=r.analysis, counterexample=r.counterexample)
             for r in await self._deps.analysis_store.for_rule(ref[1])

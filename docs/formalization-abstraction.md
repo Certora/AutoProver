@@ -538,7 +538,7 @@ so a per-component local id will merge independent conclusions.
 The relation is deliberately *stamped* and never inferred from matching evidence: rows fanned out
 from one conclusion look exactly like several checks that failed the same way, and those are two
 different facts about the program. Only whatever produced the verdicts knows which it is — a
-Rust-authored backend says so on `Verdict.finding`, and it stamps it at the point it decides to fan
+Rust-authored backend says so on `Verdict.finding_key`, and it stamps it at the point it decides to fan
 out.
 
 Returning `None` is how a backend opts out; the report then builds no findings for it and never

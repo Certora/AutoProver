@@ -1,14 +1,9 @@
-"""Findings synthesis for a Rust wheel's results: where its evidence comes from, and how to ask for
-a write-up of it.
+"""Map a Rust wheel's results onto the shared findings loop.
 
-The shared loop is `composer.spec.source.report.findings`, and `RuleEvidence` is its shape. What is
-here is the part that reads a *wheel's* results into it — every field it works from is wire
-(`Verdict.detail`, `Verdict.accounting`, `Verdict.finding`, the result's declared failures), so
-nothing in this module knows what any particular backend checks or what its evidence means.
-
-Those are the wheel's to say, and it says them in `FindingsDeclaration`: the domain half of the
-system prompt (what its evidence *is*). Severity is the host's. A wheel that declares nothing
-produces no findings — see `AppDescriptor.findings`.
+The loop and `RuleEvidence` live in `composer.spec.source.report.findings`. This module only
+reads wire fields (`Verdict.detail`, `accounting`, `finding_key`, declared failures) into that
+shape. What the evidence means is `FindingsDeclaration.domain`; severity is the host's.
+No declaration, no findings — see `AppDescriptor.findings`.
 """
 from composer.pipeline.ptypes import ComponentOutcome, Delivered
 from composer.rustapp.descriptor import FindingsDeclaration
@@ -28,15 +23,12 @@ _WRITE_UP_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_finding
 def observations(outcomes: RustOutcomes) -> dict[RuleRef, RuleEvidence]:
     """Every delivered check as evidence, keyed as the report keys its rows: ``(file, name)``.
 
-    Rebuilt rather than looked up: ``collect`` uses the verdict's file, falling back to the
-    component artifact, and a callout-mode wheel gives every component that same fallback — so the
-    check name alone does not identify a row.
+    Rebuilt to match ``collect``: the key uses the verdict's file, then the component artifact,
+    and the first component that names a key wins. A check name alone is not enough — one
+    deliverable can hold several components' checks.
 
-    First component naming a key wins, as in ``collect``: where two of them do collapse onto one
-    row, the evidence here has to be the same run's as the message there.
-
-    ``analysis`` stays unset — a wheel reports what its run found, not a reading of why the check
-    broke, and a reader must be able to tell the two apart."""
+    ``analysis`` is left unset. The wheel reports what the run found, not why the check broke.
+    """
     observed: dict[RuleRef, RuleEvidence] = {}
     for o in outcomes:
         if not isinstance(o.result, Delivered):
@@ -49,8 +41,8 @@ def observations(outcomes: RustOutcomes) -> dict[RuleRef, RuleEvidence]:
                 counterexample=verdict.detail,
                 ran=verdict.outcome,
                 accounting=verdict.accounting,
-                declared=res.expected_failures.get(check),
-                finding=verdict.finding,
+                expected_failure_reason=res.expected_failures.get(check),
+                finding_key=verdict.finding_key,
             ))
     return observed
 
@@ -58,8 +50,7 @@ def observations(outcomes: RustOutcomes) -> dict[RuleRef, RuleEvidence]:
 def rust_findings(
     outcomes: RustOutcomes, declared: FindingsDeclaration | None,
 ) -> FindingsPolicy | None:
-    """This run's findings policy, around the observations its own results carry — or ``None`` for a
-    wheel that declared none, which produces no findings at all."""
+    """This run's findings policy from the outcomes, or ``None`` if the wheel declared none."""
     if declared is None:
         return None
     observed = observations(outcomes)

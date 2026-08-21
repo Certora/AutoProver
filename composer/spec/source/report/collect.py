@@ -18,10 +18,11 @@ from pathlib import Path
 from typing import Protocol
 
 from composer.authoring.state import SkippedProperty
-from composer.spec.types import Curtailed, PropertyFormulation
+from composer.spec.types import Curtailed, FindingKey, PropertyFormulation
 from composer.spec.source.report.schema import (
-    ComponentName, CurtailedComponent, CurtailedSkip, DraftedProperty, FormalizedProperty,
-    GaveUpComponent, Outcome, PropertyTitle, RuleName, RuleRef, RuleVerdict, SkippedClaim,
+    ComponentName, CurtailedComponent, CurtailedSkip, ExpectedFailure, DraftedProperty,
+    FormalizedProperty, GaveUpComponent, Outcome, PropertyTitle, RuleName, RuleRef,
+    RuleVerdict, SkippedClaim,
 )
 
 _log = logging.getLogger(__name__)
@@ -82,10 +83,15 @@ class Verdict:
     #: a BAD, error text for an ERROR). Provenance/diagnostics only; ``None`` when the backend
     #: gives no detail (the prover/foundry fetchers don't).
     message: str | None = None
+    #: What the run spent and covered. ``None`` when the backend does not report it (prover,
+    #: foundry). Kept apart from ``message`` so render can show them separately.
+    accounting: str | None = None
+    #: Author-marked expected failure. ``None`` when the check was not marked.
+    expected_failure: ExpectedFailure | None = None
 
     def merge(self, other: "Verdict | None") -> "Verdict":
         """Combine two results for one unit within a run: higher-priority outcome wins,
-        line/duration/unit_file/message kept from whichever side has them."""
+        line/duration/unit_file/message/accounting/expected_failure kept from whichever side has them."""
         if other is None:
             return self
         hi, lo = (
@@ -99,6 +105,8 @@ class Verdict:
             hi.duration_seconds if hi.duration_seconds is not None else lo.duration_seconds,
             hi.unit_file or lo.unit_file,
             hi.message or lo.message,
+            hi.accounting or lo.accounting,
+            hi.expected_failure or lo.expected_failure,
         )
 
 
@@ -155,45 +163,34 @@ def _curtailed_component[R: ReportableResult](
 
 @dataclass(frozen=True)
 class RuleEvidence:
-    """One failing instance of a violated rule: what a run observed about it, split by where each
-    part came from.
+    """One failing instance of a violated rule.
 
-    A backend fills the parts it has and leaves the rest ``None``. Absence always means "this run
-    recorded nothing of that kind" — never that it recorded something empty — so the fields mean the
-    same thing whichever backend produced them, and a prompt can say what is missing rather than
-    guessing."""
+    A backend fills the parts it has and leaves the rest ``None``. ``None`` means the run
+    recorded nothing of that kind, not that it recorded something empty.
+    """
 
-    #: Which instance this is, where a rule can fail more than once: a parametric binding
-    #: (``rule r(method f)``) for the prover, the component for a per-component backend. ``""``
-    #: when the rule fails only once.
+    #: Which instance this is when a rule can fail more than once: a parametric binding for
+    #: the prover, the component for a per-component backend. ``""`` when it fails only once.
     label: str = ""
-    #: The backend's own account of *why* the check failed, where it produces one — a root-cause
-    #: explanation rather than the raw failure.
+    #: Why the check failed, when the backend produces a root-cause account.
     analysis: str | None = None
     #: What reproduces the failure: a counterexample trace, a crashing input, an assertion message.
     counterexample: str | None = None
-    #: The run's own outcome for this check, before any authored declaration is folded into the
-    #: outcome the report shows. ``None`` for a backend that captures evidence only for failures,
-    #: where it would add nothing; where a check can be reported BAD on the author's say-so, this is
-    #: the only thing that says whether the run actually reproduced it.
+    #: The run's own outcome, before any expected-to-fail mark is folded in. ``None`` if the
+    #: backend only records evidence for failures. Distinguishes a reproduced finding from one
+    #: the author marked expected to fail but this run did not hit.
     ran: Outcome | None = None
-    #: The run's evidence about *itself*: what it spent against its budget, how far it reached, and
-    #: whether this check was exercised at all. What makes a result weigh something — and what a
-    #: proof of concept must not be padded with.
+    #: What the run spent and covered. Do not put this in a proof of concept.
     accounting: str | None = None
-    #: Why the author declared a failure here to be expected, when they did. Present means the row
-    #: is a claim the author made, not only something the run tripped over.
-    declared: str | None = None
-    #: Which *finding* this belongs to, when one piece of evidence condemns several checks at once.
-    #: Opaque and compared across the whole report — the same string on two components merges them.
-    #: ``None`` is evidence standing on its own.
-    finding: str | None = None
+    #: Why the author marked this check expected to fail, when they did.
+    expected_failure_reason: str | None = None
+    #: Opaque key grouping several checks under one finding. Compared across the whole report:
+    #: the same string on two components merges them. ``None`` stands on its own.
+    finding_key: FindingKey | None = None
 
 
-#: Every captured failing instance of a violated rule, or ``[]`` when the backend has none for it.
-#: Keyed by `RuleRef` — ``(file, name)``, how the report identifies a row — because a name alone
-#: does not: one deliverable can hold several components' checks, and two authors given the same
-#: property write the same name.
+#: Evidence for one violated rule, or ``[]`` if the backend has none.
+#: Keyed by `RuleRef` — ``(file, name)`` — because a check name alone does not identify a row.
 type EvidenceFetcher = Callable[[RuleRef], Awaitable[list[RuleEvidence]]]
 
 
@@ -273,6 +270,7 @@ async def collect[R: ReportableResult](
                 rules_by_key[key] = RuleVerdict(
                     name=unit_name, spec_file=key[0], outcome=v.outcome, line=v.line,
                     duration_seconds=v.duration_seconds, prover_link=run_link, message=v.message,
+                    accounting=v.accounting, expected_failure=v.expected_failure,
                 )
 
     # A referenced unit with no verdict still needs an (UNKNOWN) entry to render.

@@ -118,7 +118,7 @@ impl<'a> Arbitrary<'a> for Verdict {
             unit_file: Option::arbitrary(u)?,
             detail: Option::arbitrary(u)?,
             accounting: Option::arbitrary(u)?,
-            finding: Option::arbitrary(u)?,
+            finding_key: Option::arbitrary(u)?,
         })
     }
 }

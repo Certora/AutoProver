@@ -440,7 +440,7 @@ model's reasoning, so a reader can re-derive the tier rather than take it on tru
 
 **A conclusion the wheel could not attribute to one check is one finding, not one per row.** When
 one conclusion covers several checks, the wheel stamps those verdicts with the same
-`Verdict.finding` key. The host groups on the key, so the run is written up once against the union
+`Verdict.finding_key`. The host groups on the key, so the run is written up once against the union
 of those rows' properties and groups, and `provenance.covers` names every row the write-up answers
 for. The key is compared across the whole run: the same string on two components merges them.
 Nothing here infers the relation from the evidence: fanned-out rows are otherwise indistinguishable
@@ -451,9 +451,9 @@ claims the author made, however alike the rest of their evidence looks.
 **Evidence about the program and evidence about the run are separate fields.** `Verdict.accounting`
 carries what the run spent and covered; `Verdict.detail` carries only the counterexample or the
 error. They are separate claims, and a proof of concept padded with run accounting leaves a reader
-unable to see where the evidence ends. `fetch_verdicts` rejoins them into the report row's one
-`message` — evidence first, because a `BAD` row's first line is what a reader is looking for — so a
-green row still says what it cost.
+unable to see where the evidence ends. `fetch_verdicts` copies them onto the report row as
+`message` and `accounting`; HTML shows them as separate blocks, so a green row still says what
+it cost without padding a counterexample.
 
 ---
 
@@ -501,9 +501,10 @@ examined. It is the same mechanism as CVL's `expect_rule_failure` and foundry's
 `expect_test_failure`.
 
 **Every verdict says what the run behind it cost.** A `GOOD` from a long, thorough run is a real
-claim and one from a short run is nearly none, and a report row carries only its check, its outcome
-and its `message`. So a wheel whose negative results are budget-relative gives every verdict —
-green ones included — what its run spent against what it was allowed, on `Verdict.accounting`. Not
+claim and one from a short run is nearly none, and a report row carries its check, its outcome,
+its `message`, and optional `accounting`. So a wheel whose negative results are budget-relative
+gives every verdict — green ones included — what its run spent against what it was allowed, on
+`Verdict.accounting`. Not
 on `detail`: that field is the run's evidence about the *program*, and it must stay exactly what the
 run reported. The live console shows a detail's first line, and a findings write-up is handed the
 whole of it — so accounting mixed in costs an author the line that tells them what broke, and costs
@@ -514,11 +515,10 @@ whose `reported_verdicts()` is what both the report and the console rollup read.
 reports `BAD` whatever its run said, because the alternative is the failure this exists to prevent:
 the gate accepts a declared check without ever asking the run to reproduce it, so a documented
 finding whose run did not happen to hit it would otherwise reach `report.html` as a clean row.
-The two cases are distinguished in the detail rather than in the outcome — a reproduced finding
-carries its counterexample, an unreproduced one says `NOT REPRODUCED` and names what the run did
-say — because an unreproduced finding rests on the author's reading alone and a reader has to be
-able to tell. `verdicts` itself stays verbatim: attribution remains the wheel's, and the declaration
-is applied on the way out.
+`detail` stays what the run reported. Whether this run reproduced the mark is
+`ExpectedFailure` on the report row — `reproduced` with the author's reason, or `unreproduced`
+with the reason and the outcome the run did reach. `verdicts` itself stays verbatim: attribution
+remains the wheel's, and the expected-failure mark is applied on the way out.
 
 **The judge is structured.** When `judge` names a reviewer for an input, the session binds
 `feedback_tool`; a wheel with no judge gets no review machinery and no feedback stamp among its
@@ -607,10 +607,9 @@ A check the author marked with `expect_check_failure` is the one place the wheel
 not the last word. The declaration is the author's — "the failure here IS the finding" — and the
 publish gate accepts such a check as clean without ever requiring the run to reproduce it, so
 nothing else stands between a documented finding and a green row. `reported_verdicts()` folds the
-two together on the host side: a declared check reports `BAD` whatever the run said, and the detail
-says which case it is — a reproduced finding carries its counterexample, an unreproduced one says
-`NOT REPRODUCED` and names the outcome the run did reach. Both the report and the console rollup
-read the fold, so they cannot disagree about whether the run found something.
+outcome to `BAD`; the report row's `expected_failure` field says whether this run reproduced it. Both the
+report and the console rollup read the fold, so they cannot disagree about whether the run found
+something.
 
 A stamping run records what it covered as `ran` — the targets, each with its checks — and that is
 what the publish gate validates the declared mapping against, in both directions: every claimed name

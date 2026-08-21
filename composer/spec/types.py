@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Protocol, Literal
 # or "Structural Invariants".
 # ``PropertyTitle``: a property's unique snake_case title — the key in a
 # component's ``property_rules`` mapping.
+# ``FindingKey``: opaque stamp grouping several checks under one finding. Compared
+# across the whole report; not a check name.
 #
 # ``SolidityIdentifier`` and ``RustIdentifier`` are **siblings** under
 # ``SourceIdentifier``; every other name is a sibling of the rest. Passing one
@@ -37,6 +39,7 @@ if TYPE_CHECKING:
     class CheckName(str): ...
     class ComponentName(str): ...
     class PropertyTitle(str): ...
+    class FindingKey(str): ...
 else:
     SourceIdentifier = str
     SolidityIdentifier = str
@@ -46,6 +49,7 @@ else:
     CheckName = str
     ComponentName = str
     PropertyTitle = str
+    FindingKey = str
 
 #: A ``CheckName`` as the CVL/prover side speaks it: a rule/invariant identifier as it appears in
 #: the prover report and in a component's ``property_rules`` mapping. The same type, not a

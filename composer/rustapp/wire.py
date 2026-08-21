@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Protocol, S
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from composer.spec.source.report.schema import Outcome
-from composer.spec.types import CheckName, ComponentName, PropertyTitle, PropertyType
+from composer.spec.types import CheckName, ComponentName, FindingKey, PropertyTitle, PropertyType
 
 # ``TargetName``: what a backend selects when it invokes the checker — one :class:`Target`'s name
 # (Crucible: the component's harness fn / Cargo feature). Phantom-typed like the vocabulary in
@@ -345,16 +345,12 @@ class Verdict(WireModel):
     #: Human-readable explanation of a non-GOOD outcome — the counterexample / assertion message for
     #: a BAD, the error text for an ERROR.
     detail: str | None
-    #: What the run behind this verdict cost and covered — its budget, its coverage, how far it got.
-    #: Present on a GOOD too, and mostly only there: a passing check's strength is otherwise
-    #: invisible, while a failure explains itself through :attr:`detail`. Kept apart from it because
-    #: they are separate claims — one is evidence about the program, the other about the run — and a
-    #: reader asking for a counterexample should not be handed run accounting inside one.
+    #: What the run spent and covered (budget, coverage, how far it got). Present on a GOOD too.
+    #: Kept apart from ``detail``: that is evidence about the program; this is about the run.
     accounting: str | None
-    #: Which *finding* this verdict belongs to, when one piece of evidence condemns several checks
-    #: at once — an opaque key produced by the wheel and only ever compared, never read into. Rows
-    #: sharing one are written up once; ``None`` is a verdict standing on its own evidence.
-    finding: str | None
+    #: Opaque key grouping several checks under one finding. The host compares it and never
+    #: reads into it. ``None`` means this verdict stands on its own.
+    finding_key: FindingKey | None
 
     @classmethod
     def with_outcome(cls, outcome: Outcome) -> "Verdict":
@@ -362,7 +358,7 @@ class Verdict(WireModel):
         and exists for the same reason — every field being required is right for the wire and no
         reason for a caller that has only an outcome to spell six nulls to say so."""
         return cls(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=None,
-                   accounting=None, finding=None)
+                   accounting=None, finding_key=None)
 
 
 class ValidateBuildFailed(WireModel):

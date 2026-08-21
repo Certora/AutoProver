@@ -29,9 +29,10 @@ from collections.abc import Sequence
 from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
-    AutoProverReport, ComponentName, CoverageReport, CurtailedComponent, Finding,
-    FormalizedProperty, GaveUpComponent, GroupStatus, Outcome, PropertyGroup, PropertyKey,
-    ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
+    AutoProverReport, ComponentName, CoverageReport, CurtailedComponent, ExpectedFailure,
+    Finding, FormalizedProperty, GaveUpComponent, GroupStatus, Outcome, PropertyGroup,
+    PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
+    UnreproducedExpectedFailure,
 )
 
 
@@ -143,6 +144,12 @@ class ChipView(TypedDict):
     n: int
 
 
+class ExpectedFailureView(TypedDict):
+    kind: str
+    reason: str
+    ran: str | None
+
+
 class RowView(TypedDict):
     name: str
     label: str
@@ -153,6 +160,10 @@ class RowView(TypedDict):
     #: Backend diagnostic for a non-GOOD row (e.g. the fuzzer's counterexample / failed-assertion
     #: message). ``None`` when the backend supplied none.
     message: str | None
+    #: What the run spent and covered. ``None`` when the backend does not report it.
+    accounting: str | None
+    #: Author-marked expected failure. ``ran`` is set only when this run did not reproduce it.
+    expected_failure: ExpectedFailureView | None
 
 
 class GroupView(TypedDict):
@@ -260,6 +271,20 @@ def _is_url(link: str) -> bool:
     return link.startswith("http://") or link.startswith("https://")
 
 
+def _expected_failure_view(
+    expected_failure: ExpectedFailure | None, unit_labels: dict[Outcome, str],
+) -> ExpectedFailureView | None:
+    if expected_failure is None:
+        return None
+    if isinstance(expected_failure, UnreproducedExpectedFailure):
+        return {
+            "kind": "unreproduced",
+            "reason": expected_failure.reason,
+            "ran": unit_labels[expected_failure.ran],
+        }
+    return {"kind": "reproduced", "reason": expected_failure.reason, "ran": None}
+
+
 def _link_view(link: str | None) -> LinkView:
     """How a run link renders: a clickable URL, a plain 'local run' label, or an em-dash."""
     if link and _is_url(link):
@@ -323,6 +348,8 @@ def _group_view(
             "link": _link_view(rule.prover_link if rule else None),
             "descriptions": descriptions[ref],
             "message": rule.message if rule else None,
+            "accounting": rule.accounting if rule else None,
+            "expected_failure": _expected_failure_view(rule.expected_failure, unit_labels) if rule else None,
         })
     return {
         "slug": group.slug,

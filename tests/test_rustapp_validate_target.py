@@ -307,9 +307,7 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
 
 @pytest.mark.asyncio
 async def test_the_result_carries_the_authors_expected_failure_declarations(monkeypatch, tmp_path):
-    # The wheel reports what its run observed; that a failure IS the finding is the author's, and
-    # the session is the only place that knows it. Dropping it here is what let a documented klend
-    # finding reach report.html as "No counterexample" (tests/test_rustapp_findings.py).
+    # expected_failures comes from the session; the wheel never sees it.
     async def fake_session(**_kw):
         return SessionResult(
             commentary="done", spec=SPEC, skipped=[],
@@ -333,7 +331,6 @@ async def test_the_result_carries_the_authors_expected_failure_declarations(monk
 
     assert isinstance(result, adapter.RustFormalResult)
     assert result.expected_failures == {"c_stake": "klend makes no such guarantee"}
-    # The wheel's own answer is kept verbatim beside it — the declaration is applied on the way out
-    # (``reported_verdicts``), not folded into the record of what ran.
+    # verdicts stay as the run observed; reported_verdicts applies the declaration.
     assert result.verdicts["c_stake"].outcome is Outcome.GOOD
     assert result.reported_verdicts()["c_stake"].outcome is Outcome.BAD

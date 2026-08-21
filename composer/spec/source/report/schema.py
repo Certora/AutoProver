@@ -11,7 +11,7 @@ The report is a **per-run snapshot** — no guarantee that property/group slugs 
 runs. Bump `schema_version` on a breaking change.
 """
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -74,6 +74,27 @@ class GroupStatus(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class ReproducedExpectedFailure(BaseModel):
+    """The author marked this check expected to fail, and this run reproduced it."""
+    kind: Literal["reproduced"] = "reproduced"
+    reason: str
+
+
+class UnreproducedExpectedFailure(BaseModel):
+    """The author marked this check expected to fail, but this run did not hit it.
+
+    ``ran`` is the outcome the run actually reached (never BAD)."""
+    kind: Literal["unreproduced"] = "unreproduced"
+    reason: str
+    ran: Outcome
+
+
+ExpectedFailure = Annotated[
+    ReproducedExpectedFailure | UnreproducedExpectedFailure,
+    Field(discriminator="kind"),
+]
+
+
 class RuleVerdict(BaseModel):
     """One CVL rule/invariant (or foundry test) and its outcome — the verdict table the report
     references by `RuleRef`. Stored once even when properties across several groups are formalized
@@ -91,6 +112,14 @@ class RuleVerdict(BaseModel):
         default=None,
         description="Human-readable explanation of a non-GOOD outcome (e.g. the fuzzer's "
         "counterexample / failed-assertion message). Diagnostics only; may be absent.",
+    )
+    accounting: str | None = Field(
+        default=None,
+        description="What the run spent and covered. Absent when the backend does not report it.",
+    )
+    expected_failure: ExpectedFailure | None = Field(
+        default=None,
+        description="Author-marked expected failure, and whether this run reproduced it.",
     )
 
     @property
@@ -246,16 +275,12 @@ adds its own literal here, plus its wording in ``report/render.py``."""
 # ---------------------------------------------------------------------------
 # Findings — violated rules surfaced as audit issues.
 #
-# A `Finding` is a title, a severity, and a write-up, composed by the shared loop in
-# ``report/findings.py`` from the evidence the backend hands back for a violated rule and the
-# properties/groups the covered rule(s) break. The field
-# set follows the "Submit Issue" body of the Sherlock Audit Engine API — schema at
-# https://api-audit-engine.sherlock.xyz/v1/docs/public — so a finding maps cleanly onto a submission,
-# but the source ``locations`` a submission needs
-# (``{owner}/{repo}`` / file / line) are NOT produced here: a run knows only local paths and CVL-spec
-# lines, so the submission layer reconstructs locations from the engagement scope + the counterexample.
-# The report-time locator is on ``provenance`` (rule name, spec file, prover-run link, and
-# ``covers`` when several rows share one finding).
+# A `Finding` is a title, a severity, and a write-up from ``report/findings.py``. The field set
+# follows the Sherlock Audit Engine "Submit Issue" body
+# (https://api-audit-engine.sherlock.xyz/v1/docs/public). Source ``locations`` are not produced
+# here — a run knows only local paths — so the submission layer reconstructs them. The
+# report-time locator is on ``provenance`` (rule, spec file, prover-run link, and ``covers``
+# when several rows share one finding).
 # ---------------------------------------------------------------------------
 
 type SeverityTier = Literal["critical", "high", "medium", "low", "informational"]
@@ -293,9 +318,9 @@ class FindingProvenance(BaseModel):
     likelihood: LikelihoodLevel | None = None
     #: The findings LLM's justification for the assessed impact and likelihood.
     risk_reasoning: str | None = None
-    #: Every violated rule this write-up answers for, when the backend stamped several rows as
-    #: one finding. Empty in the ordinary one-row case. Each entry is ``(spec_file, name)``;
-    #: ``rule_name`` / ``spec_file`` above are the first of them.
+    #: Every violated rule this write-up answers for when several rows share one finding.
+    #: Empty for a one-row finding. Each entry is ``(spec_file, name)``; ``rule_name`` /
+    #: ``spec_file`` above are the first of them.
     covers: list[RuleRef] = Field(default_factory=list)
 
 
@@ -333,7 +358,7 @@ class AutoProverReport(BaseModel):
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
     coverage: CoverageReport
-    #: Audit issues for violated rules. One per BAD rule, except that rows the backend stamped as
-    #: the same finding collapse to one. Empty when nothing is violated or the backend declares no
-    #: findings policy — see ``Formalizer.findings_policy``.
+    #: Audit issues for violated rules. One per BAD rule, or one per stamped finding when
+    #: several rows share a key. Empty when nothing is violated or the backend has no findings
+    #: policy — see ``Formalizer.findings_policy``.
     findings: list[Finding] = Field(default_factory=list)

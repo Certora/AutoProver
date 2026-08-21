@@ -52,9 +52,9 @@ async def build_report[R: ReportableResult](
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
-    When the backend supplies a ``findings`` policy, violated rules are additionally written up
-    as audit-issue `Finding`s (best-effort; a synthesis failure yields no findings rather than
-    failing the report)."""
+    When the backend supplies a ``findings`` policy, violated rules are written up as
+    `Finding`s. Best-effort: a synthesis failure yields no findings rather than failing the
+    report."""
     properties, rules, skipped, gave_up, curtailed, dropped = await collect(
         components, fetch_verdicts=fetch_verdicts
     )
@@ -112,9 +112,7 @@ async def build_report[R: ReportableResult](
         if c.formalized is not None and not isinstance(c.formalized, Curtailed)
         and c.formalized.run_link
     }
-    # Violated rules -> findings. Its own guard: findings synthesis must never fail the report
-    # (the whole phase is also best-effort in the caller, but this keeps a working report even when
-    # only findings break).
+    # Findings are best-effort: a failure here must not take down the rest of the report.
     written: list[Finding] = []
     if findings is not None and findings_llm is not None:
         try:

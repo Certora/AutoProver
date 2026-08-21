@@ -171,6 +171,10 @@ pub enum Outcome {
     Unknown,
 }
 
+/// Opaque grouping key for one finding that covers several checks. Compared as a string
+/// across the whole run; the host never reads into it.
+pub type FindingKey = String;
+
 /// One check's outcome (mirrors `composer…report.collect.Verdict`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,29 +191,17 @@ pub struct Verdict {
     /// to the report so a verdict is self-explaining (otherwise a bare `BAD` gives no clue why).
     #[serde(deserialize_with = "crate::required::present")]
     pub detail: Option<String>,
-    /// What the run behind this verdict cost and covered — its budget, its coverage, how far it
-    /// got. Present on a `GOOD` too, and mostly *only* there: a passing check's strength is
-    /// otherwise invisible, while a failure explains itself through `detail`.
-    ///
-    /// Separate from `detail` because they are separate claims. `detail` is evidence about the
-    /// program; this is evidence about how hard the run looked, and a reader asking for a
-    /// counterexample should not be handed run accounting inside one. The host composes both into
-    /// the report row's message and takes `detail` alone where the counterexample is what is wanted.
+    /// What the run spent and covered (budget, coverage, how far it got). Present on a `GOOD`
+    /// too. Kept apart from `detail`: that is evidence about the program; this is about the run.
+    /// The host copies them onto the report row as `message` and `accounting`.
     #[serde(deserialize_with = "crate::required::present")]
     pub accounting: Option<String>,
-    /// Which *finding* this verdict belongs to, when one piece of evidence condemns several checks
-    /// at once — an opaque key the host groups by and never interprets.
-    ///
-    /// A backend whose run can conclude something it cannot attribute to one check stamps the same
-    /// key on every verdict it fans that conclusion out to. The host writes those rows up once,
-    /// against the set, instead of once per row each guessing which check it was. The key is
-    /// compared across the whole run: the same string on two components merges them. Nothing else
-    /// recovers the relation: fanned-out verdicts are otherwise indistinguishable from several
-    /// checks that happened to fail the same way, which is a different fact about the program.
-    ///
-    /// `None` — the ordinary case — is a verdict standing on its own evidence.
+    /// Opaque key grouping several checks under one finding. The host compares it across the
+    /// whole run and never reads into it: the same string on two components merges them. Stamp
+    /// it when one conclusion covers several checks; do not infer it from matching evidence.
+    /// `None` means this verdict stands on its own.
     #[serde(deserialize_with = "crate::required::present")]
-    pub finding: Option<String>,
+    pub finding_key: Option<FindingKey>,
 }
 
 impl Verdict {
@@ -222,7 +214,7 @@ impl Verdict {
             unit_file: None,
             detail: None,
             accounting: None,
-            finding: None,
+            finding_key: None,
         }
     }
 
@@ -238,9 +230,8 @@ impl Verdict {
         Verdict { detail, ..self }
     }
 
-    /// This verdict with `note` added to its run accounting. Appends rather than sets: several
-    /// steps of one `validate` have something to say about what the run covered, and each should
-    /// add to the record instead of overwriting whatever the last one established.
+    /// Append `note` to this verdict's run accounting. Several steps of one `validate` may
+    /// each have something to add.
     pub fn noting(self, note: impl Into<String>) -> Self {
         let note = note.into();
         let accounting = Some(match self.accounting {
@@ -250,12 +241,10 @@ impl Verdict {
         Verdict { accounting, ..self }
     }
 
-    /// This verdict as one of several that share one finding — see [`Verdict::finding`].
+    /// This verdict as one of several that share a finding — see [`Verdict::finding_key`].
     ///
-    /// The key is compared across the whole run, not within one component: the same string on two
-    /// components merges those rows into one finding. It only has to separate this run's findings
-    /// from each other; the host never reads into it.
-    pub fn of_finding(self, finding: impl Into<String>) -> Self {
-        Verdict { finding: Some(finding.into()), ..self }
+    /// The key is compared across the whole run. The same string on two components merges them.
+    pub fn of_finding_key(self, finding_key: impl Into<FindingKey>) -> Self {
+        Verdict { finding_key: Some(finding_key.into()), ..self }
     }
 }

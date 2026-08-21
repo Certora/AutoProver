@@ -40,8 +40,7 @@ from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
     AutoProverReport, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome, PropertyGroup,
-    RuleVerdict, SeverityTier,
-    SkippedClaim,
+    RuleVerdict, SeverityTier, SkippedClaim, UnreproducedExpectedFailure,
 )
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.cex_capture import CexAnalysisStore
@@ -475,6 +474,43 @@ def test_render_html_shows_finding_message():
     assert "crash abc: deposit(5) - expected 105 got 100" in h
 
 
+def test_render_html_shows_accounting_apart_from_the_message():
+    p1 = _fp("C", "p_dep", [("c.spec", "c_deposit")], desc="deposit increases balance")
+    rules = [RuleVerdict(name="c_deposit", spec_file="c.spec", outcome=Outcome.BAD,
+                         message="crash abc", accounting="spent 41231 executions")]
+    groups = [PropertyGroup(slug="deposits", title="Deposits", description="d",
+                            status=GroupStatus.BAD, members=[("C", "p_dep")])]
+    cov = CoverageReport(total_properties=1, total_rules=1, total_groups=1,
+                         properties_per_group_min=1, properties_per_group_max=1,
+                         property_coverage_complete=True)
+    h = render_html(AutoProverReport(contract_name="Vault", backend="foundry",
+                                     properties=[p1], rules=rules, groups=groups,
+                                     skipped=[], coverage=cov))
+    assert 'class="finding"' in h and "crash abc" in h
+    assert 'class="accounting"' in h and "spent 41231 executions" in h
+
+
+def test_render_html_shows_an_unreproduced_expected_failure():
+    p1 = _fp("C", "p_dep", [("c.spec", "c_deposit")], desc="deposit increases balance")
+    rules = [RuleVerdict(
+        name="c_deposit", spec_file="c.spec", outcome=Outcome.BAD,
+        expected_failure=UnreproducedExpectedFailure(
+            reason="kill switch is a no-op", ran=Outcome.GOOD,
+        ),
+    )]
+    groups = [PropertyGroup(slug="deposits", title="Deposits", description="d",
+                            status=GroupStatus.BAD, members=[("C", "p_dep")])]
+    cov = CoverageReport(total_properties=1, total_rules=1, total_groups=1,
+                         properties_per_group_min=1, properties_per_group_max=1,
+                         property_coverage_complete=True)
+    h = render_html(AutoProverReport(contract_name="Vault", backend="foundry",
+                                     properties=[p1], rules=rules, groups=groups,
+                                     skipped=[], coverage=cov))
+    assert 'class="expected-failure"' in h
+    assert "kill switch is a no-op" in h
+    assert "Successful test" in h  # foundry label for GOOD
+
+
 def test_render_html_group_rows_and_edge_labels():
     h = render_html(_mini_report())
     assert "deposit-openness" in h and "Deposit is open" in h
@@ -725,9 +761,7 @@ def _policy(by_rule: dict[str, list[RuleEvidence]]):
 
 @pytest.mark.asyncio
 async def test_build_report_synthesizes_one_finding_per_violation():
-    """Only the violated rule becomes a finding; severity is computed from the model's impact/
-    likelihood, the counterexample rides proof_of_concept, the run link is a reference, and provenance
-    traces back to the rule."""
+    """One finding for the violated rule: computed severity, CEX as proof of concept, provenance back to the rule."""
     gen = _gen({"p_good": ["r_ok"], "p_bad": ["r_bad"]})
     fetch = _fetcher({"L1": [
         _fake_check("r_ok", NodeStatus.VERIFIED, file="autospec_C.spec"),

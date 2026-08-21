@@ -1,18 +1,12 @@
-"""The declaration fold: what a Rust backend reports for a check its author declared broken.
+"""What a Rust backend reports for a check its author declared broken.
 
-A check marked ``expect_check_failure`` must report BAD either way: reproduced findings carry
-their counterexample; unreproduced ones have no proof of concept and say so. Stamps on
-``Verdict.finding`` collapse those rows to one write-up. A wheel with ``findings=None`` produces
-no findings.
+An ``expect_check_failure`` check reports BAD either way: reproduced findings keep their
+counterexample; unreproduced ones have no proof of concept. Stamps on ``Verdict.finding_key``
+collapse those rows to one write-up. ``findings=None`` produces no findings.
 
-``expect_check_failure`` is how an author says "the failure here IS the finding". The publish
-gate accepts such a check as clean without requiring the run to reproduce it, so the fold is
-what stands between a documented finding and a green report row.
-
-The declaration is the author's and the outcome is the wheel's; they meet on
-``RustFormalResult``, and the first group below pins that meeting down for both consumers
-of it — the HTML report and the console rollup, which must not disagree about whether a
-run found something.
+The publish gate accepts an expected-to-fail check without requiring a repro, so this fold
+is what keeps a documented finding off a green report row. Report and console both read
+``reported_verdicts``, so they cannot disagree.
 """
 
 import pathlib
@@ -36,8 +30,9 @@ from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
     Finding, ImpactLevel, LikelihoodLevel, Outcome,
+    ReproducedExpectedFailure, UnreproducedExpectedFailure,
 )
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import FindingKey, PropertyFormulation
 from tests.conftest import wire_descriptor
 
 #: Sample counterexample text a wheel might put on ``Verdict.detail``.
@@ -52,20 +47,20 @@ REASON = "UpdateBlockPriceUsage only mark_stale()s, so PRICE_USAGE_ALLOWED survi
 
 
 def _verdict(outcome: Outcome, detail: str | None = None, accounting: str | None = None,
-             finding: str | None = None) -> Verdict:
+             finding_key: FindingKey | None = None) -> Verdict:
     return Verdict(outcome=outcome, line=None, duration_seconds=None, unit_file=None,
-                   detail=detail, accounting=accounting, finding=finding)
+                   detail=detail, accounting=accounting, finding_key=finding_key)
 
 
 def _result(
     verdicts: dict[str, Verdict],
-    declared: dict[str, str],
+    expected_failures: dict[str, str],
     checks: list[tuple[str, list[str]]] | None = None,
 ) -> RustFormalResult:
     return RustFormalResult(
         checks=checks if checks is not None else [(f"{name}_prop", [name]) for name in verdicts],
         verdicts=verdicts,
-        expected_failures=declared,
+        expected_failures=expected_failures,
     )
 
 
@@ -74,29 +69,26 @@ def _result(
 # ---------------------------------------------------------------------------
 
 def test_a_declared_finding_the_run_reproduced_reports_bad_with_its_counterexample():
-    reported = _result(
+    result = _result(
         {"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {"c_ts": REASON}
-    ).reported_verdicts()
+    )
+    reported = result.reported_verdicts()
 
     assert reported["c_ts"].outcome is Outcome.BAD
-    detail = reported["c_ts"].detail or ""
-    # Declaration and counterexample both have to survive the fold.
-    assert REASON in detail
-    assert COUNTEREXAMPLE in detail
+    assert reported["c_ts"].detail == COUNTEREXAMPLE
+    assert result.expected_failure("c_ts") == ReproducedExpectedFailure(reason=REASON)
 
 
 def test_a_declared_finding_the_run_did_not_reproduce_still_reports_as_a_finding():
     # Wheel said GOOD; the declaration still makes it a finding.
-    reported = _result(
+    result = _result(
         {"c_kill": _verdict(Outcome.GOOD)}, {"c_kill": REASON}
-    ).reported_verdicts()
+    )
+    reported = result.reported_verdicts()
 
     assert reported["c_kill"].outcome is Outcome.BAD, "a documented finding must not read as a pass"
-    detail = reported["c_kill"].detail or ""
-    assert REASON in detail
-    # Weaker claim: say so, and name the outcome the run actually reached.
-    assert "NOT REPRODUCED" in detail
-    assert "GOOD" in detail, "the run's own outcome is what makes the claim weaker; name it"
+    assert reported["c_kill"].detail is None
+    assert result.expected_failure("c_kill") == UnreproducedExpectedFailure(reason=REASON, ran=Outcome.GOOD)
 
 
 def test_an_undeclared_check_is_left_exactly_as_the_wheel_reported_it():
@@ -111,14 +103,16 @@ def test_an_undeclared_check_is_left_exactly_as_the_wheel_reported_it():
 
 def test_a_declared_check_whose_run_errored_keeps_the_error_text():
     # Keep the error text so the row still explains what happened.
-    reported = _result(
+    result = _result(
         {"c_kill": _verdict(Outcome.ERROR, "harness build timed out")}, {"c_kill": REASON}
-    ).reported_verdicts()
+    )
+    reported = result.reported_verdicts()
 
     assert reported["c_kill"].outcome is Outcome.BAD
-    detail = reported["c_kill"].detail or ""
-    assert "NOT REPRODUCED" in detail and "ERROR" in detail
-    assert "harness build timed out" in detail
+    assert reported["c_kill"].detail == "harness build timed out"
+    assert result.expected_failure("c_kill") == UnreproducedExpectedFailure(
+        reason=REASON, ran=Outcome.ERROR,
+    )
 
 
 def test_a_declaration_naming_a_check_that_did_not_run_adds_no_row():
@@ -153,9 +147,13 @@ async def test_the_report_gets_the_declared_finding():
     verdicts = await formalizer.fetch_verdicts(cast(Any, _Formalized(result)))
 
     assert verdicts["c_kill"].outcome is Outcome.BAD
-    assert REASON in (verdicts["c_kill"].message or "")
-    # Only the declared check changes.
+    assert verdicts["c_kill"].message is None
+    assert verdicts["c_kill"].expected_failure == UnreproducedExpectedFailure(
+        reason=REASON, ran=Outcome.GOOD,
+    )
+    # Only the expected-to-fail check changes.
     assert verdicts["c_plain"].outcome is Outcome.GOOD
+    assert verdicts["c_plain"].expected_failure is None
 
 
 @dataclass
@@ -190,12 +188,7 @@ def test_the_console_rollup_agrees_with_the_report():
 
 @pytest.mark.asyncio
 async def test_a_wheels_own_file_beats_the_components_fallback():
-    """A verdict that names its own file keeps it; otherwise use the component artifact.
-
-    The report keys a row by ``(file, name)``. A callout-mode wheel delivers one
-    artifact, so every component would share that fallback — two same-named checks
-    would collapse. The wheel's ``unit_file`` is what keeps them apart.
-    """
+    """A verdict that names its own file keeps it; otherwise use the component artifact."""
     formalizer = adapter.RustFormalizer(
         cast(Any, object()), AppDescriptor.model_validate(wire_descriptor())
     )
@@ -282,7 +275,7 @@ async def test_a_reproduced_crash_is_the_proof_of_concept():
 
 @pytest.mark.asyncio
 async def test_an_unreproduced_declared_finding_claims_no_counterexample():
-    """Its only ground is the author's reading, and the finding has to say so rather than show one."""
+    """An unreproduced declared finding has no proof of concept."""
     result = _result({"c_kill": _verdict(Outcome.GOOD, "campaign spent 41231 executions")},
                      {"c_kill": REASON})
     findings = await _written(_outcome(result))
@@ -293,8 +286,7 @@ async def test_an_unreproduced_declared_finding_claims_no_counterexample():
 
 @pytest.mark.asyncio
 async def test_a_fuzz_finding_is_rated_like_any_other():
-    """The axes are the model's and the tier is the matrix's, so a reader can re-derive the severity
-    from what the write-up actually said rather than taking it on trust."""
+    """Severity comes from the model's axes through the matrix, not from the backend."""
     result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
     f = (await _written(_outcome(result)))[0]
 
@@ -306,10 +298,7 @@ async def test_a_fuzz_finding_is_rated_like_any_other():
 
 @pytest.mark.asyncio
 async def test_two_sections_naming_one_check_keep_their_own_crash():
-    """Two authors given the same property title write the same check name, and the report keys a
-    row by ``(file, name)`` — the section file is the only thing keeping the two rows apart. The
-    evidence is keyed the same way, so a section's finding must carry that section's reproducer.
-    """
+    """Same check name in two files is two rows; each finding carries that file's reproducer."""
     left = _result({"c_auth": _verdict(Outcome.BAD, "crash A")}, {})
     right = _result({"c_auth": _verdict(Outcome.BAD, "crash B")}, {})
     for res, section in ((left, "c_vault_initialization.rs"), (right, "c_lamport_custody.rs")):
@@ -326,11 +315,7 @@ async def test_two_sections_naming_one_check_keep_their_own_crash():
 
 @pytest.mark.asyncio
 async def test_a_finding_on_a_collapsed_row_reads_the_run_that_row_came_from():
-    """Without a section file the two rows do collapse — the finding must follow the row.
-
-    ``collect`` keeps the first run naming a ``(file, name)``; the evidence has to keep the same
-    one, or the row's message and its finding's proof of concept describe different runs.
-    """
+    """Without a section file the two rows collapse; the finding must follow the surviving row."""
     first = _result({"c_auth": _verdict(Outcome.BAD, "crash A")}, {})
     second = _result({"c_auth": _verdict(Outcome.BAD, "crash B")}, {})
 
@@ -341,12 +326,13 @@ async def test_a_finding_on_a_collapsed_row_reads_the_run_that_row_came_from():
 
 
 def test_the_prompt_offers_no_counterexample_for_a_finding_the_run_did_not_reproduce():
-    """The prompt is where a model could be led to invent one, so the distinction lives there too."""
+    """An unreproduced finding's prompt must not invite a counterexample."""
     user = load_jinja_template(
         "autoprove_report_findings_rust_prompt.j2",
         contract_name="klend", rule_name="c_kill", properties=[], groups=[], also_covers=[],
         evidence=[RuleEvidence(label="Oracle", ran=Outcome.GOOD,
-                               accounting="campaign spent 41231 executions", declared=REASON)],
+                               accounting="campaign spent 41231 executions",
+                               expected_failure_reason=REASON)],
     )
 
     assert "did NOT reproduce" in user and REASON in user
@@ -366,7 +352,7 @@ ACCOUNTING = (
 
 @pytest.mark.asyncio
 async def test_a_proof_of_concept_is_the_crash_and_not_what_the_campaign_spent():
-    """Run accounting inside a proof of concept leaves a reader unable to see where evidence ends."""
+    """A proof of concept is the reproducer, not the run accounting."""
     result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE, ACCOUNTING)}, {})
     f = (await _written(_outcome(result)))[0]
 
@@ -376,11 +362,7 @@ async def test_a_proof_of_concept_is_the_crash_and_not_what_the_campaign_spent()
 
 @pytest.mark.asyncio
 async def test_a_green_row_still_says_what_the_campaign_cost():
-    """The split must not cost the report the accounting a passing row is supposed to carry.
-
-    The report has one ``message`` per row, so `fetch_verdicts` rejoins the halves — evidence
-    first, because a BAD row's first line is what a reader is looking for.
-    """
+    """A green row still carries its accounting; a BAD row keeps evidence and accounting apart."""
     result = _result({"c_ok": _verdict(Outcome.GOOD, None, ACCOUNTING),
                       "c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE, ACCOUNTING)}, {})
     fz = adapter.RustFormalizer(
@@ -388,9 +370,9 @@ async def test_a_green_row_still_says_what_the_campaign_cost():
     )
     rows = await fz.fetch_verdicts(cast(Any, _Formalized(result)))
 
-    assert rows["c_ok"].message == ACCOUNTING, "a green row's whole worth is its accounting"
-    bad = rows["c_ts"].message or ""
-    assert bad.startswith(COUNTEREXAMPLE) and bad.endswith(ACCOUNTING)
+    assert rows["c_ok"].message is None and rows["c_ok"].accounting == ACCOUNTING
+    assert rows["c_ts"].message == COUNTEREXAMPLE
+    assert rows["c_ts"].accounting == ACCOUNTING
 
 
 def test_the_prompt_keeps_the_accounting_out_of_the_evidence():
@@ -476,20 +458,14 @@ def test_an_unattributed_write_up_lists_every_covered_check_and_none_as_the_subj
 
 @pytest.mark.asyncio
 async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
-    """A wheel that cannot attribute one conclusion to one check stamps the fan-out as one
-    finding (`Verdict.finding`).
+    """A stamp on ``Verdict.finding_key`` writes several BAD rows up once.
 
-    Condemning every covered check is right for the verdict table — hiding a real failure would
-    be worse — but it is one finding, not one per row. Writing it up per row spends a heavy
-    model on each and publishes N accounts of the same evidence, each guessing a different check.
-
-    The key is the wheel's, and nothing here infers it: rows fanned out from one conclusion are
-    otherwise indistinguishable from several checks that failed identically, which is a different
-    fact about the program.
+    The key is the wheel's. Matching evidence is not enough to merge: several checks that
+    failed the same way are a different fact.
     """
     checks = [f"c_{i}" for i in range(6)]
     result = _result(
-        {c: _verdict(Outcome.BAD, UNPLACEABLE, ACCOUNTING, finding="c_vault") for c in checks}, {})
+        {c: _verdict(Outcome.BAD, UNPLACEABLE, ACCOUNTING, finding_key="c_vault") for c in checks}, {})
     model = _CountingModel(output=_draft(), calls=[], systems=[])
 
     findings = await _written_by(model, _outcome(result))
@@ -508,9 +484,7 @@ async def test_a_crash_the_campaign_could_not_place_is_written_up_once():
 
 @pytest.mark.asyncio
 async def test_the_loop_binds_this_runs_evidence_into_the_write_up_prompt():
-    """The host binds the prompt now, not the backend, so nothing backend-side would catch it
-    binding the wrong thing — and a write-up rendered against absent evidence still produces a
-    plausible finding rather than an error."""
+    """The host binds the write-up prompt, so the run's own evidence has to reach the model."""
     result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE, ACCOUNTING)}, {})
     model = _CountingModel(output=_draft(), calls=[], systems=[])
 
@@ -535,12 +509,7 @@ async def test_distinct_crashes_stay_distinct_findings():
 
 @pytest.mark.asyncio
 async def test_two_unreproduced_declarations_are_two_findings():
-    """An unstamped row stands on its own, so each declaration is its own claim.
-
-    Worth pinning because these two rows are otherwise as alike as rows get: no counterexample, and
-    the same accounting. Nothing about that similarity may merge two findings the author made
-    separately.
-    """
+    """Unstamped rows stay separate, even when they look alike (no counterexample, same accounting)."""
     result = _result({"c_kill": _verdict(Outcome.GOOD, None, ACCOUNTING),
                       "c_stale": _verdict(Outcome.GOOD, None, ACCOUNTING)},
                      {"c_kill": REASON, "c_stale": "a different documented bug"})
@@ -560,11 +529,7 @@ async def test_two_unreproduced_declarations_are_two_findings():
 # ---------------------------------------------------------------------------
 
 def test_a_wheel_that_declares_no_findings_policy_produces_none():
-    """No policy, no findings — not findings written from a default the host made up.
-
-    A write-up asserts what the evidence behind it is, and the host cannot know: it has verdicts,
-    not a claim about what produced them. A wheel that reports outcomes without saying what they
-    establish is coherent, and its report carries the verdict rows and nothing else."""
+    """No FindingsDeclaration means no findings, not a host-invented write-up."""
     fz = adapter.RustFormalizer(
         cast(Any, object()),
         AppDescriptor.model_validate(wire_descriptor(findings=None)),
@@ -576,12 +541,7 @@ def test_a_wheel_that_declares_no_findings_policy_produces_none():
 
 @pytest.mark.asyncio
 async def test_the_write_up_is_told_what_this_wheels_evidence_is():
-    """The wheel's own prose leads the system prompt, and the host's contract follows it.
-
-    The two halves are separable for the same reason `judge` splits them: what the evidence *is* is
-    the backend's claim, and how severity is reached and which sections come back is the host's, so
-    neither restates the other. The CVL backend's prompt is the same template with its own domain.
-    """
+    """The wheel's domain leads the system prompt; the host's severity contract follows it."""
     result = _result({"c_ts": _verdict(Outcome.BAD, COUNTEREXAMPLE)}, {})
     model = _CountingModel(output=_draft(), calls=[], systems=[])
 

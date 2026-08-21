@@ -1,9 +1,7 @@
-"""The Certora Prover's half of findings synthesis: where its evidence comes from, and what the
-model is told that evidence is.
+"""The Certora Prover's half of findings synthesis.
 
-The shared loop is `composer.spec.source.report.findings`. What is here is only what makes a finding
-a *Prover* finding — a prompt that says the Prover refuted the rule with a concrete counterexample,
-and the root-cause analysis captured during the run to ground it in.
+The shared loop is `composer.spec.source.report.findings`. This module supplies the Prover
+prompt (a concrete counterexample refuted the rule) and the run-scoped analysis store.
 """
 from typing import TypedDict
 

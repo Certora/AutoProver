@@ -53,7 +53,7 @@ def _mapped(**by_title: list[str]) -> list[PropertyCheckMapping]:
 
 def _verdict(outcome: Outcome, detail: str | None = None) -> Verdict:
     return Verdict(outcome=outcome, line=None, duration_seconds=None, unit_file=None,
-                   detail=detail, accounting=None, finding=None)
+                   detail=detail, accounting=None, finding_key=None)
 
 
 # ---------------------------------------------------------------------------

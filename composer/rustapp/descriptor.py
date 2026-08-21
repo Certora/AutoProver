@@ -95,15 +95,13 @@ DeliverableMode = Annotated[PerComponent | Callout, Field(discriminator="mode")]
 
 
 class FindingsDeclaration(WireModel):
-    """How a violated check of this backend becomes a written audit finding.
+    """What this backend's evidence is, so the host can write a violated check up as a finding.
 
-    Declared by the wheel because a write-up rests on claims only the wheel can make: what its
-    evidence *is*, what that evidence establishes, and how to read its own markers. The host owns
-    everything around that — which rows, their properties and groups, the concurrency, grouping the
-    rows that share one finding, composing the record — and none of the prose."""
+    The wheel supplies that claim; the host owns the rest (which rows, properties, groups,
+    grouping, composing)."""
 
-    #: The *domain* half of the write-up system prompt. The host wraps it in the contract (how
-    #: severity is reached, which sections come back), so no wheel restates that.
+    #: Domain half of the write-up system prompt. The host adds how severity is reached and
+    #: which sections come back.
     domain: str
 
 
@@ -227,9 +225,8 @@ class AppDescriptor(WireModel):
     #: rebuttal tool's ``evidence_type`` is built from. Declared per wheel because the evidence a
     #: backend can produce is a property of that backend.
     evidence_kinds: list[str]
-    #: How this backend's violated checks are written up as audit findings — ``None`` produces none,
-    #: and the report carries only the verdict rows. Declining is the default because a write-up has
-    #: to say what the evidence behind it is, and only the wheel knows.
+    #: How violated checks are written up. ``None`` (the default) produces no findings, only
+    #: verdict rows: a write-up has to say what the evidence is, and only the wheel knows.
     findings: FindingsDeclaration | None
 
     def unit_noun(self, *, plural: bool = False) -> str:

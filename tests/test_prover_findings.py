@@ -173,7 +173,7 @@ async def test_stamped_rows_are_written_up_against_the_union():
         _pg("g_a", [("A", "prop_a")], status=GroupStatus.BAD),
         _pg("g_bc", [("B", "prop_b"), ("C", "prop_c")], status=GroupStatus.BAD),
     ]
-    ev = [RuleEvidence(counterexample="<cex/>", finding="one")]
+    ev = [RuleEvidence(counterexample="<cex/>", finding_key="one")]
     llm = _Capture(output=_draft())
     findings = await build_findings(
         contract_name="Vault", rules=rules, properties=props, groups=groups,
@@ -190,10 +190,7 @@ async def test_stamped_rows_are_written_up_against_the_union():
 
 
 def test_how_far_this_evidence_goes_is_the_domains_not_the_hosts():
-    """Axes and sections are the host's; a counterexample being a confirmed break is the Prover's.
-
-    Domain is prepended, so a shared closer that said 'rate only what a real actor could reach'
-    would overwrite it."""
+    """How far the evidence goes is the Prover domain's, not a shared closer after it."""
     from composer.templates.loader import load_jinja_template
 
     system = load_jinja_template(

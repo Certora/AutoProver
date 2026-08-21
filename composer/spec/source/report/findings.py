@@ -1,25 +1,15 @@
-"""Synthesize findings from violated rules — the loop every backend shares.
+"""Write violated rules up as findings — the loop every backend shares.
 
-For each violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) this asks a model to write
-the issue up, grounded in the `RuleEvidence` the backend hands back for it.
+For each BAD `RuleVerdict` this asks a model to write the issue up from the backend's
+`RuleEvidence`. Evidence has one shape; backends differ in which fields they fill. A
+`FindingsPolicy` is where the evidence comes from and what the model is told it means.
 
-Evidence has one shape for every backend. Backends differ in what they can *fill* — one fills a
-root-cause analysis and a counterexample, another fills a reproducer and an account of what the
-run covered — but "instance, explanation, reproducer, and what the run itself did" is not a claim
-about any one of them. What is genuinely per-backend is where that evidence is *fetched* from and
-what the model is told it means; a `FindingsPolicy` carries those — as values, not hooks, save the
-fetcher.
-
-The rest is shared outright: walking the BAD rules, resolving each one's properties and the audit
-groups they sit in, collapsing rows that are one finding, binding the prompt, building the proof of
-concept, bounding the concurrency, keeping one failed write-up from costing the rest, and composing
-the `Finding` the report persists.
-
-A backend that produces no findings returns no `FindingsPolicy` and never reaches here.
+The rest is shared: walking BAD rows, properties and groups, collapsing stamped findings,
+the proof of concept, concurrency, and composing the `Finding`. A backend that produces
+no findings returns no policy and never reaches here.
 """
 import asyncio
 import logging
-from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TypedDict
 
@@ -34,13 +24,15 @@ from composer.spec.source.report.schema import (
     LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleName, RuleRef, RuleVerdict,
     SeverityTier,
 )
+from composer.spec.types import FindingKey
 from composer.templates.loader import load_jinja_template
+
+type FindingIdentity = FindingKey | RuleRef
 
 _log = logging.getLogger(__name__)
 
-#: Cap on concurrent findings-synthesis LLM calls (one per violated rule), so a violation-heavy run
-#: doesn't burst dozens of heavy-model requests at once (which rate limits would turn into dropped
-#: findings).
+#: Cap on concurrent findings-synthesis LLM calls, so a violation-heavy run does not burst
+#: the rate limit and drop write-ups.
 _MAX_CONCURRENT_FINDING_CALLS = 8
 
 # Impact × Likelihood -> severity. ``none`` impact (no real-world exploit path) is informational,
@@ -63,10 +55,7 @@ def severity_for(impact: ImpactLevel, likelihood: LikelihoodLevel) -> SeverityTi
 
 class FindingDraft(AuthoredContent):
     """What a findings model must return: the authored sections, a title, and the two axes
-    `severity_for` maps to a tier.
-
-    The model never picks the tier, only the axes, so the severity a reader sees is reproducible
-    from what the model actually said."""
+    `severity_for` maps to a tier. The model never picks the tier."""
     title: str = Field(description="A one-line title naming the specific broken guarantee.")
     impact_level: ImpactLevel = Field(description=(
         "How severe the consequence is if exploited: 'high' (funds lost or stolen, protocol "
@@ -86,75 +75,44 @@ class FindingDraft(AuthoredContent):
     ))
 
 
-@dataclass(frozen=True)
-class Assessment:
-    """The risk verdict on one draft: the severity, and the record of how it was reached.
-
-    The three axes are provenance — they say what the tier *rests on*, so a reader can see the
-    judgement behind it rather than only its result."""
-    severity: SeverityTier
-    impact: ImpactLevel
-    likelihood: LikelihoodLevel
-    reasoning: str
-
-
-def assess(draft: FindingDraft) -> Assessment:
-    """Severity from the matrix. Every backend's, because every backend's evidence is a violation
-    that happened — what differs is what a violation *is* there, which is what the prompt says."""
-    return Assessment(
-        severity=severity_for(draft.impact_level, draft.likelihood_level),
-        impact=draft.impact_level,
-        likelihood=draft.likelihood_level,
-        reasoning=draft.risk_reasoning,
-    )
-
-
 class FindingsSystemParams(TypedDict):
-    """The full, typed context of ``autoprove_report_findings_system.j2``.
+    """Context for ``autoprove_report_findings_system.j2``.
 
-    One template for every backend, because the two halves of a findings system prompt split the
-    same way everywhere: what this evidence *is* and how far it goes is the backend's claim, and
-    how severity is reached and what sections come back is the host's contract. Only the first
-    varies."""
-    #: The backend's own prose: what its evidence is, what it does and does not establish, and how to
-    #: read its own markers. Leads the message; the contract follows it.
+    One template for every backend: what the evidence is and how far it goes is the backend's
+    claim; how severity is reached and which sections come back is the host's."""
+    #: Backend prose: what its evidence is, what that does and does not establish, how to read
+    #: its markers. Leads the message; the host contract follows it.
     domain: str
 
 
 class FindingsPromptParams(TypedDict):
-    """The full, typed context of every backend's findings prompt: one violated rule and everything
-    known about it.
+    """Context for every backend's findings user prompt: one violated rule and what is known
+    about it.
 
-    One shape for all of them, because a backend's prompt differs in what it *says* about the
-    evidence, not in what it is given. The Prover supplies its own template; Rust-authored backends
+    One shape for all of them. The Prover supplies its own template; Rust-authored backends
     share one host template. `build_findings` binds either.
 
-    ``properties`` is every property the covered rule(s) formalize — one rule may jointly
-    formalize several, and rows stamped as one finding contribute the union. This layer does
-    not pick which actually broke."""
+    ``properties`` is every property the covered rule(s) formalize — jointly, or the union
+    when several rows share one finding. This layer does not pick which actually broke."""
     contract_name: str
     rule_name: RuleName
     properties: list[FormalizedProperty]
     groups: list[PropertyGroup]
     evidence: list[RuleEvidence]
-    #: When several rows share one finding, the names of every covered check (including the
-    #: subject). Empty in the ordinary one-row case — the subject is ``rule_name`` alone.
+    #: Names of every covered check when several rows share one finding, including the
+    #: subject. Empty for a one-row finding — the subject is ``rule_name`` alone.
     also_covers: list[RuleName]
-
 
 
 _SYSTEM = TypedTemplate[FindingsSystemParams]("autoprove_report_findings_system.j2")
 
 
 def proof_of_concept(evidence: list[RuleEvidence]) -> str | None:
-    """Every instance's reproducer, labelled once there is more than one — the report shows a single
-    row per rule, so its PoC should cover all of that rule's failing instances.
+    """Every instance's reproducer, labelled once there is more than one.
 
-    Only what this run actually refuted. A declared failure the run did not reproduce has no proof of
-    concept at all — its ground is the author's reading, which rides ``provenance.risk_reasoning`` —
-    and neither does an error that reached no verdict. Never the accounting: what a run spent is a
-    claim about the run, and padding a proof of concept with it leaves a reader unable to see where
-    the evidence ends."""
+    Only what this run actually refuted. An expected-to-fail check this run did not hit has no
+    proof of concept, and neither does an error that never reached a verdict. Never the
+    accounting — that is about the run, not the program."""
     traces = [
         (e.label, e.counterexample) for e in evidence
         if e.counterexample and (e.ran is None or e.ran is Outcome.BAD)
@@ -164,41 +122,35 @@ def proof_of_concept(evidence: list[RuleEvidence]) -> str | None:
     return "\n\n".join(f"# {label or 'counterexample'}\n{cex}" for label, cex in traces)
 
 
-def finding_key(rule: RuleVerdict, evidence: list[RuleEvidence]) -> Hashable:
-    """Identity of the *finding* behind a row: the key the backend stamped on its evidence, else the
-    row itself. Rows sharing a key are written up once — see `build_findings`.
+def finding_key(rule: RuleVerdict, evidence: list[RuleEvidence]) -> FindingIdentity:
+    """The finding behind a row: the backend's `FindingKey` stamp, else this row's `RuleRef`.
 
-    A backend whose rows are one-to-one with findings stamps nothing and nothing ever collapses. One
-    whose run can conclude something it cannot attribute to a single check fans that conclusion out
-    over every check it covered and stamps them alike, so those rows are written up once rather than
-    once per row.
-
-    The stamp is compared as a raw string across the whole report, with no file or component prefix:
-    the same key on two components merges them. Pick keys that are unique among this run's findings.
-
-    The relation is never inferred from the evidence: rows fanned out from one conclusion look
-    exactly like several checks that failed the same way, and those are two different facts about the
-    program. Only the backend can tell them apart."""
-    stamped = next((e.finding for e in evidence if e.finding is not None), None)
+    Rows that share a key are written up once. No stamp means no collapse. A stamp is compared
+    as a raw string across the whole report — the same value on two components merges them —
+    and is never inferred from matching evidence."""
+    stamped = next((e.finding_key for e in evidence if e.finding_key is not None), None)
     return stamped if stamped is not None else rule.ref
+
+
+@dataclass
+class _Cluster:
+    """One write-up: the first row, its evidence, and every row that shares its stamp."""
+    rule: RuleVerdict
+    evidence: list[RuleEvidence]
+    covered: list[RuleVerdict]
 
 
 @dataclass(frozen=True)
 class FindingsPolicy:
-    """What one backend's findings rest on: where its evidence comes from, what the model is told
-    that evidence is, and what it can be asked to conclude from it.
+    """Where one backend's evidence comes from, what it is, and how to ask for a write-up.
 
-    Values, not hooks: the prose is a string and the prompt is a template. A Rust-authored backend
-    ships the domain string across the FFI as JSON. Only the fetcher is a function, because only it
-    does I/O."""
+    ``domain`` and ``prompt`` are values (a string and a template). Only ``fetch_evidence``
+    is a function, because only it does I/O."""
 
     fetch_evidence: EvidenceFetcher
-    #: The backend's half of the system message — see `FindingsSystemParams.domain`. Constant across
-    #: this backend's rules; the per-rule context is `prompt`.
+    #: Backend half of the system message — see `FindingsSystemParams.domain`.
     domain: str
-    #: The user message's template, bound by `build_findings` from `FindingsPromptParams`. The
-    #: Prover supplies its own; Rust-authored backends share one host template. Either way the
-    #: loop owns the binding, because the fields are the same for everyone.
+    #: User-message template, bound by `build_findings` from `FindingsPromptParams`.
     prompt: TypedTemplate[FindingsPromptParams]
 
 
@@ -213,8 +165,7 @@ async def build_findings(
 ) -> list[Finding]:
     """One `Finding` per violated rule (concurrent, best-effort); ``[]`` when nothing is violated.
 
-    Fewer than one per rule where several rows are stamped as the same finding — see
-    `finding_key`."""
+    Fewer than one per rule when several rows share a finding stamp — see `finding_key`."""
     bad = [r for r in rules if r.outcome == Outcome.BAD]
     if not bad:
         return []
@@ -232,8 +183,7 @@ async def build_findings(
     system = _SYSTEM.bind({"domain": policy.domain}).render_to(load_jinja_template)
 
     async def _evidence(rule: RuleVerdict) -> list[RuleEvidence] | None:
-        """This rule's evidence, or None when fetching it failed — which drops the rule rather than
-        writing it up against nothing."""
+        """This rule's evidence, or None if fetching failed (the rule is then skipped)."""
         try:
             return await policy.fetch_evidence(rule.ref)
         except Exception:  # noqa: BLE001 — one rule failing must never fail the report
@@ -241,24 +191,21 @@ async def build_findings(
                          exc_info=True)
             return None
 
-    # Every BAD row's evidence first, so rows the backend stamped as one finding collapse before
-    # any of them is paid for. Cost follows conclusions, not row count.
+    # Fetch every BAD row first so stamped findings collapse before any write-up is paid for.
     fetched = await asyncio.gather(*[_evidence(r) for r in bad])
-    collapsed: dict[Hashable, tuple[RuleVerdict, list[RuleEvidence]]] = {}
-    covered: dict[Hashable, list[RuleVerdict]] = {}
+    clusters: dict[FindingIdentity, _Cluster] = {}
     for rule, evidence in zip(bad, fetched):
         if evidence is None:
             continue
         key = finding_key(rule, evidence)
-        if key in collapsed:
-            covered[key].append(rule)
+        cluster = clusters.get(key)
+        if cluster is None:
+            clusters[key] = _Cluster(rule, evidence, [rule])
         else:
-            collapsed[key] = (rule, evidence)
-            covered[key] = [rule]
+            cluster.covered.append(rule)
 
-    async def _one(
-        rule: RuleVerdict, evidence: list[RuleEvidence], covered: list[RuleVerdict],
-    ) -> Finding | None:
+    async def _one(cluster: _Cluster) -> Finding | None:
+        rule, evidence, covered = cluster.rule, cluster.evidence, cluster.covered
         try:
             props: list[FormalizedProperty] = []
             seen: set[PropertyKey] = set()
@@ -283,12 +230,11 @@ async def build_findings(
 
     sem = asyncio.Semaphore(_MAX_CONCURRENT_FINDING_CALLS)
 
-    async def _bounded(key: Hashable) -> Finding | None:
+    async def _bounded(cluster: _Cluster) -> Finding | None:
         async with sem:
-            rule, evidence = collapsed[key]
-            return await _one(rule, evidence, covered[key])
+            return await _one(cluster)
 
-    findings = await asyncio.gather(*[_bounded(k) for k in collapsed])
+    findings = await asyncio.gather(*[_bounded(c) for c in clusters.values()])
     return [f for f in findings if f is not None]
 
 
@@ -299,11 +245,10 @@ def _compose(
     groups: list[PropertyGroup],
     covered: list[RuleVerdict],
 ) -> Finding:
-    risk = assess(draft)
     links = list(dict.fromkeys(r.prover_link for r in covered if r.prover_link))
     return Finding(
         title=draft.title,
-        severity=risk.severity,
+        severity=severity_for(draft.impact_level, draft.likelihood_level),
         content=IssueContent(
             **{f: getattr(draft, f) for f in AuthoredContent.model_fields},
             proof_of_concept=proof_of_concept(evidence),
@@ -315,9 +260,9 @@ def _compose(
             outcome=rule.outcome,
             group_slugs=[g.slug for g in groups],
             prover_link=rule.prover_link,
-            impact=risk.impact,
-            likelihood=risk.likelihood,
-            risk_reasoning=risk.reasoning,
+            impact=draft.impact_level,
+            likelihood=draft.likelihood_level,
+            risk_reasoning=draft.risk_reasoning,
             covers=[r.ref for r in covered] if len(covered) > 1 else [],
         ),
     )

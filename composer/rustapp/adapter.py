@@ -399,28 +399,24 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     async def fetch_verdicts(
         self, formalized: Formalized[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
-        # Fold in expect_check_failure so a declared check cannot show as a pass, and rejoin the
-        # wheel's two halves: the report has one ``message`` per row, and a green row's whole worth
-        # is the accounting — but the evidence leads, because a BAD row's first line is what a
-        # reader is looking for.
+        res = formalized.result
         return {
             name: Verdict(
                 outcome=v.outcome,
                 line=v.line,
                 duration_seconds=v.duration_seconds,
                 unit_file=v.unit_file or formalized.unit_file,
-                message="\n\n".join(part for part in (v.detail, v.accounting) if part) or None,
+                message=v.detail,
+                accounting=v.accounting,
+                expected_failure=res.expected_failure(name),
             )
-            for name, v in formalized.result.reported_verdicts().items()
+            for name, v in res.reported_verdicts().items()
         }
 
     @override
     def findings_policy(
         self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]]
     ) -> FindingsPolicy | None:
-        # Evidence is in the results themselves — a wheel reports per check, and there is no
-        # run-scoped store beside it holding what it saw. What that evidence *means* is the wheel's
-        # declaration, and a wheel that made none produces no findings.
         return rust_findings(outcomes, self._descriptor.findings)
 
     @override
