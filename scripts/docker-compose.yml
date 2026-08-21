@@ -100,6 +100,12 @@ services:
       # Host directory holding your Solidity project(s) + design docs -> /work.
       # Defaults to $PWD when compose was invoked.
       - ${HOST_WORK_DIR:-${PWD}}:/work
+      # The same directory mounted a second time, at the path it has on the host,
+      # so a host path copied off the command line resolves unchanged inside the
+      # container. Without it every argument has to be rewritten to /work/...,
+      # which is easy to get wrong and impossible to tab-complete. Bind mounts are
+      # views of one directory, not copies, so the two paths are the same files.
+      - ${HOST_WORK_DIR:-${PWD}}:${HOST_WORK_DIR:-${PWD}}
       # Certora cloud credentials from `certora-cloud login`. Mounted rw so the
       # token-refresh path can rewrite credentials.json. $HOME inside the
       # container is /opt/autoprove/home (see scripts/Dockerfile).
