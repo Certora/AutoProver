@@ -34,11 +34,14 @@ from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.paths import user_harness_path, user_harnesses_dir
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.solc_version_resolver import (
+    VIA_IR_SETTINGS_MIN_VERSION,
     extract_pragma_spec,
     pragma_admits,
     read_pragma_from_source_file,
     resolve_pragma_to_version,
 )
+from certora_autosetup.utils.config_manager import certora_format_to_raw_version
+from packaging.version import Version
 from certora_autosetup.utils.types import ContractHandle
 
 # Solc's legacy-codegen stack-too-deep, as opposed to the YulException the via-ir pipeline
@@ -1963,12 +1966,23 @@ class CompilationWorkaroundManager:
         """
         # solc_via_ir_map is seeded up front by _seed_compile_maps.
         self._via_ir_contracts.add(contract_needing_via_ir)
-        config_dict["solc_via_ir_map"][contract_needing_via_ir] = True
+        if self._takes_via_ir_settings(contract_needing_via_ir, config_dict):
+            config_dict["solc_via_ir_map"][contract_needing_via_ir] = True
+        else:
+            self.log(
+                f"Leaving {contract_needing_via_ir} on legacy codegen: its pinned compiler "
+                f"predates solc {VIA_IR_SETTINGS_MIN_VERSION}, which via-ir settings need",
+                "WARNING",
+            )
 
         scene_wide = self.declared_via_ir or len(self._via_ir_contracts) >= VIA_IR_SCENE_THRESHOLD
         if scene_wide and not all(config_dict["solc_via_ir_map"].values()):
+            held_back = []
             for name in config_dict["solc_via_ir_map"]:
-                config_dict["solc_via_ir_map"][name] = True
+                if self._takes_via_ir_settings(name, config_dict):
+                    config_dict["solc_via_ir_map"][name] = True
+                else:
+                    held_back.append(name)
             reason = (
                 "the build config declares via-ir"
                 if self.declared_via_ir
@@ -1979,10 +1993,34 @@ class CompilationWorkaroundManager:
                 f"lose their internal-function summaries too",
                 "WARNING",
             )
+            if held_back:
+                self.log(
+                    f"Kept {len(held_back)} contract(s) on legacy codegen, pinned below solc "
+                    f"{VIA_IR_SETTINGS_MIN_VERSION}: {held_back}",
+                    "WARNING",
+                )
         else:
             self.log(f"Adding via-ir workaround for contract: {contract_needing_via_ir}")
 
         return config_dict
+
+    def _takes_via_ir_settings(self, contract_name: str, config_dict: Dict) -> bool:
+        """Whether *contract_name*'s compiler accepts the settings certoraRun sends with via-ir.
+
+        A scene can mix compilers through compiler_map, and via-ir is not the whole cost: with the
+        optimizer on, certoraRun also emits settings.optimizer.details, whose "inliner" key exists
+        only from solc 0.8.5. Switching such a contract to via-ir makes solc reject the input
+        outright, which fails the compile for the whole scene rather than for that one contract.
+        Contracts with no pin run on the environment's own solc and are left alone.
+        """
+        pinned = (config_dict.get("compiler_map") or {}).get(contract_name)
+        raw = certora_format_to_raw_version(pinned) if pinned else None
+        if raw is None:
+            return True
+        try:
+            return Version(raw) >= VIA_IR_SETTINGS_MIN_VERSION
+        except Exception:      # noqa: BLE001 — an unparsable pin is not a reason to hold back
+            return True
 
     # =========================================================================
     # Helper methods
