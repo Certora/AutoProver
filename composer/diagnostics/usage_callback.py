@@ -20,8 +20,39 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from graphcore.utils import get_token_usage
+from graphcore.utils import TokenUsageDict, get_token_usage
 from composer.diagnostics.timing import get_run_summary
+
+
+def _usage_of(msg: AIMessage) -> TokenUsageDict:
+    """Token usage of a response, whichever transport produced it.
+
+    ``get_token_usage`` reads the raw Anthropic ``response_metadata["usage"]`` dict,
+    which only a non-streamed response carries; a streamed response reports usage
+    solely through the provider-normalized ``usage_metadata``. Fall back to that,
+    translating back to the raw shape: normalized ``input_tokens`` is the total
+    including both cache buckets, where the raw count excludes them."""
+    usage = get_token_usage(msg)
+    if any(
+        usage[k]
+        for k in (
+            "input_tokens", "output_tokens",
+            "cache_read_input_tokens", "cache_creation_input_tokens",
+        )
+    ):
+        return usage
+    if (um := msg.usage_metadata) is None:
+        return usage
+    details = um.get("input_token_details") or {}
+    cache_read = details.get("cache_read", 0)
+    cache_creation = details.get("cache_creation", 0)
+    return {
+        "model_name": usage["model_name"],
+        "input_tokens": max(0, um["input_tokens"] - cache_read - cache_creation),
+        "output_tokens": um["output_tokens"],
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation,
+    }
 
 
 class UsageCallback(BaseCallbackHandler):
@@ -45,4 +76,4 @@ class UsageCallback(BaseCallbackHandler):
         if isinstance(msg, AIMessage):
             # get_run_summary() returns an inert throwaway outside a run, so this is
             # a no-op when no autoprove run is active (e.g. ad-hoc model use).
-            get_run_summary().record_token_usage(get_token_usage(msg))
+            get_run_summary().record_token_usage(_usage_of(msg))
