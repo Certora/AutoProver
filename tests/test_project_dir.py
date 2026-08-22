@@ -97,6 +97,60 @@ def test_no_artifacts_anywhere_falls_back_to_root(tmp_path: Path) -> None:
     assert find_build_config_dir(contract, tmp_path) == tmp_path.resolve()
 
 
+def _artifact(out_dir: Path, source: str, name: str) -> None:
+    """Write a Foundry artifact that records the source it was compiled from."""
+    d = out_dir / Path(source).name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(
+        '{"metadata": {"settings": {"compilationTarget": {"%s": "%s"}}}}' % (source, name)
+    )
+
+
+def test_shared_out_dir_resolves_to_the_project_that_wrote_it(tmp_path: Path) -> None:
+    # Two configs naming the same physical artifact directory: the root builds the tree with
+    # out = 'pkg/out', and pkg/ carries its own foundry.toml with the default out = 'out'. Only
+    # the root ran, and its artifacts say so by recording paths relative to the root, so pkg/ is
+    # the wrong frame to read them in even though it has a config and a populated out/ beside it.
+    (tmp_path / "foundry.toml").write_text("[profile.default]\nsrc = 'pkg/src'\nout = 'pkg/out'\n")
+    pkg = tmp_path / "pkg"
+    (pkg / "src").mkdir(parents=True)
+    (pkg / "foundry.toml").write_text("[profile.default]\nsrc = 'src'\nout = 'out'\n")
+    contract = pkg / "src" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+    _artifact(pkg / "out", "pkg/src/Widget.sol", "Widget")
+
+    assert find_build_config_dir(contract, tmp_path) == tmp_path.resolve()
+
+
+def test_nested_project_that_wrote_its_own_artifacts_still_wins(tmp_path: Path) -> None:
+    # The counterpart: the nested project really did build, and its artifacts record paths
+    # relative to itself. Anchoring there is right, and the shared-out check must not undo it.
+    (tmp_path / "package.json").write_text("{}")
+    pkg = tmp_path / "pkg"
+    (pkg / "src").mkdir(parents=True)
+    (pkg / "foundry.toml").write_text("[profile.default]\n")
+    contract = pkg / "src" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+    _artifact(pkg / "out", "src/Widget.sol", "Widget")
+
+    assert find_build_config_dir(contract, tmp_path) == pkg.resolve()
+
+
+def test_artifacts_without_recorded_sources_keep_the_nearest_built_config(tmp_path: Path) -> None:
+    # Older Foundry, or metadata stripped: nothing says which project wrote these, and absence
+    # of evidence should not move the anchor.
+    (tmp_path / "package.json").write_text("{}")
+    pkg = tmp_path / "pkg"
+    (pkg / "src").mkdir(parents=True)
+    (pkg / "foundry.toml").write_text("[profile.default]\n")
+    contract = pkg / "src" / "Widget.sol"
+    contract.write_text("contract Widget {}")
+    (pkg / "out" / "Widget.sol").mkdir(parents=True)
+    (pkg / "out" / "Widget.sol" / "Widget.json").write_text('{"abi": []}')
+
+    assert find_build_config_dir(contract, tmp_path) == pkg.resolve()
+
+
 def test_honors_a_custom_foundry_out_dir(tmp_path: Path) -> None:
     project = tmp_path / "sub"
     (project / "src").mkdir(parents=True)

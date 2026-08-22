@@ -11,6 +11,7 @@ root config is what actually builds the tree, so the nearest config is often not
 that ran. See ``find_build_config_dir``.
 """
 
+import json
 import os
 import tomllib
 from pathlib import Path
@@ -85,11 +86,56 @@ def _artifact_dir_of(config_dir: Path) -> Optional[Path]:
     )
 
 
+def _declared_sources(artifacts: Path, limit: int = 20) -> list[str]:
+    """Source paths a sample of *artifacts* say they were compiled from.
+
+    Foundry records them as the keys of ``metadata.settings.compilationTarget``; Hardhat as
+    ``sourceName``. Both are relative to the project the build ran in, which is the fact this
+    module needs and cannot get from the directory layout alone.
+    """
+    found: list[str] = []
+    for json_file in artifacts.rglob("*.json"):
+        try:
+            with json_file.open() as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        target = (data.get("metadata") or {}).get("settings", {}).get("compilationTarget")
+        if isinstance(target, dict) and target:
+            found.extend(str(k) for k in target)
+        elif isinstance(data.get("sourceName"), str):
+            found.append(data["sourceName"])
+        if len(found) >= limit:
+            break
+    return found
+
+
+def _artifacts_belong_to(config_dir: Path, artifacts: Path) -> bool:
+    """Whether the artifacts in *artifacts* were written by the project at *config_dir*.
+
+    Two configs can name the same physical artifact directory — a root ``foundry.toml`` with
+    ``out = 'contracts/out'`` next to ``contracts/foundry.toml`` with ``out = 'out'`` — and only
+    one of them ran. The artifacts say which: their recorded source paths resolve against the
+    project that produced them, so if none of them exists under *config_dir*, these are somebody
+    else's artifacts and this directory is the wrong frame to read them in.
+
+    Artifacts that record no source path at all (older Foundry, metadata stripped) answer True:
+    absence of evidence should leave the previous behaviour alone.
+    """
+    declared = _declared_sources(artifacts)
+    if not declared:
+        return True
+    return any((config_dir / rel).exists() for rel in declared)
+
+
 def find_build_config_dir(contract_path: Path, root: Path) -> Path:
     """Return the directory whose build system actually produced *contract_path*'s artifacts.
 
-    Walks up from the contract's own directory to *root*, and returns the nearest ancestor
-    that both holds a build config **and** has its artifact directory on disk. Falling back
+    Walks up from the contract's own directory to *root*, and returns the nearest ancestor that
+    holds a build config, has its artifact directory on disk, and whose artifacts record source
+    paths that resolve inside it. Falling back
     to *root* when nothing qualifies is deliberate: a build config alone does not mean that
     project is the one that got built. Monorepos routinely vendor per-package ``foundry.toml``
     files under ``modules/`` or ``lib/`` while the root config builds the whole tree into a
@@ -121,7 +167,7 @@ def find_build_config_dir(contract_path: Path, root: Path) -> Path:
     current = absolute_contract.resolve().parent
     while True:
         artifacts = _artifact_dir_of(current)
-        if artifacts is not None and artifacts.is_dir():
+        if artifacts is not None and artifacts.is_dir() and _artifacts_belong_to(current, artifacts):
             return current
         if current == root:
             return root
