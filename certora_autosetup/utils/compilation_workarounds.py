@@ -35,9 +35,20 @@ from certora_autosetup.utils.paths import user_harness_path, user_harnesses_dir
 from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
 from certora_autosetup.utils.solc_version_resolver import (
     extract_pragma_spec,
+    pragma_admits,
+    read_pragma_from_source_file,
     resolve_pragma_to_version,
 )
 from certora_autosetup.utils.types import ContractHandle
+
+# Solc's legacy-codegen stack-too-deep, as opposed to the YulException the via-ir pipeline
+# raises. Matched against whitespace-normalized output, since solc hard-wraps diagnostics.
+_STACK_TOO_DEEP_RE = re.compile(r"CompilerError:\s*Stack too deep", re.IGNORECASE)
+
+# How many contracts may be given via-ir one at a time before the rest of the scene is
+# switched with them. Each individual escalation costs one full compile of the scene to
+# discover, so this bounds the walk; below it, contracts keep their summaries.
+VIA_IR_SCENE_THRESHOLD = 10
 
 
 class AbstractMainContractError(Exception):
@@ -50,6 +61,11 @@ class UnimplementedContractError(Exception):
     unimplemented, which Solidity accepts only on an ``abstract`` contract."""
 
 
+class UnsatisfiableSolcPinError(Exception):
+    """Raised when a contract's pinned solc binary is absent and no installed compiler
+    satisfies its pragma, so no substitution can make the project compile."""
+
+
 # The contract name is quoted by solc, so it survives the hard wrap that
 # ``_normalize_ws`` folds away; the source location that follows is optional
 # because only the diagnostic itself is guaranteed to be in the output.
@@ -57,6 +73,30 @@ _UNIMPLEMENTED_CONTRACT_RE = re.compile(
     r'Contract "(?P<name>[^"]+)" should be marked as abstract\.'
     r"(?: --> (?P<path>[^\s:]+):\d+:\d+)?"
 )
+
+
+@dataclass(frozen=True)
+class BlockedSolcPin:
+    """A contract whose pragma no installed compiler can satisfy."""
+
+    contract_name: str
+    pragma_spec: str
+
+
+@dataclass(frozen=True)
+class SolcFallbackPlan:
+    """Which installed compiler, if any, stands in for ``failed_solc`` at each
+    contract pinned to it.
+
+    ``compliant`` maps such a contract to an installed compiler its pragma admits;
+    ``blocked`` holds the ones no installed compiler can serve. A plan with any
+    ``blocked`` entry is terminal: substituting a compiler the pragma rejects would
+    fail identically on the next compile.
+    """
+
+    failed_solc: str
+    compliant: Dict[str, str]
+    blocked: Tuple[BlockedSolcPin, ...]
 
 
 def _normalize_ws(text: str) -> str:
@@ -169,6 +209,7 @@ class CompilationWorkaroundManager:
         verbose: int = 0,
         solc_convention: SolcConvention = SolcConvention.CERTORA,
         build_config_dir: Optional[Path] = None,
+        declared_via_ir: bool = False,
     ):
         self.project_root = project_root
         # Where foundry.toml / remappings.txt / package.json are read from. Distinct from
@@ -187,6 +228,9 @@ class CompilationWorkaroundManager:
         # Used as a loop guard — if the prover still reports the same pair after we
         # wrapped the consumer, the workaround stops firing to avoid spinning.
         self._harnessed_libs: Set[Tuple[str, str]] = set()
+        # Installed compilers usable as a substitute, probed once (shutil.which +
+        # subprocess per candidate) and reused across every pass of the loop.
+        self._solc_candidates: Optional[List[Tuple[str, str]]] = None
         # consumer -> [(lib_name, lib_path), ...] in insertion order. A second
         # firing for the same consumer (different missing library) regenerates the
         # consumer's harness covering every library it has needed so far.
@@ -196,6 +240,13 @@ class CompilationWorkaroundManager:
         # to the scalar on finalize — an unseeded partial map (e.g. a single cancun
         # entry) must never be promoted to a global scalar.
         self._evm_version_seeded = False
+        # Contracts given via-ir one at a time, for the scene-wide threshold in
+        # _apply_via_ir_workaround.
+        self._via_ir_contracts: Set[str] = set()
+        # What the project's own build config asks for. The value is never inherited into
+        # the conf (build_systems/base.py drops it deliberately), but it does say where a
+        # via-ir escalation is going to end up, so the walk can be skipped.
+        self.declared_via_ir = declared_via_ir
         # Convert default version to the detected convention
         if solc_convention == SolcConvention.SOLC_SELECT and solc_default_version.startswith("solc") \
                 and not solc_default_version.startswith("solc-"):
@@ -388,6 +439,9 @@ class CompilationWorkaroundManager:
         # same (stale) output.
         applied_this_pass: Set[str] = set()
 
+        # Rebuilt from each failed output, before the workaround table runs.
+        solc_fallback_plan: Optional[SolcFallbackPlan] = None
+
         # Initialize workarounds list
         workarounds = [
             CompilationWorkaround(
@@ -406,7 +460,9 @@ class CompilationWorkaroundManager:
             ),
             CompilationWorkaround(
                 name="solc_not_found_fallback",
-                detect_fn=lambda output: self._detect_solc_not_found(output),
+                # The plan is built once per pass below, because a plan with no viable
+                # substitution is terminal and has to be acted on before this table runs.
+                detect_fn=lambda output: solc_fallback_plan if (solc_fallback_plan and solc_fallback_plan.compliant) else None,
                 apply_fn=self._apply_solc_fallback_workaround,
                 enabled=solc_pinned,
             ),
@@ -437,9 +493,56 @@ class CompilationWorkaroundManager:
                 # contract's entry from its pragma is always safe.
                 enabled=True,
             ),
+            # solc's own advice on a legacy stack-too-deep is to compile via-ir "while
+            # enabling the optimizer". The optimizer is what reclaims stack slots, and it
+            # does so under legacy codegen too. Enabling it alone leaves codegen as it is,
+            # where via-ir replaces it: via-ir inlines internal functions, which can leave
+            # the internal summaries CVL applies with nothing to attach to. It does not
+            # always cost them, but it is a risk worth not taking when the optimizer alone
+            # may do.
+            CompilationWorkaround(
+                name="stack_too_deep_optimizer",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._detect_stack_too_deep_errors(output, contracts) is not None
+                    and self._yul_optimizer_pending(compilation_config, contracts)
+                    else None
+                ),
+                apply_fn=self._apply_optimizer,
+                enabled=not global_via_ir_enabled,
+            ),
+            # The optimizer can clear the contract compile and still leave the
+            # autofinder-instrumented one over the stack limit, since instrumentation adds
+            # slots of its own. Falling back puts the local-variable finders for those files
+            # at risk; via-ir puts the internal summaries at risk in every file it is enabled
+            # for. Neither loss is certain — a file can fall back and still give useful
+            # finders, and an inlined contract can still be summarized — but the second
+            # exposure is the wider one, so this rung comes first. Only fires on output
+            # produced after the optimizer was tried, not in the pass that just enabled it.
+            CompilationWorkaround(
+                name="stack_too_deep_autofinder",
+                detect_fn=lambda output: (
+                    "detected"
+                    if self._autofinder_relaxation_pending(output, compilation_config)
+                    and not self._yul_optimizer_pending(compilation_config, contracts)
+                    and "stack_too_deep_optimizer" not in applied_this_pass
+                    else None
+                ),
+                apply_fn=self._apply_yul_exception_workaround,
+                enabled=not global_via_ir_enabled,
+            ),
+            # Last of the legacy rungs: only once the optimizer is on and the autofinder
+            # assertion is no longer what is failing the run.
             CompilationWorkaround(
                 name="stack_too_deep_via_ir",
-                detect_fn=lambda output: self._detect_stack_too_deep_errors(output, contracts),
+                detect_fn=lambda output: (
+                    self._detect_stack_too_deep_errors(output, contracts)
+                    if not self._yul_optimizer_pending(compilation_config, contracts)
+                    and not self._autofinder_relaxation_pending(output, compilation_config)
+                    and "stack_too_deep_optimizer" not in applied_this_pass
+                    and "stack_too_deep_autofinder" not in applied_this_pass
+                    else None
+                ),
                 apply_fn=self._apply_via_ir_workaround_to_config,
                 enabled=not global_via_ir_enabled,
             ),
@@ -488,7 +591,7 @@ class CompilationWorkaroundManager:
                     and self._yul_optimizer_pending(compilation_config, contracts)
                     else None
                 ),
-                apply_fn=self._apply_optimizer_for_via_ir,
+                apply_fn=self._apply_optimizer,
                 enabled=True,
             ),
             # Escalation after yul_exception_add_optimizer: with optimizer +
@@ -542,6 +645,12 @@ class CompilationWorkaroundManager:
                 detect_fn=lambda output: self._detect_missing_library(output, contracts),
                 apply_fn=self._apply_missing_library_harness_to_config,
                 enabled=True,
+                # Firing again for the same consumer with a different library
+                # regenerates the harness source covering every library so far. Its
+                # _harnessed_libs guard cannot bound that — the guard is keyed on the
+                # consumer name, which this apply replaces with the harness's, so a
+                # recurring link error is looked up under a name that was never
+                # recorded; max_retries is the bound.
             ),
             # Catch-all: final attempt before setup_prover falls back to the
             # import-patch pass.
@@ -570,6 +679,12 @@ class CompilationWorkaroundManager:
         self._mirror_compile_flags(compilation_config, updated_config_dict)
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
+
+        # Every state this loop has compiled, starting with the one the first compile
+        # runs on. Local to the call: a caller may run the loop again on the same
+        # manager (fixconf does, once either side of the import patch), and the second
+        # run legitimately revisits what the first one did.
+        seen_states = {self._retry_state(cmd, compilation_config, updated_config_dict)}
 
         output = ""
         while retry_count <= max_retries:
@@ -618,6 +733,26 @@ class CompilationWorkaroundManager:
                     f"compiler output for the functions it still owes."
                 )
 
+            # Terminal, non-recoverable case: a contract is pinned to a compiler that
+            # is not installed and none of the installed ones satisfy its pragma.
+            # Substituting one anyway reproduces this same failure next pass, so stop
+            # here and name the compiler that has to be installed.
+            # Only for a pin the conf actually carries: _seed_compile_maps pins every
+            # contract to the default compiler, and refusing to proceed over a pin
+            # autosetup invented itself would fail runs the user never constrained.
+            solc_fallback_plan = (
+                self._plan_solc_fallback(output, updated_config_dict, contracts) if solc_pinned else None
+            )
+            if solc_fallback_plan is not None and solc_fallback_plan.blocked:
+                self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
+                installed = ", ".join(binary for binary, _ in self._solc_fallback_candidates()) or "none"
+                pins = "; ".join(f"{p.contract_name} requires '{p.pragma_spec}'" for p in solc_fallback_plan.blocked)
+                raise UnsatisfiableSolcPinError(
+                    f"Compiler '{solc_fallback_plan.failed_solc}' is not installed and no installed "
+                    f"compiler satisfies the pragma of: {pins}. Installed compilers considered: "
+                    f"{installed}. Install '{solc_fallback_plan.failed_solc}' to compile this project."
+                )
+
             # One pass over the failed output: apply EVERY applicable workaround
             # before recompiling — one full certoraRun per pass is expensive, so
             # a pass fixes as much of this output as it can. detect_fns run
@@ -625,7 +760,6 @@ class CompilationWorkaroundManager:
             # gated on conf/manager state (e.g. _remappings_workaround_applied)
             # see the pass's own effects.
             applied_this_pass.clear()
-            state_before = self._retry_state(cmd, compilation_config, updated_config_dict)
 
             def try_workaround(workaround: CompilationWorkaround) -> bool:
                 """Detect and, on a hit, apply — returns whether it applied."""
@@ -673,23 +807,27 @@ class CompilationWorkaroundManager:
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return False, output, updated_config_dict
 
-            # If the whole pass changed nothing, recompiling would reproduce the
-            # identical failure — stop here instead of burning another certoraRun.
-            if self._retry_state(cmd, compilation_config, updated_config_dict) == state_before:
-                # Classifying this pass's output turns "nothing changed" into the reason nothing
-                # could change (e.g. the package is installed and the file inside it is the one
-                # missing). It is logged as part of the ERROR below, not separately.
+            # A state this loop has already compiled produces the same failure again,
+            # whether the pass changed nothing at all or a later workaround undid what
+            # an earlier one did. Either way retrying cannot converge.
+            state = self._retry_state(cmd, compilation_config, updated_config_dict)
+            if state in seen_states:
+                # Classifying this pass's output turns "the loop is circling" into the reason
+                # it cannot get out (e.g. the package is installed and the file inside it is
+                # the one missing). It is logged as part of the ERROR below, not separately.
                 diagnosis = describe_unresolved_imports(
                     self._record_import_diagnostics(output, compilation_config, log_summary=False)
                 )
                 self.log(
-                    f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf "
-                    f"and command are unchanged — retrying would fail identically, giving up"
+                    f"Workarounds applied ({', '.join(sorted(applied_this_pass))}) but the conf and "
+                    f"command are back to a state that already failed to compile — retrying would "
+                    f"fail identically, giving up"
                     + (f"\n{diagnosis}" if diagnosis else ""),
                     "ERROR",
                 )
                 self._finalize_compile_maps(compilation_config, updated_config_dict, config_file)
                 return False, output, updated_config_dict
+            seen_states.add(state)
 
             retry_count += 1
             conf_contents = json.dumps(compilation_config, indent=2)
@@ -712,10 +850,9 @@ class CompilationWorkaroundManager:
     def _retry_state(cmd: List[str], compilation_config: Dict, updated_config_dict: Dict) -> str:
         """Serialized snapshot of everything a workaround can change to make the
         next compilation retry behave differently: the command line and both
-        config dicts. Used by the no-progress check in
-        ``run_compilation_with_workarounds`` — a pass that leaves this snapshot
-        identical was a no-op, so retrying would reproduce the same failure
-        verbatim.
+        config dicts. ``run_compilation_with_workarounds`` memoizes it per pass and
+        stops when one comes round again — the same command over the same conf
+        reproduces the same failure verbatim, so the loop is circling.
 
         Invariant on apply_fns: any application that makes real progress MUST
         change the command or one of the two conf dicts. Progress expressed
@@ -727,6 +864,24 @@ class CompilationWorkaroundManager:
     # =========================================================================
     # Detection methods
     # =========================================================================
+
+    def _autofinder_relaxation_pending(self, output: str, compilation_config: Dict) -> bool:
+        """True when the run is failing on the autofinder-instrumented compile and the
+        assertion that turns that into a failure is still on.
+
+        certoraRun compiles each file twice: once as written, once instrumented to expose
+        internal functions and local variables. The instrumented copy carries extra stack
+        slots, so it can be the only one over the limit — the contracts themselves compile.
+        Relaxing the assertion accepts a finder-less fallback for those files while leaving
+        codegen alone.
+        """
+        if not compilation_config.get("assert_autofinder_success", False):
+            return False
+        normalized = re.sub(r"\s+", " ", output)
+        return (
+            "Encountered an exception generating autofinder" in normalized
+            and bool(_STACK_TOO_DEEP_RE.search(normalized))
+        )
 
     def _detect_stack_too_deep_errors(
         self, output: str, contracts: List[ContractHandle]
@@ -1328,7 +1483,7 @@ class CompilationWorkaroundManager:
             self._optimizer_off(optimize_map.get(c.contract_name)) for c in contracts
         )
 
-    def _apply_optimizer_for_via_ir(
+    def _apply_optimizer(
         self,
         _detect_result: str,
         updated_config_dict: Dict,
@@ -1336,7 +1491,10 @@ class CompilationWorkaroundManager:
         config_file: Path,
         contracts: List[ContractHandle],
     ) -> Dict:
-        """Apply optimizer alongside via-ir to resolve YulException stack-too-deep.
+        """Enable the optimizer to resolve a stack-too-deep, under either codegen pipeline.
+
+        Reached from the legacy rung (CompilerError: Stack too deep) and from the Yul rung
+        (YulException), because the optimizer's stack-limit evader is what relieves both.
 
         With a per-contract solc_optimize_map (foundry compilation_restrictions)
         only the entries whose optimizer is off are enabled — explicit project
@@ -1353,13 +1511,13 @@ class CompilationWorkaroundManager:
                 optimize_map[name] = "200"
             updated_config_dict["solc_optimize_map"] = optimize_map
             self.log(
-                "Detected YulException stack-too-deep with via-ir — enabling the "
-                f"optimizer (200 runs) in solc_optimize_map for {enabled}",
+                "Stack-too-deep — enabling the optimizer (200 runs) in "
+                f"solc_optimize_map for {enabled}",
                 "WARNING",
             )
         else:
             self.log(
-                "Detected YulException stack-too-deep with via-ir — adding solc_optimize 200",
+                "Stack-too-deep — adding solc_optimize 200",
                 "WARNING",
             )
             compilation_config["solc_optimize"] = "200"
@@ -1453,51 +1611,86 @@ class CompilationWorkaroundManager:
 
     def _apply_solc_fallback_workaround(
         self,
-        failed_solc: str,
+        plan: SolcFallbackPlan,
         updated_config_dict: Dict,
         compilation_config: Dict,
         config_file: Path,
         _contracts: List[ContractHandle],
     ) -> Dict:
-        """Fall back from a missing versioned solc binary.
-
-        Checks if plain 'solc' provides the version we need; if not, uses the
-        default versioned binary (convention-aware, e.g. solc8.34 or solc-0.8.34).
-        """
-        fallback = self._pick_solc_fallback()
-        self.log(f"Falling back from '{failed_solc}' to '{fallback}'", "WARNING")
-
+        """Substitute a missing versioned solc binary per the plan."""
         # solc is seeded into compiler_map up front (see _seed_compile_maps), so
-        # rewrite the bad binary there — every entry pinned to it — rather than
+        # replace the bad binary there — every entry pinned to it — rather than
         # setting the scalar solc, which can't coexist with compiler_map. A
         # uniform map collapses back to scalar solc in _normalize_compile_maps.
         # compilation_config shares this map object with updated_config_dict,
         # so the in-place rewrite is visible in the disk write below too — no mirroring needed.
         cmap = updated_config_dict.get("compiler_map")
         assert isinstance(cmap, dict), "compiler_map is seeded before any workaround runs"
-        for name, version in cmap.items():
-            if version == failed_solc:
-                cmap[name] = fallback
+        for name, replacement in plan.compliant.items():
+            self.log(f"Falling back from '{plan.failed_solc}' to '{replacement}' for {name}", "WARNING")
+            cmap[name] = replacement
 
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
 
         return updated_config_dict
 
-    def _pick_solc_fallback(self) -> str:
-        """Choose the best solc fallback: plain 'solc' if it matches the desired version, else the default."""
-        desired = self._extract_version_from_solc_name(self.solc_default_version)
-        if not desired:
-            return "solc"
+    def _solc_fallback_candidates(self) -> List[Tuple[str, str]]:
+        """Installed compilers that may stand in for a missing binary, as
+        (binary name, semantic version), best first.
 
-        plain_version = self._get_plain_solc_version()
-        if plain_version and plain_version == desired:
-            return "solc"
+        Compilers of unknown version are omitted: the version is what a contract's
+        pragma is checked against.
+        """
+        if self._solc_candidates is None:
+            candidates: List[Tuple[str, str]] = []
+            # The project's own default comes first: whatever `solc` happens to be on
+            # PATH is unrelated to this project and may be years older, so it is only
+            # a last resort even when a wide pragma would accept it.
+            default_version = self._extract_version_from_solc_name(self.solc_default_version)
+            if default_version and shutil.which(self.solc_default_version):
+                candidates.append((self.solc_default_version, default_version))
+            plain_version = self._get_plain_solc_version()
+            if plain_version:
+                candidates.append(("solc", plain_version))
+            self._solc_candidates = candidates
+        return self._solc_candidates
 
-        if shutil.which(self.solc_default_version):
-            return self.solc_default_version
+    def _plan_solc_fallback(
+        self, output: str, updated_config_dict: Dict, contracts: List[ContractHandle]
+    ) -> Optional[SolcFallbackPlan]:
+        """The plan for the missing binary named in ``output``: for each contract
+        pinned to it in ``compiler_map``, the first installed compiler its pragma
+        admits, or an entry in ``blocked`` when no candidate qualifies.
 
-        return "solc"
+        None when ``output`` reports no missing binary. An unreadable or unparseable
+        pragma is no evidence of a conflict, so those contracts take the first
+        candidate.
+        """
+        failed_solc = self._detect_solc_not_found(output)
+        if failed_solc is None:
+            return None
+
+        cmap = updated_config_dict.get("compiler_map") or {}
+        pinned = [name for name, version in cmap.items() if version == failed_solc]
+        pragma_by_contract = {
+            handle.contract_name: read_pragma_from_source_file(Path(handle.source_file), self.project_root)
+            for handle in contracts
+        }
+        candidates = self._solc_fallback_candidates()
+
+        compliant: Dict[str, str] = {}
+        blocked: List[BlockedSolcPin] = []
+        for name in pinned:
+            pragma = pragma_by_contract.get(name)
+            for binary, version in candidates:
+                if pragma is None or pragma_admits(pragma, version) is not False:
+                    compliant[name] = binary
+                    break
+            else:
+                blocked.append(BlockedSolcPin(contract_name=name, pragma_spec=pragma or "unknown"))
+
+        return SolcFallbackPlan(failed_solc=failed_solc, compliant=compliant, blocked=tuple(blocked))
 
     @staticmethod
     def _extract_version_from_solc_name(solc_name: str) -> Optional[str]:
@@ -1757,11 +1950,37 @@ class CompilationWorkaroundManager:
         return True
 
     def _apply_via_ir_workaround(self, contract_needing_via_ir: str, config_dict: Dict) -> Dict:
-        """Add solc_via_ir_map entry for contract that needs via-ir compilation."""
-        # solc_via_ir_map is seeded up front by _seed_compile_maps; just set the
-        # contract that needs via-ir to True.
+        """Enable via-ir for the contract that needs it — or, past the point where naming
+        them one at a time pays off, for the whole scene.
+
+        Per contract is the better answer while the count is small: every contract left on
+        legacy codegen keeps the internal-function summaries via-ir might inline away. But
+        each one costs a full compile of the scene to discover, so a project that needs it
+        widely spends dozens of compiles walking there. Past VIA_IR_SCENE_THRESHOLD the
+        exposure is already broad and the rest of the scene is likely to follow, so the
+        remaining contracts are switched in one step. A project whose build config declares
+        via-ir skips the walk entirely — it has told us where this ends.
+        """
+        # solc_via_ir_map is seeded up front by _seed_compile_maps.
+        self._via_ir_contracts.add(contract_needing_via_ir)
         config_dict["solc_via_ir_map"][contract_needing_via_ir] = True
-        self.log(f"Adding via-ir workaround for contract: {contract_needing_via_ir}")
+
+        scene_wide = self.declared_via_ir or len(self._via_ir_contracts) >= VIA_IR_SCENE_THRESHOLD
+        if scene_wide and not all(config_dict["solc_via_ir_map"].values()):
+            for name in config_dict["solc_via_ir_map"]:
+                config_dict["solc_via_ir_map"][name] = True
+            reason = (
+                "the build config declares via-ir"
+                if self.declared_via_ir
+                else f"{len(self._via_ir_contracts)} contracts have needed it individually"
+            )
+            self.log(
+                f"Enabling via-ir for the whole scene ({reason}); the remaining contracts "
+                f"lose their internal-function summaries too",
+                "WARNING",
+            )
+        else:
+            self.log(f"Adding via-ir workaround for contract: {contract_needing_via_ir}")
 
         return config_dict
 

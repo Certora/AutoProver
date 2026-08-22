@@ -32,6 +32,7 @@ from abc import ABC, abstractmethod
 import json
 import logging
 import os
+import uuid
 
 
 from langchain_core.messages import AnyMessage, HumanMessage
@@ -448,6 +449,70 @@ async def run_prover_inner(
         run_result = cast(ProverResult, json.load(output_file))
         return run_result, stdout
 
+async def declared_rules_list(
+    folder: Path,
+    args: list[str]
+) -> list[str]:
+    """
+    This is a temporary hack to work around `certoraRun` not providing a "native"
+    way to list rules. Instead we use certoraRun to build the project, hijack `msg` to find
+    the generated build dir, and then manually invoke the typechecker with `-listRules`
+    ourselves against that build dir.
+
+    Not great, obviously, but lets us work on this AP feature while waiting for support for this to 
+    land upstream in certora-cli and the pip distribution channels.
+    """
+    if any(m == "--msg" for m in args):
+        raise ValueError("This unholy black magic only works if you don't pass msg")
+    tc_key = uuid.uuid4().hex
+    proc = await asyncio.subprocess.create_subprocess_exec(
+        "certoraRun", *args, "--msg", tc_key, "--compilation_steps_only",
+        cwd=str(folder),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+
+    rc = await proc.wait()
+    if rc != 0:
+        raise ValueError("Type check failed?")
+    from importlib.resources import files
+
+    tc_jar = files("certora_jars") / "Typechecker.jar"
+    if not tc_jar.is_file():
+        raise ValueError("Typechecker not installed")
+    d = folder / ".certora_internal"
+    found : Path | None = None
+    for p in d.iterdir():
+        if not p.is_dir():
+            continue
+        is_build_mirror = p / "run.conf"
+        if not is_build_mirror.is_file():
+            continue
+        try:
+            payload = json.loads(
+                is_build_mirror.read_text()
+            )
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or "msg" not in payload or not isinstance(payload["msg"], str):
+            continue
+        if payload["msg"] == tc_key:
+            found = p
+            break
+    if found is None:
+        raise ValueError("Couldn't find build dir")
+    with tempfile.NamedTemporaryFile("r") as f:
+        proc = await asyncio.subprocess.create_subprocess_exec(
+            "java", "-jar", str(tc_jar), "-buildDirectory", str(found), "-typeCheck", "true", "-listRules", f.name,
+            cwd=str(folder),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        tc_rc = await proc.wait()
+        if tc_rc != 0:
+            raise ValueError("Nope, no dice")
+        all_rules = f.read()
+    return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
 async def run_prover(
     folder: Path,
