@@ -1681,6 +1681,76 @@ def test_via_ir_goes_scene_wide_past_the_threshold(manager, monkeypatch, tmp_pat
     assert "solc_via_ir_map" not in updated
 
 
+def test_scene_wide_via_ir_holds_back_contracts_pinned_below_the_settings_floor(
+    manager_declaring_via_ir, monkeypatch, tmp_path
+) -> None:
+    # A mixed-compiler scene: with the optimizer on, a via-ir contract is compiled with
+    # settings.optimizer.details, and its "inliner" key only exists from solc 0.8.5. Switching a
+    # contract pinned below that makes solc reject the input for the whole scene, so the sweep
+    # must leave it on legacy codegen.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+        ContractHandle(contract_name="Old", source_file="contracts/Old.sol"),
+    ]
+    success, updated, config, _ = _run_loop(
+        manager_declaring_via_ir,
+        monkeypatch,
+        tmp_path,
+        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, PERSISTENT_STACK_TOO_DEEP_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Foo": "solc8.24", "Bar": "solc8.24", "Old": "solc8.4"}},
+    )
+    assert success is True
+    # Not uniform, so the map survives rather than collapsing to the scalar.
+    assert updated["solc_via_ir_map"]["Foo"] is True
+    assert updated["solc_via_ir_map"]["Bar"] is True
+    assert updated["solc_via_ir_map"]["Old"] is False
+    assert "solc_via_ir" not in updated
+
+
+def test_via_ir_skipped_for_the_needing_contract_when_its_pin_is_too_old(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # The contract that reported stack-too-deep is itself pinned below the floor. Turning via-ir on
+    # for it would trade one compile error for another that no rung recognises, so it stays on
+    # legacy codegen while the rest of the scene is untouched.
+    contracts = [
+        ContractHandle(contract_name="Old", source_file="contracts/Old.sol"),
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+    ]
+    outputs = [
+        "Compiling contracts/Old.sol...\nsolc8.4 had an error:\nCompilerError: Stack too deep.\n"
+    ] * 4
+    _, updated, _, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        outputs,
+        contracts,
+        extra_config={"compiler_map": {"Old": "solc8.4", "Foo": "solc8.24"}},
+    )
+    assert updated.get("solc_via_ir") is not True
+    assert updated.get("solc_via_ir_map", {}).get("Old") is not True
+
+
+def test_unpinned_contracts_still_go_via_ir(manager_declaring_via_ir, monkeypatch, tmp_path) -> None:
+    # No compiler_map: every contract runs on the environment's solc, and nothing is held back.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, updated, _, _ = _run_loop(
+        manager_declaring_via_ir,
+        monkeypatch,
+        tmp_path,
+        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, PERSISTENT_STACK_TOO_DEEP_OUTPUT],
+        contracts,
+    )
+    assert success is True
+    assert updated["solc_via_ir"] is True
+
+
 def test_declared_via_ir_skips_the_per_contract_walk(manager_declaring_via_ir, monkeypatch, tmp_path) -> None:
     # The project's build config already says where this ends; walking there one contract
     # per compile only costs compiles. The declared value is still not inherited — the

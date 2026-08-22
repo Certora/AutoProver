@@ -29,6 +29,11 @@ from certora_autosetup.utils.logger import logger
 # Minimum solc version that supports viaIR (introduced as settings.viaIR in 0.7.5, stabilized in 0.8.13)
 VIA_IR_MIN_VERSION = Version("0.7.5")
 
+# Minimum solc version that accepts the settings certoraRun emits alongside viaIR. With the
+# optimizer on, a viaIR contract is compiled with settings.optimizer.details, whose "inliner" key
+# solc only learned in 0.8.5; an older binary rejects the whole input with `Unknown key "inliner"`.
+VIA_IR_SETTINGS_MIN_VERSION = Version("0.8.5")
+
 # Module-level cache for solc versions
 _solc_versions_cache: Optional[List[str]] = None
 _cache_lock = threading.Lock()
