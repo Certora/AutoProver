@@ -15,6 +15,7 @@ import pytest
 
 from certora_autosetup.setup.import_spelling_fix import (
     ImportSpellingRewrite,
+    mask_comments,
     apply_import_spelling_fixes,
     choose_spelling,
     plan_import_spelling_fixes,
@@ -267,15 +268,40 @@ def test_apply_then_revert_restores_the_bytes(tmp_path: Path, log: RecordingLog)
 def test_a_literal_occurring_twice_on_a_line_is_skipped(
     tmp_path: Path, log: RecordingLog
 ) -> None:
+    # Two statements on one line name the same path, so neither occurrence is the one an
+    # unambiguous column can be recorded for.
     write(tmp_path / "src" / "IWidgetStore.sol", "interface IWidgetStore {}\n")
     write(
         tmp_path / "src" / "Main.sol",
-        'import "./iwidgetstore.sol"; // see also "./iwidgetstore.sol"\n'
+        'import {A} from "./iwidgetstore.sol"; import {B} from "./iwidgetstore.sol";\n'
         f"{CONTRACT_BODY}",
     )
 
     assert plan_import_spelling_fixes(tmp_path, log_func=log) == []
     assert any("occurs 2 times" in message for message in log.messages())
+
+
+def test_a_trailing_comment_repeating_the_path_does_not_block_the_fix(
+    tmp_path: Path, log: RecordingLog
+) -> None:
+    """The path literal appears twice in the raw line but once in code, so the column is
+    unambiguous and the import is fixed."""
+    write(tmp_path / "src" / "IWidgetStore.sol", "interface IWidgetStore {}\n")
+    main = write(
+        tmp_path / "src" / "Main.sol",
+        'import "./iwidgetstore.sol"; // see also "./iwidgetstore.sol"\n'
+        f"{CONTRACT_BODY}",
+    )
+
+    planned = plan_import_spelling_fixes(tmp_path, log_func=log)
+    assert [(r.original_path, r.updated_path) for r in planned] == [
+        ("./iwidgetstore.sol", "./IWidgetStore.sol")
+    ]
+    apply_import_spelling_fixes(planned, log_func=log)
+    text = main.read_text()
+    assert text.startswith('import "./IWidgetStore.sol";')
+    # The comment keeps the spelling it had; only code was rewritten.
+    assert 'see also "./iwidgetstore.sol"' in text
 
 
 def test_two_rewrites_on_one_line_round_trip(tmp_path: Path, log: RecordingLog) -> None:
@@ -372,3 +398,86 @@ def test_crlf_line_endings_survive_apply_and_revert(tmp_path: Path, log: Recordi
     assert main.read_bytes().count(b"\r\n") == before.count(b"\r\n")
     revert_import_spelling_fixes(applied, log_func=log)
     assert main.read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# Comment masking
+# ---------------------------------------------------------------------------
+
+
+def test_mask_comments_blanks_a_line_comment_but_keeps_the_terminator() -> None:
+    masked = mask_comments(["uint x; // note\n"])
+    assert masked == ["uint x;        \n"]
+    assert len(masked[0]) == len("uint x; // note\n")
+
+
+def test_mask_comments_spans_a_block_comment_across_lines() -> None:
+    lines = ["a;\n", "/* import Old\n", "   still comment\n", "*/ b;\n"]
+    masked = mask_comments(lines)
+    assert masked[0] == "a;\n"
+    assert masked[1].strip() == ""
+    assert masked[2].strip() == ""
+    assert masked[3] == "   b;\n"
+    assert [len(m) for m in masked] == [len(line) for line in lines]
+
+
+def test_mask_comments_leaves_a_url_inside_a_string_alone() -> None:
+    # The reason this is a scanner and not a `//` match: the slashes here are data.
+    line = 'string constant U = "https://example.com/x"; // trailing\n'
+    masked = mask_comments([line])[0]
+    assert 'string constant U = "https://example.com/x";' in masked
+    assert "trailing" not in masked
+    assert len(masked) == len(line)
+
+
+def test_mask_comments_ignores_comment_openers_inside_strings() -> None:
+    line = 'string constant S = "/* not a comment */"; uint y;\n'
+    masked = mask_comments([line])[0]
+    assert masked == line
+
+
+def test_mask_comments_handles_an_escaped_quote_before_a_comment() -> None:
+    line = 'string constant S = "a\\"b"; // gone\n'
+    masked = mask_comments([line])[0]
+    assert 'string constant S = "a\\"b";' in masked
+    assert "gone" not in masked
+
+
+def test_a_commented_out_import_is_not_planned(tmp_path: Path, log: RecordingLog) -> None:
+    """A commented-out import with no semicolon used to make the scan run on to the next `;`
+    anywhere in the file and rewrite whatever literal it found there."""
+    root = tmp_path
+    (root / "src").mkdir()
+    (root / "src" / "Config.sol").write_text("// config\n")
+    main = root / "src" / "Main.sol"
+    main.write_text(
+        "pragma solidity ^0.8.0;\n"
+        "/*\n"
+        "import OldThing\n"
+        "*/\n"
+        'contract Main { string constant P = "./nope/Config.sol"; }\n'
+    )
+    before = main.read_bytes()
+
+    assert plan_import_spelling_fixes(root, log_func=log) == []
+    assert main.read_bytes() == before
+
+
+def test_a_real_import_after_a_commented_one_is_still_fixed(tmp_path: Path, log: RecordingLog) -> None:
+    root = tmp_path
+    (root / "src").mkdir()
+    (root / "src" / "Config.sol").write_text("// config\n")
+    main = root / "src" / "Main.sol"
+    main.write_text(
+        "pragma solidity ^0.8.0;\n"
+        "// import {Old} from './Old.sol';\n"
+        'import {Config} from "./config.sol";\n'
+        "contract Main {}\n"
+    )
+
+    planned = plan_import_spelling_fixes(root, log_func=log)
+    assert [(r.original_path, r.updated_path) for r in planned] == [("./config.sol", "./Config.sol")]
+    apply_import_spelling_fixes(planned, log_func=log)
+    assert 'import {Config} from "./Config.sol";' in main.read_text()
+    # The commented line is untouched, comment and all.
+    assert "// import {Old} from './Old.sol';" in main.read_text()

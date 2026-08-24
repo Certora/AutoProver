@@ -228,6 +228,70 @@ def _index_by_basename(files: Sequence[Path]) -> Dict[str, List[Path]]:
     return index
 
 
+def mask_comments(lines: Sequence[str]) -> List[str]:
+    """The same lines with every comment byte replaced by a space.
+
+    Import scanning runs over the masked copy so that commented-out code is simply not there:
+    a commented ``import`` is no longer read as one, and a ``;`` inside a comment no longer
+    ends the statement that a real import began.
+
+    Only comment bytes change, and each is replaced one-for-one, so a line's length and the
+    column of everything outside a comment are the same in both copies. A position found in
+    the masked lines therefore addresses the same byte of the real file, which is what lets
+    the rewrite be located here and applied there.
+
+    Comment starts are recognised by scanning each character in context rather than by
+    matching ``//`` or ``/*`` directly, because both sequences occur inside ordinary string
+    literals. ``"https://example.com"`` is the common one, and treating its ``//`` as a
+    comment would blank the rest of a perfectly good line.
+    """
+    masked: List[str] = []
+    in_block = False
+    for line in lines:
+        out: List[str] = []
+        quote: Optional[str] = None
+        escaped = False
+        index = 0
+        while index < len(line):
+            char = line[index]
+            pair = line[index : index + 2]
+            if in_block:
+                if pair == "*/":
+                    out.append("  ")
+                    index += 2
+                    in_block = False
+                    continue
+                out.append(" " if not char.isspace() else char)
+            elif quote is not None:
+                out.append(char)
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+            elif pair == "//":
+                # A line comment ends with the line, so blank the rest and keep the
+                # terminator, which is what preserves the file's line structure.
+                rest = line[index:]
+                terminator = rest[len(rest.rstrip("\r\n")) :]
+                out.append(" " * (len(rest) - len(terminator)))
+                out.append(terminator)
+                break
+            elif pair == "/*":
+                out.append("  ")
+                index += 2
+                in_block = True
+                continue
+            else:
+                if char in QUOTES:
+                    quote = char
+                out.append(char)
+            index += 1
+        masked.append("".join(out))
+    return masked
+
+
 def _locate_literal(
     lines: Sequence[str], start: int, end: int, import_path: str
 ) -> Tuple[Optional[Tuple[int, int, str]], Optional[str]]:
@@ -418,10 +482,14 @@ def plan_import_spelling_fixes(
             log(f"Import spelling: cannot read {source_file}: {error}", "WARNING")
             continue
 
-        for start, end, import_path in extract_imports_multiline(lines):
+        # Scanning and locating both run over the comment-masked copy, so a commented-out
+        # import is never planned and a literal is never located inside a comment. Columns
+        # are shared with the real lines, which is what the rewrite is applied to.
+        masked = mask_comments(lines)
+        for start, end, import_path in extract_imports_multiline(masked):
             rewrite = _plan_one_import(
                 source_file=source_file,
-                lines=lines,
+                lines=masked,
                 start=start,
                 end=end,
                 import_path=import_path,
