@@ -32,4 +32,39 @@ methods {
     function MathUtils.mulDivDown(uint256 a, uint256 b, uint256 c) internal returns (uint256) => mulDivDownSummary256(a, b, c);
     function MathUtils.mulDivUp(uint256 a, uint256 b, uint256 c)   internal returns (uint256) => mulDivUpSummary256(a, b, c);
     function MathUtils.divUp(uint256 a, uint256 b) internal returns (uint256) => mulDivUpSummary256(a, 1, b);
+
+    // ---- MathUtils.uncheckedExp: a ** b, in practice always 10 ** decimals ----
+    function MathUtils.uncheckedExp(uint256 a, uint256 b) internal returns (uint256) => limitedExp(a, b);
+}
+
+// uncheckedExp(a, b) = a ** b. Every call site passes base 10 and an asset's decimals, so it is the
+// 10 ** decimals decimal-scaling factor, modeled as an exact powers-of-ten table lookup (a symbolic
+// a ** b is prover-hostile). limitedExp asserts base 10 and an exponent within the table (0..18).
+ghost mapping(uint256 => uint256) expCVL {
+    axiom expCVL[0] == 1;
+    axiom expCVL[1] == 10;
+    axiom expCVL[2] == 100;
+    axiom expCVL[3] == 1000;
+    axiom expCVL[4] == 10000;
+    axiom expCVL[5] == 100000;
+    axiom expCVL[6] == 1000000;
+    axiom expCVL[7] == 10000000;
+    axiom expCVL[8] == 100000000;
+    axiom expCVL[9] == 1000000000;
+    axiom expCVL[10] == 10000000000;
+    axiom expCVL[11] == 100000000000;
+    axiom expCVL[12] == 1000000000000;
+    axiom expCVL[13] == 10000000000000;
+    axiom expCVL[14] == 100000000000000;
+    axiom expCVL[15] == 1000000000000000;
+    axiom expCVL[16] == 10000000000000000;
+    axiom expCVL[17] == 100000000000000000;
+    axiom expCVL[18] == 1000000000000000000;
+}
+
+function limitedExp(uint256 a, uint256 b) returns (uint256) {
+    assert a == 10;
+    // expCVL covers exponents 0..18 (standard ERC-20 decimal ranges); extend it to cover a larger one.
+    assert b <= 18;
+    return expCVL[b];
 }
