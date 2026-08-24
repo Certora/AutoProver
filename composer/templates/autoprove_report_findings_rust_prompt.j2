@@ -1,0 +1,64 @@
+Program: {{ contract_name }}
+
+{% if also_covers %}
+THIS EVIDENCE COULD NOT BE ATTRIBUTED TO ONE CHECK. The run reported it against {{ also_covers | length }}
+checks it covered, because nothing it reported says which of them was actually broken:
+{% for c in also_covers %}
+  - {{ c }}
+{%- endfor %}
+
+That is the finding. Say plainly that the run found a real violation it cannot place among these
+checks, name what it did report, and do not pick one of them and write it up as though the
+violation were its.
+{% else %}
+Failing check: {{ rule_name }}
+{% endif %}
+{% if properties -%}
+{% if also_covers %}
+Properties these checks verify:
+{% else %}
+Properties this check verifies (the violation breaks at least one of them — determine which):
+{% endif %}
+{% for p in properties %}
+  - ({{ p.sort }}) {{ p.title }}: {{ p.description }}
+{%- endfor %}
+{% endif -%}
+{% if groups -%}
+Audit-level claim(s) it belongs to:
+{% for g in groups %}
+  - {{ g.title }}: {{ g.description }}
+{%- endfor %}
+{% endif %}
+{% if evidence -%}
+{% for o in evidence %}
+--- What the run observed: {{ o.label }} ---
+{# No separate run outcome means the evidence is a refutation and nothing else — the same rule
+   `proof_of_concept` filters on. #}
+{% set reproduced = o.ran is none or o.ran.value == "BAD" -%}
+{% if o.expected_failure_reason -%}
+The author marked this check expected to fail. Their reason:
+{{ o.expected_failure_reason }}
+{% if reproduced -%}
+The run also reproduced it, so the evidence below stands behind that claim.
+{%- else -%}
+The run did NOT reproduce it — it reported {{ o.ran.value }}. The author's reason above is the only
+evidence there is. Do not describe a counterexample; say what the claim rests on.
+{%- endif %}
+{% endif -%}
+{% if reproduced %}
+What the run found, with whatever reproduces it:
+{{ o.counterexample }}
+{%- elif not o.expected_failure_reason and o.counterexample %}
+The run reported {{ o.ran.value }} for this check. What it said:
+{{ o.counterexample }}
+{%- endif %}
+{% if o.accounting %}
+What the run behind this spent and covered — how much weight its result carries, and what to say in
+`assumptions_and_uncertainties` about what was and was not reached:
+{{ o.accounting }}
+{%- endif %}
+{%- endfor %}
+{%- else -%}
+(No observation was captured for this check — reason only from the properties above, and say that no
+evidence was recorded.)
+{%- endif %}

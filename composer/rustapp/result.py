@@ -19,6 +19,9 @@ from pydantic import BaseModel, Field
 
 from composer.rustapp.wire import Target, Verdict
 from composer.authoring.state import SkippedProperty
+from composer.spec.source.report.schema import (
+    ExpectedFailure, Outcome, ReproducedExpectedFailure, UnreproducedExpectedFailure,
+)
 from composer.spec.types import CheckName, PropertyTitle
 
 
@@ -43,10 +46,11 @@ class RustFormalResult(BaseModel):
     checks: list[tuple[PropertyTitle, list[CheckName]]] = Field(default_factory=list)
     skipped: list[SkippedProperty] = Field(default_factory=list)
     output_link: str | None = None
-    # Per-check verdicts baked in at formalize time by a self-contained backend (check name -> the
-    # wheel's :class:`~composer.rustapp.wire.Verdict`, validated at the seam). Empty for
-    # run-service-backed backends (they use fetch_verdicts).
+    # What the run observed, per check. Empty when a run service supplies verdicts later.
+    # Use ``reported_verdicts`` for what to show.
     verdicts: dict[CheckName, Verdict] = Field(default_factory=dict)
+    # Checks the author marked expected-to-fail, name -> why. The wheel never sees these.
+    expected_failures: dict[CheckName, str] = Field(default_factory=dict)
     # What the stamping gate run covered: each validation *target* — one invocation of the checker —
     # with the checks it covered, in the order they ran. Several checks may share one target
     # (Crucible puts a component's whole property set in one fuzz target), so this is neither
@@ -61,6 +65,33 @@ class RustFormalResult(BaseModel):
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
         return [(title, list(names)) for title, names in self.checks]
+
+    def reported_verdicts(self) -> dict[CheckName, Verdict]:
+        """Verdicts as the console should show them: an expected-to-fail check is BAD
+        even if this run did not hit it. ``detail`` stays what the run reported."""
+        return {
+            name: (
+                verdict.model_copy(update={"outcome": Outcome.BAD})
+                if name in self.expected_failures and verdict.outcome is not Outcome.BAD
+                else verdict
+            )
+            for name, verdict in self.verdicts.items()
+        }
+
+    def expected_failure(self, check: CheckName) -> ExpectedFailure | None:
+        """How an ``expect_check_failure`` fared this run, or ``None`` if the check was not marked."""
+        reason = self.expected_failures.get(check)
+        if reason is None:
+            return None
+        ran = self.verdicts[check].outcome
+        if ran is Outcome.BAD:
+            return ReproducedExpectedFailure(reason=reason)
+        return UnreproducedExpectedFailure(reason=reason, ran=ran)
+
+    def display_name(self, check: CheckName) -> str:
+        """Row name for one check: the property title when it verifies exactly one, else the check name."""
+        titles = self.check_properties().get(check, [])
+        return titles[0] if len(titles) == 1 else check
 
     def check_properties(self) -> dict[CheckName, list[PropertyTitle]]:
         """``checks`` inverted: check name -> the property titles it verifies. For display, where

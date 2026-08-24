@@ -136,7 +136,9 @@ def test_result_round_trips_through_cache_serialization():
         skipped=[SkippedProperty(property_title="q", reason="n/a")],
         output_link="local://x",
         verdicts={"rule_p": Verdict(outcome=Outcome.BAD, line=7, detail="counterexample",
-                                    duration_seconds=None, unit_file=None)},
+                                    duration_seconds=None, unit_file=None,
+                                    accounting="campaign spent 41231 executions",
+                                    finding_key=None)},
     )
     reloaded = RustFormalResult.model_validate_json(res.model_dump_json())
     assert reloaded.property_checks() == [("p", ["rule_p"])]

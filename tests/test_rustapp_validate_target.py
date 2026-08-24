@@ -25,7 +25,7 @@ from composer.rustapp.session import (
     VALIDATE_KEY, CheckVocab, GateDeps, PropertyCheckMapping, RustSessionState, SessionResult,
     _validate_tool,
 )
-from composer.rustapp.wire import Target, Check, ValidateCoverageError
+from composer.rustapp.wire import Target, Check, ValidateCoverageError, Verdict
 from composer.spec.source.report.schema import Outcome
 from composer.spec.types import PropertyFormulation
 from tests.conftest import wire_descriptor, wire_verdict
@@ -303,3 +303,34 @@ async def test_the_result_carries_the_targets_the_gating_run_covered(monkeypatch
     assert [c.name for c in result.targets[0].checks] == ["c_stake", "c_dbl"]
     assert [s.property_title for s in result.skipped] == ["fees capped"]
     assert dict(result.checks) == {"stake matches": ["c_stake"], "no double stake": ["c_dbl"]}
+
+
+@pytest.mark.asyncio
+async def test_the_result_carries_the_authors_expected_failure_declarations(monkeypatch, tmp_path):
+    # expected_failures comes from the session; the wheel never sees it.
+    async def fake_session(**_kw):
+        return SessionResult(
+            commentary="done", spec=SPEC, skipped=[],
+            property_checks=[("stake matches", ["c_stake"])],
+            verdicts={"c_stake": Verdict.with_outcome(Outcome.GOOD)},
+            ran=[Target(name="c_farms", checks=[
+                Check(name="c_stake", properties=["stake matches"], target="c_farms"),
+            ])],
+            expected_failures={"c_stake": "klend makes no such guarantee"},
+        )
+
+    monkeypatch.setattr(adapter, "run_session", fake_session)
+    formalizer = adapter.RustFormalizer(
+        cast(Any, _Wheel()), AppDescriptor.model_validate(wire_descriptor())
+    )
+    result = await formalizer.formalize(
+        "Farms", cast(Any, _Feat()),
+        [PropertyFormulation(title="stake matches", sort="invariant", description="d")],
+        cast(Any, _Ctx()), cast(Any, _Run(_Source(str(tmp_path)), _Ctx())), cast(Any, None),
+    )
+
+    assert isinstance(result, adapter.RustFormalResult)
+    assert result.expected_failures == {"c_stake": "klend makes no such guarantee"}
+    # verdicts stay as the run observed; reported_verdicts applies the declaration.
+    assert result.verdicts["c_stake"].outcome is Outcome.GOOD
+    assert result.reported_verdicts()["c_stake"].outcome is Outcome.BAD

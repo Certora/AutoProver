@@ -1,14 +1,16 @@
-"""Synthesize findings from violated rules.
+"""Write violated rules up as findings — the loop every backend shares.
 
-For each violated rule (a `RuleVerdict` with ``outcome == Outcome.BAD``) this asks an LLM to write up
-the issue, grounded in the rule's counterexample analysis (captured during the run and looked up via
-the backend's `EvidenceFetcher`) and the properties the rule formalizes. The model assesses the impact
-and likelihood; this module computes the severity from them via a fixed matrix — the LLM never picks a
-severity directly. Findings are produced only when the backend supplies an evidence fetcher; each
-finding is best-effort, so a synthesis failure drops that one finding rather than the report.
+For each BAD `RuleVerdict` this asks a model to write the issue up from the backend's
+`RuleEvidence`. Evidence has one shape; backends differ in which fields they fill. A
+`FindingsPolicy` is where the evidence comes from and what the model is told it means.
+
+The rest is shared: walking BAD rows, properties and groups, collapsing stamped findings,
+the proof of concept, concurrency, and composing the `Finding`. A backend that produces
+no findings returns no policy and never reaches here.
 """
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -16,18 +18,21 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import Field
 
 from composer.spec.gen_types import TypedTemplate
-from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.collect import EvidenceFetcher, RuleEvidence
 from composer.spec.source.report.schema import (
     AuthoredContent, Finding, FindingProvenance, FormalizedProperty, ImpactLevel, IssueContent,
-    LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleRef, RuleVerdict, SeverityTier,
+    LikelihoodLevel, Outcome, PropertyGroup, PropertyKey, RuleName, RuleRef, RuleVerdict,
+    SeverityTier,
 )
+from composer.spec.types import FindingKey
+from composer.templates.loader import load_jinja_template
+
+type FindingIdentity = FindingKey | RuleRef
 
 _log = logging.getLogger(__name__)
 
-#: Cap on concurrent findings-synthesis LLM calls (one per violated rule), so a violation-heavy run
-#: doesn't burst dozens of heavy-model requests at once (which rate limits would turn into dropped
-#: findings).
+#: Cap on concurrent findings-synthesis LLM calls, so a violation-heavy run does not burst
+#: the rate limit and drop write-ups.
 _MAX_CONCURRENT_FINDING_CALLS = 8
 
 # Impact × Likelihood -> severity. ``none`` impact (no real-world exploit path) is informational,
@@ -48,28 +53,9 @@ def severity_for(impact: ImpactLevel, likelihood: LikelihoodLevel) -> SeverityTi
     return _SEVERITY_MATRIX[(impact, likelihood)]
 
 
-class FindingsSystemParams(TypedDict):
-    """``autoprove_report_findings_system.j2`` takes no parameters — the instructions are static.
-    Declared empty rather than skipped so the template is still covered by the strict-render fuzz
-    test: adding a ``{{ ... }}`` without declaring it here then fails."""
-
-
-class FindingsPromptParams(TypedDict):
-    """The full, typed context of ``autoprove_report_findings_prompt.j2``. Every key is required."""
-    contract_name: str
-    rule_name: str
-    properties: list[FormalizedProperty]
-    groups: list[PropertyGroup]
-    instances: list[RuleEvidence]
-
-
-_FINDINGS_SYSTEM = TypedTemplate[FindingsSystemParams]("autoprove_report_findings_system.j2")
-_FINDINGS_PROMPT = TypedTemplate[FindingsPromptParams]("autoprove_report_findings_prompt.j2")
-
-
 class FindingDraft(AuthoredContent):
-    """Write up a single confirmed vulnerability finding for a formal-verification rule that the
-    Certora Prover refuted with a concrete counterexample."""
+    """What a findings model must return: the authored sections, a title, and the two axes
+    `severity_for` maps to a tier. The model never picks the tier."""
     title: str = Field(description="A one-line title naming the specific broken guarantee.")
     impact_level: ImpactLevel = Field(description=(
         "How severe the consequence is if exploited: 'high' (funds lost or stolen, protocol "
@@ -79,14 +65,93 @@ class FindingDraft(AuthoredContent):
         "code-quality observation)."
     ))
     likelihood_level: LikelihoodLevel = Field(description=(
-        "How reachable the counterexample is: 'high' (any actor, no special preconditions), 'medium' "
+        "How reachable the violation is: 'high' (any actor, no special preconditions), 'medium' "
         "(a specific but reachable state, ordering, or setup), or 'low' (privileged access, an unusual "
         "configuration, or a narrow window)."
     ))
     risk_reasoning: str = Field(description=(
         "One to three sentences justifying the impact and likelihood you assigned, grounded in the "
-        "counterexample."
+        "evidence you were given."
     ))
+
+
+class FindingsSystemParams(TypedDict):
+    """Context for ``autoprove_report_findings_system.j2``.
+
+    One template for every backend: what the evidence is and how far it goes is the backend's
+    claim; how severity is reached and which sections come back is the host's."""
+    #: Backend prose: what its evidence is, what that does and does not establish, how to read
+    #: its markers. Leads the message; the host contract follows it.
+    domain: str
+
+
+class FindingsPromptParams(TypedDict):
+    """Context for every backend's findings user prompt: one violated rule and what is known
+    about it.
+
+    One shape for all of them. The Prover supplies its own template; Rust-authored backends
+    share one host template. `build_findings` binds either.
+
+    ``properties`` is every property the covered rule(s) formalize — jointly, or the union
+    when several rows share one finding. This layer does not pick which actually broke."""
+    contract_name: str
+    rule_name: RuleName
+    properties: list[FormalizedProperty]
+    groups: list[PropertyGroup]
+    evidence: list[RuleEvidence]
+    #: Names of every covered check when several rows share one finding, including the
+    #: subject. Empty for a one-row finding — the subject is ``rule_name`` alone.
+    also_covers: list[RuleName]
+
+
+_SYSTEM = TypedTemplate[FindingsSystemParams]("autoprove_report_findings_system.j2")
+
+
+def proof_of_concept(evidence: list[RuleEvidence]) -> str | None:
+    """Every instance's reproducer, labelled once there is more than one.
+
+    Only what this run actually refuted. An expected-to-fail check this run did not hit has no
+    proof of concept, and neither does an error that never reached a verdict. Never the
+    accounting — that is about the run, not the program."""
+    traces = [
+        (e.label, e.counterexample) for e in evidence
+        if e.counterexample and (e.ran is None or e.ran is Outcome.BAD)
+    ]
+    if len(traces) <= 1:
+        return traces[0][1] if traces else None
+    return "\n\n".join(f"# {label or 'counterexample'}\n{cex}" for label, cex in traces)
+
+
+def finding_key(rule: RuleVerdict, evidence: list[RuleEvidence]) -> FindingIdentity:
+    """The finding behind a row: the backend's `FindingKey` stamp, else this row's `RuleRef`.
+
+    Rows that share a key are written up once. No stamp means no collapse. A stamp is compared
+    as a raw string across the whole report — the same value on two components merges them —
+    and is never inferred from matching evidence."""
+    stamped = next((e.finding_key for e in evidence if e.finding_key is not None), None)
+    return stamped if stamped is not None else rule.ref
+
+
+@dataclass
+class _Cluster:
+    """One write-up: the first row, its evidence, and every row that shares its stamp."""
+    rule: RuleVerdict
+    evidence: list[RuleEvidence]
+    covered: list[RuleVerdict]
+
+
+@dataclass(frozen=True)
+class FindingsPolicy:
+    """Where one backend's evidence comes from, what it is, and how to ask for a write-up.
+
+    ``domain`` and ``prompt`` are values (a string and a template). Only ``fetch_evidence``
+    is a function, because only it does I/O."""
+
+    fetch_evidence: EvidenceFetcher
+    #: Backend half of the system message — see `FindingsSystemParams.domain`.
+    domain: str
+    #: User-message template, bound by `build_findings` from `FindingsPromptParams`.
+    prompt: TypedTemplate[FindingsPromptParams]
 
 
 async def build_findings(
@@ -95,13 +160,12 @@ async def build_findings(
     rules: list[RuleVerdict],
     properties: list[FormalizedProperty],
     groups: list[PropertyGroup],
-    fetch_evidence: EvidenceFetcher | None,
+    policy: FindingsPolicy,
     llm: BaseChatModel,
 ) -> list[Finding]:
-    """One `Finding` per violated rule (concurrent, best-effort). Findings are produced only when the
-    backend supplies an evidence fetcher; returns ``[]`` otherwise or when nothing is violated."""
-    if fetch_evidence is None:
-        return []
+    """One `Finding` per violated rule (concurrent, best-effort); ``[]`` when nothing is violated.
+
+    Fewer than one per rule when several rows share a finding stamp — see `finding_key`."""
     bad = [r for r in rules if r.outcome == Outcome.BAD]
     if not bad:
         return []
@@ -115,64 +179,80 @@ async def build_findings(
             props_by_ref.setdefault(ref, []).append(p)
     group_by_key: dict[PropertyKey, PropertyGroup] = {k: g for g in groups for k in g.members}
 
-    system = _FINDINGS_SYSTEM.bind({}).render_to(load_jinja_template)
     bound = llm.with_structured_output(FindingDraft)
+    system = _SYSTEM.bind({"domain": policy.domain}).render_to(load_jinja_template)
 
-    async def _one(rule: RuleVerdict) -> Finding | None:
+    async def _evidence(rule: RuleVerdict) -> list[RuleEvidence] | None:
+        """This rule's evidence, or None if fetching failed (the rule is then skipped)."""
         try:
-            instances = await fetch_evidence(rule.name)
-            # Every rule in the report is referenced by >=1 property (collect drops orphans), so pass
-            # ALL of them: the rule may jointly formalize several, and only the counterexample says
-            # which one actually broke — that is the LLM's job, not ours to pre-guess.
-            props = props_by_ref.get(rule.ref, [])
+            return await policy.fetch_evidence(rule.ref)
+        except Exception:  # noqa: BLE001 — one rule failing must never fail the report
+            _log.warning("report: evidence fetch failed for rule %r; skipping", rule.name,
+                         exc_info=True)
+            return None
+
+    # Fetch every BAD row first so stamped findings collapse before any write-up is paid for.
+    fetched = await asyncio.gather(*[_evidence(r) for r in bad])
+    clusters: dict[FindingIdentity, _Cluster] = {}
+    for rule, evidence in zip(bad, fetched):
+        if evidence is None:
+            continue
+        key = finding_key(rule, evidence)
+        cluster = clusters.get(key)
+        if cluster is None:
+            clusters[key] = _Cluster(rule, evidence, [rule])
+        else:
+            cluster.covered.append(rule)
+
+    async def _one(cluster: _Cluster) -> Finding | None:
+        rule, evidence, covered = cluster.rule, cluster.evidence, cluster.covered
+        try:
+            props: list[FormalizedProperty] = []
+            seen: set[PropertyKey] = set()
+            for r in covered:
+                for p in props_by_ref.get(r.ref, []):
+                    if p.key not in seen:
+                        seen.add(p.key)
+                        props.append(p)
             # A rule's properties may share a group (some may be in none); dedupe by slug, first-seen order.
             rule_groups = list({g.slug: g for p in props if (g := group_by_key.get(p.key)) is not None}.values())
-            user = _FINDINGS_PROMPT.bind({
-                "contract_name": contract_name,
-                "rule_name": rule.name,
-                "properties": props,
-                "groups": rule_groups,
-                "instances": instances,
+            also_covers = list(dict.fromkeys(r.name for r in covered)) if len(covered) > 1 else []
+            user = policy.prompt.bind({
+                "contract_name": contract_name, "rule_name": rule.name, "properties": props,
+                "groups": rule_groups, "evidence": evidence, "also_covers": also_covers,
             }).render_to(load_jinja_template)
             draft = await bound.ainvoke([SystemMessage(system), HumanMessage(user)])
             assert isinstance(draft, FindingDraft)
-            return _compose(rule, draft, instances, rule_groups)
+            return _compose(rule, draft, evidence, rule_groups, covered)
         except Exception:  # noqa: BLE001 — one finding failing must never fail the report
             _log.warning("report: finding synthesis failed for rule %r; skipping", rule.name, exc_info=True)
             return None
 
     sem = asyncio.Semaphore(_MAX_CONCURRENT_FINDING_CALLS)
 
-    async def _bounded(rule: RuleVerdict) -> Finding | None:
+    async def _bounded(cluster: _Cluster) -> Finding | None:
         async with sem:
-            return await _one(rule)
+            return await _one(cluster)
 
-    findings = await asyncio.gather(*[_bounded(r) for r in bad])
+    findings = await asyncio.gather(*[_bounded(c) for c in clusters.values()])
     return [f for f in findings if f is not None]
-
-
-def _proof_of_concept(instances: list[RuleEvidence]) -> str | None:
-    """Every instance's counterexample, labelled once there is more than one — the report shows a
-    single row per rule, so its PoC should cover all of that rule's failing instances."""
-    traces = [(i.label, i.counterexample) for i in instances if i.counterexample]
-    if len(traces) <= 1:
-        return traces[0][1] if traces else None
-    return "\n\n".join(f"# {label or 'counterexample'}\n{cex}" for label, cex in traces)
 
 
 def _compose(
     rule: RuleVerdict,
     draft: FindingDraft,
-    instances: list[RuleEvidence],
+    evidence: list[RuleEvidence],
     groups: list[PropertyGroup],
+    covered: list[RuleVerdict],
 ) -> Finding:
+    links = list(dict.fromkeys(r.prover_link for r in covered if r.prover_link))
     return Finding(
         title=draft.title,
         severity=severity_for(draft.impact_level, draft.likelihood_level),
         content=IssueContent(
             **{f: getattr(draft, f) for f in AuthoredContent.model_fields},
-            proof_of_concept=_proof_of_concept(instances),
-            references=[rule.prover_link] if rule.prover_link else None,
+            proof_of_concept=proof_of_concept(evidence),
+            references=links or None,
         ),
         provenance=FindingProvenance(
             rule_name=rule.name,
@@ -183,5 +263,6 @@ def _compose(
             impact=draft.impact_level,
             likelihood=draft.likelihood_level,
             risk_reasoning=draft.risk_reasoning,
+            covers=[r.ref for r in covered] if len(covered) > 1 else [],
         ),
     )

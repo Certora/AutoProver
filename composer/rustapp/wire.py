@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Protocol, S
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from composer.spec.source.report.schema import Outcome
-from composer.spec.types import CheckName, ComponentName, PropertyTitle, PropertyType
+from composer.spec.types import CheckName, ComponentName, FindingKey, PropertyTitle, PropertyType
 
 # ``TargetName``: what a backend selects when it invokes the checker — one :class:`Target`'s name
 # (Crucible: the component's harness fn / Cargo feature). Phantom-typed like the vocabulary in
@@ -345,13 +345,20 @@ class Verdict(WireModel):
     #: Human-readable explanation of a non-GOOD outcome — the counterexample / assertion message for
     #: a BAD, the error text for an ERROR.
     detail: str | None
+    #: What the run spent and covered (budget, coverage, how far it got). Present on a GOOD too.
+    #: Kept apart from ``detail``: that is evidence about the program; this is about the run.
+    accounting: str | None
+    #: Opaque key grouping several checks under one finding. The host compares it and never
+    #: reads into it. ``None`` means this verdict stands on its own.
+    finding_key: FindingKey | None
 
     @classmethod
     def with_outcome(cls, outcome: Outcome) -> "Verdict":
         """A bare verdict: the outcome, no diagnostics. Mirrors the Rust ``Verdict::with_outcome``,
         and exists for the same reason — every field being required is right for the wire and no
-        reason for a caller that has only an outcome to spell four nulls to say so."""
-        return cls(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=None)
+        reason for a caller that has only an outcome to spell six nulls to say so."""
+        return cls(outcome=outcome, line=None, duration_seconds=None, unit_file=None, detail=None,
+                   accounting=None, finding_key=None)
 
 
 class ValidateBuildFailed(WireModel):

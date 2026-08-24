@@ -60,6 +60,8 @@ from composer.pipeline.ecosystem import ChainTag, Ecosystem
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
+from composer.rustapp.findings import rust_findings
+from composer.spec.source.report.findings import FindingsPolicy
 from composer.rustapp.phases import PhaseModel
 from composer.rustapp.result import RustArtifact, RustFormalResult, RustSetupSpec
 from composer.rustapp.toolchain import project_toolchain, source_unit
@@ -385,6 +387,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
             checks=outcome.property_checks,
             skipped=outcome.skipped,
             verdicts=outcome.verdicts,
+            expected_failures=outcome.expected_failures,
             # What the stamping run actually covered, in the order the host ran it — each target
             # with its checks. A callout-mode wheel keys its deliverable sections on the names, and
             # carrying the checks alongside is what makes "which properties are these results
@@ -396,6 +399,7 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
     async def fetch_verdicts(
         self, formalized: Formalized[RustFormalResult]
     ) -> dict[RuleName, Verdict]:
+        res = formalized.result
         return {
             name: Verdict(
                 outcome=v.outcome,
@@ -403,9 +407,17 @@ class RustFormalizer(Formalizer[RustFormalResult, FeatureUnit]):
                 duration_seconds=v.duration_seconds,
                 unit_file=v.unit_file or formalized.unit_file,
                 message=v.detail,
+                accounting=v.accounting,
+                expected_failure=res.expected_failure(name),
             )
-            for name, v in formalized.result.verdicts.items()
+            for name, v in res.reported_verdicts().items()
         }
+
+    @override
+    def findings_policy(
+        self, outcomes: list[ComponentOutcome[RustFormalResult, FeatureUnit]]
+    ) -> FindingsPolicy | None:
+        return rust_findings(outcomes, self._descriptor.findings)
 
     @override
     async def finalize(

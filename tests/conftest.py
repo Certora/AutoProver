@@ -488,6 +488,10 @@ def wire_descriptor(**overrides: Any) -> dict[str, Any]:
         "component_noun": None,
         "check_noun": None,
         "evidence_kinds": ["build_failure", "check_output", "counterexample", "reasoned"],
+        # Default is a findings declaration. Tests that opt out pass findings=None.
+        "findings": {
+            "domain": "The demo backend read the spec back and it did not say what was asked.",
+        },
         **overrides,
     }
 
@@ -501,7 +505,7 @@ def wire_verdict(outcome: str, **overrides: Any) -> dict[str, Any]:
     """One ``Verdict`` — every diagnostic field null unless ``overrides`` says otherwise."""
     return {
         "outcome": outcome, "line": None, "duration_seconds": None,
-        "unit_file": None, "detail": None, **overrides,
+        "unit_file": None, "detail": None, "accounting": None, "finding_key": None, **overrides,
     }
 
 

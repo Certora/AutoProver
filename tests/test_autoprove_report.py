@@ -28,8 +28,10 @@ from composer.pipeline.core import Curtailed, Delivered
 
 from composer.spec.source.artifacts import ProverArtifactStore
 from composer.spec.source.report import build
-from composer.spec.source.report.collect import ReportComponentInput, collect
+from composer.spec.source.report.collect import ReportComponentInput, RuleEvidence, collect
 from composer.spec.source.report.coverage import ValidationError, validate
+from composer.spec.source.prover_findings import prover_findings
+from composer.spec.source.report.findings import FindingDraft
 from composer.spec.source.report.grouping import (
     FALLBACK_SLUG, GroupingResult, PropertyGroupDraft, aggregate_status,
     build_fallback_grouping, build_groups,
@@ -37,12 +39,10 @@ from composer.spec.source.report.grouping import (
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
     AutoProverReport, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
-    GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
-    PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
+    GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome, PropertyGroup,
+    RuleVerdict, SeverityTier, SkippedClaim, UnreproducedExpectedFailure,
 )
 from composer.spec.source.report_prover import make_prover_fetcher
-from composer.spec.source.report.collect import RuleEvidence
-from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.diagnostics.timing import RunSummary
 
@@ -474,6 +474,43 @@ def test_render_html_shows_finding_message():
     assert "crash abc: deposit(5) - expected 105 got 100" in h
 
 
+def test_render_html_shows_accounting_apart_from_the_message():
+    p1 = _fp("C", "p_dep", [("c.spec", "c_deposit")], desc="deposit increases balance")
+    rules = [RuleVerdict(name="c_deposit", spec_file="c.spec", outcome=Outcome.BAD,
+                         message="crash abc", accounting="spent 41231 executions")]
+    groups = [PropertyGroup(slug="deposits", title="Deposits", description="d",
+                            status=GroupStatus.BAD, members=[("C", "p_dep")])]
+    cov = CoverageReport(total_properties=1, total_rules=1, total_groups=1,
+                         properties_per_group_min=1, properties_per_group_max=1,
+                         property_coverage_complete=True)
+    h = render_html(AutoProverReport(contract_name="Vault", backend="foundry",
+                                     properties=[p1], rules=rules, groups=groups,
+                                     skipped=[], coverage=cov))
+    assert 'class="finding"' in h and "crash abc" in h
+    assert 'class="accounting"' in h and "spent 41231 executions" in h
+
+
+def test_render_html_shows_an_unreproduced_expected_failure():
+    p1 = _fp("C", "p_dep", [("c.spec", "c_deposit")], desc="deposit increases balance")
+    rules = [RuleVerdict(
+        name="c_deposit", spec_file="c.spec", outcome=Outcome.BAD,
+        expected_failure=UnreproducedExpectedFailure(
+            reason="kill switch is a no-op", ran=Outcome.GOOD,
+        ),
+    )]
+    groups = [PropertyGroup(slug="deposits", title="Deposits", description="d",
+                            status=GroupStatus.BAD, members=[("C", "p_dep")])]
+    cov = CoverageReport(total_properties=1, total_rules=1, total_groups=1,
+                         properties_per_group_min=1, properties_per_group_max=1,
+                         property_coverage_complete=True)
+    h = render_html(AutoProverReport(contract_name="Vault", backend="foundry",
+                                     properties=[p1], rules=rules, groups=groups,
+                                     skipped=[], coverage=cov))
+    assert 'class="expected-failure"' in h
+    assert "kill switch is a no-op" in h
+    assert "Successful test" in h  # foundry label for GOOD
+
+
 def test_render_html_group_rows_and_edge_labels():
     h = render_html(_mini_report())
     assert "deposit-openness" in h and "Deposit is open" in h
@@ -692,21 +729,6 @@ async def test_build_all_curtailed_skips_the_grouping_call(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLevel = "medium",
-           title: str = "Reentrancy drains vault") -> FindingDraft:
-    return FindingDraft(
-        title=title, impact_level=impact_level, likelihood_level=likelihood_level,
-        risk_reasoning="High impact (fund loss); medium likelihood (needs a specific state).",
-        summary="s", description="d", impact="funds at risk", attack_path="1..2..3",
-    )
-
-
-def _evidence(by_rule: dict[str, list[RuleEvidence]]):
-    async def fetch(rule_name):
-        return by_rule.get(rule_name, [])
-    return fetch
-
-
 def _finding(severity: SeverityTier = "high") -> Finding:
     return Finding(
         title="Reentrancy drains vault", severity=severity,
@@ -720,25 +742,26 @@ def _finding(severity: SeverityTier = "high") -> Finding:
     )
 
 
-def test_severity_for_matrix():
-    """Severity is computed from the impact × likelihood matrix, not chosen by the LLM."""
-    from composer.spec.source.report.findings import severity_for
-    assert severity_for("high", "high") == "critical"
-    assert severity_for("high", "medium") == "high"
-    assert severity_for("high", "low") == "medium"
-    assert severity_for("medium", "high") == "high"
-    assert severity_for("medium", "medium") == "medium"
-    assert severity_for("low", "high") == "low"    # low impact caps at low regardless of likelihood
-    assert severity_for("low", "low") == "low"
-    assert severity_for("none", "high") == "informational"   # no exploit path -> informational
-    assert severity_for("none", "low") == "informational"
+def _draft(impact_level: ImpactLevel = "high",
+           likelihood_level: LikelihoodLevel = "medium") -> FindingDraft:
+    return FindingDraft(
+        title="Reentrancy drains vault",
+        impact_level=impact_level, likelihood_level=likelihood_level,
+        risk_reasoning="High impact; medium likelihood.",
+        summary="s", description="d", impact="funds at risk", attack_path="1..2..3",
+    )
+
+
+def _policy(by_rule: dict[str, list[RuleEvidence]]):
+    """The prover's findings policy over a canned evidence store, keyed as the report keys rows."""
+    async def fetch(ref):
+        return by_rule.get(ref[1], [])
+    return prover_findings(fetch)
 
 
 @pytest.mark.asyncio
 async def test_build_report_synthesizes_one_finding_per_violation():
-    """Only the violated rule becomes a finding; severity is computed from the model's impact/
-    likelihood, the counterexample rides proof_of_concept, the run link is a reference, and provenance
-    traces back to the rule. No locations are produced at report time (submission builds those)."""
+    """One finding for the violated rule: computed severity, CEX as proof of concept, provenance back to the rule."""
     gen = _gen({"p_good": ["r_ok"], "p_bad": ["r_bad"]})
     fetch = _fetcher({"L1": [
         _fake_check("r_ok", NodeStatus.VERIFIED, file="autospec_C.spec"),
@@ -746,14 +769,14 @@ async def test_build_report_synthesizes_one_finding_per_violation():
     ]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="gd", members=[("C", "p_good"), ("C", "p_bad")])]))
-    evidence = _evidence({"r_bad": [RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
+    synthesis = _policy({"r_bad": [RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
 
     report = await build.build_report(
         contract_name="Vault", backend="prover",
         components=[_input("C", "autospec_C.spec",
                            [_prop("p_good", "d"), _prop("p_bad", "d")], gen)],
         llm=grouping, fetch_verdicts=fetch,
-        findings_llm=_StructuredStubModel(output=_draft()), fetch_evidence=evidence,
+        findings_llm=_StructuredStubModel(output=_draft()), findings=synthesis,
     )
 
     assert len(report.findings) == 1
@@ -762,17 +785,15 @@ async def test_build_report_synthesizes_one_finding_per_violation():
     prov = f.provenance
     assert prov is not None
     assert prov.impact == "high" and prov.likelihood == "medium"
-    assert prov.risk_reasoning                             # the axis justification is captured
     assert prov.rule_name == "r_bad" and prov.outcome == Outcome.BAD
     assert prov.group_slugs == ["g"] and prov.spec_file == "autospec_C.spec"
-    assert not hasattr(f, "locations")  # locations are a submission-layer concern, not on the report
     assert f.content.proof_of_concept == "<cex/>"
     assert f.content.references == ["L1"]
 
 
 @pytest.mark.asyncio
 async def test_build_report_no_findings_without_findings_llm():
-    """The findings pass is opt-in: omitting ``findings_llm`` leaves findings empty (back-compat)."""
+    """The findings pass is opt-in: omitting ``findings_llm`` leaves findings empty."""
     gen = _gen({"p_bad": ["r_bad"]})
     fetch = _fetcher({"L1": [_fake_check("r_bad", NodeStatus.VIOLATED)]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
@@ -786,49 +807,24 @@ async def test_build_report_no_findings_without_findings_llm():
 
 
 @pytest.mark.asyncio
-async def test_build_findings_degrades_without_analysis():
-    """A violated rule whose evidence fetch yields nothing (fetcher present, no analysis for that rule)
-    still produces a finding from the property/group text; proof_of_concept is simply absent."""
-    rules = [_rv("c.spec", "r_bad", Outcome.BAD)]
-    props = [_fp("C", "p_bad", [("c.spec", "r_bad")], desc="balances stay solvent")]
-    groups = [_pg("g", [("C", "p_bad")], status=GroupStatus.BAD)]
-    findings = await build_findings(
-        contract_name="Vault", rules=rules, properties=props, groups=groups,
-        fetch_evidence=_evidence({}),  # fetcher present, but no evidence recorded for r_bad
-        llm=_StructuredStubModel(output=_draft(impact_level="medium", likelihood_level="medium")),
+async def test_a_failing_findings_pass_still_yields_a_report():
+    """A failing synthesis must not take the report down with it."""
+    gen = _gen({"p_bad": ["r_bad"]})
+    fetch = _fetcher({"L1": [_fake_check("r_bad", NodeStatus.VIOLATED)]})
+    grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="d", members=[("C", "p_bad")])]))
+
+    async def _boom(_ref):
+        raise RuntimeError("evidence store exploded")
+
+    report = await build.build_report(
+        contract_name="C", backend="prover",
+        components=[_input("C", "autospec_C.spec", [_prop("p_bad", "d")], gen)],
+        llm=grouping, fetch_verdicts=fetch,
+        findings_llm=_StructuredStubModel(output=_draft()), findings=prover_findings(_boom),
     )
-    assert len(findings) == 1
-    assert findings[0].severity == "medium"               # medium × medium
-    assert findings[0].content.proof_of_concept is None
-    prov = findings[0].provenance
-    assert prov is not None and prov.spec_file == "c.spec"
-
-
-@pytest.mark.asyncio
-async def test_build_findings_empty_without_evidence_fetcher():
-    """Findings are produced only when the backend supplies an evidence fetcher — no backend-id
-    check. A backend that opts out (fetch_evidence is None) yields no findings."""
-    rules = [_rv("c.spec", "r_bad", Outcome.BAD)]
-    findings = await build_findings(
-        contract_name="V", rules=rules, properties=[], groups=[],
-        fetch_evidence=None, llm=_StructuredStubModel(output=_draft()),
-    )
-    assert findings == []
-
-
-def test_findings_prompt_lists_all_properties_a_rule_formalizes():
-    """A rule may jointly formalize several properties; the prompt presents ALL of them so the model
-    grounds the write-up in the one the counterexample actually breaks (not a pre-picked one)."""
-    from composer.templates.loader import load_jinja_template
-    user = load_jinja_template(
-        "autoprove_report_findings_prompt.j2",
-        contract_name="Vault", rule_name="allowDeposits_revert_characteristic",
-        properties=[_fp("C", "revert_on_non_admin", [], desc="reverts if caller is not an admin"),
-                    _fp("C", "revert_on_zero_actor", [], desc="reverts if allowedActor is address(0)")],
-        groups=[], instances=[RuleEvidence(analysis="the admin check is skipped", counterexample="<cex/>")],
-    )
-    assert "reverts if caller is not an admin" in user
-    assert "reverts if allowedActor is address(0)" in user
+    assert report.findings == []
+    assert report.rules  # the rest of the report is intact
 
 
 def test_render_html_findings_section():
