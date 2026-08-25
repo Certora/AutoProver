@@ -43,6 +43,7 @@ from composer.io.events import (
 from composer.diagnostics.jsonl_sink import emit as _emit_jsonl
 
 from langgraph._internal._typing import StateLike
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
 from langchain_core.runnables import RunnableConfig
@@ -322,6 +323,23 @@ async def run_to_completion[I: StateLike, S: StateLike, C: StateLike | None](
         within_tool=within_tool,
         retry=retry,
     )
+
+async def latest_checkpoint_of(
+    checkpointer: BaseCheckpointSaver, thread_id: str
+) -> str | None:
+    """The id of the most recent checkpoint on ``thread_id``, or ``None`` when
+    the thread has none yet.
+
+    Pass the result as ``run_to_completion``'s ``checkpoint_id`` to continue an
+    interrupted run instead of re-entering it: a run config that names a
+    checkpoint makes :func:`composer.io.graph_runner.run_graph` drop the input,
+    so the graph picks up the checkpoint's pending tasks rather than applying
+    the input afresh from ``START``. Re-applying it would re-run the entry node
+    over a message history that already has an initial prompt in it, which the
+    provider rejects (a second system message, no longer at position 0).
+    """
+    tup = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
+    return None if tup is None else tup.checkpoint["id"]
 
 class RetryPolicy(ABC):
     """The transient-failure ("floor") retry contract: which exceptions are
