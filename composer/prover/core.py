@@ -27,11 +27,12 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable, Protocol, cast, override, Awaitable
+from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
 import json
 import logging
 import os
+import signal
 import uuid
 
 
@@ -409,35 +410,93 @@ PROVER REPORT:
     res = await ainvoke(llm, fresh_messages)
     return res.text
 
+class ProverSubprocessTimeout(Exception):
+    """A prover subprocess outlived its bound and was killed."""
+
+
+# Bound for the compile-and-typecheck subprocesses that support rule listing.
+# They build the project and run the CVL typechecker; neither waits on the cloud.
+_BUILD_TIMEOUT_S = 1800
+
+
+def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill the subprocess and everything it started.
+
+    ``certoraRun`` is a python front end that shells out to a JVM, so killing
+    only the direct child leaves that JVM running: it holds the pipe the parent
+    was reading, and on a container it survives until the container does.
+    Children are spawned in their own process group precisely so one signal can
+    reach the whole tree.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    except Exception:
+        _logger.exception("Could not kill prover subprocess group %d", proc.pid)
+
+
+@asynccontextmanager
+async def _bounded_subprocess(
+    *argv: str, cwd: str, timeout: float, **kwargs: Any
+) -> AsyncIterator[asyncio.subprocess.Process]:
+    """Run a subprocess whose whole tree is killed if the body outlives ``timeout``.
+
+    The prover's local phase (solc, the CVL typechecker) can wedge without
+    exiting or writing anything further, and every await on it is unbounded:
+    the caller waits on the child, the child waits on the JVM, and the JVM waits
+    on a lock it will never get. One observed instance sat that way for three
+    days, having consumed a second of CPU. Nothing recovers a run from that
+    state, so bound it here and let the failure surface as an ordinary error the
+    agent can act on.
+
+    ``process_group=0`` makes the child a group leader, which is what lets
+    ``_kill_tree`` reach a grandchild JVM.
+    """
+    proc = await asyncio.subprocess.create_subprocess_exec(
+        *argv, cwd=cwd, process_group=0, **kwargs
+    )
+    try:
+        async with asyncio.timeout(timeout):
+            yield proc
+    except TimeoutError:
+        _kill_tree(proc)
+        await proc.wait()
+        raise ProverSubprocessTimeout(
+            f"{argv[0]} exceeded {timeout:.0f}s and was killed"
+        ) from None
+
+
 async def run_prover_inner(
     folder: Path,
     args: list[str],
     on_err: Callable[[int | None, str, str], None],
-    on_stdout: Callable[[str], Awaitable[None]]
+    on_stdout: Callable[[str], Awaitable[None]],
+    timeout: float,
 ) -> tuple[ProverResult | str, str]:
     # 3-5. Spawn async subprocess, stream stdout, collect stderr
     wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
 
     with tempfile.NamedTemporaryFile("rb", suffix=".json") as output_file:
-        proc = await asyncio.subprocess.create_subprocess_exec(
+        async with _bounded_subprocess(
             sys.executable,
             str(wrapper_script), str(output_file.name), *args,
             cwd=str(folder),
+            timeout=timeout,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-        )
+        ) as proc:
+            stdout_lines: list[str] = []
+            assert proc.stdout is not None
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
+                line = raw.decode()
+                stdout_lines.append(line)
+                await on_stdout(line.rstrip("\n"))
 
-        stdout_lines: list[str] = []
-        assert proc.stdout is not None
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
-                break
-            line = raw.decode()
-            stdout_lines.append(line)
-            await on_stdout(line.rstrip("\n"))
-
-        stderr_raw = await proc.stderr.read() if proc.stderr else b""
+            stderr_raw = await proc.stderr.read() if proc.stderr else b""
         await proc.wait()
 
         stdout = "".join(stdout_lines)
@@ -465,14 +524,14 @@ async def declared_rules_list(
     if any(m == "--msg" for m in args):
         raise ValueError("This unholy black magic only works if you don't pass msg")
     tc_key = uuid.uuid4().hex
-    proc = await asyncio.subprocess.create_subprocess_exec(
+    async with _bounded_subprocess(
         "certoraRun", *args, "--msg", tc_key, "--compilation_steps_only",
         cwd=str(folder),
+        timeout=_BUILD_TIMEOUT_S,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
-    )
-
-    rc = await proc.wait()
+    ) as proc:
+        rc = await proc.wait()
     if rc != 0:
         raise ValueError("Type check failed?")
     from importlib.resources import files
@@ -502,13 +561,14 @@ async def declared_rules_list(
     if found is None:
         raise ValueError("Couldn't find build dir")
     with tempfile.NamedTemporaryFile("r") as f:
-        proc = await asyncio.subprocess.create_subprocess_exec(
+        async with _bounded_subprocess(
             "java", "-jar", str(tc_jar), "-buildDirectory", str(found), "-typeCheck", "true", "-listRules", f.name,
             cwd=str(folder),
+            timeout=_BUILD_TIMEOUT_S,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
-        )
-        tc_rc = await proc.wait()
+        ) as proc:
+            tc_rc = await proc.wait()
         if tc_rc != 0:
             raise ValueError("Nope, no dice")
         all_rules = f.read()
@@ -544,12 +604,28 @@ async def run_prover(
     # only submits and returns, so this isn't used — cloud runtime comes from the job's
     # execution window (see cloud_results / _job_runtime_ms).
     _t0 = time.perf_counter()
-    run_result, stdout = await run_prover_inner(
-        folder,
-        effective_args,
-        lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
-        callbacks.on_stdout_line
-    )
+    # The same bound the result poller uses (step 7): whatever the run is allowed
+    # to take, plus slack. It is a backstop against a wedged local phase, not a
+    # budget -- a healthy cloud submit finishes in minutes.
+    subprocess_timeout = prover_opts.global_timeout + 5 * 60
+    try:
+        run_result, stdout = await run_prover_inner(
+            folder,
+            effective_args,
+            lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
+            callbacks.on_stdout_line,
+            subprocess_timeout,
+        )
+    except ProverSubprocessTimeout as e:
+        # Returned rather than raised: the agent reads this as a tool result and
+        # can retry or change approach, which beats stalling the run.
+        _logger.error("Prover subprocess timed out: %s", e)
+        return (
+            f"The prover did not finish within {subprocess_timeout:.0f}s and was "
+            f"terminated. This is an infrastructure failure, not a problem with "
+            f"the specification: the local build or type-check phase stopped "
+            f"responding. Retrying may succeed."
+        )
     local_runtime_ms = int((time.perf_counter() - _t0) * 1000)
     if isinstance(run_result, str):
         return run_result

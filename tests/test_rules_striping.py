@@ -213,8 +213,14 @@ def _install_fake_prover_procs(
     ``conf_msg``, to simulate a foreign run), java writes ``rules_text`` to its
     ``-listRules`` target."""
 
-    async def fake_exec(*argv, cwd=None, stdout=None, stderr=None):
+    # ``**kwargs`` mirrors the real signature: the production call also passes
+    # ``process_group`` so a timeout can kill the whole tree.
+    async def fake_exec(*argv, cwd=None, stdout=None, stderr=None, **kwargs):
         assert cwd is not None
+        assert kwargs.get("process_group") == 0, (
+            "children must lead their own process group so a timeout kill "
+            "reaches a grandchild JVM"
+        )
         argv = [str(a) for a in argv]
         if argv[0] == "certoraRun":
             assert "--compilation_steps_only" in argv
