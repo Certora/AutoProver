@@ -1,0 +1,10 @@
+{% import 'v.j2' as nondet %}use cvlr::nondet::Nondet;
+use cvlr_soroban::*;
+{% for elt in types %}{% if elt.fields %}
+impl Nondet for {{ elt.name }} {
+    fn nondet() -> Self {
+      {{ elt.name }}{ {% for v in elt.fields %}
+        {{ v.name }}: {{ nondet.nondet(v.type) }}{% if not loop.last %}, {% endif %} {% endfor %}}
+    }
+}
+{% endif %}{% endfor %}

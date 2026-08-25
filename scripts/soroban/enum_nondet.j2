@@ -1,10 +1,12 @@
-{% for elt in enums %}
-use {{ elt.use }}::{{ elt.name }};
+{% import 'v.j2' as nondet %}use cvlr::nondet::Nondet;
+use cvlr_soroban::*;
+use soroban_sdk::*;
 
+{% for elt in enums %}
 impl Nondet for {{ elt.name }} {
     fn nondet() -> Self { {% for v in elt.variants %}
         {% if not loop.first %}} else {% endif %}{% if not loop.last %}if bool::nondet() {% endif %}{
-            {{ elt.name }}::{{ v.name }}{% if v.args %}({% for a in v.args %}nondet(){% if not loop.first %}, {% endif %}{% endfor %}){% endif %}{% endfor %}
+            {{ elt.name }}::{{ v.name }}{% if v.args %}({% for a in v.args %}{{ nondet.nondet(a) }}{% if not loop.first %}, {% endif %}{% endfor %}){% endif %}{% endfor %}
 	}
     }
 }
