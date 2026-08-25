@@ -34,7 +34,11 @@ from composer.llm.types import CacheLevel
 
 class ContentRenderer(Protocol):
     def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict: ...
-    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict: ...
+    # ``filename`` is redundant for the Files-API providers, which reference an
+    # upload by id alone, but is required by a renderer that inlines the bytes
+    # as a data URL (OpenRouter): the content block carries no id to look a name
+    # up by, and OpenAI-compatible inline file blocks require ``filename``.
+    def file_block(self, file_id: str, *, filename: str, cache_level: CacheLevel = CacheLevel.NONE) -> dict: ...
 
 # ---------------------------------------------------------------------------
 # Protocols (the public surface)
@@ -224,7 +228,9 @@ class UploadedFile:
     renderer: ContentRenderer
 
     def to_dict(self, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
-        return self.renderer.file_block(file_id=self.file_id, cache_level=cache_level)
+        return self.renderer.file_block(
+            file_id=self.file_id, filename=self.basename, cache_level=cache_level
+        )
 
     def to_digest(self) -> str:
         return self.digest

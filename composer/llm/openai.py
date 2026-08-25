@@ -22,7 +22,8 @@ import openai
 from composer.input.files import UploaderBase, ContentRenderer
 from composer.input.types import ModelConfiguration
 from .provider import (
-    ProviderServiceBase, ProviderSpec, compaction_threshold
+    ProviderServiceBase, ProviderSpec, compaction_threshold, reasoning_effort,
+    standard_callbacks
 )
 from .pricing import PriceProvider, price_provider_for
 from .types import CacheLevel
@@ -135,14 +136,6 @@ def _context_window(features: OpenAIModelFeatures) -> int:
     return _assumed_context_window
 
 
-def _reasoning_effort(thinking_tokens: int) -> Literal["low", "medium", "high"]:
-    """Map a thinking-token budget onto OpenAI's three-step effort knob."""
-    if thinking_tokens <= 2048:
-        return "low"
-    if thinking_tokens <= 8192:
-        return "medium"
-    return "high"
-
 class OpenAIService(ProviderServiceBase):
     def __init__(self):
         from graphcore.tools.memory import openai_async_memory_tool
@@ -168,7 +161,10 @@ class OpenAIRenderer:
     def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
         to_ret : dict[str, Any] = {"type": "text", "text": text}
         return to_ret
-    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+    def file_block(
+        self, file_id: str, *, filename: str, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        # filename unused: the Files API upload already carries it.
         return {
             "type": "file",
             "file": {
@@ -250,8 +246,6 @@ class OpenAIModelProvider:
         self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
         from langchain_openai import ChatOpenAI
-        from composer.diagnostics.usage_callback import UsageCallback
-        from composer.diagnostics.cost_callback import CostAccumulator
 
         opts = self.options
         kwargs: dict[str, Any] = {
@@ -262,7 +256,7 @@ class OpenAIModelProvider:
 
         if opts.thinking_tokens is not None and not disable_thinking and self.features.reasoning:
             kwargs["reasoning"] = {
-                "effort": _reasoning_effort(opts.thinking_tokens),
+                "effort": reasoning_effort(opts.thinking_tokens),
                 "summary": "auto"
             }
 
@@ -273,7 +267,7 @@ class OpenAIModelProvider:
             max_retries=2,
             # OpenAI has no cache-TTL knob, so long_cache stays False; cache_write_1h
             # mirrors cache_write in the table anyway.
-            callbacks=[UsageCallback(), CostAccumulator(self.price_provider)],
+            callbacks=standard_callbacks(self.price_provider),
             **kwargs,
         )
 
