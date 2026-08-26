@@ -57,6 +57,11 @@ from certora_autosetup.utils.types import ContractHandle, ContractInfo
 
 COMPONENT = "Autosetup"
 
+# Per-job prover timeout (seconds) for the Collect Difficulties run. It skips the SMT solve, so this
+# is a safety net for the build/optimize pipeline, not the solver — a heavy method must reach the
+# postOptimize surviving-graph dump the detector consumes, so it is generous (20m).
+DIFFICULTY_RUN_GLOBAL_TIMEOUT = 1200
+
 
 def _reconcile_evm_version_keys(
     config: Dict[str, Any],
@@ -101,6 +106,15 @@ class Autosetup:
         "callTraceHardFail": "on",
     }
 
+    # The Collect Difficulties run only needs the built + optimized TAC and the postOptimize
+    # SurvivingCallGraph the detector reads. `skipFormulaChecking` drops the SMT solve entirely
+    # (so the run finishes fast and never times out on the solver); the test-mode result validators
+    # (`testMode`/`checkRuleDigest`) are omitted because there are no solver results to validate.
+    DIFFICULTY_RUN_PROVER_ARGS = {
+        "skipFormulaChecking": "",
+        "callTraceHardFail": "on",
+    }
+
     def __init__(
         self,
         config: AutosetupConfig,
@@ -140,6 +154,7 @@ class Autosetup:
         self.import_patcher_applied: bool = False
         self._sanity_advanced_analysis: Dict[str, Dict[str, SanityFailureResult]] = {}
         self._test_run_specs: List[ProverJobSpec[Any]] = []
+        self._difficulty_run_specs: List[ProverJobSpec[Any]] = []
         self.bytes_mappings: List[tuple[ContractHandle, List[str]]] = []
         # Set during run()
         self.main_contract_handle: Optional[ContractHandle] = None
@@ -345,6 +360,7 @@ class Autosetup:
             sanity_analysis=dict(self._sanity_advanced_analysis),
             bytes_mappings=list(self.bytes_mappings),
             test_run_specs=list(self._test_run_specs),
+            difficulty_run_specs=list(self._difficulty_run_specs),
             build_system_config_dict=self.get_build_system_config_dict_with_updates(),
             orchestration_timestamp=self.config.orchestration_timestamp,
             # Every LLM call this process made (summaries, proxy detection,
@@ -858,25 +874,54 @@ class Autosetup:
                     contract_advanced = await autosetup.set_sanity_options(enhanced_config.path, contract_name)
                     autosetup._sanity_advanced_analysis.update(contract_advanced)
 
-                # Create test run config BEFORE building the warmup config, because the test flags
-                # need actual sanity rules to exercise. Lands in .certora_internal/confs/ so the
-                # user-facing certora/confs/ stays a single-file directory.
+                # Both runs land in .certora_internal/confs/ so the user-facing certora/confs/ stays a
+                # single-file directory. Built BEFORE the warmup config because they need actual sanity
+                # rules to exercise.
                 internal_confs_dir = autosetup.config.project_root / DIR_INTERNAL_CONFS
-                test_config = autosetup.config_manager.create_copy_with_prover_args(
+
+                # Collect Difficulties run — feeds the summarization detector. It skips the SMT solve
+                # (DIFFICULTY_RUN_PROVER_ARGS) so it finishes on the build/optimize pipeline alone, and it
+                # drops `-destructiveOptimizations twostage` (which the base config sets for every other
+                # run): twostage splits a heavy rule into a shallow `firstrun` stage and strips TAC source
+                # locations, whereas the detector needs the fully-inlined postOptimize SurvivingCallGraph
+                # with locations intact. Runs regardless of --skip-test-run.
+                difficulty_config = autosetup.config_manager.create_copy_with_prover_args(
                     enhanced_config.path,
-                    autosetup.TEST_RUN_PROVER_ARGS,
-                    "_test_run",
+                    autosetup.DIFFICULTY_RUN_PROVER_ARGS,
+                    "_difficulty",
                     target_dir=internal_confs_dir,
                 )
-                # The test run exercises the generated sanity rule; rule_sanity's own
-                # checks would duplicate it, so they are turned off for this invocation
-                # only (via extra_args, leaving the conf's rule_sanity untouched).
-                autosetup._test_run_specs.append(ProverJobSpec(
-                    config_file=test_config,
+                autosetup.config_manager.update_config_with_properties(
+                    difficulty_config.path, {"global_timeout": DIFFICULTY_RUN_GLOBAL_TIMEOUT}
+                )
+                autosetup.config_manager.update_config_with_prover_args(
+                    difficulty_config.path, remove_args=["destructiveOptimizations"]
+                )
+                autosetup._difficulty_run_specs.append(ProverJobSpec(
+                    config_file=difficulty_config,
                     contract_name=contract_name,
-                    phase=f"Sanity Test Run - {contract_name}",
+                    phase=f"Collect Difficulties - {contract_name}",
                     extra_args=[*autosetup.config.extra_args, "--rule_sanity", "none"],
                 ))
+
+                # Sanity Test Run — produces the setup-completeness / comprehensive reports for direct CLI
+                # use. Skipped via --skip-test-run (the detector reads the Collect Difficulties run above).
+                if not autosetup.config.skip_test_run:
+                    test_config = autosetup.config_manager.create_copy_with_prover_args(
+                        enhanced_config.path,
+                        autosetup.TEST_RUN_PROVER_ARGS,
+                        "_test_run",
+                        target_dir=internal_confs_dir,
+                    )
+                    # The test run exercises the generated sanity rule; rule_sanity's own
+                    # checks would duplicate it, so they are turned off for this invocation
+                    # only (via extra_args, leaving the conf's rule_sanity untouched).
+                    autosetup._test_run_specs.append(ProverJobSpec(
+                        config_file=test_config,
+                        contract_name=contract_name,
+                        phase=f"Sanity Test Run - {contract_name}",
+                        extra_args=[*autosetup.config.extra_args, "--rule_sanity", "none"],
+                    ))
 
                 if skip_warmup:
                     return None

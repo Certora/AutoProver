@@ -225,6 +225,7 @@ def main():
             no_strip_contracts=args.no_strip_contracts,
             include_foundry_packages=not args.exclude_foundry_packages,
             run_source=args.run_source,
+            skip_test_run=args.skip_test_run,
         ),
         setup_prover=setup_prover,
         prover_runner=prover_runner,
@@ -259,8 +260,10 @@ def main():
         Path(args.composer_setup).write_text(json.dumps(result.composer_output, indent=2))
         print(f"Composer output written to: {args.composer_setup}")
 
-    # Submit test run jobs and generate reports via ConfRunner
-    if result.test_run_specs:
+    # Submit the deferred prover jobs (Collect Difficulties + optional Sanity Test Run) and generate
+    # reports via ConfRunner.
+    deferred_specs = result.difficulty_run_specs + result.test_run_specs
+    if deferred_specs:
         from certora_autosetup.reporting.json_reporter import JsonReporter
         from certora_autosetup.setup.setup_completeness_checker import SetupCompletenessChecker, SetupCompletenessReport
         from certora_autosetup.conf_runner import ConfRunner, ConfRunnerConfig
@@ -288,26 +291,31 @@ def main():
         )
         test_results, _ = conf_runner.run_confs(
             config_files=[],
-            test_run_specs=result.test_run_specs,
+            test_run_specs=deferred_specs,
             sanity_analysis=result.sanity_analysis,
             bytes_mappings=result.bytes_mappings,
             llm_usage=ledger_rows,
         )
 
-        # Summarization-target detector: from the completed test run, rank the prover-hostile functions
-        # worth summarizing (and, for a curated match, how). Written for composer to ingest, alongside the
-        # prover-usage / llm-usage artifacts below. Best-effort — a detector failure never fails autosetup.
+        # Summarization-target detector: from the completed Collect Difficulties run, rank the
+        # prover-hostile functions worth summarizing (and, for a curated match, how). Written for composer
+        # to ingest, alongside the prover-usage / llm-usage artifacts below. Best-effort — a detector
+        # failure never fails autosetup.
         try:
             from summarization_detector.detect import detect
             from summarization_detector.sources import fetch_surviving_graphs
 
-            test_url = next((r.job_url for r in test_results if r.job_url), None)
-            if test_url and result.asts_path:
+            difficulty_url = next(
+                (r.job_url for r in test_results
+                 if r.job_url and r.job_handle.phase.startswith("Collect Difficulties")),
+                None,
+            )
+            if difficulty_url and result.asts_path:
                 report = detect(
-                    test_url,
+                    difficulty_url,
                     ast_path=result.asts_path,
                     cut=main_contract_handle.contract_name,
-                    surviving_graphs=fetch_surviving_graphs(test_url),
+                    surviving_graphs=fetch_surviving_graphs(difficulty_url),
                     sources_root=project_root,
                 )
                 out = reports_dir / FILE_SUMMARIZATION_CANDIDATES
