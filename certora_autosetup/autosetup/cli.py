@@ -27,6 +27,7 @@ from certora_autosetup.utils.constants import (
     FILE_AUTOSETUP_RESULT,
     FILE_LLM_USAGE,
     FILE_PROVER_USAGE,
+    FILE_SUMMARIZATION_CANDIDATES,
 )
 from certora_autosetup.utils.contract_utils import auto_detect_contracts, deduplicate_contract_handles, parse_contract_files, resolve_contract_handles, split_contract_spec, with_contract_handle
 from certora_autosetup.utils.project_dir import find_build_config_dir
@@ -285,13 +286,35 @@ def main():
             project_root=project_root,
             certora_dir=certora_dir,
         )
-        conf_runner.run_confs(
+        test_results, _ = conf_runner.run_confs(
             config_files=[],
             test_run_specs=result.test_run_specs,
             sanity_analysis=result.sanity_analysis,
             bytes_mappings=result.bytes_mappings,
             llm_usage=ledger_rows,
         )
+
+        # Summarization-target detector: from the completed test run, rank the prover-hostile functions
+        # worth summarizing (and, for a curated match, how). Written for composer to ingest, alongside the
+        # prover-usage / llm-usage artifacts below. Best-effort — a detector failure never fails autosetup.
+        try:
+            from summarization_detector.detect import detect
+            from summarization_detector.sources import fetch_surviving_graphs
+
+            test_url = next((r.job_url for r in test_results if r.job_url), None)
+            if test_url and result.asts_path:
+                report = detect(
+                    test_url,
+                    ast_path=result.asts_path,
+                    cut=main_contract_handle.contract_name,
+                    surviving_graphs=fetch_surviving_graphs(test_url),
+                    sources_root=project_root,
+                )
+                out = reports_dir / FILE_SUMMARIZATION_CANDIDATES
+                out.write_text(json.dumps(report.to_dict(), indent=2))
+                print(f"Summarization candidates written to: {out}")
+        except Exception as e:  # noqa: BLE001 — best-effort side artifact
+            print(f"[autosetup] summarization detector skipped: {e}", file=sys.stderr)
 
     # Persist this run's prover-reported runtime (only the jobs actually executed;
     # cache hits are excluded by the runner ledger) for composer to ingest. Mirrors

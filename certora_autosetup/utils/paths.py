@@ -27,6 +27,7 @@ from certora_autosetup.utils.constants import (
     FILE_ERC7201_SPEC,
     FILE_LLM_USAGE,
     FILE_PROVER_USAGE,
+    FILE_SUMMARIZATION_CANDIDATES,
     SUMMARIES_SUBDIR,
 )
 
@@ -144,3 +145,9 @@ def resolve_autosetup_prover_usage_file(project_root: Path) -> Path | None:
     """Locate the ``prover_usage.json`` the most recent autosetup run wrote under ``project_root``
     (``None`` if absent). See :func:`_resolve_autosetup_reports_file`."""
     return _resolve_autosetup_reports_file(project_root, FILE_PROVER_USAGE)
+
+
+def resolve_autosetup_summarization_candidates_file(project_root: Path) -> Path | None:
+    """Locate the ``summarization_candidates.json`` the most recent autosetup run wrote under
+    ``project_root`` (``None`` if absent). See :func:`_resolve_autosetup_reports_file`."""
+    return _resolve_autosetup_reports_file(project_root, FILE_SUMMARIZATION_CANDIDATES)

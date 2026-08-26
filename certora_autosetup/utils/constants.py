@@ -70,6 +70,7 @@ DIR_PREAUDIT_DEBUG = "preaudit_debug"
 FILE_AUTOSETUP_RESULT = "autosetup_result.json"
 FILE_LLM_USAGE = "llm_usage.json"
 FILE_PROVER_USAGE = "prover_usage.json"
+FILE_SUMMARIZATION_CANDIDATES = "summarization_candidates.json"
 
 # Compiled-scene method inventory emitted under .certora_internal/
 FILE_ALL_METHODS_JSON = "all_methods.json"
