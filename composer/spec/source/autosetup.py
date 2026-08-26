@@ -140,6 +140,8 @@ async def run_autosetup(
             "--composer-setup", f.name,
             "--no-strip-contracts",
             "--skip-harnessing",
+            # We consume only the detector output + usage files, not the Test Run's reports; skip it.
+            "--skip-test-run",
             "--run-source", "AUTO_PROVER",
             "--main-contract",
             main_contract_path,
