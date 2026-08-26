@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from summarization_detector.sources import (
-    cut_from_conf, find_run_conf, find_external_call_graph, find_surviving_call_graphs)
+    cut_from_conf, find_run_conf, find_external_call_graph)
 
 
 def test_cut_from_conf_reads_verify_then_parametric():
@@ -41,23 +41,3 @@ def test_find_external_call_graph_optional():
         assert find_external_call_graph(root) == rpt / "externalCallGraph.json"
 
 
-def test_find_surviving_call_graphs_unions_procs_and_stripped_internals():
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d)
-        assert find_surviving_call_graphs(root) is None                          # absent -> None (no gate)
-        rpt = root / "inputs" / ".certora_sources" / "Reports"
-        rpt.mkdir(parents=True)
-        post = "SurvivingCallGraph-ruleA-postOptimize.json"
-        pre = "SurvivingCallGraph-ruleA-preOptimize.json"
-        (rpt / "survivingCallGraph_map.json").write_text(json.dumps({"ruleA": [pre, post]}))
-        (rpt / post).write_text(json.dumps({
-            "procedures": [{"callId": 0, "procId": "Widget.entry"}],
-            "internalFunctions": [{"name": "HashLib.digest(bytes32,uint256)",
-                                   "summarizable": True}],
-        }))
-        (rpt / pre).write_text(json.dumps({                                      # pre must be IGNORED
-            "procedures": [{"callId": 9, "procId": "Widget.preOnly"}],
-            "internalFunctions": [],
-        }))
-        s = find_surviving_call_graphs(root)
-        assert s == {"Widget.entry", "HashLib.digest"}                           # sig stripped; post-only

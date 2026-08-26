@@ -1,7 +1,7 @@
 """Summarization-target detector (detect.py). Fast, offline, no prover/scene:
  - scan_ast: a synthetic solc-AST fixture exercises span-attribution, the `abi.`-base guard (a non-abi
    `.encode()` is NOT hashing), source-file dedup, and the lib/ dependency flag.
- - detect_from: the three-signal fusion + the whole-vs-part (over_approx vs symbolic_model) classifier.
+ - detect_from: the signal fusion (per-function candidates, ranked).
 No real `.asts.json` is needed — scan_ast streams any JSON of the documented shape."""
 import json
 import tempfile
@@ -9,6 +9,7 @@ from pathlib import Path
 
 from summarization_detector.detect import (
     scan_ast, detect_from, HashSignal, reachable_from_main, cone_weights, _touch_missing_imported_specs,
+    _function_locations,
     _survives, _caller_boundaries, _expressible_typename,
 )
 from summarization_detector.difficulty import DifficultyReport, Hotspot
@@ -151,12 +152,12 @@ def test_scan_ast_dedups_and_flags_dependency():
 
 
 def test_detect_from_fuses_and_classifies():
-    """Three signals fuse per function; an external contract with >=2 hotspots -> symbolic_model, a lone
-    output function -> over_approx. Dependency hashing is dropped by default."""
+    """The signals fuse per function: an external contract's hotspots get the `external` signal, the CUT's
+    own math the `nonlinear` signal, a hasher the `hashing` signal. Dependency hashing is dropped by default."""
     diff = DifficultyReport(hotspots=[
-        Hotspot("Oracle.getPrice", 40, "O.sol:10"),     # external (not CUT), 2 methods -> whole-contract
+        Hotspot("Oracle.getPrice", 40, "O.sol:10"),     # external (not the CUT)
         Hotspot("Oracle.latestRound", 20, "O.sol:20"),
-        Hotspot("C.mulThing", 55, "C.sol:5"),           # the CUT's own nonlinear math -> over_approx
+        Hotspot("C.mulThing", 55, "C.sol:5"),           # the CUT's own nonlinear math
     ])
     hs = [
         HashSignal("C.hashId", "C", "hashId", "pure", "internal", ("keccak256",), "src/C.sol", False),
@@ -165,10 +166,9 @@ def test_detect_from_fuses_and_classifies():
     rep = detect_from(hs, diff, cut="C")
     by = {c.function: c for c in rep.candidates}
 
-    assert by["Oracle.getPrice"].mode == "symbolic_model"      # external + >=2 methods -> whole contract
     assert "external" in by["Oracle.getPrice"].signals
-    assert by["C.mulThing"].mode == "over_approx" and by["C.mulThing"].signals == ("nonlinear",)
-    assert by["C.hashId"].mode == "over_approx" and "hashing" in by["C.hashId"].signals
+    assert by["C.mulThing"].signals == ("nonlinear",)
+    assert "hashing" in by["C.hashId"].signals
     assert "Dep.enc" not in by                                  # dependency hashing filtered by default
     assert rep.candidates == sorted(rep.candidates, key=lambda c: c.score, reverse=True)   # ranked
 
@@ -190,8 +190,7 @@ def test_detect_from_strips_internal_prefix_so_cut_own_fn_is_not_external():
     # parses to contract "(internal) Stonks" != cut and is wrongly flagged a resolved-external.
     diff = DifficultyReport(hotspots=[Hotspot("(internal) Stonks.estimateTradeOutput", 12, "S.sol:387")])
     c = detect_from([], diff, cut="Stonks").candidates[0]
-    assert c.function == "Stonks.estimateTradeOutput"       # (internal) marker stripped
-    assert c.contract == "Stonks"                           # parses to the CUT
+    assert c.function == "Stonks.estimateTradeOutput"       # (internal) marker stripped -> parses to the CUT
     assert c.signals == ("nonlinear",) and "external" not in c.signals   # CUT's own math, NOT external
 
 
@@ -299,7 +298,7 @@ def test_caller_boundaries_filters_to_reachable():
 def test_boundary_tags_distinguish_no_return_from_opaque_sig():
     from summarization_detector.detect import DetectionReport, Candidate, Boundary
     rep = DetectionReport(candidates=[Candidate(
-        "leaf", "", ("hashing",), "over_approx", 10.0, "ev",
+        "leaf", ("hashing",), 10.0, "ev",
         boundaries=[
             # void (all value-type args, no return) — NOT opaque, just nothing to model
             Boundary("A.consumePermit", 1, "consumePermit(address, uint256)", expressible=False,
@@ -332,7 +331,7 @@ def test_descend_to_prims_finds_shared_nonlinear_primitive():
 def test_boundary_down_direction_renders_shared_count():
     from summarization_detector.detect import DetectionReport, Candidate, Boundary
     rep = DetectionReport(candidates=[Candidate(
-        "V.previewDeposit", "V", ("nonlinear",), "over_approx", 100.0, "ev",
+        "V.previewDeposit", ("nonlinear",), 100.0, "ev",
         boundaries=[Boundary("MathLib.mulDivDown", 2, "mulDivDown(uint256, uint256, uint256) -> uint256",
                              expressible=True, has_return=True, mutating=False, direction="down", shared=8)])])
     line = next(ln for ln in rep.format().splitlines() if "mulDivDown" in ln)
@@ -397,3 +396,21 @@ def test_detect_from_includes_dependencies_when_asked():
     hs = [HashSignal("Dep.enc", "Dep", "enc", "pure", "internal", ("abi.encode",), "lib/x/Dep.sol", True)]
     rep = detect_from(hs, DifficultyReport(), cut="C", include_dependencies=True)
     assert any(c.function == "Dep.enc" for c in rep.candidates)
+
+
+def test_function_locations_file_and_line():
+    """file always (the AST node group's path); line resolved from the source byte-offset when
+    `sources_root` is given and the file is readable, else None."""
+    # "foo" starts at byte 12 = after "line1\n" (6) + "line2\n" (6) -> line 3
+    nodes = {
+        "1": _node("ContractDefinition", 0, 200, name="Lib"),
+        "2": _node("FunctionDefinition", 12, 50, name="foo"),
+    }
+    with tempfile.TemporaryDirectory() as d:
+        ast = _write_ast(d, {"src/A.sol": nodes})
+        (Path(d) / "src").mkdir()
+        (Path(d) / "src/A.sol").write_text("line1\nline2\nfunction foo() {}\n")
+        with_src = _function_locations(ast, sources_root=d)
+        no_src = _function_locations(ast)
+    assert with_src["Lib.foo"] == ("src/A.sol", 3)
+    assert no_src["Lib.foo"] == ("src/A.sol", None)          # file only, line unresolved without sources

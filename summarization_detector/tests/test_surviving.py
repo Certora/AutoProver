@@ -1,13 +1,15 @@
-"""Surviving-call-graph signal (surviving.py) — pure/offline: the generic-vs-curated classifier, the
-linear-scaling exclusion, the ghost/raw split, and the per-primitive reaching-method roll-up. The live
-POU fetch (fetch_surviving_postoptimize) is exercised end-to-end against real runs, not here."""
-from summarization_detector.surviving import classify, scan_surviving, parse_surviving_graph
+"""Signal 4 (surviving hostile primitives) — pure/offline: the generic-vs-curated
+classifier, the linear-scaling exclusion, the surviving_hostile aggregation (ghost exclusion + per-primitive
+reaching-method roll-up), and the detect_from fusion into an enriched candidate. The live POU fetch
+(fetch_surviving_graphs) is exercised end-to-end against real runs, not here."""
+from summarization_detector.detect import (
+    DifficultyReport, classify_hostile, detect_from, surviving_hostile, _entry_of_rule,
+)
 
 
 def test_classify_generic_categories():
-    # generic operation tokens — no project names
     def cat(name: str) -> str:
-        m = classify(name)
+        m = classify_hostile(name)
         assert m is not None
         return m.category
     assert cat("BitLib.fls(uint256)") == "bitwise-scan"
@@ -17,57 +19,64 @@ def test_classify_generic_categories():
     assert cat("FooMath.mulDivDown(uint256,uint256,uint256)") == "nonlinear-mulDiv"
 
 
-def test_generic_sort_and_bitwise_are_over_approx_only():
-    m = classify("ListLib.sortByKey(ListLib.List)")
-    assert m is not None and m.exact_summary_available is False and m.curated is False
-    b = classify("BitLib.fls(uint256)")
-    assert b is not None and b.exact_summary_available is False
+def test_generic_match_suggests_no_summary():
+    # a generic (non-curated) match reports the category but leaves the summary to the agent
+    for name in ("ListLib.sortByKey(ListLib.List)", "BitLib.fls(uint256)"):
+        m = classify_hostile(name)
+        assert m is not None and m.curated is False and m.candidate_summary == ""
 
 
-def test_curated_overlay_upgrades_to_exact():
-    # a curated PUBLIC-library entry upgrades the candidate to an EXACT summary
-    oz = classify("Math.mulDiv(uint256,uint256,uint256)")
+def test_curated_overlay_attaches_a_concrete_summary():
+    oz = classify_hostile("Math.mulDiv(uint256,uint256,uint256)")
     assert oz is not None and oz.category == "nonlinear-mulDiv"
-    assert oz.curated is True and oz.exact_summary_available is True
+    assert oz.curated is True and oz.candidate_summary != ""
 
 
 def test_generic_camelcase_exp_is_caught_without_hardcoding():
-    # a camelCase `…Exp` name is matched structurally (no curated entry → generic over-approx candidate)
-    e = classify("PriceLib.computeExp(uint256,uint256)")
-    assert e is not None and e.category == "symbolic-exp" and e.curated is False
+    # a camelCase `…Exp` name is matched structurally (no curated entry → no suggested summary)
+    e = classify_hostile("PriceLib.computeExp(uint256,uint256)")
+    assert e is not None and e.category == "symbolic-exp" and e.curated is False and e.candidate_summary == ""
 
 
 def test_linear_constant_scaling_excluded():
     # multiply-by-constant conversions are cheap, not hostile
-    assert classify("WadRayMath.bpsToWad(uint256)") is None
-    assert classify("WadRayMath.toRay(uint256)") is None
-    assert classify("Foo.normalizeDecimals(uint256,uint8,uint8)") is None
+    assert classify_hostile("WadRayMath.bpsToWad(uint256)") is None
+    assert classify_hostile("WadRayMath.toRay(uint256)") is None
+    assert classify_hostile("Foo.normalizeDecimals(uint256,uint8,uint8)") is None
 
 
-def test_scan_splits_raw_candidates_from_ghosts_and_counts_methods():
-    def graph(method, names):
-        return {"rule": f"sanity-{method}-Satisfy_x", "phase": "postOptimize",
-                "procedures": [], "internalFunctions": [{"name": n, "summarizable": True} for n in names]}
+def _graph(method, names):
+    return {"rule": f"sanity-{method}-Satisfy_x", "phase": "postOptimize", "procedures": [],
+            "internalFunctions": [{"name": n, "summarizable": True} for n in names]}
+
+
+def test_surviving_hostile_aggregates_reach_and_excludes_ghosts():
     graphs = [
-        graph("borrow(uint256)", ["ListLib.sortByKey(ListLib.List)", "BitLib.fls(uint256)",
-                                  "CVL/Ghost Function 'mulDivUpSummary256(a,b,c)'"]),
-        graph("withdraw(uint256)", ["ListLib.sortByKey(ListLib.List)"]),   # sort reaches a 2nd method
-        graph("getX()", ["Foo.plainGetter()"]),                            # nothing hostile
+        _graph("borrow(uint256)", ["ListLib.sortByKey(ListLib.List)", "BitLib.fls(uint256)",
+                                   "CVL/Ghost Function 'mulDivUpSummary256(a,b,c)'"]),
+        _graph("withdraw(uint256)", ["ListLib.sortByKey(ListLib.List)"]),   # sort reaches a 2nd method
+        _graph("getX()", ["Foo.plainGetter()"]),                            # nothing hostile
     ]
-    rep = scan_surviving(graphs)
-    assert rep.n_methods == 3
-    names = {c.name: c for c in rep.candidates}
-    assert set(names) == {"ListLib.sortByKey(ListLib.List)", "BitLib.fls(uint256)"}   # ghost excluded
-    assert len(names["ListLib.sortByKey(ListLib.List)"].reaching_methods) == 2        # borrow + withdraw
-    assert names["BitLib.fls(uint256)"].reaching_methods == ["borrow(uint256)"]
-    assert rep.already_summarized == ["CVL/Ghost Function 'mulDivUpSummary256(a,b,c)'"]
+    h = surviving_hostile(graphs)
+    assert set(h) == {"ListLib.sortByKey(ListLib.List)", "BitLib.fls(uint256)"}  # ghost + non-hostile out
+    assert sorted(h["ListLib.sortByKey(ListLib.List)"]["reaching_methods"]) == [
+        "borrow(uint256)", "withdraw(uint256)"]
+    assert h["BitLib.fls(uint256)"]["reaching_methods"] == ["borrow(uint256)"]
+    assert h["ListLib.sortByKey(ListLib.List)"]["category"] == "in-memory-sort"
 
 
-def test_parse_extracts_entry_method_and_summarizable_flag():
-    entry, names = parse_surviving_graph({
-        "rule": "sanity-updateFlag(uint256,bool,address)-Satisfy_sanity_check_failed",
-        "phase": "postOptimize",
-        "procedures": [{"procId": "Vault.updateFlag(uint256,bool,address)", "range": {}}],
-        "internalFunctions": [{"name": "BitLib.fls(uint256)", "summarizable": False}]})
-    assert entry == "updateFlag(uint256,bool,address)"
-    assert ("BitLib.fls(uint256)", False) in names
+def test_detect_from_fuses_surviving_into_enriched_candidate():
+    # the surviving name carries a signature; the candidate key is sig-stripped so it merges cleanly.
+    # A generic match carries no summary; a curated one carries the concrete text.
+    surv = surviving_hostile([_graph("borrow(uint256)", ["BitLib.fls(uint256)",
+                                                         "WadRayMath.rayMul(uint256,uint256)"])])
+    rep = detect_from([], DifficultyReport(), cut="Vault", surviving=surv)
+    fls = next(c for c in rep.candidates if c.function == "BitLib.fls")
+    assert "surviving" in fls.signals and fls.category == "bitwise-scan"
+    assert fls.reaching_methods == ["borrow(uint256)"] and fls.candidate_summary == ""
+    ray = next(c for c in rep.candidates if c.function == "WadRayMath.rayMul")
+    assert ray.category == "nonlinear-mulDiv" and ray.candidate_summary != ""
+
+
+def test_entry_of_rule():
+    assert _entry_of_rule("sanity-setFlag(uint256,bool,address)-Satisfy_x") == "setFlag(uint256,bool,address)"

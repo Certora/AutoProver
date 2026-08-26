@@ -1,17 +1,16 @@
-"""Summarization-target DETECTOR — from ONE prover run, rank the functions worth summarizing and say
-HOW (per-function over-approx, or whole-contract symbolic model).
+"""Summarization-target DETECTOR — from ONE prover run, rank the functions worth summarizing (and, for a
+curated match, suggest how).
 
 Run this on a SANITY run (a `satisfy true` per-method reachability check) to decide what to
 summarize BEFORE the real rules exist; a downstream generator then produces the summaries.
 
-We are therefore a STATIC PREDICTOR of what will be expensive for REAL rules — not a reader of runtime
-cost. The sanity run only needs one arbitrary path that exits a method, so it DODGES expensive code
-(branches around a hash, picks trivial inputs); its completing fast is NOT evidence the code is cheap. So
-a runtime signal (difficulty hotspot / timeout) is POSITIVE-ONLY — present means "so central even sanity
-couldn't avoid it" (strong), but ABSENT is never a reason to drop a candidate. Acceptance/ranking comes
-from the code's STRUCTURE (signals 2/3 + the reachability & cone-of-influence over the real call graph).
+A sanity run processes every method through the full build+optimize TAC pipeline, so the expensive paths
+(nonlinear, bitwise, hashing) stay IN the program and appear in the difficulty/live statistics and the
+surviving call graph. Only the SMT SOLVE is trivial — it may exit a method via one easy path without
+satisfying the hard nonlinear constraints — so solve TIME is not a cost signal, but the TAC-derived
+difficulty statistics ARE (they reflect the code in the problem, not the path the solver took).
 
-THREE signals, each catching a different cost class:
+FOUR signals, each catching a different cost class:
 
   1. NONLINEAR (SMT phase)  — the prover's own difficulty report (`difficulty.fetch_difficulty`): ranked
      functions whose INLINED body contributes nonlinear ops (mulDiv, pow, sqrt, div). Catches the
@@ -24,10 +23,11 @@ THREE signals, each catching a different cost class:
   3. RESOLVED-EXPENSIVE EXTERNAL — a signal-1 hotspot whose owning contract is NOT the CUT: a call that
      ALREADY resolved/linked to a real contract/oracle but is expensive once inlined. We do NOT touch
      UNRESOLVED (`[?]`) calls — resolving those is call-resolution's job (a separate tool).
-
-The WHOLE-vs-PART classifier (`_classify_mode`): a PURE/VIEW output-only function -> per-function
-over-approx (a Phi over its result). A stateful external contract the rules lean on (several of its
-methods are hotspots) -> whole-contract symbolic model.
+  4. SURVIVING HOSTILE PRIMITIVE — from the postOptimize SurvivingCallGraph dumps (`surviving_hostile`):
+     a RAW (non-ghost) prover-hostile primitive — bitwise scan / in-memory sort / symbolic exp / mulDiv,
+     recognized by a generic operation catalog + a curated public-library overlay — that survives
+     optimization, carrying which entry methods reach it and a candidate summary. Catches bitwise/sort,
+     which contribute no nonlinear op and so are invisible to signal 1.
 
 AST acquisition (`ensure_ast`): the raw solc AST (`.asts.json`) is all we need — its `FunctionDefinition`
 nodes carry name + `stateMutability` + `visibility`, so no separate methods manifest is needed. Pass an
@@ -101,13 +101,18 @@ class Boundary:
 
 @dataclass
 class Candidate:
-    """A function worth summarizing, with WHY (`signals`) and HOW (`mode`)."""
-    function: str                 # "Contract.fn"
-    contract: str
-    signals: tuple[str, ...]      # subset of {"nonlinear", "hashing", "external"}
-    mode: str                     # "over_approx" | "symbolic_model"
+    """A function worth summarizing, with WHY (`signals`) and, for a curated match, HOW (`candidate_summary`)."""
+    function: str                 # "Contract.fn" (the contract prefix is part of the identifier)
+    signals: tuple[str, ...]      # subset of {"nonlinear", "hashing", "external", "surviving"}
     score: float                  # rank key (higher = summarize first)
     evidence: str                 # human-readable justification
+    file: str = ""                # source file of the function ("" if unresolved)
+    line: int | None = None       # 1-based start line of the function ("" -> None if unresolved)
+    category: str = ""            # hostile-primitive class (bitwise-scan / in-memory-sort / symbolic-exp /
+                                  # nonlinear-mulDiv) when the surviving-graph catalog matched, else ""
+    reaching_methods: list[str] = field(default_factory=list)  # entry methods whose postOptimize TAC keeps it
+    summarizable: bool = True     # the prover's own `summarizable` flag (surviving graph)
+    candidate_summary: str = ""   # suggested summary (curated EXACT or generic over-approx)
     boundaries: list[Boundary] = field(default_factory=list)   # caller boundaries to summarize at instead
 
 
@@ -128,8 +133,13 @@ class DetectionReport:
             return "no summarization candidates detected"
         out = ["summarization candidates (what to summarize first, and how):"]
         for c in self.candidates:
-            out.append(f"  [{c.mode:14s}] {c.score:5.1f}  {c.function}  <{','.join(c.signals)}>")
+            cat = f" {{{c.category}}}" if c.category else ""
+            reach = f"  reaches {len(c.reaching_methods)}" if c.reaching_methods else ""
+            loc = f"  {c.file}:{c.line}" if c.file else ""
+            out.append(f"  {c.score:5.1f}  {c.function}{cat}  <{','.join(c.signals)}>{reach}{loc}")
             out.append(f"                          {c.evidence}")
+            if c.candidate_summary:
+                out.append(f"                          candidate: {c.candidate_summary}")
             for b in c.boundaries:
                 if not b.has_return:
                     feas = "no return value"                    # void — nothing to model as a summary
@@ -322,6 +332,206 @@ def scan_ast(ast_path: str | Path) -> list[HashSignal]:
     return sorted(out.values(), key=lambda h: h.function)
 
 
+def _function_locations(ast_path: str | Path,
+                        sources_root: str | Path | None = None) -> dict[str, tuple[str, int | None]]:
+    """`Contract.fn` -> (source_file, 1-based start line | None). The FILE is the AST node group's path.
+    The LINE resolves the FunctionDefinition byte-offset against the source when it is readable under
+    `sources_root` (project root the AST paths are relative to); None when no `sources_root` or the file
+    can't be read. Streams the AST once, deduping repeated source files by path (as `scan_ast` does)."""
+    import bisect
+    out: dict[str, tuple[str, int | None]] = {}
+    newlines: dict[str, list[int] | None] = {}          # file -> newline byte offsets (None = unreadable)
+
+    def _line_of(file: str, offset: int) -> int | None:
+        if sources_root is None:
+            return None
+        if file not in newlines:
+            try:
+                data = (Path(sources_root) / file).read_bytes()
+                newlines[file] = [i for i, b in enumerate(data) if b == 0x0A]
+            except Exception:
+                newlines[file] = None
+        nl = newlines[file]
+        return None if nl is None else bisect.bisect_right(nl, offset) + 1
+
+    seen: set[str] = set()
+    for _rel, pdata in stream_raw_units(Path(ast_path)):
+        if not isinstance(pdata, dict):
+            continue
+        for absp, nodes in pdata.items():
+            if absp in seen or not isinstance(nodes, dict):
+                continue
+            seen.add(absp)
+            contracts: list = []
+            funcs: list = []
+            for node in nodes.values():
+                if not isinstance(node, dict):
+                    continue
+                sp = _span(node)
+                if sp is None:
+                    continue
+                nt = node.get("nodeType")
+                if nt == "ContractDefinition":
+                    contracts.append((sp, node.get("name") or ""))
+                elif nt == "FunctionDefinition" and node.get("name"):
+                    funcs.append((sp, node["name"]))
+            for fsp, fname in funcs:
+                c = _tightest(fsp[0], contracts)
+                cname = c[1] if c else ""
+                qual = f"{cname}.{fname}" if cname else fname
+                out[qual] = (absp, _line_of(absp, fsp[0]))
+    return out
+
+
+# ---------------------------------------------------------------- signal 4: surviving hostile primitives
+# From a sanity run's postOptimize SurvivingCallGraph dumps (one per entry method): the functions still in
+# the optimized TAC. A RAW (non-ghost) prover-hostile primitive that survives is a summarization candidate;
+# an already-applied summary appears as a `CVL/Ghost Function` stand-in (excluded — it IS the summary).
+# GENERIC_RULES recognize the hostile OPERATION by conventional primitive-name tokens (protocol-agnostic);
+# a CURATED overlay maps specific PUBLIC libraries to their known EXACT summaries.
+@dataclass(frozen=True)
+class HostileCategory:
+    key: str
+    match: "re.Pattern[str]"     # generic operation-name pattern
+    reason: str                  # why it is prover-hostile
+
+
+# Linear constant-scaling conversions (× a compile-time constant) are cheap — exclude so a fixed-point
+# name doesn't misfire (e.g. `bpsToWad` = value·1e‹k›).
+_LINEAR_SCALE = re.compile(
+    r"\b(bpsToWad|bpsToRay|toWad|toRay|wadToRay|rayToWad|fromWad(Down|Up)?|fromRay(Down|Up)?|"
+    r"fromBps(Down|Up)?|scaleBy|normalizeDecimals)\b", re.I)
+
+# GENERIC operation categories — matched on conventional primitive-name tokens, no project names. A generic
+# match reports WHAT (category + why) only; it suggests NO summary — the agent writes the one that is sound
+# for the property at hand.
+GENERIC_RULES: tuple[HostileCategory, ...] = (
+    HostileCategory(
+        key="bitwise-scan",
+        match=re.compile(r"(?:\b|_)(fls|flz|clz|ctz|msb|lsb)\b|pop[_]?count|findLastSet|findFirstSet|bitLen",
+                         re.I),
+        reason="word-wide bit scan / population count — under-specified bitwise ops; a major imprecision "
+               "and timeout source when inlined",
+    ),
+    HostileCategory(
+        key="in-memory-sort",
+        match=re.compile(r"(?:\b|_)(sort|quickSort|mergeSort|heapSort|insertionSort)(ByKey|Asc\w*|Desc\w*)?\b",
+                         re.I),
+        reason="in-place permutation sort over an in-memory list — unrolls into the loop bound; expensive",
+    ),
+    HostileCategory(
+        key="symbolic-exp",
+        match=re.compile(r"(?:\b|_)(exp|pow|rpow|power)(?=[_A-Z]|\b)|(?<=[a-z])(Exp|Pow|Rpow|Power)(?=[_A-Z(]|\b)"),
+        reason="exponentiation with a symbolic exponent — an unrolled loop; prover-hostile",
+    ),
+    HostileCategory(
+        key="nonlinear-mulDiv",
+        match=re.compile(r"(?:\b|_)(mulDiv\w*|fullMulDiv\w*|mulWad\w*|divWad\w*|rayMul\w*|rayDiv\w*|"
+                         r"wadMul\w*|wadDiv\w*|percentMul\w*|percentDiv\w*)\b", re.I),
+        reason="256/512-bit multiply-divide of two symbolic operands — nonlinear SMT",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class CuratedEntry:
+    match: "re.Pattern[str]"     # a specific "Contract.func(sig)" pattern for a known PUBLIC library
+    category: str                # one of the GENERIC_RULES keys
+    summary: str                 # the concrete summary text, INCLUDING any soundness caveat — a curated
+                                 # entry may be exact, or a documented over-/under-approximation
+    note: str = ""
+
+
+# CURATED overlay — specific PUBLIC libraries → a known-good, concrete summary. Only public, widely-used
+# third-party libraries belong here; a protocol's own private math is caught by the GENERIC rules above and
+# carries no suggested summary.
+CURATED_SUMMARIES: tuple[CuratedEntry, ...] = (
+    CuratedEntry(
+        match=re.compile(r"\b(WadRayMath|PercentageMath)\.(ray|wad|percent)", re.I),
+        category="nonlinear-mulDiv",
+        summary="=> WAD/RAY fixed-point mulDiv summary (EXACT floor/ceil of x·y/scale).",
+    ),
+    CuratedEntry(
+        match=re.compile(r"\b(Math|MathUpgradeable)\.mulDiv\b"),
+        category="nonlinear-mulDiv",
+        summary="=> OZ_Math.mulDiv curated summary (EXACT).",
+    ),
+    CuratedEntry(
+        match=re.compile(r"\bFixedPointMathLib\.|\bFullMath\.mulDiv\b|\bPRBMath"),
+        category="nonlinear-mulDiv",
+        summary="=> FixedPointMathLib / FullMath / PRB curated summary (EXACT).",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class HostileMatch:
+    category: str
+    reason: str
+    candidate_summary: str       # a concrete summary from the curated overlay, or "" for a generic match
+    curated: bool
+
+
+def classify_hostile(name: str) -> HostileMatch | None:
+    """Resolve a solidity function name to a hostile match, or None. A GENERIC operation rule fires first
+    (protocol-agnostic) and reports only WHAT (category + why); a CURATED overlay entry, if any, attaches a
+    concrete summary. Linear constant-scaling conversions are excluded up front."""
+    if _LINEAR_SCALE.search(name):
+        return None
+    cat = next((c for c in GENERIC_RULES if c.match.search(name)), None)
+    if cat is None:
+        return None
+    cur = next((e for e in CURATED_SUMMARIES if e.match.search(name)), None)
+    if cur is not None:
+        return HostileMatch(cat.key, cat.reason, candidate_summary=cur.summary, curated=True)
+    return HostileMatch(cat.key, cat.reason, candidate_summary="", curated=False)
+
+
+def _entry_of_rule(rule: str) -> str:
+    """The entry-method name from a sanity rule name (`sanity-<method>-Satisfy_...` -> `<method>`)."""
+    m = re.match(r"sanity-(?P<sig>.+?)-Satisfy", rule or "")
+    return m.group("sig") if m else (rule or "")
+
+
+def _surviving_names(graph: dict) -> list[tuple[str, bool]]:
+    """(function_name, summarizable) for every procedure/internal function in one SurvivingCallGraph."""
+    names: list[tuple[str, bool]] = []
+    for p in graph.get("procedures", []) or []:
+        if p.get("procId"):
+            names.append((p["procId"], True))
+    for f in graph.get("internalFunctions", []) or []:
+        nm = f.get("name") or f.get("procId")
+        if nm:
+            names.append((nm, bool(f.get("summarizable", True))))
+    return names
+
+
+def surviving_hostile(graphs: list[dict]) -> dict[str, dict]:
+    """Aggregate raw (non-ghost) hostile primitives across postOptimize SurvivingCallGraph dumps. Returns
+    function -> {category, reason, reaching_methods, summarizable, candidate_summary} (candidate_summary is
+    "" for a generic match, the curated text for a curated one). A `CVL/Ghost` survivor is an
+    already-applied summary and is skipped."""
+    out: dict[str, dict] = {}
+    for g in graphs:
+        if (g.get("phase") or "").lower() not in ("postoptimize", ""):
+            continue
+        entry = _entry_of_rule(g.get("rule", ""))
+        for name, summarizable in _surviving_names(g):
+            if _is_cvl_ghost(name):
+                continue
+            m = classify_hostile(name)
+            if m is None:
+                continue
+            rec = out.get(name)
+            if rec is None:
+                rec = out[name] = {"category": m.category, "reason": m.reason, "reaching_methods": [],
+                                   "summarizable": True, "candidate_summary": m.candidate_summary}
+            if entry not in rec["reaching_methods"]:
+                rec["reaching_methods"].append(entry)
+            rec["summarizable"] = rec["summarizable"] and summarizable
+    return out
+
+
 # ---------------------------------------------------------------- AST acquisition (optional-arg design)
 _MISSING_IMPORT_RE = re.compile(r'\d+:\d+:"([^"]+)"')
 
@@ -396,15 +606,6 @@ def _contract_of(procid: str) -> str:
     return procid.split(".", 1)[0] if "." in procid else ""
 
 
-def _classify_mode(contract: str, signals: tuple[str, ...], external_multi: bool) -> str:
-    """WHOLE (symbolic_model) vs PART (over_approx). Whole-contract when the cost is a stateful external
-    dependency the rules lean on — heuristic: several methods of the same external contract are hotspots
-    (`external_multi`). Otherwise a single output-only function -> per-function over-approx."""
-    if "external" in signals and external_multi:
-        return "symbolic_model"
-    return "over_approx"
-
-
 def _is_cvl_ghost(function: str) -> bool:
     """A `CVL/Ghost Function '...'` hotspot is an ALREADY-APPLIED CVL summary / ghost, not a Solidity
     function to summarize — so it is never a candidate (it IS the summary). The prover labels these
@@ -423,28 +624,25 @@ def _strip_procid(function: str) -> str:
 
 def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *, cut: str,
                 include_dependencies: bool = False,
-                cone_weight: dict[str, int] | None = None) -> DetectionReport:
-    """Fuse the three signals into a ranked candidate list. `difficulty` supplies signals 1 (nonlinear)
+                cone_weight: dict[str, int] | None = None,
+                surviving: dict[str, dict] | None = None) -> DetectionReport:
+    """Fuse the four signals into a ranked candidate list. `difficulty` supplies signals 1 (nonlinear)
     and 3 (its hotspots whose contract != `cut` are resolved-expensive externals); `hash_signals` supply
-    signal 2. `cut` is the verified contract (its own methods are NOT "external"). Dependency-tree
-    functions (lib/) are dropped unless `include_dependencies`. `cone_weight` (per-function
-    cone-of-influence size) re-weights the build-phase hashing signal by how much code consumes the
-    result — the only cost proxy available there. CVL/ghost hotspots (already-applied summaries) are
-    excluded — they are the summary, not a summarization target."""
+    signal 2; `surviving` (from `surviving_hostile`) supplies signal 4 — raw prover-hostile primitives
+    (bitwise / sort / exp / mulDiv) that survive optimization, keyed by function, carrying a category, the
+    entry methods that reach it, the prover's `summarizable` flag, and a candidate summary. `cut` is the
+    verified contract (its own methods are NOT "external"). Dependency-tree functions (lib/) are dropped
+    from the hashing signal unless `include_dependencies` (surviving primitives are kept regardless — they
+    are in the real problem). `cone_weight` re-weights the build-phase hashing signal by how much code
+    consumes the result. CVL/ghost hotspots (already-applied summaries) are excluded — they are the
+    summary, not a summarization target."""
     hotspots = [h for h in difficulty.hotspots if not _is_cvl_ghost(h.function)]
-    ext_counts: dict[str, int] = {}
-    for h in hotspots:
-        c = _contract_of(_strip_procid(h.function))
-        if c and c != cut:
-            ext_counts[c] = ext_counts.get(c, 0) + 1
-
     cand: dict[str, Candidate] = {}
 
-    def _bump(key: str, contract: str, sig: str, score: float, evidence: str):
+    def _bump(key: str, sig: str, score: float, evidence: str):
         c = cand.get(key)
         if c is None:
-            cand[key] = Candidate(function=key, contract=contract, signals=(sig,), mode="over_approx",
-                                  score=score, evidence=evidence)
+            cand[key] = Candidate(function=key, signals=(sig,), score=score, evidence=evidence)
         else:
             if sig not in c.signals:
                 c.signals = (*c.signals, sig)
@@ -455,11 +653,10 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     for h in hotspots:
         fn = _strip_procid(h.function)
         contract = _contract_of(fn)
-        _bump(fn, contract, "nonlinear", float(h.pct),
+        _bump(fn, "nonlinear", float(h.pct),
               f"{h.pct}% of nonlinear ops" + (f" @{h.location}" if h.location else ""))
         if contract and contract != cut:
-            _bump(fn, contract, "external", 10.0,
-                  f"resolved external in {contract} (not the CUT)")
+            _bump(fn, "external", 10.0, f"resolved external in {contract} (not the CUT)")
 
     # signal 2 (hashing/encoding): the AST scan. Dynamic-input hashing (unbounded bytes/string/array) is
     # the costly kind; a fixed-size digest (typical EIP-712) is bounded — score it far lower so the noise
@@ -468,8 +665,23 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
         if h.is_dependency and not include_dependencies:
             continue
         cls = "dynamic-input" if h.dynamic_input else "fixed-size"
-        _bump(h.function, h.contract, "hashing", 20.0 if h.dynamic_input else 4.0,
+        _bump(h.function, "hashing", 20.0 if h.dynamic_input else 4.0,
               f"{'/'.join(h.patterns)} [{cls}] ({h.mutability or 'n/a'} {h.visibility})")
+
+    # signal 4 (surviving hostile primitives): raw prover-hostile primitives still in the sanity run's
+    # postOptimize TAC — a direct candidate. Score by reach (how many entry methods keep it); attach the
+    # catalog category, candidate summary, reaching methods, and the prover's summarizable flag. A surviving
+    # name carries a signature (`C.f(sig)`) while the difficulty/hashing keys are sig-less (`C.f`) — strip it
+    # so the same function unifies into one candidate.
+    for raw_fn, rec in (surviving or {}).items():
+        fn = raw_fn.split("(", 1)[0]
+        _bump(fn, "surviving", 20.0 + 2.0 * len(rec["reaching_methods"]),
+              f"{rec['category']} survives optimization, reaches {len(rec['reaching_methods'])} method(s)")
+        c = cand[fn]
+        c.category = rec["category"]
+        c.reaching_methods = list(rec["reaching_methods"])
+        c.summarizable = rec["summarizable"]
+        c.candidate_summary = rec["candidate_summary"]
 
     # cone-of-influence re-weighting for the hashing signal: build-phase cost has no per-function measure,
     # so scale a hashing candidate by how much reachable code consumes its result (normalized within the
@@ -482,11 +694,6 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
             w = cone_weight.get(c.function, 0)
             c.score *= 1 + w / mx
             c.evidence += f" | cone={w}"
-
-    # classify mode per candidate
-    for c in cand.values():
-        external_multi = c.contract in ext_counts and ext_counts[c.contract] >= 2
-        c.mode = _classify_mode(c.contract, c.signals, external_multi)
 
     ranked = sorted(cand.values(), key=lambda c: c.score, reverse=True)
     return DetectionReport(candidates=ranked)
@@ -502,20 +709,33 @@ def _survives(function: str, surviving_set: set[str], survivors_bare: set[str]) 
     return function in surviving_set or ("." not in function and function in survivors_bare)
 
 
+def _surviving_reach(graphs: list[dict]) -> set[str]:
+    """The reachability set (sig-stripped `Contract.fn`) over the postOptimize surviving graphs — the
+    functions that actually reach SMT. This is the authoritative signal-2 gate."""
+    return {name.split("(", 1)[0] for g in graphs for name, _ in _surviving_names(g)}
+
+
 def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
            conf: str | Path | None = None, cut: str, solc_dir: str | Path | None = None,
            include_dependencies: bool = False,
            external_call_graph: str | Path | None = None,
-           surviving_set: set[str] | None = None) -> DetectionReport:
+           surviving_graphs: list[dict] | None = None,
+           sources_root: str | Path | None = None) -> DetectionReport:
     """Orchestrate the detector. `job_url` (optional) supplies the difficulty report (signals 1+3); with
     none, only the static signal-2 (hashing) runs. The AST is resolved by `ensure_ast` (`ast_path` if
     given, else generated from `conf`). `cut` is the verified contract name.
 
-    Reachability gate for signal-2: `surviving_set` (the prover's postOptimize surviving call graphs —
-    the functions that actually reach SMT) is authoritative and used when present. Otherwise we fall back
-    to AST + `external_call_graph` reachability from the CUT (see `reachable_from_main`)."""
+    `surviving_graphs` are the prover's postOptimize SurvivingCallGraph dumps: they drive signal 4 (the
+    surviving hostile primitives) AND give the authoritative signal-2 reachability gate (the functions that
+    actually reach SMT). Absent them, signal-2 falls back to AST + `external_call_graph` reachability from
+    the CUT (see `reachable_from_main`). `sources_root` (the project root the AST paths are relative to,
+    defaulting to the conf's directory) lets each candidate's start line be resolved from the source."""
     ast = ensure_ast(ast_path, conf=conf, solc_dir=solc_dir)
+    if sources_root is None and conf is not None:
+        sources_root = Path(conf).parent
     hash_signals = scan_ast(ast)
+    surviving = surviving_hostile(surviving_graphs or [])
+    surviving_set = _surviving_reach(surviving_graphs) if surviving_graphs else None
     cone: dict[str, int] = {}
     reachable: set[str] = set()
     edges: dict[str, set[str]] = {}
@@ -535,24 +755,26 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
         hash_signals = [h for h in hash_signals if h.function in reachable]
     difficulty = fetch_difficulty(job_url) if job_url else DifficultyReport()
     report = detect_from(hash_signals, difficulty, cut=cut, cone_weight=cone,
-                         include_dependencies=include_dependencies)
-    # For each hashing candidate (the cost LEAF), offer caller boundaries — a summary at a clean-signature
-    # caller subsumes the leaf and is often more feasible to model (see Boundary).
+                         include_dependencies=include_dependencies, surviving=surviving)
+    # A hashing or surviving candidate is the cost LEAF (the exact function to summarize) — offer caller
+    # boundaries too: where else the agent can place the summary (a clean-signature caller subsumes the
+    # leaf and is often more feasible to model — see Boundary).
     bounds_reach = surviving_set if surviving_set else (reachable or None)
     if edges:
-        # nonlinear candidates: descend to the shared nonlinear PRIMITIVE they inline, and count how many
-        # candidates share each (fan-in) — a primitive shared across many methods is the real target.
+        # nonlinear-only candidates: descend to the shared nonlinear PRIMITIVE they inline, and count how
+        # many candidates share each (fan-in) — a primitive shared across many methods is the real target.
         # Filter by AST reachability, NOT the surviving set: library `using`-for primitives (e.g.
         # MathLib.mulDivDown) get no INTERNAL_FUNC_START annotation, so they are absent from the surviving
         # set even though they are genuinely inlined into a surviving method.
-        nl = [c.function for c in report.candidates if "nonlinear" in c.signals and "hashing" not in c.signals]
+        nl = [c.function for c in report.candidates
+              if "nonlinear" in c.signals and "hashing" not in c.signals and "surviving" not in c.signals]
         prim_reach = {m: _descend_to_prims(edges, m, reachable or None) for m in nl}
         fanin: dict[str, int] = {}
         for prims in prim_reach.values():
             for p in prims:
                 fanin[p] = fanin.get(p, 0) + 1
         for c in report.candidates:
-            if "hashing" in c.signals:                     # walk UP to a clean caller boundary
+            if "hashing" in c.signals or "surviving" in c.signals:   # walk UP to a clean caller boundary
                 c.boundaries = _caller_boundaries(edges, sigs, c.function, bounds_reach)
             elif "nonlinear" in c.signals:                 # descend DOWN to the shared nonlinear primitive
                 targets = sorted(prim_reach.get(c.function, {}).items(),
@@ -560,6 +782,11 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
                 c.boundaries = [Boundary(p, d, *sigs.get(p, (p, False, False, True)),
                                          direction="down", shared=fanin.get(p, 1))
                                 for p, d in targets]
+    # attach each candidate's source location (file always; line when the source is readable)
+    locations = _function_locations(ast, sources_root)
+    for c in report.candidates:
+        if c.function in locations:
+            c.file, c.line = locations[c.function]
     return report
 
 

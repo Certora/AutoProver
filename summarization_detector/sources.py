@@ -10,7 +10,6 @@ here from the host so the caller needn't.
 """
 import json
 import os
-import re
 import tempfile
 import time
 from pathlib import Path
@@ -115,70 +114,37 @@ def fetch_external_call_graph(url: str, dest: str | Path) -> Path | None:
         return None
 
 
-def _reachable_from_reports(reports_dir: str | Path) -> set[str]:
-    """Union, across every rule's POST-optimize surviving call graph, of the external `procedures`
-    (`Contract.method`) and the internal functions (name with its `(sig)` stripped -> `Contract.method`).
-    This is the set of functions that actually reach SMT — the authoritative reachability gate. The
-    manifest (`survivingCallGraph_map.json`) names the files; absent it, we glob the per-rule files."""
-    d = Path(reports_dir)
-    mp = d / "survivingCallGraph_map.json"
-    if mp.exists():
-        m = json.loads(mp.read_text())
-        files = [d / f for fs in m.values() for f in fs if "postOptimize" in f]
-    else:
-        files = list(d.glob("SurvivingCallGraph-*postOptimize.json"))
-    reach: set[str] = set()
-    for f in files:
-        if not f.exists():
-            continue
-        g = json.loads(f.read_text())
-        for p in g.get("procedures", []):
-            reach.add(p["procId"])
-        for i in g.get("internalFunctions", []):
-            reach.add(re.sub(r"\(.*\)", "", i["name"]))
-    return reach
-
-
-def find_surviving_call_graphs(sources_dir: str | Path) -> set[str] | None:
-    """The postOptimize reachability set from a local prover run's `Reports/` (see `_reachable_from_reports`).
-    None when the run carries no collector output. For a job URL use `fetch_surviving_call_graphs`."""
-    hits = list(Path(sources_dir).rglob("survivingCallGraph_map.json"))
-    if not hits:
-        hits = list(Path(sources_dir).rglob("SurvivingCallGraph-*postOptimize.json"))
-        if not hits:
-            return None
-    return _reachable_from_reports(hits[0].parent) or None
-
-
-def fetch_surviving_call_graphs(url: str, dest: str | Path) -> set[str] | None:
-    """Fetch a run's postOptimize surviving call graphs and return the reachability set. Reads the manifest
-    `survivingCallGraph_map.json` (POU single-file endpoint), then each rule's postOptimize file — mirroring
-    POU's `unsat_core_map` -> `read_unsat_cores`. None when the run produced none (a prover build without the
-    collector) or on any fetch error. NB: needs an up-to-date POU (the ProverCLI repo)."""
+def fetch_surviving_graphs(url: str) -> list[dict]:
+    """Fetch a run's postOptimize SurvivingCallGraph dumps and return them PARSED. Reads the manifest
+    `survivingCallGraph_map.json` (POU single-file endpoint), then each rule's postOptimize file. Empty
+    list when the run produced none (a prover build without the collector) or on any fetch error. The
+    detector derives both signal 4 (surviving hostile primitives) and the signal-2 reachability gate from
+    these. NB: needs an up-to-date POU (the ProverCLI repo)."""
     _aiss_env_for(url)
+    graphs: list[dict] = []
     try:
         from prover_output_utility import ProverOutputAPI
         api = ProverOutputAPI(use_local=False)
-        # fetch_output_file needs a current POU; older installs lack it -> AttributeError -> caught -> None.
+        # fetch_output_file needs a current POU; older installs lack it -> AttributeError -> caught -> [].
         raw = _retry_transient(
             lambda: api.fetch_output_file(url, "survivingCallGraph_map.json"))  # type: ignore[attr-defined]
         if not raw:
-            return None
+            return []
         manifest = json.loads(raw) if isinstance(raw, str) else raw
-        out = Path(dest) / "surviving_call_graphs"
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "survivingCallGraph_map.json").write_text(json.dumps(manifest))
-        for files in manifest.values():
-            for fn in files:
-                if "postOptimize" not in fn:
-                    continue
+    except Exception:
+        return []
+    for files in manifest.values():
+        for fn in files:
+            if "postOptimize" not in fn:
+                continue
+            try:
                 content = _retry_transient(
                     lambda fn=fn: api.fetch_output_file(url, fn))  # type: ignore[attr-defined]
                 if content:
-                    (out / fn).write_text(content if isinstance(content, str) else json.dumps(content))
-        return _reachable_from_reports(out) or None
-    except Exception:
-        return None
+                    graphs.append(json.loads(content) if isinstance(content, str) else content)
+            except Exception:
+                continue
+    return graphs
 
 
 def detect_url(url: str, *, work_dir: str | Path | None = None, solc_dir: str | Path | None = None,
@@ -195,6 +161,7 @@ def detect_url(url: str, *, work_dir: str | Path | None = None, solc_dir: str | 
         raise ValueError(f"could not derive the main contract from {conf} — pass cut=")
     ast = ensure_ast(conf=conf, solc_dir=solc_dir)
     ecg = external_call_graph or fetch_external_call_graph(url, work)   # Reports artifact — from the tarball
-    surviving = fetch_surviving_call_graphs(url, work)                  # postOptimize reachability gate
+    surviving_graphs = fetch_surviving_graphs(url)                      # signal 4 + the signal-2 gate
     return detect(url, ast_path=ast, cut=cut, external_call_graph=ecg,
-                  surviving_set=surviving, include_dependencies=include_dependencies)
+                  surviving_graphs=surviving_graphs, include_dependencies=include_dependencies,
+                  sources_root=conf.parent)

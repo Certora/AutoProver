@@ -209,7 +209,6 @@ fixconf = "certora_autosetup.fixconf:main"
 # summarization_detector entry points
 detect-summaries = "summarization_detector.cli:main"
 detect-difficulty-profile = "summarization_detector.difficulty_profile:main"
-detect-surviving = "summarization_detector.surviving:main"
 
 # Command-sandbox providers, resolved by composer.sandbox.config.SandboxConfig.resolve_provider.
 # Adding a provider = adding a line here (and re-running the editable install so the

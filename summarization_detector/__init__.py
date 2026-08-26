@@ -1,32 +1,28 @@
 """Summarization-target detector — a standalone AutoProver tool.
 
-From ONE prover run it ranks the functions worth summarizing and says HOW (per-function over-approx vs
-whole-contract symbolic model), so a caller can summarize the expensive ones before paying for them. It
-is a SEPARATE, self-contained tool — it decides WHAT to summarize; a downstream generator (curated
-summaries, a symbolic-model tool, or the CVL_GEN agent) produces the actual summaries. It reads the
-prover's output via its own helpers and reuses `certora_autosetup` for the AST. Invoke via `detect()` or
-the CLI (`python -m summarization_detector` / `detect-summaries`).
+From a prover run it ranks the functions worth summarizing and says how (per-function summary vs
+whole-contract symbolic model) — it decides WHAT to summarize, not how the summary is written. It fetches
+the prover's output via `prover_output_utility` and parses the solc AST dump (from
+`certoraRun --dump_asts`) with `certora_autosetup.solidity_ast`. Invoke via `detect()` or the CLI
+(`python -m summarization_detector` / `detect-summaries`).
 """
 from .detect import (
     Boundary,
     Candidate,
     DetectionReport,
     HashSignal,
+    HostileCategory,
+    CuratedEntry,
+    HostileMatch,
     detect,
     detect_from,
     scan_ast,
+    classify_hostile,
+    surviving_hostile,
     reachable_from_main,
     cone_weights,
 )
-from .sources import detect_url, cut_from_conf, find_run_conf
-from .surviving import (
-    HostileCandidate,
-    SurvivingReport,
-    scan_surviving,
-    classify,
-    detect_surviving,
-    fetch_surviving_postoptimize,
-)
+from .sources import detect_url, cut_from_conf, find_run_conf, fetch_surviving_graphs
 from .difficulty_profile import (
     ProfileReport,
     SlowRule,
@@ -55,10 +51,10 @@ __all__ = [
     "profile_job",
     "profile_jobs",
     "aggregate_by_class",
-    "HostileCandidate",
-    "SurvivingReport",
-    "scan_surviving",
-    "classify",
-    "detect_surviving",
-    "fetch_surviving_postoptimize",
+    "HostileCategory",
+    "CuratedEntry",
+    "HostileMatch",
+    "classify_hostile",
+    "surviving_hostile",
+    "fetch_surviving_graphs",
 ]
