@@ -20,7 +20,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from graphcore.utils import TokenUsageDict, get_token_usage
+from graphcore.utils import TokenUsageDict, get_normalized_token_usage, get_token_usage
 from composer.diagnostics.timing import get_run_summary
 
 
@@ -29,29 +29,22 @@ def _usage_of(msg: AIMessage) -> TokenUsageDict:
 
     ``get_token_usage`` reads the raw Anthropic ``response_metadata["usage"]`` dict,
     which only a non-streamed response carries; a streamed response reports usage
-    solely through the provider-normalized ``usage_metadata``. Fall back to that,
-    translating back to the raw shape: normalized ``input_tokens`` is the total
-    including both cache buckets, where the raw count excludes them."""
+    solely through the provider-normalized ``usage_metadata``. Fall back to
+    ``get_normalized_token_usage`` over that, translating back to the raw shape:
+    normalized input is the total including both cache buckets, where the raw
+    count excludes them."""
     usage = get_token_usage(msg)
-    if any(
-        usage[k]
-        for k in (
-            "input_tokens", "output_tokens",
-            "cache_read_input_tokens", "cache_creation_input_tokens",
-        )
-    ):
+    if "usage" in msg.response_metadata:
         return usage
-    if (um := msg.usage_metadata) is None:
-        return usage
-    details = um.get("input_token_details") or {}
-    cache_read = details.get("cache_read", 0)
-    cache_creation = details.get("cache_creation", 0)
+    norm = get_normalized_token_usage(msg)
+    cache_read = norm["cache_read_tokens"]
+    cache_write = norm["cache_write_tokens"]
     return {
-        "model_name": usage["model_name"],
-        "input_tokens": max(0, um["input_tokens"] - cache_read - cache_creation),
-        "output_tokens": um["output_tokens"],
+        "model_name": usage["model_name"] or norm["model_name"],
+        "input_tokens": max(0, norm["total_input_tokens"] - cache_read - cache_write),
+        "output_tokens": norm["total_output_tokens"],
         "cache_read_input_tokens": cache_read,
-        "cache_creation_input_tokens": cache_creation,
+        "cache_creation_input_tokens": cache_write,
     }
 
 
