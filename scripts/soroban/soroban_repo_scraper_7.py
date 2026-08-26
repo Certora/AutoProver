@@ -836,8 +836,8 @@ def _generate_json(
             if not part:
                 continue
             if ":" in part:
-                pname, ptype = part.split(":", 1)
-                params.append({"name": pname.strip(), "type": ptype.strip()})
+                pns = part.split(":")
+                params.append({"name": pns[0].strip(), "type": pns[-1].strip()})
             else:
                 params.append({"name": part, "type": ""})
         return {

@@ -347,7 +347,7 @@ def annotate_recursive(all_types: list[dict]) -> None:
 # ---------------------------------------------------------------------------
  
 CONTRACTTYPE_RE = re.compile(
-    r'#\s*\[\s*contracttype\s*(?:\([^)]*\))?\s*\]'
+    r'#\s*\[\s*contract(type|error)\s*(?:\([^)]*\))?\s*\]'
 )
  
  
