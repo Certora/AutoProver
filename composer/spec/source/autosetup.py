@@ -24,6 +24,7 @@ from composer.io.context import emit_custom_event
 from certora_autosetup.utils.paths import (
     resolve_autosetup_llm_usage_file,
     resolve_autosetup_prover_usage_file,
+    resolve_autosetup_summarization_candidates_file,
 )
 
 _logger = logging.getLogger(__name__)
@@ -275,3 +276,21 @@ def read_autosetup_prover_usage(project_root: Path) -> int | None:
     except (OSError, ValueError, KeyError, TypeError) as e:
         _logger.warning(f"Could not read AutoSetup prover usage from {usage_file}: {e}")
         return None
+
+
+def read_summarization_candidates(project_root: Path) -> list[dict]:
+    """The summarization detector's ranked candidates from the AutoSetup run — the prover-hostile
+    functions worth summarizing (function, category, reaching methods, why, and, for a curated match, a
+    suggested summary), rendered into the CVL-generation and invariants agent prompts.
+
+    AutoSetup writes ``summarization_candidates.json`` after its test run; returns ``[]`` on any failure
+    (file absent — the run predates the detector, a full cache hit, or the test run dumped no surviving
+    graph — or malformed JSON): a missing hint must never break the phase."""
+    candidates_file = resolve_autosetup_summarization_candidates_file(project_root)
+    if candidates_file is None:
+        return []
+    try:
+        return json.loads(candidates_file.read_text()).get("candidates", [])
+    except (OSError, ValueError, TypeError) as e:
+        _logger.warning(f"Could not read AutoSetup summarization candidates from {candidates_file}: {e}")
+        return []
