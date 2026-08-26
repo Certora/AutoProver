@@ -622,6 +622,15 @@ def _strip_procid(function: str) -> str:
     return re.sub(r"^\((?:internal|external)\)\s*", "", function.strip())
 
 
+def _parse_location(loc: str) -> tuple[str, int | None]:
+    """Split a difficulty hotspot location (`file:line`, or just `file`) into `(file, line)`. `line` is
+    `None` when it is absent or non-numeric. Source paths carry no `:`, so the last segment is the line."""
+    file, _, line = loc.rpartition(":")
+    if file and line.isdigit():
+        return file, int(line)
+    return loc, None
+
+
 def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *, cut: str,
                 include_dependencies: bool = False,
                 cone_weight: dict[str, int] | None = None,
@@ -655,6 +664,12 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
         contract = _contract_of(fn)
         _bump(fn, "nonlinear", float(h.pct),
               f"{h.pct}% of nonlinear ops" + (f" @{h.location}" if h.location else ""))
+        # The difficulty report already carries the hotspot's source location; lift it into the
+        # structured fields. The AST pass in `detect` still overrides for functions it can resolve,
+        # but it keys on the defining contract, so a hotspot the prover attributes to a derived
+        # contract (`SpokeInstance.fn` defined on a base in another file) would otherwise have none.
+        if h.location:
+            cand[fn].file, cand[fn].line = _parse_location(h.location)
         if contract and contract != cut:
             _bump(fn, "external", 10.0, f"resolved external in {contract} (not the CUT)")
 
