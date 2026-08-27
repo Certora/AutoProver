@@ -284,7 +284,9 @@ without writing composer-resident Python glued to the RAG DB. Two levels:
   however it likes — a script in the app's own repo, checked-in output, a CI artifact) and the
   generic `rag_import.py` ingests it. No checkout of the upstream doc source at build or run time.
   Composer ships the importer and the schema, nothing corpus-specific. Crucible is the first app to
-  do this; see its own docs for that corpus.
+  do this; see its own docs for that corpus. The CVLR backend does the same from a
+  separate private repo (`certora-cvlr-kb`) even though its backend is in-tree Python, so the
+  pattern is not wheel-specific.
 - **Level 2 (optional, natural follow-on):** add a wheel FFI callout — `rag_entries() -> str`
   returning the manifest JSON — so RAG content becomes part of the app package exactly like
   `descriptor()`. The importer could then ingest straight from a loaded wheel
@@ -305,8 +307,12 @@ The mechanism, corpus-free:
    covered by [`tests/test_rag_import.py`](../tests/test_rag_import.py) (each product feeds exactly
    its own index, block kinds cut as declared, `part` numbering across sections *and* across
    manifests sharing a DB, code-ref tagging, version and target-resolution refusals).
-3. The `KNOWLEDGE_BASES` registry (§4) in [`composer/rag/db.py`](../composer/rag/db.py) — **empty**,
-   the same resting state as [`rag_env.py`](../composer/tools/rag_env.py)'s tools registry.
+3. The `KNOWLEDGE_BASES` registry (§4) in [`composer/rag/db.py`](../composer/rag/db.py). Its first
+   entry is `cvlr_kb`, registered alongside [`composer/tools/cvlr_rag.py`](../composer/tools/cvlr_rag.py)
+   in [`rag_env.py`](../composer/tools/rag_env.py)'s tools registry — see
+   [cvlr-capture-plan.md](./cvlr-capture-plan.md) §8.7. It is also the first corpus fed by *several*
+   manifests sharing one tag, which the importer already supported (`part` numbering continues
+   across manifests resolving to the same DB).
 
 What an adopting application adds, in one go: its committed `<kb>.rag.json`, both registry halves
 (the `KNOWLEDGE_BASES` connection + a `composer/tools/<corpus>_rag.py` in `rag_env._FACTORIES`), the
