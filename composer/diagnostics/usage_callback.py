@@ -20,32 +20,8 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from graphcore.utils import TokenUsageDict, get_normalized_token_usage, get_token_usage
+from graphcore.utils import get_normalized_token_usage
 from composer.diagnostics.timing import get_run_summary
-
-
-def _usage_of(msg: AIMessage) -> TokenUsageDict:
-    """Token usage of a response, whichever transport produced it.
-
-    ``get_token_usage`` reads the raw Anthropic ``response_metadata["usage"]`` dict,
-    which only a non-streamed response carries; a streamed response reports usage
-    solely through the provider-normalized ``usage_metadata``. Fall back to
-    ``get_normalized_token_usage`` over that, translating back to the raw shape:
-    normalized input is the total including both cache buckets, where the raw
-    count excludes them."""
-    usage = get_token_usage(msg)
-    if "usage" in msg.response_metadata:
-        return usage
-    norm = get_normalized_token_usage(msg)
-    cache_read = norm["cache_read_tokens"]
-    cache_write = norm["cache_write_tokens"]
-    return {
-        "model_name": usage["model_name"] or norm["model_name"],
-        "input_tokens": max(0, norm["total_input_tokens"] - cache_read - cache_write),
-        "output_tokens": norm["total_output_tokens"],
-        "cache_read_input_tokens": cache_read,
-        "cache_creation_input_tokens": cache_write,
-    }
 
 
 class UsageCallback(BaseCallbackHandler):
@@ -67,6 +43,9 @@ class UsageCallback(BaseCallbackHandler):
             return
         msg = generation.message
         if isinstance(msg, AIMessage):
-            # get_run_summary() returns an inert throwaway outside a run, so this is
-            # a no-op when no autoprove run is active (e.g. ad-hoc model use).
-            get_run_summary().record_token_usage(_usage_of(msg))
+            # The normalized usage_metadata is the one source every transport and
+            # provider fills in — the raw response_metadata["usage"] dict exists only
+            # on non-streamed Anthropic responses. get_run_summary() returns an inert
+            # throwaway outside a run, so this is a no-op when no autoprove run is
+            # active (e.g. ad-hoc model use).
+            get_run_summary().record_token_usage(get_normalized_token_usage(msg))
