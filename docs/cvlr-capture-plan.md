@@ -471,7 +471,13 @@ current / legacy / unknown, using signals in this order of reliability:
    | 3 — current | native `cvlr_assert!` etc. | `cvlr` imports, no `cvt` path |
 
    Rung 2 is the one a name-based check gets wrong: it looks identical to rung 1 at the call site
-   and is a completely different situation. It is also the easiest deprecation mapping to write,
+   and is a completely different situation.
+
+   **A fifth state the data forced: `mixed`.** Five of sixteen projects carry rung-1 *and*
+   rung-2/3 evidence at once — importing `cvt::cvt_assume` (the superseded crate) alongside
+   `cvlr::cvt::*` (the compat module) or native calls. That is not "unknown": it says a migration
+   is in progress, which is a different fact with a different follow-up, and collapsing the two
+   would hide the most common real state in the corpus after `current`. It is also the easiest deprecation mapping to write,
    because the compat module *is* the migration path — the entry can name the exact swap.
 
    **The ladder is per-concern, not per-project.** A project can sit on different rungs for
@@ -517,6 +523,62 @@ So rank on two axes, kept separate:
 The bottom-left quadrant is the point of doing this. Under a single-axis rank those idioms look
 like well-attested best practice; under two axes they are correctly identified as *gaps* — gaps we
 would otherwise have shipped as advice.
+
+### 4.5.1 What the first ranked run found
+
+`tools/rank.py` over the extracted rows. Three results changed how the rest of Phase A should be
+run.
+
+**Sixteen repositories are eleven clients.** Grouped by codebase owner, as evidenced by package
+names: the three SPL-upstream repos are one client, Kamino is two repos, Squads two, Certora's own
+teaching material two. So **"appears in ≥2 projects" is a much weaker statement than it looks**, and
+the honest bar — two *teams* — eliminates several idioms that a repo count would have promoted. One
+project's owner is not yet established, which is recorded in the inventory as `~` and makes every
+recurrence count an **upper bound** until it is named.
+
+**Vintage, per project per concern** (rung from the import path, never the macro name):
+
+| | assertions | logging | vacuity | env naming |
+|---|---|---|---|---|
+| current (rung 3) | 9 | 13 | 0 | 6 |
+| legacy surface (rung 2) | 0 | 0 | 0 | 5 |
+| superseded library (rung 1) | 1 | 0 | 1 | 0 |
+| mixed | 5 | 1 | 4 | 0 |
+| absent / unknown | 1 | 2 | 11 | 5 |
+
+Three things to read off it:
+
+- **The per-concern claim is confirmed by a same-client pair.** Kamino's two repos are rung 3 on
+  assertions and rung 2 on env-file naming — the same team, current in one concern and legacy in
+  another. A project-level vintage would have been wrong for both.
+- **Tier really is a prior, not a verdict.** One *normative*-tier project is `mixed` on assertions
+  and `unknown` on env naming (it uses the unprefixed third convention), exactly the case §3.1
+  predicted.
+- **Vacuity is current nowhere.** No project on any rung uses `cvlr_vacuity_check`; the four that
+  check vacuity all use the legacy spelling.
+
+**The quadrants: 221 ship, 8 ledger gaps, 197 recipes, 112 appendix.** And the valuable cell needed
+splitting, because *recurs with no current solution* turned out to mean two different things:
+
+- **4 are mechanical renames** — `cvt_assert` → `cvlr_assert` and friends, where the current name
+  both exists in the pinned crates *and* is attested in normative projects. These cost no expert
+  time; they are a mapping table.
+- **4 are real questions.** `cvt_vacuity_check` maps to a name that **exists but has zero uses
+  anywhere and no mention in the manual** — so the rename is not the answer, and the question is
+  whether that is still how vacuity is checked (the `rule_sanity` conf key, present in 13 projects,
+  is the obvious hypothesis). The other three are env-file entries that recur across clients with
+  no normative-tier instance, which asks why current projects stopped inlining them.
+
+That distinction is worth its own state (`unattested_replacement`): without it, the single most
+interesting gap in the corpus would have been filed as a spelling change.
+
+**One false question caught, which is a warning about the ledger's own quality.** `cvlr_assert_eq`
+is produced by a macro-generating macro — `impl_bin_assert!(cvlr_assert_eq, ==, $)` — and is
+therefore invisible to a `macro_rules!` scan. The first run reported `cvt_assert_eq` as having *no*
+current counterpart, i.e. as a question for a human, when the replacement is used 46 times across 6
+projects. **A ledger that sends an expert to answer something the crates already answer spends the
+one resource Phase B has.** Scan for generated names, and treat every "no replacement found" as
+suspect until the symbol list is known to be complete.
 
 ### 4.6 The abstraction pass (LLM, still Phase A)
 
