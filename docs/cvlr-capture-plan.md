@@ -194,6 +194,13 @@ git diff --name-status --diff-filter=A $MB <spec-branch>
 git diff --diff-filter=M $MB <spec-branch> -- programs/ crates/ src/
 ```
 
+**The merge-base isolates the branch's divergence, which is not the same as the verification
+work.** Where a spec branch also carried ordinary feature development, the added set contains it:
+one project's `A` set is 100 files of TypeScript UI code and dev utilities, another's includes
+committed `.so` binaries. So the diff narrows the problem and the *classifier* (§4.2) finishes it —
+which is why a large "unclassified" bucket is a signal about the branch, not a tool failure. Judge a
+project by whether its rules/confs/env files were found, never by the size of the added set.
+
 **Also check the dates.** On the calibration project the spec branch head was *older* than the
 code branch head — the spec was written against code that has since moved. Pair the spec with the
 code it was written against (the spec branch's own tree), never with today's mainline, or both the
@@ -218,6 +225,20 @@ assuming. The kinds seen in practice, all of which recur:
 
 Output: one small JSON/YAML manifest per project naming these paths. Everything downstream reads
 the manifest, so a project with an unusual layout is handled once, here.
+
+**Built and run over all 16 projects** — `tools/locate.py` in the private repo, with the manifests
+committed beside the inventory. The corpus is therefore counted rather than estimated:
+
+| | rules | confs | expected verdicts | env files | mocks | harness | build scripts | munge |
+|---|---|---|---|---|---|---|---|---|
+| files, 16 projects | **264** | 486 | 287 | 106 | 90 | 181 | 28 | **527** |
+
+Three classifier facts worth carrying into any layout work, each of which mis-scored a project
+before it was fixed: rules nest arbitrarily deep under a spec directory *and* appear as a single
+`spec.rs` in smaller projects (matching one directory level found 1 of 24 rule files in one
+project); `mod.rs` under a spec tree is glue, not a rule; and **cargo wiring must be read from the
+tree, not the diff**, because verification usually *modifies* an existing manifest, which lands the
+scaffold's ground truth in the munge set conflated with source edits.
 
 **Do not assume one cargo workspace per project.** One surveyed repo has *no root workspace at
 all*: four independent sibling workspaces at the root, each with its own `Cargo.lock` and no root
@@ -262,8 +283,9 @@ Inlining and summaries entries, bucketed by symbol shape (SDK function, math hel
 …). Ten projects' worth is a direct answer to "what does the scaffold's starting env file contain"
 — currently a guess.
 
-Two gotchas, both observed: the files are named `cvt_*` in older projects and `cvlr_*` in current
-ones, so match on both; and **"summaries" names two different mechanisms.** One project has both an
+Two gotchas, both observed: the files carry **three** naming conventions, not two — bare
+(`envs/inlining.txt`), `cvt_*` in older projects, and `cvlr_*` in current ones — so match all
+three, and note that a prefixed-only pattern scored a project with six env files as having none; and **"summaries" names two different mechanisms.** One project has both an
 env-file summary list *and* a tree of Rust replacement implementations under
 `src/certora/summaries/`. They are not variants of one thing — the first is an `ENV`-channel
 entry, the second is closer to `MOCK` (§7.2) — and conflating them would produce recipes that
