@@ -848,6 +848,39 @@ else can resolve at all.
 That last field is what keeps Phase B from turning into a conversation with no artifact. Every
 answer has a predetermined destination.
 
+### 5.2.1 What the first generated ledger contains
+
+`tools/gen_ledger.py`: **73 open questions**, ranked by blocked weight, ids stable across re-runs.
+
+| Kind | Count | Top of that kind |
+|---|---|---|
+| `unexplained_fail` | 47 | every `FAIL`/`SANITY_FAIL` in the corpus, one per (project, rule) |
+| `divergent` | 14 | `optimistic_loop` — 10 clients, two values; `rule_sanity` — 9 clients, basic vs advanced |
+| `unexplained_conf` | 7 | prover flags one client tuned deliberately and nobody else sets |
+| `currency_gap` | 4 | `cvt_vacuity_check`, whose replacement exists but is unused everywhere |
+| `undatable` | 1 | one project's env-file naming, which uses the unprefixed third convention |
+
+**Two filters decide what reaches an expert, and both are reported on every run rather than applied
+silently.** They are the difference between a ledger people trust and one they skim:
+
+- **Mechanical renames are not questions.** Four of the eight §4.5 gaps have a replacement that
+  exists in the pinned crates *and* is attested in normative projects. Asking about those spends
+  Phase B's only resource on something a lookup answers.
+- **Knobs expected to vary are suppressed**, with a recorded reason each: a loop bound follows the
+  program's loops, a timeout follows the problem's difficulty, `java_args` is a log level. Before
+  this, the ledger's first page asked why one project bounds loops at 2 and another at 3 — a
+  question with an answer that teaches the corpus nothing. Eight keys are suppressed and named; the
+  fourteen that remain are real methodological disagreements.
+
+**Evidence is sampled round-robin across projects.** The first run put six examples from one project
+under a question claiming four clients, which invites exactly the doubt the evidence exists to
+dispel.
+
+**Two kinds are not generated yet and say so on every run:** `soundness` (needs the §4.6 abstraction
+pass to propose the arguments) and `orphan_mock` (needs a module graph — `locate.py` records paths,
+not the `mod` wiring that adopts a mock). A ledger that silently covers fewer kinds than its schema
+lists reads as *these questions do not arise*.
+
 ### 5.3 Prioritization
 
 Rank by blocked weight, not by curiosity. A question blocking one high-recurrence idiom outranks
