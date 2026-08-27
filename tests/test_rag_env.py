@@ -9,8 +9,8 @@ registered — its connection in ``composer.rag.db.KNOWLEDGE_BASES`` and its sea
 * an **unavailable corpus** (DB down, embedding model missing) is an environment condition — the
   run continues with no RAG surface, because a search aid must never fail a run.
 
-No corpus is registered on this branch, so the tests that need one register a stub. That stub is
-also the executable spec for adding a real one: two entries, in two maps.
+``cvlr_kb`` is registered for real; tests that need an *arbitrary* corpus still register a stub,
+which doubles as the executable spec for adding one: two entries, in two maps.
 """
 
 import pytest
@@ -37,9 +37,23 @@ def test_an_unregistered_tag_raises_and_says_where_to_register_it():
     assert "KNOWLEDGE_BASES" in msg and "rag_env" in msg
 
 
-def test_the_message_says_so_when_nothing_is_registered_at_all():
-    # An empty registry is the intended resting state, and "known: []" would read as a lookup
-    # failure against a populated one.
+def test_a_really_registered_corpus_validates():
+    # Not a stub: `cvlr_kb` is registered in both maps for real, and this is the guard against a
+    # half-registration landing (the trap the next test describes) during a refactor.
+    assert rag_env.validate_rag_db("cvlr_kb") is None
+
+
+def test_the_registered_corpora_are_listed_when_a_tag_is_unknown(monkeypatch: pytest.MonkeyPatch):
+    msg = str(pytest.raises(ValueError, rag_env.validate_rag_db, "no_such_kb").value)
+    assert "known: ['cvlr_kb']" in msg
+
+
+def test_the_message_says_so_when_nothing_is_registered_at_all(monkeypatch: pytest.MonkeyPatch):
+    # "known: []" would read as a lookup failure against a populated registry rather than as an
+    # empty one, so the empty case gets its own wording. Emptying the maps is how that case is
+    # reached now that a corpus is registered.
+    monkeypatch.setattr(rag_db, "KNOWLEDGE_BASES", {})
+    monkeypatch.setattr(rag_env, "_FACTORIES", {})
     assert "none is registered yet" in str(
         pytest.raises(ValueError, rag_env.validate_rag_db, "no_such_kb").value
     )
@@ -82,3 +96,13 @@ def test_an_unavailable_corpus_degrades_to_no_rag(monkeypatch: pytest.MonkeyPatc
         assert rag_env.build_rag_tools("stub_kb") == ()
     assert "unavailable" in caplog.text
     assert "connection refused" in caplog.text  # the factory's failure, not the embedder's
+
+
+def test_the_cvlr_factory_binds_its_three_tools():
+    """The registered factory is only useful if it actually produces tools: a tag can validate
+    (both maps populated) while its tools module fails to import or its bindings are wrong, and
+    ``build_rag_tools`` would swallow that as an "unavailable corpus" and degrade silently. Binding
+    is lazy, so no database is needed to check the wiring."""
+    factory = rag_env._FACTORIES["cvlr_kb"]
+    names = {t.name for t in factory(object())}  # type: ignore[arg-type]  # bind() is lazy
+    assert names == {"cvlr_get_section", "cvlr_manual_search", "cvlr_keyword_search"}
