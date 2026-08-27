@@ -90,11 +90,43 @@ carries a *synthetic* example — rewritten against invented types, minimal, and
 Public projects may be cited by name and linked; confidential ones contribute the *idiom* and are
 cited only as "observed in N projects".
 
-**Prefer a public project's real code to a synthetic rewrite when both are available.** A real,
-citable, compiling example from a public repo is strictly better evidence than an invented one —
-the reader can go read the rest of it. Exactly one surveyed project is public (a tutorial), which
-makes it the default source for worked examples even where a confidential project demonstrates the
-same idiom more richly.
+### 3.0.1 Quoting: never from an engagement, encouraged from a tutorial
+
+**Every code block derived from a verification engagement is paraphrased or generalized — never
+quoted — whether or not that repo is public.** The reason is not confidentiality; it is
+**overfitting**. A corpus that quotes how eleven particular projects happened to do things trains
+the agent on those projects' accidents: their house layout, their helper names, their era's
+idioms. A generalized entry states the idiom; a quoted one states one instance of it.
+
+So the rule keys on `kind`, not on `disclosure`:
+
+| Source `kind` | Code blocks |
+|---|---|
+| `engagement` | **always** paraphrased / generalized, public or not |
+| `tutorial`, `examples` | quoting **encouraged** — *provided it agrees with current best practice* |
+
+`disclosure` still matters, but for a narrower thing than before: whether a project may be **named
+and linked**, and whether its identifiers need to be on the sanitization denylist. It no longer
+governs whether code can be reused, because nothing from an engagement is reused verbatim either
+way. Note what follows for the four confidential engagements whose upstream program is public —
+relaxing their disclosure would buy attribution, not quotable code.
+
+**The tutorial proviso is a live gate, not a formality.** Both public Solana sources currently sit
+on the 0.4 line with no `cvlr_rules!`/`cvlr_spec!`, while the newest engagement is on 0.6.1 with
+both (§4.4). So a tutorial quote has to be checked against current practice before it ships, and
+some of it will fail that check today.
+
+That leaves an awkward but honest position: **the quotable material lags, and the current material
+is not quotable.** Most code blocks in the corpus will therefore be *authored* — written to
+current practice and compiled (§9) — rather than lifted from anywhere. It raises the value of the
+modernization pass (§6.2) and makes updating the public tutorials a worthwhile side effect of this
+work.
+
+**Paraphrasing prevents copying, not bias.** Which idioms get an entry at all is still decided by
+what these projects happened to do. The actual defenses against overfitting are the two ranking
+axes — recurrence across *clients* (§4.5), which suppresses one team's house style, and currency,
+which suppresses one era's — plus the modernization pass for gaps neither axis can fill. Treat
+paraphrasing as necessary and not sufficient.
 
 This is not merely a legal formality. A synthetic minimal example retrieves and generalizes
 better than a 200-line excerpt from someone's lending protocol, which mostly teaches the agent
@@ -424,7 +456,8 @@ than sparse:
 - **The public examples repo.** Two complete minimal CVLR projects, canonical `*_core` inlining
   and summaries files, and a conf variant pair with expected-verdict files. Public, tiny, and
   authoritative about the *scaffold* rather than about practice — see the backend plan's Phase 3.
-- **Public tutorial prose.** One surveyed project is a public tutorial whose README is already
+- **Public tutorial prose** (quotable, subject to §3.0.1's currency proviso). One surveyed
+  project is a public tutorial whose README is already
   pedagogical — organized by property category, with further READMEs documenting the `certora/`
   scaffold itself. It is the only project material that needs *import* rather than abstraction, and
   being public it can be quoted verbatim. Cheapest real content in the whole plan; do it first.
@@ -762,6 +795,11 @@ client-derived material and never publishes; `entries/`, `recipes/` and `dist/` 
 Private-repo status is not a substitute for sanitization, because everything in `dist/` ends up
 embedded in a database that ships.
 
+Note that the no-verbatim rule is now *two* rules with one enforcement point: confidentiality (no
+client identifiers or code leaving the boundary) **and** methodology (no engagement code quoted at
+all, §3.0.1). The second is the binding one, since it applies even to public engagement repos that
+the first would permit.
+
 **Enforce that boundary in CI, not in review.** A publish job that re-runs §9's cleanliness gate
 over `dist/` — no client identifiers, no verbatim excerpts, every code block compiles — is the
 difference between a rule and a hope. It is also the only gate that cannot be recovered from
@@ -862,6 +900,9 @@ Two related pieces are deliberately **not** done, because nothing consumes them 
       validates the generated crate reference (main plan §5.4/§5.5). The corpus is not allowed to
       be the one place with unverified code in it.
 - [ ] **Clean.** No client identifiers, no verbatim confidential code; provenance by count.
+- [ ] **Not quoted from an engagement.** Engagement-derived code is paraphrased or generalized,
+      public repo or not (§3.0.1). A verbatim block is admissible only from a `tutorial` or
+      `examples` source **and** only after passing the currency check.
 - [ ] **Version-stamped.** Known CVLR version range.
 - [ ] **Status-labeled** per §4.8, with the ledger question named if not `verified`.
 
