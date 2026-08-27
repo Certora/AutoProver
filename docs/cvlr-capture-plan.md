@@ -341,6 +341,12 @@ scalar "version" field cannot represent what is actually there. The set's elemen
 version string alone silently merges two distinct resolutions. Stamp every extracted instance. Shipping a dated idiom
 unmarked is the corpus-side version of the "reading the wrong CVLR" risk in the main plan's §5.5.
 
+**Stamp the platform generation alongside the CVLR versions.** A CVLR chain crate is bound to one
+chain-platform line — `cvlr-solana` 0.4.x to `solana-program` 1.18, 0.5.0 to 2.2, the unreleased
+0.6 line to the split `solana-*` v3 crates — and each generation has its own `AccountInfo` *type*.
+Two instances can therefore carry identical `cvlr` versions and still be mutually incompatible,
+and no CVLR version string explains why (§4.7.3).
+
 Also expect more than one **dependency source**: crates.io, git pinned to a commit, git pinned to
 a tag, and git pinned to a *branch* all appear across the surveyed projects. A stamp that assumes a
 registry version silently loses the git cases. Read `Cargo.lock`, never `Cargo.toml` — a
@@ -550,22 +556,51 @@ Three things narrow the decision, all mechanically checked:
 3. **A rule in the documented current form compiles against published-only dependencies** — core
    0.6.1 plus `cvlr-solana` 0.5.0, host target, no git pin and no patch. Verified.
 
-So the recommendation is to define the reference set as **published releases only**, recorded as
-explicit `(name, version, source)` triples in data and refreshed deliberately — never resolved as
-"latest", which would silently mix a current core with a stale chain crate. Two consequences to
-accept openly: SPL-token helper coverage is a **hole** until that crate is published (ledger
-question), and the scaffold the backend generates must not imitate the newest project's
-git-branch/`[patch]` pinning, however current that project otherwise is.
+### 4.7.3 Decided: the reference set
 
-Three questions only a maintainer can answer, in decreasing order of what they block:
+**Published releases only, pinned exactly**, and now settled — recorded as data in
+[composer/spec/cvlr_reference.py](../composer/spec/cvlr_reference.py), the single answer the
+compile gate, the crate reference and the generated scaffold all read:
 
-1. Is `cvlr-solana` 0.5.0 the release users should be on, or is 0.6.0 imminent? Corpus content
-   that depends on the crate split should wait if so.
-2. Will the SPL-token crate be published, and under which name — `cvlr-spl-token` (the dev
-   branch's name) or `cvlr-solana-token` (the name older lockfiles resolve)?
-3. Is `cvlr-soroban` 0.4.0 — seventeen months old, and passed over in favour of a personal fork by
-   one of the two Soroban projects — really the current Soroban line? This decides whether Soroban
-   gets a normative tier at all (§3.1).
+| Chain | CVLR | Platform generation it implies |
+|---|---|---|
+| Solana | `cvlr` 0.6.1, `cvlr-solana` 0.5.0, `cvlr-solana-stake` 0.5.0 | `solana-program` 2.x (the last monolithic line) |
+| Soroban | `cvlr` 0.6.1, `cvlr-soroban` 0.4.0, `cvlr-soroban-derive` 0.4.0 | `soroban-sdk` 22.x |
+
+Verified by compiling a probe per chain against exactly these pins — the Solana one exercising
+`cvlr_rules!` / `cvlr_spec!` / predicates / derives and `cvlr_deserialize_nondet_accounts`, the
+Soroban one a `#[contract]` impl with nondet and `clog!`. That probe *is* §9's gate in miniature.
+
+**Choosing a chain crate chooses a platform generation, and that is the load-bearing consequence.**
+`cvlr-solana` tracks the Solana platform line, and each generation has its own `AccountInfo`
+*type*, so a mismatch is a hard type error rather than a warning:
+
+| `cvlr-solana` | requires | surveyed projects there |
+|---|---|---|
+| 0.4.4 / 0.4.5 | `solana-program` 1.18 | 9 — klend, kvault, restaking, texture, manifest, stake-deposit, smart-account, and both public example repos |
+| **0.5.0 (the reference)** | `solana-program` 2.2 | 2 — fluid (2.3.0), stake-pool (2.2.1) |
+| 0.6.0-dev (unreleased) | split `solana-*` v3 | 1 — spl-token-pinocchio |
+
+Two things follow, both deliberate:
+
+- **The reference band is the two most recent conventional projects**, which is the right target:
+  the newest normative work that is not on an unreleased crate. The nine 1.18-era projects stay
+  *evidence* — their situations count, their `AccountInfo`-typed code does not compile here.
+- **Pinocchio / split-crate programs are out of scope until 0.6.0 ships.** Worth stating plainly,
+  because the newest engagement is also the only source of some current practice (§3.0.1). Its rule
+  *form* still applies — that lives in the published core line — only its account handling does not.
+
+Accepted consequences, recorded so they are not rediscovered later as bugs:
+
+- **SPL Token support is a known hole.** The token model was factored out of `cvlr-solana` on the
+  unreleased 0.6 line and published under neither `cvlr-spl-token` nor `cvlr-solana-token`. Entries
+  needing it model the token account themselves. The gap is recorded in the reference data under
+  *both* names, so searching either finds it; if the crate is ever published the corpus is revised
+  then, rather than pre-emptively.
+- **The scaffold never emits a git-branch or `[patch.crates-io]` pin**, however current the project
+  that does. That is precisely what makes the newest engagement's build unreproducible from its own
+  repository, and it is not a practice to propagate to users.
+- **A stamp needs the platform generation, not just the CVLR version** (§4.3.6).
 
 **And the docs need the compile gate too.** Building the probe surfaced two defects in the manual's
 own examples, both of which fail against every available version:
