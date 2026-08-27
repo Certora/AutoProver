@@ -471,9 +471,29 @@ than sparse:
   targets current CVLR (§3.0.1). Several of the main plan's open questions are answered here
   rather than by extraction.
 - **Generated crate reference** — an agent reads the CVLR crate family and emits a reference entry
-  per macro, derive, and helper. This is cheap and *self-verifying*: the emitted examples must
-  compile against the crate they document. It is also the layer most directly enabled by the main
-  plan's §5.5 (the crate source is on disk in the resolved version).
+  per macro, derive, and helper. Cheap and *self-verifying*: the emitted examples must compile
+  against the crate they document. Most directly enabled by the main plan's §5.5 (the crate source
+  is on disk in the resolved version).
+
+  **Measured, so the scope is known rather than assumed.** The reference set (§4.7.3) resolves to
+  14 crates with **282 public symbols, of which the manual names 74 — 26%.** The layer is therefore
+  worth building, and the priority order falls out of where the gaps are rather than out of taste:
+
+  | Gap | Coverage | Why it ranks here |
+  |---|---|---|
+  | `cvlr-solana` | 4/28 fns, 0/7 macros, 0/2 types | The chain API — CPI (`invoke`, `invoke_signed`), key comparison (`require_keys_eq`), account logging (`clog_acc_info`), mint modelling (`impl_nondet_mint`) — is almost entirely unnamed |
+  | `cvlr-solana-stake` | 0/15 | Undocumented in full; the word "stake" does not appear in the manual |
+  | `cvlr-log` | 5/35 fns, 0/8 macros | Counterexample readability is a named hard part of the backend plan (§5.3) |
+  | `cvlr-nondet` | 5/21 fns | The other half of every rule's setup |
+  | `cvlr-fixed`, `cvlr-decimal`, `cvlr-mathint` | 14/71 | Numeric modelling; many are mechanical operators, so count overstates the real gap |
+  | `cvlr-spec` types | 0/5 | The parametric layer's prose is good but its type surface is unnamed |
+
+  Two gaps are sharper than a count can show, because **the projects use what the manual does not
+  document**: `cvlr::early_panic` (0 mentions) appears in the munge taxonomy (§4.3.4) as a whole
+  category of edit, and `invoke`/`invoke_signed` (0 mentions) are how CPIs are reached at all.
+  `cvlr_vacuity_check` is the inverse and just as instructive: the manual teaches vacuity as a
+  *method* ("Catch vacuity early") without ever naming the macro that performs it. This is exactly
+  the corpus's value-add over the docs, and it is measurable rather than asserted.
 
 - **The public examples repo.** Two complete minimal CVLR projects, canonical `*_core` inlining
   and summaries files, and a conf variant pair with expected-verdict files. Public, tiny, and
