@@ -871,8 +871,10 @@ content ships with a marker; unreviewed soundness content does not ship as advic
 
 - [x] A `cvlr_kb` manifest ingests cleanly via `composer.scripts.rag_import`, dry-run reviewed.
       *(§4.7.1 — the public docs half. The idiom half needs `publish.py`.)*
-- [ ] Every code-bearing entry compiles against current CVLR. *(Needs `compile_gate.py`; the 82
-      entries carry synthetic examples that nothing has compiled yet — the last open gate.)*
+- [x] Every code-bearing entry compiles against current CVLR. *(§9.1 — `compile_gate.py`; the pass
+      compiles its own examples, so an entry records the verdict and the gate verifies it. Two
+      exemptions, both stated: a legacy spelling absent from the pinned crates by design, and a
+      bodyless `mod x;`, which names a file.)*
 - [x] Retrieval spot-check: ~20 questions an authoring agent would actually ask return a sensible
       entry. (Judging "sensible" here is machine-adjacent — the questions can be written from the
       extracted rule corpus, and the check is "did anything relevant come back", not "is the
@@ -1349,6 +1351,63 @@ only, both), but no container has been built from them here.
 - [ ] Retrieval spot-check (§4.9).
 
 ---
+
+### 9.1 What the compile gate found, and why the pass now runs it itself
+
+**A third of the corpus taught a syntax that does not exist.** The abstraction pass wrote prover
+`.conf` examples as TOML — `[loop_iter]` section headers, `loop_iter = "3"` — and a conf is JSON.
+Nothing about those entries read as wrong; every surrounding field was right, which is exactly what
+makes a fabricated format dangerous. This is the argument for §9 in one finding: an entry is
+plausible by construction, because a language model wrote it.
+
+**Not everything is Rust, so the gate is four checks chosen by what the block is:**
+
+| Block | Check | First run | After |
+|---|---|---|---|
+| `rust` | `cargo check` against the reference set, **host target** | 4/48 | 32/34 |
+| `conf` | JSON parse | 0/7 | 36/36 |
+| `toml` | TOML parse, **rejected if it is a conf in disguise** | 13/33 | 3/3 |
+| `text` | env-file line shapes | — | 14/14 |
+
+The fence label decides, with one exception: a conf mislabelled `toml` parses as valid TOML and is
+still a format nobody can feed to the prover, so content overrides the label *there and only there*.
+Guessing against a correct label invents failures — an inlining env file is `#[inline] ^symbol$`,
+which a content sniff reads as Rust attributes, and a content-first classifier sent thirteen
+correctly-labelled env files to the compiler.
+
+**The gate belongs inside the pass, not after it.** Telling the pass what each fence means fixed the
+confs outright. The Rust examples needed more than instruction: they were fragments calling helpers
+they never defined, and *reporting* that leaves someone to hand-fix ninety entries. §4.7 already
+asks the generated layers to be self-verifying, so the pass now compiles its own examples and
+retries with the compiler's message, in the same loop as the leak gates. Nine of the failures were
+one mistake — calling `nondet()` on a type without `#[derive(Nondet)]` — which a model corrects
+immediately once it is told and cannot guess otherwise.
+
+**Two things cannot compile and must still be shown.** A legacy spelling is absent from the pinned
+crates *by design*: recognizing it is the entry's whole job (§7.2). A bodyless `mod x;` names a
+file, and the module-hook and module-redirect idioms are precisely about that declaration. Both are
+exempt with a stated reason rather than counted as passes, and the pass skips retrying them.
+
+Entries record `compiles:` at generation time, so §9 verifies a stated claim rather than discovering
+one — which is what lets §7 refuse to ship a failure.
+
+### 9.2 Publishing: where the statuses stop being metadata
+
+`publish.py` is the boundary between what the corpus knows and what it is willing to say. Of 84
+entries, **46 ship and 38 are withheld**:
+
+- `quarantined` does not ship (37). An uncertified soundness claim fails in the one way nothing
+  downstream catches, and §4.8's whole distinction is failure mode rather than confidence.
+- An entry whose example does not compile does not ship (1), whatever its status.
+- `proposed` ships **carrying an unreviewed marker in its own text**, because a retrieval hands back
+  content and not a status column. An entry silent about its own confidence reads as settled.
+
+Every withheld entry names the ledger question that would promote it, which is §5.2's write-back
+field doing its job: 37 of the 110 open questions have a specific entry waiting on them.
+
+**No entry is `verified`, and the run says so on every publish.** Compiling an example checks that
+it runs, not that the advice is right. That is Phase B's job, and claiming otherwise would make the
+prototype's confidence unmeasurable — which is the one thing §4.9 exists to prevent.
 
 ## 10. What not to do
 
