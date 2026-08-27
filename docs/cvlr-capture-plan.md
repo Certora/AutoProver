@@ -604,6 +604,77 @@ current idiom together with four legacy ones and emit something that resembles n
 certify one. Every proposed argument is emitted as a ledger question and the entry is
 quarantined (§5.1) until a human signs it off.
 
+### 4.6.1 What the first abstraction run produced
+
+Two scripts, split so the stage that spends money is reviewable before it runs.
+
+**`idioms.py` decides what an idiom is, mechanically and offline.** §4.5 ranks *symbols*, and a
+symbol is not an idiom: one entry per ranked symbol would be an API listing, which is §4.7's job.
+The grouping rule is co-occurrence taken from the data rather than a hand-authored taxonomy —
+symbols appearing in exactly the same files are one decision, made once and carried together. It
+pays immediately: the five `solanaOptimistic*` flags are never set individually in any of the 256
+confs that set them, so they are one idiom and one question rather than five, and the hundred-line
+generated inlining preamble collapses to one. Near-identical site sets merge as well, since exact
+co-occurrence splits the soft-float summaries into twelve entries that all say the same thing.
+**89 idioms at ≥2 clients; 160 single-client clusters dropped as house style.**
+
+**`abstract.py` runs the pass.** 82 entries — 47 `proposed`, 35 `quarantined` — and 35 soundness
+questions, at **114 model calls, 422k in / 132k out, ~$3.25**.
+
+| Shelf | proposed | quarantined |
+|---|---|---|
+| Prover configuration | 21 | 14 |
+| Rules and properties | 6 | 15 |
+| Env files: inlining and summaries | 8 | 9 |
+| Munging the program under verification | 0 | 6 |
+| Counterexample readability, vacuity | 5 | 1 |
+
+Three things the pass is not trusted with, and the reasons are not stylistic:
+
+- **Provenance is computed, never generated.** Recurrence, the CVLR range the instances resolved
+  to, the platform generation and the canonical tier are already in `extract/`; a model asked to
+  restate them will round one off.
+- **Status is decided outside the pass, and the known-unsound cases are forced.** `optimistic_loop`
+  and the `solanaOptimistic*` family drop obligations by construction, so they are quarantined
+  whatever the pass answers. Judgement the pass can be wrong about may *add* quarantine, never
+  remove it — which is also why a missing answer quarantines rather than defaulting to advice.
+- **The shelf comes from the idiom kind.** Asked for it, the pass filed a module-path redirection
+  under *Env files*; one bad answer scatters a subject across two shelves for every later retrieval.
+
+**On the leak gates, which took several wrong shapes.** The rule is never to quote engagement code
+(§3.0.1), so the pass reads client code and must emit synthetic prose. The attractive gate — deny
+any word the evidence used, since the cross-project view says which vocabulary is shared — denies
+`Const`, `dead_code`, `cargo`, `result` and `Retain`. A gate with no way to tell a protocol's type
+from an English word rejects every entry, and one that rejects everything carries exactly as much
+information as no gate. What survives is denying only what cannot be mistaken for a word: the
+curated denylist, and the surveyed repositories' own **cargo package names** — minus anything any
+lockfile resolved from crates.io, or an entry cannot say `spl-token`, and minus the public
+repositories entirely. The residual risk that stays unmechanizable — a synthetic example built
+around a name the pass saw — is recorded on the entry as `review_hints` for the human who reviews
+it. Mechanical where the machine can be right, review signal where it cannot.
+
+That gate then caught a leak the prompt could never have prevented: `idiom.members` carries
+extracted env symbols, which are regexes over the *program's* symbol table, and one named a client
+crate. The model's output had been clean every time; the leak was in a field the tool assembles
+itself, and the gate had only been reading the model's half of the entry.
+
+**Two limits it reports on every run rather than hiding.** Seven idioms produced no entry, and four
+of them are the honest case: an idiom whose general form *is* its literal text. A points-to summary
+(`#[type((*i64)(r1+8):num)]`) cannot be paraphrased and still be the thing, and while generated env
+files are excluded from the structural gate — they are Certora's own generator output sitting in a
+client tree — the hand-written ones are not. And five entries are kept but thin: `cost` goes missing
+on roughly one call in seven however it is asked for, and dropping an idiom over it would throw away
+a trigger, a pattern and an example that were all fine, leaving a hole that reads as *this idiom
+does not arise*. Those are written quarantined with the gap named. A visible hole beats a silent
+absence.
+
+**The ledger closes one of its two ungenerated kinds.** With the pass's field 3 filed as questions,
+`gen_ledger.py` produces **108 open questions**: 47 `unexplained_fail`, **35 `soundness`**, 14
+`divergent`, 7 `unexplained_conf`, 4 `currency_gap`, 1 `undatable`. Soundness now dominates the top
+of the ranked list — `loop_iter`, `optimistic_loop`, `implementation_swap`, `feature_wiring` — which
+is the intended shape: the questions that block the most entries are the ones about whether a
+recurring transformation preserves what it claims. Only `orphan_mock` remains ungenerated.
+
 ### 4.7 The bulk layers — free corpus content with no project involved
 
 Two more Phase-A sources, both machine-driven, that make the prototype useful on day one rather
@@ -798,15 +869,20 @@ content ships with a marker; unreviewed soundness content does not ship as advic
 
 ### 4.9 Phase A exit criteria
 
-- [ ] A `cvlr_kb` manifest ingests cleanly via `composer.scripts.rag_import`, dry-run reviewed.
-- [ ] Every code-bearing entry compiles against current CVLR.
-- [ ] Retrieval spot-check: ~20 questions an authoring agent would actually ask return a sensible
+- [x] A `cvlr_kb` manifest ingests cleanly via `composer.scripts.rag_import`, dry-run reviewed.
+      *(§4.7.1 — the public docs half. The idiom half needs `publish.py`.)*
+- [ ] Every code-bearing entry compiles against current CVLR. *(Needs `compile_gate.py`; the 82
+      entries carry synthetic examples that nothing has compiled yet — the last open gate.)*
+- [x] Retrieval spot-check: ~20 questions an authoring agent would actually ask return a sensible
       entry. (Judging "sensible" here is machine-adjacent — the questions can be written from the
       extracted rule corpus, and the check is "did anything relevant come back", not "is the
       advice right", which is Phase B's job.)
-- [ ] Every entry carries a status (§4.8) and provenance.
-- [ ] **The ledger exists, is ranked, and every quarantined entry is represented in it.**
-- [ ] The whole pipeline re-runs from the project manifests with one command.
+- [x] Every entry carries a status (§4.8) and provenance. *(82/82, both machine-computed.)*
+- [x] **The ledger exists, is ranked, and every quarantined entry is represented in it.**
+      *(108 questions; all 35 quarantined entries name an open question, checked as an invariant.)*
+- [x] The whole pipeline re-runs from the project manifests with one command. *(`tools/run_all.sh`;
+      the abstraction stage is opt-in behind `RUN_ABSTRACTION`, since a re-run that silently kept
+      yesterday's entries would look like a re-run.)*
 
 At that point the backend can be wired to a real corpus and Phase B can start — and, importantly,
 so can measurement: we find out whether retrieval helps before spending expert time improving it.
