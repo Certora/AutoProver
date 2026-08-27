@@ -14,6 +14,14 @@ trap cleanup EXIT
 
 git clone --depth 1 git@github.com:Certora/Documentation.git "$doc_dir"
 
+# Record which revision these manuals were built from. The clone is a temp dir that this script
+# deletes, so without this the built HTML has no traceable origin — and a corpus derived from it
+# (composer.scripts.cvlr_docs_manifest) could not say which docs it is reporting.
+printf 'Certora/Documentation %s (%s)\n' \
+    "$(git -C "$doc_dir" rev-parse HEAD)" \
+    "$(git -C "$doc_dir" log -1 --format=%cI)" \
+    > "$host_dir/PROVENANCE"
+
 python3 -m venv "$venv_dir"
 source "$venv_dir/bin/activate"
 pip install -r "$doc_dir/requirements.txt"
