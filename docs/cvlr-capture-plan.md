@@ -299,7 +299,7 @@ taxonomy rather than an exhaustive one:
 | Form | Shape | What it does |
 |---|---|---|
 | Implementation swap | paired `#[cfg(feature = "certora")]` / `#[cfg(not(...))]` | Replace a definition under verification |
-| **Module redirect** | `#[cfg_attr(feature = "certora", path = "../certora/mocks/<x>.rs")]` | Point a `mod` at a mock **without touching any call site** — the highest-leverage idiom found |
+| **Module redirect** | `#[cfg_attr(feature = "certora", path = "../certora/mocks/<x>.rs")]` | Point a `mod` at a mock **without touching any call site**. The highest-*leverage* idiom found and also the **rarest**: 10 occurrences in 2 projects, against 1029 implementation swaps in 13 (§4.3.7) |
 | Attribute injection | `#[cfg_attr(feature = "certora", cvlr::early_panic)]` | Add a CVLR attribute only under verification |
 | Expression swap | `if cfg!(feature = "certora") { … }` | Replace one hard subexpression (e.g. an interest computation) inline |
 | Module hook | `pub mod certora;` | The single entry point into the spec tree |
@@ -310,6 +310,68 @@ Note what the counts say: on the calibration project the munge was ~600 lines ag
 surface of tens of thousands. **Munging is broad but shallow.** That is a load-bearing input to
 the main plan's give-up boundary (§5.2 there) — the charter should expect many small mechanical
 edits, not a rewrite.
+
+#### 4.3.7 What the first extraction run found
+
+`tools/extract.py` + `tools/tables.py` over all 16 projects: **3704 rows in 1.3 s**, re-runnable.
+The numbers below are the point of the stage — several were open questions in
+[cvlr-backend-plan.md](./cvlr-backend-plan.md) §8 answered by reading documentation and hoping.
+
+**Three parsing facts, each of which silently destroyed data before it was fixed.** They matter
+beyond this stage because the backend has to *write* these files:
+
+- **Conf files are JSON5-shaped, not JSON**: `//` comments *and* trailing commas. A strict parser
+  rejected **152 of 486** (31%). Whatever emits a conf may therefore emit trailing commas safely,
+  and whatever reads one must tolerate them.
+- **Env files comment with `;` only.** `#` opens a *directive* — an entry is
+  `#[inline(never)] ^core::.*$` — so treating `#` as a comment marker discarded **every entry in
+  all 52 inlining files** while leaving the file count looking healthy.
+- **Some env files carry a `DO NOT EDIT — AUTOMATICALLY GENERATED` banner and others do not** (6
+  files in one project, 4 in another, 0 in a third). Recorded per file, not concluded: whether the
+  backend should *author* these or *run their generator* is a ledger question, and it changes the
+  scaffold.
+
+**The scaffold's starting env file is now evidence rather than a guess.** These entries appear in
+**14 of 14** projects that have env files: `^core::.*$`, `^std::.*$`, `^<?alloc::.*$`,
+`^solana_program::.*$`, `^([^:]+::)*CVT_.*$`, `__rust_alloc` / `__rust_dealloc` /
+`__rust_alloc_zeroed` / `__rg_alloc` / `__rg_dealloc` / `__rg_oom`, `memcpy`. 5208 entries total,
+bucketed: 3395 inlining (622 `solana_sdk`, 462 `anchor`) and 1813 summaries (191 `solana_sdk`, 29
+CPI).
+
+**The conf surface, settled empirically.** `[package.metadata.certora]` has exactly three keys
+across the 9 projects that use it — `solana_inlining`, `solana_summaries`, `sources` — which
+settles main-plan open question #2 in favour of the from-sources style. Top-level conf keys by
+project count: `rule` (16), `build_script` (15), `loop_iter` (15), `rule_sanity` (13), `java_args`
+(13), `msg` (13), `optimistic_loop` (12), `smt_timeout` (10), `override_base_config` (8). And a
+`prover_args` baseline that a top-level key count cannot see: **five `-solanaOptimistic*` flags set
+`true` in 13 of 13 projects** (`Join`, `Memcmp`, `MemcpyPromotion`, `NoMemmove`, `Overlaps`), then
+`-solanaTACOptimize` (12), `-solanaAggressiveGlobalDetection` (11), `-solanaTACMathInt` (10),
+`-solanaStackSize 8192` (9).
+
+**1303 rule instances.** The two-axis rank is no longer a hypothesis: `cvt_assert` has **1130
+occurrences but in only 6 projects**, while `cvlr_assert` has **931 in 14**. A frequency-ranked
+corpus would have taught the superseded spelling. Two sharper cases:
+
+- **`cvlr_vacuity_check` has zero uses anywhere; `cvt_vacuity_check` has 113 across 4 projects** —
+  a §4.5 bottom-left cell exactly as predicted: the problem recurs and *every* solution we hold is
+  legacy. The manual names neither macro (§4.7).
+- **`acc_infos_with_mem_layout`: 211 calls in 5 projects** — undocumented, *and* one of the nine
+  symbols the unreleased 0.6 chain crate removes (§4.7.3). A widely-used idiom facing removal is
+  the highest-value thing a ledger can carry.
+- **130 macros appear in exactly one project** — the KB-recipe quadrant, and a map of what the
+  library does not provide (mint extensions, anchor contexts, signer assertions, stack-height
+  control).
+
+**Munge: 527 modified files across 13 projects, 1393 marker-carrying lines.** Implementation swap
+dominates (1029 occurrences, 13 projects), then attribute injection (203, 12), dependency wiring
+(71, 12), feature wiring (33, 13), expression swap (24, 5), module hook (23, 11), module redirect
+(10, 2). Note the raw added-line count (22309) is *not* munge volume — where a spec branch also
+carried feature work its additions land in the same set (§4.1), so the marker count is the honest
+measure.
+
+**Verdicts: 1199, of which 45 `FAIL` and 5 `SANITY_FAIL`.** That is **50 ledger questions**
+generated mechanically, and it surfaced a verdict value the plan had not anticipated: `SANITY_FAIL`
+is its own outcome, not a flavour of `FAIL`.
 
 #### 4.3.5 Expected-verdict files
 
