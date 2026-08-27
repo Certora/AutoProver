@@ -113,6 +113,12 @@ reading, but *for different things*:
 
 > **Older projects vote on the problem set. Recent projects decide the solution form.**
 
+**Compute the tiers per chain, against that chain's own frontier.** The surveyed Soroban projects
+run cvlr 0.3.x–0.4.x while the Solana ones run 0.4.x–0.6.x, so a 0.4.1 core is *current* on Soroban
+and a generation behind on Solana. Ranking both chains on one version scale would mark the entire
+Soroban corpus as legacy and leave that chain with no normative tier at all — which is not a
+finding about Soroban practice, only about release cadence.
+
 This keeps the value of a dozen projects — breadth of situations, which no single project can
 give — while refusing to let the older majority set the idiom.
 
@@ -261,8 +267,9 @@ git show <spec-branch>:Cargo.lock | grep -A2 'name = "cvlr'
 Glob lockfiles carefully: one surveyed repo keeps a `Cargo.lock.backup` beside the real one, and a
 pattern like `*Cargo.lock*` would stamp versions from a stale file.
 
-CVLR is a **family**, and it is wider than the core crate — sixteen members observed across the
-surveyed projects: `cvlr`, `cvlr-asserts`, `cvlr-decimal`, `cvlr-derive`, `cvlr-early-panic`,
+CVLR is a **family**, and it is wider than the core crate — nineteen members observed across the
+surveyed projects (sixteen below plus the Soroban line `cvlr-soroban`, `cvlr-soroban-derive`,
+`cvlr-soroban-macros`): `cvlr`, `cvlr-asserts`, `cvlr-decimal`, `cvlr-derive`, `cvlr-early-panic`,
 `cvlr-fixed`, `cvlr-hook`, `cvlr-log`, `cvlr-macros`, `cvlr-mathint`, `cvlr-nondet`, `cvlr-spec`,
 `cvlr-vectors`, plus the Solana line `cvlr-solana`, `cvlr-solana-stake`, `cvlr-solana-token`.
 Treat the list as open: it grew by eleven over twelve projects, so **discover the family from the
@@ -270,7 +277,9 @@ lockfile** rather than matching a hardcoded set.
 
 The projects also span **three generations** — 0.4.x, 0.5.x and 0.6.x — so "current CVLR" is a
 moving target *within* the corpus, not just relative to it. Sources seen: crates.io, git pinned to
-a commit, git pinned to a tag, git pinned to a branch, and a **local path override**.
+a commit, git pinned to a tag, git pinned to a branch, a **local path override**, and a **personal
+fork pinned to a platform-SDK release branch** (one Soroban project takes `cvlr-soroban` from a
+fork on a `soroban-22.0.8` branch rather than from the Certora org repo).
 
 Worse for any single "version" notion: **the core line and the Solana line version
 independently.** One project resolves the whole `cvlr*` core at 0.4.1 from crates.io while every
@@ -310,6 +319,13 @@ current / legacy / unknown, using signals in this order of reliability:
    surveyed project uses it (`cvlr::spec::cvlr_rules! { … spec: cvlr_spec! { … } }`, from the
    `cvlr-spec` crate on the 0.6 line). So the currency axis will often rest on a single project —
    which is why it is a separate axis from recurrence rather than folded into it.
+
+   **Both of the first two signals are chain-relative, and reading them across chains inverts
+   them.** No surveyed Soroban project uses the parametric machinery — but it appears only on the
+   0.6 line, which Soroban has not reached, so its *absence there is evidence of nothing*. Likewise
+   a version comparison is only meaningful within a chain (§3.1). Evaluate signals 1 and 2 against
+   the project's own chain, and treat "construct absent" as informative only when that construct
+   exists for that chain.
 
    On the negative side this resolves to a **three-rung ladder**, and the rungs are distinguished
    by the *import path*, not by the macro name — so classify on imports and dependencies, never on a
@@ -573,9 +589,30 @@ script.
   `atomic` for tables, `continuation` for prose resuming around a code block.
 - `manual_sections` — whole reference units returned intact by `get_section`.
 - `headers` — a path of ≤6 levels; a taxonomy **we choose**, and it should be chosen once before
-  bulk authoring. A workable first cut: *Primitives / Accounts & PDAs / Mocking & Munging /
-  Nondeterminism / Logging & Diagnosis / Conf & Environment / Methodology*, with chain tagged in
-  the path so one corpus serves both chains (main plan §5.4).
+  bulk authoring. A workable first cut: *Primitives / Accounts & State / Mocking & Munging /
+  Nondeterminism / Logging & Diagnosis / Conf & Environment / Methodology*.
+
+**Where the chain marker goes is not uniform, and getting it wrong costs retrieval.** Content
+splits three ways, and each wants a different granularity:
+
+| Category | Example | Chain marker |
+|---|---|---|
+| **Chain-independent** | the `cvlr` core — `cvlr_assert!`, `nondet`, `clog!`, mathint, vacuity checks, and all methodology | none |
+| **Analogous** — same concept, different spelling | nondet a platform value: Solana `cvlr_nondet_pubkey` ↔ Soroban `nondet_address`; declare a rule: core `cvlr` ↔ `cvlr_soroban_derive::rule`; summarize: a `cvlr_summaries.txt` entry ↔ `cvlr_soroban_macros::apply_summary` | **on the code block**, section keyed by *concept* |
+| **Chain-specific** | accounts / PDAs / signers vs. storage durability / TTL / `require_auth` | **on the section** |
+
+The middle row is the one a uniform chain tag damages. If those sections are chain-scoped, an
+agent asking "how do I nondet the entry state" while working on Soroban gets *nothing* from an
+entry tagged `solana` — even though the concept transfers and the answer is one substitution away.
+Key such sections by concept and carry per-chain spellings inside them, so retrieval hits from
+either chain and the reader sees the correspondence.
+
+The bottom row inverts: a Solana account-model entry retrieved during Soroban work is worse than
+no hit, so those stay chain-scoped at the section level.
+
+This also confirms the one-corpus decision empirically (main plan §5.4): of the nineteen crates
+observed, only six are chain-specific — three per chain — and the analogous category is
+substantial. Two corpora would duplicate the shared majority *and* hide the correspondences.
 
 Accepts `verified` and `proposed` (marked). Answers *"how do I express X in CVLR?"*
 
@@ -602,6 +639,14 @@ vocabulary:
 Defining this *from* the capture data rather than guessing is a concrete payoff of capturing before
 authoring the KB, and the channel is what tells a stuck agent whether the fix is even in its
 action space.
+
+**Part of this vocabulary is chain-dependent, so validate it per chain before fixing it.** `ENV`
+is derived from Solana's `cvlr_inlining.txt` / `cvlr_summaries.txt` files; the surveyed Soroban
+projects summarize with an attribute macro (`cvlr_soroban_macros::apply_summary`) instead, which is
+a different action in a different place. So `ENV` may not apply to Soroban at all while that chain
+may need a channel the Solana taxonomy has no name for. A recipe whose channel does not exist on
+the reader's chain is worse than no recipe, because the channel is exactly the part the agent acts
+on.
 
 **Deprecation mappings belong here, and they are not waste.** A legacy idiom that lost the
 currency test still has a job: the agent *will* meet it in existing client projects it is asked to
