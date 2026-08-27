@@ -49,14 +49,21 @@ _RAG_PORT = os.environ.get("CERTORA_AI_COMPOSER_PGPORT", "5432")
 DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 
 # Logical knowledge-base tag -> default DB connection, for corpora ingested by the generic importer
 # (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's
 # `rag_db_default`), so the import target and the runtime search tools resolve by one name —
-# `composer.tools.rag_env` requires both halves before a tag is usable. Empty until the first such
-# corpus lands with the application that declares it; the CVL/Foundry builders use the constants
-# above instead.
-KNOWLEDGE_BASES: dict[str, str] = {}
+# `composer.tools.rag_env` requires both halves before a tag is usable. The CVL/Foundry builders
+# predate the importer and use the constants above instead.
+#
+# `cvlr_kb` is fed by more than one manifest under this single tag (docs/cvlr-capture-plan.md
+# §8.2): a public docs + crate-reference manifest built here, and a project-derived one shipped by
+# the private `certora-cvlr-kb` package. Which of them a given database holds is not modelled —
+# the tag names the corpus, not its sources, and having only the public half is a supported state.
+KNOWLEDGE_BASES: dict[str, str] = {
+    "cvlr_kb": CVLR_DEFAULT_CONNECTION,
+}
 
 
 type _RagHeader = str | None

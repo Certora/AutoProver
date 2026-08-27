@@ -55,6 +55,40 @@ if [[ "${1:-}" == "setup-db" ]]; then
       "$AUTOPROVE_HOME/prover-docs/cvl.html"
   echo "[autoprove] populating LangGraph knowledge base ..."
   python -m composer.scripts.kb_populate
+
+  # The `cvlr_kb` corpus (CVLR reference + verification practice). Both of its manifests are
+  # optional here and neither is baked into the image today: the project-derived half ships in
+  # the private `certora-cvlr-kb` package, and the public docs+crate-reference half still needs
+  # its producer (docs/cvlr-capture-plan.md §4.7). An install with no CVLR corpus is a supported
+  # state — the backend degrades to its static guidance — so this reports a skip rather than
+  # failing setup-db.
+  cvlr_manifests=()
+  if [[ -n "${CVLR_KB_REPO:-}" && -d "${CVLR_KB_REPO%/}/src/certora_cvlr_kb/data" ]]; then
+    shopt -s nullglob
+    cvlr_manifests+=("${CVLR_KB_REPO%/}"/src/certora_cvlr_kb/data/*.rag.json)
+    shopt -u nullglob
+  fi
+  if [[ ${#cvlr_manifests[@]} -eq 0 ]]; then
+    pkg_probe='
+try:
+    from certora_cvlr_kb import practice_manifest
+    p = practice_manifest()
+    print(p if p.is_file() else "")
+except Exception:
+    print("")
+'
+    pkg_manifest="$(python -c "$pkg_probe" 2>/dev/null || true)"
+    if [[ -n "$pkg_manifest" ]]; then
+      cvlr_manifests+=("$pkg_manifest")
+    fi
+  fi
+  if [[ ${#cvlr_manifests[@]} -gt 0 ]]; then
+    echo "[autoprove] populating cvlr_kb from ${#cvlr_manifests[@]} manifest(s) ..."
+    python -m composer.scripts.rag_import "${cvlr_manifests[@]}"
+  else
+    echo "[autoprove] no cvlr_kb manifest found; skipping (CVLR corpus will be unavailable)"
+  fi
+
   echo "[autoprove] setup-db done."
   exit 0
 fi
