@@ -516,6 +516,69 @@ Two notes for whoever extends this:
 Still open in this layer: the generated crate reference, and whether to include `prover.html`
 (diagnostics and timeouts are on-topic; its EVM CLI surface is not).
 
+### 4.7.2 The reference set: what "current CVLR" resolves to
+
+§4.4's third vintage signal and §9's first acceptance gate both say "compiles against *current*
+CVLR", and there is no single coordinate that means it. What the survey and the registry show:
+
+| Line | Newest published | Date | Newest *observed in use* |
+|---|---|---|---|
+| `cvlr`, `cvlr-spec` | 0.6.1 | 2026-03-28 | 0.6.1 (crates.io) |
+| `cvlr-solana`, `cvlr-solana-stake` | 0.5.0 | 2026-01-16 | 0.6.0-dev (git branch / path override) |
+| `cvlr-solana-token` / `cvlr-spl-token` | **never published** | — | 0.5.0–0.6.0-dev (path override) |
+| `cvlr-soroban*` | 0.4.0 | 2025-03-17 | 0.4.0 from a **personal fork** on a Soroban-SDK branch |
+
+The projects cannot settle it either: fifteen lockfiles resolve **ten distinct (version, source)
+combinations**, and the sources include crates.io, Certora git by commit, Certora git by branch,
+two different *personal forks*, and local path overrides. Nor can "whatever the newest project
+does" be the rule — that project's manifest requires `cvlr-solana = "0.6.0-dev"`, a version that
+exists on no registry; its workspace reaches it through `[patch.crates-io]` pointed at a **moving
+branch**; and its committed lockfile records the crate with *no source and no checksum* (a path
+resolution), so the build is not reproducible from the repository. **That is a ledger question in
+its own right**, not just an inconvenience for us.
+
+Three things narrow the decision, all mechanically checked:
+
+1. **The unpublished Solana branch is not a feature jump.** Against published 0.5.0 it adds *no*
+   new public symbols and removes nine (the `mem_layout_*` helpers and the `AccountInfo`
+   re-export), because SPL-token support was factored into a separate crate; it also moves from
+   monolithic `solana-program` 2.2 to the split `solana-*` crates. Its changelog's `[Unreleased]`
+   section is empty. `0.6.0-dev` is a version bump in flight.
+2. **Current rule *form* lives in the core line, which is published.** `cvlr_rules!`,
+   `cvlr_spec!`, `cvlr_lemma!`, `cvlr::derive::*` and the predicate machinery are all in
+   `cvlr`/`cvlr-spec` 0.6.1.
+3. **A rule in the documented current form compiles against published-only dependencies** — core
+   0.6.1 plus `cvlr-solana` 0.5.0, host target, no git pin and no patch. Verified.
+
+So the recommendation is to define the reference set as **published releases only**, recorded as
+explicit `(name, version, source)` triples in data and refreshed deliberately — never resolved as
+"latest", which would silently mix a current core with a stale chain crate. Two consequences to
+accept openly: SPL-token helper coverage is a **hole** until that crate is published (ledger
+question), and the scaffold the backend generates must not imitate the newest project's
+git-branch/`[patch]` pinning, however current that project otherwise is.
+
+Three questions only a maintainer can answer, in decreasing order of what they block:
+
+1. Is `cvlr-solana` 0.5.0 the release users should be on, or is 0.6.0 imminent? Corpus content
+   that depends on the crate split should wait if so.
+2. Will the SPL-token crate be published, and under which name — `cvlr-spl-token` (the dev
+   branch's name) or `cvlr-solana-token` (the name older lockfiles resolve)?
+3. Is `cvlr-soroban` 0.4.0 — seventeen months old, and passed over in favour of a personal fork by
+   one of the two Soroban projects — really the current Soroban line? This decides whether Soroban
+   gets a normative tier at all (§3.1).
+
+**And the docs need the compile gate too.** Building the probe surfaced two defects in the manual's
+own examples, both of which fail against every available version:
+
+- `cvlr_rules! { … bases: [a, b, c], }` — the macro arm is `bases: [ $($base:ident),* $(,)? ]`,
+  which does not accept a trailing comma *after* the bracket.
+- `let acc_infos: [AccountInfo; 8] = cvlr_deserialize_nondet_accounts();` — both 0.5.0 and the dev
+  branch return a hard-coded `[AccountInfo<'a>; 16]`.
+
+Neither is version skew; both are wrong as written. This qualifies §3.0.1: the manual is the
+normative and quotable source, but "quotable" still means *quotable after it compiles*. Fixing
+these upstream is cheap and is the first concrete payback from this work.
+
 ### 4.8 Entry status — the prototype must be honest about confidence
 
 Every entry carries a status, and the status governs where it may be used:
