@@ -93,9 +93,10 @@ Error: no cvlr_kb manifest found, so there is nothing to ingest.
 
   - For the project-derived half: clone the private certora-cvlr-kb repo and point
     CVLR_KB_REPO at it, or `pip install certora-cvlr-kb`.
-  - For the public half: build cvlr-docs.rag.json from the documentation (scripts/gen_docs.sh
-    already produces scripts/prover-docs/solana.html; the manifest producer for it is the
-    remaining piece — see docs/cvlr-capture-plan.md §4.7).
+  - For the public half, which needs no private access:
+        ./scripts/gen_docs.sh                       # builds scripts/prover-docs/solana.html
+        uv run python -m composer.scripts.cvlr_docs_manifest scripts/prover-docs/solana.html
+    That writes scripts/cvlr-docs/cvlr-docs.rag.json, which this script then finds.
 
 Pass manifest paths explicitly to bypass discovery.
 MSG

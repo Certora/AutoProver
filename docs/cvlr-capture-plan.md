@@ -111,16 +111,22 @@ governs whether code can be reused, because nothing from an engagement is reused
 way. Note what follows for the four confidential engagements whose upstream program is public —
 relaxing their disclosure would buy attribution, not quotable code.
 
-**The tutorial proviso is a live gate, not a formality.** Both public Solana sources currently sit
-on the 0.4 line with no `cvlr_rules!`/`cvlr_spec!`, while the newest engagement is on 0.6.1 with
-both (§4.4). So a tutorial quote has to be checked against current practice before it ships, and
-some of it will fail that check today.
+**The tutorial proviso is a live gate, not a formality**, but it bites the example *repos*, not
+the published documentation. The two public example repos sit on the 0.4 line with no
+`cvlr_rules!`/`cvlr_spec!`, so quoting them needs a currency check that some of their content
+fails. The published Solana manual does not have that problem: it states that it targets
+`cvlr >= 0.6` / `cvlr-solana >= 0.5`, marks features "since 0.5"/"since 0.6", and carries whole
+sections on the constructs the example repos lack (§4.7). It is quotable *and* current.
 
-That leaves an awkward but honest position: **the quotable material lags, and the current material
-is not quotable.** Most code blocks in the corpus will therefore be *authored* — written to
-current practice and compiled (§9) — rather than lifted from anywhere. It raises the value of the
-modernization pass (§6.2) and makes updating the public tutorials a worthwhile side effect of this
-work.
+So the corpus has a normative, citable backbone from day one, and the authoring burden falls where
+the docs are thin rather than across the board. Two consequences worth keeping straight:
+
+- **The docs are the reference; the projects are the evidence.** Where a doc section and a
+  project instance disagree on form, the doc wins — it is maintained, versioned and public.
+- **The docs describe the API and the method; they do not report what breaks.** No published page
+  says which SDK boundary needed mocking on a real protocol, which property turned out to be
+  false, or what a two-day timeout hunt ended in. That is what the projects and §6.3 are for, and
+  it is still the part that cannot be quoted.
 
 **Paraphrasing prevents copying, not bias.** Which idioms get an entry at all is still decided by
 what these projects happened to do. The actual defenses against overfitting are the two ranking
@@ -144,6 +150,11 @@ reading, but *for different things*:
 | **Evidence** | Everything older | **What** situations exist — which problems arise, which SDK boundaries need mocking, which failure modes occur, how often |
 
 > **Older projects vote on the problem set. Recent projects decide the solution form.**
+
+With one addition the survey forced: **the published manual is normative by construction**, and on
+questions of *form* it outranks every project instance — it is maintained, explicitly
+version-scoped, and public, where a project instance is one team's choice frozen at one date
+(§3.0.1). Projects remain the only source for what actually goes wrong, which no manual reports.
 
 **Compute the tiers per chain, against that chain's own frontier.** The surveyed Soroban projects
 run cvlr 0.3.x–0.4.x while the Solana ones run 0.4.x–0.6.x, so a 0.4.1 core is *current* on Soroban
@@ -446,8 +457,13 @@ quarantined (§5.1) until a human signs it off.
 Two more Phase-A sources, both machine-driven, that make the prototype useful on day one rather
 than sparse:
 
-- **Published docs** — the Solana Prover and CVLR documentation, scraped and imported through
-  [rag-import-format.md](./rag-import-format.md).
+- **Published docs** — the Solana Prover manual, imported through
+  [rag-import-format.md](./rag-import-format.md). **Built: see §4.7.1.** It is much more than an
+  API listing: fourteen top-level sections including *Methodology*, *Parametric Rules & Macros*,
+  *Specifications and Lemmas*, *Mocks & Feature Gates*, *Nondet & Havoc*, *Solana Accounts*,
+  *Anchor*, *Rule Sanity Checks*, *Understanding Prover Output* and *Troubleshooting* — and it
+  targets current CVLR (§3.0.1). Several of the main plan's open questions are answered here
+  rather than by extraction.
 - **Generated crate reference** — an agent reads the CVLR crate family and emits a reference entry
   per macro, derive, and helper. This is cheap and *self-verifying*: the emitted examples must
   compile against the crate they document. It is also the layer most directly enabled by the main
@@ -466,11 +482,39 @@ These four layers plus §4.6's idioms are the prototype corpus. Note the divisio
 bulk layers give **coverage of the API**, the extracted idioms give **coverage of practice**, and
 only the latter needs the confidential projects at all.
 
-A caution that came out of the survey: **the public teaching material lags the newest observed
-practice by a full generation** (0.4 line, no parametric rules; the newest project is on 0.6 with
-them). So the tutorial is the best source of *quotable* material and a poor source of *current*
-material — which is the recency/citability trade-off in miniature, and a reason the two axes in
-§4.5 stay separate.
+A caution that came out of the survey, now narrowed by what the docs turned out to contain: **the
+public example repos lag the newest observed practice by a full generation** (0.4 line, no
+parametric rules; the newest project is on 0.6 with them) — but the published manual does not
+(§3.0.1). So the example repos are the best source of *scaffold* material and a poor source of
+*current rule-writing* material, while the manual is good for both. The recency/citability
+trade-off is real but local, which is why §4.5 keeps the two axes separate rather than collapsing
+them into one "is this good practice" score.
+
+### 4.7.1 Status: the public docs layer is built
+
+The first bulk layer is done end to end, which makes `cvlr_kb` a real corpus rather than a
+registration:
+
+| Step | Artifact |
+|---|---|
+| Build the manuals | [gen_docs.sh](../scripts/gen_docs.sh) → `scripts/prover-docs/solana.html`, now also writing a `PROVENANCE` file naming the docs revision |
+| Parse | [composer/rag/html_manual.py](../composer/rag/html_manual.py) — sphinx HTML → a tree of typed blocks, bs4 only, no RAG dependencies |
+| Produce | [composer/scripts/cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) → `scripts/cvlr-docs/cvlr-docs.rag.json` (147 embedded groups, 156 manual sections, 121 code blocks) |
+| Ingest | `composer.scripts.rag_import` → 148 chunks + 156 sections in the `cvlr_rag` schema |
+| Spot-check | 20 authoring-agent questions (§4.9): 20/20 returned a relevant section, `get_section` round-trips, keyword search resolves `cvlr_rules` at 0.998 |
+
+Two notes for whoever extends this:
+
+- The parser was extracted *from* `ragbuild.py` rather than written beside it, and the CVL corpus
+  it feeds was verified byte-identical before and after (232 chunks / 198 sections unchanged, same
+  for `prover.html`). A second HTML parser would have drifted from the first within a release.
+- Retrieval is good but not uniformly: three of the twenty questions returned a plausible-but-not-
+  best section, and in one case (*"one rule covering every instruction"*) keyword search found the
+  right page — *Parametric Rules & Macros* — while vector search did not. Worth revisiting once
+  the practice half lands, since more content changes the ranking.
+
+Still open in this layer: the generated crate reference, and whether to include `prover.html`
+(diagnostics and timeouts are on-topic; its EVM CLI surface is not).
 
 ### 4.8 Entry status — the prototype must be honest about confidence
 
@@ -881,16 +925,24 @@ done:**
    populate that would leave the corpus empty is a mistake), while `setup-db` reports a skip (no
    CVLR corpus is a supported degradation, and failing image setup over it would be wrong).
 
-Two related pieces are deliberately **not** done, because nothing consumes them yet:
+Both of the pieces this section used to list as *not* done are now done, and the shape they took
+is worth recording:
 
-- **The public docs manifest producer** (§4.7) — the `solana.html` → `cvlr-docs.rag.json` step.
-  `gen_docs.sh` already builds `solana.html` on the host; the Dockerfile's `docs-builder` stage
-  still builds only `cvl.html`, and adding a second sphinx target before a producer exists would
-  be an unused build step that looks like it works.
-- **Baking a corpus into the image.** Neither manifest is available at image build time today, so
-  `setup-db`'s CVLR step currently always reports its skip. That skip line is the point: it makes
-  the absence visible in setup logs instead of silent, and turning it into a real ingest is a
-  one-line change once a manifest exists.
+5. **The public docs manifest producer** (§4.7.1) —
+   [cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) over
+   [html_manual.py](../composer/rag/html_manual.py). The parser was extracted from `ragbuild.py`
+   instead of written alongside it, with the CVL corpus verified unchanged; a second HTML parser
+   would have drifted within a release.
+6. **The corpus is baked into the image.** `docs-builder` now builds `solana.html` as well as
+   `cvl.html` and records the docs revision in a `PROVENANCE` file; the final stage runs the
+   producer, so the public manifest is part of the image. `setup-db` discovers the two halves
+   independently — the baked public one and, if installed, the private practice package — rather
+   than treating the second as a fallback for the first. An install with neither still degrades to
+   static guidance, which is why finding nothing is a logged skip and not a setup failure.
+
+Not verified by a real image build: the Dockerfile and entrypoint changes are checked by shell
+parse and by a simulation of the discovery block against all three cases (neither half, public
+only, both), but no container has been built from them here.
 
 ## 9. Acceptance gates
 
