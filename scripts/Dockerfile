@@ -35,7 +35,7 @@ WORKDIR /src
 RUN git clone "$FOUNDRY_REPO" . && git checkout "$FOUNDRY_SHA" && git rev-parse HEAD
 RUN cargo build --release --bin forge && /src/target/release/forge --version
 
-# ---- Stage 1: build the CVL documentation HTML for the RAG DB ----
+# ---- Stage 1: build the documentation HTML for the RAG DBs ----
 FROM --platform=linux/amd64 python:3.12-slim AS docs-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -50,14 +50,21 @@ RUN git clone --depth 1 https://github.com/Certora/Documentation.git docs
 RUN python -m venv /venv \
  && /venv/bin/pip install --no-cache-dir -r /build/docs/requirements.txt
 
-# Only the CVL manual is needed for the base rag_db (see scripts/populate_rag.sh).
+# cvl -> the base rag_db (scripts/populate_rag.sh); solana -> the cvlr_kb corpus, via the
+# manifest producer run in the final stage (docs/cvlr-capture-plan.md §4.7).
 # TODO: Include extended_rag for sanity analyzer
 RUN set -eux; \
     mkdir -p /out; \
-    target=/build/docs/docs/cvl; \
-    cp /build/docs/conf.py "$target/"; \
-    ( cd "$target" && /venv/bin/sphinx-build -M singlehtml . tmp ); \
-    cp "$target/tmp/singlehtml/index.html" /out/cvl.html
+    for name in cvl solana; do \
+        target="/build/docs/docs/$name"; \
+        cp /build/docs/conf.py "$target/"; \
+        ( cd "$target" && /venv/bin/sphinx-build -M singlehtml . tmp ); \
+        cp "$target/tmp/singlehtml/index.html" "/out/$name.html"; \
+    done; \
+    printf 'Certora/Documentation %s (%s)\n' \
+        "$(git -C /build/docs rev-parse HEAD)" \
+        "$(git -C /build/docs log -1 --format=%cI)" \
+        > /out/PROVENANCE
 
 # ---- Stage 2: final runtime image ----
 FROM --platform=linux/amd64 python:3.12-slim AS final
@@ -146,8 +153,17 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-editable \
       --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
-# Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
-COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
+# Pre-built documentation HTML — the entrypoint's setup-db reads cvl.html to populate rag_db.
+# PROVENANCE names the docs revision, and is read into the cvlr_kb manifest's source field.
+COPY --from=docs-builder /out/cvl.html /out/solana.html /out/PROVENANCE $AUTOPROVE_HOME/prover-docs/
+
+# The public half of the cvlr_kb corpus, baked at build time: the producer needs only bs4, and
+# doing it here rather than in setup-db means the manifest is part of the image (and its provenance
+# is fixed at build). The private, project-derived half is not in this image — it ships in the
+# separate certora-cvlr-kb package; an install with only this half is a supported state.
+RUN python -m composer.scripts.cvlr_docs_manifest \
+        $AUTOPROVE_HOME/prover-docs/solana.html \
+        -o $AUTOPROVE_HOME/cvlr-docs/cvlr-docs.rag.json
 
 # The `run-confined` command-sandbox launcher is intentionally NOT baked in here
 # (not every AutoProver image needs it). Services that select the `launcher`

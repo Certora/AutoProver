@@ -33,22 +33,20 @@ RAG_CONN="postgresql://rag_user:rag_password@${PGHOST}:${PGPORT}/rag_db"
 if [[ "${1:-}" == "setup-db" ]]; then
   shift
   export PGPASSWORD=postgres_admin_password
-  # Skip schema init if rag_user already exists. The compose postgres service
-  # applies init-db.sql on first boot via /docker-entrypoint-initdb.d, so the
-  # schema is usually already present; this also guards re-runs (init-db.sql is
-  # plain CREATE USER/DATABASE, not idempotent).
-  if psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres -tAc \
-      "SELECT 1 FROM pg_user WHERE usename='rag_user'" | grep -q 1; then
-    echo "[autoprove] schema already initialized, skipping init-db.sql"
-  else
-    # composer ships init-db.sql as package-data of composer.scripts, so it's at
-    # site-packages/composer/scripts/init-db.sql in this image. It contains psql
-    # \c meta-commands and must go through psql.
-    init_sql=$(python -c "import importlib.resources; print(importlib.resources.files('composer.scripts').joinpath('init-db.sql'))")
-    echo "[autoprove] applying schema from ${init_sql} ..."
-    psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres \
-        -v ON_ERROR_STOP=1 -f "$init_sql"
-  fi
+  # Always apply init-db.sql, even against an already-initialized cluster. Every statement in it
+  # is guarded (IF NOT EXISTS / \gexec), so re-running is a no-op for what is already there and
+  # creates what is not — which is the case that matters: a cluster provisioned before a new
+  # corpus was added has the old roles and none of the new schema. Skipping on "rag_user exists"
+  # would leave that cluster permanently missing the newer schemas, and the failure would surface
+  # later as an ingest error rather than here.
+  #
+  # composer ships init-db.sql as package-data of composer.scripts, so it's at
+  # site-packages/composer/scripts/init-db.sql in this image. It contains psql
+  # \c meta-commands and must go through psql.
+  init_sql=$(python -c "import importlib.resources; print(importlib.resources.files('composer.scripts').joinpath('init-db.sql'))")
+  echo "[autoprove] applying schema from ${init_sql} ..."
+  psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres \
+      -v ON_ERROR_STOP=1 -f "$init_sql"
   echo "[autoprove] populating rag_db at ${RAG_CONN} ..."
   python -m composer.scripts.ragbuild \
       --output "$RAG_CONN" \
@@ -56,19 +54,28 @@ if [[ "${1:-}" == "setup-db" ]]; then
   echo "[autoprove] populating LangGraph knowledge base ..."
   python -m composer.scripts.kb_populate
 
-  # The `cvlr_kb` corpus (CVLR reference + verification practice). Both of its manifests are
-  # optional here and neither is baked into the image today: the project-derived half ships in
-  # the private `certora-cvlr-kb` package, and the public docs+crate-reference half still needs
-  # its producer (docs/cvlr-capture-plan.md §4.7). An install with no CVLR corpus is a supported
-  # state — the backend degrades to its static guidance — so this reports a skip rather than
-  # failing setup-db.
+  # The `cvlr_kb` corpus (CVLR reference + verification practice). Two manifests share the tag
+  # (docs/cvlr-capture-plan.md §8.2) and are discovered independently, because they come from
+  # different places and either can be absent:
+  #
+  #   public   — built from the Solana manual at image build time; present in this image.
+  #   private  — project-derived practice; ships in the separate certora-cvlr-kb package, so it is
+  #              here only if that package is installed or CVLR_KB_REPO points at a checkout.
+  #
+  # An install with neither is still supported (the backend falls back to its static guidance), so
+  # finding nothing reports a skip rather than failing setup-db.
   cvlr_manifests=()
+  shopt -s nullglob
+  cvlr_manifests+=("$AUTOPROVE_HOME"/cvlr-docs/*.rag.json)
+  shopt -u nullglob
+  cvlr_public_only=("${cvlr_manifests[@]+"${cvlr_manifests[@]}"}")
+
   if [[ -n "${CVLR_KB_REPO:-}" && -d "${CVLR_KB_REPO%/}/src/certora_cvlr_kb/data" ]]; then
     shopt -s nullglob
     cvlr_manifests+=("${CVLR_KB_REPO%/}"/src/certora_cvlr_kb/data/*.rag.json)
     shopt -u nullglob
   fi
-  if [[ ${#cvlr_manifests[@]} -eq 0 ]]; then
+  if [[ ${#cvlr_manifests[@]} -eq ${#cvlr_public_only[@]} ]]; then
     pkg_probe='
 try:
     from certora_cvlr_kb import practice_manifest
