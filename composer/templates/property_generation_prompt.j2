@@ -176,11 +176,11 @@ choose the summary that is sound for the property at hand (and justify it). This
 directive — a function you genuinely need exact should stay unsummarized.
 
 {% for c in hostile_candidates %}
-- `{{ c.function }}`{% if c.category %} [{{ c.category }}]{% endif %}{% if c.file %} — {{ c.file }}{% if c.line %}:{{ c.line }}{% endif %}{% endif %}
+- `{{ c.function }}`{% if c.get('signature') %} `{{ c.signature }}`{% endif %} [{{ c.signals | join(", ") }}]{% if c.get('mutating') %} (state-changing){% endif %}{% if c.get('file') %} — {{ c.file }}{% if c.get('line') %}:{{ c.line }}{% endif %}{% endif %}
     {{ c.evidence }}
-    {% if c.reaching_methods %}reached from: {{ c.reaching_methods | join(", ") }}{% endif %}
-    {% if c.candidate_summary %}suggested summary (curated): {{ c.candidate_summary }}{% endif %}
-    {% if c.boundaries %}can also be summarized at a caller: {% for b in c.boundaries %}`{{ b.signature }}`{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+    {% if c.get('reaching_count') %}reaches {{ c.reaching_count }} entry method(s){% endif %}
+    {% if c.get('candidate_summary') %}suggested summary (curated): {{ c.candidate_summary }}{% endif %}
+    {% if c.get('boundaries') %}can also be summarized at a caller: {% for b in c.boundaries %}`{{ b.signature }}`{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
 {% endfor %}
 {% endif %}
 
