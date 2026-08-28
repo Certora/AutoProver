@@ -49,6 +49,7 @@ from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
 from composer.prover.results import read_and_format_run_result
 from composer.templates.loader import load_jinja_template
+from composer.certora_env import ProverApp
 from composer.prover.prover_protocol import ProverResult
 
 _logger = logging.getLogger(__name__)
@@ -60,6 +61,11 @@ DEFAULT_GLOBAL_TIMEOUT: float = 7200.0
 @dataclass
 class ProverOptions:
     extra_args: list[str] = field(default_factory=list)
+    #: Which Prover CLI takes this run. A property of the run rather than a parameter threaded
+    #: through :func:`run_prover`, because everything downstream of submission — cloud polling,
+    #: the treeView parse, the verdict roll-up — is already chain-neutral, and the app is the one
+    #: place they differ.
+    app: ProverApp = "evm"
 
     @property
     def cloud(self) -> bool:
@@ -91,7 +97,7 @@ def _resolved_global_prover_timeout() -> int:
         return default
 
 
-def make_prover_options(*, cloud: bool) -> ProverOptions:
+def make_prover_options(*, cloud: bool, app: ProverApp = "evm") -> ProverOptions:
     """Build prover options. Cloud runs get a global prover timeout and the
     certoraRun ``--server`` resolved from the deployment env."""
     extras: list[str] = []
@@ -100,7 +106,7 @@ def make_prover_options(*, cloud: bool) -> ProverOptions:
             "--global_timeout", str(_resolved_global_prover_timeout()),
             "--server", cloud_server_for_env()
         ]
-    return ProverOptions(extra_args=extras)
+    return ProverOptions(extra_args=extras, app=app)
 
 
 @dataclass
@@ -366,6 +372,37 @@ class TrivialFanoutCexHandler(CexHandler):
         return report
 
 
+class UnanalyzedCexHandler(CexHandler):
+    """Renders the result set as-is. No LLM, no analysis, no summarization.
+
+    For runs whose consumer is a *program* rather than an agent: a deterministic gate that asserts
+    verdicts against a checked-in expected file, a plumbing test, a CLI mode that only wants the
+    outcomes. ``run_prover``'s handler hook is otherwise the one place an LLM is unavoidable, and
+    those callers have nothing for it to do.
+
+    It renders the counterexample dump verbatim rather than reusing ``flat_rule_feedback.j2``: that
+    template says "analyzing the counterexample yielded no results" when handed no explanation,
+    which is a false account of a run that never asked.
+    """
+
+    @override
+    async def analyze(
+        self,
+        all_results: list[RuleResult],
+        tool_call_id: str,
+        callbacks: CexProgressCallbacks,
+        report_dir: Path,
+    ) -> str:
+        lines: list[str] = []
+        for r in all_results:
+            lines.append(f"{r.name}: {r.status}")
+            for message in r.error_messages or ():
+                lines.append(f"  {message}")
+            if r.cex_dump:
+                lines.append(f"  {r.cex_dump}")
+        return "\n".join(lines)
+
+
 # Compatibility alias for the legacy name. New code should reach for
 # TrivialFanoutCexHandler directly; the agentic codegen handler lives
 # elsewhere.
@@ -413,7 +450,8 @@ async def run_prover_inner(
     folder: Path,
     args: list[str],
     on_err: Callable[[int | None, str, str], None],
-    on_stdout: Callable[[str], Awaitable[None]]
+    on_stdout: Callable[[str], Awaitable[None]],
+    app: ProverApp = "evm",
 ) -> tuple[ProverResult | str, str]:
     # 3-5. Spawn async subprocess, stream stdout, collect stderr
     wrapper_script = Path(__file__).parent / "certoraRunWrapper.py"
@@ -421,7 +459,7 @@ async def run_prover_inner(
     with tempfile.NamedTemporaryFile("rb", suffix=".json") as output_file:
         proc = await asyncio.subprocess.create_subprocess_exec(
             sys.executable,
-            str(wrapper_script), str(output_file.name), *args,
+            str(wrapper_script), str(output_file.name), app, *args,
             cwd=str(folder),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -548,7 +586,8 @@ async def run_prover(
         folder,
         effective_args,
         lambda ret_code, stdout, stderr: _logger.error("Process failed %d\nstdout:%s\nstderr:%s", ret_code, stdout, stderr),
-        callbacks.on_stdout_line
+        callbacks.on_stdout_line,
+        prover_opts.app,
     )
     local_runtime_ms = int((time.perf_counter() - _t0) * 1000)
     if isinstance(run_result, str):

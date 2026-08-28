@@ -29,35 +29,33 @@ class ProverFailure(TypedDict):
     exc_str: str
 
 """
-This is a wrapper script which sandboxes an invocation of run_certora.py
+This is a wrapper script which sandboxes an invocation of a Certora Prover CLI
 while still allowing access to the structured return type.
 
 The structured data is returned via the first argument, which is a temp file
 into which the serialized result is written (either None or a CertoraRunResult).
 
-If certora run throws an exception, it is caught, and the serialized representation of the
+The second argument names which Prover this run submits to (`evm`, `solana`,
+`soroban`); each is a separate certora_cli entry point with its own build step,
+and they share the `list[str] -> CertoraRunResult | None` signature this wrapper
+depends on.
+
+If the run throws an exception, it is caught, and the serialized representation of the
 exception is written to the same file.
 
-All other arguments past the first are passed through to `run_certora`.
+All other arguments past the second are passed through to that entry point.
 """
 
 os.putenv("DONT_USE_VERIFICATION_RESULTS_FOR_EXITCODE", "1")
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from certoraRun import run_certora
-else:
-    from composer.certora_env import import_run_certora
-    run_certora = import_run_certora()
-
 output = sys.argv[1]
+
+from composer.certora_env import import_prover_entry, prover_app
+run_prover_cli = import_prover_entry(prover_app(sys.argv[2]))
 
 with open(output, 'w') as out:
     try:
-        r = run_certora(
-            args=sys.argv[2:]
-        )
+        r = run_prover_cli(sys.argv[3:])
         if r is None:
             json.dump(None, out)
         else:
