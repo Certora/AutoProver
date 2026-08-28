@@ -241,8 +241,15 @@ module exporting three unrelated things is three entries. Every public item you 
 appear in some entry's `symbols`, because a reader searching for it needs to land somewhere.
 
 Examples must compile against the pinned reference set. They are checked, and you will be told what
-the compiler said. Prefer the smallest fragment that shows real use; a fragment of statements is
-fine — it will be wrapped.
+the compiler said.
+
+**Each example is compiled on its own, in an otherwise empty crate.** Entries do not share a file, so
+an example may not use a type, function or constant that another entry defined — define everything
+it needs, in the example itself. A struct passed to a CVLR helper needs the derives that helper
+requires (`#[derive(cvlr::derive::Nondet, cvlr::derive::CvlrLog)]` for most of them), because
+nothing else in the crate will supply them. Prefer the smallest *self-contained* example over the
+smallest fragment; a bare sequence of statements is fine when it needs no definitions, since it will
+be wrapped in a function.
 
 **Import only these crates: {importable}.** A project under verification depends on those and gets
 everything else through them, so an example that writes `use cvlr_asserts::…` or
@@ -440,14 +447,24 @@ async def _generate_module(
             len(missing),
         )
         if attempt == MAX_ATTEMPTS:
-            # Ship what passed rather than nothing: an entry whose example compiles is usable even
-            # when a sibling's does not, and the manifest records which examples were gated.
-            kept = [e for e in entries if e.title not in {t for t, _ in broken}]
+            # The prose ships; the unverified example does not. Dropping the whole entry would make
+            # coverage hostage to *exemplifiability*, and the two are not the same thing —
+            # ``cvlr_rules!`` is the construct the published methodology recommends most and the one
+            # hardest to show in a self-contained snippet, so an all-or-nothing gate loses exactly
+            # the entries a reader most needs. The summary and the form are derived from the source
+            # and remain true; only the Rust nobody could compile is withheld, and the section says
+            # so rather than leaving a silent hole.
+            failed = {t for t, _ in broken}
+            kept = [
+                e if e.title not in failed else e.model_copy(update={"example": ""})
+                for e in entries
+            ]
             logger.warning(
-                "%s: giving up after %d attempts, keeping %d of %d entries; uncovered: %s",
+                "%s: giving up after %d attempts, %d of %d entries ship without an example; "
+                "uncovered: %s",
                 module.label,
                 MAX_ATTEMPTS,
-                len(kept),
+                len(failed),
                 len(entries),
                 ", ".join(missing) or "none",
             )
@@ -535,12 +552,25 @@ def plan_modules(crates: MountedCrates, *, core: str = "cvlr") -> list[Module]:
     return sorted(modules, key=lambda m: -len(m.items))
 
 
+#: What a section says in place of an example that never compiled. Stated rather than omitted: a
+#: reader who sees no example should know the difference between "this needs none" and "no
+#: self-contained one could be produced", because only the second is a reason to go read the source.
+NO_EXAMPLE = (
+    "**No verified example.** Every example drafted for this entry failed to compile on its own, "
+    "which for the parametric-rule machinery usually means it needs a harness larger than a snippet. "
+    "The description above is derived from the crate source; the usage is not demonstrated here — "
+    "read the crate's own tests through the `cvlr_source_*` tools before writing against it."
+)
+
+
 def _entry_section(module: Module, entry: ReferenceEntry) -> ManualSection:
     body = [
         ManualBlock(kind=ManualBlockKind.TEXT, body=f"**Covers.** {', '.join(entry.symbols)}"),
         ManualBlock(kind=ManualBlockKind.TEXT, body=entry.summary),
         ManualBlock(kind=ManualBlockKind.TEXT, body=f"**Form.** {entry.signature}"),
-        ManualBlock(kind=ManualBlockKind.CODE, body=entry.example),
+        ManualBlock(kind=ManualBlockKind.CODE, body=entry.example)
+        if entry.example.strip()
+        else ManualBlock(kind=ManualBlockKind.TEXT, body=NO_EXAMPLE),
     ]
     if entry.notes.strip():
         body.append(ManualBlock(kind=ManualBlockKind.TEXT, body=f"**Note.** {entry.notes}"))
@@ -560,9 +590,10 @@ def _entry_group(module: Module, entry: ReferenceEntry) -> EmbeddedGroup:
             # The symbol list joins the prose block rather than standing alone: a vector index over
             # a bare list of identifiers retrieves for everything and means nothing.
             body=f"{entry.summary} Covers {', '.join(entry.symbols)}. Form: {entry.signature}",
-        ),
-        EmbeddedBlock(kind=EmbeddedBlockKind.CODE, body=entry.example),
+        )
     ]
+    if entry.example.strip():
+        blocks.append(EmbeddedBlock(kind=EmbeddedBlockKind.CODE, body=entry.example))
     if entry.notes.strip():
         blocks.append(EmbeddedBlock(kind=EmbeddedBlockKind.PARAGRAPH, body=entry.notes))
     return EmbeddedGroup(headers=[CORPUS_ROOT, module.crate, entry.title], blocks=blocks)

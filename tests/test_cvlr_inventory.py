@@ -14,7 +14,18 @@ The three worth knowing about, because each hides a widely-used name:
 * ``#[cfg(test)] mod tests { pub fn … }`` — indistinguishable from API on any single line.
 """
 
-from composer.spec.cvlr.inventory import Item, items_in, uncovered
+from composer.scripts.cvlr_crate_reference import (
+    CORPUS_ROOT,
+    EXPANSION_SECTION,
+    NO_EXAMPLE,
+    Module,
+    ReferenceEntry,
+    _entry_group,
+    _entry_section,
+    _expansion_section,
+    build_manifest,
+)
+from composer.spec.cvlr.inventory import ExpansionPair, Item, items_in, uncovered
 
 
 def _names(source: str, kind: str | None = None) -> set[str]:
@@ -179,3 +190,86 @@ def test_a_family_named_in_one_line_counts_as_covered():
 def test_an_unmentioned_symbol_is_reported_once_in_source_order():
     items = [_item("covered"), _item("missing_a"), _item("missing_b"), _item("missing_a")]
     assert uncovered(items, "covered is documented") == ("missing_a", "missing_b")
+
+
+# --------------------------------------------------------------------------------------------
+# what the producer renders
+# --------------------------------------------------------------------------------------------
+
+
+def _entry(**overrides: object) -> ReferenceEntry:
+    base = {
+        "title": "Nondeterministic scalars",
+        "symbols": ["nondet", "nondet_with"],
+        "summary": "Produces an unconstrained value of the target type.",
+        "signature": "pub fn nondet<T: Nondet>() -> T",
+        "example": "let x: u64 = nondet();",
+        "notes": "",
+    }
+    return ReferenceEntry.model_validate({**base, **overrides})
+
+
+def _module(**overrides: object) -> Module:
+    base = {
+        "crate": "cvlr-nondet-0.6.1",
+        "path": "cvlr-nondet-0.6.1/src/core.rs",
+        "items": (),
+        "source": "",
+        "expansions": (),
+    }
+    return Module(**{**base, **overrides})  # type: ignore[arg-type]
+
+
+def test_an_entry_with_a_verified_example_renders_it_as_code():
+    section = _entry_section(_module(), _entry())
+    kinds = [b.kind.value for b in section.blocks]
+    assert "code" in kinds
+    assert not [b for b in section.blocks if NO_EXAMPLE in b.body]
+
+
+def test_an_entry_whose_example_never_compiled_keeps_its_prose_and_says_so():
+    """Coverage and exemplifiability are not the same thing. ``cvlr_rules!`` is the construct the
+    published methodology recommends most and the hardest to show in a self-contained snippet, so an
+    all-or-nothing gate would lose exactly the entries a reader most needs. The prose is derived from
+    the source and stays true; only the Rust nobody could compile is withheld."""
+    section = _entry_section(_module(), _entry(example=""))
+    bodies = [b.body for b in section.blocks]
+    assert any("Produces an unconstrained value" in b for b in bodies)
+    assert NO_EXAMPLE in bodies
+    assert "code" not in [b.kind.value for b in section.blocks]
+
+
+def test_a_missing_example_is_distinguishable_from_a_needless_one():
+    """A reader who sees no example has to be able to tell "this needs none" from "none could be
+    produced" — only the second is a reason to go and read the crate source."""
+    assert "read the crate's own tests" in NO_EXAMPLE
+
+
+def test_the_symbol_list_rides_with_the_prose_in_the_vector_index():
+    """A vector chunk that is a bare list of identifiers retrieves for everything and means nothing,
+    so the names join the sentence that gives them context."""
+    group = _entry_group(_module(), _entry())
+    paragraph = next(b for b in group.blocks if b.kind.value == "paragraph")
+    assert "nondet_with" in paragraph.body and "unconstrained value" in paragraph.body
+
+
+def test_an_expansion_pair_is_quoted_rather_than_summarised():
+    """The one question §5.4 says a corpus cannot answer, answered exactly by the crate itself."""
+    section = _expansion_section(
+        ExpansionPair(
+            crate="cvlr-asserts-0.6.1",
+            name="test_add_loc",
+            invocation="add_loc!();",
+            expansion='::cvlr_asserts::log::add_loc("<FILE>", 0u32);',
+        )
+    )
+    code = [b.body for b in section.blocks if b.kind.value == "code"]
+    assert code == ["add_loc!();", '::cvlr_asserts::log::add_loc("<FILE>", 0u32);']
+    assert section.headers == [CORPUS_ROOT, EXPANSION_SECTION, "cvlr-asserts-0.6.1: test_add_loc"]
+
+
+def test_entries_and_expansions_share_the_corpus_root_but_not_the_shelf():
+    manifest = build_manifest([(_module(), _entry())], (), source="test")
+    assert manifest.knowledge_base == "cvlr_kb"
+    assert manifest.manual_sections[0].headers[0] == CORPUS_ROOT
+    assert manifest.manual_sections[0].headers[1] == "cvlr-nondet-0.6.1"
