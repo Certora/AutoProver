@@ -58,7 +58,8 @@ if [[ "${1:-}" == "setup-db" ]]; then
   # (docs/cvlr-capture-plan.md §8.2) and are discovered independently, because they come from
   # different places and either can be absent:
   #
-  #   public   — built from the Solana manual at image build time; present in this image.
+  #   public   — built from the Solana manual and from the CVLR crate sources at image build
+  #              time; present in this image.
   #   private  — project-derived practice; ships in the separate certora-cvlr-kb package, so it is
   #              here only if that package is installed or CVLR_KB_REPO points at a checkout.
   #
@@ -67,6 +68,7 @@ if [[ "${1:-}" == "setup-db" ]]; then
   cvlr_manifests=()
   shopt -s nullglob
   cvlr_manifests+=("$AUTOPROVE_HOME"/cvlr-docs/*.rag.json)
+  cvlr_manifests+=("$AUTOPROVE_HOME"/cvlr-crates/*.rag.json)
   shopt -u nullglob
   cvlr_public_only=("${cvlr_manifests[@]+"${cvlr_manifests[@]}"}")
 
