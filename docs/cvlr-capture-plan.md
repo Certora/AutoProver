@@ -530,8 +530,8 @@ would otherwise have shipped as advice.
 run.
 
 **Sixteen repositories are eleven clients.** Grouped by codebase owner, as evidenced by package
-names: the three SPL-upstream repos are one client, Kamino is two repos, Squads two, Certora's own
-teaching material two. So **"appears in ≥2 projects" is a much weaker statement than it looks**, and
+names: one upstream-library owner accounts for three repos, two other owners for two each, and
+Certora's own teaching material for two more. So **"appears in ≥2 projects" is a much weaker statement than it looks**, and
 the honest bar — two *teams* — eliminates several idioms that a repo count would have promoted. One
 project's owner is not yet established, which is recorded in the inventory as `~` and makes every
 recurrence count an **upper bound** until it is named.
@@ -548,7 +548,7 @@ recurrence count an **upper bound** until it is named.
 
 Three things to read off it:
 
-- **The per-concern claim is confirmed by a same-client pair.** Kamino's two repos are rung 3 on
+- **The per-concern claim is confirmed by a same-client pair.** One client's two repos are rung 3 on
   assertions and rung 2 on env-file naming — the same team, current in one concern and legacy in
   another. A project-level vintage would have been wrong for both.
 - **Tier really is a prior, not a verdict.** One *normative*-tier project is `mixed` on assertions
@@ -814,9 +814,9 @@ Soroban one a `#[contract]` impl with nondet and `clog!`. That probe *is* §9's 
 
 | `cvlr-solana` | requires | surveyed projects there |
 |---|---|---|
-| 0.4.4 / 0.4.5 | `solana-program` 1.18 | 9 — klend, kvault, restaking, texture, manifest, stake-deposit, smart-account, and both public example repos |
-| **0.5.0 (the reference)** | `solana-program` 2.2 | 2 — fluid (2.3.0), stake-pool (2.2.1) |
-| 0.6.0-dev (unreleased) | split `solana-*` v3 | 1 — spl-token-pinocchio |
+| 0.4.4 / 0.4.5 | `solana-program` 1.18 | 9 — seven engagements plus both public example repos |
+| **0.5.0 (the reference)** | `solana-program` 2.2 | 2 — both normative, resolving 2.3.0 and 2.2.1 |
+| 0.6.0-dev (unreleased) | split `solana-*` v3 | 1 — a Pinocchio-based token program |
 
 Two things follow, both deliberate:
 
