@@ -1450,6 +1450,30 @@ field doing its job: 37 of the 110 open questions have a specific entry waiting 
 it runs, not that the advice is right. That is Phase B's job, and claiming otherwise would make the
 prototype's confidence unmeasurable — which is the one thing §4.9 exists to prevent.
 
+### 9.3 A gate for the shape of the content, because every other gate is about a property
+
+The first published manifest was **97% garbage** — 12,275 of 12,619 embedded blocks were single
+characters — and every gate in this document passed it.
+
+The cause was mundane: a field the tool schema declares as an array arrived as a plain string, and
+the renderer iterated it. Iterating a string yields characters. What matters is not the bug but that
+nothing caught it:
+
+| Gate | What it asked | Why it passed |
+|---|---|---|
+| §9 manifest validation | does it match the schema? | a one-character paragraph is a valid paragraph |
+| §8.3 sanitization | does it contain a denied string? | one character contains nothing |
+| §9 compile gate | do the examples compile? | the examples were fine |
+
+Each gate tests a **property** — it parses, it leaks nothing, it compiles — and a corpus can satisfy
+all of them while carrying no information. So the publish step now also refuses a manifest whose
+retrieval blocks are degenerately short, and names the likely cause when it does. It is three lines
+and it closes the whole class.
+
+The general form is worth keeping in mind while adding gates: a property gate answers *"is this
+well-formed?"*, and the question that went unasked for an entire pipeline was *"is this anything at
+all?"*
+
 ## 10. What not to do
 
 - **Do not wait for expert availability to start.** Phase A is gated on nothing but Stage 0, and
