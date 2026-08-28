@@ -48,6 +48,23 @@ EXPECTED_TO_TREEVIEW = {
 }
 
 
+def _shipped_cli_only() -> None:
+    """Refuse to run against a Certora source checkout.
+
+    ``$CERTORA`` makes :func:`composer.certora_env.import_prover_entry` import the CLI from a local
+    Prover build (:mod:`composer.certora_env`'s documented policy), and such a build reports itself
+    as "no package installed" — so the run is rejected before upload unless it also names a
+    ``prover_version``. That is a real developer setting for EVM work and incidental here, but the
+    resulting failure names neither this variable nor the expected-verdict file it would invalidate:
+    a local Prover branch need not agree with the release the fixture's verdicts were recorded
+    against. Skipping names it instead."""
+    if os.environ.get("CERTORA"):
+        pytest.skip(
+            "$CERTORA points this run at a Prover source checkout, whose verdicts need not match "
+            "the fixture's expected file. Rerun with `env -u CERTORA` to gate the shipped CLI."
+        )
+
+
 def _examples_root() -> Path:
     root = Path(os.environ.get(EXAMPLES_ENV, DEFAULT_EXAMPLES)).expanduser()
     if not (root / EXAMPLE / "Cargo.toml").is_file():
@@ -66,6 +83,7 @@ def workdir(tmp_path: Path) -> Path:
     ``CARGO_HOME``, the build script, the conf, ``target/`` — and a test that dirties a developer's
     working tree is a test they learn to avoid running.
     """
+    _shipped_cli_only()
     root = _examples_root()
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not on PATH")

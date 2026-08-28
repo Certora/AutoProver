@@ -444,6 +444,12 @@ system produces verdicts, with measured latency for both compile tiers.
 This is the riskiest infrastructure in the project (first Python-side use of the sandbox) and
 it is fully testable without an LLM. It goes first.
 
+**Met.** Against the public examples' `first_example` — confined build, real cloud submission, no
+agent anywhere — all seven rules matched the project's own `expectedDefault.json`, the failing rule
+and the sanity-failing rule included. 2 min 13 s wall clock, of which 3.6 s was the build. The
+assertion is equality with the fixture's expected verdicts, not "results came back", so the treeView
+parse is confirmed to carry over to SBF rather than merely to run.
+
 #### 7.2.1 What is built
 
 Two packages, split on the line §4.3 draws — Cargo is *chain* knowledge shared across products, and
@@ -468,6 +474,13 @@ deterministic caller has nothing for it to do.
 
 Tests: [test_cvlr_plumbing.py](../tests/test_cvlr_plumbing.py) (routine gate — no toolchain, no
 network, no LLM) and [test_cvlr_end_to_end.py](../tests/test_cvlr_end_to_end.py) (`expensive`).
+
+Run the expensive one with **`env -u CERTORA`**. `$CERTORA` is a normal EVM development setting that
+points the CLI at a local Prover checkout ([certora_env.py](../composer/certora_env.py)); such a
+build reports itself as "no package installed", so the submission is refused before upload unless it
+also names a `prover_version` — and a Prover branch need not produce the verdicts the fixture's
+expected file was recorded against. The test skips on it rather than failing, since the failure names
+neither the variable nor the file it would invalidate.
 
 #### 7.2.2 The build is ours, and the prover reruns it
 
