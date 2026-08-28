@@ -1,10 +1,12 @@
 # summarization-target detector
 
-A standalone AutoProver tool that, from **one prover run**, ranks the functions worth summarizing and says
-**how** — per-function over-approximation or a whole-contract symbolic model. It decides *what* to
-summarize; a downstream generator (curated summaries, a symbolic-model tool, or the CVL_GEN agent)
-produces the actual summaries. A caller runs it after a slow/timeout (or sanity) run to summarize the
-expensive functions before paying for them.
+A standalone AutoProver tool that, from **one prover run**, ranks the functions worth summarizing — a
+candidate list with *why* each is prover-hostile, *where* it can be summarized, and (for a curated
+public-library match) a suggested summary. It decides *what* to summarize, **not** *how*: the summarization
+strategy (per-function over-approximation, a whole-contract symbolic model, …) and the actual summary text
+are the downstream generator's job (curated summaries, the symbolic-model tool, or the CVL_GEN agent). A
+caller runs it after a slow/timeout (or sanity) run to summarize the expensive functions before paying for
+them.
 
 It is self-contained: it reads the prover's difficulty report via its own `difficulty` module and uses
 `certora_autosetup` (the solc AST reader).

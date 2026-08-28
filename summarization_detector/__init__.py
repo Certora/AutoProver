@@ -1,9 +1,12 @@
 """Summarization-target detector — a standalone AutoProver tool.
 
-From a prover run it ranks the functions worth summarizing and says how (per-function summary vs
-whole-contract symbolic model) — it decides WHAT to summarize, not how the summary is written. It fetches
-the prover's output via `prover_output_utility` and parses the solc AST dump (from
-`certoraRun --dump_asts`) with `certora_autosetup.solidity_ast`. Invoke via `detect()` or the CLI
+From a prover run it ranks the functions worth summarizing: a candidate list with WHY each is
+prover-hostile (the hard-op signal / category), WHERE it can be summarized (caller boundaries), and, for a
+curated public-library match, a suggested summary. It suggests WHAT to summarize — not the summarization
+strategy (per-function summary, whole-contract symbolic model, …) and not how the summary is written; the
+CVL-generation / invariant agent (or smtool) does that. It fetches the prover's output via
+`prover_output_utility` and parses the solc AST dump (from `certoraRun --dump_asts`) with
+`certora_autosetup.solidity_ast`. Invoke via `detect()` or the CLI
 (`python -m summarization_detector` / `detect-summaries`).
 """
 from .detect import (

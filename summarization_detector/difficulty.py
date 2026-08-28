@@ -1,27 +1,23 @@
-"""Fetch a TIMED-OUT job's difficulty signal WITHOUT the whole zipOutput or statsdata.json.
+"""Fetch a completed job's difficulty signal WITHOUT the whole zipOutput or statsdata.json.
 
-A conformance TIMEOUT is a PERFORMANCE problem (the model is likely correct) — and the prover has
-already localized the cost. Instead of feeding the agent a bare "it timed out", we fetch the prover's
-own ranked NONLINEARITY HOTSPOTS from the failing run (via POU — treeView only, no tarball):
+Reads the prover's own ranked NONLINEARITY HOTSPOTS from the run (via POU — treeView only, no tarball):
 
   rule_live_statistics_*.json -> "nonlinearity hotspots" node -> functions ranked by % contribution to
   nonlinear ops, each carrying a source file:line.
 
-A function shows up here ONLY IF its body was INLINED into the SMT problem — a summarized or havoc'd
-call contributes no nonlinear ops. So the hotspot list IS the "real bytecode that's in the problem and
-expensive" set: exactly the summarization candidates (the agent then judges which are OFF-PATH for the
-checked output and safe to NONDET, vs on-path math to mirror by congruence).
+A function appears here ONLY IF its body was INLINED into the SMT problem — a summarized or havoc'd call
+contributes no nonlinear ops. So the hotspot list is the real, in-problem, expensive bytecode: the
+summarization candidates.
 
-Note on call resolutions: we do NOT use `get_call_resolutions` to find inlined calls. That table is
-built only from applied-summary annotations (EVMVerifier CallResolutionTable.kt:161 ->
+Note on call resolutions: `get_call_resolutions` is NOT used to find inlined calls. That table is built
+only from applied-summary annotations (EVMVerifier CallResolutionTable.kt:161 ->
 TACProgram.topoSortedSummaryStart), so an inlined call has NO row; POU additionally filters it to
-unresolved (`[?]`) callees (prover_output_utility tree_parser.py:136). It therefore reports the OPPOSITE
-of inlined — already-havoc'd unresolved externals — and cannot surface a summarization candidate.
+unresolved (`[?]`) callees (prover_output_utility tree_parser.py:136). It reports the OPPOSITE of inlined —
+already-havoc'd unresolved externals — so it cannot surface a summarization candidate.
 
-We deliberately AVOID `statsdata.json` (can be huge, and it is the same nonlinear-op scores WITHOUT
-source locations — the locations are joined from the call graph only in the rendered treeView).
-Best-effort: any failure (missing POU / auth / network / schema drift) returns an empty report and the
-loop still refines on the assert messages + the section-3 playbook.
+`statsdata.json` is avoided (can be huge, and it carries the same nonlinear-op scores WITHOUT source
+locations — those are joined from the call graph only in the rendered treeView). Best-effort: any failure
+(missing POU / auth / network / schema drift) returns an empty report.
 """
 
 import json
@@ -59,9 +55,9 @@ class DifficultyReport:
         return not self.hotspots
 
     def format(self) -> str:
-        """A compact, source-located pointer for the refine message: the ranked nonlinearity hotspots.
+        """Render the ranked hotspots as a compact, source-located block plus a summarization playbook.
         Every listed function has its real body INLINED in the SMT problem (that is why it contributes
-        nonlinear ops); those are the summarization candidates."""
+        nonlinear ops)."""
         if self.is_empty():
             return ""
         out = ["  nonlinearity hotspots (prover difficulty report — % of the rule's nonlinear ops; each "
@@ -122,11 +118,11 @@ def _live_stats_indices(api, job_url: str) -> list[int]:
 
 
 def fetch_difficulty(job_url: str, limit: int | None = _MAX_HOTSPOTS) -> DifficultyReport:
-    """Best-effort difficulty report for a TIMED-OUT job: the prover's ranked nonlinearity hotspots
+    """Best-effort difficulty report for a completed job: the prover's ranked nonlinearity hotspots
     (function, % of nonlinear ops, source file:line). Returns an empty report on any error. Uses ONLY
     the treeView `rule_live_statistics_*.json` files (fetched per-file via POU's public API) — never
-    statsdata.json or the output tarball. `limit` caps the returned hotspots (default `_MAX_HOTSPOTS`, a
-    compact refine pointer); pass ``None`` for the full ranked set (the detector filters it itself)."""
+    statsdata.json or the output tarball. `limit` caps the returned hotspots (default `_MAX_HOTSPOTS`);
+    pass ``None`` for the full ranked set."""
     report = DifficultyReport()
     if not job_url:
         return report
