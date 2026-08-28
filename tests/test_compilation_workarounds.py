@@ -7,6 +7,7 @@ import pytest
 
 import certora_autosetup.utils.remappings as remappings_mod
 from certora_autosetup.utils.compilation_workarounds import (
+    VIA_IR_SCENE_THRESHOLD,
     CompilationWorkaroundManager,
     UnimplementedContractError,
     UnsatisfiableSolcPinError,
@@ -68,6 +69,12 @@ UNRELATED_OUTPUT = (
 @pytest.fixture
 def manager(tmp_path: Path) -> CompilationWorkaroundManager:
     return CompilationWorkaroundManager(project_root=tmp_path)
+
+
+@pytest.fixture
+def manager_declaring_via_ir(tmp_path: Path) -> CompilationWorkaroundManager:
+    """A manager for a project whose own build config declares via_ir."""
+    return CompilationWorkaroundManager(project_root=tmp_path, declared_via_ir=True)
 
 
 def test_detects_wrapped_yul_stack_too_deep(manager: CompilationWorkaroundManager) -> None:
@@ -191,20 +198,21 @@ def test_unnamed_return_warning_fires_once(manager, monkeypatch, tmp_path) -> No
 
 
 def test_noop_pass_exits_without_recompile(manager, monkeypatch, tmp_path) -> None:
-    # Run 1: via-ir applies for Foo. Run 2: the identical stack-too-deep hit
-    # fires again, re-applying is a no-op; the catch-all is suppressed because
-    # a specific workaround applied this pass, and the pass changed nothing ->
-    # exit without recompiling.
+    # Run 1: the optimizer goes on, legacy codegen kept. Run 2: the same stack-too-deep
+    # survives it, so via-ir applies for Foo. Run 3: the identical hit fires again,
+    # re-applying is a no-op; the catch-all is suppressed because a specific workaround
+    # applied this pass, and the pass changed nothing -> exit without recompiling.
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, updated, _, fake_run = _run_loop_with_output(
         manager, monkeypatch, tmp_path, PERSISTENT_STACK_TOO_DEEP_OUTPUT, contracts
     )
     assert success is False
+    assert updated["solc_optimize"] == "200"
     # The first application is preserved (uniform one-contract map collapses
     # back to the scalar on exit).
     assert updated["solc_via_ir"] is True
     assert "use_relpaths_for_solc_json" not in updated
-    assert fake_run.calls == 2
+    assert fake_run.calls == 3
 
 
 def test_different_detect_results_keep_workaround_enabled(manager, monkeypatch, tmp_path) -> None:
@@ -219,11 +227,12 @@ def test_different_detect_results_keep_workaround_enabled(manager, monkeypatch, 
         manager,
         monkeypatch,
         tmp_path,
-        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, STACK_TOO_DEEP_BAR_OUTPUT],
+        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, PERSISTENT_STACK_TOO_DEEP_OUTPUT, STACK_TOO_DEEP_BAR_OUTPUT],
         contracts,
     )
     assert success is True
-    assert fake_run.calls == 3
+    # Pass 1 spends the optimizer rung; Foo and Bar then need one via-ir application each.
+    assert fake_run.calls == 4
     # Both contracts got via-ir, so the uniform map collapsed to the scalar on
     # exit. A guard that disabled the workaround after its first application
     # would leave Bar's entry False and the map uncollapsed.
@@ -263,7 +272,9 @@ def test_multiple_workarounds_apply_in_one_pass(manager, monkeypatch, tmp_path) 
     )
     assert success is True
     assert fake_run.calls == 2
-    assert updated["solc_via_ir"] is True
+    # The stack-too-deep half is answered by the optimizer first — via-ir is a later rung.
+    assert updated["solc_optimize"] == "200"
+    assert "solc_via_ir" not in updated
     assert updated["ignore_solidity_warnings"] is True
     assert "use_relpaths_for_solc_json" not in updated
 
@@ -931,11 +942,11 @@ def test_a_pin_autosetup_seeded_itself_is_not_terminal(manager, monkeypatch, tmp
     assert success is False
 
 
-def test_the_ledger_is_scoped_to_one_loop_not_to_the_manager(
+def test_the_seen_state_memo_is_scoped_to_one_loop_not_to_the_manager(
     manager, monkeypatch, tmp_path
 ) -> None:
     # fixconf runs the loop twice on one manager, either side of the import patch;
-    # the second run must be free to re-apply what the first one did.
+    # the second run must be free to revisit the states the first one reached.
     monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     for _ in range(2):
@@ -948,7 +959,7 @@ def test_the_ledger_is_scoped_to_one_loop_not_to_the_manager(
             extra_config={"compiler_map": {"Foo": "solc6.4"}},
         )
         assert success is False
-        assert fake_run.calls == 3
+        assert fake_run.calls == 2
 
 
 def test_no_installed_candidate_blocks_instead_of_guessing(
@@ -972,8 +983,8 @@ def test_no_installed_candidate_blocks_instead_of_guessing(
 # The two halves of a real cycle. A contract is pinned to a compiler that is not
 # installed; the fallback substitutes the default one; the next compile reports the
 # pragma mismatch and pins the missing compiler again. The two fire on mutually
-# exclusive outputs, so they land in different passes and neither pass repeats its
-# own conf state — the within-pass no-op guard cannot see it.
+# exclusive outputs, so they land in different passes and every pass changes the
+# conf — only the states the loop has already compiled reveal the cycle.
 MISSING_PIN_OUTPUT = (
     "attribute/flag 'compiler_map': Solidity executable solc6.4 not found in path\n"
 )
@@ -987,10 +998,10 @@ PIN_DEMANDED_AGAIN_OUTPUT = (
 )
 
 
-def test_a_change_repeated_across_passes_stops_the_loop(manager, monkeypatch, tmp_path) -> None:
+def test_a_conf_state_seen_before_stops_the_loop(manager, monkeypatch, tmp_path) -> None:
     # Foo's source is not on disk, so its pragma is unreadable and the fallback plan
     # has no constraint to refuse on — the substitution is allowed and the cycle is
-    # reachable. This is the residual case the ledger exists for.
+    # reachable. This is the residual case the seen-state memo exists for.
     monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, _, _, fake_run = _run_loop(
@@ -1002,13 +1013,65 @@ def test_a_change_repeated_across_passes_stops_the_loop(manager, monkeypatch, tm
         extra_config={"compiler_map": {"Foo": "solc6.4"}},
     )
     assert success is False
-    # substitute, re-pin, then the substitution repeats and the loop stops.
+    # Substitute, then re-pin — which lands back on the conf the first compile ran on.
+    assert fake_run.calls == 2
+
+
+# A missing-library link error, one per consumer. The harness workaround reacts by
+# generating a harness source on disk and swapping the consumer for it in `files`.
+def _missing_library_output(consumer_path: str, consumer: str, lib: str, lib_path: str) -> str:
+    return (
+        f"Compiling {consumer_path}...\n"
+        f"Failed to find a dependency library while building the constructor bytecode of {consumer}.\n"
+        f"Failed to find a contract named {lib} in file {lib_path}.\n"
+    )
+
+
+def test_the_harness_workaround_is_not_stopped_by_the_seen_state_memo(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # Part of this workaround's progress is the generated harness source, which the
+    # memo cannot see. What it can see is the `files` swap the same apply performs,
+    # and that reaches a new state on every firing — so consecutive firings must not
+    # be read as a cycle.
+    (tmp_path / "contracts").mkdir(parents=True, exist_ok=True)
+    for lib in ("LibA", "LibB"):
+        (tmp_path / "contracts" / f"{lib}.sol").write_text(
+            f"pragma solidity ^0.8.0;\nlibrary {lib} {{\n"
+            f"    function value() public pure returns (uint256) {{ return 1; }}\n}}\n"
+        )
+    contracts = []
+    for name in ("Foo", "Bar"):
+        (tmp_path / "contracts" / f"{name}.sol").write_text(
+            f"pragma solidity ^0.8.0;\ncontract {name} {{\n"
+            f"    function ping() external pure returns (uint256) {{ return 1; }}\n}}\n"
+        )
+        contracts.append(
+            ContractHandle(contract_name=name, source_file=f"contracts/{name}.sol")
+        )
+
+    success, _, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [
+            _missing_library_output("contracts/Foo.sol", "Foo", "LibA", "contracts/LibA.sol"),
+            _missing_library_output("contracts/Bar.sol", "Bar", "LibB", "contracts/LibB.sol"),
+        ],
+        contracts,
+    )
+    assert success is True
+    # Both firings landed, and the third compile is the one that succeeds.
     assert fake_run.calls == 3
+    files = compilation_config["files"]
+    assert any("FooHarness" in entry for entry in files)
+    assert any("BarHarness" in entry for entry in files)
 
 
 def test_a_new_change_alongside_a_repeat_keeps_going(manager, monkeypatch, tmp_path) -> None:
-    # A pass that re-applies a known change while also landing a new one is still
-    # converging and must not be stopped.
+    # The same cycle, but the second pass also lands an orthogonal change. That takes
+    # the loop to a conf it has not compiled, so it must keep going — and it still
+    # terminates one full turn of the cycle later.
     monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.34", "0.8.34")])
     contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
     success, _, compilation_config, fake_run = _run_loop(
@@ -1017,8 +1080,8 @@ def test_a_new_change_alongside_a_repeat_keeps_going(manager, monkeypatch, tmp_p
         tmp_path,
         [
             MISSING_PIN_OUTPUT,
-            PIN_DEMANDED_AGAIN_OUTPUT,
-            MISSING_PIN_OUTPUT + UNNAMED_RETURN_WARNING_OUTPUT,
+            PIN_DEMANDED_AGAIN_OUTPUT + UNNAMED_RETURN_WARNING_OUTPUT,
+            MISSING_PIN_OUTPUT,
             PIN_DEMANDED_AGAIN_OUTPUT,
         ],
         contracts,
@@ -1315,6 +1378,171 @@ def test_unseeded_cancun_map_not_promoted_to_scalar(manager, monkeypatch, tmp_pa
     assert "solc_evm_version" not in compilation_config
 
 
+# =============================================================================
+# Unresolved-import classification around the source-not-found workaround
+# =============================================================================
+#
+# The classification never gates the workaround: it explains what the rebuild is reacting to,
+# and turns the loop's generic "conf and command are unchanged" giving-up message into one that
+# names why nothing could change.
+
+
+class _SequencedRunWithoutForge(_SequencedRun):
+    """Queued compilation outputs, plus `forge remappings` failing the way it does in CI.
+
+    The packages rebuild shells out to forge through the same subprocess module the loop's fake
+    is installed on, so one fake has to answer both kinds of call.
+    """
+
+    def __call__(self, cmd, **kwargs):
+        if cmd and cmd[0] == "forge":
+            raise FileNotFoundError("forge")
+        return super().__call__(cmd, **kwargs)
+
+
+def _run_loop_with_packages(manager, monkeypatch, tmp_path, outputs, contracts, packages):
+    """Like _run_loop, but the conf already carries a packages list (in both dicts), which is
+    what a real run looks like once the build system contributed one."""
+    fake_run = _SequencedRunWithoutForge(outputs)
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run
+    )
+    compilation_config = {
+        "files": [f"{c.source_file}:{c.contract_name}" for c in contracts],
+        "packages": list(packages),
+    }
+    success, _, updated = manager.run_compilation_with_workarounds(
+        cmd=["certoraRun", "test.conf"],
+        config_file=tmp_path / "test.conf",
+        compilation_config=compilation_config,
+        contracts=contracts,
+        updated_config_dict={"packages": list(packages)},
+    )
+    return success, updated, fake_run
+
+
+def _source_not_found(source_unit: str) -> str:
+    return f'ParserError: Source "{source_unit}" not found: File not found.\n'
+
+
+def test_file_missing_in_installed_package_is_named_when_giving_up(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The package IS installed, so the rebuilt list is identical and the loop stops — the
+    # message must say that rebuilding cannot help rather than only "nothing changed".
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (tmp_path / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, _, fake_run = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{tmp_path / 'node_modules/@vault/core/IVault.sol'}")] * 10,
+        contracts,
+        packages,
+    )
+
+    assert success is False
+    # One certoraRun: the rebuild reproduces the identical list, so there is nothing to retry.
+    assert fake_run.calls == 1
+    assert [f.kind.value for f in manager.last_import_diagnostics] == ["file_missing_in_package"]
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert any("rebuilding the packages list cannot help" in msg for msg in errors)
+
+
+def test_missing_package_target_is_retried_once_the_rebuild_finds_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The dependency is hoisted to the run root, so the rebuild produces a different list and
+    # the loop has something new to try.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, updated, fake_run = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{project / 'node_modules/@vault/core/IVault.sol'}")],
+        contracts,
+        packages,
+    )
+
+    assert any("package_target_missing" in msg for msg, _ in logged)
+    # The retry compiled, so the run has no unresolved imports left to report.
+    assert manager.last_import_diagnostics == []
+    assert success is True
+    assert fake_run.calls == 2
+    assert updated["packages"] == [f"@vault/={tmp_path / 'node_modules/@vault/core'}/"]
+
+
+def test_import_diagnostics_do_not_survive_into_an_unrelated_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The import problem IS fixed by the rebuild and the run then dies of something else. The
+    # classification of the first output must not be reported for that terminal failure —
+    # callers paste it into the compilation error, where it would blame a missing dependency.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    packages = [f"@vault/={project / 'node_modules/@vault/core'}/"]
+    manager = CompilationWorkaroundManager(project_root=tmp_path, build_config_dir=project)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+    unrelated = "Error: something entirely different, no workaround applies\n"
+
+    success, _, _ = _run_loop_with_packages(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [_source_not_found(f"{project / 'node_modules/@vault/core/IVault.sol'}")] + [unrelated] * 12,
+        contracts,
+        packages,
+    )
+
+    assert success is False
+    assert manager.last_import_diagnostics == []
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert errors and not any("package_target_missing" in msg for msg in errors)
+
+
+def test_unparseable_source_not_found_leaves_the_loop_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A garbled diagnostic still trips the detector; classification simply finds nothing and the
+    # workaround runs exactly as it did before.
+    garbled = 'ParserError: Source " not found: File not found.\n'
+    manager = CompilationWorkaroundManager(project_root=tmp_path)
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(manager, "log", lambda msg, level="INFO": logged.append((msg, level)))
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+
+    success, _, fake_run = _run_loop_with_packages(
+        manager, monkeypatch, tmp_path, [garbled] * 10, contracts, []
+    )
+
+    assert success is False
+    assert manager.last_import_diagnostics == []
+    # Empty project, so the rebuild reproduces the empty list and the loop gives up after the
+    # one certoraRun — with no diagnosis appended, exactly as before the classifier existed.
+    assert fake_run.calls == 1
+    errors = [msg for msg, level in logged if level == "ERROR"]
+    assert errors and errors[-1].endswith("giving up")
+
+
 # A contract that inherits functions it never implements. solc hard-wraps the
 # diagnostic, so the sentence is split across a newline here as it is in a real
 # run's output; the quoted contract name and the source location survive it.
@@ -1372,3 +1600,103 @@ def test_unimplemented_contract_is_terminal(manager, monkeypatch, tmp_path) -> N
     assert "TokenInstance1" in str(excinfo.value)
     assert "certora/harnesses/TokenInstance1.sol" in str(excinfo.value)
     assert fake_run.calls == 1
+
+
+# --- the legacy stack-too-deep ladder: optimizer, then autofinder, then via-ir ----------
+
+AUTOFINDER_STACK_TOO_DEEP_OUTPUT = (
+    "Compiling contracts/Foo.sol to expose internal function information and local variables...\n"
+    "Encountered an exception generating autofinder contracts/Foo.sol (solc8.21 had an error:\n"
+    "CompilerError: Stack too deep. Try compiling with `--via-ir` (cli) or the equivalent\n"
+    "`viaIR: true` (standard JSON) while enabling the optimizer.\n"
+)
+
+
+def test_legacy_stack_too_deep_enables_the_optimizer_before_via_ir(manager, monkeypatch, tmp_path) -> None:
+    # solc's advice on this error names both the pipeline and the optimizer. The optimizer
+    # alone keeps legacy codegen, so it is what the first pass must try.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, config, fake_run = _run_loop(
+        manager, monkeypatch, tmp_path, [PERSISTENT_STACK_TOO_DEEP_OUTPUT], contracts
+    )
+    assert success is True
+    assert fake_run.calls == 2
+    assert updated["solc_optimize"] == "200"
+    assert "solc_via_ir" not in updated and "solc_via_ir_map" not in updated
+
+
+def test_via_ir_follows_when_the_optimizer_did_not_clear_it(manager, monkeypatch, tmp_path) -> None:
+    # Still failing with the optimizer on: via-ir is the next rung, and it stays scoped to
+    # the contract that failed.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, updated, _, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, PERSISTENT_STACK_TOO_DEEP_OUTPUT],
+        contracts,
+    )
+    assert success is True
+    assert fake_run.calls == 3
+    assert updated["solc_optimize"] == "200"
+    assert updated["solc_via_ir_map"] == {"Foo": True, "Bar": False}
+
+
+def test_autofinder_stack_too_deep_relaxes_the_assertion_before_via_ir(manager, monkeypatch, tmp_path) -> None:
+    # The contracts compile; only the instrumented copies are over the limit. Accepting the
+    # finder fallback for those files keeps legacy codegen for every contract.
+    contracts = [ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol")]
+    success, updated, config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [AUTOFINDER_STACK_TOO_DEEP_OUTPUT, AUTOFINDER_STACK_TOO_DEEP_OUTPUT],
+        contracts,
+        extra_config={"assert_autofinder_success": True},
+    )
+    assert success is True
+    assert fake_run.calls == 3
+    assert config["assert_autofinder_success"] is False
+    assert "solc_via_ir" not in updated and "solc_via_ir_map" not in updated
+
+
+def test_via_ir_goes_scene_wide_past_the_threshold(manager, monkeypatch, tmp_path) -> None:
+    # Naming contracts one at a time costs a compile each; past the threshold the rest of
+    # the scene is switched in one step.
+    names = [f"C{i}" for i in range(VIA_IR_SCENE_THRESHOLD + 4)]
+    contracts = [ContractHandle(contract_name=n, source_file=f"contracts/{n}.sol") for n in names]
+    outputs = [
+        f"Compiling contracts/{n}.sol...\nsolc8.21 had an error:\nCompilerError: Stack too deep.\n"
+        for n in names[:VIA_IR_SCENE_THRESHOLD]
+    ]
+    # One extra leading failure for the optimizer rung to consume.
+    success, updated, _, _ = _run_loop(manager, monkeypatch, tmp_path, [outputs[0]] + outputs, contracts)
+
+    assert success is True
+    # Uniform True map collapses to the scalar on exit — every contract is on via-ir.
+    assert updated["solc_via_ir"] is True
+    assert "solc_via_ir_map" not in updated
+
+
+def test_declared_via_ir_skips_the_per_contract_walk(manager_declaring_via_ir, monkeypatch, tmp_path) -> None:
+    # The project's build config already says where this ends; walking there one contract
+    # per compile only costs compiles. The declared value is still not inherited — the
+    # optimizer value emitted is ours.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    success, updated, _, fake_run = _run_loop(
+        manager_declaring_via_ir,
+        monkeypatch,
+        tmp_path,
+        [PERSISTENT_STACK_TOO_DEEP_OUTPUT, PERSISTENT_STACK_TOO_DEEP_OUTPUT],
+        contracts,
+    )
+    assert success is True
+    assert updated["solc_via_ir"] is True
+    assert "solc_via_ir_map" not in updated
+    assert updated["solc_optimize"] == "200"

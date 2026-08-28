@@ -179,7 +179,7 @@ def pragma_admits(pragma_spec: str, version: str) -> Optional[bool]:
     Examples:
         pragma_admits("0.6.4", "0.8.34") -> False   (exact pin, cannot be widened)
         pragma_admits("^0.8.0", "0.8.34") -> True
-        pragma_admits("~0.6.4", "0.6.4")  -> None   (spec not understood)
+        pragma_admits("^0.6.0 || ^0.8.0", "0.8.34") -> None  (disjunction: not one constraint)
     """
     constraint = parse_pragma_constraint(pragma_spec)
     if constraint is None:

@@ -32,6 +32,7 @@ from abc import ABC, abstractmethod
 import json
 import logging
 import os
+import uuid
 
 
 from langchain_core.messages import AnyMessage, HumanMessage
@@ -117,11 +118,17 @@ class ProverReport:
     them through the return value.
 
     ``link`` is the prover run's URL (cloud) or local results directory.
+
+    ``certora_run_stdout`` is the captured stdout of the ``certoraRun``
+    invocation. It carries diagnostic signal that never reaches the rule
+    results — e.g. internal function summarization silently failing on
+    stack-too-deep — so it rides along even on successful runs.
     """
     raw_rule_status: dict[RulePath, StatusCodes]
 
     result_str: str
     link: str
+    certora_run_stdout: str
 
     @property
     def rule_status(self) -> dict[str, bool]:
@@ -309,8 +316,25 @@ class TrivialFanoutCexHandler(CexHandler):
                 await callbacks.on_analysis_complete(instance, analysis)
             return (instance, analysis)
 
-        jobs = [_one(r) for r in all_results if r.status == "VIOLATED"]
-        results = await asyncio.gather(*jobs)
+        violated = [r for r in all_results if r.status == "VIOLATED"]
+        # One counterexample's analysis failing is not a reason to lose the
+        # prover run that produced it: the rule keeps its status and only its
+        # explanation goes missing, so the report renders without it.
+        settled = await asyncio.gather(
+            *(_one(r) for r in violated), return_exceptions=True
+        )
+        results: list[tuple[RuleResult, str | None]] = []
+        for rule, outcome in zip(violated, settled):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, BaseException):
+                _logger.warning(
+                    "CEX analysis failed for rule %s, continuing without its explanation: %r",
+                    rule.name,
+                    outcome,
+                )
+                continue
+            results.append(outcome)
 
         to_cex_explanation = {
             r.name: stat for (r, stat) in results if stat is not None
@@ -331,8 +355,10 @@ class TrivialFanoutCexHandler(CexHandler):
             results=results_for_template,
         )
 
+        # Counted over every violated rule, not just the analyzed ones, so a
+        # failed analysis cannot move the summarization threshold.
         failed_count = sum(
-            1 for instance, _ in results
+            1 for instance in violated
             if instance.status != "VERIFIED"
         )
         if failed_count > self.summarization_threshold:
@@ -423,6 +449,70 @@ async def run_prover_inner(
         run_result = cast(ProverResult, json.load(output_file))
         return run_result, stdout
 
+async def declared_rules_list(
+    folder: Path,
+    args: list[str]
+) -> list[str]:
+    """
+    This is a temporary hack to work around `certoraRun` not providing a "native"
+    way to list rules. Instead we use certoraRun to build the project, hijack `msg` to find
+    the generated build dir, and then manually invoke the typechecker with `-listRules`
+    ourselves against that build dir.
+
+    Not great, obviously, but lets us work on this AP feature while waiting for support for this to 
+    land upstream in certora-cli and the pip distribution channels.
+    """
+    if any(m == "--msg" for m in args):
+        raise ValueError("This unholy black magic only works if you don't pass msg")
+    tc_key = uuid.uuid4().hex
+    proc = await asyncio.subprocess.create_subprocess_exec(
+        "certoraRun", *args, "--msg", tc_key, "--compilation_steps_only",
+        cwd=str(folder),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+
+    rc = await proc.wait()
+    if rc != 0:
+        raise ValueError("Type check failed?")
+    from importlib.resources import files
+
+    tc_jar = files("certora_jars") / "Typechecker.jar"
+    if not tc_jar.is_file():
+        raise ValueError("Typechecker not installed")
+    d = folder / ".certora_internal"
+    found : Path | None = None
+    for p in d.iterdir():
+        if not p.is_dir():
+            continue
+        is_build_mirror = p / "run.conf"
+        if not is_build_mirror.is_file():
+            continue
+        try:
+            payload = json.loads(
+                is_build_mirror.read_text()
+            )
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or "msg" not in payload or not isinstance(payload["msg"], str):
+            continue
+        if payload["msg"] == tc_key:
+            found = p
+            break
+    if found is None:
+        raise ValueError("Couldn't find build dir")
+    with tempfile.NamedTemporaryFile("r") as f:
+        proc = await asyncio.subprocess.create_subprocess_exec(
+            "java", "-jar", str(tc_jar), "-buildDirectory", str(found), "-typeCheck", "true", "-listRules", f.name,
+            cwd=str(folder),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        tc_rc = await proc.wait()
+        if tc_rc != 0:
+            raise ValueError("Nope, no dice")
+        all_rules = f.read()
+    return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
 async def run_prover(
     folder: Path,
@@ -546,4 +636,5 @@ async def run_prover(
         raw_rule_status=raw_rule_results,
         result_str=result_str,
         link=run_result["link"],
+        certora_run_stdout=stdout,
     )

@@ -145,6 +145,20 @@ def deduplicate_contract_handles(handles: list[ContractHandle]) -> list[Contract
     return result
 
 
+def with_contract_handle(
+    handles: list[ContractHandle], to_add: ContractHandle
+) -> list[ContractHandle]:
+    """Return *handles* containing *to_add*, appended if it is not already there.
+
+    Any handle carrying the same ``contract_name`` as *to_add* but a different source file
+    is dropped, so the returned list names each contract once: two handles sharing a name
+    make the scene ambiguous about which file it came from.
+    """
+    if to_add in handles:
+        return handles
+    return [h for h in handles if h.contract_name != to_add.contract_name] + [to_add]
+
+
 def resolve_contract_handles(
     contract_handles: list[ContractHandle],
     project_root: Path,

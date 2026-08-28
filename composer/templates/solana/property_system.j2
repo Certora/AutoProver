@@ -37,7 +37,7 @@ non-triviality, a clear violation consequence, and defensibility in your `reason
 
 ## Source exploration
 
-{% with source_tools_has_explorer = sort == "existing" %}
+{% with source_tools_has_explorer = sort == "existing", source_language = "Rust" %}
 {% include "source_tools_system_prompt.j2" %}
 {% endwith %}
 

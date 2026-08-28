@@ -1,0 +1,106 @@
+Target component: {{ context.component.name }} in {{ context.contract.name }}
+(`{{ context.contract.contract_identifier }}`).
+
+Component description:
+
+{{ context.component.description }}
+
+{% if context.component.requirements %}
+Component requirements:
+{% for req in context.component.requirements %}
+* {{ req }}
+{% endfor %}
+{% endif %}
+{% if context.storage_entries %}
+
+## The storage this component maintains
+{% for entry in context.storage_entries %}
+* `{{ entry.key }}` — {{ entry.durability }} storage, `{{ entry.value_type }}`. {{ entry.description }}
+{% endfor %}
+{% elif context.component.storage_keys %}
+
+The storage keys this component maintains: {{ context.component.storage_keys | join(", ") }}.
+{% endif %}
+
+Application type: {{ context.app.application_type }}.
+
+## This component's entry points
+
+Functions in scope:
+{% for fn in context.functions %}
+
+### `{{ fn.name }}`
+
+{{ fn.description }}
+{% if fn.requirements %}
+Requirements:
+{% for req in fn.requirements %}
+* {{ req }}
+{% endfor %}
+{% endif %}
+Signature: `{{ fn.to_signature() }}`
+Authorization:
+{% if fn.auth %}
+{% for au in fn.auth %}
+* `{{ au.address }}` via `{{ au.kind }}` — {{ au.description }}
+{% endfor %}
+{% else %}
+* **No auth.**
+{% endif %}
+{% if fn.storage %}
+Storage accessed:
+{% for st in fn.storage %}
+* `{{ st.key }}` ({{ st.durability }}) — {{ st.access }}
+{% endfor %}
+{% endif %}
+{% if fn.calls %}
+Cross-contract calls:
+{% for call in fn.calls %}
+* → `{{ call.target_contract }}`: {{ call.description }}
+{% endfor %}
+{% endif %}
+{% if fn.events %}
+Events published: {{ fn.events | join(", ") }}.
+{% endif %}
+{% if fn.errors %}
+Failure conditions:
+{% for err in fn.errors %}
+* {{ err }}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% if context.sibling_components %}
+## The rest of the contract
+
+Other components of {{ context.contract.name }}. These are provided for context only. Do not
+write properties about them. They matter because they may share storage with this component, or
+execute before, after, or between its calls:
+{% for other in context.sibling_components %}
+* **{{ other.name }}**: {{ other.description }}
+{% endfor %}
+{% endif %}
+
+{% if context.sibling_contracts %}
+Other contracts in the application:
+{% for c in context.sibling_contracts %}
+* `{{ c.name }}` (`{{ c.contract_identifier }}`): {{ c.description }}
+{% endfor %}
+{% endif %}
+{% if context.app.authorities %}
+External authorities / actors the system interacts with:
+{% for a in context.app.authorities %}
+* {{ a.name }}: {{ a.description }}{% if a.assumptions %} (assumed: {{ a.assumptions | join("; ") }}){% endif %}
+{% endfor %}
+{% endif %}
+
+{% if context.component.interactions %}
+Component links:
+{% for other in context.component.interactions %}
+{% if other.authority is defined %}
+- External actor "{{ other.authority }}": {{ other.description }}
+{% else %}
+- The `{{ other.component }}` component of {% if other.contract == context.contract.name %}this contract{% else %}the {{ other.contract }} contract{% endif %}: {{ other.description }}
+{% endif %}
+{% endfor %}
+{% endif %}

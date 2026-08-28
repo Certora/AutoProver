@@ -22,7 +22,7 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Awaitable, Callable, override
+from typing import Awaitable, Callable, override, Sequence, Any
 
 from composer.foundry.author import (
     GeneratedFoundryTest, batch_foundry_test_generation,
@@ -32,13 +32,15 @@ from composer.foundry.report import _foundry_verdicts
 from composer.pipeline.core import (
     Formalizer, PreparedSystem, PipelineRun,
     GaveUp, SystemAnalysisSpec,
-    CorePhases, CorePipelineResult,
-    COMMON_SYSTEM_CACHE_KEY
+    CorePhases, CorePipelineResult, ToolBinder,
 )
+from composer.foundry.plugin import FoundryTools
 from composer.pipeline.ptypes import Curtailed
 from composer.pipeline.ecosystem import main_instance
+from composer.pipeline.keys import COMMON_SYSTEM_CACHE_KEY
 from composer.foundry.artifacts import FoundryTestArtifact
 from composer.spec.source.report.collect import Formalized, Verdict
+from composer.spec.source.report.schema import RuleName
 from composer.spec.context import (
     WorkflowContext, SourceCode, FoundryGeneration
 )
@@ -109,6 +111,8 @@ class FoundryPhase(enum.Enum):
     REPORT = "report"
 
 class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstance]):
+    tool_provider_type = FoundryTools
+
     def __init__(self, conf: _ForgeRunConfig):
         super().__init__(GeneratedFoundryTest, "foundry")
         self.conf = conf
@@ -120,7 +124,8 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstan
         feat: ContractComponentInstance,
         props: list[PropertyFormulation],
         ctx: WorkflowContext[GeneratedFoundryTest],
-        run: PipelineRun
+        run: PipelineRun,
+        extra_tools: ToolBinder[ContractComponentInstance]
     ) -> GeneratedFoundryTest | Curtailed[GeneratedFoundryTest] | GaveUp:
         return await batch_foundry_test_generation(
             ctx=ctx.abstract(FoundryGeneration),
@@ -132,11 +137,14 @@ class FoundryFormalizer(Formalizer[GeneratedFoundryTest, ContractComponentInstan
             forge_binary=self.conf.forge_binary,
             forge_sem=self.conf.forge_sem,
             forge_timeout_s=self.conf.forge_timeout_s,
-            props=props
+            props=props,
+            tool_provider=extra_tools,
         )
 
     @override
-    async def fetch_verdicts(self, formalized: Formalized[GeneratedFoundryTest]) -> dict[str, Verdict]:
+    async def fetch_verdicts(
+        self, formalized: Formalized[GeneratedFoundryTest]
+    ) -> dict[RuleName, Verdict]:
         return await _foundry_verdicts(formalized)
 
 @dataclass
@@ -164,10 +172,17 @@ class FoundryBackend:
 
     foundry_conf: _ForgeRunConfig
 
+    async def preflight(self, run: PipelineRun[FoundryPhase, None]) -> None:
+        """Nothing to do ahead of analysis. Foundry authors `.t.sol` into a project `forge` already
+        builds, so there is no workspace to prepare; the existing project is the precondition (a
+        `forge build` smoke test would be the natural thing to add here)."""
+        return None
+
     async def prepare_system(
         self,
         analyzed: SourceApplication,
-        run: PipelineRun[FoundryPhase, None]
+        run: PipelineRun[FoundryPhase, None],
+        preflight: None,
     ) -> PreparedSystem[GeneratedFoundryTest, ContractComponentInstance, ContractInstance]:
         return FoundrySystem(
             main_instance(

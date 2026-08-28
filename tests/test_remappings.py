@@ -17,7 +17,11 @@ import pytest
 
 from certora_autosetup.build_systems.foundry import FoundryManager
 from certora_autosetup.utils import remappings as remappings_mod
-from certora_autosetup.utils.remappings import build_packages_from_remapping_sources
+from certora_autosetup.utils.remappings import (
+    build_packages_from_remapping_sources,
+    node_modules_package_root,
+    resolve_node_modules_target,
+)
 
 
 def _no_forge(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,3 +217,479 @@ def test_forge_run_with_foundry_profile_env(tmp_path: Path, monkeypatch) -> None
     build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None, profile="ci")
 
     assert captured["env"]["FOUNDRY_PROFILE"] == "ci"
+
+
+def _nested_project(tmp_path: Path) -> Path:
+    """A repo whose Foundry project sits at <repo>/chains/somechain, with a sub-project tree."""
+    project = tmp_path / "chains" / "somechain"
+    (project / "src" / "Widget_1234" / "dependencies" / "oz-5.4.0" / "contracts").mkdir(parents=True)
+    (project / "lib" / "forge-std" / "src").mkdir(parents=True)
+    return project
+
+
+def test_context_is_rebased_onto_the_run_root(tmp_path: Path, monkeypatch) -> None:
+    # `forge remappings` reports contexts relative to the project dir, but solc matches them
+    # against source unit names, which are relative to the run root. For a project nested under
+    # the run root the reported context `src/Widget_1234/` never prefixes the source unit name
+    # `chains/somechain/src/Widget_1234/...`, so the remapping silently never applies and every
+    # import of that sub-project fails to resolve.
+    project = _nested_project(tmp_path)
+    _forge_returning(
+        monkeypatch,
+        "src/Widget_1234/:@openzeppelin/contracts/=src/Widget_1234/dependencies/oz-5.4.0/contracts/\n"
+        "forge-std/=lib/forge-std/src/\n",
+    )
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    keys = _keys(packages)
+    assert "chains/somechain/src/Widget_1234/:@openzeppelin/contracts/" in keys
+    assert "src/Widget_1234/:@openzeppelin/contracts/" not in keys
+    # the target half is untouched by the rebasing — still absolute, still pointing at the tree
+    assert _path_of(packages, "chains/somechain/src/Widget_1234/:@openzeppelin/contracts/") == \
+        str(project / "src/Widget_1234/dependencies/oz-5.4.0/contracts") + "/"
+    # an unscoped key has no context to rebase
+    assert "forge-std/" in keys
+
+
+def test_context_unchanged_when_the_project_is_the_run_root(tmp_path: Path, monkeypatch) -> None:
+    # The flat case (the overwhelming majority): base_dir == run_root, so contexts are already
+    # expressed against the run root and must come out byte-identical.
+    (tmp_path / "lib" / "some-dependency").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (tmp_path / "remappings.txt").write_text(
+        "lib/some-dependency/:@openzeppelin/contracts/=lib/openzeppelin-contracts-v4/contracts/\n"
+    )
+
+    with_root = build_packages_from_remapping_sources(
+        base_dir=tmp_path, log_fn=lambda *_: None, run_root=tmp_path
+    )
+    without_root = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
+
+    assert with_root == without_root
+    assert "lib/some-dependency/:@openzeppelin/contracts/" in _keys(with_root)
+
+
+def test_context_naming_no_directory_is_left_alone(tmp_path: Path, monkeypatch) -> None:
+    # Only a context that names a real directory under the project is project-relative. Anything
+    # else — including a context already written against the run root — is left as authored.
+    project = _nested_project(tmp_path)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text(
+        "chains/somechain/src/Widget_1234/:@oz/=src/Widget_1234/dependencies/oz-5.4.0/contracts/\n"
+    )
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert "chains/somechain/src/Widget_1234/:@oz/" in _keys(packages)
+
+
+def test_context_outside_the_run_root_is_left_alone_with_a_warning(tmp_path: Path, monkeypatch) -> None:
+    # A context resolving outside the run root cannot be named by any source unit name; keep the
+    # authored form and say so rather than emitting a `../`-prefixed context.
+    project = _nested_project(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-vendor"
+    outside.mkdir(exist_ok=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text(f"{outside}/:@oz/=lib/forge-std/src/\n")
+    warnings: list[tuple[str, str]] = []
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project,
+        log_fn=lambda msg, level: warnings.append((msg, level)),
+        run_root=tmp_path,
+    )
+
+    assert f"{outside}/:@oz/" in _keys(packages)
+    assert any(level == "WARNING" and "outside the run root" in msg for msg, level in warnings)
+
+
+def test_parse_config_rebases_contexts_against_the_project_root(tmp_path: Path, monkeypatch) -> None:
+    # End-to-end at the bug site: the manager knows the run root, so parse_config's packages
+    # come out with run-root-relative contexts.
+    project = _nested_project(tmp_path)
+    foundry_toml = project / "foundry.toml"
+    foundry_toml.write_text(
+        '[profile.default]\nsrc = "src"\n'
+        'remappings = ["src/Widget_1234/:@oz/=src/Widget_1234/dependencies/oz-5.4.0/contracts/"]\n'
+    )
+    _no_forge(monkeypatch)
+
+    manager = FoundryManager(project_root=tmp_path, scope=None)
+    config = manager.parse_config(foundry_toml)
+
+    keys = {p.split("=", 1)[0] for p in (config.packages or [])}
+    assert "chains/somechain/src/Widget_1234/:@oz/" in keys
+
+
+def test_context_that_is_the_run_root_is_left_alone_without_a_warning(tmp_path: Path, monkeypatch) -> None:
+    # A context resolving to the run root itself already covers every source unit name, so
+    # nothing is wrong with it — unlike a context resolving outside the run root, it must not
+    # be reported as a problem.
+    project = _nested_project(tmp_path)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("../../:@oz/=lib/forge-std/src/\n")
+    logged: list[tuple[str, str]] = []
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda msg, level: logged.append((msg, level)), run_root=tmp_path
+    )
+
+    assert "../../:@oz/" in _keys(packages)
+    assert not [m for m, level in logged if level == "WARNING" and "run root" in m]
+
+
+# =============================================================================
+# Hoisted node_modules: the ancestor walk
+# =============================================================================
+#
+# npm/yarn hoist a dependency to the highest node_modules that satisfies every consumer, so a
+# sub-project's own node_modules/<pkg> frequently does not exist while the repo root's does.
+# solc has no such resolver, so the packages list must name the directory that exists.
+
+
+def _hoisted_repo(tmp_path: Path) -> Path:
+    """A repo whose Foundry project sits at <repo>/smart-contracts, with @vault/core hoisted to
+    the repo root and @widget/lib installed locally in the sub-project."""
+    project = tmp_path / "smart-contracts"
+    (tmp_path / "node_modules" / "@vault" / "core" / "contracts").mkdir(parents=True)
+    (project / "node_modules" / "@widget" / "lib").mkdir(parents=True)
+    return project
+
+
+def test_hoisted_package_resolves_from_the_ancestor_while_local_stays_local(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = _hoisted_repo(tmp_path)
+    _no_forge(monkeypatch)
+    (project / "package.json").write_text(
+        '{"dependencies": {"@vault/core": "^1.0.0", "@widget/lib": "^1.0.0"}}'
+    )
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "@vault/core/") == str(tmp_path / "node_modules/@vault/core") + "/"
+    assert _path_of(packages, "@widget/lib/") == str(project / "node_modules/@widget/lib") + "/"
+
+
+def test_nearest_node_modules_wins_over_the_ancestor(tmp_path: Path, monkeypatch) -> None:
+    # Node's own resolution order: the closest node_modules answers, even when an ancestor
+    # also provides the package (routinely a different version).
+    project = tmp_path / "smart-contracts"
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (project / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "package.json").write_text('{"dependencies": {"@vault/core": "^1.0.0"}}')
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "@vault/core/") == str(project / "node_modules/@vault/core") + "/"
+
+
+def test_walk_stops_at_the_run_root(tmp_path: Path, monkeypatch) -> None:
+    # certoraRun only uploads the run root's tree, so a package above it is unusable: the walk
+    # must not reach it, and the base-dir target is emitted instead.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    outside = tmp_path.parent / "node_modules" / "@vault" / "core"
+    outside.mkdir(parents=True, exist_ok=True)
+    _no_forge(monkeypatch)
+    (project / "package.json").write_text('{"dependencies": {"@vault/core": "^1.0.0"}}')
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "@vault/core/") == str(project / "node_modules/@vault/core") + "/"
+
+
+def test_no_run_root_performs_no_walk(tmp_path: Path, monkeypatch) -> None:
+    # Every caller that does not know the run root keeps the one-candidate behaviour.
+    project = _hoisted_repo(tmp_path)
+    _no_forge(monkeypatch)
+    (project / "package.json").write_text('{"dependencies": {"@vault/core": "^1.0.0"}}')
+
+    packages = build_packages_from_remapping_sources(base_dir=project, log_fn=lambda *_: None)
+
+    assert _path_of(packages, "@vault/core/") == str(project / "node_modules/@vault/core") + "/"
+
+
+def test_flat_project_packages_are_identical_with_and_without_run_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The overwhelming majority of projects: base_dir == run_root, so the walk has exactly one
+    # candidate and the packages list must come out byte-identical to the no-run-root result.
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    (tmp_path / "lib" / "widget").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (tmp_path / "remappings.txt").write_text(
+        "@vault/core/=node_modules/@vault/core/\n"
+        "widget/=lib/widget/\n"
+        "@absent/pkg/=node_modules/@absent/pkg/\n"
+    )
+
+    with_root = build_packages_from_remapping_sources(
+        base_dir=tmp_path, log_fn=lambda *_: None, run_root=tmp_path
+    )
+    without_root = build_packages_from_remapping_sources(base_dir=tmp_path, log_fn=lambda *_: None)
+
+    assert with_root == without_root
+    assert _path_of(with_root, "@vault/core/") == str(tmp_path / "node_modules/@vault/core") + "/"
+
+
+def test_existing_local_target_is_never_rewritten(tmp_path: Path, monkeypatch) -> None:
+    # The walk can only change an entry whose target does not exist; a local install always wins.
+    project = tmp_path / "smart-contracts"
+    (project / "node_modules" / "@vault" / "core" / "contracts").mkdir(parents=True)
+    (tmp_path / "node_modules" / "@vault" / "core" / "contracts").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/contracts/\n")
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "@vault/") == \
+        str(project / "node_modules/@vault/core/contracts") + "/"
+
+
+def test_hoist_resolution_is_independent_of_the_entry_source(tmp_path: Path, monkeypatch) -> None:
+    # The resolution is a property of the target, not of which file the entry came from.
+    project = _hoisted_repo(tmp_path)
+    expected = str(tmp_path / "node_modules/@vault/core") + "/"
+    _no_forge(monkeypatch)
+
+    (project / "remappings.txt").write_text("@vault/core/=node_modules/@vault/core/\n")
+    from_remappings_txt = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+    (project / "remappings.txt").unlink()
+    (project / "foundry.toml").write_text(
+        '[profile.default]\nremappings = ["@vault/core/=node_modules/@vault/core/"]\n'
+    )
+    from_foundry_toml = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(from_remappings_txt, "@vault/core/") == expected
+    assert _path_of(from_foundry_toml, "@vault/core/") == expected
+
+
+def test_lib_target_is_never_walked(tmp_path: Path, monkeypatch) -> None:
+    # forge and soldeer do not hoist, and a sibling project's lib/<name> is routinely a
+    # different pin — walking those would silently bind the wrong version.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "lib" / "oz").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("@oz/=lib/oz/\n")
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "@oz/") == str(project / "lib/oz") + "/"
+
+
+def test_unscoped_package_name_is_one_segment(tmp_path: Path, monkeypatch) -> None:
+    # A scoped name spans two segments (@scope/name), an unscoped one exactly one — splitting
+    # wrongly would test the existence of the wrong directory.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "plainpkg" / "src").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("plainpkg/=node_modules/plainpkg/src/\n")
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "plainpkg/") == str(tmp_path / "node_modules/plainpkg/src") + "/"
+
+
+def test_subpath_inside_a_hoisted_package_resolves(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "@pkg" / "artifacts" / "src").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "foundry.toml").write_text(
+        '[profile.default]\nremappings = ["@pkg/=node_modules/@pkg/artifacts/src/"]\n'
+    )
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "@pkg/") == str(tmp_path / "node_modules/@pkg/artifacts/src") + "/"
+
+
+def test_ancestor_with_the_subpath_beats_a_nearer_package_without_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Only the full target is usable by solc, so a nearer package that lacks the remapped
+    # subdirectory is skipped in favour of an ancestor that has the whole thing.
+    project = tmp_path / "smart-contracts"
+    # The nearer install really is the package directory (`@pkg/artifacts`, two segments for a
+    # scoped name) — it just lacks the remapped `src/`.
+    (project / "node_modules" / "@pkg" / "artifacts").mkdir(parents=True)
+    (tmp_path / "node_modules" / "@pkg" / "artifacts" / "src").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("@pkg/=node_modules/@pkg/artifacts/src/\n")
+    logged: list[tuple[str, str]] = []
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project,
+        log_fn=lambda msg, level: logged.append((msg, level)),
+        run_root=tmp_path,
+    )
+
+    assert _path_of(packages, "@pkg/") == str(tmp_path / "node_modules/@pkg/artifacts/src") + "/"
+    assert not [m for m, level in logged if level == "WARNING"]
+    assert any(level == "INFO" and "hoisted install" in m for m, level in logged)
+
+
+def test_installed_package_without_the_subpath_is_reported_as_subpath_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # No ancestor has the full target either, so the installed package is the best evidence
+    # there is: the entry keeps naming its subdirectory and the log says the package is there
+    # while the remapped subdirectory is not — a different remedy from "not installed".
+    project = tmp_path / "smart-contracts"
+    (project / "node_modules" / "@oz" / "contracts").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("@oz/=node_modules/@oz/contracts/token/\n")
+    logged: list[tuple[str, str]] = []
+
+    resolution = resolve_node_modules_target(
+        "node_modules/@oz/contracts/token", base_dir=project, run_root=tmp_path
+    )
+    packages = build_packages_from_remapping_sources(
+        base_dir=project,
+        log_fn=lambda msg, level: logged.append((msg, level)),
+        run_root=tmp_path,
+    )
+
+    assert resolution.kind == "subpath_missing"
+    assert resolution.package_dir == str(project / "node_modules/@oz/contracts")
+    assert _path_of(packages, "@oz/") == str(project / "node_modules/@oz/contracts/token") + "/"
+    warnings = [m for m, level in logged if level == "WARNING"]
+    assert any("exists but the remapped subdirectory is missing" in m for m in warnings)
+
+
+def test_ancestor_walk_never_leaves_the_run_root_through_a_symlinked_base_dir(
+    tmp_path: Path,
+) -> None:
+    # A base_dir that reaches the run root through a symlink must not widen the walk: a package
+    # found above the run root is outside the tree certoraRun uploads.
+    run_root = tmp_path / "repo"
+    (run_root / "a" / "b" / "c").mkdir(parents=True)
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    base_dir = run_root / "link"
+    base_dir.symlink_to(run_root / "a" / "b" / "c", target_is_directory=True)
+
+    resolution = resolve_node_modules_target(
+        "node_modules/@vault/core", base_dir=base_dir, run_root=run_root
+    )
+
+    assert resolution.kind == "unresolved"
+    assert all(str(tmp_path / "node_modules") not in candidate for candidate in resolution.searched)
+
+
+def test_ancestor_walk_reaches_the_run_root_through_a_symlinked_base_dir(tmp_path: Path) -> None:
+    # The converse: a base_dir textually deeper than it resolves must still be walked all the
+    # way up to the run root, or a hoisted package there is silently missed.
+    run_root = tmp_path / "repo"
+    (run_root / "x").mkdir(parents=True)
+    (run_root / "p" / "q").mkdir(parents=True)
+    hoisted = run_root / "node_modules" / "@vault" / "core"
+    hoisted.mkdir(parents=True)
+    base_dir = run_root / "p" / "q" / "s"
+    base_dir.symlink_to(run_root / "x", target_is_directory=True)
+
+    resolution = resolve_node_modules_target(
+        "node_modules/@vault/core", base_dir=base_dir, run_root=run_root
+    )
+
+    assert resolution.kind == "hoisted"
+    assert resolution.path == str(hoisted)
+
+
+def test_package_root_of_a_target_takes_the_last_node_modules(tmp_path: Path) -> None:
+    # Scoped names span two segments, unscoped one, and a nested install is governed by the
+    # innermost node_modules — the classifier tests exactly this directory for existence.
+    assert node_modules_package_root("/r/node_modules/@oz/contracts/token") == \
+        "/r/node_modules/@oz/contracts"
+    assert node_modules_package_root("/r/node_modules/solady/src") == "/r/node_modules/solady"
+    assert node_modules_package_root("/r/node_modules/a/node_modules/@b/c/src") == \
+        "/r/node_modules/a/node_modules/@b/c"
+    assert node_modules_package_root("/r/node_modules/@oz/contracts") == \
+        "/r/node_modules/@oz/contracts"
+    assert node_modules_package_root("/r/lib/openzeppelin/contracts") is None
+
+
+def test_package_missing_everywhere_keeps_the_base_dir_target_and_warns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Dropping the entry would turn a precise `Source "…" not found` into a vaguer failure, or
+    # let the bare import resolve against a same-named path in the project tree.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("@vault/=node_modules/@vault/core/\n")
+    logged: list[tuple[str, str]] = []
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project,
+        log_fn=lambda msg, level: logged.append((msg, level)),
+        run_root=tmp_path,
+    )
+
+    assert _path_of(packages, "@vault/") == str(project / "node_modules/@vault/core") + "/"
+    warnings = [m for m, level in logged if level == "WARNING" and "does not exist" in m]
+    assert warnings
+    assert str(tmp_path / "node_modules/@vault/core") in warnings[0]
+
+
+def test_prefixed_node_modules_target_is_left_untouched(tmp_path: Path, monkeypatch) -> None:
+    # An explicit prefix before node_modules names a location the author chose; only a bare
+    # node_modules/... target is the node-resolution idiom hoisting applies to.
+    project = tmp_path / "smart-contracts"
+    project.mkdir()
+    (tmp_path / "node_modules" / "@vault" / "core").mkdir(parents=True)
+    _no_forge(monkeypatch)
+    (project / "remappings.txt").write_text("@vault/=packages/a/node_modules/@vault/core/\n")
+
+    packages = build_packages_from_remapping_sources(
+        base_dir=project, log_fn=lambda *_: None, run_root=tmp_path
+    )
+
+    assert _path_of(packages, "@vault/") == \
+        str(project / "packages/a/node_modules/@vault/core") + "/"
+
+
+def test_parse_config_emits_run_root_relative_hoisted_packages(tmp_path: Path, monkeypatch) -> None:
+    # End-to-end: a hoisted target stays inside the run root, so the conf keeps relative paths
+    # (BuildSystemConfig._relativize_packages does a textual relative_to against the run root).
+    project = _hoisted_repo(tmp_path)
+    foundry_toml = project / "foundry.toml"
+    foundry_toml.write_text(
+        '[profile.default]\nsrc = "src"\nremappings = ["@vault/=node_modules/@vault/core/contracts/"]\n'
+    )
+    _no_forge(monkeypatch)
+    # _relativize_packages relativizes against the process CWD, which in a run IS the run root.
+    monkeypatch.chdir(tmp_path)
+
+    manager = FoundryManager(project_root=project, scope=None, run_root=tmp_path)
+    config = manager.parse_config(foundry_toml)
+    packages = config.to_certora_dict()["packages"]
+
+    # Relative (no `../`, no absolute fallback): the walk never leaves the run root.
+    assert packages == ["@vault/=node_modules/@vault/core/contracts"]

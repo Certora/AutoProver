@@ -17,14 +17,21 @@ from composer.spec.system_model import (
     HarnessedApplication, _context_marker_attr,
     BaseApplication
 )
+
 from composer.spec.solana.model import (
     SolanaApplication, SolanaComponentInstance, SolanaProgramInstance
 )
+
+from composer.spec.soroban.model import (
+    SorobanApplication, SorobanComponentInstance, SorobanContractInstance
+)
+
 from composer.templates.loader import _patch_environment_filters
 from composer.spec.service_host import Sort # defined here? huh?
 import hypothesis.strategies._internal.core as hcore
 
 import os
+
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 
@@ -366,6 +373,28 @@ def solana_component_resolver(t: type) -> st.SearchStrategy[SolanaComponentInsta
         )
     )
 
+def soroban_contract_resolver(t: type) -> st.SearchStrategy[SorobanContractInstance]:
+    return st.from_type(SorobanApplication).filter(
+        lambda a: len(a.contracts) > 0
+    ).flatmap(lambda app: \
+        st.builds(
+            SorobanContractInstance,
+            ind=st.integers(min_value=0, max_value=len(app.contracts) - 1),
+            app=st.just(app)
+        )
+    )
+
+def soroban_component_resolver(t: type) -> st.SearchStrategy[SorobanComponentInstance]:
+    return st.from_type(SorobanContractInstance).filter(
+        lambda c: len(c.contract.components) > 0
+    ).flatmap(lambda contract: \
+        st.builds(
+            SorobanComponentInstance,
+            ind=st.integers(min_value=0, max_value=len(contract.contract.components) - 1),
+            _contract=st.just(contract)
+        )
+    )
+
 def sort_to_application(
     sort: Sort
 ) -> st.SearchStrategy[AnyApplication]:
@@ -383,14 +412,15 @@ st.register_type_strategy(SolanaProgramInstance, solana_program_resolver)
 
 st.register_type_strategy(SolanaComponentInstance, solana_component_resolver)
 
-#: How to draw a marked param dict's ``context``, per concrete unit type the ecosystems declare
-#: (see ``_build_template_context``). EVM's is sort-coherent: its prompts branch on ``sort`` and
-#: read subtype-specific fields off the app, so the unit must come from an app of the matching
-#: family. Solana's templates have no ``sort`` branch (no greenfield/update split), so its unit is
-#: drawn independently — the registered resolver already keeps the indices in bounds.
+st.register_type_strategy(SorobanContractInstance, soroban_contract_resolver)
+
+st.register_type_strategy(SorobanComponentInstance, soroban_component_resolver)
+
+#: How to draw a marked param dict's ``context``, per concrete unit type.
 _COHERENT_UNITS: dict[type, Callable[[Sort], st.SearchStrategy[Any]]] = {
     ContractComponentInstance: lambda sort: contract_to_component(app_to_contract(sort_to_application(sort))),
     SolanaComponentInstance: lambda _sort: st.from_type(SolanaComponentInstance),
+    SorobanComponentInstance: lambda _sort: st.from_type(SorobanComponentInstance),
 }
 
 settings.register_profile("quick", settings(

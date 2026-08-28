@@ -16,6 +16,7 @@ from pydantic import (
 from composer.input.types import (
     ExtendedModelOptions,
 )
+from composer.input.files import Document, resolve_document_paths
 
 from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.spec.context import SourceFields, WorkflowContext, SourceCode
@@ -35,6 +36,7 @@ from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.io.context import DefaultRetryPolicy, install_retry_policy
 from composer.llm.registry import get_provider_for
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
@@ -142,9 +144,20 @@ class PipelineArgs(ExtendedModelOptions, Protocol):
     @property
     def max_concurrent(self) -> int:
         ...
-    
+
+    @property
+    def max_cpu_tasks(self) -> int:
+        ...
+
     @property
     def threat_model(self) -> str | None:
+        ...
+
+    @property
+    def extra_context(self) -> list[str] | None:
+        """Documents of user-supplied background about the application, fed to property
+        inference in the order given. A directory entry is swept for the documents in
+        it."""
         ...
 
     @property
@@ -192,10 +205,10 @@ class StagedPipeline:
     root_key: str
 
 class Continuation[P: enum.Enum, H](Protocol):
-    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+    async def __call__[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
         self,
         env: ServiceHost,
-        backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+        backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
         ecosystem: Ecosystem[App, Main, U]
     ) -> CorePipelineResult[FormT]:
         ...
@@ -234,12 +247,18 @@ async def cli_pipeline[P: enum.Enum, H](
     tiered = get_provider_for(tiered=args)
 
     semaphore = asyncio.Semaphore(args.max_concurrent)
+    cpu_semaphore = asyncio.Semaphore(args.max_cpu_tasks)
 
     model = get_model()
     text_log, events_log = setup_autoprove_logging(project_root, thread_id)
     print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
     print(f"Selected run id: {summary.run_id}")
     install_run_summary(summary)
+    # Run-wide retry floor: transient provider failures (as classified by the
+    # provider itself) resume any graph in the run from its last checkpoint
+    # instead of killing the whole pipeline. Installed once here — contextvar
+    # inheritance carries it into every task the run spawns.
+    install_retry_policy(DefaultRetryPolicy(tiered.provider_service.should_retry))
 
     disc_cache_ns: tuple[str, ...] | None = (
         user_ns(args.cache_ns, "discovery",
@@ -323,6 +342,16 @@ async def cli_pipeline[P: enum.Enum, H](
                 await conns.uploader.get_document(pathlib.Path(threat_path))
                 if (threat_path := args.threat_model) is not None else None
             )
+            # Gathered rather than awaited one at a time: a swept directory of PDFs is
+            # one upload round trip each. ``gather`` preserves order, which the prompt
+            # and the bug-analysis cache key both depend on.
+            context_paths = resolve_document_paths(args.extra_context)
+            loaded = await asyncio.gather(*(conns.uploader.get_document(p) for p in context_paths))
+            extra_context: list[Document] = []
+            for path, doc in zip(context_paths, loaded):
+                if doc is None:
+                    raise ValueError(f"Fatal error, failed to read extra context: {path}")
+                extra_context.append(doc)
             if budget is not None:
                 await data_logger("budget", {
                     "total": budget.total, "caps": dict(budget.caps),
@@ -336,9 +365,9 @@ async def cli_pipeline[P: enum.Enum, H](
                 relative_path=init_source.relative_path
             )
 
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication](
+            async def cont[FormT: BackendResult, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](
                 env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U, Main, App],
+                backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
                 ecosystem: Ecosystem[App, Main, U]
             ) -> CorePipelineResult[FormT]:
                 await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
@@ -347,6 +376,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     memory_ns=memory_ns,
                     plugins=applicable_plugin_manifest(ecosystem.unit_type),
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
+                    extra_context_digests=[d.to_digest() for d in extra_context],
                     interactive=args.interactive,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
@@ -361,7 +391,8 @@ async def cli_pipeline[P: enum.Enum, H](
                     ctx=full_ctx,
                     source=full_source,
                     env=env,
-                    _semaphore=semaphore,
+                    _agent_semaphore=semaphore,
+                    _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler
                 )
                 return await run_pipeline(
@@ -370,6 +401,7 @@ async def cli_pipeline[P: enum.Enum, H](
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
                     threat_model=threat_model,
+                    extra_context=extra_context,
                     budget=budget,
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
