@@ -1084,7 +1084,7 @@ vocabulary:
 | `RULE` | Fix it in the rule — assertions, assumptions, nondet |
 | `MOCK` | Redirect a module to a mock implementation |
 | `GATE` | Feature-gate a swap in the program source |
-| `ENV` | An `cvlr_inlining.txt` / `cvlr_summaries.txt` entry |
+| `ENVFILE` | An entry in a `cvlr_inlining.txt` / `cvlr_summaries.txt` file |
 | `CONF` | A prover option — diagnose and surface, outside the agent's action space |
 | `SCAFFOLD` | Project structure or Cargo wiring |
 
@@ -1092,13 +1092,21 @@ Defining this *from* the capture data rather than guessing is a concrete payoff 
 authoring the KB, and the channel is what tells a stuck agent whether the fix is even in its
 action space.
 
-**Part of this vocabulary is chain-dependent, so validate it per chain before fixing it.** `ENV`
-is derived from Solana's `cvlr_inlining.txt` / `cvlr_summaries.txt` files; the surveyed Soroban
-projects summarize with an attribute macro (`cvlr_soroban_macros::apply_summary`) instead, which is
-a different action in a different place. So `ENV` may not apply to Soroban at all while that chain
-may need a channel the Solana taxonomy has no name for. A recipe whose channel does not exist on
-the reader's chain is worse than no recipe, because the channel is exactly the part the agent acts
-on.
+**Part of this vocabulary is chain-dependent, so validate it per chain before fixing it.**
+`ENVFILE` is derived from Solana's `cvlr_inlining.txt` / `cvlr_summaries.txt` files; the surveyed
+Soroban projects summarize with an attribute macro instead, which is a different action in a
+different place. **Measured, and it holds: all 106 surveyed env files are Solana's and Soroban has
+none**, so `ENVFILE` is declared Solana-only and a recipe claiming otherwise has its chain list
+corrected with the correction printed. A recipe whose channel does not exist on the reader's chain
+is worse than no recipe, because the channel is exactly the part the agent acts on.
+
+**The channel was `ENV` until a run showed the short name losing to the word it looks like.** With
+the definition spelled out in the prompt, the pass still filed *"certoraSolanaProver: command not
+found"* under `ENV` — in a body whose own first line said *"this is an environment/tooling issue,
+not a rule or conf problem"*. It understood the content and mislabelled the dispatch. Renaming to
+`ENVFILE` stopped it. Worth recording because the failure is not about this vocabulary: any channel
+name that reads as a common word will be pulled toward the common meaning, however carefully it is
+defined elsewhere.
 
 **Deprecation mappings belong here, and they are not waste.** A legacy idiom that lost the
 currency test still has a job: the agent *will* meet it in existing client projects it is asked to
@@ -1108,6 +1116,39 @@ material is authoritative, precisely because it is framed as something to recogn
 something to write.
 
 Answers *"I am seeing X — what do I do?"* and *"this project does X — is that still how we do it?"*
+
+#### 7.2.1 What generates them, and what cannot yet
+
+`tools/recipes.py`, one generator per source, mirroring the ledger's structure. **Twelve recipes for
+$0.15.**
+
+| Source | Yield | Why it is available now |
+|---|---|---|
+| `renames` | 4 | §4.5 already resolved them: a legacy spelling whose replacement exists in the pinned crates *and* is attested in normative projects. No judgement. |
+| `compile_fixes` | 1 | The §4.6 pass's own compile-retry loop, below |
+| `docs` | 7 | The published manual's troubleshooting material, public and so quotable (§3.0.1) |
+| `answers` | **0** | Needs Phase B |
+
+**The compile-fix source is the interesting one, because it was being thrown away.** §9's gate runs
+inside the abstraction pass, so the pass produces (compiler error, working example) pairs as a
+byproduct of fixing its own homework — and those are the only content in this corpus whose action is
+attested by `cargo` rather than proposed. They group by error signature rather than by example,
+which is what turns several occurrences of *"the trait bound `T: Nondet` is not satisfied"* into one
+recipe instead of several.
+
+**The discriminator is the trigger, and stating it was not enough to follow it.** A recipe's trigger
+must be something the agent literally sees; a trigger phrasable only as a situation belongs in an
+entry. The first docs run ignored that and offered *Overview*, *Verification Tasks* and *Advanced
+Topics* as recipes — reference prose already in the corpus, which dilutes the index an agent scans
+precisely when it is stuck. A manual section now earns a recipe only if its heading names a symptom,
+and the rejections are printed so the filter stays inspectable.
+
+**The large symptom pool is deliberately not a source.** The 47 unexplained FAILs, 14 divergent
+settings and 7 lone conf flags are the richest observable symptoms in the corpus and **none of them
+can become an action** until an expert says which of "known bug", "tool limitation" and "genuinely
+false" applies. `from_answers()` exists, returns nothing, and says why on every run: guessing an
+action for a symptom is how a corpus starts lying, and unlike a wrong entry nothing downstream
+catches it.
 
 ### 7.3 `backend_guidance` and prompt fragments
 
