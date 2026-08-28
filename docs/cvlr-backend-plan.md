@@ -53,7 +53,7 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | Per-component `units()` split | **Built** | both models |
 | Null Solana backend (front-half test double) | **Built** | [solana/null_backend.py](../composer/spec/solana/null_backend.py) |
 | Sandbox: Landlock+seccomp launcher, `rust_build_policy`, private per-run `CARGO_HOME`, offline | **Built, never driven from a Python backend** | [composer/sandbox/](../composer/sandbox/), [rust/run-confined/](../rust/run-confined/) |
-| `project_toolchain` seam (the analyzed project's build system, keyed by `ChainTag`) | **Declared; "no chain has an entry yet"** | [rustapp/toolchain.py](../composer/rustapp/toolchain.py) |
+| `project_toolchain` seam (the analyzed project's build system, keyed by `ChainTag`) | **Solana registered** (§7.2); Soroban still has no entry | [rustapp/toolchain.py](../composer/rustapp/toolchain.py), [cargo/toolchain.py](../composer/cargo/toolchain.py) |
 | Munge subsystem: editor agent, versioned edit store, VFS diff, compile-check gate, staleness oracle | **Built for EVM**; spine reusable | [source/munge/](../composer/spec/source/munge/) |
 | Prover result parsing (treeView JSON → `RuleResult`), cloud polling, callbacks | **Built, chain-neutral** | [prover/results.py](../composer/prover/results.py), [prover/cloud.py](../composer/prover/cloud.py) |
 | `certoraSolanaProver` / `certoraSorobanProver` CLIs | **Already installed in the venv** | `certora_cli` |
@@ -192,6 +192,25 @@ Two things must be validated in Phase 1 rather than assumed: (a) that a host-tar
 check` is a faithful proxy for the SBF build under the `certora` feature (`no-entrypoint`
 changes what compiles), and (b) the actual latency of both tiers on a real project.
 
+**First measurements (public examples repo, one two-crate program, warm workdir, confined):**
+
+| | cold graph | after one edit | no-op |
+|---|---|---|---|
+| Fast (`cargo check --features certora`, host) | 2.6 s | — | 0.05 s |
+| Slow (`cargo certora-sbf --json`) | 3.6 s (15.7 s including platform-tools resolution) | — | 0.23 s |
+
+Both tiers compile this fixture, so (a) has no counterexample yet — but the fixture's `certora`
+feature is empty, where a real project's is `["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]`, and
+that is exactly the case the question is about. Treat the answer as open until a project with a real
+entrypoint has been through both. The numbers are a floor, not a forecast: two crates is not ten
+thousand, and the middle column — the one the authoring loop actually pays — needs a project big
+enough for an incremental rebuild to mean something.
+
+One measured cost worth designing around: **mixing a confined and an unconfined build in one workdir
+busts the incremental cache**. The private `CARGO_HOME` puts crate sources at different paths, so
+fingerprints do not match and the next build is a full one. A session should not switch posture
+mid-run, and the dev opt-out is therefore a per-run decision rather than a per-command one.
+
 **Cargo-cache interaction, which is now on the critical path.** The sandbox recipe gives each
 run a *private* `CARGO_HOME` under the workdir ([sandbox/recipes.py](../composer/sandbox/recipes.py),
 `sandbox_cargo_home`) — deliberately, so an untrusted `build.rs` cannot poison a later run. The
@@ -309,6 +328,18 @@ be treated as a first-class knowledge channel rather than a fallback:
    *different* version's source than the build compiles is worse than reading no source, because
    it is confidently wrong.
 
+   **Built** ([spec/cvlr/crates.py](../composer/spec/cvlr/crates.py)): the CVLR *family* is resolved
+   from `cargo metadata` — not just `cvlr`, since a question about what `cvlr_assert!` expands to is
+   answered in `cvlr-asserts` and an agent handed only the facade finds a re-export and stops — and
+   each crate arrives paired with the source tree it resolved to, so there is no path that yields a
+   version without the code. It also reports where the project and the *corpus* disagree: the
+   knowledge base is compile-gated against a recorded reference set
+   ([cvlr_reference.py](../composer/spec/cvlr_reference.py)), and a target on another line may not
+   have the symbols recalled advice names. Run against the public examples this prints three gaps
+   immediately — `cvlr` 0.4.1 against the corpus's 0.6.1, `cvlr-solana` 0.4.4 against 0.5.0, and
+   `cvlr-solana-stake` absent entirely — which is the risk table's "reading the wrong CVLR" row
+   becoming a fact the run states rather than a hazard it walks into.
+
 4. **This is separate from the sandbox.** The confined build already gets read-only grants for
    the crate sources it needs (`shared_cargo_ro_paths` in
    [sandbox/recipes.py](../composer/sandbox/recipes.py)). Agent file reads are Python-side and
@@ -413,6 +444,56 @@ system produces verdicts, with measured latency for both compile tiers.
 This is the riskiest infrastructure in the project (first Python-side use of the sandbox) and
 it is fully testable without an LLM. It goes first.
 
+#### 7.2.1 What is built
+
+Two packages, split on the line §4.3 draws — Cargo is *chain* knowledge shared across products, and
+only what speaks to the Prover is CVLR's:
+
+| Module | Role |
+|---|---|
+| [cargo/metadata.py](../composer/cargo/metadata.py) | `cargo metadata`, typed: the crate owning a file, and the version every dependency resolves to |
+| [cargo/session.py](../composer/cargo/session.py) | The warm workdir + the fast tier. Confined `cargo check`, unconfined `cargo fetch` |
+| [cargo/sbf.py](../composer/cargo/sbf.py) | The slow tier (`cargo certora-sbf`), its build manifest, and the build script handed to the prover |
+| [cargo/toolchain.py](../composer/cargo/toolchain.py) | `PROJECT_TOOLCHAINS["solana"]` — the registry's first entry |
+| [spec/cvlr/conf.py](../composer/spec/cvlr/conf.py) | Reading a project's conf (JSON5) and layering a run onto it |
+| [spec/cvlr/crates.py](../composer/spec/cvlr/crates.py) | §5.5: which CVLR the build resolves, and where it disagrees with the corpus's reference set |
+| [spec/cvlr/prover.py](../composer/spec/cvlr/prover.py) | Build → configure → submit, on the shared `run_prover` |
+
+Three changes to shared code rather than copies of it. `ProverOptions` gained an `app` field and the
+subprocess wrapper an app argument, so all three Prover CLIs reach the same submission path —
+`run_solana_prover` and `run_certora` have the same signature, which is the whole reason cloud
+polling and the treeView parse carry over untouched. `UnanalyzedCexHandler` is a no-LLM
+`CexHandler`, because `run_prover`'s handler hook was the one place an agent was unavoidable and a
+deterministic caller has nothing for it to do.
+
+Tests: [test_cvlr_plumbing.py](../tests/test_cvlr_plumbing.py) (routine gate — no toolchain, no
+network, no LLM) and [test_cvlr_end_to_end.py](../tests/test_cvlr_end_to_end.py) (`expensive`).
+
+#### 7.2.2 The build is ours, and the prover reruns it
+
+The one design decision here that is not mechanical. `certoraSolanaProver` offers two ways in, and
+they are not symmetric:
+
+- **`files: ["…so"]`** — hand it a finished artifact. It then copies the `.so` and *nothing else*:
+  `set_rust_build_directory` only collects Rust sources on the other path, so `.certora_sources`
+  would carry no source for the report or the counterexample analyzer to read (§5.3).
+- **`build_script`** — it runs a script and reads a build manifest from its stdout. Sources are
+  collected. But the CLI's *own* from-sources path shells out to `cargo certora-sbf` inside its
+  process, unconfined, which §3 item 2 does not permit.
+
+So: **the backend builds, confined, as its pre-submission gate, and hands the prover a generated
+build script that reruns the same command under the same confinement.** The second run is a warm
+cargo no-op (0.23 s measured) and it is what keeps the manifest describing a build that exists on
+disk right now, rather than a recording that goes stale when anything moves. The confinement reaches
+the script as an opaque `argv_prefix` from `SandboxConfig.backend_spec` — the same mechanism a Rust
+wheel is handed — so the script names no sandbox.
+
+Two smaller things fall out. `cargo certora-sbf` registers a rustup toolchain link around every
+build, which writes to a read-only `RUSTUP_HOME`, so `--no-rustup` is not optional. And a confined
+build cannot download missing platform tools, so an absent `cargo_tools_version` is raised as its
+own error naming the version and the one-line install — the failure otherwise surfaces inside the
+toolchain naming neither.
+
 ### 7.3 Phase 2 — Knowledge (parallel with 1b)
 
 The `cvlr` RAG corpus (docs import + generated crate reference), its three-part registration,
@@ -489,6 +570,7 @@ whether any of these pieces deserve to be bundled after all.**
 | Builds | Local to AutoProver, always sandboxed |
 | macOS | Unconfined local builds allowed for dev via an explicit opt-out; never in production or CI |
 | Compile gate | Two tiers (fast `cargo check` per edit, full build per submission) |
+| Conf style | From-sources, through a `build_script` the backend generates — it builds inside the sandbox and the prover reruns that same command (§7.2.2) |
 | Setup | Templated preflight; no AutoSetup |
 | RAG | A single `cvlr_kb` corpus with chain-tagged sections, fed by two manifests: a public docs+crate-reference one built in this repo, and a project-derived one from a separate private repo ([capture plan](./cvlr-capture-plan.md) §8) |
 | CVLR source | Mounted read-only as its own tool set (not a project-VFS layer), version resolved by the host from `cargo metadata`, available to the code explorer and the author, and named as authoritative in the prompt |
@@ -497,11 +579,18 @@ whether any of these pieces deserve to be bundled after all.**
 ### Open — to close during Phase 1
 
 1. **Is a host-target `cargo check --features certora` a faithful proxy for the SBF build?**
-   Measure; if not, the fast tier becomes a cheaper SBF-target check.
-2. **Conf style: `[package.metadata.certora]` from-sources, or explicit pre-built `.so`?**
-   The docs recommend from-sources; Phase 1a's real conf files decide it.
+   Measure; if not, the fast tier becomes a cheaper SBF-target check. *Partially answered* (§5.1):
+   both tiers accept the public examples, but that fixture's `certora` feature is empty, so the
+   `no-entrypoint` case the question is actually about is still untested.
+2. ~~**Conf style: `[package.metadata.certora]` from-sources, or explicit pre-built `.so`?**~~
+   **Settled: from-sources, through a build script the backend owns** (§7.2.2). The capture survey
+   found `build_script` in 15 of 16 projects and `[package.metadata.certora]` with exactly three
+   keys, and the implementation found the harder half of the reason: the `files` path collects no
+   Rust sources into `.certora_sources`, and the CLI's own from-sources path builds unconfined.
 3. **Warm-workdir lifetime** — per authoring session (planned) vs. per unit vs. per run, and
-   whether the shared read-only cargo cache optimization is needed on day one.
+   whether the shared read-only cargo cache optimization is needed on day one. One constraint
+   discovered while measuring: a workdir may not switch confinement posture mid-run without losing
+   its incremental cache (§5.1).
 4. **Where the munge give-up boundary sits**, in edits or in wall-clock.
 5. **Rule granularity per property** — one `#[rule]` per property, or parametric rules /
    `cvlr_rules!` batching, which changes both prover cost and CEX attribution.
