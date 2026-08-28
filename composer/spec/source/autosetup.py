@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Callable
 from pydantic import BaseModel, Field
 from pathlib import Path
-from typing import TypedDict, Literal, Annotated
+from typing import TypedDict, Literal, Annotated, NotRequired
 from pydantic import Discriminator
 import asyncio
 from composer.prover.core import ProverOptions
@@ -280,7 +280,36 @@ def read_autosetup_prover_usage(project_root: Path) -> int | None:
         return None
 
 
-def read_summarization_candidates(project_root: Path) -> list[dict]:
+class HostileBoundary(TypedDict):
+    """A caller/primitive the summarization detector offers as an alternative place to summarize a
+    candidate. Mirrors ``summarization_detector.detect.Boundary`` (all fields always present)."""
+    function: str
+    hops: int
+    signature: str
+    mutating: bool
+    direction: str
+    shared: int
+
+
+class HostileCandidate(TypedDict):
+    """One prover-hostile summarization target from the detector, as serialized into
+    ``summarization_candidates.json``. ``function``/``signals``/``score``/``evidence`` are always present;
+    the rest are omitted when at their default (see ``DetectionReport.to_dict``)."""
+    function: str
+    signals: list[str]
+    score: float
+    evidence: str
+    file: NotRequired[str]
+    line: NotRequired[int | None]
+    signature: NotRequired[str]
+    mutating: NotRequired[bool | None]
+    reaching_count: NotRequired[int]
+    summarizable: NotRequired[bool]
+    candidate_summary: NotRequired[str]
+    boundaries: NotRequired[list[HostileBoundary]]
+
+
+def read_summarization_candidates(project_root: Path) -> list[HostileCandidate]:
     """The summarization detector's ranked candidates from the AutoSetup run — the prover-hostile
     functions worth summarizing (function, category, reaching methods, why, and, for a curated match, a
     suggested summary), rendered into the CVL-generation and invariants agent prompts.
