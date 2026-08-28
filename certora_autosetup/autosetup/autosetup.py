@@ -106,13 +106,11 @@ class Autosetup:
         "callTraceHardFail": "on",
     }
 
-    # The Collect Difficulties run only needs the built + optimized TAC and the postOptimize
-    # SurvivingCallGraph the detector reads. `skipFormulaChecking` drops the SMT solve entirely
-    # (so the run finishes fast and never times out on the solver); the test-mode result validators
-    # (`testMode`/`checkRuleDigest`) are omitted because there are no solver results to validate.
     DIFFICULTY_RUN_PROVER_ARGS = {
         "skipFormulaChecking": "",
-        "callTraceHardFail": "on",
+        "callTraceHardFail": "off",
+        # Emit the postOptimize SurvivingCallGraph the summarization detector reads (off by default).
+        "dumpSurvivingCallGraph": "true",
     }
 
     def __init__(
@@ -879,12 +877,6 @@ class Autosetup:
                 # rules to exercise.
                 internal_confs_dir = autosetup.config.project_root / DIR_INTERNAL_CONFS
 
-                # Collect Difficulties run — feeds the summarization detector. It skips the SMT solve
-                # (DIFFICULTY_RUN_PROVER_ARGS) so it finishes on the build/optimize pipeline alone, and it
-                # drops `-destructiveOptimizations twostage` (which the base config sets for every other
-                # run): twostage splits a heavy rule into a shallow `firstrun` stage and strips TAC source
-                # locations, whereas the detector needs the fully-inlined postOptimize SurvivingCallGraph
-                # with locations intact. Runs regardless of --skip-test-run.
                 difficulty_config = autosetup.config_manager.create_copy_with_prover_args(
                     enhanced_config.path,
                     autosetup.DIFFICULTY_RUN_PROVER_ARGS,
@@ -904,8 +896,6 @@ class Autosetup:
                     extra_args=[*autosetup.config.extra_args, "--rule_sanity", "none"],
                 ))
 
-                # Sanity Test Run — produces the setup-completeness / comprehensive reports for direct CLI
-                # use. Skipped via --skip-test-run (the detector reads the Collect Difficulties run above).
                 if not autosetup.config.skip_test_run:
                     test_config = autosetup.config_manager.create_copy_with_prover_args(
                         enhanced_config.path,

@@ -32,9 +32,6 @@ class AutosetupConfig:
 
     # Feature flags
     skip_sanity_setup: bool = False
-    # When True, skip the AIComposer-backed sanity coverage analysis (the per-method
-    # coverage rerun jobs + sanity_analyzer vacuity analysis). Loop-iter and hashing-bound
-    # detection still run. Set by PreAudit, which does not consume the advanced analysis.
     skip_sanity_coverage_analysis: bool = False
     skip_hashing_bound_detection: int | None = None
     min_loop_iter: int = 3
@@ -42,8 +39,6 @@ class AutosetupConfig:
     skip_call_resolution: bool = False
     skip_proxy_detection: bool = False
     skip_harnessing: bool = False
-    # When True, don't run the sanity Test Run (its setup-completeness / comprehensive
-    # reports are for direct CLI use).
     skip_test_run: bool = False
     no_strip_contracts: bool = False
     keep_intermediate_typechecker_files: bool = False
