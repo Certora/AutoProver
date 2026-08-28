@@ -32,18 +32,32 @@ class CodeExplorerPromptParams(TypedDict):
     ``prior_findings`` selects which index protocol is appended: none (a
     fresh explorer), established facts from the frozen index, or the
     versioned/possibly-stale protocol used by the live editor.
+
+    ``crate_source`` names a second, read-only source tree the explorer can
+    read besides the project — today the CVLR crates the target's build
+    resolves (``docs/cvlr-backend-plan.md`` §5.5). It travels with the tools
+    that serve it and is ``None`` whenever they are unbound: a prompt that
+    advertises a source of truth the agent cannot reach is worse than one
+    that says nothing, because the agent will fabricate the reads. Required
+    rather than :data:`~typing.NotRequired` for that reason — ``None`` already
+    spells "no mount", and a second spelling for the same state is one a
+    caller can reach by forgetting rather than by deciding.
     """
 
     prior_findings: PriorFindingsMode
+    crate_source: str | None
 
 
 def code_explorer_sys_prompt(
     template: TypedTemplate[CodeExplorerPromptParams],
     prior_findings: PriorFindingsMode,
+    crate_source: str | None = None,
 ) -> Callable[[TemplateLoader], str]:
     """The bound prompt as a deferred render, for `with_sys_prompt` to resolve
     against the builder's own loader."""
-    return template.bind({"prior_findings": prior_findings}).render_to
+    return template.bind(
+        {"prior_findings": prior_findings, "crate_source": crate_source}
+    ).render_to
 
 class _ExplorerST(MessagesState):
     result: NotRequired[str]
@@ -101,6 +115,7 @@ def code_explorer_tool(
     env: CodeExplorerEnv,
     recursion_limit: int,
     explorer_prompt: TypedTemplate[CodeExplorerPromptParams],
+    crate_source: str | None = None,
 ) -> BaseTool:
     """Create a code exploration sub-agent tool from a pre-configured builder.
 
@@ -108,12 +123,14 @@ def code_explorer_tool(
         env: Code explorer env with builder and tools bound.
         recursion_limit: LangGraph recursion limit for each sub-agent run.
         explorer_prompt: Ecosystem-specific explorer system prompt.
+        crate_source: What ``env``'s extra read-only source mount holds, or ``None``.
+            Must be non-``None`` exactly when the tools serving it are in the env.
 
     Returns:
         A BaseTool named ``explore_code``.
     """
     graph = _code_explorer_graph(
-        env, sys_prompt=code_explorer_sys_prompt(explorer_prompt, "none")
+        env, sys_prompt=code_explorer_sys_prompt(explorer_prompt, "none", crate_source)
     )
 
     @tool_display_of(CommonTools.code_explorer)
@@ -147,9 +164,10 @@ def indexed_code_explorer_tool(
     env: ExtCodeExplorerEnv,
     recursion_limit: int,
     explorer_prompt: TypedTemplate[CodeExplorerPromptParams],
+    crate_source: str | None = None,
 ) -> BaseTool:
     builder_graph = _code_explorer_graph(
-        env, sys_prompt=code_explorer_sys_prompt(explorer_prompt, "established")
+        env, sys_prompt=code_explorer_sys_prompt(explorer_prompt, "established", crate_source)
     )
 
     @tool_display_of(CommonTools.code_explorer)
