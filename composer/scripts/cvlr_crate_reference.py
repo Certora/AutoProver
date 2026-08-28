@@ -556,10 +556,12 @@ def plan_modules(crates: MountedCrates, *, core: str = "cvlr") -> list[Module]:
 #: reader who sees no example should know the difference between "this needs none" and "no
 #: self-contained one could be produced", because only the second is a reason to go read the source.
 NO_EXAMPLE = (
-    "**No verified example.** Every example drafted for this entry failed to compile on its own, "
-    "which for the parametric-rule machinery usually means it needs a harness larger than a snippet. "
-    "The description above is derived from the crate source; the usage is not demonstrated here — "
-    "read the crate's own tests through the `cvlr_source_*` tools before writing against it."
+    "**No verified example.** Every example drafted for this entry failed to compile on its own. "
+    "That is usually a sign the item needs more context than a self-contained snippet can carry — a "
+    "spec and its base functions, or a caller-supplied type — rather than a sign it does not work. "
+    "The description above is derived from the crate source and holds; the usage is simply not "
+    "demonstrated here, so read the crate's own tests and its `tests/expand` snapshots through the "
+    "`cvlr_source_*` tools before writing against it."
 )
 
 
