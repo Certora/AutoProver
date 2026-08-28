@@ -157,10 +157,21 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # PROVENANCE names the docs revision, and is read into the cvlr_kb manifest's source field.
 COPY --from=docs-builder /out/cvl.html /out/solana.html /out/PROVENANCE $AUTOPROVE_HOME/prover-docs/
 
-# The public half of the cvlr_kb corpus, baked at build time: the producer needs only bs4, and
-# doing it here rather than in setup-db means the manifest is part of the image (and its provenance
-# is fixed at build). The private, project-derived half is not in this image — it ships in the
-# separate certora-cvlr-kb package; an install with only this half is a supported state.
+# The documentation half of the cvlr_kb corpus, baked at build time: the producer needs only bs4,
+# and doing it here rather than in setup-db means the manifest is part of the image (and its
+# provenance is fixed at build).
+#
+# Two other manifests share the `cvlr_kb` tag and neither can be built here:
+#
+#   cvlr-crates.rag.json  the generated CVLR crate reference. Its producer calls a model and runs
+#                         cargo, so it needs an API key and a Rust toolchain — build it on a
+#                         developer machine (`python -m composer.scripts.cvlr_crate_reference`) and
+#                         mount the result at $AUTOPROVE_HOME/cvlr-crates/, which the entrypoint
+#                         already discovers.
+#   cvlr-practice.rag.json  the private, project-derived half; it ships in the separate
+#                         certora-cvlr-kb package.
+#
+# An install with only the documentation half is a supported state.
 RUN python -m composer.scripts.cvlr_docs_manifest \
         $AUTOPROVE_HOME/prover-docs/solana.html \
         -o $AUTOPROVE_HOME/cvlr-docs/cvlr-docs.rag.json

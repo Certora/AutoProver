@@ -530,7 +530,7 @@ that most directly attacks the hallucination risk.
 | First KB articles from real projects | **Done, shipping from the private repo** — 83 entries + 15 recipes under the second manifest sharing the `cvlr_kb` tag ([capture plan](./cvlr-capture-plan.md) §8.2) |
 | CVLR-source tool set (§5.5) | **Done** — [source_tools.py](../composer/spec/cvlr/source_tools.py), reaching the explorer through `build_source_tools(library_source=…)` |
 | `backend_guidance` | **Done** — [guidance.py](../composer/spec/cvlr/guidance.py) |
-| Generated crate reference | **Not started** |
+| Generated crate reference | **Built** — [cvlr_crate_reference.py](../composer/scripts/cvlr_crate_reference.py), gated by [inventory.py](../composer/spec/cvlr/inventory.py) + [probe.py](../composer/spec/cvlr/probe.py) |
 
 Two things about the source mount are worth stating, because they are what make it more than a
 convenience.
@@ -551,6 +551,45 @@ reachable, and a statement with no tools invites it to fabricate the reads. The 
 `crate_source` a **required** prompt parameter rather than an optional one — `None` already spells
 "no mount", and a second spelling for that state is one a caller reaches by forgetting rather than
 by deciding. (The template fuzzer caught exactly that, which is what the fuzzer is for.)
+
+#### 7.3.2 The crate reference, and what its gates caught
+
+The published manual covers CVLR's *methodology* well and its *surface* thinly — the capture survey
+measured `cvlr-solana` at 4 of 28 functions and 0 of 7 macros named. That gap is where an authoring
+agent invents a helper, and it is closed from the one source that cannot be stale: the crates
+themselves, at the pinned versions.
+
+**310 public items across 14 crates**, and three shapes a line scan gets wrong, each hiding names
+that are reached for constantly:
+
+| Shape | Example | Why a scan misses it |
+|---|---|---|
+| A macro that generates macros | `impl_bin_assert!(cvlr_assert_le, <=, $)` | The exported name exists only as an *argument*. Four of these emit 24 names in `cvlr-asserts` alone |
+| A renamed re-export | `pub use super::log::cvlr_log as clog` | The name every project writes is an alias; the definition carries a different one |
+| Test code | `#[cfg(test)] mod tests { pub fn … }` | Indistinguishable from API on any single line |
+
+**Two gates, both properties.** Every example compiles against the reference set, and every
+inventoried item must be *named* by some entry. The second is what makes "grouped" coverage honest:
+one entry may legitimately cover twenty mechanical variants, and the gate demands it name the
+twenty rather than quietly documenting three. The compile gate sits *inside* the retry loop, which
+is the capture pass's lesson — that placement took its examples from 4 of 48 compiling to 35 of 35.
+
+**What the gates actually caught** is the part worth recording, because both were about to ship
+advice that no target project could follow:
+
+- Examples wrote `use cvlr_early_panic::early_panic;` — the defining sub-crate. A project depends on
+  the *facade*, so that import resolves nowhere. The system prompt now names the importable crates,
+  derived from the reference set so the list and the probe's dependencies cannot disagree.
+- Examples called `nondet_option(…)` after `use cvlr::prelude::*;`. It is not in the prelude. A
+  module documented in isolation cannot know its own public spelling — `nondet_option` is defined in
+  `cvlr-nondet` and reached as `cvlr::nondet::nondet_option`, and `pub mod havoc` sits behind
+  `#[cfg(feature = "std")]`. Both the facade's `lib.rs` and the defining crate's now ride along in
+  every prompt, which took `havoc.rs` from failing every attempt to passing on the second.
+
+**Macro expansions are quoted, not described.** The crates ship 58 `macrotest` snapshot pairs — an
+invocation beside its expansion. "What exactly does this macro expand to" is the question §5.4 says
+a corpus is the wrong tool for, and here the crate answers it exactly, in the version we pin. Asking
+an agent to describe those would be inference over something sitting on disk.
 
 `backend_guidance` is deliberately not modelled on the EVM text, and the difference is not
 stylistic. Two of `CERTORA_BACKEND_GUIDANCE`'s exclusions **invert** here. Checked arithmetic makes
