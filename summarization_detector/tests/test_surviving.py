@@ -72,11 +72,24 @@ def test_detect_from_fuses_surviving_into_enriched_candidate():
                                                          "WadRayMath.rayMul(uint256,uint256)"])])
     rep = detect_from([], DifficultyReport(), cut="Vault", surviving=surv)
     fls = next(c for c in rep.candidates if c.function == "BitLib.fls")
-    assert "surviving" in fls.signals and fls.category == "bitwise-scan"
-    assert fls.reaching_methods == ["borrow(uint256)"] and fls.candidate_summary == ""
+    assert "bitwise-scan" in fls.signals          # the hard-op class IS the signal (no separate category)
+    assert fls.reaching_count == 1 and fls.candidate_summary == ""
     ray = next(c for c in rep.candidates if c.function == "WadRayMath.rayMul")
-    assert ray.category == "nonlinear-mulDiv" and ray.candidate_summary != ""
+    assert "nonlinear-mulDiv" in ray.signals and ray.candidate_summary != ""
 
 
 def test_entry_of_rule():
     assert _entry_of_rule("sanity-setFlag(uint256,bool,address)-Satisfy_x") == "setFlag(uint256,bool,address)"
+    # the per-method Assertions graph must strip to the same bare method (not leak the raw rule name)
+    assert _entry_of_rule("sanity-setFlag(uint256,bool,address)-Assertions") == "setFlag(uint256,bool,address)"
+
+
+def test_surviving_dedups_satisfy_and_assertions_graphs():
+    from summarization_detector.detect import surviving_hostile
+    def g(rule):
+        return {"rule": rule, "phase": "postOptimize", "procedures": [],
+                "internalFunctions": [{"name": "BitLib.fls(uint256)", "summarizable": True}]}
+    # a method's Satisfy + Assertions graphs both keep the primitive -> counted ONCE
+    out = surviving_hostile([g("sanity-borrow(uint256)-Satisfy_sanity_check_failed_x"),
+                             g("sanity-borrow(uint256)-Assertions")])
+    assert out["BitLib.fls(uint256)"]["reaching_methods"] == ["borrow(uint256)"]

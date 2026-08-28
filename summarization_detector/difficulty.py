@@ -121,11 +121,12 @@ def _live_stats_indices(api, job_url: str) -> list[int]:
     return list(range(_PROBE_MAX))
 
 
-def fetch_difficulty(job_url: str) -> DifficultyReport:
+def fetch_difficulty(job_url: str, limit: int | None = _MAX_HOTSPOTS) -> DifficultyReport:
     """Best-effort difficulty report for a TIMED-OUT job: the prover's ranked nonlinearity hotspots
     (function, % of nonlinear ops, source file:line). Returns an empty report on any error. Uses ONLY
     the treeView `rule_live_statistics_*.json` files (fetched per-file via POU's public API) — never
-    statsdata.json or the output tarball."""
+    statsdata.json or the output tarball. `limit` caps the returned hotspots (default `_MAX_HOTSPOTS`, a
+    compact refine pointer); pass ``None`` for the full ranked set (the detector filters it itself)."""
     report = DifficultyReport()
     if not job_url:
         return report
@@ -141,5 +142,6 @@ def fetch_difficulty(job_url: str) -> DifficultyReport:
             _parse_hotspots(api.fetch_treeview_output_by_filename(job_url, f"rule_live_statistics_{n}.json"), hs)
         except Exception:
             continue      # index not present (expected when probing) / transient fetch error
-    report.hotspots = sorted(hs.values(), key=lambda h: h.pct, reverse=True)[:_MAX_HOTSPOTS]
+    ranked = sorted(hs.values(), key=lambda h: h.pct, reverse=True)
+    report.hotspots = ranked if limit is None else ranked[:limit]
     return report

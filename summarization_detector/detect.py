@@ -78,22 +78,33 @@ class HashSignal:
                                   # only fixed-size fields (the typical EIP-712 digest) is bounded/cheap.
 
 
+# Output caps — keep the report (and the prompt it renders into) bounded. The score is only comparable
+# WITHIN a signal category (nonlinear = % of the rule's nonlinear ops; surviving = flat; hashing = fixed),
+# so each category is capped on its own rather than by a single cross-category top-N (which would let the
+# nonlinear %s crowd out the surviving/hashing targets).
+MAX_PER_CATEGORY = {"primitive": 10, "nonlinear": 10, "hashing": 10}
+NONLINEAR_MIN_PCT = 15       # drop difficulty hotspots below this % of the rule's nonlinear ops (long tail)
+
+# Flat score for a surviving hostile primitive (signal 4). It does NOT scale with how many entry methods
+# reach it: reach is breadth, not summarization priority, so a primitive reached by 2 methods ranks with one
+# reached by 20. The reach count rides along as context only (`reaching_count`).
+SURVIVING_SCORE = 50.0
+
+
 @dataclass
 class Boundary:
-    """A caller of a detected leaf, offered as an alternative place to summarize. The leaf is where the
-    COST is; a caller is often where the CLEAN semantic boundary is (a summary there subsumes the leaf).
-    Feasibility is described by three orthogonal facts: `has_return` (a void function has no value to
-    model — nothing to summarize at); `expressible` (has a return AND all param/return types are CVL-clean
-    — no opaque dynamic bytes/string, mapping, or function type); `mutating` (writes state, NOT view/pure —
-    summarizing it as a value would erase side effects the properties may observe). `hops` = call-graph
-    distance from the candidate. `direction` = "up" (a CALLER to summarize at — the hashing-leaf case) or
-    "down" (a shared nonlinear PRIMITIVE the candidate inlines — the real arg-based target). `shared` = for
-    a "down" target, how many sibling candidates also inline it (fan-in). Best: expressible, non-mutating."""
+    """A caller (or, for a "down" target, a shared inlined primitive) offered as an alternative place to
+    summarize the leaf. Only EXPRESSIBLE, INTERNAL boundaries are kept — has a return AND all param/return
+    types are CVL-clean (no void, opaque dynamic bytes/string, mapping, or function type), and not a
+    public/external entry point (the rule's subject, never a summarization site) — so the signature alone
+    conveys feasibility. `mutating` (writes state, NOT view/pure — summarizing it as a value would erase
+    side effects the properties may observe) is the one remaining caveat. `hops` = call-graph distance from
+    the candidate. `direction` = "up" (a CALLER to summarize at — the hashing-leaf case) or "down" (a shared
+    nonlinear PRIMITIVE the candidate inlines — the real arg-based target). `shared` = for a "down" target,
+    how many sibling candidates also inline it (fan-in). Best: non-mutating, nearest."""
     function: str
     hops: int
     signature: str
-    expressible: bool
-    has_return: bool
     mutating: bool
     direction: str = "up"
     shared: int = 1
@@ -103,14 +114,17 @@ class Boundary:
 class Candidate:
     """A function worth summarizing, with WHY (`signals`) and, for a curated match, HOW (`candidate_summary`)."""
     function: str                 # "Contract.fn" (the contract prefix is part of the identifier)
-    signals: tuple[str, ...]      # subset of {"nonlinear", "hashing", "external", "surviving"}
+    signals: tuple[str, ...]      # why flagged: "nonlinear" (difficulty %), "hashing" (AST), "external"
+                                  # (cross-contract modifier), or a catalog hard-op class naming the exact
+                                  # primitive: "in-memory-sort" / "bitwise-scan" / "symbolic-exp" /
+                                  # "nonlinear-mulDiv". No liveness label — every candidate reaches SMT.
     score: float                  # rank key (higher = summarize first)
     evidence: str                 # human-readable justification
     file: str = ""                # source file of the function ("" if unresolved)
-    line: int | None = None       # 1-based start line of the function ("" -> None if unresolved)
-    category: str = ""            # hostile-primitive class (bitwise-scan / in-memory-sort / symbolic-exp /
-                                  # nonlinear-mulDiv) when the surviving-graph catalog matched, else ""
-    reaching_methods: list[str] = field(default_factory=list)  # entry methods whose postOptimize TAC keeps it
+    line: int | None = None       # 1-based start line of the function (None if unresolved)
+    signature: str = ""           # readable `fn(paramTypes) -> returnTypes` (from the AST; "" if unresolved)
+    mutating: bool | None = None  # True if state-changing (not view/pure); None if unresolved from the AST
+    reaching_count: int = 0       # how many entry methods' postOptimize TAC keeps this primitive (breadth)
     summarizable: bool = True     # the prover's own `summarizable` flag (surviving graph)
     candidate_summary: str = ""   # suggested summary (curated EXACT or generic over-approx)
     boundaries: list[Boundary] = field(default_factory=list)   # caller boundaries to summarize at instead
@@ -119,36 +133,38 @@ class Candidate:
 @dataclass
 class DetectionReport:
     candidates: list[Candidate] = field(default_factory=list)
+    dropped: int = 0   # candidates cut by the per-category caps (0 = the whole ranked list is present)
 
     def is_empty(self) -> bool:
         return not self.candidates
 
     def to_dict(self) -> dict:
-        """Machine-readable form for a consuming pipeline: each candidate (the problematic
-        function, why, and rank) with its caller-boundary shortlist (call chain + summarizability)."""
-        return asdict(self)
+        """Machine-readable form for a consuming pipeline: each candidate (the problematic function, why,
+        and rank) with its caller-boundary shortlist. Fields left at their default (unresolved location,
+        no reach, no summary, no boundaries, summarizable) are OMITTED — the consumer assumes the default,
+        and the prompt this renders into stays lean."""
+        defaults = {"file": "", "line": None, "signature": "", "mutating": None, "reaching_count": 0,
+                    "summarizable": True, "candidate_summary": "", "boundaries": []}
+        candidates = []
+        for c in self.candidates:
+            d = {k: v for k, v in asdict(c).items() if defaults.get(k, object()) != v}
+            candidates.append(d)
+        return {"candidates": candidates, "dropped": self.dropped}
 
     def format(self) -> str:
         if self.is_empty():
             return "no summarization candidates detected"
         out = ["summarization candidates (what to summarize first, and how):"]
         for c in self.candidates:
-            cat = f" {{{c.category}}}" if c.category else ""
-            reach = f"  reaches {len(c.reaching_methods)}" if c.reaching_methods else ""
+            reach = f"  reaches {c.reaching_count}" if c.reaching_count else ""
             loc = f"  {c.file}:{c.line}" if c.file else ""
-            out.append(f"  {c.score:5.1f}  {c.function}{cat}  <{','.join(c.signals)}>{reach}{loc}")
+            out.append(f"  {c.score:5.1f}  {c.function}  <{','.join(c.signals)}>{reach}{loc}")
             out.append(f"                          {c.evidence}")
             if c.candidate_summary:
                 out.append(f"                          candidate: {c.candidate_summary}")
             for b in c.boundaries:
-                if not b.has_return:
-                    feas = "no return value"                    # void — nothing to model as a summary
-                elif not b.expressible:                         # has a return, so the TYPE is the problem
-                    feas = "opaque sig"
-                elif b.mutating:
-                    feas = "state-changing — prefer a pure boundary"
-                else:
-                    feas = "summarizable here"
+                # only expressible, internal boundaries survive the filter, so mutating is the last caveat
+                feas = "state-changing — prefer a pure boundary" if b.mutating else "summarizable here"
                 if b.direction == "down":                       # a shared nonlinear primitive (descend)
                     arrow = "↓"
                     tag = f"shared ×{b.shared}, {feas}" if b.shared > 1 else feas
@@ -342,6 +358,16 @@ def _function_locations(ast_path: str | Path,
     out: dict[str, tuple[str, int | None]] = {}
     newlines: dict[str, list[int] | None] = {}          # file -> newline byte offsets (None = unreadable)
 
+    def _relativize(p: str) -> str:
+        # solc records source-unit keys as a MIX of project-relative and absolute paths (depending on how
+        # each was imported/remapped); normalize to project-relative so every entry's `file` is uniform.
+        if sources_root is None:
+            return p
+        try:
+            return str(Path(p).relative_to(Path(sources_root)))
+        except ValueError:
+            return p                                    # already relative / not under the root — leave as-is
+
     def _line_of(file: str, offset: int) -> int | None:
         if sources_root is None:
             return None
@@ -379,7 +405,7 @@ def _function_locations(ast_path: str | Path,
                 c = _tightest(fsp[0], contracts)
                 cname = c[1] if c else ""
                 qual = f"{cname}.{fname}" if cname else fname
-                out[qual] = (absp, _line_of(absp, fsp[0]))
+                out[qual] = (_relativize(absp), _line_of(absp, fsp[0]))   # read line from absp, store relative
     return out
 
 
@@ -431,6 +457,11 @@ GENERIC_RULES: tuple[HostileCategory, ...] = (
         reason="256/512-bit multiply-divide of two symbolic operands — nonlinear SMT",
     ),
 )
+
+# The catalog categories double as SIGNALS: a catalog-matched candidate carries its category
+# (`in-memory-sort`, `bitwise-scan`, …) directly in `signals` rather than a generic `primitive` + a
+# separate `category` field. This set is how the per-category cap groups them all under "primitive".
+_PRIMITIVE_CATEGORIES = frozenset(c.key for c in GENERIC_RULES)
 
 
 @dataclass(frozen=True)
@@ -488,8 +519,11 @@ def classify_hostile(name: str) -> HostileMatch | None:
 
 
 def _entry_of_rule(rule: str) -> str:
-    """The entry-method name from a sanity rule name (`sanity-<method>-Satisfy_...` -> `<method>`)."""
-    m = re.match(r"sanity-(?P<sig>.+?)-Satisfy", rule or "")
+    """The entry-method name from a sanity rule name. Each method yields TWO surviving graphs — the
+    `-Satisfy_sanity_check_failed_...` (reachability) and the `-Assertions` (assertion) run — so strip
+    either suffix to the bare `<method>`; both then dedup to one entry (`sanity-<method>-Satisfy...` and
+    `sanity-<method>-Assertions` -> `<method>`)."""
+    m = re.match(r"sanity-(?P<sig>.+?)-(?:Satisfy|Assertions)", rule or "")
     return m.group("sig") if m else (rule or "")
 
 
@@ -631,6 +665,17 @@ def _parse_location(loc: str) -> tuple[str, int | None]:
     return loc, None
 
 
+def _bucket(c: Candidate) -> str:
+    """The cap bucket a candidate falls in (its score is only comparable within it). Any catalog hard-op
+    signal -> "primitive"; else nonlinear -> "nonlinear"; else "hashing". `external` is a modifier, not a
+    bucket of its own."""
+    if any(s in _PRIMITIVE_CATEGORIES for s in c.signals):
+        return "primitive"
+    if "nonlinear" in c.signals:
+        return "nonlinear"
+    return "hashing"
+
+
 def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *, cut: str,
                 include_dependencies: bool = False,
                 cone_weight: dict[str, int] | None = None,
@@ -658,19 +703,37 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
             c.score += score
             c.evidence += " | " + evidence
 
-    # signal 1 (nonlinear) + 3 (external): the difficulty hotspots
-    for h in hotspots:
+    # signal 1 (nonlinear) + 3 (external): the difficulty hotspots. The prover's procIds carry a visibility
+    # marker; three kinds are handled distinctly:
+    #  - unmarked `<CUT>.m`     -> the CUT's OWN external method = a rule subject, never summarized -> DROP
+    #  - unmarked `<other>.m`   -> a cross-contract callee (e.g. HubInstanceHarness.previewRemoveByShares)
+    #                              -> keep + flag as a resolved external (signal 3)
+    #  - `(internal) <ctx>.m`   -> an inlined internal fn (the ray/bit math). The prover attributes it to the
+    #                              CALLING contract, so the same fn recurs under several contexts and (as
+    #                              `<CUT>.fls`) collides with a surviving primitive -> dedup by bare name,
+    #                              keeping the highest-contribution instance (hotspots are pct-sorted).
+    surviving_bare = {raw.split("(", 1)[0].rpartition(".")[2] for raw in (surviving or {})}
+    seen_internal: set[str] = set()
+    for h in hotspots:                                       # already excludes CVL/Ghost
+        if h.pct < NONLINEAR_MIN_PCT:                        # drop the long, low-contribution tail
+            continue
+        internal = h.function.strip().startswith("(internal)")
         fn = _strip_procid(h.function)
         contract = _contract_of(fn)
+        bare = fn.rpartition(".")[2]
+        if contract == cut and not internal:                # the CUT's own external method (rule subject)
+            continue
+        if bare in surviving_bare:                          # already a correctly-named surviving candidate
+            continue
+        if internal:
+            if bare in seen_internal:                       # caller-attribution dup -> keep the top one
+                continue
+            seen_internal.add(bare)
         _bump(fn, "nonlinear", float(h.pct),
               f"{h.pct}% of nonlinear ops" + (f" @{h.location}" if h.location else ""))
-        # The difficulty report already carries the hotspot's source location; lift it into the
-        # structured fields. The AST pass in `detect` still overrides for functions it can resolve,
-        # but it keys on the defining contract, so a hotspot the prover attributes to a derived
-        # contract (`SpokeInstance.fn` defined on a base in another file) would otherwise have none.
-        if h.location:
+        if h.location:                                      # the difficulty report carries the location
             cand[fn].file, cand[fn].line = _parse_location(h.location)
-        if contract and contract != cut:
+        if contract and contract != cut and not internal:   # a genuine cross-contract external call
             _bump(fn, "external", 10.0, f"resolved external in {contract} (not the CUT)")
 
     # signal 2 (hashing/encoding): the AST scan. Dynamic-input hashing (unbounded bytes/string/array) is
@@ -690,11 +753,11 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
     # so the same function unifies into one candidate.
     for raw_fn, rec in (surviving or {}).items():
         fn = raw_fn.split("(", 1)[0]
-        _bump(fn, "surviving", 20.0 + 2.0 * len(rec["reaching_methods"]),
-              f"{rec['category']} survives optimization, reaches {len(rec['reaching_methods'])} method(s)")
+        n = len(rec["reaching_methods"])
+        _bump(fn, rec["category"], SURVIVING_SCORE,       # the hard-op class IS the signal
+              f"{rec['category']}, reaches {n} method(s)")
         c = cand[fn]
-        c.category = rec["category"]
-        c.reaching_methods = list(rec["reaching_methods"])
+        c.reaching_count = n
         c.summarizable = rec["summarizable"]
         c.candidate_summary = rec["candidate_summary"]
 
@@ -710,8 +773,15 @@ def detect_from(hash_signals: list[HashSignal], difficulty: DifficultyReport, *,
             c.score *= 1 + w / mx
             c.evidence += f" | cone={w}"
 
-    ranked = sorted(cand.values(), key=lambda c: c.score, reverse=True)
-    return DetectionReport(candidates=ranked)
+    ranked = sorted(cand.values(), key=lambda c: (-c.score, c.function))   # score desc, name for stable ties
+    kept: list[Candidate] = []
+    per_cat: dict[str, int] = {}
+    for c in ranked:                                    # score-ordered, so per category we keep the top ones
+        cat = _bucket(c)
+        if per_cat.get(cat, 0) < MAX_PER_CATEGORY.get(cat, 0):
+            per_cat[cat] = per_cat.get(cat, 0) + 1
+            kept.append(c)
+    return DetectionReport(candidates=kept, dropped=len(ranked) - len(kept))
 
 
 def _survives(function: str, surviving_set: set[str], survivors_bare: set[str]) -> bool:
@@ -768,7 +838,7 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
         hash_signals = [h for h in hash_signals if _survives(h.function, surviving_set, survivors_bare)]
     elif merged is not None and external_call_graph is not None:   # fallback: complete cross-contract edges
         hash_signals = [h for h in hash_signals if h.function in reachable]
-    difficulty = fetch_difficulty(job_url) if job_url else DifficultyReport()
+    difficulty = fetch_difficulty(job_url, limit=None) if job_url else DifficultyReport()   # detector filters
     report = detect_from(hash_signals, difficulty, cut=cut, cone_weight=cone,
                          include_dependencies=include_dependencies, surviving=surviving)
     # A hashing or surviving candidate is the cost LEAF (the exact function to summarize) — offer caller
@@ -782,26 +852,39 @@ def detect(job_url: str | None = None, *, ast_path: str | Path | None = None,
         # MathLib.mulDivDown) get no INTERNAL_FUNC_START annotation, so they are absent from the surviving
         # set even though they are genuinely inlined into a surviving method.
         nl = [c.function for c in report.candidates
-              if "nonlinear" in c.signals and "hashing" not in c.signals and "surviving" not in c.signals]
+              if "nonlinear" in c.signals and "hashing" not in c.signals
+              and not any(s in _PRIMITIVE_CATEGORIES for s in c.signals)]
         prim_reach = {m: _descend_to_prims(edges, m, reachable or None) for m in nl}
         fanin: dict[str, int] = {}
         for prims in prim_reach.values():
             for p in prims:
                 fanin[p] = fanin.get(p, 0) + 1
         for c in report.candidates:
-            if "hashing" in c.signals or "surviving" in c.signals:   # walk UP to a clean caller boundary
+            if "hashing" in c.signals or any(s in _PRIMITIVE_CATEGORIES for s in c.signals):  # walk UP to a caller
                 c.boundaries = _caller_boundaries(edges, sigs, c.function, bounds_reach)
             elif "nonlinear" in c.signals:                 # descend DOWN to the shared nonlinear primitive
                 targets = sorted(prim_reach.get(c.function, {}).items(),
                                  key=lambda kv: (-fanin.get(kv[0], 0), kv[1], kv[0]))[:4]
-                c.boundaries = [Boundary(p, d, *sigs.get(p, (p, False, False, True)),
-                                         direction="down", shared=fanin.get(p, 1))
-                                for p, d in targets]
+                c.boundaries = []
+                for p, d in targets:
+                    sig, expressible, mutating, _ext = sigs.get(p, (p, False, False, False))
+                    if not expressible:      # a shared primitive we can't express as a value is no target
+                        continue
+                    c.boundaries.append(Boundary(p, d, sig, mutating, direction="down", shared=fanin.get(p, 1)))
     # attach each candidate's source location (file always; line when the source is readable)
     locations = _function_locations(ast, sources_root)
     for c in report.candidates:
         if c.function in locations:
             c.file, c.line = locations[c.function]
+    # attach a signature + view/pure flag (the agent needs the param/return types to write the summary, and
+    # `mutating` to know a value-summary would erase side effects) — the same AST map the boundaries use.
+    # Exact qualified match, else bare name: the difficulty report attributes an inlined fn to its CALLING
+    # contract (`HubInstanceHarness.calculatePremiumRay`), which resolves by the bare `calculatePremiumRay`.
+    bare_sigs = {q.rpartition(".")[2]: v for q, v in sigs.items()}
+    for c in report.candidates:
+        s = sigs.get(c.function) or bare_sigs.get(c.function.rpartition(".")[2])
+        if s:
+            c.signature, _expr, c.mutating, _ext = s
     return report
 
 
@@ -1018,10 +1101,11 @@ def _expressible_typename(tn: object, merged: dict, seen: frozenset = frozenset(
 
 
 def _signatures(merged: dict) -> dict[str, tuple[str, bool, bool, bool]]:
-    """qual -> (readable `fn(pt,..) -> rt,..` signature, is-CVL-expressible, has-a-return, is-mutating).
-    Expressible = has a return AND every param/return type is CVL-expressible (see `_expressible_typename`).
-    has_return is kept SEPARATELY so a void function (no value to model) is distinguished from one with an
-    opaque type. Mutating = stateMutability not view/pure (summarizing it as a value erases side effects)."""
+    """qual -> (readable `fn(pt,..) -> rt,..` signature, is-CVL-expressible, is-mutating, is-external).
+    Expressible = has a return AND every param/return type is CVL-expressible (see `_expressible_typename`);
+    a void function has no value to model, so it is not expressible. Mutating = stateMutability not
+    view/pure (summarizing it as a value erases side effects). External = public/external visibility — an
+    entry point (the rule's subject), never an internal summarization boundary."""
     contracts_by_fid: dict[int, list] = {}
     for node in merged.values():
         if node.get("nodeType") == "ContractDefinition":
@@ -1045,7 +1129,8 @@ def _signatures(merged: dict) -> dict[str, tuple[str, bool, bool, bool]]:
         has_return = bool(rets)
         types_ok = all(_expressible_typename(tn, merged) for _, tn in params + rets)
         mutating = (node.get("stateMutability") or "") not in ("view", "pure")
-        out[qual] = (sig, has_return and types_ok, has_return, mutating)
+        is_external = (node.get("visibility") or "") in ("external", "public")
+        out[qual] = (sig, has_return and types_ok, mutating, is_external)
     return out
 
 
@@ -1074,10 +1159,12 @@ def _caller_boundaries(edges: dict, sigs: dict, leaf: str, reachable: set[str] |
     for q, h in hops.items():
         if reachable is not None and not _survives(q, reachable, bare):
             continue
-        sig, expressible, has_return, mutating = sigs.get(q, (q, False, False, True))
-        out.append(Boundary(q, h, sig, expressible, has_return, mutating))
-    # expressible first, then view/pure over state-changing, then nearest — the cleanest, safest boundary
-    out.sort(key=lambda b: (not b.expressible, b.mutating, b.hops, b.function))
+        sig, expressible, mutating, is_external = sigs.get(q, (q, False, False, False))
+        if not expressible or is_external:   # keep only internal, value-expressible (actionable) boundaries
+            continue
+        out.append(Boundary(q, h, sig, mutating))
+    # view/pure over state-changing, then nearest — the cleanest, safest boundary first
+    out.sort(key=lambda b: (b.mutating, b.hops, b.function))
     return out[:limit]
 
 

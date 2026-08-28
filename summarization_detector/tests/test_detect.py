@@ -152,12 +152,13 @@ def test_scan_ast_dedups_and_flags_dependency():
 
 
 def test_detect_from_fuses_and_classifies():
-    """The signals fuse per function: an external contract's hotspots get the `external` signal, the CUT's
-    own math the `nonlinear` signal, a hasher the `hashing` signal. Dependency hashing is dropped by default."""
+    """Signals fuse per function: a cross-contract hotspot gets `external`+`nonlinear`; the CUT's own
+    INLINED internal math gets `nonlinear`; a hasher gets `hashing`. The CUT's own EXTERNAL method (an
+    unmarked `<CUT>.m` — a rule subject) is dropped. Dependency hashing is dropped by default."""
     diff = DifficultyReport(hotspots=[
-        Hotspot("Oracle.getPrice", 40, "O.sol:10"),     # external (not the CUT)
-        Hotspot("Oracle.latestRound", 20, "O.sol:20"),
-        Hotspot("C.mulThing", 55, "C.sol:5"),           # the CUT's own nonlinear math
+        Hotspot("Oracle.getPrice", 40, "O.sol:10"),          # external (not the CUT)
+        Hotspot("(internal) C.mulThing", 55, "C.sol:5"),     # the CUT's own inlined internal math
+        Hotspot("C.borrow", 70, "C.sol:9"),                  # the CUT's own EXTERNAL method (rule subject)
     ])
     hs = [
         HashSignal("C.hashId", "C", "hashId", "pure", "internal", ("keccak256",), "src/C.sol", False),
@@ -167,17 +168,18 @@ def test_detect_from_fuses_and_classifies():
     by = {c.function: c for c in rep.candidates}
 
     assert "external" in by["Oracle.getPrice"].signals
-    assert by["C.mulThing"].signals == ("nonlinear",)
+    assert by["C.mulThing"].signals == ("nonlinear",)          # CUT's own internal math, not external
+    assert "C.borrow" not in by                                # CUT's external entry method dropped
     assert "hashing" in by["C.hashId"].signals
     assert "Dep.enc" not in by                                  # dependency hashing filtered by default
-    assert rep.candidates == sorted(rep.candidates, key=lambda c: c.score, reverse=True)   # ranked
+    assert rep.candidates == sorted(rep.candidates, key=lambda c: (-c.score, c.function))   # ranked
 
 
 def test_detect_from_drops_cvl_ghost_hotspots():
     # a CVL/ghost hotspot is an ALREADY-APPLIED summary — must never be a candidate (it IS the summary)
     diff = DifficultyReport(hotspots=[
         Hotspot("CVL/Ghost Function 'mulDivDownSummary(x,y,denominator)'", 86, ""),   # already a summary
-        Hotspot("AmountConverter.getExpectedOut", 10, "contracts/AmountConverter.sol:134"),
+        Hotspot("AmountConverter.getExpectedOut", 20, "contracts/AmountConverter.sol:134"),  # external callee
     ])
     rep = detect_from([], diff, cut="Stonks")
     fns = {c.function for c in rep.candidates}
@@ -185,13 +187,29 @@ def test_detect_from_drops_cvl_ghost_hotspots():
     assert not any("Ghost" in f or "CVL" in f for f in fns)                           # ghost summary dropped
 
 
-def test_detect_from_strips_internal_prefix_so_cut_own_fn_is_not_external():
-    # the prover prefixes inlined hotspots with "(internal)"; without stripping, the CUT's own function
-    # parses to contract "(internal) Stonks" != cut and is wrongly flagged a resolved-external.
-    diff = DifficultyReport(hotspots=[Hotspot("(internal) Stonks.estimateTradeOutput", 12, "S.sol:387")])
-    c = detect_from([], diff, cut="Stonks").candidates[0]
-    assert c.function == "Stonks.estimateTradeOutput"       # (internal) marker stripped -> parses to the CUT
-    assert c.signals == ("nonlinear",) and "external" not in c.signals   # CUT's own math, NOT external
+def test_detect_from_keeps_cut_internal_math_but_drops_cut_external_method():
+    # (internal)-marked CUT hotspot = an inlined internal fn (summarizable); an unmarked CUT hotspot = the
+    # CUT's own external method (a rule subject) and is dropped.
+    diff = DifficultyReport(hotspots=[
+        Hotspot("(internal) Stonks.estimateTradeOutput", 20, "S.sol:387"),
+        Hotspot("Stonks.swap", 80, "S.sol:40"),
+    ])
+    by = {c.function: c for c in detect_from([], diff, cut="Stonks").candidates}
+    assert by["Stonks.estimateTradeOutput"].signals == ("nonlinear",)   # internal CUT math kept, not external
+    assert "Stonks.swap" not in by                                      # CUT's external method dropped
+
+
+def test_detect_from_nonlinear_floor_and_internal_dedup():
+    from summarization_detector.detect import NONLINEAR_MIN_PCT
+    diff = DifficultyReport(hotspots=[
+        Hotspot("Hub.previewShares", NONLINEAR_MIN_PCT, "Hub.sol:471"),  # exactly at the floor -> kept
+        Hotspot("Hub.getIndex", NONLINEAR_MIN_PCT - 1, "Hub.sol:508"),   # below the floor -> dropped
+        Hotspot("(internal) Hub.calcRay", 27, "AssetLogic.sol:153"),     # kept (top instance of calcRay)
+        Hotspot("(internal) Spoke.calcRay", 25, "Spoke.sol:639"),        # same bare name, lower -> deduped
+    ])
+    by = {c.function: c for c in detect_from([], diff, cut="Spoke").candidates}
+    assert "Hub.previewShares" in by and "Hub.getIndex" not in by
+    assert "Hub.calcRay" in by and "Spoke.calcRay" not in by            # caller-attribution dedup by bare name
 
 
 def _fndef(off, length, name, vis="internal"):
@@ -267,51 +285,49 @@ def test_expressible_typename_recurses_arrays_and_structs():
     assert not _expressible_typename(_udt(50), merged)                   # mapping nested in a struct
 
 
-def test_caller_boundaries_prefers_expressible_pure_callers():
-    # leaf <- encodeFromData (opaque) <- mutClose (clean but MUTATING, hop2) <- pureFar (clean+pure, hop3)
+def test_caller_boundaries_keeps_only_expressible_internal_callers():
+    # leaf <- encodeFromData (opaque, dropped) <- mutClose (clean+mutating) <- pureFar (clean+pure);
+    # a public entry point that also calls the leaf is dropped (the rule's subject, not a boundary).
     edges = {
         "L.encodeFromData": {"computeBaseHash"},
         "M.mutClose": {"L.encodeFromData"},
         "M.pureFar": {"M.mutClose"},
+        "C.borrow": {"computeBaseHash"},
     }
-    sigs = {                                        # (signature, expressible, has_return, mutating)
-        "L.encodeFromData": ("encodeFromData(uint256, bytes) -> C", False, True, False),  # opaque bytes arg
-        "M.mutClose": ("mutClose(PositionId[]) -> C", True, True, True),                   # clean but mutating
-        "M.pureFar": ("pureFar(PositionId[]) -> C", True, True, False),                    # clean + pure
+    sigs = {                                        # (signature, expressible, mutating, is_external)
+        "L.encodeFromData": ("encodeFromData(uint256, bytes) -> C", False, False, False),  # opaque -> dropped
+        "M.mutClose": ("mutClose(PositionId[]) -> C", True, True, False),                   # clean but mutating
+        "M.pureFar": ("pureFar(PositionId[]) -> C", True, False, False),                    # clean + pure
+        "C.borrow": ("borrow(uint256) -> uint256", True, True, True),                       # external -> dropped
     }
-    reach = {"computeBaseHash", "L.encodeFromData", "M.mutClose", "M.pureFar"}
+    reach = {"computeBaseHash", "L.encodeFromData", "M.mutClose", "M.pureFar", "C.borrow"}
     b = _caller_boundaries(edges, sigs, "computeBaseHash", reach)
-    # pure+clean wins even though FARTHER; mutating-clean next; opaque last (view-preference beats distance)
-    assert [x.function for x in b] == ["M.pureFar", "M.mutClose", "L.encodeFromData"]
-    assert b[0].expressible and not b[0].mutating
-    assert b[1].expressible and b[1].mutating
-    assert not b[2].expressible
+    # opaque + external-entry both dropped; pure+clean wins over mutating-clean (view-preference beats distance)
+    assert [x.function for x in b] == ["M.pureFar", "M.mutClose"]
+    assert not b[0].mutating and b[1].mutating
 
 
 def test_caller_boundaries_filters_to_reachable():
     edges = {"C.caller": {"computeBaseHash"}}
-    sigs = {"C.caller": ("caller(uint256) -> bytes32", True, True, False)}
+    sigs = {"C.caller": ("caller(uint256) -> bytes32", True, False, False)}   # expressible, pure, internal
     assert _caller_boundaries(edges, sigs, "computeBaseHash", reachable={"computeBaseHash"}) == []  # caller unreached
     assert _caller_boundaries(edges, sigs, "computeBaseHash", reachable=None)                       # no filter -> kept
 
 
-def test_boundary_tags_distinguish_no_return_from_opaque_sig():
+def test_boundary_format_flags_mutating_vs_pure():
     from summarization_detector.detect import DetectionReport, Candidate, Boundary
+    # only expressible, internal boundaries reach the report; mutating is the last remaining caveat
     rep = DetectionReport(candidates=[Candidate(
         "leaf", ("hashing",), 10.0, "ev",
         boundaries=[
-            # void (all value-type args, no return) — NOT opaque, just nothing to model
-            Boundary("A.consumePermit", 1, "consumePermit(address, uint256)", expressible=False,
-                     has_return=False, mutating=True),
-            # has a return but an opaque `bytes` param — genuinely opaque signature
-            Boundary("A.encodeFromData", 1, "encodeFromData(bytes) -> b32", expressible=False,
-                     has_return=True, mutating=False),
+            Boundary("A.pureView", 1, "pureView(address) -> b32", mutating=False),
+            Boundary("A.mutClose", 2, "mutClose(address) -> b32", mutating=True),
         ])])
     lines = rep.format().splitlines()
-    permit_line = next(ln for ln in lines if "consumePermit" in ln)
-    enc_line = next(ln for ln in lines if "encodeFromData" in ln)
-    assert "no return value" in permit_line and "opaque sig" not in permit_line   # void -> distinct tag
-    assert "opaque sig" in enc_line                                               # opaque-type keeps its tag
+    pure_line = next(ln for ln in lines if "pureView" in ln)
+    mut_line = next(ln for ln in lines if "mutClose" in ln)
+    assert "summarizable here" in pure_line
+    assert "state-changing" in mut_line
 
 
 def test_descend_to_prims_finds_shared_nonlinear_primitive():
@@ -333,7 +349,7 @@ def test_boundary_down_direction_renders_shared_count():
     rep = DetectionReport(candidates=[Candidate(
         "V.previewDeposit", ("nonlinear",), 100.0, "ev",
         boundaries=[Boundary("MathLib.mulDivDown", 2, "mulDivDown(uint256, uint256, uint256) -> uint256",
-                             expressible=True, has_return=True, mutating=False, direction="down", shared=8)])])
+                             mutating=False, direction="down", shared=8)])])
     line = next(ln for ln in rep.format().splitlines() if "mulDivDown" in ln)
     assert "↓" in line and "shared ×8" in line and "summarizable here" in line
 
@@ -414,3 +430,80 @@ def test_function_locations_file_and_line():
         no_src = _function_locations(ast)
     assert with_src["Lib.foo"] == ("src/A.sol", 3)
     assert no_src["Lib.foo"] == ("src/A.sol", None)          # file only, line unresolved without sources
+
+
+def test_detect_from_caps_each_category_and_reports_dropped():
+    from summarization_detector.detect import detect_from, HashSignal, MAX_PER_CATEGORY
+    from summarization_detector.difficulty import DifficultyReport
+    cap = MAX_PER_CATEGORY["hashing"]
+    # more hashers than the hashing cap -> that category is bounded to its cap and `dropped` records the rest
+    hs = [HashSignal(function=f"C.h{i}", contract="C", name=f"h{i}", mutability="view",
+                     visibility="internal", patterns=("keccak256",), file="src/C.sol",
+                     is_dependency=False, dynamic_input=True)
+          for i in range(cap + 5)]
+    rep = detect_from(hs, DifficultyReport(), cut="C")
+    hashing = [c for c in rep.candidates if "hashing" in c.signals]
+    assert len(hashing) == cap        # hashing category capped
+    assert rep.dropped == 5           # the 5 over the cap are dropped
+
+
+def test_surviving_score_is_flat_regardless_of_reach():
+    from summarization_detector.detect import detect_from, SURVIVING_SCORE
+    from summarization_detector.difficulty import DifficultyReport
+    # two primitives, wildly different reach -> same (flat) score; reach rides along as reaching_count only
+    surviving = {
+        "L.wide(uint256)":   {"category": "symbolic-exp", "reason": "", "reaching_methods": [f"m{i}" for i in range(20)],
+                              "summarizable": True, "candidate_summary": ""},
+        "L.narrow(uint256)": {"category": "bitwise-scan", "reason": "", "reaching_methods": ["only"],
+                              "summarizable": True, "candidate_summary": ""},
+    }
+    rep = detect_from([], DifficultyReport(), cut="C", surviving=surviving)
+    by = {c.function: c for c in rep.candidates}
+    assert by["L.wide"].score == SURVIVING_SCORE and by["L.narrow"].score == SURVIVING_SCORE
+    assert by["L.wide"].reaching_count == 20 and by["L.narrow"].reaching_count == 1
+    assert "reaches 20" in by["L.wide"].evidence      # count still reported in evidence
+
+
+def test_signatures_gives_signature_and_mutating_with_bare_fallback():
+    from summarization_detector.detect import _signatures
+    merged = {
+        "1": {"nodeType": "ContractDefinition", "src": "0:200:1", "name": "AssetLogic"},
+        "2": {"nodeType": "FunctionDefinition", "src": "10:80:1", "name": "calcRay", "stateMutability": "view",
+              "visibility": "internal",
+              "parameters": {"parameters": [{"typeDescriptions": {"typeString": "uint256"}}]},
+              "returnParameters": {"parameters": [{"typeDescriptions": {"typeString": "uint256"}}]}},
+        "3": {"nodeType": "ContractDefinition", "src": "300:200:1", "name": "Hub"},
+        "4": {"nodeType": "FunctionDefinition", "src": "310:80:1", "name": "add", "stateMutability": "nonpayable",
+              "visibility": "external",
+              "parameters": {"parameters": [{"typeDescriptions": {"typeString": "uint256"}}]},
+              "returnParameters": {"parameters": []}},
+    }
+    sigs = _signatures(merged)                      # (signature, expressible, mutating, is_external)
+    assert sigs["AssetLogic.calcRay"][0] == "calcRay(uint256) -> uint256" and sigs["AssetLogic.calcRay"][2] is False
+    assert sigs["Hub.add"][0] == "add(uint256)" and sigs["Hub.add"][2] is True          # nonpayable -> mutating
+    # the attach's bare-name fallback: a caller-attributed hotspot resolves by bare name
+    bare = {q.rpartition(".")[2]: v for q, v in sigs.items()}
+    assert bare["calcRay"][0] == "calcRay(uint256) -> uint256" and bare["calcRay"][2] is False
+
+
+def test_function_locations_normalizes_absolute_ast_paths():
+    # solc records some source-unit keys absolute (remapped imports); the stored `file` must still be
+    # project-relative (uniform with the relative-keyed ones), with the line read from the absolute path.
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "inputs" / ".certora_sources"
+        absfile = root / "src" / "math" / "MathUtils.sol"
+        absfile.parent.mkdir(parents=True)
+        absfile.write_text("a\nb\nfunction uncheckedExp() {}\n")
+        doc = {
+            str(absfile): {str(absfile): {                                    # ABSOLUTE source-unit key
+                "1": {"nodeType": "ContractDefinition", "src": "0:80:1", "name": "MathUtils"},
+                "2": {"nodeType": "FunctionDefinition", "src": "4:20:1", "name": "uncheckedExp"}}},
+            "src/dep/LibBit.sol": {"src/dep/LibBit.sol": {                    # already-relative key
+                "3": {"nodeType": "ContractDefinition", "src": "0:80:1", "name": "LibBit"},
+                "4": {"nodeType": "FunctionDefinition", "src": "4:20:1", "name": "fls"}}},
+        }
+        ap = Path(d) / "x.asts.json"
+        ap.write_text(json.dumps(doc))
+        locs = _function_locations(ap, sources_root=root)
+    assert locs["MathUtils.uncheckedExp"] == ("src/math/MathUtils.sol", 3)   # absolute key -> relative
+    assert locs["LibBit.fls"][0] == "src/dep/LibBit.sol"                      # relative key -> unchanged
