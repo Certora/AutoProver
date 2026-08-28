@@ -142,7 +142,8 @@ class DetectionReport:
         """Machine-readable form for a consuming pipeline: each candidate (the problematic function, why,
         and rank) with its caller-boundary shortlist. Fields left at their default (unresolved location,
         no reach, no summary, no boundaries, summarizable) are OMITTED — the consumer assumes the default,
-        and the prompt this renders into stays lean."""
+        and the prompt this renders into stays lean. The emitted shape is the `schema.py` TypedDicts
+        (`HostileCandidate` / `HostileBoundary`) — keep those in step with this and the `Candidate` fields."""
         defaults = {"file": "", "line": None, "signature": "", "mutating": None, "reaching_count": 0,
                     "summarizable": True, "candidate_summary": "", "boundaries": []}
         candidates = []

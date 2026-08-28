@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Callable
 from pydantic import BaseModel, Field
 from pathlib import Path
-from typing import TypedDict, Literal, Annotated, NotRequired
+from typing import TypedDict, Literal, Annotated
 from pydantic import Discriminator
 import asyncio
 from composer.prover.core import ProverOptions
@@ -26,6 +26,8 @@ from certora_autosetup.utils.paths import (
     resolve_autosetup_prover_usage_file,
     resolve_autosetup_summarization_candidates_file,
 )
+# The detector owns the schema of the file it writes; import its typed view rather than re-declaring it.
+from summarization_detector.schema import HostileCandidate
 
 _logger = logging.getLogger(__name__)
 
@@ -140,7 +142,6 @@ async def run_autosetup(
             "--composer-setup", f.name,
             "--no-strip-contracts",
             "--skip-harnessing",
-            # We consume only the detector output + usage files, not the Test Run's reports; skip it.
             "--skip-test-run",
             "--run-source", "AUTO_PROVER",
             "--main-contract",
@@ -278,35 +279,6 @@ def read_autosetup_prover_usage(project_root: Path) -> int | None:
     except (OSError, ValueError, KeyError, TypeError) as e:
         _logger.warning(f"Could not read AutoSetup prover usage from {usage_file}: {e}")
         return None
-
-
-class HostileBoundary(TypedDict):
-    """A caller/primitive the summarization detector offers as an alternative place to summarize a
-    candidate. Mirrors ``summarization_detector.detect.Boundary`` (all fields always present)."""
-    function: str
-    hops: int
-    signature: str
-    mutating: bool
-    direction: str
-    shared: int
-
-
-class HostileCandidate(TypedDict):
-    """One prover-hostile summarization target from the detector, as serialized into
-    ``summarization_candidates.json``. ``function``/``signals``/``score``/``evidence`` are always present;
-    the rest are omitted when at their default (see ``DetectionReport.to_dict``)."""
-    function: str
-    signals: list[str]
-    score: float
-    evidence: str
-    file: NotRequired[str]
-    line: NotRequired[int | None]
-    signature: NotRequired[str]
-    mutating: NotRequired[bool | None]
-    reaching_count: NotRequired[int]
-    summarizable: NotRequired[bool]
-    candidate_summary: NotRequired[str]
-    boundaries: NotRequired[list[HostileBoundary]]
 
 
 def read_summarization_candidates(project_root: Path) -> list[HostileCandidate]:
