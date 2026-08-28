@@ -712,6 +712,10 @@ than sparse:
   *method* ("Catch vacuity early") without ever naming the macro that performs it. This is exactly
   the corpus's value-add over the docs, and it is measurable rather than asserted.
 
+- **The recommended spec template** — [`Certora/solana-spec-template`](https://github.com/Certora/solana-spec-template),
+  the repository Certora tells people to clone when starting a new Solana spec. This is the one
+  project-shaped source that is **advice rather than evidence**, so it sits a rung above `normative`
+  on §4.5's currency axis and is used differently from everything else here. See §4.7.4.
 - **The public examples repo.** Two complete minimal CVLR projects, canonical `*_core` inlining
   and summaries files, and a conf variant pair with expected-verdict files. Public, tiny, and
   authoritative about the *scaffold* rather than about practice — see the backend plan's Phase 3.
@@ -732,6 +736,50 @@ parametric rules; the newest project is on 0.6 with them) — but the published 
 *current rule-writing* material, while the manual is good for both. The recency/citability
 trade-off is real but local, which is why §4.5 keeps the two axes separate rather than collapsing
 them into one "is this good practice" score.
+
+### 4.7.4 The recommended starting point, and why it is not another data point
+
+`tools/template.py` reads [`Certora/solana-spec-template`](https://github.com/Certora/solana-spec-template).
+Every other source in this plan is *evidence* — what some project did — and this one is *advice*:
+where it takes a position, that position is the answer. Three consequences, in descending order of
+value.
+
+**It closes ledger questions outright.** A `divergent` question asks which of several observed
+values is right; if the recommended starting point sets that key, an expert has already answered it
+and asking again spends Phase B's only resource on a lookup. This is the mechanical-rename filter
+(§5.2.1) applied to a new source, and it took **the highest-weighted divergent question in the
+ledger** off the list:
+
+| Question | Weight | The starting point's answer |
+|---|---|---|
+| `optimistic_loop` | 10 clients disagreeing | `false` |
+| `solanaTACOptimize` | 7 | `"2"` |
+| `cargo_tools_version` | 2 | `"v1.43"` |
+
+**It tells §4.6 what the recommended default is.** Twenty of the shipped entries are prover
+configuration, and they were being written from sixteen projects disagreeing without any mention
+that the template takes a side. The sharpest case is the one a frequency count gets exactly
+backwards: the five `solanaOptimistic*` flags appear in **9 clients and 1280 occurrences**, and the
+starting point **enables none of them** — its latest commit removed options, so absence is a
+position rather than an oversight. That is §4.5's two-axis thesis in a single data point, and the
+entry now says so instead of reporting a well-attested block of flags.
+
+**It supplies what no engagement can.** Every surveyed project shows a *finished* scaffold; none
+shows creating one. The template is the only source for the act of starting: clone into the
+package's `src` as `certora`, run `certora-setup.py --workspace … --package-name …` then `--execute`,
+add `pub mod certora;`, declare `certora = ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana"]`. It also
+settles the env-file naming convention that the survey found three incompatible versions of and that
+§4.4 had recorded as an *undatable* question: a `cvlr_` prefix, per-concern suffixes
+(`_core` / `_anchor` / `_package`), and an unsuffixed aggregate that is generated rather than edited.
+
+Two deliberate limits. It is **not** in `projects/inventory.yaml` — that file describes
+spec-branch-against-code-branch engagements with a merge-base, and a template with no program under
+verification would read as a sixteenth engagement. And a `PER_RUN_KEYS` guard keeps its silence from
+being over-read: the template names no rules because it has no program, so treating that as "does not
+set `rule`" would attribute a position it never took.
+
+Every consumer degrades with a message when no checkout is available, because *nobody checked* and
+*nobody has an opinion* are different states and only one of them justifies an expert's time.
 
 ### 4.7.1 Status: the public docs layer is built
 
