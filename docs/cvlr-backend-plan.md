@@ -49,7 +49,7 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | `SolanaApplication` (programs → instructions → accounts, PDAs, CPIs, authorities) | **Built** | [solana/model.py](../composer/spec/solana/model.py) |
 | `SorobanApplication` (contracts → functions, storage durability/TTL, `require_auth`) | **Built** | [soroban/model.py](../composer/spec/soroban/model.py) |
 | Analysis + property prompts, per-chain vulnerability fragments, code-explorer prompts | **Built** | [templates/solana/](../composer/templates/solana/), [templates/soroban/](../composer/templates/soroban/) |
-| `backend_guidance` injection point in the property system prompt | **Built, awaiting our text** | [prop_inference.py:76](../composer/spec/prop_inference.py#L76) |
+| `backend_guidance` injection point in the property system prompt | **Built; Solana's text written** (§7.3.1) | [prop_inference.py:76](../composer/spec/prop_inference.py#L76), [cvlr/guidance.py](../composer/spec/cvlr/guidance.py) |
 | Per-component `units()` split | **Built** | both models |
 | Null Solana backend (front-half test double) | **Built** | [solana/null_backend.py](../composer/spec/solana/null_backend.py) |
 | Sandbox: Landlock+seccomp launcher, `rust_build_policy`, private per-run `CARGO_HOME`, offline | **Built, never driven from a Python backend** | [composer/sandbox/](../composer/sandbox/), [rust/run-confined/](../rust/run-confined/) |
@@ -57,8 +57,9 @@ source ─analyze─▶ App model ─extract─▶ properties ─formalize─▶
 | Munge subsystem: editor agent, versioned edit store, VFS diff, compile-check gate, staleness oracle | **Built for EVM**; spine reusable | [source/munge/](../composer/spec/source/munge/) |
 | Prover result parsing (treeView JSON → `RuleResult`), cloud polling, callbacks | **Built, chain-neutral** | [prover/results.py](../composer/prover/results.py), [prover/cloud.py](../composer/prover/cloud.py) |
 | `certoraSolanaProver` / `certoraSorobanProver` CLIs | **Already installed in the venv** | `certora_cli` |
-| RAG corpus registry (`KNOWLEDGE_BASES`, `rag_env`) | **Built and empty — no corpus registered yet** | [rag/db.py](../composer/rag/db.py), [tools/rag_env.py](../composer/tools/rag_env.py) |
-| CVLR corpus · CVLR KB articles · project scaffold · authoring loop · Solana CEX analysis | **Nothing** | — |
+| RAG corpus registry (`KNOWLEDGE_BASES`, `rag_env`) | **`cvlr_kb` registered** — the first corpus in either map | [rag/db.py](../composer/rag/db.py), [tools/rag_env.py](../composer/tools/rag_env.py) |
+| CVLR corpus · CVLR KB articles | **Two manifests under one tag** (§7.3.1): published docs here, project-derived idioms from the private repo | [scripts/cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) |
+| Project scaffold · authoring loop · Solana CEX analysis | **Nothing** | — |
 
 **Phase 0 (hands-on experience) is done.** Several team members have completed real Solana
 verification projects. What that changes: the first phase is not discovery, it is **capture** —
@@ -519,6 +520,47 @@ wired into the code explorer's env, and the prompt addendum in the shared Rust f
 doing here rather than in Phase 4 — it is independent of the authoring loop, it makes the
 generated crate reference (item 2 above) cheap to produce and to verify, and it is the piece
 that most directly attacks the hallucination risk.
+
+#### 7.3.1 State
+
+| Piece | State |
+|---|---|
+| Corpus registration (tools module · `KNOWLEDGE_BASES` · importer target) | **Done** — [cvlr_rag.py](../composer/tools/cvlr_rag.py), [rag_env.py](../composer/tools/rag_env.py), [db.py](../composer/rag/db.py). `cvlr_kb` is the first corpus AutoProver has ever registered |
+| Published docs import | **Done** — [cvlr_docs_manifest.py](../composer/scripts/cvlr_docs_manifest.py) → `scripts/cvlr-docs/cvlr-docs.rag.json` (156 sections, 147 groups) |
+| First KB articles from real projects | **Done, shipping from the private repo** — 83 entries + 15 recipes under the second manifest sharing the `cvlr_kb` tag ([capture plan](./cvlr-capture-plan.md) §8.2) |
+| CVLR-source tool set (§5.5) | **Done** — [source_tools.py](../composer/spec/cvlr/source_tools.py), reaching the explorer through `build_source_tools(library_source=…)` |
+| `backend_guidance` | **Done** — [guidance.py](../composer/spec/cvlr/guidance.py) |
+| Generated crate reference | **Not started** |
+
+Two things about the source mount are worth stating, because they are what make it more than a
+convenience.
+
+**Every path carries its version.** A file is addressed as `cvlr-asserts-0.6.1/src/core.rs`, never
+`cvlr-asserts/src/core.rs`. That closes the one risk in §9 with no other mitigation: source
+disagreeing with what the build resolved is *confidently* wrong, and `RUST_FORBIDDEN_READ` hides
+`Cargo.lock`, so an agent cannot otherwise tell which CVLR it is holding. Stamping the version into
+the path makes an unversioned answer unreachable rather than merely discouraged.
+
+**The whole family, not the facade.** `cvlr` re-exports almost its entire surface. Run against the
+public examples, `cvlr_assert!` resolves to `cvlr-asserts-0.4.1/src/core.rs:66` — an agent given only
+the crate the manifest names would find the re-export and stop.
+
+The tools and the sentence introducing them hang off one object, because binding either alone fails
+in both directions: tools with no statement leave an agent unaware that authoritative source is
+reachable, and a statement with no tools invites it to fabricate the reads. The same reasoning made
+`crate_source` a **required** prompt parameter rather than an optional one — `None` already spells
+"no mount", and a second spelling for that state is one a caller reaches by forgetting rather than
+by deciding. (The template fuzzer caught exactly that, which is what the fuzzer is for.)
+
+`backend_guidance` is deliberately not modelled on the EVM text, and the difference is not
+stylistic. Two of `CERTORA_BACKEND_GUIDANCE`'s exclusions **invert** here. Checked arithmetic makes
+"no overflow" uninteresting on EVM, while a Solana release build does not check by default and the
+Prover has `assert_on_panic` for precisely this — panic-freedom is a frequently-violated property
+class on this chain, not a non-property. And an EVM property spanning many functions is expensive,
+where `cvlr_rules!` fans one property across a grid of handlers for the price of a line — so a
+cross-handler property is *cheaper* than several per-handler restatements, and the extractor should
+be told to prefer it. The text is therefore mostly about **shape** (what a property must look like
+for a rule to exist) and reserves exclusion for the few things that genuinely have no rule.
 
 ### 7.4 Phase 3 — Preflight scaffold
 

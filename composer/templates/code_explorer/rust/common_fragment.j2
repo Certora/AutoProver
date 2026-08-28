@@ -1,3 +1,15 @@
 {% include "code_explorer/common_fragment.j2" %}
 
 The project is a Rust crate or workspace. Navigate from `Cargo.toml` and the crate modules; quote exact Rust snippets rather than paraphrasing them.
+{% if crate_source %}
+{{ crate_source }}
+
+So when a question turns on what a macro expands to, what a helper's signature is, or which trait a
+derive implements, read the definition instead of recalling it. That reading is cheap here and
+nowhere else: you are a sub-agent, so you can search broadly and return a short answer without
+spending the caller's context. Quote the definition you found, with the path you found it at — the
+path names the version, and an answer that cannot name its version cannot be checked.
+
+Do not confuse the two trees. `get_file` / `list_files` / `grep_files` read the project under
+verification; `cvlr_source_*` read the specification library it depends on.
+{% endif %}
