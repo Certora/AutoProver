@@ -21,6 +21,19 @@ class _BaseSourceTools():
     base_source_tools: tuple[BaseTool, ...]
 
 
+@dataclass(frozen=True)
+class LibrarySource:
+    """A read-only mount of the specification library the analyzed project depends on.
+
+    The two fields travel together because binding one without the other is the failure this type
+    exists to prevent: tools with no statement leaves an agent unaware that authoritative source is
+    reachable, and a statement with no tools invites it to fabricate reads. Built from
+    :meth:`composer.spec.cvlr.source_tools.MountedCrates.tools` and ``.statement()``."""
+
+    tools: tuple[BaseTool, ...]
+    statement: str
+
+
 def build_basic_source_tools(
     root: str,
     forbidden_read: GlobalExcludeArg,
@@ -37,11 +50,19 @@ def build_source_tools(
     cache_ns: tuple[str, ...],
     recursion_limit: int,
     ecosystem: Ecosystem,
+    library_source: LibrarySource | None = None,
 ) -> tuple[BaseTool, ...]:
     """Wrap the base source tools with the indexed code_explorer sub-agent
     + the document-ref retrieval tool. Returns the full source tool tuple.
 
-    The code_explorer is a support sub-agent, so it runs on the lite tier."""
+    The code_explorer is a support sub-agent, so it runs on the lite tier.
+
+    ``library_source`` mounts a second, read-only tree the *explorer only* may read — the
+    specification library the target depends on, whose source is on disk in the version the build
+    resolves (``docs/cvlr-backend-plan.md`` §5.5). Explorer-only on purpose: it is where a broad read
+    costs least, since a sub-agent returns a short answer rather than filling the caller's context.
+    It does not reach the returned tuple, so nothing the caller hands to an authoring agent changes.
+    """
 
     @dataclass(frozen=True)
     class _ExplorerEnv:
@@ -62,12 +83,15 @@ def build_source_tools(
     explorer_tool = indexed_code_explorer_tool(
         _ExplorerEnv(
             builder=models.builder_lite(),
-            base_source_tools=s.base_source_tools,
+            base_source_tools=(
+                s.base_source_tools + (library_source.tools if library_source else ())
+            ),
             index=ind,
             llm=models.llm_lite(),
         ),
         recursion_limit=recursion_limit,
         explorer_prompt=ecosystem.code_explorer_prompt,
+        crate_source=library_source.statement if library_source else None,
     )
     return s.base_source_tools + (
         explorer_tool,
