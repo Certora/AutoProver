@@ -5,8 +5,10 @@
 # (docs/cvlr-capture-plan.md §8.2). This script ingests whichever of them it can find, because
 # the halves have deliberately different availability:
 #
-#   cvlr-docs.rag.json      public: the published Solana/CVLR documentation plus the generated
-#                           CVLR crate reference. Built here. Needs no private access.
+#   cvlr-docs.rag.json      public: the published Solana/CVLR documentation. Built here.
+#   cvlr-crates.rag.json    public: the generated CVLR crate reference — every public item of the
+#                           pinned reference set, with compile-gated examples. Built here.
+#                           Neither needs private access.
 #   cvlr-practice.rag.json  project-derived idioms, from the private `certora-cvlr-kb` repo.
 #                           Absent for anyone without access to it — which is a SUPPORTED state,
 #                           not a failure: you get API coverage without practice coverage.
@@ -19,7 +21,7 @@
 #   1. any paths given on the command line (before `--`), which override discovery entirely
 #   2. $CVLR_KB_REPO/src/certora_cvlr_kb/data/*.rag.json   (a checkout of the private repo)
 #   3. the installed `certora_cvlr_kb` package, if importable
-#   4. scripts/cvlr-docs/*.rag.json                        (locally built public manifest)
+#   4. scripts/cvlr-docs/*.rag.json  and  scripts/cvlr-crates/*.rag.json   (built locally)
 #
 # Args after `--` are forwarded to rag_import, e.g.:
 #   ./populate_cvlr_rag.sh -- --print              # dry run, no DB writes
@@ -85,6 +87,7 @@ except Exception:
     fi
 
     for f in "$script_dir"/cvlr-docs/*.rag.json; do add_if_file "$f"; done
+    for f in "$script_dir"/cvlr-crates/*.rag.json; do add_if_file "$f"; done
 fi
 
 if [[ ${#manifests[@]} -eq 0 ]]; then
@@ -96,7 +99,8 @@ Error: no cvlr_kb manifest found, so there is nothing to ingest.
   - For the public half, which needs no private access:
         ./scripts/gen_docs.sh                       # builds scripts/prover-docs/solana.html
         uv run python -m composer.scripts.cvlr_docs_manifest scripts/prover-docs/solana.html
-    That writes scripts/cvlr-docs/cvlr-docs.rag.json, which this script then finds.
+        uv run python -m composer.scripts.cvlr_crate_reference   # needs ANTHROPIC_API_KEY
+    Those write scripts/cvlr-docs/ and scripts/cvlr-crates/, which this script then finds.
 
 Pass manifest paths explicitly to bypass discovery.
 MSG
