@@ -530,7 +530,7 @@ that most directly attacks the hallucination risk.
 | First KB articles from real projects | **Done, shipping from the private repo** — 83 entries + 15 recipes under the second manifest sharing the `cvlr_kb` tag ([capture plan](./cvlr-capture-plan.md) §8.2) |
 | CVLR-source tool set (§5.5) | **Done** — [source_tools.py](../composer/spec/cvlr/source_tools.py), reaching the explorer through `build_source_tools(library_source=…)` |
 | `backend_guidance` | **Done** — [guidance.py](../composer/spec/cvlr/guidance.py) |
-| Generated crate reference | **Built** — [cvlr_crate_reference.py](../composer/scripts/cvlr_crate_reference.py), gated by [inventory.py](../composer/spec/cvlr/inventory.py) + [probe.py](../composer/spec/cvlr/probe.py) |
+| Generated crate reference | **Built and run** — [cvlr_crate_reference.py](../composer/scripts/cvlr_crate_reference.py) → `scripts/cvlr-crates/cvlr-crates.rag.json` (175 sections, 117 groups, 310/310 items covered) |
 
 Two things about the source mount are worth stating, because they are what make it more than a
 convenience.
@@ -585,6 +585,19 @@ advice that no target project could follow:
   `cvlr-nondet` and reached as `cvlr::nondet::nondet_option`, and `pub mod havoc` sits behind
   `#[cfg(feature = "std")]`. Both the facade's `lib.rs` and the defining crate's now ride along in
   every prompt, which took `havoc.rs` from failing every attempt to passing on the second.
+
+**The pass, as run.** 117 entries over 175 sections for **$3.58**; 27 of 41 modules passed on the
+first attempt, 7 on the second, 4 on the third. **Every one of the 310 items is named by some
+entry**, and 111 of the 117 entries carry an example the compiler accepted.
+
+The six that do not are the change worth recording. Dropping an entry because no *self-contained
+snippet* could demonstrate it makes coverage hostage to exemplifiability, and those are not the same
+property — `cvlr_spec!` and the `cvlr_assert_all!` family need a spec, base functions or a
+caller-supplied type, which is more context than a snippet carries. So the prose ships and the
+unverified example does not: the summary and the form are derived from the crate source and stay
+true, and the section says plainly that no example could be verified, pointing the reader at the
+`cvlr_source_*` tools. The corpus keeps the guarantee worth having — *every example in it compiles* —
+without losing the constructs a reader most needs.
 
 **Macro expansions are quoted, not described.** The crates ship 58 `macrotest` snapshot pairs — an
 invocation beside its expansion. "What exactly does this macro expand to" is the question §5.4 says
