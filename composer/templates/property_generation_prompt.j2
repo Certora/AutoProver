@@ -165,6 +165,25 @@ You may also make use of the following CVL resources, available as CVL files.
 {% endfor %}
 {% endif %}
 
+{% if hostile_candidates %}
+## Prover-hostile functions in this scene (summarization candidates)
+
+A static analysis of the sanity run flagged the functions below as prover-hostile — they survive
+optimization and/or dominate the difficulty, so left inlined they are a likely timeout source. Where a
+property does NOT depend on a function's exact result, summarizing it is often the difference between a
+proof and a timeout. Only a `curated` entry carries a concrete, vetted summary; for the rest you must
+choose the summary that is sound for the property at hand (and justify it). This is a hint, not a
+directive — a function you genuinely need exact should stay unsummarized.
+
+{% for c in hostile_candidates %}
+- `{{ c.function }}`{% if c.get('signature') %} `{{ c.signature }}`{% endif %} [{{ c.signals | join(", ") }}]{% if c.get('mutating') %} (state-changing){% endif %}{% if c.get('file') %} — {{ c.file }}{% if c.get('line') %}:{{ c.line }}{% endif %}{% endif %}
+    {{ c.evidence }}
+    {% if c.get('reaching_count') %}reaches {{ c.reaching_count }} entry method(s){% endif %}
+    {% if c.get('candidate_summary') %}suggested summary (curated): {{ c.candidate_summary }}{% endif %}
+    {% if c.get('boundaries') %}can also be summarized at a caller: {% for b in c.boundaries %}`{{ b.signature }}`{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{% endfor %}
+{% endif %}
+
 <state>
 Use the available memory tools to track your progress through this algorithm, any important lessons about CVL you may have learned,
 or any other significant, relevant information to this task. In particular, be sure to update your memory before calling the prover to summarize

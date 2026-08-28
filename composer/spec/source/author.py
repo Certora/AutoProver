@@ -26,6 +26,8 @@ from composer.spec.cvl_generation import (
     GeneratedCVL, PropertyRuleMapping, AppliedEdit, FeedbackToolBase,
 )
 from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
+from composer.spec.source.autosetup import read_summarization_candidates
+from summarization_detector.schema import HostileCandidate
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools, WIPE_HISTORY
 from composer.spec.source.prover import setup_prover_config_in
 from composer.spec.context import WorkflowContext, CVLGeneration, CacheKey, SourceCode
@@ -192,6 +194,7 @@ class PropertyGenParams(TypedDict):
     resources: list[ResourceView]
     properties: list[PropertyFormulation]
     contract_name: str
+    hostile_candidates: list[HostileCandidate]   # detector's prover-hostile summarization targets (may be empty)
 
 class PropertyGenerationConfig(SummaryConfig[SourceCVLGenerationState]):
     def __init__(self, source_editing: bool = False):
@@ -749,7 +752,8 @@ async def batch_cvl_generation(
         "context": component,
         "properties": props,
         "contract_name": source.contract_name,
-        "sort": "existing"
+        "sort": "existing",
+        "hostile_candidates": read_summarization_candidates(Path(source.project_root)),
     })
 
     sys_prompt : list[RawPromptInput | type[CacheMarker]] = [
