@@ -53,10 +53,11 @@ _API_KEY_ENV = "OPENROUTER_API_KEY"
 _PROBE_TIMEOUT_SECONDS = 15
 
 # How long a stream may go quiet before it is treated as dead. langchain's guard
-# measures the gap between *content* chunks and defaults to 120s, which assumes the
-# provider streams its reasoning; OpenRouter does not forward reasoning deltas for
-# every route, so a thinking model goes silent for the whole reasoning phase — over
-# 200s on a kimi-k3 burst — and a working request looks stalled.
+# measures the gap between chunks *it emits* and defaults to 120s. OpenRouter streams
+# reasoning as `response.reasoning_text.delta`, where OpenAI sends the summary event
+# `response.reasoning_summary_text.delta` — the only reasoning event langchain turns
+# into a chunk. So a thinking route's reasoning phase yields no chunks at all (over
+# 200s of it on a kimi-k3 burst) and a healthy request looks stalled.
 _STREAM_QUIET_SECONDS = 900.0
 
 
