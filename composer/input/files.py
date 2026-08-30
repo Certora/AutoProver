@@ -34,11 +34,21 @@ from composer.llm.types import CacheLevel
 
 class ContentRenderer(Protocol):
     def text_block(self, text: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict: ...
-    # ``filename`` is redundant for the Files-API providers, which reference an
-    # upload by id alone, but is required by a renderer that inlines the bytes
-    # as a data URL (OpenRouter): the content block carries no id to look a name
-    # up by, and OpenAI-compatible inline file blocks require ``filename``.
-    def file_block(self, file_id: str, *, filename: str, cache_level: CacheLevel = CacheLevel.NONE) -> dict: ...
+
+    def file_block(self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        """Reference a Files-API upload by id. Providers without a Files API
+        raise ``NotImplementedError`` and produce
+        :class:`InMemoryBytesFile` instead."""
+        ...
+
+    def inline_file_block(
+        self, basename: str, contents: bytes, mime: str,
+        *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        """Carry the bytes in the request itself, for providers with no Files
+        API. The mirror of :meth:`file_block`; a provider implements one or the
+        other, matching what its uploader produces."""
+        ...
 
 # ---------------------------------------------------------------------------
 # Protocols (the public surface)
@@ -212,6 +222,38 @@ class InMemoryTextFile:
 
 
 @dataclass(frozen=True)
+class InMemoryBytesFile:
+    """Binary content carried inline in the request, for a provider with no
+    Files API. The binary analogue of :class:`InMemoryTextFile`: the bytes ride
+    along in every request that carries the document rather than being uploaded
+    once and referenced by id."""
+
+    basename: str
+    contents: bytes
+    mime: str
+    renderer: ContentRenderer
+
+    def to_dict(self, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
+        return self.renderer.inline_file_block(
+            self.basename, self.contents, self.mime, cache_level=cache_level
+        )
+
+    def to_digest(self) -> str:
+        return _bytes_digest(self.contents)
+
+    @property
+    def bytes_contents(self) -> bytes:
+        return self.contents
+
+    @property
+    def string_contents(self) -> str | None:
+        try:
+            return self.contents.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+
+@dataclass(frozen=True)
 class UploadedFile:
     """A (potentially-binary) file uploaded to the Files API. Bytes are
     cached in memory so ``bytes_contents`` / ``string_contents`` don't
@@ -228,9 +270,7 @@ class UploadedFile:
     renderer: ContentRenderer
 
     def to_dict(self, cache_level: CacheLevel = CacheLevel.NONE) -> dict:
-        return self.renderer.file_block(
-            file_id=self.file_id, filename=self.basename, cache_level=cache_level
-        )
+        return self.renderer.file_block(file_id=self.file_id, cache_level=cache_level)
 
     def to_digest(self) -> str:
         return self.digest
@@ -265,7 +305,7 @@ class UploadedTextFile(UploadedFile):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class _FileData:
+class FileData:
     basename: str
     raw_data: bytes
     is_binary: bool
@@ -277,28 +317,28 @@ class _FileData:
 async def _file_data(
     *,
     path: str | pathlib.Path
-) -> _FileData:
+) -> FileData:
     ...
 
 @overload
 async def _file_data(
     *,
     basename: str, data: bytes
-) -> _FileData:
+) -> FileData:
     ...
 
 async def _file_data(
     path: str | pathlib.Path | None = None,
     basename: str | None = None,
     data: bytes | None = None
-) -> _FileData:
+) -> FileData:
     return await asyncio.to_thread(_file_data_impl, path, basename, data)
 
 def _file_data_impl(
     path: str | pathlib.Path | None,
     basename: str | None,
     data: bytes | None
-) -> _FileData:
+) -> FileData:
     if path is not None:
         if isinstance(path, str):
             path = pathlib.Path(path)
@@ -321,18 +361,18 @@ def _file_data_impl(
         mime = "application/octet-stream" if is_binary else "text/plain"
     crc = hex(zlib.crc32(data))
     digest = _bytes_digest(data)
-    return _FileData(raw_data=data, is_binary=is_binary, mime=mime, crc_basename=f"{crc}_{basename}", digest=digest, basename=basename)
+    return FileData(raw_data=data, is_binary=is_binary, mime=mime, crc_basename=f"{crc}_{basename}", digest=digest, basename=basename)
 
 class FileUploader(Protocol):
     """Upload+dedup contract. Obtain via ``ModelProvider.uploader()`` (``composer.llm``)."""
 
     async def upload_file_if_needed(
         self, file_path: str | pathlib.Path
-    ) -> UploadedFile: ...
+    ) -> Document: ...
 
     async def upload_text_file_if_needed(
         self, file_path: str | pathlib.Path
-    ) -> UploadedTextFile: ...
+    ) -> TextDocument: ...
 
     async def get_document(
         self, path: str | pathlib.Path
@@ -356,7 +396,11 @@ class UploaderBase(ABC):
     The dedup cache lives in ``self.uploaded`` (CRC-prefixed filename →
     remote file id) and is seeded by each subclass's ``fresh`` factory
     so we don't reupload a file whose bytes the account has already
-    seen."""
+    seen.
+
+    A provider with no Files API overrides :meth:`_binary_document` and
+    :meth:`_text_upload_document` to return inline shapes instead, and never
+    implements ``_upload_bytes``."""
 
     renderer: ContentRenderer
 
@@ -366,14 +410,9 @@ class UploaderBase(ABC):
     ) -> str:
         ...
 
-    async def upload_file_if_needed(
-        self, file_path: str | pathlib.Path
-    ) -> UploadedFile:
-        """Upload ``file_path`` (or reuse cached upload). Intended for
-        binary inputs — callers that know they have text should prefer
-        :meth:`get_document` (default text-inline) or
-        :meth:`upload_text_file_if_needed` (explicit upload of text)."""
-        data = await _file_data(path=file_path)
+    async def _binary_document(self, data: FileData) -> Document:
+        """How this provider represents binary content. Uploads by default;
+        override to inline the bytes instead."""
         file_id = await self._upload_bytes(data.crc_basename, data.raw_data, data.mime)
         return UploadedFile(
             file_id=file_id,
@@ -383,15 +422,9 @@ class UploaderBase(ABC):
             renderer=self.renderer,
         )
 
-    async def upload_text_file_if_needed(
-        self, file_path: str | pathlib.Path
-    ) -> UploadedTextFile:
-        """Upload ``file_path`` and tag the result as text. Use for
-        very-large text inputs that would otherwise blow the prompt
-        budget if inlined; ordinary text should go through
-        :meth:`get_document`, which keeps the content in-prompt for
-        transcript debuggability."""
-        data = await _file_data(path=file_path)
+    async def _text_upload_document(self, data: FileData) -> TextDocument:
+        """How this provider represents text explicitly destined for upload.
+        Uploads by default; override to keep it in the prompt instead."""
         file_id = await self._upload_bytes(data.crc_basename, data.raw_data, data.mime)
         return UploadedTextFile(
             file_id=file_id,
@@ -400,6 +433,25 @@ class UploaderBase(ABC):
             digest=data.digest,
             renderer=self.renderer,
         )
+
+    async def upload_file_if_needed(
+        self, file_path: str | pathlib.Path
+    ) -> Document:
+        """Upload ``file_path`` (or reuse cached upload). Intended for
+        binary inputs — callers that know they have text should prefer
+        :meth:`get_document` (default text-inline) or
+        :meth:`upload_text_file_if_needed` (explicit upload of text)."""
+        return await self._binary_document(await _file_data(path=file_path))
+
+    async def upload_text_file_if_needed(
+        self, file_path: str | pathlib.Path
+    ) -> TextDocument:
+        """Upload ``file_path`` and tag the result as text. Use for
+        very-large text inputs that would otherwise blow the prompt
+        budget if inlined; ordinary text should go through
+        :meth:`get_document`, which keeps the content in-prompt for
+        transcript debuggability."""
+        return await self._text_upload_document(await _file_data(path=file_path))
 
     async def get_document(
         self, path: str | pathlib.Path
@@ -419,14 +471,7 @@ class UploaderBase(ABC):
             return None
         data = await _file_data(path=p)
         if data.is_binary:
-            file_id = await self._upload_bytes(data.crc_basename, data.raw_data, data.mime)
-            return UploadedFile(
-                file_id=file_id,
-                basename=data.basename,
-                contents=data.raw_data,
-                digest=data.digest,
-                renderer=self.renderer
-            )
+            return await self._binary_document(data)
         return InMemoryTextFile(
             basename=p.name,
             string_contents=data.raw_data.decode("utf-8"),
@@ -435,18 +480,12 @@ class UploaderBase(ABC):
 
     async def upload_bytes_if_needed(
         self, basename: str, raw: bytes
-    ) -> UploadedFile:
+    ) -> Document:
         """Upload in-memory ``raw`` bytes (e.g. an audit-restored binary
         document) to the Files API, reusing a cached upload by CRC. The
         bytes-sourced analogue of :meth:`upload_file_if_needed`."""
-        data = await _file_data(basename=basename, data=raw)
-        file_id = await self._upload_bytes(data.crc_basename, data.raw_data, data.mime)
-        return UploadedFile(
-            file_id=file_id,
-            basename=data.basename,
-            contents=data.raw_data,
-            digest=data.digest,
-            renderer=self.renderer
+        return await self._binary_document(
+            await _file_data(basename=basename, data=raw)
         )
 
     def text_document_from(self, src: TextUploadable) -> TextDocument:

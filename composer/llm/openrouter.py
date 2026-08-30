@@ -15,20 +15,21 @@ Three things differ from the OpenAI backend:
 
 Requires ``OPENROUTER_API_KEY``.
 """
-from typing import Any, TYPE_CHECKING, Mapping, AsyncIterator, override
+from typing import Any, TYPE_CHECKING, override
 from dataclasses import dataclass, field
 from functools import cache
-import asyncio
 import base64
-import json
 import logging
 import os
-import urllib.request
 
 import httpx
 import openai
+from pydantic import BaseModel, Field, PositiveInt, SecretStr, ValidationError
 
-from composer.input.files import UploaderBase, ContentRenderer
+from composer.input.files import (
+    ContentRenderer, Document, FileData, InMemoryBytesFile, InMemoryTextFile,
+    TextDocument, UploaderBase
+)
 from composer.input.types import ModelConfiguration
 from .provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold, reasoning_effort,
@@ -40,8 +41,6 @@ from .types import CacheLevel
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
-    from langchain_core.outputs import ChatGenerationChunk
-    from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +51,6 @@ _MODELS_URL = f"{BASE_URL}/models"
 _API_KEY_ENV = "OPENROUTER_API_KEY"
 
 _PROBE_TIMEOUT_SECONDS = 15
-
-# The only fields read off a roster record.
-_PROBED_KEYS = ("context_length", "top_provider", "supported_parameters", "pricing")
-
-# Transient stream failures and how many times to re-issue the request. The SDK's
-# own `max_retries` covers *establishing* a request; these surface while the SSE
-# body is being consumed, by which point the request has already succeeded, so
-# nothing below us retries them and they take the whole run down. `TimeoutError`
-# covers langchain's `StreamChunkTimeoutError` (a subclass) for a content stall;
-# `httpx.TransportError` covers the dropped-connection family.
-_RETRYABLE_STREAM_ERRORS = (httpx.TransportError, TimeoutError, openai.APIConnectionError)
-_STREAM_ATTEMPTS = 3
-_STREAM_RETRY_BACKOFF_SECONDS = 2.0
 
 
 def matches(model: str) -> bool:
@@ -97,35 +83,98 @@ class OpenRouterModelFeatures:
     reasoning: bool
 
 
+# --- the `GET /api/v1/models` schema ---------------------------------------
+#
+# https://openrouter.ai/docs/api-reference/list-available-models. Only the fields
+# this module reads are modelled; `extra="ignore"` (pydantic's default) drops the
+# rest, which is most of the ~690KB payload. Prices arrive as decimal *strings*,
+# which pydantic coerces to float on the way in.
+
+class _TopProvider(BaseModel):
+    context_length: PositiveInt | None = None
+    max_completion_tokens: PositiveInt | None = None
+
+
+class _PriceCard(BaseModel):
+    """Per-token USD prices. A missing bucket is not a zero — it means the route
+    publishes no separate rate for it (see :func:`_price_tier`)."""
+
+    prompt: float | None = None
+    completion: float | None = None
+    input_cache_read: float | None = None
+    input_cache_write: float | None = None
+    input_cache_write_1h: float | None = None
+
+
+class _PriceOverride(_PriceCard):
+    """A conditional price, restating only the fields it changes. Only prompt-size
+    floors are modelled; OpenRouter also publishes time-of-day windows
+    (``utc_start``/``utc_end``), which a per-call price curve cannot express, so
+    those arrive with ``min_prompt_tokens`` unset and are skipped."""
+
+    min_prompt_tokens: PositiveInt | None = None
+
+
+class _Pricing(_PriceCard):
+    overrides: list[_PriceOverride] = Field(default_factory=list)
+
+
+class _ModelRecord(BaseModel):
+    id: str
+    context_length: PositiveInt | None = None
+    top_provider: _TopProvider = Field(default_factory=_TopProvider)
+    supported_parameters: set[str] = Field(default_factory=set)
+    pricing: _Pricing | None = None
+
+
+class _ModelsEnvelope(BaseModel):
+    """Records stay raw here so one unreadable model can't take the roster with it
+    — 400+ vendors publish into this feed, and a single odd record blanking the
+    catalog would silently downgrade every route to the fallback window."""
+
+    data: list[Any]
+
+
 @cache
-def _catalog() -> dict[str, Mapping[str, Any]]:
-    """OpenRouter's model roster, by id: one blocking unauthenticated GET, no retry,
-    from :meth:`OpenRouterModelProvider.create` at startup. Any failure yields an
-    empty catalog and a run on conservative defaults."""
+def _catalog() -> dict[str, _ModelRecord]:
+    """OpenRouter's model roster, by id: one blocking unauthenticated GET per
+    process, no retry, from :meth:`OpenRouterModelProvider.create` at startup. Any
+    failure yields an empty catalog and a run on conservative defaults."""
+    return _fetch_catalog()
+
+
+def _fetch_catalog() -> dict[str, _ModelRecord]:
     try:
-        with urllib.request.urlopen(_MODELS_URL, timeout=_PROBE_TIMEOUT_SECONDS) as resp:
-            payload = json.load(resp)
-    except (OSError, json.JSONDecodeError) as exc:
+        with httpx.Client(timeout=_PROBE_TIMEOUT_SECONDS) as client:
+            response = client.get(_MODELS_URL)
+            response.raise_for_status()
+            envelope = _ModelsEnvelope.model_validate_json(response.content)
+    except (httpx.HTTPError, ValidationError) as exc:
         logger.warning(
             "Could not fetch OpenRouter model metadata from %s (%s); falling back to "
             "a %d-token context window and no price card.",
             _MODELS_URL, exc, _FALLBACK_CONTEXT_WINDOW,
         )
         return {}
-    records = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(records, list):
-        logger.warning("Unexpected OpenRouter /models payload shape; ignoring it.")
-        return {}
-    # Projected to what's actually read: the full roster is ~690KB on the wire and
-    # ~2.3MB of retained objects, nearly all of it prose this module never touches.
-    return {
-        rec["id"]: {k: rec[k] for k in _PROBED_KEYS if k in rec}
-        for rec in records
-        if isinstance(rec, dict) and isinstance(rec.get("id"), str)
-    }
+
+    catalog: dict[str, _ModelRecord] = {}
+    unreadable = 0
+    for raw in envelope.data:
+        try:
+            record = _ModelRecord.model_validate(raw)
+        except ValidationError:
+            unreadable += 1
+            continue
+        catalog[record.id] = record
+    if unreadable:
+        logger.warning(
+            "Skipped %d OpenRouter roster record(s) that did not match the expected "
+            "schema; those routes fall back to defaults.", unreadable,
+        )
+    return catalog
 
 
-def _record_for(model_name: str) -> Mapping[str, Any] | None:
+def _record_for(model_name: str) -> _ModelRecord | None:
     catalog = _catalog()
     if (exact := catalog.get(model_name)) is not None:
         return exact
@@ -135,11 +184,7 @@ def _record_for(model_name: str) -> Mapping[str, Any] | None:
     return catalog.get(base) if variant else None
 
 
-def _positive_int(value: Any) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
-
-
-def _features_from(record: Mapping[str, Any] | None) -> OpenRouterModelFeatures:
+def _features_from(record: _ModelRecord | None) -> OpenRouterModelFeatures:
     if record is None:
         # Only reachable when the fetch itself failed — an id absent from a roster
         # that did load is rejected in `create`.
@@ -148,64 +193,53 @@ def _features_from(record: Mapping[str, Any] | None) -> OpenRouterModelFeatures:
             max_output_tokens=None,
             reasoning=True,
         )
-    top = record.get("top_provider")
-    top = top if isinstance(top, Mapping) else {}
-    supported = record.get("supported_parameters")
-    supported = set(supported) if isinstance(supported, list) else set()
     return OpenRouterModelFeatures(
         # Two windows are published: the model's own and the serving provider's. The
         # smaller is the one a request actually has to fit in.
         context_window=min(
             (
-                w for w in (
-                    _positive_int(record.get("context_length")),
-                    _positive_int(top.get("context_length")),
-                ) if w is not None
+                w for w in (record.context_length, record.top_provider.context_length)
+                if w is not None
             ),
             default=_FALLBACK_CONTEXT_WINDOW,
         ),
-        max_output_tokens=_positive_int(top.get("max_completion_tokens")),
-        reasoning="reasoning" in supported,
+        max_output_tokens=record.top_provider.max_completion_tokens,
+        reasoning="reasoning" in record.supported_parameters,
     )
 
 
 # --- pricing ---------------------------------------------------------------
 
-# OpenRouter quotes USD per token; PriceTier is USD per million.
-_TOKENS_PER_MTOK = 1_000_000
+# OpenRouter quotes USD per token; PriceTier is USD per million tokens.
+_TOKENS_PER_MILLION = 1_000_000
 
 
-def _per_mtok(raw: Any) -> float | None:
-    """One price field, converted to per-MTok. A "0" is a real zero (a free route);
-    an absent field is a missing key, which comes back as None."""
-    if not isinstance(raw, (str, int, float)) or isinstance(raw, bool):
+def _price_tier(card: _PriceCard) -> PriceTier | None:
+    """One published price card as a :class:`PriceTier`, or None if the route
+    publishes no prompt/completion rate at all (leaving it uncosted).
+
+    An unpublished *cache* bucket is not a guess: on OpenRouter it means the route
+    offers no separate rate for those tokens, so they bill at the ordinary prompt
+    rate — which is what falls through here. The only real inference is
+    ``cache_write_1h``, where a route with no 1-hour rate is assumed to charge its
+    5-minute one; no route this backend has seen publishes the second without the
+    first."""
+    if card.prompt is None or card.completion is None:
         return None
-    try:
-        return float(raw) * _TOKENS_PER_MTOK
-    except ValueError:
-        return None
-
-
-def _price_tier(prices: Mapping[str, Any]) -> PriceTier | None:
-    prompt = _per_mtok(prices.get("prompt"))
-    completion = _per_mtok(prices.get("completion"))
-    if prompt is None or completion is None:
-        return None
-    # A route that publishes no cache bucket bills those tokens as fresh input, and
-    # one with no separate 1h rate charges the 5m one. `or` would not do here: a
-    # real 0.0 is a free route.
-    if (cache_read := _per_mtok(prices.get("input_cache_read"))) is None:
-        cache_read = prompt
-    if (cache_write := _per_mtok(prices.get("input_cache_write"))) is None:
-        cache_write = prompt
-    if (cache_write_1h := _per_mtok(prices.get("input_cache_write_1h"))) is None:
-        cache_write_1h = cache_write
+    per_million = _TOKENS_PER_MILLION
+    cache_write = card.input_cache_write if card.input_cache_write is not None else card.prompt
     return PriceTier(
-        input=prompt,
-        output=completion,
-        cache_read=cache_read,
-        cache_write=cache_write,
-        cache_write_1h=cache_write_1h,
+        input=card.prompt * per_million,
+        output=card.completion * per_million,
+        cache_read=(
+            card.input_cache_read if card.input_cache_read is not None else card.prompt
+        ) * per_million,
+        cache_write=cache_write * per_million,
+        cache_write_1h=(
+            card.input_cache_write_1h
+            if card.input_cache_write_1h is not None
+            else cache_write
+        ) * per_million,
     )
 
 
@@ -217,27 +251,27 @@ def _bare_model_name(model_name: str) -> str:
 
 
 def _price_provider_from(
-    record: Mapping[str, Any] | None, model_name: str
+    record: _ModelRecord | None, model_name: str
 ) -> PriceProvider:
     """The route's pricing curve, live from the catalog where possible, else the
     static table on the vendor's bare model name — which covers ``openai/*`` and
     ``anthropic/*``, and yields None (an uncosted run, not a wrong one) elsewhere."""
-    prices = (record or {}).get("pricing")
-    if not isinstance(prices, Mapping) or (short := _price_tier(prices)) is None:
+    pricing = record.pricing if record is not None else None
+    if pricing is None or (short := _price_tier(pricing)) is None:
         return price_provider_for(_bare_model_name(model_name))
 
-    # Long-context surcharges arrive as overrides keyed by a prompt-size floor, each
-    # restating only the fields it changes (see openai/gpt-5.5's >272K tier).
-    raw_overrides = prices.get("overrides")
-    tiers: list[tuple[int, PriceTier]] = []
-    if isinstance(raw_overrides, list):
-        for override in raw_overrides:
-            if not isinstance(override, Mapping):
-                continue
-            floor = _positive_int(override.get("min_prompt_tokens"))
-            tier = _price_tier({**prices, **override})
-            if floor is not None and tier is not None:
-                tiers.append((floor, tier))
+    # Long-context surcharges are keyed by a prompt-size floor and restate only the
+    # fields they change (see openai/gpt-5.5's >272K tier), so each one is merged
+    # over the base card before becoming a tier. Highest floor first, so the first
+    # match wins.
+    tiers = [
+        (override.min_prompt_tokens, tier)
+        for override in pricing.overrides
+        if override.min_prompt_tokens is not None
+        and (tier := _price_tier(
+            pricing.model_copy(update=override.model_dump(exclude_none=True))
+        )) is not None
+    ]
     tiers.sort(key=lambda t: t[0], reverse=True)
 
     def provider(input_tokens: int) -> PriceTier | None:
@@ -264,38 +298,66 @@ def _api_key() -> str:
 class OpenRouterRenderer(OpenAIRenderer):
     """Content blocks in the Chat-Completions shape, which is what langchain converts
     from: ``_convert_chat_completions_blocks_to_responses`` turns ``file`` into
-    ``input_file`` and ``image_url`` into ``input_image`` on the way out. Only the
-    file block differs from OpenAI's; the text block is inherited.""" 
+    ``input_file`` and ``image_url`` into ``input_image`` on the way out. The text
+    block is inherited from OpenAI's renderer."""
 
     @override
     def file_block(
-        self, file_id: str, *, filename: str, cache_level: CacheLevel = CacheLevel.NONE
+        self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
-        # `file_id` is a `data:` URL rather than a remote id: OpenRouter has no
-        # Files API, so InlineFileUploader carries the bytes here instead.
-        if file_id.startswith("data:image/"):
-            return {"type": "image_url", "image_url": {"url": file_id}}
-        return {"type": "file", "file": {"filename": filename, "file_data": file_id}}
+        raise NotImplementedError(
+            "OpenRouter has no Files API; binary content is inlined by "
+            "InlineFileUploader as an InMemoryBytesFile."
+        )
+
+    @override
+    def inline_file_block(
+        self, basename: str, contents: bytes, mime: str,
+        *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        url = f"data:{mime};base64,{base64.b64encode(contents).decode('ascii')}"
+        if mime.startswith("image/"):
+            return {"type": "image_url", "image_url": {"url": url}}
+        return {"type": "file", "file": {"filename": basename, "file_data": url}}
 
 
 @dataclass
 class InlineFileUploader(UploaderBase):
-    """``FileUploader`` impl for a provider with no Files API: the "upload" is a
-    ``data:`` URL built in memory, which the renderer inlines into the request. So a
-    large binary is re-sent with every request carrying it, and a PDF no route reads
-    natively goes through OpenRouter's ``file-parser`` plugin, which falls back to
-    ``mistral-ocr`` at $2/1K pages (pin an engine via ``plugins`` to avoid that)."""
+    """``FileUploader`` for a provider with no Files API: nothing is uploaded, so
+    binary content becomes an :class:`InMemoryBytesFile` and text destined for
+    upload simply stays in the prompt.
+
+    A large binary therefore rides along in every request that carries it, and a
+    PDF no route reads natively goes through OpenRouter's ``file-parser`` plugin,
+    which falls back to ``mistral-ocr`` at $2/1K pages (pin an engine via
+    ``plugins`` to avoid that)."""
 
     renderer: ContentRenderer = field(default_factory=OpenRouterRenderer)
 
+    @override
     async def _upload_bytes(
         self, crc_basename: str, file_data: bytes, mime: str
     ) -> str:
-        # No dedup cache: the "id" *is* the content, so there is nothing to reuse.
-        # Off-thread because the encode is ~1.5ms/MB of blocked loop, matching how
-        # `composer.input.files` already offloads the read.
-        encoded = await asyncio.to_thread(base64.b64encode, file_data)
-        return f"data:{mime};base64,{encoded.decode('ascii')}"
+        raise NotImplementedError("OpenRouter has no Files API.")
+
+    @override
+    async def _binary_document(self, data: FileData) -> Document:
+        return InMemoryBytesFile(
+            basename=data.basename,
+            contents=data.raw_data,
+            mime=data.mime,
+            renderer=self.renderer,
+        )
+
+    @override
+    async def _text_upload_document(self, data: FileData) -> TextDocument:
+        # There is no upload to make it smaller than the prompt, so the
+        # very-large-text case this exists for collapses into the ordinary one.
+        return InMemoryTextFile(
+            basename=data.basename,
+            string_contents=data.raw_data.decode("utf-8"),
+            renderer=self.renderer,
+        )
 
 
 class OpenRouterService(ProviderServiceBase):
@@ -306,59 +368,29 @@ class OpenRouterService(ProviderServiceBase):
     def __init__(self):
         from graphcore.tools.memory import openai_async_memory_tool
         super().__init__(
-            # The OpenAI-flavored memory tool is a plain client-side function tool
-            # differing only in its args schema, so it is portable to any route.
+            # The memory tool differs from the Anthropic one only in its args
+            # schema, so it is portable to any route.
             openai_async_memory_tool,
             InlineFileUploader,
         )
+
+    @override
+    def should_retry(self, exc: Exception) -> bool:
+        """The OpenAI taxonomy, plus the two failures a *streamed* request adds.
+        Both surface while the SSE body is being read, when the request has already
+        succeeded, so the SDK's own ``max_retries`` never sees them: a dropped
+        connection (``httpx.TransportError``) and a content stall (langchain's
+        ``StreamChunkTimeoutError``, a ``TimeoutError`` subclass)."""
+        if isinstance(exc, (httpx.TransportError, TimeoutError, openai.APIConnectionError)):
+            return True
+        if isinstance(exc, openai.APIStatusError):
+            return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+        return False
 
 
 @cache
 def _openrouter_service():
     return OpenRouterService()
-
-
-# --- chat model ------------------------------------------------------------
-
-@cache
-def _chat_model_cls() -> type["ChatOpenAI"]:
-    """``ChatOpenAI`` that re-issues a streamed request when the stream breaks.
-
-    Defined behind a cached factory so ``langchain_openai`` stays a lazy import,
-    as it is in the sibling backends."""
-    from langchain_openai import ChatOpenAI
-
-    class RetryingChatOpenAI(ChatOpenAI):
-        @override
-        async def _astream(
-            self, *args: Any, **kwargs: Any
-        ) -> AsyncIterator["ChatGenerationChunk"]:
-            for attempt in range(1, _STREAM_ATTEMPTS + 1):
-                # Buffered, not forwarded as they arrive: a retry must not emit a
-                # partial response twice. Callers aggregate through `ainvoke`
-                # anyway, so this costs nothing today — an incremental consumer
-                # would lose its incrementality.
-                chunks: list["ChatGenerationChunk"] = []
-                try:
-                    async for chunk in super()._astream(*args, **kwargs):
-                        chunks.append(chunk)
-                except _RETRYABLE_STREAM_ERRORS as exc:
-                    if attempt == _STREAM_ATTEMPTS:
-                        raise
-                    delay = _STREAM_RETRY_BACKOFF_SECONDS * attempt
-                    logger.warning(
-                        "OpenRouter stream failed after %d chunk(s) (%s: %s); "
-                        "re-issuing in %.0fs (attempt %d/%d).",
-                        len(chunks), type(exc).__name__, exc, delay,
-                        attempt + 1, _STREAM_ATTEMPTS,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                for chunk in chunks:
-                    yield chunk
-                return
-
-    return RetryingChatOpenAI
 
 
 # --- ModelProvider ---------------------------------------------------------
@@ -411,7 +443,7 @@ class OpenRouterModelProvider:
     def builder_for(
         self, *, cache_level: CacheLevel = CacheLevel.NONE, disable_thinking: bool = False
     ) -> "BaseChatModel":
-        from pydantic import SecretStr
+        from langchain_openai import ChatOpenAI
 
         opts = self.options
         kwargs: dict[str, Any] = {}
@@ -430,15 +462,12 @@ class OpenRouterModelProvider:
             # back with the next tool result so the model can resume it.
             kwargs["include"] = ["reasoning.encrypted_content"]
 
-        return _chat_model_cls()(
+        return ChatOpenAI(
             model=self.model_name,
             base_url=BASE_URL,
             api_key=SecretStr(self.api_key),
-            # Load-bearing, not a default: the Responses API is the only surface on
-            # which reasoning survives a tool round-trip, because langchain echoes a
-            # prior turn's reasoning items back into the next request. Chat
-            # Completions drops them, so a long tool loop re-derives its reasoning
-            # every round at the output token rate.
+            # Only surface on which langchain echoes a prior turn's reasoning back,
+            # so a tool loop doesn't re-derive it every round.
             use_responses_api=True,
             # Unstreamed, OpenRouter holds the whole generation and an upstream
             # pause trips its gateway idle timeout, failing the request.

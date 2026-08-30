@@ -138,9 +138,8 @@ class AnthropicRenderer:
         return to_ret
 
     def file_block(
-        self, file_id: str, *, filename: str, cache_level: CacheLevel = CacheLevel.NONE
+        self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
-        # filename unused: the Files API upload already carries it.
         to_ret : dict[str, Any] = {
             "type": "document",
             "source": {
@@ -154,6 +153,14 @@ class AnthropicRenderer:
                 "ttl": ttl
             }
         return to_ret
+
+    def inline_file_block(
+        self, basename: str, contents: bytes, mime: str,
+        *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        raise NotImplementedError(
+            "Anthropic content is uploaded to the Files API, not inlined."
+        )
 
 @cache
 def _get_service():

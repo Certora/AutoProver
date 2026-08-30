@@ -162,15 +162,22 @@ class OpenAIRenderer:
         to_ret : dict[str, Any] = {"type": "text", "text": text}
         return to_ret
     def file_block(
-        self, file_id: str, *, filename: str, cache_level: CacheLevel = CacheLevel.NONE
+        self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
-        # filename unused: the Files API upload already carries it.
         return {
             "type": "file",
             "file": {
                 "file_id": file_id,
             },
         }
+
+    def inline_file_block(
+        self, basename: str, contents: bytes, mime: str,
+        *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        raise NotImplementedError(
+            "OpenAI content is uploaded to the Files API, not inlined."
+        )
 
 # --- Files API uploader ----------------------------------------------------
 
